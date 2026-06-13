@@ -1,0 +1,65 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+wheels/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 虚拟环境
+.venv/
+.venv-*/
+env/
+venv/
+app/.venv/
+
+# ===== 前端 / Node =====
+node_modules/
+web/dist/
+web/dist-ssr/
+*.local
+.eslintcache
+*.tsbuildinfo
+
+# ===== 模型 / 音频 等大文件 =====
+*.pth
+*.onnx
+*.pt
+*.ckpt
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.ogg
+*.aac
+
+# ===== 日志 =====
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ===== 编辑器 / IDE =====
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== 本地用户数据（默认在 ~/.xb-svcb，仅在被移入仓库时生效）=====
+.xb-svcb/
+.venv-svc/
+
+.vscode
