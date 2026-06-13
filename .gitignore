@@ -58,6 +58,10 @@ pnpm-debug.log*
 Thumbs.db
 desktop.ini
 
+# ===== 安装器生成的引擎与模型（开箱即用，由 install.ps1 重建）=====
+engines/
+models/
+
 # ===== 本地用户数据（默认在 ~/.xb-svcb，仅在被移入仓库时生效）=====
 .xb-svcb/
 .venv-svc/

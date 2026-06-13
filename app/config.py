@@ -3,23 +3,40 @@
 from __future__ import annotations
 
 import os
-import shutil
+import sys
 from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
 APP_BG = "#05060d"
 
-# 项目根目录（app/ 的上一级）
-ROOT_DIR = Path(__file__).resolve().parent.parent
+# ---- 运行基准目录（兼容源码运行与 PyInstaller 打包后的 exe）----
+#   BASE_DIR   外部环境/数据的根：打包后为 exe 所在目录（= 安装目录，旁边就是
+#              engines/.venv-svc/.venv-uvr/models）；源码运行时为项目根。
+#   BUNDLE_DIR 随程序一起分发的只读资源根：打包后为 PyInstaller 解包目录
+#              （_internal，内含 web/dist 与 worker 脚本）；源码运行时为 app/ 目录。
+_FROZEN = bool(getattr(sys, "frozen", False))
+if _FROZEN:
+    BASE_DIR = Path(sys.executable).resolve().parent
+    BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))
+else:
+    BASE_DIR = Path(__file__).resolve().parent.parent
+    BUNDLE_DIR = Path(__file__).resolve().parent
 
-# 前端构建产物
-DIST_INDEX = ROOT_DIR / "web" / "dist" / "index.html"
+# 项目根目录（外部引擎/环境的定位基准）
+ROOT_DIR = BASE_DIR
+
+# 前端构建产物：打包时内置于 exe 资源目录；源码运行取项目根 web/dist。
+DIST_INDEX = (
+    BUNDLE_DIR / "web" / "dist" / "index.html"
+    if _FROZEN
+    else ROOT_DIR / "web" / "dist" / "index.html"
+)
 
 
 # ---- so-vits-svc 4.1 推理引擎 ----
-# 复用用户本地已配置好的 so-vits-svc 仓库与其 conda 环境（无需在本项目内重装依赖）。
-# 均可通过环境变量覆盖，未配置时回退到下方默认候选路径，找不到则推理降级为占位音频。
+# 开箱即用：默认使用安装器在项目内搭建的引擎与独立环境（engines/、.venv-svc）。
+# 所有路径均可通过环境变量覆盖；找不到时推理降级为占位音频。
 
 
 def _first_existing(candidates: list[Path]) -> Path | None:
@@ -29,43 +46,49 @@ def _first_existing(candidates: list[Path]) -> Path | None:
     return None
 
 
+def _venv_python(venv_dir: Path) -> Path:
+    """返回 venv 内 Python 解释器路径（兼容 Windows / *nix）。"""
+    win = venv_dir / "Scripts" / "python.exe"
+    nix = venv_dir / "bin" / "python"
+    return win if os.name == "nt" else nix
+
+
+# 项目内引擎与环境的约定位置（由安装器创建）
+ENGINES_DIR = ROOT_DIR / "engines"
+SOVITS_REPO_DIR = ENGINES_DIR / "so-vits-svc"
+SVC_VENV_DIR = ROOT_DIR / ".venv-svc"
+UVR_VENV_DIR = ROOT_DIR / ".venv-uvr"
+
+
 def _detect_sovits_repo() -> Path | None:
     env = os.environ.get("XB_SOVITS_REPO")
     if env:
         return Path(env)
-    return _first_existing(
-        [
-            Path(r"C:\Users\Lkpap\Desktop\AI唱歌\nxd\so-vits-svc-4.1-Stable"),
-            ROOT_DIR / "engines" / "so-vits-svc",
-        ]
-    )
+    return _first_existing([SOVITS_REPO_DIR])
 
 
 def _detect_svc_python() -> Path | None:
     env = os.environ.get("XB_SVC_PYTHON")
     if env:
         return Path(env)
-    found = _first_existing(
+    # 优先项目内安装器创建的 .venv-svc；其次常见 conda 环境名 svc（开发便利）
+    return _first_existing(
         [
-            Path(r"C:\anaconda3\envs\svc\python.exe"),
+            _venv_python(SVC_VENV_DIR),
             Path.home() / "anaconda3" / "envs" / "svc" / "python.exe",
             Path.home() / "miniconda3" / "envs" / "svc" / "python.exe",
         ]
     )
-    if found:
-        return found
-    which = shutil.which("python")
-    return Path(which) if which else None
 
 
 # 推理仓库根目录（含 inference/infer_tool.py 与 pretrain/）
 SOVITS_REPO = _detect_sovits_repo()
 # 运行推理用的 Python 解释器（需装有 torch + fairseq 等 so-vits-svc 依赖）
 SVC_PYTHON = _detect_svc_python()
-# 子进程内执行的 worker 脚本
-SVC_WORKER = Path(__file__).resolve().parent / "infrastructure" / "svc_worker.py"
+# 子进程内执行的 worker 脚本（由外部 venv 的 Python 读取，需为磁盘上的真实文件）
+SVC_WORKER = BUNDLE_DIR / "infrastructure" / "svc_worker.py"
 # F0 提取 worker（同样在 so-vits-svc 环境中运行）
-F0_WORKER = Path(__file__).resolve().parent / "infrastructure" / "f0_worker.py"
+F0_WORKER = BUNDLE_DIR / "infrastructure" / "f0_worker.py"
 
 
 def svc_engine_ready() -> bool:
@@ -88,12 +111,11 @@ def _detect_uvr_python() -> Path | None:
     env = os.environ.get("XB_UVR_PYTHON")
     if env:
         return Path(env)
-    return _first_existing(
-        [
-            ROOT_DIR / ".venv-uvr" / "Scripts" / "python.exe",
-            ROOT_DIR / ".venv-uvr" / "bin" / "python",
-        ]
-    )
+    return _first_existing([_venv_python(UVR_VENV_DIR)])
+
+
+# UVR 模型默认下载/存放目录（安装器创建）
+UVR_MODEL_DIR_DEFAULT = ROOT_DIR / "models" / "uvr"
 
 
 def _detect_uvr_model_dir() -> Path | None:
@@ -102,9 +124,10 @@ def _detect_uvr_model_dir() -> Path | None:
         return Path(env)
     return _first_existing(
         [
-            # 优先 VR 模型目录（含 5_HP-Karaoke / DeEcho-DeReverb 等去混响模型）
+            # 优先项目内安装器下载的 UVR 模型目录
+            UVR_MODEL_DIR_DEFAULT,
+            # 其次复用本机常见的 Ultimate Vocal Remover 安装目录（开发便利）
             Path(r"C:\Ultimate Vocal Remover\models\VR_Models"),
-            Path(r"C:\Ultimate Vocal Remover\models\MDX_Net_Models"),
         ]
     )
 
@@ -119,8 +142,8 @@ UVR_SEP_MODEL = os.environ.get("XB_UVR_SEP_MODEL", "5_HP-Karaoke-UVR.pth")
 UVR_DEREVERB_MODEL = os.environ.get("XB_UVR_DEREVERB_MODEL", "UVR-DeEcho-DeReverb.pth")
 # 兼容旧引用：默认分离模型
 UVR_MODEL = UVR_SEP_MODEL
-# 子进程内执行的分离 worker 脚本
-UVR_WORKER = Path(__file__).resolve().parent / "infrastructure" / "uvr_worker.py"
+# 子进程内执行的分离 worker 脚本（由外部 venv 的 Python 读取，需为磁盘上的真实文件）
+UVR_WORKER = BUNDLE_DIR / "infrastructure" / "uvr_worker.py"
 
 
 def uvr_ready() -> bool:
