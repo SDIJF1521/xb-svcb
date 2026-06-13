@@ -78,9 +78,9 @@ models/
 #         git lfs track "assets/models/**" "dist/XB-SVCB-Setup.exe"
 #       （或仅本地/内网仓库保留，发布走 GitHub Releases 等外部分发）
 
-# 自带模型（安装器附带资源）
+# 自带模型（安装器附带资源，走 Git LFS）
 !assets/models/
 !assets/models/**
 
-# 打包好的安装器本体
-!dist/XB-SVCB-Setup.exe
+# 安装器本体不入库：超过 GitHub LFS / Release 之外的 2GiB 单文件上限处理，
+# 改为构建后上传到 GitHub Releases 分发（见 README）。dist/* 已忽略，无需额外规则。
