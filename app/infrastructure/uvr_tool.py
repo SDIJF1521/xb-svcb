@@ -75,6 +75,7 @@ class UvrTool:
                 errors="replace",
                 env=env,
                 timeout=1800,
+                **config.subprocess_no_window(),
             )
         except (OSError, subprocess.SubprocessError):
             return SeparationResult(vocals=Path(src), instrumental=None, simulated=True)

@@ -3,12 +3,30 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
 APP_BG = "#05060d"
+
+
+# ---- 子进程窗口隐藏（Windows）----
+# GUI（无控制台）程序用 subprocess 调用 ffmpeg / Python 等命令行工具时，Windows 会
+# 为子进程新建一个控制台窗口，表现为「一闪而过的黑框」。统一加上 CREATE_NO_WINDOW
+# 并隐藏 STARTUPINFO 窗口，彻底消除这些弹窗（其他平台无影响）。
+def subprocess_no_window() -> dict:
+    """返回隐藏子进程控制台窗口的 subprocess 关键字参数（仅 Windows 生效）。"""
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    return {
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+        "startupinfo": startupinfo,
+    }
 
 # ---- 运行基准目录（兼容源码运行与 PyInstaller 打包后的 exe）----
 #   BASE_DIR   外部环境/数据的根：打包后为 exe 所在目录（= 安装目录，旁边就是

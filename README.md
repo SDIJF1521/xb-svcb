@@ -171,6 +171,7 @@ app\.venv\Scripts\python.exe app\main.py
 ## 八、常见问题
 
 - **so-vits-svc 依赖现场编译失败（numpy 1.19.5 / pyworld 等 `_Py_HashDouble`、`could not get source code`）**：so-vits-svc 4.1 的依赖是为 **Python 3.8~3.9** 钉的旧版本，只有 3.9 及更低才有预编译 wheel，在 3.10 上会回退到源码编译并失败。安装器已把 **SVC 引擎固定用 Python 3.9**（uv 自动下载，无需你手动装），整套依赖直接装 wheel、零编译；UVR 分离环境仍用 3.10。若你是从旧版本升级，重跑 `--only svc` 会自动把 `.venv-svc` 重建为 3.9（会重新下载 torch）。
+- **推理报 `No module named 'pkg_resources'`**：`.venv-svc` 由 `uv venv` 创建，默认不含 setuptools，而 librosa 运行时需要 `pkg_resources`（属于 setuptools）。**注意 setuptools 81+ 已移除 pkg_resources**，必须钉 `<81`。安装器已自动给 `.venv-svc` / `.venv-uvr` 装 `setuptools<81`；若是旧环境，手动补一行即可：`uv pip install --python <安装目录>\.venv-svc\Scripts\python.exe "setuptools<81" wheel`。
 - **`playsound==1.3.0` 构建失败**：该包仅 WebUI 播放用、推理用不到，安装器已自动从依赖清单里**剔除 playsound / gradio / pyaudio / sounddevice / onnxsim / onnxoptimizer**（实时变声与 ONNX 导出专用，文件翻唱用不到，且在 Windows 上常需编译），无需理会。
 - **底模下载超时（`WinError 10060` / huggingface 连不上）**：安装器默认走 `hf-mirror.com` 镜像并自动换源重试。仍不行时设 `XB_HF_MIRROR` / `XB_GH_MIRROR` 后重跑 `python install\install.py --only models`，或手动下载放入对应目录。
 - **`so-vits-svc` 依赖（fairseq 等）安装失败**：fairseq 在 Windows 上对编译环境较敏感。可安装「Microsoft C++ Build Tools」后重跑 `python install\install.py --only svc`；或设置 `XB_SVC_PYTHON` 指向一个已配置好 so-vits-svc 依赖的 Python。

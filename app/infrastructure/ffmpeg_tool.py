@@ -12,6 +12,8 @@ import wave
 from pathlib import Path
 from typing import Optional
 
+import config
+
 
 class FfmpegTool:
     def __init__(self) -> None:
@@ -33,6 +35,7 @@ class FfmpegTool:
                 encoding="utf-8",
                 errors="replace",
                 timeout=8,
+                **config.subprocess_no_window(),
             )
             first = (out.stdout or "").splitlines()[0] if out.stdout else ""
             m = re.search(r"ffmpeg version (\S+)", first)
@@ -60,6 +63,7 @@ class FfmpegTool:
                     encoding="utf-8",
                     errors="replace",
                     timeout=15,
+                    **config.subprocess_no_window(),
                 )
                 value = (out.stdout or "").strip()
                 if value:
@@ -98,6 +102,7 @@ class FfmpegTool:
                 encoding="utf-8",
                 errors="replace",
                 timeout=300,
+                **config.subprocess_no_window(),
             )
             return res.returncode == 0 and dst.exists()
         except (OSError, subprocess.SubprocessError):
@@ -138,6 +143,7 @@ class FfmpegTool:
                 encoding="utf-8",
                 errors="replace",
                 timeout=300,
+                **config.subprocess_no_window(),
             )
             return res.returncode == 0 and dst.exists()
         except (OSError, subprocess.SubprocessError):

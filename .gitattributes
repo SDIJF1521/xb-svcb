@@ -1,0 +1,4 @@
+*.pt filter=lfs diff=lfs merge=lfs -text
+*.pth filter=lfs diff=lfs merge=lfs -text
+assets/models/** filter=lfs diff=lfs merge=lfs -text
+dist/XB-SVCB-Setup.exe filter=lfs diff=lfs merge=lfs -text

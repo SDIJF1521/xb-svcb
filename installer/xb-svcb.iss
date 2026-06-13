@@ -54,7 +54,7 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkablealone
-Name: "buildenv"; Description: "安装后立即搭建运行环境（联网下载依赖与模型，耗时较长）"; GroupDescription: "运行环境:"
+Name: "buildenv"; Description: "安装后立即搭建运行环境（创建 AI 子环境、复制自带模型；仅 Python 依赖需联网，耗时较长）"; GroupDescription: "运行环境:"
 
 [Files]
 ; 应用本体：PyInstaller 打包产物（XB-SVCB.exe + _internal，含前端与 worker 脚本）
@@ -62,6 +62,9 @@ Source: "..\dist\XB-SVCB\*"; DestDir: "{app}"; Flags: recursesubdirs createallsu
 ; 环境搭建脚本（纯 batch + Python，安装过程不涉及 PowerShell）
 Source: "..\install\*"; DestDir: "{app}\install"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "\__pycache__\*"
 Source: "..\setup_env.bat"; DestDir: "{app}"; Flags: ignoreversion
+; 自带底模与 UVR 模型（随安装包分发；安装时由 install.py 本地复制，免联网慢下载）
+; 模型为已压缩的二进制权重，用 nocompression 跳过再压缩，显著加快编译与安装速度
+Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 
 [Icons]
@@ -74,7 +77,7 @@ Name: "{commondesktop}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir
 ; 安装结束后按勾选搭建环境（前端已预构建，跳过 web 步骤）。由 setup_env.bat 调 install.py，控制台保留便于查看日志。
 Filename: "{app}\setup_env.bat"; \
   WorkingDir: "{app}"; Flags: shellexec skipifsilent; Tasks: buildenv; \
-  StatusMsg: "正在搭建运行环境（联网下载依赖与模型）…"
+  StatusMsg: "正在搭建运行环境（创建子环境、复制自带模型、联网装 Python 依赖）…"
 ; 提供安装完成后直接启动选项（默认不勾）
 Filename: "{app}\{#MyAppExe}"; Description: "立即启动 {#MyAppShort}"; \
   WorkingDir: "{app}"; Flags: postinstall shellexec skipifsilent unchecked

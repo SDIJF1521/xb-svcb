@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 *.egg-info/
 build/
-dist/
+dist/*
 wheels/
 .pytest_cache/
 .mypy_cache/
@@ -67,3 +67,20 @@ models/
 .venv-svc/
 
 .vscode
+
+# ===== 例外：安装器本体与自带模型必须纳入版本库 =====
+# 让「安装器在、且可安装」：保留打包好的安装器，以及它要附带的底模/UVR 模型。
+# 这些例外要放在最后，覆盖前面的 dist/*、*.pt、*.pth 等忽略规则。
+#
+# 注意：单文件体积很大（安装器约 2GB、ContentVec 1.27GB），GitHub 单文件上限 100MB，
+#       直接 push 会被拒绝。若要托管到 GitHub，请用 Git LFS 跟踪这些大文件：
+#         git lfs install
+#         git lfs track "assets/models/**" "dist/XB-SVCB-Setup.exe"
+#       （或仅本地/内网仓库保留，发布走 GitHub Releases 等外部分发）
+
+# 自带模型（安装器附带资源）
+!assets/models/
+!assets/models/**
+
+# 打包好的安装器本体
+!dist/XB-SVCB-Setup.exe

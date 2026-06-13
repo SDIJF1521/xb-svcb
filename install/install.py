@@ -267,15 +267,23 @@ def copy_bundled(rel: str, dest: Path) -> bool:
     src = ASSETS_MODELS_DIR / rel
     if not src.exists():
         return False
-    if dest.exists() and (dest.is_file() and dest.stat().st_size > 0 or dest.is_dir()):
-        print(c("g", f"    已存在，跳过：{dest.name}"))
+    if src.is_dir():
+        # 目录：始终合并复制（dirs_exist_ok）。不能因为目标目录已存在就跳过——
+        # so-vits-svc 仓库克隆后 pretrain/nsf_hifigan 已存在但只含占位文件，
+        # 若跳过会导致真正的 model/config.json 不被放入，推理时报 FileNotFoundError。
+        dest.mkdir(parents=True, exist_ok=True)
+        print(f"    自带模型，本地复制目录 {src.name}/ …")
+        shutil.copytree(src, dest, dirs_exist_ok=True)
+        print(c("g", f"    复制完成：{dest.name}/"))
+        return True
+    # 文件：仅当目标已存在且大小与自带文件完全一致才跳过；大小不符（残缺/损坏）则重新复制覆盖。
+    # 这能自愈旧安装器下载到的残缺底模（如 16.5MB 的 ContentVec 应为 1268MB）。
+    if dest.exists() and dest.is_file() and dest.stat().st_size == src.stat().st_size:
+        print(c("g", f"    已存在且完整，跳过：{dest.name}"))
         return True
     dest.parent.mkdir(parents=True, exist_ok=True)
     print(f"    自带模型，本地复制 {src.name} …")
-    if src.is_dir():
-        shutil.copytree(src, dest, dirs_exist_ok=True)
-    else:
-        shutil.copyfile(src, dest)
+    shutil.copyfile(src, dest)
     print(c("g", f"    复制完成：{dest.name}"))
     return True
 
@@ -312,6 +320,9 @@ def step_uvr(uv: str, use_gpu: bool) -> None:
             cmd += ["--index-url", index]
         run(cmd)
 
+    # uv venv 默认不含 setuptools，部分库运行时需要 pkg_resources，先补齐
+    # （setuptools 81+ 已移除 pkg_resources，钉 <81）
+    pip("setuptools<81", "wheel")
     # VR 模型走 torch；GPU 时装 CUDA 版，CPU 时装 CPU 版
     pip("torch", "torchaudio", index=TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX)
     # audio-separator：gpu 额外组件含 onnxruntime-gpu
@@ -384,6 +395,10 @@ def step_svc(uv: str, use_gpu: bool) -> None:
             cmd += ["--index-url", index]
         run(cmd)
 
+    # uv venv 默认不含 setuptools/pip，而 librosa 运行时要 `from pkg_resources import ...`
+    # （pkg_resources 属于 setuptools），缺失会导致推理一加载 librosa 就 ModuleNotFoundError。
+    # 注意：setuptools 81+ 已移除 pkg_resources，必须钉 <81 才仍带该模块。
+    pip("setuptools<81", "wheel")
     # 先装 torch（决定 CUDA/CPU），再装仓库其余依赖
     pip("torch", "torchaudio", index=TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX)
     # 优先 requirements_win.txt（仓库为 Windows 提供的更易装版本）
@@ -393,6 +408,10 @@ def step_svc(uv: str, use_gpu: bool) -> None:
     if req_file.exists():
         filtered = _filter_requirements(req_file)
         pip("-r", str(filtered))
+    # so-vits-svc 的 vdecoder 代码里 `import matplotlib`，但官方 requirements 漏列了它，
+    # 不补会在推理加载模型时报 No module named 'matplotlib'。钉 3.7.5 以兼容 numpy 1.22 / py3.9，
+    # 避免最新 matplotlib(3.9+) 强行把 numpy 升到 >=1.23 而破坏 so-vits-svc 依赖。
+        pip("matplotlib==3.7.5")
     else:
         print(c("r", "    未找到 requirements，跳过依赖安装（请检查仓库）"))
     print(c("g", "推理环境就绪"))

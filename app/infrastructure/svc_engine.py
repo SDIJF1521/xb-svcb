@@ -125,6 +125,9 @@ class SvcEngine:
             "--device",
             params.device or "auto",
         ]
+        f0_env = os.environ.copy()
+        f0_env["PYTHONIOENCODING"] = "utf-8"
+        f0_env["PYTHONUTF8"] = "1"
         try:
             proc = subprocess.run(
                 cmd,
@@ -133,7 +136,9 @@ class SvcEngine:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=f0_env,
                 timeout=900,
+                **config.subprocess_no_window(),
             )
         except (OSError, subprocess.SubprocessError):
             return None
@@ -220,6 +225,9 @@ class SvcEngine:
         # 缓解显存碎片，降低长音频推理 OOM 概率
         env = os.environ.copy()
         env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
+        # 强制子进程以 UTF-8 输出，避免中文报错（如"模型加载失败"）在管道里变成乱码
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
 
         try:
             proc = subprocess.run(
@@ -231,6 +239,7 @@ class SvcEngine:
                 errors="replace",
                 env=env,
                 timeout=3600,
+                **config.subprocess_no_window(),
             )
         except (OSError, subprocess.SubprocessError) as exc:
             raise RuntimeError(f"推理子进程启动失败: {exc}") from exc
