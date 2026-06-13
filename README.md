@@ -209,3 +209,17 @@ app\.venv\Scripts\python.exe app\main.py
 - 安装器**打包预构建的 `web/dist`**，因此最终用户无需安装 Node.js。
 - 安装器**自带 `assets/models/` 内的底模与 UVR 模型**（约 2 GB），「搭建运行环境」时直接本地复制，免去缓慢的联网下载；安装包因此较大（约 2 GB），换来近乎瞬时的模型部署。Python 环境、so-vits-svc 仓库仍在该阶段联网获取。
 - 卸载时会清理安装目录内生成的 `.venv-*`、`engines/`、`models/`；用户作品数据位于 `~/.xb-svcb`，予以保留。
+
+---
+
+## 许可（License）
+
+本项目自身代码采用 **MIT License**（见仓库根目录 [`LICENSE`](LICENSE)）。Copyright (c) 2026 SDIJF1521。
+
+注意：本项目依赖/附带的第三方组件各自遵循其原始协议，使用与再分发时请遵守：
+
+- **so-vits-svc 4.1**（`svc-develop-team/so-vits-svc`）：安装时联网获取，遵循其上游协议（AGPL-3.0）。
+- **底模**：ContentVec、NSF-HiFiGAN、RMVPE、FCPE 等各有其许可。
+- **UVR 模型**：`5_HP-Karaoke-UVR`、`UVR-DeEcho-DeReverb` 等遵循 Ultimate Vocal Remover 项目的相应许可。
+
+MIT 仅覆盖本仓库自有代码，不改变上述第三方组件的授权条款。
