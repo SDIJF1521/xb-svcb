@@ -57,6 +57,18 @@ def main() -> None:
     # 注入窗口引用，供原生文件对话框使用
     api.set_window(window)
 
+    # 窗口显示后先按默认主题给标题栏/边框上色，避免首帧出现系统默认配色；
+    # 前端就绪后会再按用户持久化的主题二次同步。
+    def _theme_on_shown() -> None:
+        from infrastructure.window_theme import apply as apply_window_theme
+
+        apply_window_theme(config.APP_TITLE, "cyber")
+
+    try:
+        window.events.shown += _theme_on_shown
+    except Exception:  # noqa: BLE001 - 个别平台无该事件时忽略
+        pass
+
     # 生产模式下用内置 http server 提供静态资源，确保 SPA 路由与资源路径正常。
     webview.start(debug=dev, http_server=not dev)
 

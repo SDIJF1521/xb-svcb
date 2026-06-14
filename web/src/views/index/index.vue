@@ -204,14 +204,14 @@ const recentWorks = computed(() => works.value.slice(0, 5))
 const stats = computed(() => [
   { value: String(models.value.length), label: '已导入模型', icon: FolderOpened, color: '#00f0ff' },
   { value: String(works.value.length), label: '我的作品', icon: Files, color: '#b65cff' },
-  { value: String(works.value.filter((w) => w.status === 'done').length), label: '已完成', icon: TrendCharts, color: '#19f59a' },
-  { value: String(works.value.filter((w) => w.status === 'running' || w.status === 'queue').length), label: '处理中', icon: Timer, color: '#ffae00' },
+  { value: String(works.value.filter((w) => w.status === 'done').length), label: '已完成', icon: TrendCharts, color: 'var(--xb-success)' },
+  { value: String(works.value.filter((w) => w.status === 'running' || w.status === 'queue').length), label: '处理中', icon: Timer, color: 'var(--xb-warn)' },
 ])
 
 const quickActions = [
   { title: 'AI 翻唱', desc: '加载 SVC 模型，一键换声生成翻唱', icon: Microphone, color: '#00f0ff', action: () => router.push('/create') },
   { title: '人声分离', desc: '由 Ultimate Vocal Remover 提取干声与伴奏', icon: Scissor, color: '#ff2e88', action: () => router.push('/create') },
-  { title: '我的模型', desc: '管理 .pth / .onnx 的 SVC 歌声模型', icon: FolderOpened, color: '#19f59a', action: () => router.push('/models') },
+  { title: '我的模型', desc: '管理 .pth / .onnx 的 SVC 歌声模型', icon: FolderOpened, color: 'var(--xb-success)', action: () => router.push('/models') },
   { title: '导入模型', desc: '从本地导入新的 SVC 歌声模型', icon: FolderAdd, color: '#b65cff', action: () => onImport() },
 ]
 
@@ -222,7 +222,7 @@ const toolIconMap: Record<string, Component> = {
 }
 const toolColorMap: Record<string, string> = {
   uvr: '#ff2e88',
-  ffmpeg: '#19f59a',
+  ffmpeg: 'var(--xb-success)',
   svc: '#00f0ff',
 }
 const toolIcon = (key: string): Component => toolIconMap[key] ?? Cpu
@@ -257,7 +257,7 @@ onMounted(() => {
   backdrop-filter: blur(16px);
 }
 .grad-text {
-  background: linear-gradient(120deg, #00f0ff 0%, #2f6bff 45%, #ff2e88 100%);
+  background: var(--xb-hero-gradient);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -277,12 +277,12 @@ onMounted(() => {
 .cta-btn {
   background: linear-gradient(135deg, var(--xb-primary), var(--xb-primary-2)) !important;
   border: none !important;
-  color: #05060d !important;
+  color: var(--xb-on-primary) !important;
   font-weight: 700;
-  box-shadow: 0 0 22px rgba(0, 240, 255, 0.4);
+  box-shadow: 0 0 22px rgba(var(--xb-primary-rgb), 0.4);
 }
 .ghost-btn {
-  background: rgba(0, 240, 255, 0.06) !important;
+  background: rgba(var(--xb-primary-rgb), 0.06) !important;
   border: 1px solid var(--xb-border) !important;
   color: var(--xb-text) !important;
   font-weight: 600;
@@ -300,7 +300,7 @@ onMounted(() => {
   grid-template-columns: 1.3fr 0.9fr;
   gap: 36px;
   align-items: center;
-  box-shadow: 0 0 50px rgba(0, 240, 255, 0.08);
+  box-shadow: 0 0 50px rgba(var(--xb-primary-rgb), 0.08);
 }
 .hello {
   color: var(--xb-primary);
@@ -327,17 +327,17 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 .dropzone {
-  border: 1.5px dashed rgba(0, 240, 255, 0.3);
+  border: 1.5px dashed rgba(var(--xb-primary-rgb), 0.3);
   border-radius: 8px;
   padding: 34px 20px;
   text-align: center;
-  background: rgba(0, 240, 255, 0.03);
+  background: rgba(var(--xb-primary-rgb), 0.03);
   transition: all 0.25s;
   cursor: pointer;
 }
 .dropzone:hover {
   border-color: var(--xb-primary);
-  background: rgba(0, 240, 255, 0.07);
+  background: rgba(var(--xb-primary-rgb), 0.07);
 }
 .dz-icon {
   font-size: 46px;
@@ -412,10 +412,10 @@ onMounted(() => {
   gap: 7px;
   font-size: 13px;
   font-weight: 600;
-  color: #19f59a;
+  color: var(--xb-success);
 }
-.env-tag.degraded { color: #ffae00; }
-.env-tag.degraded .env-dot { background: #ffae00; box-shadow: 0 0 8px #ffae00; }
+.env-tag.degraded { color: var(--xb-warn); }
+.env-tag.degraded .env-dot { background: var(--xb-warn); box-shadow: 0 0 8px var(--xb-warn); }
 .empty-hint {
   padding: 36px;
   text-align: center;
@@ -425,8 +425,8 @@ onMounted(() => {
 .env-dot {
   width: 7px; height: 7px;
   border-radius: 50%;
-  background: #19f59a;
-  box-shadow: 0 0 8px #19f59a;
+  background: var(--xb-success);
+  box-shadow: 0 0 8px var(--xb-success);
   animation: env-pulse 1.8s infinite;
 }
 @keyframes env-pulse {
@@ -451,8 +451,8 @@ onMounted(() => {
 }
 .quick-card:hover {
   transform: translateY(-4px);
-  border-color: rgba(0, 240, 255, 0.5);
-  box-shadow: 0 0 28px rgba(0, 240, 255, 0.12);
+  border-color: rgba(var(--xb-primary-rgb), 0.5);
+  box-shadow: 0 0 28px rgba(var(--xb-primary-rgb), 0.12);
 }
 .quick-icon {
   width: 48px; height: 48px;
@@ -486,8 +486,8 @@ onMounted(() => {
 }
 .model-card:hover {
   transform: translateY(-4px);
-  border-color: rgba(0, 240, 255, 0.5);
-  box-shadow: 0 0 24px rgba(0, 240, 255, 0.12);
+  border-color: rgba(var(--xb-primary-rgb), 0.5);
+  box-shadow: 0 0 24px rgba(var(--xb-primary-rgb), 0.12);
 }
 .model-top {
   display: flex;
@@ -501,7 +501,7 @@ onMounted(() => {
   display: grid;
   place-items: center;
   font-size: 20px;
-  color: #05060d;
+  color: var(--xb-on-primary);
   background: var(--mc);
   box-shadow: 0 0 16px color-mix(in srgb, var(--mc) 45%, transparent);
 }
@@ -511,8 +511,8 @@ onMounted(() => {
   padding: 3px 8px;
   border-radius: 6px;
   color: var(--xb-primary);
-  background: rgba(0, 240, 255, 0.1);
-  border: 1px solid rgba(0, 240, 255, 0.25);
+  background: rgba(var(--xb-primary-rgb), 0.1);
+  border: 1px solid rgba(var(--xb-primary-rgb), 0.25);
 }
 .model-name {
   font-weight: 600;
@@ -532,8 +532,8 @@ onMounted(() => {
 }
 .model-add {
   border-radius: 6px;
-  border: 1.5px dashed rgba(0, 240, 255, 0.3);
-  background: rgba(0, 240, 255, 0.03);
+  border: 1.5px dashed rgba(var(--xb-primary-rgb), 0.3);
+  background: rgba(var(--xb-primary-rgb), 0.03);
   color: var(--xb-muted);
   cursor: pointer;
   display: flex;
@@ -550,7 +550,7 @@ onMounted(() => {
 .model-add small { font-size: 11px; font-weight: 400; }
 .model-add:hover {
   border-color: var(--xb-primary);
-  background: rgba(0, 240, 255, 0.08);
+  background: rgba(var(--xb-primary-rgb), 0.08);
   color: var(--xb-text);
 }
 
@@ -592,7 +592,7 @@ onMounted(() => {
   color: var(--xb-muted);
   padding: 2px 7px;
   border-radius: 5px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(var(--xb-fill-rgb), 0.06);
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
 .tool-desc {
@@ -611,8 +611,8 @@ onMounted(() => {
   border-radius: 999px;
   flex-shrink: 0;
 }
-.tool-status.ok { color: #19f59a; background: rgba(25, 245, 154, 0.12); }
-.tool-status.warn { color: #ffae00; background: rgba(255, 174, 0, 0.12); }
+.tool-status.ok { color: var(--xb-success); background: rgba(var(--xb-success-rgb), 0.12); }
+.tool-status.warn { color: var(--xb-warn); background: rgba(var(--xb-warn-rgb), 0.12); }
 
 /* 最近作品 */
 .works {
@@ -627,14 +627,14 @@ onMounted(() => {
   border-radius: 6px;
   transition: background 0.2s;
 }
-.work-row:hover { background: rgba(0, 240, 255, 0.05); }
-.work-row + .work-row { border-top: 1px solid rgba(255, 255, 255, 0.04); }
+.work-row:hover { background: rgba(var(--xb-primary-rgb), 0.05); }
+.work-row + .work-row { border-top: 1px solid rgba(var(--xb-fill-rgb), 0.04); }
 .work-play {
   width: 36px; height: 36px;
   flex-shrink: 0;
   border-radius: 50%;
   border: 1px solid var(--xb-border);
-  background: rgba(0, 240, 255, 0.08);
+  background: rgba(var(--xb-primary-rgb), 0.08);
   color: var(--xb-primary);
   cursor: pointer;
   display: grid;
@@ -642,14 +642,14 @@ onMounted(() => {
   font-size: 15px;
   transition: all 0.2s;
 }
-.work-play:hover { background: var(--xb-primary); color: #05060d; }
+.work-play:hover { background: var(--xb-primary); color: var(--xb-on-primary); }
 .work-cover {
   width: 42px; height: 42px;
   flex-shrink: 0;
   border-radius: 9px;
   display: grid;
   place-items: center;
-  color: #05060d;
+  color: var(--xb-on-primary);
   font-size: 19px;
   background: var(--wc);
 }
@@ -666,7 +666,7 @@ onMounted(() => {
   width: 120px;
   height: 5px;
   border-radius: 5px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(var(--xb-fill-rgb), 0.08);
   overflow: hidden;
   flex-shrink: 0;
 }
@@ -682,9 +682,9 @@ onMounted(() => {
   border-radius: 999px;
   flex-shrink: 0;
 }
-.work-status.done { color: #19f59a; background: rgba(25, 245, 154, 0.12); }
-.work-status.running { color: var(--xb-primary); background: rgba(0, 240, 255, 0.12); }
-.work-status.queue { color: #ffae00; background: rgba(255, 174, 0, 0.12); }
+.work-status.done { color: var(--xb-success); background: rgba(var(--xb-success-rgb), 0.12); }
+.work-status.running { color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.12); }
+.work-status.queue { color: var(--xb-warn); background: rgba(var(--xb-warn-rgb), 0.12); }
 .work-time {
   font-size: 12.5px;
   color: var(--xb-muted);
@@ -705,7 +705,7 @@ onMounted(() => {
   font-size: 16px;
   transition: all 0.2s;
 }
-.work-ops button:hover { color: var(--xb-primary); background: rgba(0, 240, 255, 0.08); }
+.work-ops button:hover { color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.08); }
 
 /* 响应式 */
 @media (max-width: 1080px) {

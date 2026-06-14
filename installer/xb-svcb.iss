@@ -19,7 +19,7 @@
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.0.2"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 
@@ -44,6 +44,9 @@ OutputBaseFilename=XB-SVCB-Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+; 安装器与卸载项图标
+SetupIconFile=..\assets\icon\xb-svcb.ico
+UninstallDisplayIcon={app}\{#MyAppExe}
 
 [Languages]
 ; 默认使用随 Inno 自带的 Default.isl，保证任何机器都能编译。
@@ -62,6 +65,8 @@ Source: "..\dist\XB-SVCB\*"; DestDir: "{app}"; Flags: recursesubdirs createallsu
 ; 环境搭建脚本（纯 batch + Python，安装过程不涉及 PowerShell）
 Source: "..\install\*"; DestDir: "{app}\install"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "\__pycache__\*"
 Source: "..\setup_env.bat"; DestDir: "{app}"; Flags: ignoreversion
+; 应用图标（供 .bat 快捷方式引用；exe 已内嵌同一图标）
+Source: "..\assets\icon\xb-svcb.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; 自带底模与 UVR 模型（随安装包分发；安装时由 install.py 本地复制，免联网慢下载）
 ; 模型为已压缩的二进制权重，用 nocompression 跳过再压缩，显著加快编译与安装速度
 ; 排除可选的 fcpe.pt（默认 F0 用 rmvpe），让安装器体积压到 GitHub Release 单文件 2GiB 上限内
@@ -69,10 +74,10 @@ Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubd
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 
 [Icons]
-Name: "{group}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"
-Name: "{group}\搭建/修复运行环境"; Filename: "{app}\setup_env.bat"; WorkingDir: "{app}"
+Name: "{group}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\xb-svcb.ico"
+Name: "{group}\搭建/修复运行环境"; Filename: "{app}\setup_env.bat"; WorkingDir: "{app}"; IconFilename: "{app}\xb-svcb.ico"
 Name: "{group}\卸载 {#MyAppShort}"; Filename: "{uninstallexe}"
-Name: "{commondesktop}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{commondesktop}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\xb-svcb.ico"
 
 [Run]
 ; 安装结束后按勾选搭建环境（前端已预构建，跳过 web 步骤）。由 setup_env.bat 调 install.py，控制台保留便于查看日志。

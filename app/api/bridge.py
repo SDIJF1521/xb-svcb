@@ -50,6 +50,16 @@ class Api:
     def get_system_status(self) -> dict[str, Any]:
         return self._system.status()
 
+    def apply_window_theme(self, theme: str) -> bool:
+        """让原生窗口标题栏/边框跟随前端主题（cyber / anime）。
+
+        前端在挂载及切换主题时调用；非 Windows 平台静默返回 False。
+        """
+        from infrastructure.window_theme import apply as _apply_window_theme
+
+        name = theme if theme in ("cyber", "anime") else "cyber"
+        return _apply_window_theme(config.APP_TITLE, name)
+
     # ---- 模型 ----
     def list_models(self) -> list[dict[str, Any]]:
         return self._models.list()

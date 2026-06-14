@@ -237,9 +237,9 @@ onUnmounted(() => {
 .cta-btn {
   background: linear-gradient(135deg, var(--xb-primary), var(--xb-primary-2)) !important;
   border: none !important;
-  color: #05060d !important;
+  color: var(--xb-on-primary) !important;
   font-weight: 700;
-  box-shadow: 0 0 22px rgba(0, 240, 255, 0.4);
+  box-shadow: 0 0 22px rgba(var(--xb-primary-rgb), 0.4);
 }
 
 /* 工具条 */
@@ -258,25 +258,25 @@ onUnmounted(() => {
   padding: 8px 14px;
   border-radius: 8px;
   border: 1px solid var(--xb-border);
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(var(--xb-fill-rgb), 0.02);
   color: var(--xb-muted);
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
   transition: all 0.2s;
 }
-.seg-item:hover { color: var(--xb-text); border-color: rgba(0, 240, 255, 0.45); }
+.seg-item:hover { color: var(--xb-text); border-color: rgba(var(--xb-primary-rgb), 0.45); }
 .seg-item.active {
   color: var(--xb-primary);
   border-color: var(--xb-primary);
-  background: rgba(0, 240, 255, 0.1);
+  background: rgba(var(--xb-primary-rgb), 0.1);
 }
 .seg-count {
   font-size: 11px;
   font-weight: 700;
   padding: 1px 7px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(var(--xb-fill-rgb), 0.08);
   color: inherit;
 }
 .search {
@@ -285,7 +285,7 @@ onUnmounted(() => {
   gap: 8px;
   padding: 9px 14px;
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(var(--xb-fill-rgb), 0.04);
   border: 1px solid var(--xb-border);
   color: var(--xb-muted);
   width: 240px;
@@ -320,8 +320,8 @@ onUnmounted(() => {
   border-radius: 6px;
   transition: background 0.2s;
 }
-.work-row:hover { background: rgba(0, 240, 255, 0.05); }
-.work-row + .work-row { border-top: 1px solid rgba(255, 255, 255, 0.04); }
+.work-row:hover { background: rgba(var(--xb-primary-rgb), 0.05); }
+.work-row + .work-row { border-top: 1px solid rgba(var(--xb-fill-rgb), 0.04); }
 .col-ops { text-align: right; }
 
 .work-title-cell { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -330,7 +330,7 @@ onUnmounted(() => {
   flex-shrink: 0;
   border-radius: 50%;
   border: 1px solid var(--xb-border);
-  background: rgba(0, 240, 255, 0.08);
+  background: rgba(var(--xb-primary-rgb), 0.08);
   color: var(--xb-primary);
   cursor: pointer;
   display: grid;
@@ -338,7 +338,7 @@ onUnmounted(() => {
   font-size: 15px;
   transition: all 0.2s;
 }
-.work-play:hover:not(:disabled) { background: var(--xb-primary); color: #05060d; }
+.work-play:hover:not(:disabled) { background: var(--xb-primary); color: var(--xb-on-primary); }
 .work-play:disabled { opacity: 0.35; cursor: not-allowed; }
 .work-cover {
   width: 40px; height: 40px;
@@ -346,7 +346,7 @@ onUnmounted(() => {
   border-radius: 9px;
   display: grid;
   place-items: center;
-  color: #05060d;
+  color: var(--xb-on-primary);
   font-size: 18px;
   background: var(--wc);
 }
@@ -370,7 +370,7 @@ onUnmounted(() => {
   width: 70px;
   height: 4px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(var(--xb-fill-rgb), 0.1);
   overflow: hidden;
 }
 .mini-bar i {
@@ -388,10 +388,10 @@ onUnmounted(() => {
   padding: 4px 10px;
   border-radius: 999px;
 }
-.badge.done { color: #19f59a; background: rgba(25, 245, 154, 0.12); }
-.badge.running { color: var(--xb-primary); background: rgba(0, 240, 255, 0.12); }
-.badge.queue { color: #ffae00; background: rgba(255, 174, 0, 0.12); }
-.badge.failed { color: var(--xb-accent); background: rgba(255, 46, 136, 0.12); }
+.badge.done { color: var(--xb-success); background: rgba(var(--xb-success-rgb), 0.12); }
+.badge.running { color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.12); }
+.badge.queue { color: var(--xb-warn); background: rgba(var(--xb-warn-rgb), 0.12); }
+.badge.failed { color: var(--xb-accent); background: rgba(var(--xb-accent-rgb), 0.12); }
 
 .op {
   width: 32px; height: 32px;
@@ -403,8 +403,8 @@ onUnmounted(() => {
   font-size: 15px;
   transition: all 0.2s;
 }
-.op:hover:not(:disabled) { color: var(--xb-primary); background: rgba(0, 240, 255, 0.08); }
-.op.danger:hover { color: var(--xb-accent); background: rgba(255, 46, 136, 0.1); }
+.op:hover:not(:disabled) { color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.08); }
+.op.danger:hover { color: var(--xb-accent); background: rgba(var(--xb-accent-rgb), 0.1); }
 .op:disabled { opacity: 0.3; cursor: not-allowed; }
 
 /* 空状态 */
