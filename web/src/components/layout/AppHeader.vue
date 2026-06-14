@@ -23,9 +23,46 @@
 
       <!-- 右侧操作 -->
       <div class="header-actions">
-        <div class="search">
-          <el-icon><Search /></el-icon>
-          <input type="text" placeholder="搜索作品、模型…" />
+        <div ref="searchWrap" class="menu-wrap search-wrap">
+          <div class="search" :class="{ focus: searchOpen }">
+            <el-icon><Search /></el-icon>
+            <input
+              v-model="searchQuery"
+              type="text"
+              placeholder="搜索作品、模型…"
+              @focus="onSearchFocus"
+              @input="onSearchInput"
+              @keyup.enter="onSearchEnter"
+            />
+            <button v-if="searchQuery" class="search-clear" title="清除" @click="clearSearch">
+              <el-icon><Close /></el-icon>
+            </button>
+          </div>
+          <transition name="pop">
+            <div v-if="searchOpen" class="popover search-pop">
+              <div v-if="searchResults.length" class="notif-list">
+                <button
+                  v-for="r in searchResults"
+                  :key="r.id"
+                  class="notif-item"
+                  @click="gotoSearch(r)"
+                >
+                  <span class="search-ic" :class="r.kind">
+                    <el-icon><component :is="r.kind === 'model' ? Microphone : Files" /></el-icon>
+                  </span>
+                  <span class="notif-body">
+                    <span class="notif-title">{{ r.label }}</span>
+                    <span class="notif-text">{{ r.sub }}</span>
+                  </span>
+                  <el-icon class="search-go"><Right /></el-icon>
+                </button>
+              </div>
+              <div v-else class="pop-empty">
+                <el-icon><Search /></el-icon>
+                <span>没有匹配「{{ searchQuery }}」的结果</span>
+              </div>
+            </div>
+          </transition>
         </div>
 
         <div class="env-status" :class="{ degraded: !allReady }" :title="envTitle">
@@ -137,9 +174,10 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Sunny, Moon, Picture } from '@element-plus/icons-vue'
+import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Sunny, Moon, Picture, Close, Right } from '@element-plus/icons-vue'
 import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
+import { useModelsStore } from '@/stores/models'
 import { useProfileStore } from '@/stores/profile'
 import { useThemeStore, THEMES } from '@/stores/theme'
 
@@ -180,8 +218,71 @@ function toggleMenu(which: Exclude<MenuName, 'none'>) {
 
 function onDocClick(e: MouseEvent) {
   const t = e.target as Node
-  if (notifWrap.value?.contains(t) || profileWrap.value?.contains(t)) return
-  openMenu.value = 'none'
+  if (!(notifWrap.value?.contains(t) || profileWrap.value?.contains(t))) {
+    openMenu.value = 'none'
+  }
+  if (!searchWrap.value?.contains(t)) {
+    searchOpen.value = false
+  }
+}
+
+/* ----- 全局搜索（作品 / 模型）----- */
+interface SearchResult {
+  id: string
+  label: string
+  sub: string
+  kind: 'work' | 'model'
+  to: string
+}
+
+const modelsStore = useModelsStore()
+const { models } = storeToRefs(modelsStore)
+
+const searchWrap = ref<HTMLElement>()
+const searchQuery = ref('')
+const searchOpen = ref(false)
+
+const searchResults = computed<SearchResult[]>(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return []
+  const res: SearchResult[] = []
+  for (const m of models.value) {
+    if (res.filter((r) => r.kind === 'model').length >= 5) break
+    if (m.name.toLowerCase().includes(q) || m.type.toLowerCase().includes(q)) {
+      res.push({ id: `m_${m.id}`, label: m.name, sub: `模型 · ${m.type}`, kind: 'model', to: '/models' })
+    }
+  }
+  let wc = 0
+  for (const w of works.value) {
+    if (wc >= 6) break
+    if (w.title.toLowerCase().includes(q) || w.model.toLowerCase().includes(q)) {
+      res.push({ id: `w_${w.id}`, label: w.title, sub: `作品 · ${w.model}`, kind: 'work', to: '/works' })
+      wc++
+    }
+  }
+  return res
+})
+
+function onSearchFocus() {
+  if (searchQuery.value.trim()) searchOpen.value = true
+}
+function onSearchInput() {
+  searchOpen.value = !!searchQuery.value.trim()
+}
+function clearSearch() {
+  searchQuery.value = ''
+  searchOpen.value = false
+}
+function gotoSearch(r: SearchResult) {
+  searchOpen.value = false
+  router.push({ path: r.to, query: { q: searchQuery.value.trim() } })
+}
+function onSearchEnter() {
+  const first = searchResults.value[0]
+  const q = searchQuery.value.trim()
+  if (!q) return
+  searchOpen.value = false
+  router.push({ path: first ? first.to : '/works', query: { q } })
 }
 
 /* ----- 消息通知（由作品与环境状态派生）----- */
@@ -289,6 +390,7 @@ function onAvatarFile(e: Event) {
 onMounted(() => {
   if (!loaded.value) systemStore.load()
   worksStore.ensureLoaded()
+  modelsStore.ensureLoaded()
   document.addEventListener('click', onDocClick)
 })
 
@@ -402,7 +504,33 @@ onUnmounted(() => {
   width: 100%;
 }
 .search input::placeholder { color: var(--xb-muted); }
-.search:focus-within { border-color: var(--xb-primary); }
+.search:focus-within, .search.focus { border-color: var(--xb-primary); }
+.search-clear {
+  display: grid;
+  place-items: center;
+  border: none;
+  background: none;
+  color: var(--xb-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0;
+}
+.search-clear:hover { color: var(--xb-accent); }
+
+.search-wrap { flex-shrink: 0; }
+.search-pop { left: 0; right: auto; width: 300px; }
+.search-ic {
+  width: 30px; height: 30px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  font-size: 15px;
+  color: var(--xb-on-primary);
+  background: linear-gradient(135deg, var(--xb-primary), var(--xb-primary-2));
+}
+.search-ic.work { background: linear-gradient(135deg, var(--xb-primary-2), var(--xb-accent)); }
+.search-go { color: var(--xb-muted); font-size: 14px; align-self: center; }
 
 .env-status {
   display: flex;

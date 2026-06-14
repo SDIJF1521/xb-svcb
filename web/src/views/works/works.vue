@@ -102,7 +102,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import {
   Plus,
@@ -132,8 +133,15 @@ const tabs: { key: JobStatus | 'all'; label: string }[] = [
   { key: 'queue', label: '排队中' },
   { key: 'failed', label: '失败' },
 ]
+const route = useRoute()
 const filter = ref<JobStatus | 'all'>('all')
-const keyword = ref('')
+const keyword = ref(typeof route.query.q === 'string' ? route.query.q : '')
+watch(
+  () => route.query.q,
+  (q) => {
+    keyword.value = typeof q === 'string' ? q : ''
+  },
+)
 const playingId = ref<string | null>(null)
 
 const countOf = (key: JobStatus | 'all') =>

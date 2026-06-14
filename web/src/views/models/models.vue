@@ -145,8 +145,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import {
   FolderAdd,
@@ -169,7 +169,14 @@ const { models, defaultId } = storeToRefs(modelsStore)
 
 const showImport = ref(false)
 const importing = ref(false)
-const keyword = ref('')
+const route = useRoute()
+const keyword = ref(typeof route.query.q === 'string' ? route.query.q : '')
+watch(
+  () => route.query.q,
+  (q) => {
+    keyword.value = typeof q === 'string' ? q : ''
+  },
+)
 
 const typeTabs = ['全部', 'SVC', 'So-VITS', 'RVC']
 const typeFilter = ref('全部')
