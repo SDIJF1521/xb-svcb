@@ -185,6 +185,9 @@ DATA_DIR = Path.home() / ".xb-svcb"
 MODELS_DIR = DATA_DIR / "models"
 WORKS_DIR = DATA_DIR / "works"
 TEMP_DIR = DATA_DIR / "temp"
+# WebView2 持久化目录：存放前端 localStorage / cookie，使主题、头像等设置跨重启记忆。
+# 必须配合 webview.start(private_mode=False, storage_path=WEBVIEW_DIR) 才会持久化。
+WEBVIEW_DIR = DATA_DIR / "webview"
 
 MODELS_DB = DATA_DIR / "models.json"
 WORKS_DB = DATA_DIR / "works.json"

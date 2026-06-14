@@ -279,25 +279,60 @@ interface Song {
   hint: string
 }
 
+// 记忆上次使用的推理参数（localStorage，跨重启保留）
+const PREFS_KEY = 'xb-create-prefs'
+function loadPrefs(): Record<string, unknown> {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY)
+    if (raw) return JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    /* ignore */
+  }
+  return {}
+}
+const prefs = loadPrefs()
+const num = (v: unknown, d: number) => (typeof v === 'number' ? v : d)
+const str = (v: unknown, d: string) => (typeof v === 'string' ? v : d)
+
 const song = ref<Song | null>(null)
 const selectedModel = ref<string>('')
 
 const uvrModels = ['MDX-Net', 'Demucs v4', 'VR Arch']
-const uvrModel = ref('MDX-Net')
+const uvrModel = ref(str(prefs.uvrModel, 'MDX-Net'))
 
 const f0Methods = ['rmvpe', 'crepe', 'harvest', 'pm']
-const f0Method = ref('rmvpe')
+const f0Method = ref(str(prefs.f0Method, 'rmvpe'))
 
-const pitch = ref(0)
-const indexRate = ref(0.75)
-const rmsMix = ref(0.25)
-const diffusionRatio = ref(0.5)
+const pitch = ref(num(prefs.pitch, 0))
+const indexRate = ref(num(prefs.indexRate, 0.75))
+const rmsMix = ref(num(prefs.rmsMix, 0.25))
+const diffusionRatio = ref(num(prefs.diffusionRatio, 0.5))
 
 const deviceOptions = [
   { v: 'cuda', label: 'GPU (CUDA)' },
   { v: 'cpu', label: 'CPU' },
 ]
-const device = ref('cuda')
+const device = ref(str(prefs.device, 'cuda'))
+
+// 任一参数变化即写回 localStorage
+watch([uvrModel, f0Method, pitch, indexRate, rmsMix, diffusionRatio, device], () => {
+  try {
+    localStorage.setItem(
+      PREFS_KEY,
+      JSON.stringify({
+        uvrModel: uvrModel.value,
+        f0Method: f0Method.value,
+        pitch: pitch.value,
+        indexRate: indexRate.value,
+        rmsMix: rmsMix.value,
+        diffusionRatio: diffusionRatio.value,
+        device: device.value,
+      }),
+    )
+  } catch {
+    /* ignore */
+  }
+})
 
 const isPlaying = ref(false)
 const currentWork = ref<WorkDTO | null>(null)

@@ -69,8 +69,20 @@ def main() -> None:
     except Exception:  # noqa: BLE001 - 个别平台无该事件时忽略
         pass
 
+    # 关闭隐私模式并指定固定存储目录，使前端 localStorage / cookie 跨重启持久化
+    # （主题、头像、昵称、通知已读等设置因此具备记忆性）。
+    try:
+        config.WEBVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+
     # 生产模式下用内置 http server 提供静态资源，确保 SPA 路由与资源路径正常。
-    webview.start(debug=dev, http_server=not dev)
+    webview.start(
+        debug=dev,
+        http_server=not dev,
+        private_mode=False,
+        storage_path=str(config.WEBVIEW_DIR),
+    )
 
 
 if __name__ == "__main__":
