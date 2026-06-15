@@ -104,6 +104,22 @@ GH_PROXIES = [
 
 UVR_MODEL_NAMES = ["5_HP-Karaoke-UVR.pth", "UVR-DeEcho-DeReverb.pth"]
 
+# audio-separator 启动加载模型前会联网拉取这几个 JSON（模型清单与按哈希匹配的参数表），
+# 国内访问 raw.githubusercontent.com 常超时。预先放进模型目录即可完全离线
+# （audio-separator 的 download_file_if_not_exists 检测到本地已存在就跳过下载）。
+UVR_SUPPORT_FILES = [
+    "download_checks.json",
+    "vr_model_data.json",
+    "mdx_model_data.json",
+]
+# 这些 JSON 在 GitHub 上的相对路径（自带缺失时回退联网下载，走镜像优先）
+UVR_SUPPORT_GH = {
+    "download_checks.json": "filelists/download_checks.json",
+    "vr_model_data.json": "vr_model_data/model_data_new.json",
+    "mdx_model_data.json": "mdx_model_data/model_data_new.json",
+}
+UVR_DATA_RAW_PREFIX = "https://raw.githubusercontent.com/TRvlvr/application_data/main/"
+
 # UVR（audio-separator）是现代库，用 3.10。
 PYTHON_FOR_ENGINES = "3.10"
 # so-vits-svc 4.1 的依赖（numpy 1.19.5 / scipy 1.7.3 / pyworld 0.3.0 等）是为
@@ -193,6 +209,28 @@ def ensure_uv() -> str:
 
 def uv_cmd(uv: str, *args: str) -> list[str]:
     return [uv, *args]
+
+
+def uv_pip_install(uv: str, py: str, *args: str, index: str | None = None) -> None:
+    """`uv pip install`；失败时自动加 --reinstall 重试一次。
+
+    用于自愈被中断的半成品安装：典型表现是 site-packages 里留下空的
+    `*.dist-info` 目录（缺 METADATA），再次安装会报
+    `failed to open file ... METADATA (os error 2)`。--reinstall 会强制
+    重新下载并覆盖，绕过损坏的旧元数据。
+    """
+    def build(reinstall: bool) -> list[str]:
+        extra = ["--reinstall"] if reinstall else []
+        cmd = uv_cmd(uv, "pip", "install", *extra, "--python", py, *args)
+        if index:
+            cmd += ["--index-url", index]
+        return cmd
+
+    try:
+        run(build(reinstall=False))
+    except subprocess.CalledProcessError:
+        print(c("y", "    安装失败，尝试 --reinstall 重装以修复损坏/残缺的旧安装 …"))
+        run(build(reinstall=True))
 
 
 # ---------- 下载工具 ----------
@@ -315,10 +353,7 @@ def step_uvr(uv: str, use_gpu: bool) -> None:
     py = str(venv_python(UVR_VENV))
 
     def pip(*args: str, index: str | None = None) -> None:
-        cmd = uv_cmd(uv, "pip", "install", "--python", py, *args)
-        if index:
-            cmd += ["--index-url", index]
-        run(cmd)
+        uv_pip_install(uv, py, *args, index=index)
 
     # uv venv 默认不含 setuptools，部分库运行时需要 pkg_resources，先补齐
     # （setuptools 81+ 已移除 pkg_resources，钉 <81）
@@ -390,10 +425,7 @@ def step_svc(uv: str, use_gpu: bool) -> None:
     py = str(venv_python(SVC_VENV))
 
     def pip(*args: str, index: str | None = None) -> None:
-        cmd = uv_cmd(uv, "pip", "install", "--python", py, *args)
-        if index:
-            cmd += ["--index-url", index]
-        run(cmd)
+        uv_pip_install(uv, py, *args, index=index)
 
     # uv venv 默认不含 setuptools/pip，而 librosa 运行时要 `from pkg_resources import ...`
     # （pkg_resources 属于 setuptools），缺失会导致推理一加载 librosa 就 ModuleNotFoundError。
@@ -491,6 +523,22 @@ def step_models(uv: str) -> None:
     # 4) UVR 分离模型：自带优先，缺失再用 audio-separator 联网下载
     print(c("b", "  · UVR 分离模型（5_HP-Karaoke / DeEcho-DeReverb）"))
     UVR_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 4a) audio-separator 模型数据 JSON（清单 + 参数表）：放进模型目录即可离线，
+    #     避免运行时去 raw.githubusercontent.com 拉取而超时报错。
+    print(c("b", "  · UVR 模型数据（download_checks / vr / mdx）"))
+    for name in UVR_SUPPORT_FILES:
+        dest = UVR_MODELS_DIR / name
+        if dest.exists() and dest.stat().st_size > 0:
+            print(c("g", f"    已存在，跳过：{name}"))
+            continue
+        if copy_bundled(f"uvr/{name}", dest):
+            continue
+        try:
+            download(gh_urls(UVR_DATA_RAW_PREFIX + UVR_SUPPORT_GH[name]), dest)
+        except Exception as exc:  # noqa: BLE001 - 非致命：运行时仍会尝试联网拉取
+            print(c("y", f"    {name} 下载失败（{exc}）；首次分离时将尝试联网获取"))
+
     missing: list[str] = []
     for name in UVR_MODEL_NAMES:
         if not copy_bundled(f"uvr/{name}", UVR_MODELS_DIR / name):
