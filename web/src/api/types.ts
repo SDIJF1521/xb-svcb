@@ -88,3 +88,54 @@ export interface CreateWorkPayload {
   source_path?: string | null
   params?: InferenceParams
 }
+
+// ---- 音乐资源获取（妖狐 API）----
+
+/** 搜索结果中的单条歌曲索引项。 */
+export interface MusicSearchItem {
+  n: number
+  name: string
+  singer: string
+  album: string
+}
+
+export interface MusicSearchResult {
+  ok: boolean
+  error?: string
+  keyword?: string
+  songs?: MusicSearchItem[]
+}
+
+/** 单曲详情（含播放与下载地址）。 */
+export interface MusicSongDetail {
+  name: string
+  singer: string
+  album: string
+  title: string
+  picture: string
+  url: string
+  musicurl: string
+  lrc: string
+}
+
+export interface MusicSongResult {
+  ok: boolean
+  error?: string
+  song?: MusicSongDetail
+}
+
+/** 下载结果。 */
+export interface MusicDownloadResult {
+  ok: boolean
+  error?: string
+  path?: string
+  name?: string
+  size?: string
+}
+
+/** 已下载到本地的歌曲。 */
+export interface DownloadedMusic {
+  name: string
+  path: string
+  size: string
+}

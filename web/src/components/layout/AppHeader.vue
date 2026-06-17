@@ -174,7 +174,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Sunny, Moon, Picture, Close, Right } from '@element-plus/icons-vue'
+import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Sunny, Moon, Picture, Close, Right, Download } from '@element-plus/icons-vue'
 import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
 import { useModelsStore } from '@/stores/models'
@@ -192,6 +192,7 @@ const themeLabel = computed(() => THEMES.find((t) => t.value === theme.value)?.l
 const navItems = [
   { label: '首页', to: '/', icon: HomeFilled },
   { label: 'AI 翻唱', to: '/create', icon: Microphone },
+  { label: '资源获取', to: '/music', icon: Download },
   { label: '我的模型', to: '/models', icon: FolderOpened },
   { label: '我的作品', to: '/works', icon: Files },
 ]

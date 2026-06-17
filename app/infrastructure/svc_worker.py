@@ -66,6 +66,20 @@ def main() -> int:
 
     try:
         import soundfile
+        import torch
+
+        # PyTorch>=2.6 起 torch.load 默认 weights_only=True，会拒绝反序列化
+        # so-vits-svc checkpoint 里的 argparse.Namespace / numpy 标量等非张量对象，
+        # 导致"Weights only load failed"。so-vits 仓库本身未适配，这里在导入其模块前
+        # 还原旧默认行为（仓库内 .pth/.pt 均为用户本地可信文件）。
+        _orig_torch_load = torch.load
+
+        def _torch_load_compat(*a, **kw):  # noqa: ANN001, ANN202
+            kw.setdefault("weights_only", False)
+            return _orig_torch_load(*a, **kw)
+
+        torch.load = _torch_load_compat  # type: ignore[assignment]
+
         from inference.infer_tool import Svc
     except Exception as exc:  # noqa: BLE001
         print(f"SVC_ERR 依赖导入失败: {exc}")

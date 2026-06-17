@@ -9,6 +9,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
+APP_VERSION = "0.0.3"
 APP_BG = "#05060d"
 
 
@@ -185,6 +186,8 @@ DATA_DIR = Path.home() / ".xb-svcb"
 MODELS_DIR = DATA_DIR / "models"
 WORKS_DIR = DATA_DIR / "works"
 TEMP_DIR = DATA_DIR / "temp"
+# 在线下载的歌曲存放目录（资源获取页下载的素材，可在翻唱页选用）
+MUSIC_DIR = DATA_DIR / "music"
 # WebView2 持久化目录：存放前端 localStorage / cookie，使主题、头像等设置跨重启记忆。
 # 必须配合 webview.start(private_mode=False, storage_path=WEBVIEW_DIR) 才会持久化。
 WEBVIEW_DIR = DATA_DIR / "webview"
@@ -192,6 +195,12 @@ WEBVIEW_DIR = DATA_DIR / "webview"
 MODELS_DB = DATA_DIR / "models.json"
 WORKS_DB = DATA_DIR / "works.json"
 SETTINGS_DB = DATA_DIR / "settings.json"
+
+# ---- 在线音乐资源 API（妖狐 API，网易云源）----
+# 用户需在「资源获取」页填写自己的 API Key（控制台->密钥管理）。
+MUSIC_API_URL = "https://api.yaohud.cn/api/music/wy"
+# 接口限制 10 QPS，客户端侧统一限流，避免触发风控。
+MUSIC_API_QPS = 10
 
 # 支持的音频与模型扩展名
 AUDIO_EXTS = (".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac")

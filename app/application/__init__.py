@@ -4,10 +4,12 @@ from .system_service import SystemService
 from .model_service import ModelService
 from .work_service import WorkService
 from .conversion_service import ConversionService
+from .music_service import MusicService
 
 __all__ = [
     "SystemService",
     "ModelService",
     "WorkService",
     "ConversionService",
+    "MusicService",
 ]

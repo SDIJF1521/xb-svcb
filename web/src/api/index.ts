@@ -8,6 +8,10 @@ import type {
   ModelDTO,
   SystemStatus,
   WorkDTO,
+  MusicSearchResult,
+  MusicSongResult,
+  MusicDownloadResult,
+  DownloadedMusic,
 } from './types'
 
 export * from './types'
@@ -51,6 +55,9 @@ export const api = {
   retryWork: (id: string) =>
     invoke<boolean>('retry_work', [id], () => mock.retryWork(id)),
 
+  renameWork: (id: string, title: string) =>
+    invoke<boolean>('rename_work', [id, title], () => mock.renameWork(id, title)),
+
   deleteWork: (id: string) =>
     invoke<boolean>('delete_work', [id], () => mock.deleteWork(id)),
 
@@ -68,6 +75,28 @@ export const api = {
 
   exportWork: (id: string) =>
     invoke<string>('export_work', [id], () => mock.exportWork(id)),
+
+  // ---- 音乐资源获取 ----
+  getMusicApiKey: () =>
+    invoke<string>('get_music_api_key', [], () => mock.getMusicApiKey()),
+
+  setMusicApiKey: (key: string) =>
+    invoke<boolean>('set_music_api_key', [key], () => mock.setMusicApiKey(key)),
+
+  searchMusic: (msg: string, g = 13) =>
+    invoke<MusicSearchResult>('search_music', [msg, g], () => mock.searchMusic(msg, g)),
+
+  getMusicSong: (msg: string, n: number) =>
+    invoke<MusicSongResult>('get_music_song', [msg, n], () => mock.getMusicSong(msg, n)),
+
+  downloadMusic: (msg: string, n: number) =>
+    invoke<MusicDownloadResult>('download_music', [msg, n], () => mock.downloadMusic(msg, n)),
+
+  listMusic: () =>
+    invoke<DownloadedMusic[]>('list_music', [], () => mock.listMusic()),
+
+  deleteMusic: (path: string) =>
+    invoke<boolean>('delete_music', [path], () => mock.deleteMusic(path)),
 }
 
 const palette = ['#00f0ff', '#2f6bff', '#ff2e88', '#19f59a', '#ffae00', '#b65cff', '#5ce0c8', '#ff7ac0']

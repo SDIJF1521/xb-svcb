@@ -130,8 +130,17 @@
         <router-link class="more" to="/works">我的作品 <el-icon><Right /></el-icon></router-link>
       </div>
       <div v-if="recentWorks.length" class="works glass">
+        <audio ref="audioEl" style="display: none" @ended="playingId = null" @pause="onAudioPause" />
         <div class="work-row" v-for="w in recentWorks" :key="w.id">
-          <button class="work-play"><el-icon><VideoPlay /></el-icon></button>
+          <button
+            class="work-play"
+            :disabled="w.status !== 'done'"
+            :title="w.status === 'done' ? '试听' : '尚未完成'"
+            @click="togglePlay(w.id)"
+          >
+            <el-icon v-if="playingId === w.id"><VideoPause /></el-icon>
+            <el-icon v-else><VideoPlay /></el-icon>
+          </button>
           <div class="work-cover" :style="{ '--wc': w.color }">
             <el-icon><Headset /></el-icon>
           </div>
@@ -145,8 +154,31 @@
           <span class="work-status" :class="w.status">{{ statusText(w.status) }}</span>
           <span class="work-time">{{ w.time }}</span>
           <div class="work-ops">
-            <button title="下载"><el-icon><Download /></el-icon></button>
-            <button title="更多"><el-icon><MoreFilled /></el-icon></button>
+            <button title="下载" :disabled="w.status !== 'done'" @click="onDownload(w.id)">
+              <el-icon><Download /></el-icon>
+            </button>
+            <el-dropdown trigger="click" @command="(cmd: string) => onCommand(cmd, w.id, w.title)">
+              <button title="更多" @click.stop><el-icon><MoreFilled /></el-icon></button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="rename">
+                    <el-icon><EditPen /></el-icon> 重命名
+                  </el-dropdown-item>
+                  <el-dropdown-item command="retry">
+                    <el-icon><RefreshRight /></el-icon> 重新生成
+                  </el-dropdown-item>
+                  <el-dropdown-item v-if="w.status === 'failed'" command="log">
+                    <el-icon><Document /></el-icon> 查看日志
+                  </el-dropdown-item>
+                  <el-dropdown-item command="open">
+                    <el-icon><FolderOpened /></el-icon> 在「我的作品」中查看
+                  </el-dropdown-item>
+                  <el-dropdown-item command="remove" divided>
+                    <el-icon><Delete /></el-icon> 删除
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </div>
       </div>
@@ -165,6 +197,7 @@ import {
   FolderAdd,
   Right,
   VideoPlay,
+  VideoPause,
   Headset,
   Download,
   MoreFilled,
@@ -178,10 +211,16 @@ import {
   VideoCamera,
   CircleCheckFilled,
   WarningFilled,
+  RefreshRight,
+  Document,
+  Delete,
+  EditPen,
 } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useSystemStore } from '@/stores/system'
 import { useModelsStore } from '@/stores/models'
 import { useWorksStore } from '@/stores/works'
+import { api } from '@/api'
 import type { JobStatus } from '@/api'
 
 defineOptions({ name: 'Index' })
@@ -230,6 +269,77 @@ const toolColor = (key: string): string => toolColorMap[key] ?? '#00f0ff'
 
 const statusText = (s: JobStatus) =>
   ({ done: '已完成', running: '生成中', queue: '排队中', failed: '失败' })[s]
+
+// 试听播放
+const audioEl = ref<HTMLAudioElement | null>(null)
+const playingId = ref<string | null>(null)
+const audioLoadedFor = ref<string | null>(null)
+
+const onAudioPause = () => {
+  if (audioEl.value && audioEl.value.ended) playingId.value = null
+}
+
+const togglePlay = async (id: string) => {
+  const el = audioEl.value
+  if (!el) return
+  if (playingId.value === id && !el.paused) {
+    el.pause()
+    playingId.value = null
+    return
+  }
+  if (audioLoadedFor.value !== id) {
+    const data = await api.getWorkAudio(id)
+    if (!data) {
+      ElMessage.error('无法加载生成的音频')
+      return
+    }
+    el.src = data
+    audioLoadedFor.value = id
+  }
+  await el.play()
+  playingId.value = id
+}
+
+const onDownload = async (id: string) => {
+  const dest = await api.exportWork(id)
+  if (dest) ElMessage.success('已导出到：' + dest)
+  else ElMessage.info('已取消导出')
+}
+
+const onCommand = async (cmd: string, id: string, title = '') => {
+  if (cmd === 'rename') {
+    await onRename(id, title)
+  } else if (cmd === 'retry') {
+    await worksStore.retry(id)
+    ElMessage.success('已重新提交生成任务')
+  } else if (cmd === 'log') {
+    await api.openWorkLog(id)
+  } else if (cmd === 'open') {
+    router.push('/works')
+  } else if (cmd === 'remove') {
+    await worksStore.remove(id)
+    ElMessage.success('已删除作品')
+  }
+}
+
+const onRename = async (id: string, current: string) => {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入新的作品名称', '重命名作品', {
+      inputValue: current,
+      inputPlaceholder: '作品名称',
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValidator: (v: string) => (v && v.trim() ? true : '名称不能为空'),
+    })
+    const name = (value || '').trim()
+    if (!name || name === current) return
+    const ok = await worksStore.rename(id, name)
+    if (ok) ElMessage.success('已重命名，导出文件名将同步更新')
+    else ElMessage.error('重命名失败')
+  } catch {
+    /* 用户取消 */
+  }
+}
 
 function onImport() {
   // 导入需手动选择多个文件，统一在「我的模型」页操作
@@ -642,7 +752,8 @@ onMounted(() => {
   font-size: 15px;
   transition: all 0.2s;
 }
-.work-play:hover { background: var(--xb-primary); color: var(--xb-on-primary); }
+.work-play:hover:not(:disabled) { background: var(--xb-primary); color: var(--xb-on-primary); }
+.work-play:disabled { opacity: 0.35; cursor: not-allowed; }
 .work-cover {
   width: 42px; height: 42px;
   flex-shrink: 0;
@@ -705,7 +816,9 @@ onMounted(() => {
   font-size: 16px;
   transition: all 0.2s;
 }
-.work-ops button:hover { color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.08); }
+.work-ops button:hover:not(:disabled) { color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.08); }
+.work-ops button:disabled { opacity: 0.35; cursor: not-allowed; }
+.work-ops :deep(.el-dropdown) { display: inline-flex; }
 
 /* 响应式 */
 @media (max-width: 1080px) {

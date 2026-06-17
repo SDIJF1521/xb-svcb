@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,7 @@ import config
 from application import (
     ConversionService,
     ModelService,
+    MusicService,
     SystemService,
     WorkService,
 )
@@ -30,16 +32,24 @@ from infrastructure.svc_engine import SvcEngine
 from infrastructure.uvr_tool import UvrTool
 
 
+def _safe_filename(name: str) -> str:
+    """清洗为合法文件名（去除非法字符并限长），用于导出默认名。"""
+    cleaned = re.sub(r'[\\/:*?"<>|\r\n\t]', "_", name or "").strip().strip(".")
+    return cleaned[:120] or "翻唱作品"
+
+
 class Api:
     def __init__(
         self,
         system: SystemService,
         models: ModelService,
         works: WorkService,
+        music: MusicService,
     ) -> None:
         self._system = system
         self._models = models
         self._works = works
+        self._music = music
         self._window = None
 
     def set_window(self, window) -> None:  # noqa: ANN001
@@ -119,6 +129,10 @@ class Api:
     def retry_work(self, work_id: str) -> bool:
         return self._works.retry(work_id)
 
+    def rename_work(self, work_id: str, title: str) -> bool:
+        """重命名作品；新标题同时作为导出文件的默认名。"""
+        return self._works.rename(work_id, title)
+
     def delete_work(self, work_id: str) -> bool:
         return self._works.remove(work_id)
 
@@ -156,11 +170,18 @@ class Api:
         return f"data:{mime};base64,{b64}"
 
     def export_work(self, work_id: str) -> str:
-        """弹出保存对话框，把成品音频另存到用户选择的位置，返回保存路径。"""
+        """弹出保存对话框，把成品音频另存到用户选择的位置，返回保存路径。
+
+        默认文件名取作品标题（与重命名后的名称保持一致），后缀沿用成品格式。
+        """
         src = self._stem_path(work_id, "output")
         if src is None:
             return ""
-        dest = self._save_dialog("导出翻唱作品", src.name)
+        work = self._works.get(work_id) or {}
+        title = (work.get("title") or src.stem).strip()
+        ext = src.suffix or ".wav"
+        filename = f"{_safe_filename(title)}{ext}"
+        dest = self._save_dialog("导出翻唱作品", filename)
         if not dest:
             return ""
         try:
@@ -168,6 +189,28 @@ class Api:
             return dest
         except OSError:
             return ""
+
+    # ---- 音乐资源获取 ----
+    def get_music_api_key(self) -> str:
+        return self._music.get_api_key()
+
+    def set_music_api_key(self, key: str) -> bool:
+        return self._music.set_api_key(key)
+
+    def search_music(self, msg: str, g: int = 13) -> dict[str, Any]:
+        return self._music.search(msg, g)
+
+    def get_music_song(self, msg: str, n: int) -> dict[str, Any]:
+        return self._music.get_song(msg, n)
+
+    def download_music(self, msg: str, n: int) -> dict[str, Any]:
+        return self._music.download(msg, n)
+
+    def list_music(self) -> list[dict[str, Any]]:
+        return self._music.list_downloaded()
+
+    def delete_music(self, path: str) -> bool:
+        return self._music.delete_downloaded(path)
 
     def _stem_path(self, work_id: str, kind: str) -> Path | None:
         """解析作品某条音轨的真实路径，并校验其位于数据目录内。"""
@@ -284,8 +327,9 @@ def build_api() -> Api:
     model_service = ModelService(models_repo, settings)
     conversion_service = ConversionService(works_repo, ffmpeg, uvr, svc)
     work_service = WorkService(works_repo, conversion_service, model_service)
+    music_service = MusicService(settings)
 
     # 启动时回收上次会话残留的"处理中"任务（其后台线程已随进程退出而终止）
     work_service.recover_stale()
 
-    return Api(system_service, model_service, work_service)
+    return Api(system_service, model_service, work_service, music_service)

@@ -1,9 +1,10 @@
 [project]
 name = "app"
-version = "0.1.0"
+version = "0.0.3"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "httpx[http2]>=0.28.1",
     "pywebview>=6.2.1",
 ]

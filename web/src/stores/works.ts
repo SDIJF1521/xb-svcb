@@ -50,5 +50,14 @@ export const useWorksStore = defineStore('works', () => {
     return ok
   }
 
-  return { works, loaded, load, ensureLoaded, create, refreshOne, retry, remove }
+  async function rename(id: string, title: string) {
+    const ok = await api.renameWork(id, title)
+    if (ok) {
+      const idx = works.value.findIndex((w) => w.id === id)
+      if (idx >= 0) works.value[idx] = { ...works.value[idx], title: title.trim() } as WorkVM
+    }
+    return ok
+  }
+
+  return { works, loaded, load, ensureLoaded, create, refreshOne, retry, remove, rename }
 })

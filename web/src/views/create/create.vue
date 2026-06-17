@@ -31,6 +31,28 @@
             </div>
             <button class="icon-x" @click="song = null"><el-icon><Close /></el-icon></button>
           </div>
+
+          <!-- 已下载素材：从「资源获取」下载的歌曲可直接选用 -->
+          <div v-if="downloaded.length" class="lib">
+            <div class="lib-head">
+              <span>从已下载素材选择</span>
+              <router-link to="/music" class="head-link">资源获取 <el-icon><Right /></el-icon></router-link>
+            </div>
+            <div class="lib-list">
+              <button
+                v-for="d in downloaded"
+                :key="d.path"
+                class="lib-item"
+                :class="{ active: song?.path === d.path }"
+                :title="d.name"
+                @click="pickDownloaded(d)"
+              >
+                <el-icon><Headset /></el-icon>
+                <span class="lib-name">{{ d.name }}</span>
+                <span class="lib-size">{{ d.size }}</span>
+              </button>
+            </div>
+          </div>
         </section>
 
         <!-- 选择模型 -->
@@ -246,6 +268,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import {
   UploadFilled,
@@ -263,7 +286,7 @@ import {
   RefreshRight,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { api, type WorkDTO, type PipelineStep } from '@/api'
+import { api, type WorkDTO, type PipelineStep, type DownloadedMusic } from '@/api'
 import { useModelsStore } from '@/stores/models'
 import { useWorksStore } from '@/stores/works'
 
@@ -414,6 +437,18 @@ async function onPickSong() {
   song.value = { name, path, hint: '本地音频已选择' }
 }
 
+// 已下载素材（来自「资源获取」页）
+const route = useRoute()
+const downloaded = ref<DownloadedMusic[]>([])
+
+function pickDownloaded(d: DownloadedMusic) {
+  song.value = { name: d.name, path: d.path, hint: '已下载素材' }
+}
+
+async function loadDownloaded() {
+  downloaded.value = await api.listMusic()
+}
+
 let timer: ReturnType<typeof setInterval> | null = null
 function stopPolling() {
   if (timer) {
@@ -463,6 +498,15 @@ watch(defaultId, (id) => {
 onMounted(async () => {
   await modelsStore.ensureLoaded()
   selectedModel.value = defaultId.value || models.value[0]?.id || ''
+  await loadDownloaded()
+  // 从「资源获取」页跳转而来时，预选传入的已下载素材
+  const src = typeof route.query.source === 'string' ? route.query.source : ''
+  if (src) {
+    const name = typeof route.query.name === 'string' && route.query.name
+      ? route.query.name
+      : src.split(/[/\\]/).pop() || src
+    song.value = { name, path: src, hint: '来自资源获取' }
+  }
 })
 onUnmounted(stopPolling)
 </script>
@@ -606,6 +650,44 @@ onUnmounted(stopPolling)
   font-size: 16px;
 }
 .icon-x:hover { color: var(--xb-accent); background: rgba(var(--xb-accent-rgb), 0.1); }
+
+/* 已下载素材 */
+.lib { margin-top: 16px; border-top: 1px solid var(--xb-border); padding-top: 14px; }
+.lib-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--xb-muted);
+  margin-bottom: 10px;
+}
+.lib-list { display: flex; flex-direction: column; gap: 8px; max-height: 220px; overflow-y: auto; }
+.lib-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.02);
+  color: var(--xb-text);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+}
+.lib-item:hover { border-color: rgba(var(--xb-primary-rgb), 0.45); }
+.lib-item.active { border-color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.08); }
+.lib-item .el-icon { color: var(--xb-primary); flex-shrink: 0; }
+.lib-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lib-size { font-size: 12px; color: var(--xb-muted); flex-shrink: 0; }
 
 /* 模型选择 */
 .model-list { display: flex; flex-direction: column; gap: 10px; }

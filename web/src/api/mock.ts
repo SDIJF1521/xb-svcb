@@ -8,6 +8,10 @@ import type {
   SystemStatus,
   WorkDTO,
   PipelineStep,
+  MusicSearchResult,
+  MusicSongResult,
+  MusicDownloadResult,
+  DownloadedMusic,
 } from './types'
 
 const now = () => new Date().toISOString()
@@ -53,6 +57,10 @@ const mockModels: ModelDTO[] = [
   },
 ]
 let defaultModelId = 'm1'
+
+// 音乐资源获取的模拟状态（仅浏览器开发环境）
+let mockMusicKey = ''
+const mockDownloaded: DownloadedMusic[] = []
 
 const baseSteps = (): PipelineStep[] => [
   { key: 'separate', label: '人声分离', status: 'wait' },
@@ -193,6 +201,12 @@ export const mock = {
     advance(w)
     return true
   },
+  renameWork(id: string, title: string): boolean {
+    const w = mockWorks.find((x) => x.id === id)
+    if (!w || !title.trim()) return false
+    w.title = title.trim()
+    return true
+  },
   deleteWork(id: string): boolean {
     const idx = mockWorks.findIndex((w) => w.id === id)
     if (idx >= 0) {
@@ -220,5 +234,59 @@ export const mock = {
   exportWork(id: string): string {
     console.info('[mock] exportWork', id)
     return ''
+  },
+
+  // ---- 音乐资源获取（浏览器开发环境模拟）----
+  getMusicApiKey(): string {
+    return mockMusicKey
+  },
+  setMusicApiKey(key: string): boolean {
+    mockMusicKey = key.trim()
+    return true
+  },
+  searchMusic(msg: string, g = 13): MusicSearchResult {
+    if (!mockMusicKey) return { ok: false, error: '未配置 API Key，请先在「API 设置」中填写' }
+    if (!msg.trim()) return { ok: false, error: '请输入搜索关键词' }
+    const songs = Array.from({ length: Math.min(g, 8) }, (_, i) => ({
+      n: i + 1,
+      name: `${msg}${i === 0 ? '' : `（版本 ${i + 1}）`}`,
+      singer: ['洛天依', '国风堂', '云梦', 'Reze'][i % 4] as string,
+      album: msg,
+    }))
+    return { ok: true, keyword: msg, songs }
+  },
+  getMusicSong(msg: string, n: number): MusicSongResult {
+    if (!mockMusicKey) return { ok: false, error: '未配置 API Key' }
+    return {
+      ok: true,
+      song: {
+        name: `${msg}`,
+        singer: '示例歌手',
+        album: msg,
+        title: `${msg} — 示例歌手`,
+        picture: '',
+        url: '',
+        musicurl: '',
+        lrc: `[00:00.00]${msg}（第 ${n} 首）\n[00:03.00]浏览器开发环境为模拟数据`,
+      },
+    }
+  },
+  downloadMusic(msg: string, n: number): MusicDownloadResult {
+    if (!mockMusicKey) return { ok: false, error: '未配置 API Key' }
+    const name = `${msg} - 示例歌手${n > 1 ? ` (${n})` : ''}`
+    const item: DownloadedMusic = { name, path: `C:/music/${name}.mp3`, size: '8.2 MB' }
+    mockDownloaded.unshift(item)
+    return { ok: true, path: item.path, name: item.name, size: item.size }
+  },
+  listMusic(): DownloadedMusic[] {
+    return [...mockDownloaded]
+  },
+  deleteMusic(path: string): boolean {
+    const idx = mockDownloaded.findIndex((m) => m.path === path)
+    if (idx >= 0) {
+      mockDownloaded.splice(idx, 1)
+      return true
+    }
+    return false
   },
 }

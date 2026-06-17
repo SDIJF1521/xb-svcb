@@ -81,6 +81,7 @@
         </span>
         <span class="col-time work-dim">{{ w.time }}</span>
         <span class="col-ops">
+          <button class="op" title="重命名" @click="onRename(w.id, w.title)"><el-icon><EditPen /></el-icon></button>
           <button class="op" :disabled="w.status !== 'done'" title="下载" @click="onDownload(w.id)"><el-icon><Download /></el-icon></button>
           <button class="op" v-if="w.status === 'failed'" title="打开日志" @click="onOpenLog(w.id)"><el-icon><Document /></el-icon></button>
           <button class="op" title="重新生成" @click="onRetry(w.id)"><el-icon><RefreshRight /></el-icon></button>
@@ -115,8 +116,9 @@ import {
   RefreshRight,
   Delete,
   Document,
+  EditPen,
 } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
 import { useWorksStore } from '@/stores/works'
 import type { JobStatus } from '@/api'
@@ -196,6 +198,25 @@ const onDownload = async (id: string) => {
 const onRetry = (id: string) => worksStore.retry(id)
 const onRemove = (id: string) => worksStore.remove(id)
 const onOpenLog = (id: string) => api.openWorkLog(id)
+
+const onRename = async (id: string, current: string) => {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入新的作品名称', '重命名作品', {
+      inputValue: current,
+      inputPlaceholder: '作品名称',
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValidator: (v: string) => (v && v.trim() ? true : '名称不能为空'),
+    })
+    const name = (value || '').trim()
+    if (!name || name === current) return
+    const ok = await worksStore.rename(id, name)
+    if (ok) ElMessage.success('已重命名，导出文件名将同步更新')
+    else ElMessage.error('重命名失败')
+  } catch {
+    /* 用户取消 */
+  }
+}
 
 // 轮询刷新进行中 / 排队中的任务进度
 let timer: ReturnType<typeof setInterval> | null = null

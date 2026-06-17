@@ -103,6 +103,18 @@ class WorkService:
                 count += 1
         return count
 
+    def rename(self, work_id: str, title: str) -> bool:
+        """重命名作品（标题用于展示与导出文件名）。"""
+        work = self._repo.get(work_id)
+        if not work:
+            return False
+        new_title = (title or "").strip()
+        if not new_title:
+            return False
+        work["title"] = new_title[:120]
+        self._repo.update(work_id, work)
+        return True
+
     def remove(self, work_id: str) -> bool:
         if not self._repo.get(work_id):
             return False

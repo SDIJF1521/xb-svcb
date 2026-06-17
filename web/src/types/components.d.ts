@@ -13,7 +13,12 @@ declare module 'vue' {
   export interface GlobalComponents {
     AppHeader: typeof import('./../components/layout/AppHeader.vue')['default']
     ElButton: typeof import('element-plus/es')['ElButton']
+    ElDialog: typeof import('element-plus/es')['ElDialog']
+    ElDropdown: typeof import('element-plus/es')['ElDropdown']
+    ElDropdownItem: typeof import('element-plus/es')['ElDropdownItem']
+    ElDropdownMenu: typeof import('element-plus/es')['ElDropdownMenu']
     ElIcon: typeof import('element-plus/es')['ElIcon']
+    ElInput: typeof import('element-plus/es')['ElInput']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
   }

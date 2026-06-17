@@ -10,7 +10,13 @@ import config
 
 def ensure_dirs() -> None:
     """确保所有数据目录存在。"""
-    for d in (config.DATA_DIR, config.MODELS_DIR, config.WORKS_DIR, config.TEMP_DIR):
+    for d in (
+        config.DATA_DIR,
+        config.MODELS_DIR,
+        config.WORKS_DIR,
+        config.TEMP_DIR,
+        config.MUSIC_DIR,
+    ):
         d.mkdir(parents=True, exist_ok=True)
 
 

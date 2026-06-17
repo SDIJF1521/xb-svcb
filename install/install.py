@@ -431,8 +431,12 @@ def step_svc(uv: str, use_gpu: bool) -> None:
     # （pkg_resources 属于 setuptools），缺失会导致推理一加载 librosa 就 ModuleNotFoundError。
     # 注意：setuptools 81+ 已移除 pkg_resources，必须钉 <81 才仍带该模块。
     pip("setuptools<81", "wheel")
-    # 先装 torch（决定 CUDA/CPU），再装仓库其余依赖
-    pip("torch", "torchaudio", index=TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX)
+    # 先装 torch（决定 CUDA/CPU），再装仓库其余依赖。
+    # 钉 <2.6：torch>=2.6 起 torch.load 默认 weights_only=True，会拒绝反序列化
+    # so-vits checkpoint 里的非张量对象（argparse.Namespace / numpy 标量），导致
+    # 加载模型时报 "Weights only load failed"。2.5.1 是支持 py3.9 且仍默认
+    # weights_only=False 的稳定版，避免新装用户拉到不兼容的最新版。
+    pip("torch==2.5.1", "torchaudio==2.5.1", index=TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX)
     # 优先 requirements_win.txt（仓库为 Windows 提供的更易装版本）
     req_win = SOVITS_DIR / "requirements_win.txt"
     req = SOVITS_DIR / "requirements.txt"
