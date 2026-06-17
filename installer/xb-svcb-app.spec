@@ -31,10 +31,20 @@ hiddenimports = [
     "webview.platforms.winforms",
     "webview.platforms.edgechromium",
     "clr",
+    # 音乐资源服务的 httpx 在函数内惰性 import，PyInstaller 静态分析会漏掉，
+    # 这里显式声明 httpx 及其传递依赖，确保打包进 exe（否则在线曲库报缺依赖）。
+    "httpx",
+    "httpcore",
+    "h11",
+    "anyio",
+    "sniffio",
+    "idna",
+    "certifi",
 ]
 
-# pywebview（Windows EdgeChromium 后端）+ 其 http server 依赖一并收集
-for pkg in ("webview", "clr_loader", "pythonnet", "bottle", "proxy_tools"):
+# pywebview（Windows EdgeChromium 后端）+ 其 http server 依赖一并收集；
+# httpx / certifi 一并 collect_all，确保模块与 certifi 的 CA 证书数据都打进 exe。
+for pkg in ("webview", "clr_loader", "pythonnet", "bottle", "proxy_tools", "httpx", "certifi"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b

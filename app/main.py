@@ -39,6 +39,23 @@ def resolve_url() -> str:
     return str(config.DIST_INDEX)
 
 
+def purge_web_http_cache() -> None:
+    """清理 WebView2 持久化的 HTTP / 代码缓存。
+
+    生产模式用内置 http server 提供前端资源，且 storage_path + private_mode=False
+    会让 WebView2 缓存首页与各 chunk。前端重新构建（如新增页面）后，WebView2 仍可能
+    沿用旧缓存，表现为「浏览器预览有、桌面窗口里某些页面/导航缺失」。这里只删除缓存
+    目录，保留 Local Storage / cookie，使主题、头像等设置不丢失。
+    """
+    import shutil
+
+    profile = config.WEBVIEW_DIR / "EBWebView" / "Default"
+    for name in ("Cache", "Code Cache", "GPUCache", "DawnWebGPUCache", "DawnGraphiteCache"):
+        target = profile / name
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+
+
 def main() -> None:
     dev = is_dev()
     url = resolve_url()
@@ -75,6 +92,11 @@ def main() -> None:
         config.WEBVIEW_DIR.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
+
+    # 生产模式下清理 WebView2 旧的 HTTP/代码缓存，避免前端重新构建后仍加载到旧页面
+    # （只删缓存，保留 localStorage，主题/头像等设置不受影响）。
+    if not dev:
+        purge_web_http_cache()
 
     # 生产模式下用内置 http server 提供静态资源，确保 SPA 路由与资源路径正常。
     webview.start(

@@ -45,9 +45,14 @@ if (-not $SkipWebBuild) {
     throw "npm not found. Install Node.js LTS, or pass -SkipWebBuild."
   }
   Push-Location (Join-Path $Root "web")
-  if (Test-Path "package-lock.json") { npm ci } else { npm install }
-  npm run build
-  Pop-Location
+  try {
+    if (Test-Path "package-lock.json") { npm ci } else { npm install }
+    if ($LASTEXITCODE -ne 0) { throw "npm install/ci failed (exit code $LASTEXITCODE). Frontend NOT rebuilt." }
+    npm run build
+    if ($LASTEXITCODE -ne 0) { throw "npm run build failed (exit code $LASTEXITCODE). Frontend NOT rebuilt." }
+  } finally {
+    Pop-Location
+  }
 }
 if (-not (Test-Path (Join-Path $Root "web\dist\index.html"))) {
   throw "web\dist\index.html not found. Build the frontend first (do not use -SkipWebBuild)."
