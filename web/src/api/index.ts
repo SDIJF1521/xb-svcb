@@ -12,6 +12,8 @@ import type {
   MusicSongResult,
   MusicDownloadResult,
   DownloadedMusic,
+  MusicSource,
+  LyricsResult,
 } from './types'
 
 export * from './types'
@@ -83,20 +85,41 @@ export const api = {
   setMusicApiKey: (key: string) =>
     invoke<boolean>('set_music_api_key', [key], () => mock.setMusicApiKey(key)),
 
-  searchMusic: (msg: string, g = 13) =>
-    invoke<MusicSearchResult>('search_music', [msg, g], () => mock.searchMusic(msg, g)),
+  listMusicSources: () =>
+    invoke<MusicSource[]>('list_music_sources', [], () => mock.listMusicSources()),
 
-  getMusicSong: (msg: string, n: number) =>
-    invoke<MusicSongResult>('get_music_song', [msg, n], () => mock.getMusicSong(msg, n)),
+  getMusicSource: () =>
+    invoke<string>('get_music_source', [], () => mock.getMusicSource()),
 
-  downloadMusic: (msg: string, n: number) =>
-    invoke<MusicDownloadResult>('download_music', [msg, n], () => mock.downloadMusic(msg, n)),
+  setMusicSource: (source: string) =>
+    invoke<boolean>('set_music_source', [source], () => mock.setMusicSource(source)),
+
+  getMusicCookie: () =>
+    invoke<string>('get_music_cookie', [], () => mock.getMusicCookie()),
+
+  setMusicCookie: (cookie: string) =>
+    invoke<boolean>('set_music_cookie', [cookie], () => mock.setMusicCookie(cookie)),
+
+  searchMusic: (msg: string, g = 13, source?: string) =>
+    invoke<MusicSearchResult>('search_music', [msg, g, source], () => mock.searchMusic(msg, g, source)),
+
+  getMusicSong: (msg: string, n: number, source?: string) =>
+    invoke<MusicSongResult>('get_music_song', [msg, n, source], () => mock.getMusicSong(msg, n, source)),
+
+  downloadMusic: (msg: string, n: number, source?: string) =>
+    invoke<MusicDownloadResult>('download_music', [msg, n, source], () => mock.downloadMusic(msg, n, source)),
+
+  getMusicLyrics: (msg: string, n: number, source?: string) =>
+    invoke<LyricsResult>('get_music_lyrics', [msg, n, source], () => mock.getMusicLyrics(msg, n, source)),
 
   listMusic: () =>
     invoke<DownloadedMusic[]>('list_music', [], () => mock.listMusic()),
 
   deleteMusic: (path: string) =>
     invoke<boolean>('delete_music', [path], () => mock.deleteMusic(path)),
+
+  getAudioDuration: (path: string) =>
+    invoke<number>('get_audio_duration', [path], () => mock.getAudioDuration(path)),
 }
 
 const palette = ['#00f0ff', '#2f6bff', '#ff2e88', '#19f59a', '#ffae00', '#b65cff', '#5ce0c8', '#ff7ac0']

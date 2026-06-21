@@ -9,7 +9,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.3"
+APP_VERSION = "0.0.4"
 APP_BG = "#05060d"
 
 
@@ -196,9 +196,29 @@ MODELS_DB = DATA_DIR / "models.json"
 WORKS_DB = DATA_DIR / "works.json"
 SETTINGS_DB = DATA_DIR / "settings.json"
 
-# ---- 在线音乐资源 API（妖狐 API，网易云源）----
+# ---- 在线音乐资源 API（妖狐 API）----
 # 用户需在「资源获取」页填写自己的 API Key（控制台->密钥管理）。
-MUSIC_API_URL = "https://api.yaohud.cn/api/music/wy"
+# 接口形如 https://api.yaohud.cn/api/music/{source}，source 支持多个曲库。
+MUSIC_API_BASE = "https://api.yaohud.cn/api/music"
+# 可选曲库（source -> 显示名）。wy=网易云，qq=QQ音乐。
+MUSIC_SOURCES: dict[str, str] = {
+    "wy": "网易云音乐",
+    "qq": "QQ音乐",
+}
+# 默认曲库
+MUSIC_API_DEFAULT_SOURCE = "wy"
+# 仅 QQ音乐支持的曲库（可填写会员 Cookie 以获取高品质音频）
+MUSIC_COOKIE_SOURCES = ("qq",)
+
+
+def music_api_url(source: str) -> str:
+    """根据曲库标识拼接妖狐音乐 API 地址（非法标识回退默认源）。"""
+    src = source if source in MUSIC_SOURCES else MUSIC_API_DEFAULT_SOURCE
+    return f"{MUSIC_API_BASE}/{src}"
+
+
+# 兼容旧引用：默认网易云源地址。
+MUSIC_API_URL = music_api_url(MUSIC_API_DEFAULT_SOURCE)
 # 接口限制 10 QPS，客户端侧统一限流，避免触发风控。
 MUSIC_API_QPS = 10
 

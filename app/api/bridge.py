@@ -197,14 +197,40 @@ class Api:
     def set_music_api_key(self, key: str) -> bool:
         return self._music.set_api_key(key)
 
-    def search_music(self, msg: str, g: int = 13) -> dict[str, Any]:
-        return self._music.search(msg, g)
+    def list_music_sources(self) -> list[dict[str, Any]]:
+        return self._music.list_sources()
 
-    def get_music_song(self, msg: str, n: int) -> dict[str, Any]:
-        return self._music.get_song(msg, n)
+    def get_music_source(self) -> str:
+        return self._music.get_source()
 
-    def download_music(self, msg: str, n: int) -> dict[str, Any]:
-        return self._music.download(msg, n)
+    def set_music_source(self, source: str) -> bool:
+        return self._music.set_source(source)
+
+    def get_music_cookie(self) -> str:
+        return self._music.get_cookie()
+
+    def set_music_cookie(self, cookie: str) -> bool:
+        return self._music.set_cookie(cookie)
+
+    def search_music(self, msg: str, g: int = 13, source: str | None = None) -> dict[str, Any]:
+        return self._music.search(msg, g, source)
+
+    def get_music_song(self, msg: str, n: int, source: str | None = None) -> dict[str, Any]:
+        return self._music.get_song(msg, n, source)
+
+    def download_music(self, msg: str, n: int, source: str | None = None) -> dict[str, Any]:
+        return self._music.download(msg, n, source)
+
+    def get_music_lyrics(self, msg: str, n: int, source: str | None = None) -> dict[str, Any]:
+        """按歌名+索引获取带时间轴的歌词（多模型混合翻唱用）。"""
+        return self._music.get_lyrics(msg, n, source)
+
+    def get_audio_duration(self, path: str) -> float:
+        """探测本地音频时长（秒），失败返回 0。用于歌词/文件时长匹配校验。"""
+        if not path:
+            return 0.0
+        dur = FfmpegTool().probe_duration(Path(path))
+        return float(dur or 0.0)
 
     def list_music(self) -> list[dict[str, Any]]:
         return self._music.list_downloaded()

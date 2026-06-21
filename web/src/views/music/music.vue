@@ -26,6 +26,11 @@
 
     <!-- 搜索栏 -->
     <div class="toolbar glass">
+      <div class="source-field">
+        <el-select v-model="source" class="source-select" @change="onSourceChange">
+          <el-option v-for="s in sources" :key="s.id" :label="s.name" :value="s.id" />
+        </el-select>
+      </div>
       <div class="search">
         <el-icon><Search /></el-icon>
         <input
@@ -67,7 +72,9 @@
             <el-icon v-else><VideoPlay /></el-icon>
           </button>
           <div class="row-main">
-            <div class="row-title" :title="r.name">{{ r.name }}</div>
+            <div class="row-title" :title="r.name">
+              {{ r.name }}<span v-if="r.pay" class="pay-tag">{{ payLabel(r.pay) }}</span>
+            </div>
             <div class="row-sub">{{ r.singer }}<span v-if="r.album"> · {{ r.album }}</span></div>
           </div>
           <div class="row-ops">
@@ -145,6 +152,19 @@
           placeholder="粘贴你的接口密钥"
           size="large"
         />
+        <template v-if="cookieSupported">
+          <label class="dialog-label">QQ音乐会员 Cookie（选填）</label>
+          <el-input
+            v-model="cookieDraft"
+            type="textarea"
+            :rows="3"
+            placeholder="uin=xxx;qqmusic_key=xxx"
+            resize="none"
+          />
+          <p class="dialog-tip" style="margin: 0">
+            填写 QQ音乐会员 Cookie 后，可解析并下载高品质（320 / flac）音频。仅保存在本地。
+          </p>
+        </template>
       </div>
       <template #footer>
         <el-button round @click="settingsVisible = false">取消</el-button>
@@ -155,7 +175,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Search,
@@ -171,7 +191,7 @@ import {
   Key,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, type MusicSearchItem, type DownloadedMusic } from '@/api'
+import { api, type MusicSearchItem, type DownloadedMusic, type MusicSource } from '@/api'
 
 defineOptions({ name: 'MusicPage' })
 
@@ -184,6 +204,25 @@ const searching = ref(false)
 const searched = ref(false)
 const results = ref<MusicSearchItem[]>([])
 const resultKeyword = ref('')
+
+/* ----- 曲库（网易云 / QQ音乐）----- */
+const sources = ref<MusicSource[]>([{ id: 'wy', name: '网易云音乐', cookie: false }])
+const source = ref('wy')
+// 当前结果对应的曲库（预览 / 下载必须与搜索时一致）
+const resultSource = ref('wy')
+const cookieSupported = computed(() => sources.value.find((s) => s.id === source.value)?.cookie ?? false)
+
+function payLabel(pay: string): string {
+  return pay.replace(/[[\]]/g, '') || 'VIP'
+}
+
+async function onSourceChange(val: string) {
+  await api.setMusicSource(val)
+  // 切换曲库后旧的搜索结果索引失效，清空避免误操作
+  results.value = []
+  searched.value = false
+  resultKeyword.value = ''
+}
 
 const downloaded = ref<DownloadedMusic[]>([])
 
@@ -209,7 +248,7 @@ async function togglePreview(item: MusicSearchItem) {
   }
   previewLoadingN.value = item.n
   try {
-    const res = await api.getMusicSong(resultKeyword.value, item.n)
+    const res = await api.getMusicSong(resultKeyword.value, item.n, resultSource.value)
     if (!res.ok || !res.song) {
       ElMessage.error(res.error || '获取歌曲信息失败')
       return
@@ -241,17 +280,20 @@ async function doSearch() {
     return
   }
   searching.value = true
+  const usedSource = source.value
   try {
-    const res = await api.searchMusic(kw, count.value || 13)
+    const res = await api.searchMusic(kw, count.value || 13, usedSource)
     searched.value = true
     if (!res.ok) {
       results.value = []
       resultKeyword.value = kw
+      resultSource.value = usedSource
       ElMessage.error(res.error || '搜索失败')
       return
     }
     results.value = res.songs || []
     resultKeyword.value = res.keyword || kw
+    resultSource.value = res.source || usedSource
   } finally {
     searching.value = false
   }
@@ -261,7 +303,7 @@ async function doSearch() {
 async function doDownload(item: MusicSearchItem): Promise<DownloadedMusic | null> {
   downloadingN.value = item.n
   try {
-    const res = await api.downloadMusic(resultKeyword.value, item.n)
+    const res = await api.downloadMusic(resultKeyword.value, item.n, resultSource.value)
     if (!res.ok || !res.path) {
       ElMessage.error(res.error || '下载失败')
       return null
@@ -319,10 +361,12 @@ async function removeDownloaded(d: DownloadedMusic) {
 /* ----- API 设置 ----- */
 const settingsVisible = ref(false)
 const keyDraft = ref('')
+const cookieDraft = ref('')
 const savingKey = ref(false)
 
-function openSettings() {
-  keyDraft.value = ''
+async function openSettings() {
+  keyDraft.value = await api.getMusicApiKey()
+  cookieDraft.value = await api.getMusicCookie()
   settingsVisible.value = true
 }
 
@@ -330,17 +374,25 @@ async function saveKey() {
   savingKey.value = true
   try {
     await api.setMusicApiKey(keyDraft.value.trim())
+    await api.setMusicCookie(cookieDraft.value.trim())
     hasKey.value = !!keyDraft.value.trim()
     settingsVisible.value = false
-    ElMessage.success('已保存 API Key')
+    ElMessage.success('已保存设置')
   } finally {
     savingKey.value = false
   }
 }
 
 onMounted(async () => {
-  const key = await api.getMusicApiKey()
+  const [key, srcList, curSource] = await Promise.all([
+    api.getMusicApiKey(),
+    api.listMusicSources(),
+    api.getMusicSource(),
+  ])
   hasKey.value = !!key
+  if (srcList.length) sources.value = srcList
+  if (srcList.some((s) => s.id === curSource)) source.value = curSource
+  resultSource.value = source.value
   await refreshDownloaded()
 })
 </script>
@@ -462,6 +514,20 @@ onMounted(async () => {
 }
 .count-field input:focus { border-color: var(--xb-primary); }
 
+/* 曲库选择 */
+.source-field { flex-shrink: 0; }
+.source-select { width: 130px; }
+.source-select :deep(.el-select__wrapper) {
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  border: 1px solid var(--xb-border);
+  border-radius: 9px;
+  box-shadow: none;
+  min-height: 42px;
+}
+.source-select :deep(.el-select__wrapper.is-focused) { border-color: var(--xb-primary); }
+.source-select :deep(.el-select__placeholder),
+.source-select :deep(.el-select__selected-item) { color: var(--xb-text); }
+
 /* 区块 */
 .block { margin-bottom: 30px; }
 .block-head {
@@ -533,6 +599,18 @@ onMounted(async () => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.pay-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+  color: var(--xb-warn);
+  background: rgba(var(--xb-warn-rgb), 0.14);
+  border: 1px solid rgba(var(--xb-warn-rgb), 0.35);
 }
 .row-ops { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .op {

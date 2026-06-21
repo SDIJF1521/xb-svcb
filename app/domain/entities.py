@@ -128,6 +128,10 @@ class Work:
     error: Optional[str] = None
     params: dict[str, Any] = field(default_factory=dict)
     steps: list[dict[str, Any]] = field(default_factory=list)
+    # 翻唱模式：single=单模型；multi=多模型混合（按歌词分句指派模型）
+    mode: str = "single"
+    # 多模型模式下，每个已指派模型的演唱片段：{start, end, model_id}
+    segments: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -150,4 +154,6 @@ class Work:
             error=data.get("error"),
             params=data.get("params", {}) or {},
             steps=data.get("steps", []) or [],
+            mode=data.get("mode", "single"),
+            segments=data.get("segments", []) or [],
         )

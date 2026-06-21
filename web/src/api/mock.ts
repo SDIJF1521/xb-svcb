@@ -12,6 +12,8 @@ import type {
   MusicSongResult,
   MusicDownloadResult,
   DownloadedMusic,
+  MusicSource,
+  LyricsResult,
 } from './types'
 
 const now = () => new Date().toISOString()
@@ -60,12 +62,26 @@ let defaultModelId = 'm1'
 
 // 音乐资源获取的模拟状态（仅浏览器开发环境）
 let mockMusicKey = ''
+let mockMusicSource = 'wy'
+let mockMusicCookie = ''
+const mockMusicSources: MusicSource[] = [
+  { id: 'wy', name: '网易云音乐', cookie: false },
+  { id: 'qq', name: 'QQ音乐', cookie: true },
+]
 const mockDownloaded: DownloadedMusic[] = []
 
 const baseSteps = (): PipelineStep[] => [
   { key: 'separate', label: '人声分离', status: 'wait' },
   { key: 'f0', label: 'F0 提取', status: 'wait' },
   { key: 'infer', label: 'SVC 推理', status: 'wait' },
+  { key: 'mix', label: '混音合成', status: 'wait' },
+]
+
+const multiSteps = (): PipelineStep[] => [
+  { key: 'separate', label: '人声分离', status: 'wait' },
+  { key: 'split', label: '歌词分割', status: 'wait' },
+  { key: 'infer', label: '逐段推理', status: 'wait' },
+  { key: 'merge', label: '人声合并', status: 'wait' },
   { key: 'mix', label: '混音合成', status: 'wait' },
 ]
 
@@ -171,13 +187,14 @@ export const mock = {
     return w ? { ...w, steps: w.steps.map((s) => ({ ...s })) } : null
   },
   createWork(payload: CreateWorkPayload): WorkDTO {
+    const isMulti = payload.mode === 'multi'
     const model = mockModels.find((m) => m.id === (payload.model_id || defaultModelId))
     const rawTitle = payload.title || (payload.source_path ? payload.source_path.split(/[/\\]/).pop()?.replace(/\.[^.]+$/, '') : '') || '未命名翻唱'
     const work: WorkDTO = {
       id: rid('wrk_'),
-      title: `${rawTitle} (AI 翻唱)`,
-      model: model?.name || '默认模型',
-      model_id: model?.id || '',
+      title: `${rawTitle} (${isMulti ? '混合翻唱' : 'AI 翻唱'})`,
+      model: isMulti ? `多模型混合（${payload.models?.length || 0} 个）` : (model?.name || '默认模型'),
+      model_id: payload.models?.[0]?.model_id || model?.id || '',
       status: 'queue',
       progress: 0,
       duration: '—',
@@ -187,7 +204,9 @@ export const mock = {
       time: '刚刚',
       source_path: payload.source_path,
       params: payload.params,
-      steps: baseSteps(),
+      mode: isMulti ? 'multi' : 'single',
+      segments: payload.segments,
+      steps: isMulti ? multiSteps() : baseSteps(),
     }
     mockWorks.unshift(work)
     advance(work)
@@ -244,7 +263,27 @@ export const mock = {
     mockMusicKey = key.trim()
     return true
   },
-  searchMusic(msg: string, g = 13): MusicSearchResult {
+  listMusicSources(): MusicSource[] {
+    return [...mockMusicSources]
+  },
+  getMusicSource(): string {
+    return mockMusicSource
+  },
+  setMusicSource(source: string): boolean {
+    if (mockMusicSources.some((s) => s.id === source)) {
+      mockMusicSource = source
+      return true
+    }
+    return false
+  },
+  getMusicCookie(): string {
+    return mockMusicCookie
+  },
+  setMusicCookie(cookie: string): boolean {
+    mockMusicCookie = cookie.trim()
+    return true
+  },
+  searchMusic(msg: string, g = 13, source = mockMusicSource): MusicSearchResult {
     if (!mockMusicKey) return { ok: false, error: '未配置 API Key，请先在「API 设置」中填写' }
     if (!msg.trim()) return { ok: false, error: '请输入搜索关键词' }
     const songs = Array.from({ length: Math.min(g, 8) }, (_, i) => ({
@@ -252,10 +291,12 @@ export const mock = {
       name: `${msg}${i === 0 ? '' : `（版本 ${i + 1}）`}`,
       singer: ['洛天依', '国风堂', '云梦', 'Reze'][i % 4] as string,
       album: msg,
+      pay: source === 'qq' && i % 3 === 0 ? '[收费]' : '',
     }))
-    return { ok: true, keyword: msg, songs }
+    return { ok: true, keyword: msg, source, songs }
   },
-  getMusicSong(msg: string, n: number): MusicSongResult {
+  getMusicSong(msg: string, n: number, _source = mockMusicSource): MusicSongResult {
+    void _source
     if (!mockMusicKey) return { ok: false, error: '未配置 API Key' }
     return {
       ok: true,
@@ -271,7 +312,8 @@ export const mock = {
       },
     }
   },
-  downloadMusic(msg: string, n: number): MusicDownloadResult {
+  downloadMusic(msg: string, n: number, _source = mockMusicSource): MusicDownloadResult {
+    void _source
     if (!mockMusicKey) return { ok: false, error: '未配置 API Key' }
     const name = `${msg} - 示例歌手${n > 1 ? ` (${n})` : ''}`
     const item: DownloadedMusic = { name, path: `C:/music/${name}.mp3`, size: '8.2 MB' }
@@ -288,5 +330,19 @@ export const mock = {
       return true
     }
     return false
+  },
+  getMusicLyrics(msg: string, n: number, _source = mockMusicSource): LyricsResult {
+    void n
+    void _source
+    if (!mockMusicKey) return { ok: false, error: '未配置 API Key' }
+    const lines = Array.from({ length: 12 }, (_, i) => ({
+      time: 8 + i * 12.5,
+      text: `${msg} 第 ${i + 1} 句歌词（模拟）`,
+    }))
+    return { ok: true, lines, name: msg, singer: '示例歌手' }
+  },
+  getAudioDuration(path: string): number {
+    void path
+    return 165
   },
 }

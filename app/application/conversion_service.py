@@ -29,6 +29,17 @@ def default_steps() -> list[dict[str, Any]]:
     ]
 
 
+def default_steps_multi() -> list[dict[str, Any]]:
+    """多模型混合翻唱的流水线步骤。"""
+    return [
+        {"key": "separate", "label": "人声分离", "status": StepStatus.WAIT.value},
+        {"key": "split", "label": "歌词分割", "status": StepStatus.WAIT.value},
+        {"key": "infer", "label": "逐段推理", "status": StepStatus.WAIT.value},
+        {"key": "merge", "label": "人声合并", "status": StepStatus.WAIT.value},
+        {"key": "mix", "label": "混音合成", "status": StepStatus.WAIT.value},
+    ]
+
+
 class ConversionService:
     def __init__(
         self,
@@ -72,7 +83,11 @@ class ConversionService:
     def _run(self, work_id: str) -> None:
         # 等待 GPU 空闲（串行），期间任务保持排队状态
         with self._gpu_lock:
-            self._run_locked(work_id)
+            work = self._repo.get(work_id)
+            if work and work.get("mode") == "multi":
+                self._run_multi(work_id)
+            else:
+                self._run_locked(work_id)
 
     def _run_locked(self, work_id: str) -> None:
         work = self._repo.get(work_id)
@@ -245,6 +260,264 @@ class ConversionService:
             self._log(
                 log_file,
                 f"[4/4] 混音合成完成（{'人声+伴奏' if mixed else '仅干声'}）: {output}",
+            )
+
+            work["progress"] = 100
+            work["status"] = JobStatus.DONE.value
+            work["output_path"] = str(output)
+            work["format"] = output.suffix.lstrip(".").upper() or "WAV"
+            work["size"] = paths.file_size_label(output)
+            work["duration"] = self._format_duration(duration)
+            self._save(work)
+            self._log(log_file, "任务完成 ✅")
+        except Exception as exc:  # noqa: BLE001 - 任务失败需记录而非崩溃
+            work["status"] = JobStatus.FAILED.value
+            work["error"] = str(exc)
+            self._log(log_file, f"任务失败 ❌: {exc}")
+            self._log(log_file, traceback.format_exc())
+            for step in work["steps"]:
+                if step["status"] == StepStatus.ACTIVE.value:
+                    step["status"] = StepStatus.FAILED.value
+            self._save(work)
+
+    # ---- 多模型混合翻唱 ----
+    @staticmethod
+    def _build_timeline(
+        segments: list[dict[str, Any]], duration: float
+    ) -> list[dict[str, Any]]:
+        """把「已指派模型的演唱句」补全为覆盖整首歌的时间轴。
+
+        未被任何句覆盖的空隙（前奏/间奏/尾奏）以 ``model_id=None`` 的片段填充，
+        保证按顺序拼接后总时长与原曲一致，且间奏处保留原始（近静音）人声。
+        """
+        cleaned: list[dict[str, Any]] = []
+        for s in segments:
+            try:
+                start = max(0.0, float(s.get("start", 0.0)))
+                end = min(float(duration), float(s.get("end", 0.0)))
+            except (TypeError, ValueError):
+                continue
+            if end > start:
+                cleaned.append({"start": start, "end": end, "model_id": s.get("model_id")})
+        cleaned.sort(key=lambda x: x["start"])
+
+        timeline: list[dict[str, Any]] = []
+        cursor = 0.0
+        for s in cleaned:
+            start = max(s["start"], cursor)
+            end = s["end"]
+            if end <= start:
+                continue
+            if start > cursor + 0.05:
+                timeline.append({"start": cursor, "end": start, "model_id": None})
+            timeline.append({"start": start, "end": end, "model_id": s["model_id"]})
+            cursor = end
+        if cursor < duration - 0.05:
+            timeline.append({"start": cursor, "end": duration, "model_id": None})
+        return timeline
+
+    def _run_multi(self, work_id: str) -> None:
+        work = self._repo.get(work_id)
+        if not work:
+            return
+
+        work_dir = config.WORKS_DIR / work_id
+        work_dir.mkdir(parents=True, exist_ok=True)
+        log_file = work_dir / "run.log"
+        try:
+            log_file.write_text(
+                f"=== {work.get('title', work_id)} (多模型混合) ===\n"
+                f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+
+        work["status"] = JobStatus.RUNNING.value
+        work["progress"] = 0
+        work["log_path"] = str(log_file)
+        self._save(work)
+
+        try:
+            base_params = InferenceParams.from_dict(work.get("params", {}))
+            source = Path(work["source_path"]) if work.get("source_path") else None
+            duration = (
+                self._ffmpeg.probe_duration(source)
+                if source and source.exists()
+                else None
+            ) or 180.0
+            segments_in = work.get("segments") or []
+            seg_models = work.get("seg_models") or {}
+            self._log(
+                log_file,
+                f"源文件: {source} | 时长: {duration:.1f}s | "
+                f"演唱句: {len(segments_in)} | 模型: {len(seg_models)}",
+            )
+
+            # 1) 人声分离（与单模型一致）
+            self._set_step(work, "separate", StepStatus.ACTIVE.value)
+            self._save(work)
+            self._log(
+                log_file,
+                f"[1/5] 人声分离（UVR {'可用' if self._uvr.available else '降级模式'}）",
+            )
+            instrumental: Path | None = None
+            if source and source.exists():
+                sep_model = base_params.uvr_model or config.UVR_SEP_MODEL
+                sep = self._uvr.separate(source, work_dir, sep_model, base_params.device)
+                vocals = sep.vocals
+                instrumental = sep.instrumental
+                if sep.simulated:
+                    self._log(log_file, "  分离降级：直接使用源音频作为人声（无伴奏）")
+                else:
+                    self._log(log_file, f"  人声: {vocals} | 伴奏: {instrumental}")
+                    if config.uvr_dereverb_ready():
+                        dr = self._uvr.separate(
+                            vocals,
+                            work_dir / "dereverb",
+                            config.UVR_DEREVERB_MODEL,
+                            base_params.device,
+                        )
+                        if not dr.simulated and dr.vocals.exists():
+                            vocals = dr.vocals
+                            self._log(log_file, f"  去混响后人声: {vocals}")
+            else:
+                vocals = work_dir / "placeholder.wav"
+            if instrumental and Path(instrumental).exists():
+                work["instrumental_path"] = str(instrumental)
+            if Path(vocals).exists():
+                work["vocals_path"] = str(vocals)
+            self._set_step(work, "separate", StepStatus.DONE.value)
+            work["progress"] = 20
+            self._save(work)
+
+            # 2) 歌词分割：把人声统一为 wav，再按时间轴逐句切片
+            self._set_step(work, "split", StepStatus.ACTIVE.value)
+            self._save(work)
+            infer_input = Path(vocals)
+            if infer_input.exists() and self._ffmpeg.available:
+                wav_input = work_dir / "infer_input.wav"
+                if self._ffmpeg.convert(infer_input, wav_input):
+                    infer_input = wav_input
+            timeline = self._build_timeline(segments_in, duration)
+            seg_dir = work_dir / "segments"
+            seg_dir.mkdir(parents=True, exist_ok=True)
+            sliced: list[dict[str, Any]] = []
+            for i, seg in enumerate(timeline):
+                seg_in = seg_dir / f"seg_{i:03d}_in.wav"
+                ok = (
+                    self._ffmpeg.slice(infer_input, seg["start"], seg["end"], seg_in)
+                    if self._ffmpeg.available and infer_input.exists()
+                    else False
+                )
+                sliced.append({"i": i, "in": seg_in if ok else None, **seg})
+            sung = sum(1 for s in timeline if s["model_id"])
+            self._log(
+                log_file,
+                f"[2/5] 歌词分割完成：共 {len(timeline)} 段（演唱 {sung} 段，间奏 {len(timeline) - sung} 段）",
+            )
+            self._set_step(work, "split", StepStatus.DONE.value)
+            work["progress"] = 40
+            self._save(work)
+
+            # 3) 逐段推理：演唱段送对应模型，间奏/未指派段保留原始人声
+            self._set_step(work, "infer", StepStatus.ACTIVE.value)
+            self._save(work)
+            self._log(
+                log_file,
+                f"[3/5] 逐段推理（引擎 {'可用' if self._svc.available else '降级模式'}）",
+            )
+            outputs: list[Path] = []
+            total = len(sliced)
+            for item in sliced:
+                idx = item["i"]
+                seg_in = item["in"]
+                model_id = item.get("model_id")
+                if not seg_in or not Path(seg_in).exists():
+                    continue
+                seg_dur = max(0.05, item["end"] - item["start"])
+                seg_out = seg_dir / f"seg_{idx:03d}_out.wav"
+                model = seg_models.get(model_id) if model_id else None
+                produced = Path(seg_in)
+                if model:
+                    seg_params = InferenceParams.from_dict(model.get("params", {}))
+                    self._log(
+                        log_file,
+                        f"  [{idx + 1}/{total}] {item['start']:.2f}-{item['end']:.2f}s "
+                        f"→ {model.get('name', model_id)}",
+                    )
+                    try:
+                        self._svc.infer(
+                            main_model=model.get("main_model_path", ""),
+                            main_config=model.get("main_config_path", ""),
+                            diffusion_model=model.get("diffusion_model_path", ""),
+                            diffusion_config=model.get("diffusion_config_path", ""),
+                            vocals=Path(seg_in),
+                            out_path=seg_out,
+                            params=seg_params,
+                            duration=seg_dur,
+                            log_file=log_file,
+                        )
+                        produced = seg_out if seg_out.exists() else Path(seg_in)
+                    except Exception as exc:  # noqa: BLE001 - 单段失败回退原声，不中断整曲
+                        self._log(log_file, f"    片段推理失败，回退原始人声：{exc}")
+                        produced = Path(seg_in)
+                # 锁定每段到其原始切片时长：避免推理输出微小长短差异累计成
+                # 人声/伴奏错位，并消除采样率不一致带来的变速。失败则退回原段。
+                if self._ffmpeg.available:
+                    seg_fix = seg_dir / f"seg_{idx:03d}_fix.wav"
+                    if self._ffmpeg.pad_or_trim(produced, seg_fix, seg_dur):
+                        produced = seg_fix
+                outputs.append(produced)
+                work["progress"] = 40 + int(35 * (idx + 1) / max(total, 1))
+                self._save(work)
+            self._set_step(work, "infer", StepStatus.DONE.value)
+            work["progress"] = 75
+            self._save(work)
+
+            # 4) 人声合并：按顺序拼接所有片段为完整人声
+            self._set_step(work, "merge", StepStatus.ACTIVE.value)
+            self._save(work)
+            full_vocal = work_dir / "converted.wav"
+            merged = (
+                self._ffmpeg.concat(outputs, full_vocal)
+                if self._ffmpeg.available and outputs
+                else False
+            )
+            if not merged:
+                if outputs and Path(outputs[0]).exists():
+                    full_vocal = Path(outputs[0])
+                else:
+                    full_vocal = infer_input
+                self._log(log_file, "  人声合并失败/降级：使用首段或整段人声")
+            else:
+                self._log(log_file, f"[4/5] 人声合并完成：{full_vocal}")
+            self._set_step(work, "merge", StepStatus.DONE.value)
+            work["progress"] = 88
+            self._save(work)
+
+            # 5) 混音合成：完整人声 + 原伴奏
+            self._set_step(work, "mix", StepStatus.ACTIVE.value)
+            self._save(work)
+            output = work_dir / "output.wav"
+            mixed = False
+            if (
+                instrumental
+                and Path(instrumental).exists()
+                and Path(full_vocal).exists()
+                and self._ffmpeg.available
+            ):
+                mixed = self._ffmpeg.mix(Path(full_vocal), Path(instrumental), output)
+            if not mixed:
+                if self._ffmpeg.available and Path(full_vocal).exists():
+                    if not self._ffmpeg.convert(Path(full_vocal), output):
+                        output = Path(full_vocal)
+                else:
+                    output = Path(full_vocal)
+            self._set_step(work, "mix", StepStatus.DONE.value)
+            self._log(
+                log_file,
+                f"[5/5] 混音合成完成（{'人声+伴奏' if mixed else '仅人声'}）: {output}",
             )
 
             work["progress"] = 100

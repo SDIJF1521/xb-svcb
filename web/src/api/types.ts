@@ -80,6 +80,21 @@ export interface WorkDTO {
   log_path?: string | null
   params?: InferenceParams
   steps: PipelineStep[]
+  mode?: 'single' | 'multi'
+  segments?: BlendSegment[]
+}
+
+/** 多模型混合：某一句歌词指派给某个模型的时间区间。 */
+export interface BlendSegment {
+  start: number
+  end: number
+  model_id: string
+}
+
+/** 多模型混合：参与本次翻唱的模型及其各自参数。 */
+export interface BlendModel {
+  model_id: string
+  params: InferenceParams
 }
 
 export interface CreateWorkPayload {
@@ -87,9 +102,23 @@ export interface CreateWorkPayload {
   model_id?: string
   source_path?: string | null
   params?: InferenceParams
+  /** 翻唱模式：single=单模型（默认）；multi=多模型混合。 */
+  mode?: 'single' | 'multi'
+  /** 多模型混合时参与的模型与参数。 */
+  models?: BlendModel[]
+  /** 多模型混合时每句歌词的模型指派。 */
+  segments?: BlendSegment[]
 }
 
 // ---- 音乐资源获取（妖狐 API）----
+
+/** 可选曲库（网易云 / QQ音乐 …）。 */
+export interface MusicSource {
+  id: string
+  name: string
+  /** 是否支持配置会员 Cookie（仅 QQ音乐）。 */
+  cookie: boolean
+}
 
 /** 搜索结果中的单条歌曲索引项。 */
 export interface MusicSearchItem {
@@ -97,12 +126,15 @@ export interface MusicSearchItem {
   name: string
   singer: string
   album: string
+  /** 收费标记，如「[收费]」（仅部分曲库返回）。 */
+  pay?: string
 }
 
 export interface MusicSearchResult {
   ok: boolean
   error?: string
   keyword?: string
+  source?: string
   songs?: MusicSearchItem[]
 }
 
@@ -138,4 +170,18 @@ export interface DownloadedMusic {
   name: string
   path: string
   size: string
+}
+
+/** 一句带时间轴的歌词（time 为秒）。 */
+export interface LyricLine {
+  time: number
+  text: string
+}
+
+export interface LyricsResult {
+  ok: boolean
+  error?: string
+  lines?: LyricLine[]
+  name?: string
+  singer?: string
 }

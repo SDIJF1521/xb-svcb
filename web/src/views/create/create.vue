@@ -12,6 +12,24 @@
     <div class="layout">
       <!-- 左侧：配置 -->
       <div class="config">
+        <!-- 翻唱模式 -->
+        <section class="card glass mode-card">
+          <button class="mode-item" :class="{ active: mode === 'single' }" @click="mode = 'single'">
+            <el-icon><Microphone /></el-icon>
+            <div class="mode-text">
+              <div class="mode-name">单模型翻唱</div>
+              <div class="mode-desc">整首歌用一个模型</div>
+            </div>
+          </button>
+          <button class="mode-item" :class="{ active: mode === 'multi' }" @click="mode = 'multi'">
+            <el-icon><Operation /></el-icon>
+            <div class="mode-text">
+              <div class="mode-name">多模型混合</div>
+              <div class="mode-desc">逐句指派不同模型</div>
+            </div>
+          </button>
+        </section>
+
         <!-- 上传歌曲 -->
         <section class="card glass">
           <div class="card-head">
@@ -55,8 +73,8 @@
           </div>
         </section>
 
-        <!-- 选择模型 -->
-        <section class="card glass">
+        <!-- 选择模型（单模型） -->
+        <section v-if="mode === 'single'" class="card glass">
           <div class="card-head">
             <span class="step-no">02</span>
             <h2>选择 SVC 模型</h2>
@@ -82,6 +100,62 @@
           </div>
         </section>
 
+        <!-- 选择模型（多模型 + 各自参数） -->
+        <section v-else class="card glass">
+          <div class="card-head">
+            <span class="step-no">02</span>
+            <h2>选择参与模型</h2>
+            <router-link to="/models" class="head-link">管理模型 <el-icon><Right /></el-icon></router-link>
+          </div>
+          <p class="field-tip">勾选本次要混合的模型，每个模型可单独展开设置参数</p>
+          <div class="model-list">
+            <div v-for="m in models" :key="m.id" class="multi-model">
+              <button
+                class="model-item"
+                :class="{ active: isPicked(m.id) }"
+                @click="togglePick(m.id)"
+              >
+                <div class="model-dot" :style="{ '--mc': m.color }">
+                  <el-icon><Microphone /></el-icon>
+                </div>
+                <div class="model-text">
+                  <div class="model-name">{{ m.name }}</div>
+                  <div class="model-tag">{{ m.type }} · {{ m.sr }}</div>
+                </div>
+                <span v-if="isPicked(m.id)" class="model-badge" :style="{ background: m.color }">
+                  {{ pickedIndex(m.id) + 1 }}
+                </span>
+                <el-icon v-if="isPicked(m.id)" class="model-check"><Select /></el-icon>
+              </button>
+
+              <div v-if="isPicked(m.id)" class="mp-params">
+                <div class="mp-row">
+                  <label>变调 {{ mp(m.id).pitch > 0 ? '+' + mp(m.id).pitch : mp(m.id).pitch }}</label>
+                  <input type="range" min="-12" max="12" step="1" v-model.number="mp(m.id).pitch" />
+                </div>
+                <div class="mp-row">
+                  <label>扩散占比 {{ Math.round(mp(m.id).diffusionRatio * 100) }}%</label>
+                  <input type="range" min="0" max="1" step="0.05" v-model.number="mp(m.id).diffusionRatio" />
+                </div>
+                <div class="mp-inline">
+                  <div class="mp-mini">
+                    <span>F0</span>
+                    <select v-model="mp(m.id).f0Method">
+                      <option v-for="f in f0Methods" :key="f" :value="f">{{ f }}</option>
+                    </select>
+                  </div>
+                  <div class="mp-mini">
+                    <span>设备</span>
+                    <select v-model="mp(m.id).device">
+                      <option v-for="d in deviceOptions" :key="d.v" :value="d.v">{{ d.label }}</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- 人声分离 -->
         <section class="card glass">
           <div class="card-head">
@@ -100,8 +174,8 @@
           </div>
         </section>
 
-        <!-- 推理参数 -->
-        <section class="card glass">
+        <!-- 推理参数（单模型） -->
+        <section v-if="mode === 'single'" class="card glass">
           <div class="card-head">
             <span class="step-no">04</span>
             <h2>推理参数</h2>
@@ -170,6 +244,67 @@
               <span class="field-val">{{ rmsMix.toFixed(2) }}</span>
             </div>
             <input type="range" min="0" max="1" step="0.05" v-model.number="rmsMix" />
+          </div>
+        </section>
+
+        <!-- 歌词与分句指派（多模型） -->
+        <section v-else class="card glass">
+          <div class="card-head">
+            <span class="step-no">04</span>
+            <h2>歌词分句指派</h2>
+          </div>
+          <p class="field-tip">按歌名获取带时间轴的歌词，再为每句指派演唱模型</p>
+
+          <div class="lyric-fetch">
+            <input
+              v-model="songQuery"
+              class="lyric-input"
+              type="text"
+              placeholder="歌曲名 / 歌手，用于获取歌词"
+              @keyup.enter="fetchLyrics"
+            />
+            <input v-model.number="songIndex" class="lyric-n" type="number" min="1" max="20" title="搜索结果序号" />
+            <el-select v-model="lyricSrc" class="lyric-src">
+              <el-option v-for="s in lyricSources" :key="s.id" :label="s.name" :value="s.id" />
+            </el-select>
+            <el-button round class="ghost-btn" :loading="lyricLoading" @click="fetchLyrics">获取歌词</el-button>
+          </div>
+
+          <!-- 对齐校验 -->
+          <div v-if="lyrics.length" class="align-bar" :class="alignStatus.type">
+            <el-icon><Clock /></el-icon>
+            <span class="align-text">{{ alignStatus.text }}</span>
+            <div class="offset-ctrl">
+              <label>整体偏移 {{ offset > 0 ? '+' : '' }}{{ offset.toFixed(1) }}s</label>
+              <input type="range" min="-10" max="10" step="0.1" v-model.number="offset" />
+            </div>
+          </div>
+
+          <!-- 快捷指派 -->
+          <div v-if="lyrics.length && pickedModels.length" class="assign-quick">
+            <span class="muted">批量：</span>
+            <button
+              v-for="pm in pickedModels"
+              :key="pm.id"
+              class="quick-btn"
+              :style="{ '--mc': pm.color }"
+              @click="assignAll(pm.id)"
+            >全指派给 {{ pm.name }}</button>
+          </div>
+
+          <!-- 歌词逐句 -->
+          <div v-if="lyrics.length" class="lyric-list">
+            <div v-for="(ln, i) in lyrics" :key="i" class="lyric-row">
+              <span class="ly-time">{{ fmtTime(ln.time + offset) }}</span>
+              <span class="ly-text" :title="ln.text">{{ ln.text }}</span>
+              <select v-model="assignments[i]" class="ly-model" :style="assignColor(i)">
+                <option value="">间奏/不唱</option>
+                <option v-for="pm in pickedModels" :key="pm.id" :value="pm.id">{{ pm.name }}</option>
+              </select>
+            </div>
+          </div>
+          <div v-else-if="lyricTried && !lyricLoading" class="lyric-empty">
+            未获取到歌词，请检查歌名 / 序号 / 曲库后重试。
           </div>
         </section>
 
@@ -267,7 +402,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import {
@@ -284,9 +419,20 @@ import {
   Loading,
   Document,
   RefreshRight,
+  Operation,
+  Clock,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { api, type WorkDTO, type PipelineStep, type DownloadedMusic } from '@/api'
+import {
+  api,
+  type WorkDTO,
+  type PipelineStep,
+  type DownloadedMusic,
+  type LyricLine,
+  type MusicSource,
+  type BlendModel,
+  type BlendSegment,
+} from '@/api'
 import { useModelsStore } from '@/stores/models'
 import { useWorksStore } from '@/stores/works'
 
@@ -337,8 +483,133 @@ const deviceOptions = [
 ]
 const device = ref(str(prefs.device, 'cuda'))
 
+/* ===== 多模型混合翻唱 ===== */
+type MultiParams = {
+  pitch: number
+  diffusionRatio: number
+  f0Method: string
+  device: string
+  indexRate: number
+  rmsMix: number
+}
+const mode = ref<'single' | 'multi'>(prefs.mode === 'multi' ? 'multi' : 'single')
+
+// 已勾选模型的 id（保持勾选顺序）与各自参数
+const selectedMulti = ref<string[]>([])
+const modelParams = reactive<Record<string, MultiParams>>({})
+
+function defaultParams(): MultiParams {
+  return {
+    pitch: pitch.value,
+    diffusionRatio: diffusionRatio.value,
+    f0Method: f0Method.value,
+    device: device.value,
+    indexRate: indexRate.value,
+    rmsMix: rmsMix.value,
+  }
+}
+function mp(id: string): MultiParams {
+  let p = modelParams[id]
+  if (!p) {
+    p = defaultParams()
+    modelParams[id] = p
+  }
+  return p
+}
+function isPicked(id: string) {
+  return selectedMulti.value.includes(id)
+}
+function pickedIndex(id: string) {
+  return selectedMulti.value.indexOf(id)
+}
+function togglePick(id: string) {
+  if (isPicked(id)) {
+    selectedMulti.value = selectedMulti.value.filter((x) => x !== id)
+  } else {
+    if (!modelParams[id]) modelParams[id] = defaultParams()
+    selectedMulti.value = [...selectedMulti.value, id]
+  }
+}
+const pickedModels = computed(() =>
+  selectedMulti.value
+    .map((id) => models.value.find((m) => m.id === id))
+    .filter((m): m is NonNullable<typeof m> => !!m)
+    .map((m) => ({ id: m.id, name: m.name, color: m.color })),
+)
+
+// 歌词获取与对齐
+const songQuery = ref('')
+const songIndex = ref(1)
+const lyricSrc = ref('wy')
+const lyricSources = ref<MusicSource[]>([{ id: 'wy', name: '网易云音乐', cookie: false }])
+const lyrics = ref<LyricLine[]>([])
+const assignments = ref<string[]>([])
+const offset = ref(0)
+const lyricLoading = ref(false)
+const lyricTried = ref(false)
+const audioDuration = ref(0)
+
+async function fetchLyrics() {
+  const q = songQuery.value.trim()
+  if (!q) {
+    ElMessage.info('请输入歌曲名')
+    return
+  }
+  lyricLoading.value = true
+  lyricTried.value = true
+  try {
+    const res = await api.getMusicLyrics(q, songIndex.value || 1, lyricSrc.value)
+    if (!res.ok || !res.lines?.length) {
+      lyrics.value = []
+      assignments.value = []
+      ElMessage.error(res.error || '未获取到歌词')
+      return
+    }
+    lyrics.value = res.lines
+    const first = pickedModels.value[0]?.id || ''
+    assignments.value = res.lines.map(() => first)
+    if (song.value?.path) {
+      audioDuration.value = await api.getAudioDuration(song.value.path)
+    }
+  } finally {
+    lyricLoading.value = false
+  }
+}
+
+function assignAll(id: string) {
+  assignments.value = lyrics.value.map(() => id)
+}
+function assignColor(i: number) {
+  const id = assignments.value[i]
+  const m = pickedModels.value.find((x) => x.id === id)
+  return m ? { borderColor: m.color, color: m.color } : {}
+}
+function fmtTime(t: number) {
+  const s = Math.max(0, t)
+  const mm = Math.floor(s / 60)
+  const ss = Math.floor(s % 60)
+  return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
+}
+
+const alignStatus = computed(() => {
+  const dur = audioDuration.value
+  const arr = lyrics.value
+  const lastLine = arr[arr.length - 1]
+  if (!arr.length || !lastLine) return { type: 'idle', text: '' }
+  const last = lastLine.time + offset.value
+  if (!dur) return { type: 'warn', text: `共 ${lyrics.value.length} 句；未知音频时长，建议核对偏移` }
+  const diff = last - dur
+  if (last > dur + 2) {
+    return { type: 'bad', text: `歌词末句 ${fmtTime(last)} 超出音频 ${fmtTime(dur)}，请调整偏移或核对版本` }
+  }
+  if (Math.abs(diff) <= 8 || last <= dur) {
+    return { type: 'ok', text: `对齐良好：${lyrics.value.length} 句 · 音频 ${fmtTime(dur)}` }
+  }
+  return { type: 'warn', text: `请核对：歌词末句 ${fmtTime(last)} / 音频 ${fmtTime(dur)}` }
+})
+
 // 任一参数变化即写回 localStorage
-watch([uvrModel, f0Method, pitch, indexRate, rmsMix, diffusionRatio, device], () => {
+watch([uvrModel, f0Method, pitch, indexRate, rmsMix, diffusionRatio, device, mode], () => {
   try {
     localStorage.setItem(
       PREFS_KEY,
@@ -350,6 +621,7 @@ watch([uvrModel, f0Method, pitch, indexRate, rmsMix, diffusionRatio, device], ()
         rmsMix: rmsMix.value,
         diffusionRatio: diffusionRatio.value,
         device: device.value,
+        mode: mode.value,
       }),
     )
   } catch {
@@ -364,16 +636,27 @@ const stepMeta: Record<string, string> = {
   separate: 'UVR 提取干声与伴奏',
   f0: '分析音高曲线',
   infer: '加载模型进行歌声转换',
+  split: '按歌词时间轴切分人声',
+  merge: '按顺序拼接各模型片段',
   mix: 'ffmpeg 合成与重采样',
 }
-const defaultPipeline: PipelineStep[] = [
+const singlePipeline: PipelineStep[] = [
   { key: 'separate', label: '人声分离', status: 'wait' },
   { key: 'f0', label: 'F0 提取', status: 'wait' },
   { key: 'infer', label: 'SVC 推理', status: 'wait' },
   { key: 'mix', label: '混音合成', status: 'wait' },
 ]
+const multiPipeline: PipelineStep[] = [
+  { key: 'separate', label: '人声分离', status: 'wait' },
+  { key: 'split', label: '歌词分割', status: 'wait' },
+  { key: 'infer', label: '逐段推理', status: 'wait' },
+  { key: 'merge', label: '人声合并', status: 'wait' },
+  { key: 'mix', label: '混音合成', status: 'wait' },
+]
 
-const pipeline = computed<PipelineStep[]>(() => currentWork.value?.steps ?? defaultPipeline)
+const pipeline = computed<PipelineStep[]>(
+  () => currentWork.value?.steps ?? (mode.value === 'multi' ? multiPipeline : singlePipeline),
+)
 const stepDesc = (key: string) => stepMeta[key] ?? ''
 
 const isGenerating = computed(
@@ -381,7 +664,16 @@ const isGenerating = computed(
 )
 const done = computed(() => currentWork.value?.status === 'done')
 const failed = computed(() => currentWork.value?.status === 'failed')
-const canGenerate = computed(() => !!song.value && !!selectedModel.value)
+const canGenerate = computed(() => {
+  if (!song.value) return false
+  if (mode.value === 'single') return !!selectedModel.value
+  // 多模型：至少选 1 个模型，且至少 1 句已指派
+  return (
+    selectedMulti.value.length > 0 &&
+    lyrics.value.length > 0 &&
+    assignments.value.some((a) => a)
+  )
+})
 
 const audioEl = ref<HTMLAudioElement | null>(null)
 const audioLoadedFor = ref<string | null>(null)
@@ -468,8 +760,53 @@ function startPolling(id: string) {
 const generate = async () => {
   if (!canGenerate.value || isGenerating.value || !song.value) return
   isPlaying.value = false
+  const title = song.value.name.replace(/\.[^.]+$/, '')
+
+  if (mode.value === 'multi') {
+    const lines = lyrics.value
+    const lastLine = lines[lines.length - 1]
+    const dur = audioDuration.value || (lastLine ? lastLine.time + offset.value + 5 : 180)
+    const segments: BlendSegment[] = []
+    for (let i = 0; i < lines.length; i++) {
+      const cur = lines[i]
+      const mid = assignments.value[i]
+      if (!cur || !mid) continue
+      const start = Math.max(0, cur.time + offset.value)
+      const nextLine = lines[i + 1]
+      const next = nextLine ? nextLine.time + offset.value : dur
+      const end = Math.min(dur, Math.max(start, next))
+      if (end > start) segments.push({ start, end, model_id: mid })
+    }
+    const blendModels: BlendModel[] = pickedModels.value.map((pm) => {
+      const p = mp(pm.id)
+      return {
+        model_id: pm.id,
+        params: {
+          pitch: p.pitch,
+          f0_method: p.f0Method,
+          index_rate: p.indexRate,
+          rms_mix: p.rmsMix,
+          uvr_model: uvrModel.value,
+          diffusion_ratio: p.diffusionRatio,
+          device: p.device,
+        },
+      }
+    })
+    const work = await worksStore.create({
+      title,
+      mode: 'multi',
+      source_path: song.value.path,
+      models: blendModels,
+      segments,
+      params: blendModels[0]?.params,
+    })
+    currentWork.value = work
+    startPolling(work.id)
+    return
+  }
+
   const work = await worksStore.create({
-    title: song.value.name.replace(/\.[^.]+$/, ''),
+    title,
     model_id: selectedModel.value,
     source_path: song.value.path,
     params: {
@@ -495,10 +832,31 @@ watch(defaultId, (id) => {
   if (id && !selectedModel.value) selectedModel.value = id
 })
 
+// 选中歌曲后默认带出歌名作为歌词搜索词；切歌时重置时长
+watch(song, (s) => {
+  if (s && !songQuery.value.trim()) songQuery.value = s.name.replace(/\.[^.]+$/, '')
+  audioDuration.value = 0
+})
+
 onMounted(async () => {
   await modelsStore.ensureLoaded()
   selectedModel.value = defaultId.value || models.value[0]?.id || ''
+  // 默认勾选默认模型，便于直接进入多模型流程
+  if (selectedModel.value && selectedMulti.value.length === 0) {
+    togglePick(selectedModel.value)
+  }
   await loadDownloaded()
+  // 加载歌词曲库选项（与「资源获取」共用妖狐 API 来源）
+  try {
+    const [srcList, curSource] = await Promise.all([
+      api.listMusicSources(),
+      api.getMusicSource(),
+    ])
+    if (srcList.length) lyricSources.value = srcList
+    if (srcList.some((s) => s.id === curSource)) lyricSrc.value = curSource
+  } catch {
+    /* ignore */
+  }
   // 从「资源获取」页跳转而来时，预选传入的已下载素材
   const src = typeof route.query.source === 'string' ? route.query.source : ''
   if (src) {
@@ -506,6 +864,7 @@ onMounted(async () => {
       ? route.query.name
       : src.split(/[/\\]/).pop() || src
     song.value = { name, path: src, hint: '来自资源获取' }
+    songQuery.value = name.replace(/\.[^.]+$/, '')
   }
 })
 onUnmounted(stopPolling)
@@ -721,6 +1080,178 @@ onUnmounted(stopPolling)
 .model-name { font-weight: 600; font-size: 14px; color: var(--xb-text); }
 .model-tag { font-size: 12px; color: var(--xb-muted); margin-top: 2px; }
 .model-check { color: var(--xb-primary); font-size: 18px; }
+
+/* 模式切换 */
+.mode-card { display: flex; gap: 10px; padding: 12px; }
+.mode-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.02);
+  color: var(--xb-text);
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+}
+.mode-item .el-icon { font-size: 20px; color: var(--xb-muted); }
+.mode-item:hover { border-color: rgba(var(--xb-primary-rgb), 0.45); }
+.mode-item.active { border-color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.09); }
+.mode-item.active .el-icon { color: var(--xb-primary); }
+.mode-name { font-weight: 700; font-size: 14px; }
+.mode-desc { font-size: 12px; color: var(--xb-muted); margin-top: 2px; }
+
+/* 多模型：每个模型 + 参数 */
+.multi-model { display: flex; flex-direction: column; }
+.model-badge {
+  min-width: 20px; height: 20px;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+  padding: 0 5px;
+}
+.mp-params {
+  margin: 6px 0 4px 8px;
+  padding: 12px 14px;
+  border-left: 2px solid var(--xb-border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mp-row { display: flex; flex-direction: column; gap: 6px; }
+.mp-row label { font-size: 12.5px; color: var(--xb-muted); }
+.mp-inline { display: flex; gap: 10px; }
+.mp-mini { flex: 1; display: flex; align-items: center; gap: 6px; }
+.mp-mini span { font-size: 12.5px; color: var(--xb-muted); }
+.mp-mini select {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-text);
+  outline: none;
+  font-size: 13px;
+}
+
+/* 歌词获取 */
+.lyric-fetch { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.lyric-input {
+  flex: 1;
+  min-width: 140px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-text);
+  outline: none;
+  font-size: 13.5px;
+}
+.lyric-input:focus { border-color: var(--xb-primary); }
+.lyric-n {
+  width: 52px;
+  padding: 9px 8px;
+  border-radius: 9px;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-text);
+  outline: none;
+  text-align: center;
+}
+.lyric-src { width: 120px; }
+.lyric-src :deep(.el-select__wrapper) {
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  border: 1px solid var(--xb-border);
+  border-radius: 9px;
+  box-shadow: none;
+  min-height: 38px;
+}
+.lyric-src :deep(.el-select__selected-item) { color: var(--xb-text); }
+
+/* 对齐校验条 */
+.align-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 9px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  border: 1px solid var(--xb-border);
+  flex-wrap: wrap;
+}
+.align-bar .el-icon { font-size: 16px; flex-shrink: 0; }
+.align-bar.ok { border-color: rgba(var(--xb-success-rgb), 0.4); color: var(--xb-success); }
+.align-bar.warn { border-color: rgba(var(--xb-warn-rgb), 0.4); color: var(--xb-warn); }
+.align-bar.bad { border-color: rgba(var(--xb-accent-rgb), 0.4); color: var(--xb-accent); }
+.align-text { flex: 1; min-width: 120px; }
+.offset-ctrl { display: flex; align-items: center; gap: 8px; }
+.offset-ctrl label { font-size: 12px; color: var(--xb-muted); white-space: nowrap; }
+.offset-ctrl input[type='range'] { width: 120px; }
+
+/* 批量指派 */
+.assign-quick { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.assign-quick .muted { font-size: 12.5px; color: var(--xb-muted); }
+.quick-btn {
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--mc);
+  background: transparent;
+  color: var(--mc);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.quick-btn:hover { background: color-mix(in srgb, var(--mc) 14%, transparent); }
+
+/* 歌词逐句 */
+.lyric-list { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.lyric-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 8px;
+}
+.lyric-row:hover { background: rgba(var(--xb-primary-rgb), 0.05); }
+.ly-time {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font-size: 12px;
+  color: var(--xb-muted);
+  flex-shrink: 0;
+  width: 44px;
+}
+.ly-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ly-model {
+  width: 116px;
+  flex-shrink: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-text);
+  outline: none;
+  font-size: 12.5px;
+}
+.lyric-empty {
+  padding: 24px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--xb-muted);
+}
 
 /* 字段 */
 .field { margin-bottom: 18px; }

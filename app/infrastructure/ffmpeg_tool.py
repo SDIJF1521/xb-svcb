@@ -108,6 +108,144 @@ class FfmpegTool:
         except (OSError, subprocess.SubprocessError):
             return False
 
+    def slice(
+        self,
+        src: Path,
+        start: float,
+        end: float,
+        dst: Path,
+        sample_rate: int = 44100,
+    ) -> bool:
+        """从 ``src`` 精确截取 [start, end] 区间为统一格式 WAV（多模型分句用）。
+
+        采用「-i 后置 -ss」的精确定位（先解码再裁剪），保证各句边界对齐，
+        拼接后总时长不漂移。成功返回 True。
+        """
+        if not self.ffmpeg:
+            return False
+        start = max(0.0, float(start))
+        end = max(start, float(end))
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            res = subprocess.run(
+                [
+                    self.ffmpeg,
+                    "-y",
+                    "-i",
+                    str(src),
+                    "-ss",
+                    f"{start:.3f}",
+                    "-to",
+                    f"{end:.3f}",
+                    "-ar",
+                    str(sample_rate),
+                    "-ac",
+                    "2",
+                    str(dst),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+                **config.subprocess_no_window(),
+            )
+            return res.returncode == 0 and dst.exists()
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def concat(self, parts: list[Path], dst: Path, sample_rate: int = 44100) -> bool:
+        """按顺序拼接多个音频片段为一个完整文件（多模型人声合并用）。
+
+        关键：必须用 concat **滤镜**而非 concat demuxer。各片段采样率可能不同
+        （SVC 模型按自身 target_sample 写出，可能不是 44100；而切片是 44100），
+        demuxer 会按首段采样率重放后续片段，表现为「忽快忽慢 / 整体加速」。
+        滤镜会先按各文件自身头信息正确解码、逐个重采样到统一采样率再拼接。
+        成功返回 True。
+        """
+        if not self.ffmpeg:
+            return False
+        usable = [p for p in parts if p and Path(p).exists()]
+        if not usable:
+            return False
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        cmd: list[str] = [self.ffmpeg, "-y"]
+        for p in usable:
+            cmd += ["-i", str(p)]
+        filt = ""
+        labels = ""
+        for i in range(len(usable)):
+            filt += (
+                f"[{i}:a]aresample={sample_rate},"
+                f"aformat=sample_fmts=s16:channel_layouts=stereo[a{i}];"
+            )
+            labels += f"[a{i}]"
+        filt += f"{labels}concat=n={len(usable)}:v=0:a=1[a]"
+        cmd += [
+            "-filter_complex",
+            filt,
+            "-map",
+            "[a]",
+            "-ar",
+            str(sample_rate),
+            "-ac",
+            "2",
+            str(dst),
+        ]
+        try:
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=600,
+                **config.subprocess_no_window(),
+            )
+            return res.returncode == 0 and dst.exists()
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def pad_or_trim(
+        self, src: Path, dst: Path, seconds: float, sample_rate: int = 44100
+    ) -> bool:
+        """把片段规整为「恰好 seconds 秒」的统一格式 WAV（不足补静音、超出截断）。
+
+        多模型逐段推理后，各段时长可能与原切片有微小出入；逐段锁定到原时长可
+        避免累计漂移，保证合并后人声与伴奏始终对齐、总时长与原曲一致。
+        """
+        if not self.ffmpeg:
+            return False
+        seconds = max(0.05, float(seconds))
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            res = subprocess.run(
+                [
+                    self.ffmpeg,
+                    "-y",
+                    "-i",
+                    str(src),
+                    "-af",
+                    f"aresample={sample_rate},apad",
+                    "-t",
+                    f"{seconds:.3f}",
+                    "-ar",
+                    str(sample_rate),
+                    "-ac",
+                    "2",
+                    str(dst),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+                **config.subprocess_no_window(),
+            )
+            return res.returncode == 0 and dst.exists()
+        except (OSError, subprocess.SubprocessError):
+            return False
+
     def mix(
         self, vocals: Path, instrumental: Path, dst: Path, sample_rate: int = 44100
     ) -> bool:
