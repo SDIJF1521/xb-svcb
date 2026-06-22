@@ -115,28 +115,47 @@ class FfmpegTool:
         end: float,
         dst: Path,
         sample_rate: int = 44100,
+        fade: float = 0.0,
     ) -> bool:
         """从 ``src`` 精确截取 [start, end] 区间为统一格式 WAV（多模型分句用）。
 
-        采用「-i 后置 -ss」的精确定位（先解码再裁剪），保证各句边界对齐，
-        拼接后总时长不漂移。成功返回 True。
+        采用「-ss 前置（输入定位）+ -t 限长」的方式：输入定位会把片段时间戳
+        归零，保证各句时长精确、拼接后总时长不漂移（源为 WAV/PCM，定位为样本级精确）。
+
+        ``fade`` > 0 时在片段两端各加一段时长 ``fade`` 秒的淡入/淡出，使片段
+        首尾归零——拼接处不再出现因波形跳变产生的「咔哒声 / 卡顿」，且不改变
+        片段时长（淡变发生在片段内部），整曲与伴奏仍精确对齐。
+
+        注意：淡变 ``afade`` 的 ``st`` 以片段内部时间（从 0 计）为基准，因此
+        必须用输入定位让时间戳归零；若用输出定位（-i 后置 -ss）会保留绝对时间戳，
+        导致 fade-out 立即触发把整段变静音（表现为「成品只剩伴奏」）。
         """
         if not self.ffmpeg:
             return False
         start = max(0.0, float(start))
         end = max(start, float(end))
+        dur = max(0.0, end - start)
         dst.parent.mkdir(parents=True, exist_ok=True)
+        af = f"aresample={sample_rate}"
+        f = min(float(fade), dur / 2.0) if (fade and dur > 0) else 0.0
+        if f > 0.0:
+            af += (
+                f",afade=t=in:st=0:d={f:.3f}"
+                f",afade=t=out:st={max(0.0, dur - f):.3f}:d={f:.3f}"
+            )
         try:
             res = subprocess.run(
                 [
                     self.ffmpeg,
                     "-y",
-                    "-i",
-                    str(src),
                     "-ss",
                     f"{start:.3f}",
-                    "-to",
-                    f"{end:.3f}",
+                    "-i",
+                    str(src),
+                    "-t",
+                    f"{dur:.3f}",
+                    "-af",
+                    af,
                     "-ar",
                     str(sample_rate),
                     "-ac",
@@ -186,6 +205,71 @@ class FfmpegTool:
             filt,
             "-map",
             "[a]",
+            "-ar",
+            str(sample_rate),
+            "-ac",
+            "2",
+            str(dst),
+        ]
+        try:
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=600,
+                **config.subprocess_no_window(),
+            )
+            return res.returncode == 0 and dst.exists()
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def concat_crossfade(
+        self,
+        parts: list[Path],
+        dst: Path,
+        xf: float = 0.03,
+        sample_rate: int = 44100,
+    ) -> bool:
+        """按顺序用「交叉淡化」拼接多个片段（多模型换人处用）。
+
+        相比 concat 的硬拼接，``acrossfade`` 让相邻片段在边界处重叠混合，既消除
+        波形跳变产生的咔哒声/卡顿，又不会像「淡出到静音再淡入」那样在每个边界
+        留下音量塌陷。各片段除最后一段外都向后多借 ``xf`` 秒素材，使交叉淡化
+        消耗的重叠量被补回，拼接后总时长保持不变、人声与伴奏精确对齐。
+
+        要求各片段时长 ≥ ``xf``（调用方按整句/整段切片，远大于 xf）。成功返回 True。
+        """
+        if not self.ffmpeg:
+            return False
+        usable = [p for p in parts if p and Path(p).exists()]
+        if not usable:
+            return False
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if len(usable) == 1:
+            return self.convert(usable[0], dst, sample_rate)
+        cmd: list[str] = [self.ffmpeg, "-y"]
+        for p in usable:
+            cmd += ["-i", str(p)]
+        filt = ""
+        for i in range(len(usable)):
+            filt += (
+                f"[{i}:a]aresample={sample_rate},"
+                f"aformat=sample_fmts=s16:channel_layouts=stereo[a{i}];"
+            )
+        prev = "[a0]"
+        last = len(usable) - 1
+        for i in range(1, len(usable)):
+            out = "[out]" if i == last else f"[x{i}]"
+            filt += f"{prev}[a{i}]acrossfade=d={xf:.3f}:c1=tri:c2=tri{out};"
+            prev = out
+        filt = filt.rstrip(";")
+        cmd += [
+            "-filter_complex",
+            filt,
+            "-map",
+            "[out]",
             "-ar",
             str(sample_rate),
             "-ac",

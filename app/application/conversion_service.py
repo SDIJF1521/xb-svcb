@@ -391,7 +391,7 @@ class ConversionService:
             work["progress"] = 20
             self._save(work)
 
-            # 2) 歌词分割：把人声统一为 wav，再按时间轴逐句切片
+            # 2) 歌词分割：把人声统一为 wav，并规划时间轴 / 参与模型
             self._set_step(work, "split", StepStatus.ACTIVE.value)
             self._save(work)
             infer_input = Path(vocals)
@@ -400,98 +400,131 @@ class ConversionService:
                 if self._ffmpeg.convert(infer_input, wav_input):
                     infer_input = wav_input
             timeline = self._build_timeline(segments_in, duration)
-            seg_dir = work_dir / "segments"
-            seg_dir.mkdir(parents=True, exist_ok=True)
-            sliced: list[dict[str, Any]] = []
-            for i, seg in enumerate(timeline):
-                seg_in = seg_dir / f"seg_{i:03d}_in.wav"
-                ok = (
-                    self._ffmpeg.slice(infer_input, seg["start"], seg["end"], seg_in)
-                    if self._ffmpeg.available and infer_input.exists()
-                    else False
-                )
-                sliced.append({"i": i, "in": seg_in if ok else None, **seg})
+            used_models: list[str] = []
+            for s in timeline:
+                mid = s.get("model_id")
+                if mid and mid in seg_models and mid not in used_models:
+                    used_models.append(mid)
             sung = sum(1 for s in timeline if s["model_id"])
             self._log(
                 log_file,
-                f"[2/5] 歌词分割完成：共 {len(timeline)} 段（演唱 {sung} 段，间奏 {len(timeline) - sung} 段）",
+                f"[2/5] 歌词分割完成：共 {len(timeline)} 段"
+                f"（演唱 {sung} 段，间奏 {len(timeline) - sung} 段），"
+                f"参与模型 {len(used_models)} 个",
             )
             self._set_step(work, "split", StepStatus.DONE.value)
-            work["progress"] = 40
+            work["progress"] = 35
             self._save(work)
 
-            # 3) 逐段推理：演唱段送对应模型，间奏/未指派段保留原始人声
+            # 3) 整轨逐模型推理：每个模型在「完整人声」上推理一次。
+            #    关键修复：不再把人声切成碎片逐句送推——短碎片会产生句首/句尾
+            #    电流声、咔哒声并拼出卡顿。整轨推理保证上下文连续、无边界伪声。
             self._set_step(work, "infer", StepStatus.ACTIVE.value)
             self._save(work)
             self._log(
                 log_file,
-                f"[3/5] 逐段推理（引擎 {'可用' if self._svc.available else '降级模式'}）",
+                f"[3/5] 整轨逐模型推理（引擎 {'可用' if self._svc.available else '降级模式'}）",
             )
-            outputs: list[Path] = []
-            total = len(sliced)
-            for item in sliced:
-                idx = item["i"]
-                seg_in = item["in"]
-                model_id = item.get("model_id")
-                if not seg_in or not Path(seg_in).exists():
-                    continue
-                seg_dur = max(0.05, item["end"] - item["start"])
-                seg_out = seg_dir / f"seg_{idx:03d}_out.wav"
-                model = seg_models.get(model_id) if model_id else None
-                produced = Path(seg_in)
-                if model:
-                    seg_params = InferenceParams.from_dict(model.get("params", {}))
-                    self._log(
-                        log_file,
-                        f"  [{idx + 1}/{total}] {item['start']:.2f}-{item['end']:.2f}s "
-                        f"→ {model.get('name', model_id)}",
+            full_renders: dict[str, Path] = {}
+            for n, mid in enumerate(used_models):
+                model = seg_models.get(mid) or {}
+                seg_params = InferenceParams.from_dict(model.get("params", {}))
+                full_raw = work_dir / f"full_{mid}.wav"
+                self._log(
+                    log_file,
+                    f"  [{n + 1}/{len(used_models)}] 模型 {model.get('name', mid)} 整轨推理…",
+                )
+                try:
+                    self._svc.infer(
+                        main_model=model.get("main_model_path", ""),
+                        main_config=model.get("main_config_path", ""),
+                        diffusion_model=model.get("diffusion_model_path", ""),
+                        diffusion_config=model.get("diffusion_config_path", ""),
+                        vocals=infer_input,
+                        out_path=full_raw,
+                        params=seg_params,
+                        duration=duration,
+                        log_file=log_file,
                     )
-                    try:
-                        self._svc.infer(
-                            main_model=model.get("main_model_path", ""),
-                            main_config=model.get("main_config_path", ""),
-                            diffusion_model=model.get("diffusion_model_path", ""),
-                            diffusion_config=model.get("diffusion_config_path", ""),
-                            vocals=Path(seg_in),
-                            out_path=seg_out,
-                            params=seg_params,
-                            duration=seg_dur,
-                            log_file=log_file,
-                        )
-                        produced = seg_out if seg_out.exists() else Path(seg_in)
-                    except Exception as exc:  # noqa: BLE001 - 单段失败回退原声，不中断整曲
-                        self._log(log_file, f"    片段推理失败，回退原始人声：{exc}")
-                        produced = Path(seg_in)
-                # 锁定每段到其原始切片时长：避免推理输出微小长短差异累计成
-                # 人声/伴奏错位，并消除采样率不一致带来的变速。失败则退回原段。
-                if self._ffmpeg.available:
-                    seg_fix = seg_dir / f"seg_{idx:03d}_fix.wav"
-                    if self._ffmpeg.pad_or_trim(produced, seg_fix, seg_dur):
-                        produced = seg_fix
-                outputs.append(produced)
-                work["progress"] = 40 + int(35 * (idx + 1) / max(total, 1))
+                    # 规整到 44100Hz 且锁定为整曲时长：保证逐句切片与原伴奏精确对齐
+                    full_fix = work_dir / f"full_{mid}_fix.wav"
+                    if self._ffmpeg.available and self._ffmpeg.pad_or_trim(
+                        full_raw, full_fix, duration
+                    ):
+                        full_renders[mid] = full_fix
+                    elif full_raw.exists():
+                        full_renders[mid] = full_raw
+                except Exception as exc:  # noqa: BLE001 - 单模型失败回退原声，不中断整曲
+                    self._log(log_file, f"    模型整轨推理失败，相关句回退原始人声：{exc}")
+                work["progress"] = 35 + int(40 * (n + 1) / max(len(used_models), 1))
                 self._save(work)
             self._set_step(work, "infer", StepStatus.DONE.value)
             work["progress"] = 75
             self._save(work)
 
-            # 4) 人声合并：按顺序拼接所有片段为完整人声
+            # 4) 人声合并：先把「相邻且用同一来源」的句子并成连续段，避免在同
+            #    一歌手连唱处反复切割造成卡顿；再仅在真正换人处用交叉淡化平滑衔接。
             self._set_step(work, "merge", StepStatus.ACTIVE.value)
             self._save(work)
+            seg_dir = work_dir / "segments"
+            seg_dir.mkdir(parents=True, exist_ok=True)
+
+            def _src_key(seg: dict[str, Any]) -> str | None:
+                mid = seg.get("model_id")
+                return mid if (mid and mid in full_renders) else None
+
+            runs: list[dict[str, Any]] = []
+            for seg in timeline:
+                key = _src_key(seg)
+                if runs and runs[-1]["key"] == key:
+                    runs[-1]["end"] = seg["end"]
+                else:
+                    runs.append(
+                        {"key": key, "start": seg["start"], "end": seg["end"]}
+                    )
+
+            xf = 0.03
+            pieces: list[Path] = []
+            n_runs = len(runs)
+            for i, r in enumerate(runs):
+                key = r["key"]
+                src = full_renders.get(key) if key else infer_input
+                if src is None:
+                    src = infer_input  # 间奏 / 未指派 / 推理失败 → 原始人声
+                start = r["start"]
+                end = r["end"]
+                if i < n_runs - 1:
+                    end = min(duration, end + xf)  # 多借 xf 秒供交叉淡化、保长度
+                piece = seg_dir / f"piece_{i:03d}.wav"
+                ok = (
+                    self._ffmpeg.slice(Path(src), start, end, piece)
+                    if self._ffmpeg.available and Path(src).exists()
+                    else False
+                )
+                if ok:
+                    pieces.append(piece)
+
             full_vocal = work_dir / "converted.wav"
             merged = (
-                self._ffmpeg.concat(outputs, full_vocal)
-                if self._ffmpeg.available and outputs
+                self._ffmpeg.concat_crossfade(pieces, full_vocal, xf=xf)
+                if self._ffmpeg.available and pieces
                 else False
             )
+            if not merged and self._ffmpeg.available and pieces:
+                merged = self._ffmpeg.concat(pieces, full_vocal)  # 退回硬拼接
+                if merged:
+                    self._log(log_file, "  交叉淡化失败，退回硬拼接")
             if not merged:
-                if outputs and Path(outputs[0]).exists():
-                    full_vocal = Path(outputs[0])
+                if full_renders:
+                    full_vocal = next(iter(full_renders.values()))
                 else:
                     full_vocal = infer_input
-                self._log(log_file, "  人声合并失败/降级：使用首段或整段人声")
+                self._log(log_file, "  人声合并失败/降级：使用整轨结果或原始人声")
             else:
-                self._log(log_file, f"[4/5] 人声合并完成：{full_vocal}")
+                self._log(
+                    log_file,
+                    f"[4/5] 人声合并完成（{len(timeline)} 句合并为 {len(pieces)} 段）：{full_vocal}",
+                )
             self._set_step(work, "merge", StepStatus.DONE.value)
             work["progress"] = 88
             self._save(work)
