@@ -24,6 +24,7 @@
 - 🗣️ **真实 so-vits-svc 4.1 推理** —— 支持主模型 + 浅扩散，可调变调、F0 预测器、扩散步数。
 - 🧬 **多模型混合翻唱** —— 按歌名自动获取带时间轴歌词并做时长对齐校验，逐句把不同段落指派给不同模型；每个模型在完整人声上整轨推理，再「同源连唱合并、换人处交叉淡化」无缝拼成一首多人合唱。
 - 🎵 **在线资源获取** —— 内置 **网易云 / QQ音乐** 曲库的搜索、试听、下载（QQ 可填会员 Cookie 取高品质音频），下载素材可一键进入翻唱。
+- 🌐 **模型站（魔搭社区）** —— 基于 **ModelScope** 一键**上传/下载**声音模型：填自己的访问令牌即可发布到自有公开仓库，按关键词**模糊搜索**社区模型并直接导入；带**架构标签**（So-VITS-SVC / RVC 等）与**清单防污染**校验，上传/下载全程显示**进度条**。
 - 🎼 **专业人声分离** —— `5_HP-Karaoke-UVR` 分离 + `UVR-DeEcho-DeReverb` 去混响，得到干净干声。
 - ⚡ **GPU / CPU 自由切换** —— 自动识别 NVIDIA 显卡，长音频自动分段避免显存溢出。
 - 🎨 **双主题自由切换** —— 「赛博霓虹（暗）/ 二次元蓝粉（亮）」一键切换并记忆，连 pywebview **原生窗口标题栏/边框**也随主题变色。
@@ -32,7 +33,9 @@
 - 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-uvr`），互不污染。
 - 🎧 **作品库** —— 试听 / 导出成品，单独试听伴奏与干声，失败任务一键查日志；删除作品同步真实清理本地生成文件。
 
-> **最新版本 v0.0.5**：重做 **多模型混合翻唱** 合成——每个模型在完整人声上**整轨推理**，再「同一歌手连唱合并、仅在换人处交叉淡化」拼接，彻底消除逐句碎片推理带来的电流声 / 咔哒声 / 卡顿。
+> **最新版本 v0.0.6**：新增 **模型站（ModelScope 魔搭社区）**——用自己的访问令牌把本地模型一键发布到自有公开仓库，并按关键词**模糊搜索**、直接下载导入社区模型；模型带**架构标签**（So-VITS-SVC / RVC…）、**清单防污染**校验，上传/下载全程**进度条**实时反馈。
+>
+> v0.0.5：重做 **多模型混合翻唱** 合成——每个模型在完整人声上**整轨推理**，再「同一歌手连唱合并、仅在换人处交叉淡化」拼接，彻底消除逐句碎片推理带来的电流声 / 咔哒声 / 卡顿。
 >
 > v0.0.4：资源获取新增 **QQ音乐** 曲库（支持会员 Cookie 获取高品质音频）；新增 **多模型混合翻唱**（按歌词逐句指派不同模型）；删除作品时同步真实清理本地生成文件。
 
@@ -82,9 +85,11 @@ flowchart LR
 | **ffmpeg** | 音频转码 / 混音 | 需在 PATH 中可用 |
 | Git（可选） | 获取 so-vits-svc 仓库 | 没有也行，安装器会自动下载 ZIP |
 | **Node.js LTS**（含 npm） | 构建前端 | 仅「从源码安装」需要 |
-| NVIDIA 显卡 + 驱动（可选） | GPU 加速 | 有则自动装 CUDA 版，无则用 CPU |
+| NVIDIA 显卡 + 驱动（可选） | GPU 加速 | 有则自动装 **CUDA 12.1** 版 PyTorch（[CUDA 12.1 下载](https://developer.nvidia.com/cuda-12-1-0-download-archive)），无则用 CPU |
 
 > 安装器使用 [uv](https://github.com/astral-sh/uv) 管理虚拟环境（缺失会自动安装），并能自动获取所需 Python 版本。
+>
+> 💡 **关于 CUDA**：GPU 版默认安装 PyTorch 的 **cu121** 预编译 wheel（已内置 CUDA 12.1 运行库），通常**只需较新的 NVIDIA 驱动**即可，无需手动装整套 CUDA Toolkit。若需自行安装，可从官方下载 **[CUDA Toolkit 12.1](https://developer.nvidia.com/cuda-12-1-0-download-archive)**（建议显卡驱动版本 ≥ 530）。
 
 ---
 
@@ -105,13 +110,14 @@ setup_env.bat
 | 3 | `.venv-uvr` | 人声分离环境（audio-separator） |
 | 4 | `engines/so-vits-svc` + `.venv-svc` | so-vits-svc 4.1 仓库与推理环境 |
 | 5 | `models/`、`engines/so-vits-svc/pretrain/` | UVR 模型与底模 |
+| 6 | `.venv-hub` | 模型站上传组件（`modelscope` SDK；仅上传需要） |
 
 更细的控制可直接调用 `install.py`：
 
 ```bat
 python install\install.py --cpu          rem 强制 CPU 版
 python install\install.py --gpu          rem 强制 CUDA 版
-python install\install.py --only svc     rem 只重跑某一步：app / web / uvr / svc / models
+python install\install.py --only svc     rem 只重跑某一步：app / web / uvr / svc / models / hub
 python install\install.py --skip-svc     rem 跳过 so-vits-svc（仅装壳 + 分离 + 前端）
 ```
 
@@ -136,7 +142,7 @@ run.bat
 
 ## 🎬 使用流程
 
-1. **模型管理** —— 导入训练好的 so-vits-svc 角色模型（主模型 `G_*.pth` + `config.json`，可选浅扩散 `model_*.pt` + `diffusion.yaml`）。
+1. **模型管理** —— 导入训练好的 so-vits-svc 角色模型（主模型 `G_*.pth` + `config.json`，可选浅扩散 `model_*.pt` + `diffusion.yaml`）；也可在「模型站」搜索并下载社区模型，或把自己的模型分享上去（详见下文）。
 2. **资源获取（可选）** —— 在「资源获取」页填好妖狐 API Key（QQ 想要高音质再填会员 Cookie），切换曲库（网易云 / QQ音乐）搜索、试听并下载歌曲素材到本地。
 3. **新建翻唱** —— 上传或从已下载素材选歌，选择翻唱模式：
    - **单模型** —— 选一个角色模型，设置变调 / F0 预测器 / 推理设备（GPU·CPU）等，整首歌统一演唱。
@@ -178,6 +184,32 @@ flowchart LR
 8. **混音输出** —— 合并后的完整人声与原伴奏混音，得到多人合唱成品。
 
 > 💡 间奏、前奏、尾奏等没有指派模型的区间会自动以原始人声（分离后近静音）填充，确保整条时间轴连续、不会错位。
+
+---
+
+## 🌐 模型站（ModelScope 魔搭社区）
+
+在「声音模型 → 模型站」标签页，可以把训练好的模型分享到社区，也能搜索并下载别人分享的模型，**全程在软件内完成、带进度条**。
+
+**方案要点（每人自有令牌 + 标记防污染）**
+
+- **自有令牌**：在「ModelScope 设置」填入你自己的访问令牌（[个人中心 → 访问令牌](https://www.modelscope.cn/my/myaccesstoken)），仅保存在本地。上传只会发布到**你自己的命名空间**。
+- **防污染**：上传的仓库统一带 `xb-svcb-` 前缀，并写入带签名标记的清单文件 `xb-svcb-model.json`（含 `magic` / 架构 / 各文件角色）。搜索/下载时只保留「带前缀且清单校验通过」的条目，避免被无关模型干扰。
+- **架构标签**：上传时标注模型框架（**So-VITS-SVC** / RVC 等），便于他人按类型筛选；搜索结果可按架构过滤，为后续多框架兼容预留。
+
+**搜索 / 下载**
+
+1. 填好令牌后，在搜索框输入关键词（支持中文、多词**模糊匹配**，留空浏览全部），可叠加架构筛选。
+2. 命中结果会先列出**你自己命名空间**内的模型（上传后必定可见），再合并全站按标记搜索到的社区模型。
+3. 点「下载导入」即流式下载（按字节显示**进度条**），完成后自动导入到「本地模型」。
+
+**上传分享**
+
+1. 在「本地模型」列表对某个模型点「分享到模型站」，确认/选择其框架架构。
+2. 软件打包模型文件 + 生成清单后，经独立上传组件逐个文件上传（按文件显示**进度条**）。
+3. 完成后即在你的 ModelScope 公开仓库可见，社区可搜索下载。
+
+> 💡 上传需要独立的上传组件环境 `.venv-hub`（含 `modelscope` SDK），由安装器的「模型上传组件」步骤创建；**搜索 / 下载仅用内置 httpx，无需该组件**。
 
 ---
 
@@ -269,7 +301,7 @@ uv pip install --python <安装目录>\.venv-svc\Scripts\python.exe "setuptools<
 <details>
 <summary><b>分离 / 去混响很慢</b></summary>
 
-CPU 模式下 VR 模型较慢。装有 NVIDIA 显卡时用 `python install\install.py --gpu` 重装分离环境即可走 GPU。
+CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\install.py --gpu` 重装分离环境即可走 GPU（默认安装 CUDA 12.1 版 PyTorch，一般只需较新 NVIDIA 驱动；如需 Toolkit 见 [CUDA 12.1 下载](https://developer.nvidia.com/cuda-12-1-0-download-archive)）。
 </details>
 
 <details>
