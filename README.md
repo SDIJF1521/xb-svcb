@@ -341,7 +341,6 @@ CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\inst
 4. 音频波形编辑
 5. 多轨音频编辑
 6. Seed-VC 支持
-7. AMD 支持
 
 ### 📌 分阶段清单
 
