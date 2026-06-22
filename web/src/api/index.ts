@@ -14,6 +14,12 @@ import type {
   DownloadedMusic,
   MusicSource,
   LyricsResult,
+  HubTokenResult,
+  HubSearchResult,
+  HubDownloadResult,
+  HubUploadResult,
+  HubProgress,
+  ModelFramework,
 } from './types'
 
 export * from './types'
@@ -120,6 +126,42 @@ export const api = {
 
   getAudioDuration: (path: string) =>
     invoke<number>('get_audio_duration', [path], () => mock.getAudioDuration(path)),
+
+  // ---- 模型站（ModelScope 魔搭社区）----
+  getModelscopeToken: () =>
+    invoke<string>('get_modelscope_token', [], () => mock.getModelscopeToken()),
+
+  setModelscopeToken: (token: string) =>
+    invoke<boolean>('set_modelscope_token', [token], () => mock.setModelscopeToken(token)),
+
+  verifyModelscopeToken: (token?: string) =>
+    invoke<HubTokenResult>('verify_modelscope_token', [token], () =>
+      mock.verifyModelscopeToken(token),
+    ),
+
+  modelhubUploadReady: () =>
+    invoke<boolean>('modelhub_upload_ready', [], () => mock.modelhubUploadReady()),
+
+  listModelFrameworks: () =>
+    invoke<ModelFramework[]>('list_model_frameworks', [], () => mock.listModelFrameworks()),
+
+  hubSearchModels: (query = '', page = 1, framework?: string) =>
+    invoke<HubSearchResult>('hub_search_models', [query, page, framework], () =>
+      mock.hubSearchModels(query, page, framework),
+    ),
+
+  hubDownloadModel: (repoId: string) =>
+    invoke<HubDownloadResult>('hub_download_model', [repoId], () =>
+      mock.hubDownloadModel(repoId),
+    ),
+
+  hubUploadModel: (modelId: string, name?: string, framework?: string) =>
+    invoke<HubUploadResult>('hub_upload_model', [modelId, name, framework], () =>
+      mock.hubUploadModel(modelId, name, framework),
+    ),
+
+  hubProgress: (key: string) =>
+    invoke<HubProgress>('hub_progress', [key], () => mock.hubProgress(key)),
 }
 
 const palette = ['#00f0ff', '#2f6bff', '#ff2e88', '#19f59a', '#ffae00', '#b65cff', '#5ce0c8', '#ff7ac0']

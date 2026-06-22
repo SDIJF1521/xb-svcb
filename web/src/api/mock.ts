@@ -14,6 +14,12 @@ import type {
   DownloadedMusic,
   MusicSource,
   LyricsResult,
+  HubTokenResult,
+  HubSearchResult,
+  HubDownloadResult,
+  HubUploadResult,
+  HubProgress,
+  ModelFramework,
 } from './types'
 
 const now = () => new Date().toISOString()
@@ -69,6 +75,19 @@ const mockMusicSources: MusicSource[] = [
   { id: 'qq', name: 'QQ音乐', cookie: true },
 ]
 const mockDownloaded: DownloadedMusic[] = []
+
+// 模型站（ModelScope）模拟状态
+let mockHubToken = ''
+const mockFrameworks: ModelFramework[] = [
+  { id: 'so-vits-svc', name: 'So-VITS-SVC' },
+  { id: 'rvc', name: 'RVC' },
+  { id: 'ddsp-svc', name: 'DDSP-SVC' },
+  { id: 'other', name: '其他' },
+]
+const mockHubModels = [
+  { repo_id: 'demo-user/xb-svcb-luotianyi-a1b2c3', name: '洛天依（社区）', type: 'So-VITS', framework: 'so-vits-svc', framework_label: 'So-VITS-SVC', sample_rate: '44.1kHz', author: 'demo-user', has_diffusion: true, url: '#' },
+  { repo_id: 'demo-user/xb-svcb-reze-d4e5f6', name: 'Reze（社区）', type: 'RVC', framework: 'rvc', framework_label: 'RVC', sample_rate: '44.1kHz', author: 'demo-user', has_diffusion: false, url: '#' },
+]
 
 const baseSteps = (): PipelineStep[] => [
   { key: 'separate', label: '人声分离', status: 'wait' },
@@ -345,4 +364,75 @@ export const mock = {
     void path
     return 165
   },
+
+  // ---- 模型站（浏览器开发环境模拟）----
+  getModelscopeToken(): string {
+    return mockHubToken
+  },
+  setModelscopeToken(token: string): boolean {
+    mockHubToken = token.trim()
+    return true
+  },
+  verifyModelscopeToken(token?: string): HubTokenResult {
+    const t = (token ?? mockHubToken).trim()
+    if (!t) return { ok: false, error: '未填写 ModelScope 访问令牌' }
+    return { ok: true, username: 'demo-user', email: 'demo@example.com' }
+  },
+  modelhubUploadReady(): boolean {
+    return true
+  },
+  listModelFrameworks(): ModelFramework[] {
+    return [...mockFrameworks]
+  },
+  hubSearchModels(query = '', page = 1, framework?: string): HubSearchResult {
+    const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    const fw = (framework || '').trim().toLowerCase()
+    const items = mockHubModels.filter((m) => {
+      const hay = `${m.name} ${m.repo_id}`.toLowerCase()
+      const hit = tokens.every((t) => hay.includes(t))
+      return hit && (!fw || m.framework === fw)
+    })
+    return { ok: true, items, page }
+  },
+  hubDownloadModel(repoId: string): HubDownloadResult {
+    const hit = mockHubModels.find((m) => m.repo_id === repoId)
+    if (!hit) return { ok: false, error: '未找到该模型' }
+    const m: ModelDTO = {
+      id: rid('mdl_'),
+      name: hit.name,
+      type: hit.type,
+      sample_rate: hit.sample_rate,
+      size: '400 MB',
+      imported_at: new Date().toISOString().slice(5, 10),
+      main_model: { name: 'G_30000.pth', path: '' },
+      main_config: { name: 'config.json', path: '' },
+      diffusion_model: hit.has_diffusion ? { name: 'diffusion.pt', path: '' } : null,
+      diffusion_config: hit.has_diffusion ? { name: 'diffusion.yaml', path: '' } : null,
+    }
+    mockModels.unshift(m)
+    return { ok: true, model: m }
+  },
+  hubUploadModel(modelId: string, name?: string, framework?: string): HubUploadResult {
+    void framework
+    if (!mockHubToken) return { ok: false, error: '未填写 ModelScope 访问令牌' }
+    const model = mockModels.find((m) => m.id === modelId)
+    if (!model) return { ok: false, error: '本地模型不存在' }
+    const repo = `demo-user/xb-svcb-${(name || model.name).toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Math.random().toString(36).slice(2, 8)}`
+    return { ok: true, url: '#', repo_id: repo }
+  },
+
+  hubProgress(key: string): HubProgress {
+    const cur = (mockProgress[key] ?? 0) + 20
+    mockProgress[key] = cur
+    const pct = Math.min(100, cur)
+    return {
+      phase: pct >= 100 ? 'done' : 'upload',
+      pct,
+      msg: pct >= 100 ? '完成' : `处理中 ${pct}%`,
+      done: pct,
+      total: 100,
+    }
+  },
 }
+
+const mockProgress: Record<string, number> = {}

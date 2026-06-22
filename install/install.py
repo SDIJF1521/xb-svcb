@@ -49,6 +49,7 @@ SOVITS_DIR = ENGINES_DIR / "so-vits-svc"
 PRETRAIN_DIR = SOVITS_DIR / "pretrain"
 UVR_VENV = ROOT / ".venv-uvr"
 SVC_VENV = ROOT / ".venv-svc"
+HUB_VENV = ROOT / ".venv-hub"
 UVR_MODELS_DIR = ROOT / "models" / "uvr"
 
 # 随安装包一起分发的「自带模型」目录：安装时直接本地复制，免联网慢下载。
@@ -59,7 +60,7 @@ ASSETS_MODELS_DIR = Path(__file__).resolve().parent.parent / "assets" / "models"
 def _derive_paths(root: Path) -> None:
     """以 root 为基准重新计算所有产物路径（供 --root 覆盖）。"""
     global ROOT, APP_DIR, WEB_DIR, ENGINES_DIR, SOVITS_DIR, PRETRAIN_DIR
-    global UVR_VENV, SVC_VENV, UVR_MODELS_DIR
+    global UVR_VENV, SVC_VENV, HUB_VENV, UVR_MODELS_DIR
     ROOT = root
     APP_DIR = root / "app"
     WEB_DIR = root / "web"
@@ -68,6 +69,7 @@ def _derive_paths(root: Path) -> None:
     PRETRAIN_DIR = SOVITS_DIR / "pretrain"
     UVR_VENV = root / ".venv-uvr"
     SVC_VENV = root / ".venv-svc"
+    HUB_VENV = root / ".venv-hub"
     UVR_MODELS_DIR = root / "models" / "uvr"
 
 SOVITS_REPO_URL = "https://github.com/svc-develop-team/so-vits-svc.git"
@@ -328,13 +330,13 @@ def copy_bundled(rel: str, dest: Path) -> bool:
 
 # ---------- 各安装步骤 ----------
 def step_app(uv: str) -> None:
-    hr("1/5 主程序环境 app/.venv")
+    hr("1/6 主程序环境 app/.venv")
     run(uv_cmd(uv, "sync"), cwd=APP_DIR)
     print(c("g", "主程序环境就绪"))
 
 
 def step_web() -> None:
-    hr("2/5 前端构建 web/dist")
+    hr("2/6 前端构建 web/dist")
     if not have("npm"):
         raise RuntimeError("未检测到 npm，请先安装 Node.js LTS 后重试（或 --skip-web）")
     # 优先 npm ci（依赖 lock）；无 lock 时回退 npm install
@@ -347,7 +349,7 @@ def step_web() -> None:
 
 
 def step_uvr(uv: str, use_gpu: bool) -> None:
-    hr("3/5 人声分离环境 .venv-uvr（audio-separator）")
+    hr("3/6 人声分离环境 .venv-uvr（audio-separator）")
     if not venv_python(UVR_VENV).exists():
         run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_ENGINES, str(UVR_VENV)))
     py = str(venv_python(UVR_VENV))
@@ -410,7 +412,7 @@ def _venv_pyver(py: Path) -> str | None:
 
 
 def step_svc(uv: str, use_gpu: bool) -> None:
-    hr("4/5 推理引擎 so-vits-svc + .venv-svc")
+    hr("4/6 推理引擎 so-vits-svc + .venv-svc")
     fetch_sovits()
 
     # 创建环境（强制 Python 3.9）。若已存在但版本不符，则重建，避免旧依赖在 3.10 现场编译失败。
@@ -472,8 +474,26 @@ def _filter_requirements(src: Path) -> Path:
     return out
 
 
+def step_hub(uv: str) -> None:
+    hr("5/6 模型上传组件 .venv-hub（modelscope）")
+    # 仅「分享到模型站（上传）」需要 modelscope SDK；搜索 / 下载走纯 HTTP，不依赖本环境。
+    # 用 3.10（与 UVR 一致），装 modelscope hub 能力即可（上传用 upload_folder，无需本地 git）。
+    if not venv_python(HUB_VENV).exists():
+        run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_ENGINES, str(HUB_VENV)))
+    py = str(venv_python(HUB_VENV))
+
+    def pip(*args: str, index: str | None = None) -> None:
+        uv_pip_install(uv, py, *args, index=index)
+
+    # uv venv 默认不含 setuptools，modelscope 运行时可能用到 pkg_resources，先补齐
+    pip("setuptools<81", "wheel")
+    # modelscope SDK（含 hub 上传能力）+ 依赖
+    pip("modelscope", "requests", "tqdm")
+    print(c("g", "模型上传组件就绪"))
+
+
 def step_models(uv: str) -> None:
-    hr("5/5 底模 + UVR 模型（自带优先，缺失才联网下载）")
+    hr("6/6 底模 + UVR 模型（自带优先，缺失才联网下载）")
     PRETRAIN_DIR.mkdir(parents=True, exist_ok=True)
     if ASSETS_MODELS_DIR.exists():
         print(c("g", f"  检测到自带模型目录：{ASSETS_MODELS_DIR}"))
@@ -579,9 +599,10 @@ STEPS = {
     "web": lambda uv, gpu: step_web(),
     "uvr": lambda uv, gpu: step_uvr(uv, gpu),
     "svc": lambda uv, gpu: step_svc(uv, gpu),
+    "hub": lambda uv, gpu: step_hub(uv),
     "models": lambda uv, gpu: step_models(uv),
 }
-ORDER = ["app", "web", "uvr", "svc", "models"]
+ORDER = ["app", "web", "uvr", "svc", "hub", "models"]
 
 
 def main() -> int:

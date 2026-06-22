@@ -9,7 +9,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.5"
+APP_VERSION = "0.0.6"
 APP_BG = "#05060d"
 
 
@@ -181,6 +181,33 @@ def uvr_dereverb_ready() -> bool:
     """去混响模型是否可用。"""
     return bool(UVR_MODEL_DIR and (UVR_MODEL_DIR / UVR_DEREVERB_MODEL).exists())
 
+
+# ---- 模型站（ModelScope 魔搭社区）上传组件 ----
+# 上传需要 modelscope SDK，装在独立轻量环境 .venv-hub（由安装器创建）。
+# 搜索 / 下载 / 校验 token 走纯 HTTP（httpx），不依赖该环境。
+HUB_VENV_DIR = ROOT_DIR / ".venv-hub"
+
+
+def _detect_hub_python() -> Path | None:
+    env = os.environ.get("XB_HUB_PYTHON")
+    if env:
+        return Path(env)
+    return _first_existing([_venv_python(HUB_VENV_DIR)])
+
+
+# 运行 modelscope 上传的 Python 解释器（需装有 modelscope SDK）
+HUB_PYTHON = _detect_hub_python()
+# 子进程内执行的上传 worker 脚本（由 .venv-hub 的 Python 读取，需为磁盘真实文件）
+HUB_WORKER = BUNDLE_DIR / "infrastructure" / "hub_worker.py"
+
+
+def modelhub_upload_ready() -> bool:
+    """模型上传组件是否就绪（.venv-hub 解释器 + worker 脚本都在）。
+
+    仅「上传」需要；搜索与下载不依赖该组件。
+    """
+    return bool(HUB_PYTHON and HUB_PYTHON.exists() and HUB_WORKER.exists())
+
 # 用户数据目录（模型 / 作品 / 缓存 / 配置均保存在本地）
 DATA_DIR = Path.home() / ".xb-svcb"
 MODELS_DIR = DATA_DIR / "models"
@@ -221,6 +248,55 @@ def music_api_url(source: str) -> str:
 MUSIC_API_URL = music_api_url(MUSIC_API_DEFAULT_SOURCE)
 # 接口限制 10 QPS，客户端侧统一限流，避免触发风控。
 MUSIC_API_QPS = 10
+
+# ---- 模型站（ModelScope 魔搭社区）----
+# 用户在「模型站」填写自己的 ModelScope 访问令牌（个人中心->访问令牌）。
+# 上传到自己命名空间下、名称带固定前缀并写入清单文件，下载侧据此筛选，避免被无关模型污染。
+MODELSCOPE_ENDPOINT = "https://www.modelscope.cn"
+# 本软件上传模型的统一标记关键词（用于全局搜索发现 + 防污染软校验）
+MODELSCOPE_MARKER = "xb-svcb-voice-model"
+# 上传仓库名前缀（owner/<前缀>-<slug>-<短id>）
+MODELHUB_REPO_PREFIX = "xb-svcb"
+# 写入仓库的清单文件名与 schema/magic（下载时校验，确认确为本软件上传）
+MODELHUB_MANIFEST = "xb-svcb-model.json"
+MODELHUB_SCHEMA = 1
+MODELHUB_MAGIC = "XB-SVCB-VOICE-MODEL"
+# 模型架构标签（上传时标注，便于将来兼容 RVC 等不同框架并按类型筛选）。
+# id -> 显示名；id 写入清单的 framework 字段，下载/筛选据此识别。
+MODELHUB_FRAMEWORKS: dict[str, str] = {
+    "so-vits-svc": "So-VITS-SVC",
+    "rvc": "RVC",
+    "ddsp-svc": "DDSP-SVC",
+    "other": "其他",
+}
+# 默认架构（当前推理引擎为 so-vits-svc）
+MODELHUB_DEFAULT_FRAMEWORK = "so-vits-svc"
+
+
+def modelhub_normalize_framework(framework: str | None) -> str:
+    """把任意输入规整为合法的架构 id（非法回退默认）。"""
+    fw = (framework or "").strip().lower()
+    return fw if fw in MODELHUB_FRAMEWORKS else MODELHUB_DEFAULT_FRAMEWORK
+
+
+def modelhub_guess_framework(model_type: str | None) -> str:
+    """根据本地模型的 type（ModelType 值）推断默认架构 id。"""
+    t = (model_type or "").strip().lower()
+    if "rvc" in t:
+        return "rvc"
+    if "ddsp" in t:
+        return "ddsp-svc"
+    if "so-vits" in t or "sovits" in t or t == "svc":
+        return "so-vits-svc"
+    return MODELHUB_DEFAULT_FRAMEWORK
+
+
+# 上传 / 下载暂存目录
+MODELHUB_DIR = DATA_DIR / "modelhub"
+# ModelScope 接口限流（客户端侧保守值）
+MODELSCOPE_QPS = 5
+# settings.json 中保存 ModelScope 访问令牌的键名
+MODELSCOPE_TOKEN_SETTING = "modelscope_token"
 
 # 支持的音频与模型扩展名
 AUDIO_EXTS = (".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac")

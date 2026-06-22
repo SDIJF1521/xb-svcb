@@ -185,3 +185,65 @@ export interface LyricsResult {
   name?: string
   singer?: string
 }
+
+// ---- 模型站（ModelScope 魔搭社区）----
+
+/** 校验 ModelScope 访问令牌的结果。 */
+export interface HubTokenResult {
+  ok: boolean
+  error?: string
+  username?: string
+  email?: string
+}
+
+/** 模型架构标签（so-vits-svc / rvc …）。 */
+export interface ModelFramework {
+  id: string
+  name: string
+}
+
+/** 模型站搜索到的一个（经清单校验、确为本软件上传的）模型。 */
+export interface HubModelItem {
+  repo_id: string
+  name: string
+  type: string
+  /** 模型架构 id，如 so-vits-svc / rvc。 */
+  framework: string
+  /** 模型架构显示名。 */
+  framework_label: string
+  sample_rate: string
+  author: string
+  has_diffusion: boolean
+  url: string
+}
+
+export interface HubSearchResult {
+  ok: boolean
+  error?: string
+  items?: HubModelItem[]
+  page?: number
+}
+
+/** 下载结果：成功时附带导入到本地模型库的模型。 */
+export interface HubDownloadResult {
+  ok: boolean
+  error?: string
+  model?: ModelDTO
+}
+
+/** 上传结果。 */
+export interface HubUploadResult {
+  ok: boolean
+  error?: string
+  url?: string
+  repo_id?: string
+}
+
+/** 上传/下载进度（前端轮询）。 */
+export interface HubProgress {
+  phase: string
+  pct: number
+  msg: string
+  done: number
+  total: number
+}

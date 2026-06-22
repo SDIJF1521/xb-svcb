@@ -20,6 +20,7 @@ from typing import Any
 import config
 from application import (
     ConversionService,
+    ModelHubService,
     ModelService,
     MusicService,
     SystemService,
@@ -45,11 +46,13 @@ class Api:
         models: ModelService,
         works: WorkService,
         music: MusicService,
+        hub: ModelHubService,
     ) -> None:
         self._system = system
         self._models = models
         self._works = works
         self._music = music
+        self._hub = hub
         self._window = None
 
     def set_window(self, window) -> None:  # noqa: ANN001
@@ -104,6 +107,45 @@ class Api:
 
     def delete_model(self, model_id: str) -> bool:
         return self._models.remove(model_id)
+
+    # ---- 模型站（ModelScope 魔搭社区）----
+    def get_modelscope_token(self) -> str:
+        return self._hub.get_token()
+
+    def set_modelscope_token(self, token: str) -> bool:
+        return self._hub.set_token(token)
+
+    def verify_modelscope_token(self, token: str | None = None) -> dict[str, Any]:
+        """校验 ModelScope 访问令牌，返回 {ok, username, email}。"""
+        return self._hub.verify_token(token)
+
+    def modelhub_upload_ready(self) -> bool:
+        """上传组件（.venv-hub + modelscope）是否就绪。"""
+        return self._hub.upload_ready()
+
+    def list_model_frameworks(self) -> list[dict[str, str]]:
+        """可选的模型架构标签（so-vits-svc / rvc …）。"""
+        return self._hub.list_frameworks()
+
+    def hub_search_models(
+        self, query: str = "", page: int = 1, framework: str | None = None
+    ) -> dict[str, Any]:
+        """搜索模型站中由本软件上传的翻唱模型（可按架构筛选）。"""
+        return self._hub.search(query or "", int(page or 1), framework)
+
+    def hub_download_model(self, repo_id: str) -> dict[str, Any]:
+        """下载模型站中的模型并导入本地模型库。"""
+        return self._hub.download(repo_id)
+
+    def hub_upload_model(
+        self, model_id: str, name: str | None = None, framework: str | None = None
+    ) -> dict[str, Any]:
+        """把本地模型上传到模型站（用户自己的 ModelScope 命名空间），并标注模型架构。"""
+        return self._hub.upload(model_id, name, framework)
+
+    def hub_progress(self, key: str) -> dict[str, Any]:
+        """轮询上传/下载进度。key 形如 'dl:<repo_id>' 或 'ul:<model_id>'。"""
+        return self._hub.get_progress(key or "")
 
     # ---- 作品 / 翻唱 ----
     def pick_audio_file(self) -> str | None:
@@ -354,8 +396,9 @@ def build_api() -> Api:
     conversion_service = ConversionService(works_repo, ffmpeg, uvr, svc)
     work_service = WorkService(works_repo, conversion_service, model_service)
     music_service = MusicService(settings)
+    hub_service = ModelHubService(settings, model_service)
 
     # 启动时回收上次会话残留的"处理中"任务（其后台线程已随进程退出而终止）
     work_service.recover_stale()
 
-    return Api(system_service, model_service, work_service, music_service)
+    return Api(system_service, model_service, work_service, music_service, hub_service)
