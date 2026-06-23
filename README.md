@@ -1,4 +1,4 @@
-<div align="center">
+
 
 # 🎤 XB-SVCB · AI 翻唱工具
 
@@ -6,15 +6,15 @@
 
 开箱即用的桌面 AI 翻唱应用，一条龙完成整首歌的 AI 翻唱。
 
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows)](#)
-[![Python](https://img.shields.io/badge/python-3.9%20|%203.10-3776AB?logo=python&logoColor=white)](#)
-[![Frontend](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
+[License](LICENSE)
+[Release](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+[Platform](#)
+[Python](#)
+[Frontend](#)
 
-### ⬇️ [**下载安装器 XB-SVCB-Setup.exe**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+### ⬇️ **[下载安装器 XB-SVCB-Setup.exe](https://github.com/SDIJF1521/xb-svcb/releases/latest)**
 
-</div>
+
 
 ---
 
@@ -46,26 +46,35 @@
 
 ## 🏗️ 架构一览
 
-应用本体打包为单个 **`XB-SVCB.exe`**（PyInstaller 生成，内置前端与 worker 脚本）；只有「人声分离 / so-vits-svc 推理」这类重型 AI 能力需要在安装目录旁单独搭建隔离环境（由安装器完成，**全程无 PowerShell**）。
+应用本体打包为单个 `**XB-SVCB.exe`**（PyInstaller 生成，内置前端与 worker 脚本）；只有「人声分离 / 模型推理（so-vits-svc · RVC）」这类重型 AI 能力需要在安装目录旁单独搭建隔离环境（由安装器完成，**全程无 PowerShell**）。
 
 ```mermaid
 flowchart LR
     A[🎵 源歌曲] --> B[人声分离<br/>5_HP-Karaoke-UVR]
     B --> C[去混响<br/>UVR-DeEcho-DeReverb]
     B --> I[🎹 伴奏]
-    C --> D[F0 提取<br/>rmvpe]
-    D --> E[SVC 推理<br/>so-vits-svc 4.1]
-    E --> F[ffmpeg 混音]
+    C --> D[F0 提取<br/>rmvpe<br/>so-vits-svc 专用]
+    C --> E
+    D --> E{模型推理<br/>引擎按框架路由}
+    E --> S[So-VITS-SVC 4.1]
+    E --> R[RVC<br/>rvc-python · .index]
+    S --> F[ffmpeg 混音]
+    R --> F
     I --> F
     F --> G[🎤 成品翻唱]
 ```
 
-| 层 | 技术 | 职责 |
-| --- | --- | --- |
-| 前端 | Vue 3 + Vite + Element Plus | 交互界面 |
-| 桌面壳 | pywebview | 把前端包成桌面应用 |
-| 业务 | Python 分层（api / application / infrastructure） | 编排流水线、模型/作品服务 |
-| AI 引擎 | so-vits-svc 4.1 · audio-separator | 子进程运行于隔离环境 |
+
+
+
+| 层     | 技术                                                 | 职责                                                  |
+| ----- | -------------------------------------------------- | --------------------------------------------------- |
+| 前端    | Vue 3 + Vite + Element Plus                        | 交互界面                                                |
+| 桌面壳   | pywebview                                          | 把前端包成桌面应用                                           |
+| 业务    | Python 分层（api / application / infrastructure）      | 编排流水线、模型/作品服务                                       |
+| 推理引擎层 | `EngineRegistry` 统一接口                              | 按模型「框架」路由到对应引擎，为多框架预留扩展点                            |
+| AI 引擎 | So-VITS-SVC 4.1 · RVC（rvc-python）· audio-separator | 子进程运行于隔离环境（`.venv-svc` / `.venv-rvc` / `.venv-uvr`） |
+
 
 ---
 
@@ -73,7 +82,7 @@ flowchart LR
 
 > 推荐直接用图形安装器，无需任何命令行操作。
 
-1. 在 [Releases](https://github.com/SDIJF1521/xb-svcb/releases/latest) 下载 **`XB-SVCB-Setup.exe`** 并双击运行。
+1. 在 [Releases](https://github.com/SDIJF1521/xb-svcb/releases/latest) 下载 `**XB-SVCB-Setup.exe**` 并双击运行。
 2. 在「选择安装位置」页**自定义安装路径**（默认 `%LOCALAPPDATA%\Programs\XB-SVCB`，无需管理员权限）。应用 exe 与全部依赖（`engines/`、`.venv-svc`、`.venv-uvr`、`models/`）都装进**这个目录**。
 3. 勾选「安装后立即搭建运行环境」，联网创建 AI 子环境（由 `setup_env.bat` 调 `install.py`，无 PowerShell）。
 4. 通过桌面 / 开始菜单的 **XB-SVCB** 快捷方式启动。
@@ -82,13 +91,15 @@ flowchart LR
 
 ### 📋 环境要求
 
-| 软件 | 用途 | 说明 |
-| --- | --- | --- |
-| **Python 3.10+** | 运行安装器与主程序 | 安装时勾选 *Add to PATH* |
-| **ffmpeg** | 音频转码 / 混音 | 需在 PATH 中可用 |
-| Git（可选） | 获取 so-vits-svc 仓库 | 没有也行，安装器会自动下载 ZIP |
-| **Node.js LTS**（含 npm） | 构建前端 | 仅「从源码安装」需要 |
-| NVIDIA 显卡 + 驱动（可选） | GPU 加速 | 有则自动装 **CUDA 12.1** 版 PyTorch（[CUDA 12.1 下载](https://developer.nvidia.com/cuda-12-1-0-download-archive)），无则用 CPU |
+
+| 软件                     | 用途                | 说明                                                                                                               |
+| ---------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **Python 3.10+**       | 运行安装器与主程序         | 安装时勾选 *Add to PATH*                                                                                              |
+| **ffmpeg**             | 音频转码 / 混音         | 需在 PATH 中可用                                                                                                      |
+| Git（可选）                | 获取 so-vits-svc 仓库 | 没有也行，安装器会自动下载 ZIP                                                                                                |
+| **Node.js LTS**（含 npm） | 构建前端              | 仅「从源码安装」需要                                                                                                       |
+| NVIDIA 显卡 + 驱动（可选）     | GPU 加速            | 有则自动装 **CUDA 12.1** 版 PyTorch（[CUDA 12.1 下载](https://developer.nvidia.com/cuda-12-1-0-download-archive)），无则用 CPU |
+
 
 > 安装器使用 [uv](https://github.com/astral-sh/uv) 管理虚拟环境（缺失会自动安装），并能自动获取所需 Python 版本。
 >
@@ -106,15 +117,17 @@ setup_env.bat
 
 将自动完成（全部落在项目目录内，便于卸载）：
 
-| 步骤 | 产物 | 说明 |
-| --- | --- | --- |
-| 1 (`app`) | `app/.venv` | 主程序环境（pywebview） |
-| 2 (`web`) | `web/dist` | 前端构建产物 |
-| 3 (`uvr`) | `.venv-uvr` | 人声分离环境（audio-separator） |
-| 4 (`svc`) | `engines/so-vits-svc` + `.venv-svc` | so-vits-svc 4.1 仓库与推理环境（Python 3.9 / cu121） |
-| 5 (`rvc`) | `.venv-rvc` | RVC 推理环境（`rvc-python`，Python 3.9 / cu118；首启自动下载 hubert/rmvpe 底模） |
-| 6 (`hub`) | `.venv-hub` | 模型站上传组件（`modelscope` SDK；仅上传需要） |
-| 7 (`models`) | `models/`、`engines/so-vits-svc/pretrain/` | UVR 模型与底模 |
+
+| 步骤           | 产物                                        | 说明                                                               |
+| ------------ | ----------------------------------------- | ---------------------------------------------------------------- |
+| 1 (`app`)    | `app/.venv`                               | 主程序环境（pywebview）                                                 |
+| 2 (`web`)    | `web/dist`                                | 前端构建产物                                                           |
+| 3 (`uvr`)    | `.venv-uvr`                               | 人声分离环境（audio-separator）                                          |
+| 4 (`svc`)    | `engines/so-vits-svc` + `.venv-svc`       | so-vits-svc 4.1 仓库与推理环境（Python 3.9 / cu121）                      |
+| 5 (`rvc`)    | `.venv-rvc`                               | RVC 推理环境（`rvc-python`，Python 3.9 / cu118；首启自动下载 hubert/rmvpe 底模） |
+| 6 (`hub`)    | `.venv-hub`                               | 模型站上传组件（`modelscope` SDK；仅上传需要）                                  |
+| 7 (`models`) | `models/`、`engines/so-vits-svc/pretrain/` | UVR 模型与底模                                                        |
+
 
 更细的控制可直接调用 `install.py`：
 
@@ -150,9 +163,9 @@ run.bat
 1. **模型管理** —— 导入训练好的 so-vits-svc 角色模型（主模型 `G_*.pth` + `config.json`，可选浅扩散 `model_*.pt` + `diffusion.yaml`）；也可在「模型站」搜索并下载社区模型，或把自己的模型分享上去（详见下文）。
 2. **资源获取（可选）** —— 在「资源获取」页填好妖狐 API Key（QQ 想要高音质再填会员 Cookie），切换曲库（网易云 / QQ音乐）搜索、试听并下载歌曲素材到本地。
 3. **新建翻唱** —— 上传或从已下载素材选歌，选择翻唱模式：
-   - **单模型** —— 选一个角色模型，设置变调 / F0 预测器 / 推理设备（GPU·CPU）等，整首歌统一演唱。
-   - **多模型混合** —— 勾选多个模型并分别设参；按歌名获取歌词、校验时长对齐（可整体偏移），再逐句指派模型。
-4. **自动处理** —— 单模型：分离 → 去混响 → F0 → SVC 推理 → 混音；多模型：分离 → 歌词分割 → 整轨逐模型推理 → 人声合并（同源连唱合并 + 换人处交叉淡化）→ 混音。
+  - **单模型** —— 选一个角色模型，设置变调 / F0 预测器 / 推理设备（GPU·CPU）等，整首歌统一演唱。
+  - **多模型混合** —— 勾选多个模型并分别设参；按歌名获取歌词、校验时长对齐（可整体偏移），再逐句指派模型。
+4. **自动处理** —— 单模型：分离 → 去混响 →（so-vits-svc 才需）F0 → 模型推理 → 混音；多模型：分离 → 歌词分割 → 整轨逐模型推理 → 人声合并（同源连唱合并 + 换人处交叉淡化）→ 混音。
 5. **作品库** —— 试听 / 导出成品，单独试听**伴奏**与**干声**；失败任务一键打开日志；删除作品会真实清理其本地生成文件。
 
 ---
@@ -166,13 +179,15 @@ flowchart LR
     A[🎵 源歌曲] --> B[人声分离 + 去混响]
     B --> I[🎹 伴奏]
     L[按歌名获取歌词<br/>时长对齐校验] --> N[逐句指派模型]
-    B --> P[各模型整轨推理<br/>so-vits-svc 4.1]
+    B --> P[各模型整轨推理<br/>So-VITS-SVC / RVC 按框架路由]
     N --> Q[同源连唱合并<br/>换人处交叉淡化]
     P --> Q
     I --> F[ffmpeg 混音]
     Q --> F
     F --> G[🎤 多人合唱成品]
 ```
+
+
 
 **前台：选模型 → 取歌词 → 对齐 → 指派**
 
@@ -183,10 +198,10 @@ flowchart LR
 
 **后台：分离 → 整轨推理 → 合并 → 混音**
 
-5. **人声分离 + 去混响** —— 与单模型一致，得到干净干声与伴奏。
-6. **整轨逐模型推理** —— 每个参与模型都在**完整人声**上推理一次（而非逐句切片送推）。整轨上下文连续，避免短碎片产生的句首/句尾电流声与咔哒声。
-7. **按时间轴合并** —— 把相邻、且指派给**同一模型**的句子并成一个连续段，直接从该模型的整轨结果整块切出；仅在**真正换人处**用交叉淡化（`acrossfade`）无缝衔接，并多借少量素材补回交叉消耗，保证总时长与伴奏精确对齐、不漂移。
-8. **混音输出** —— 合并后的完整人声与原伴奏混音，得到多人合唱成品。
+1. **人声分离 + 去混响** —— 与单模型一致，得到干净干声与伴奏。
+2. **整轨逐模型推理** —— 每个参与模型都在**完整人声**上推理一次（而非逐句切片送推）。整轨上下文连续，避免短碎片产生的句首/句尾电流声与咔哒声。
+3. **按时间轴合并** —— 把相邻、且指派给**同一模型**的句子并成一个连续段，直接从该模型的整轨结果整块切出；仅在**真正换人处**用交叉淡化（`acrossfade`）无缝衔接，并多借少量素材补回交叉消耗，保证总时长与伴奏精确对齐、不漂移。
+4. **混音输出** —— 合并后的完整人声与原伴奏混音，得到多人合唱成品。
 
 > 💡 间奏、前奏、尾奏等没有指派模型的区间会自动以原始人声（分离后近静音）填充，确保整条时间轴连续、不会错位。
 
@@ -246,14 +261,16 @@ flowchart LR
 
 无需改代码，用环境变量即可指向自有的引擎 / 模型（优先级高于项目内默认）：
 
-| 变量 | 含义 |
-| --- | --- |
-| `XB_SOVITS_REPO` | so-vits-svc 仓库根目录 |
-| `XB_SVC_PYTHON` | 运行 SVC 推理的 Python 解释器 |
-| `XB_UVR_PYTHON` | 运行 audio-separator 的 Python 解释器 |
-| `XB_UVR_MODEL_DIR` | UVR 模型目录 |
-| `XB_UVR_SEP_MODEL` | 分离模型文件名（默认 `5_HP-Karaoke-UVR.pth`） |
+
+| 变量                      | 含义                                     |
+| ----------------------- | -------------------------------------- |
+| `XB_SOVITS_REPO`        | so-vits-svc 仓库根目录                      |
+| `XB_SVC_PYTHON`         | 运行 SVC 推理的 Python 解释器                  |
+| `XB_UVR_PYTHON`         | 运行 audio-separator 的 Python 解释器        |
+| `XB_UVR_MODEL_DIR`      | UVR 模型目录                               |
+| `XB_UVR_SEP_MODEL`      | 分离模型文件名（默认 `5_HP-Karaoke-UVR.pth`）     |
 | `XB_UVR_DEREVERB_MODEL` | 去混响模型文件名（默认 `UVR-DeEcho-DeReverb.pth`） |
+
 
 ---
 
@@ -261,13 +278,15 @@ flowchart LR
 
 模型获取采用 **「自带优先」** 策略：若 `assets/models/` 内已随安装包附带对应文件，安装时**直接本地复制**（瞬间完成、不联网）；只有缺失项才回退到镜像下载。
 
-| 模型 | 用途 | 自带去向 / 下载来源 |
-| --- | --- | --- |
-| `checkpoint_best_legacy_500.pt` | ContentVec 语音编码器（默认 `vec768l12`） | `assets/models/pretrain/` → `engines/so-vits-svc/pretrain/`；缺失则 HuggingFace |
-| `nsf_hifigan/` | NSF-HiFiGAN 声码器 / 浅扩散 | 同上；缺失则 openvpi/vocoders Releases |
-| `rmvpe.pt` | RMVPE F0 预测器 | 同上；缺失则 yxlllc/RMVPE Releases |
-| `fcpe.pt`（可选） | FCPE F0 预测器 | 仅在自带目录存在时复制 |
-| `5_HP-Karaoke-UVR.pth` / `UVR-DeEcho-DeReverb.pth` | 人声分离 / 去混响 | `assets/models/uvr/` → `models/uvr/`；缺失则 audio-separator 下载 |
+
+| 模型                                                 | 用途                               | 自带去向 / 下载来源                                                                 |
+| -------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------------- |
+| `checkpoint_best_legacy_500.pt`                    | ContentVec 语音编码器（默认 `vec768l12`） | `assets/models/pretrain/` → `engines/so-vits-svc/pretrain/`；缺失则 HuggingFace |
+| `nsf_hifigan/`                                     | NSF-HiFiGAN 声码器 / 浅扩散            | 同上；缺失则 openvpi/vocoders Releases                                            |
+| `rmvpe.pt`                                         | RMVPE F0 预测器                     | 同上；缺失则 yxlllc/RMVPE Releases                                                |
+| `fcpe.pt`（可选）                                      | FCPE F0 预测器                      | 仅在自带目录存在时复制                                                                 |
+| `5_HP-Karaoke-UVR.pth` / `UVR-DeEcho-DeReverb.pth` | 人声分离 / 去混响                       | `assets/models/uvr/` → `models/uvr/`；缺失则 audio-separator 下载                 |
+
 
 > 自带模型为二进制大文件（约 2 GB）。编译安装包时会被打进 `XB-SVCB-Setup.exe`，因体积通过 **GitHub Releases** 单独分发（详见 `assets/models/README.md`）。联网回退时底模走 **hf-mirror 镜像**、GitHub 资源带 **ghproxy 回退**并逐源重试。
 
@@ -275,47 +294,45 @@ flowchart LR
 
 ## ❓ 常见问题
 
-<details>
-<summary><b>so-vits-svc 依赖现场编译失败（numpy / pyworld 等 <code>could not get source code</code>）</b></summary>
+**so-vits-svc 依赖现场编译失败（numpy / pyworld 等** `could not get source code`**）**
 
 so-vits-svc 4.1 的依赖是为 **Python 3.8~3.9** 钉的旧版本，只有 3.9 及更低才有预编译 wheel，3.10 上会回退源码编译并失败。安装器已把 **SVC 引擎固定用 Python 3.9**（uv 自动下载），整套依赖直接装 wheel、零编译；UVR 分离环境仍用 3.10。旧版本升级时重跑 `--only svc` 会自动把 `.venv-svc` 重建为 3.9。
-</details>
 
-<details>
-<summary><b>推理报 <code>No module named 'pkg_resources'</code></b></summary>
+
+
+**推理报** `No module named 'pkg_resources'`
 
 `.venv-svc` 由 `uv venv` 创建，默认不含 setuptools，而 librosa 运行时需要 `pkg_resources`。**setuptools 81+ 已移除 pkg_resources**，必须钉 `<81`。安装器已自动给子环境装 `setuptools<81`；旧环境手动补：
 
 ```bat
 uv pip install --python <安装目录>\.venv-svc\Scripts\python.exe "setuptools<81" wheel
 ```
-</details>
 
-<details>
-<summary><b><code>playsound==1.3.0</code> 构建失败</b></summary>
+
+
+`playsound==1.3.0` **构建失败**
 
 该包仅 WebUI 播放用、推理用不到。安装器已自动从依赖清单剔除 **playsound / gradio / pyaudio / sounddevice / onnxsim / onnxoptimizer**（实时变声与 ONNX 导出专用），无需理会。
-</details>
 
-<details>
-<summary><b>底模下载超时（<code>WinError 10060</code> / huggingface 连不上）</b></summary>
+
+
+**底模下载超时（**`WinError 10060` **/ huggingface 连不上）**
 
 安装器默认走 `hf-mirror.com` 并自动换源重试。仍不行时设 `XB_HF_MIRROR` / `XB_GH_MIRROR` 后重跑 `python install\install.py --only models`，或手动下载放入对应目录。
-</details>
 
-<details>
-<summary><b>分离 / 去混响很慢</b></summary>
+
+
+**分离 / 去混响很慢**
 
 CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\install.py --gpu` 重装分离环境即可走 GPU（默认安装 CUDA 12.1 版 PyTorch，一般只需较新 NVIDIA 驱动；如需 Toolkit 见 [CUDA 12.1 下载](https://developer.nvidia.com/cuda-12-1-0-download-archive)）。
-</details>
 
-<details>
-<summary><b>其它</b></summary>
+
+
+**其它**
 
 - **中文歌名**：内部统一用 UTF-8 + 结果文件传递路径，支持中文文件名。
 - **任务失败**：在「作品库」点失败项「打开日志」，查看 `run.log` 与各步骤子进程输出定位原因。
 - **fairseq 安装失败**：安装「Microsoft C++ Build Tools」后重跑 `--only svc`，或设 `XB_SVC_PYTHON` 指向已配好的环境。
-</details>
 
 ---
 
@@ -349,8 +366,7 @@ CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\inst
 
 ### 📌 分阶段清单
 
-<details>
-<summary><b>阶段一 · 推理生态完善（近期）</b> —— 支持主流 VC 模型、完善模型管理、提升推理体验</summary>
+**阶段一 · 推理生态完善（近期）** —— 支持主流 VC 模型、完善模型管理、提升推理体验
 
 - [x] RVC 支持
 - [x] RVC Index 自动识别
@@ -362,10 +378,10 @@ CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\inst
 - [ ] 推理历史记录
 - [ ] 预设参数保存
 - [ ] 模型收藏功能
-</details>
 
-<details>
-<summary><b>阶段二 · 混合翻唱系统（优先级最高）</b> —— 解决多人翻唱制作困难</summary>
+
+
+**阶段二 · 混合翻唱系统（优先级最高）** —— 解决多人翻唱制作困难
 
 - [ ] 可视化时间轴
 - [ ] 时间轴缩放
@@ -383,10 +399,10 @@ CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\inst
 - [ ] 歌词时间轴编辑
 - [ ] 自动歌词识别
 - [ ] 自动时间轴生成
-</details>
 
-<details>
-<summary><b>阶段三 · 音频编辑器</b> —— 减少对第三方软件的依赖</summary>
+
+
+**阶段三 · 音频编辑器** —— 减少对第三方软件的依赖
 
 - [ ] 音频裁剪
 - [ ] 音频切片
@@ -398,10 +414,10 @@ CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\inst
 - [ ] 实时试听
 - [ ] 音频格式转换
 - [ ] 导出 WAV / FLAC / MP3
-</details>
 
-<details>
-<summary><b>阶段四 · 模型生态</b> —— 建立模型共享生态</summary>
+
+
+**阶段四 · 模型生态** —— 建立模型共享生态
 
 - [ ] 模型评分
 - [ ] 模型评论
@@ -415,10 +431,10 @@ CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\inst
 - [ ] 模型依赖检查
 - [ ] 模型截图展示
 - [ ] 模型试听功能
-</details>
 
-<details>
-<summary><b>阶段五 · 多框架支持</b> —— 统一管理多种 AI 语音转换模型</summary>
+
+
+**阶段五 · 多框架支持** —— 统一管理多种 AI 语音转换模型
 
 - [ ] Seed-VC
 - [ ] Diffusion-SVC
@@ -429,10 +445,10 @@ CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\inst
 - [ ] 框架自动识别
 - [ ] 跨框架混合工程
 - [ ] 跨框架时间轴编排
-</details>
 
-<details>
-<summary><b>阶段六 · 创作工具增强</b> —— 从推理工具升级为创作平台</summary>
+
+
+**阶段六 · 创作工具增强** —— 从推理工具升级为创作平台
 
 - [ ] 项目工程系统
 - [ ] 自动保存
@@ -443,10 +459,10 @@ CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\inst
 - [ ] 字幕生成
 - [ ] 歌词视频生成
 - [ ] MV 模板支持
-</details>
 
-<details>
-<summary><b>阶段七 · 硬件兼容</b> —— 扩大用户覆盖范围</summary>
+
+
+**阶段七 · 硬件兼容** —— 扩大用户覆盖范围
 
 - [ ] AMD GPU 支持
 - [ ] DirectML 支持
@@ -455,7 +471,8 @@ CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\inst
 - [ ] Ascend 昇腾支持
 - [ ] CPU 推理优化
 - [ ] 多 GPU 调度
-</details>
+
+
 
 ---
 
@@ -470,22 +487,33 @@ CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\inst
 ./installer/build.ps1
 ```
 
-3. 产物输出在 `dist/XB-SVCB-Setup.exe`，上传到 GitHub Releases 分发。
+1. 产物输出在 `dist/XB-SVCB-Setup.exe`，上传到 GitHub Releases 分发。
 
-| 文件 | 作用 |
-| --- | --- |
+
+| 文件                      | 作用                                    |
+| ----------------------- | ------------------------------------- |
 | `installer/xb-svcb.iss` | Inno Setup 脚本（打包内容、快捷方式、安装后搭建环境、卸载清理） |
-| `installer/build.ps1` | 构建前端 + 调 ISCC 编译为 setup.exe（仅开发者用） |
-| `install/install.py` | 安装器在用户机搭建环境/下载模型的核心逻辑 |
-| `setup_env.bat` | 用户机搭建/修复环境入口（纯 batch，无 PowerShell） |
-| `run.bat` | 启动器（快捷方式指向） |
+| `installer/build.ps1`   | 构建前端 + 调 ISCC 编译为 setup.exe（仅开发者用）    |
+| `install/install.py`    | 安装器在用户机搭建环境/下载模型的核心逻辑                 |
+| `setup_env.bat`         | 用户机搭建/修复环境入口（纯 batch，无 PowerShell）    |
+| `run.bat`               | 启动器（快捷方式指向）                           |
+
 
 **设计说明**
 
 - 安装器**打包预构建的 `web/dist`**，最终用户无需安装 Node.js。
 - 安装器**自带 `assets/models/` 内的底模与 UVR 模型**，「搭建运行环境」时直接本地复制，免去缓慢联网下载；安装包因此较大（约 2 GB），换来近乎瞬时的模型部署。Python 环境与 so-vits-svc 仓库仍在该阶段联网获取。
 - 安装包超过 GitHub LFS / Release 之外的处理，统一通过 **GitHub Releases** 分发（单文件已控制在 2 GiB 上限内）。
-- 卸载时清理安装目录内生成的 `.venv-*`、`engines/`、`models/`；用户作品数据位于 `~/.xb-svcb`，予以保留。
+- 卸载时清理安装目录内生成的 `.venv-`*、`engines/`、`models/`；用户作品数据位于 `~/.xb-svcb`，予以保留。
+
+---
+
+## 🙏 致谢
+
+- 🧁 **模型来源** —— 目前软件内可用 / 演示的**绝大部分声音模型，均由「白菜工厂1145号员工」提供**。在此特别致谢 🙏，正是这些模型让本工具能开箱即用地体验完整翻唱流程。
+- 📌 模型版权归原作者所有，请在其授权范围内使用；如有侵权或需要下架，请联系作者处理。
+- 🛠️ 同时感谢上游开源项目：[so-vits-svc](https://github.com/svc-develop-team/so-vits-svc)、[rvc-python](https://github.com/daswer123/rvc-python) / RVC、[Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)、[ModelScope 魔搭社区](https://www.modelscope.cn/) 等。
+- 后续模型会逐一上传到模型站
 
 ---
 
@@ -494,8 +522,10 @@ CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\inst
 本项目自身代码采用 **[MIT License](LICENSE)**。Copyright © 2026 SDIJF1521。
 
 > ⚠️ 本项目依赖/附带的第三方组件各自遵循其原始协议，使用与再分发时请遵守：
+>
 > - **so-vits-svc 4.1**（`svc-develop-team/so-vits-svc`）：安装时联网获取，遵循上游 **AGPL-3.0**。
 > - **底模**：ContentVec、NSF-HiFiGAN、RMVPE、FCPE 等各有其许可。
 > - **UVR 模型**：`5_HP-Karaoke-UVR`、`UVR-DeEcho-DeReverb` 等遵循 Ultimate Vocal Remover 项目相应许可。
 >
 > MIT 仅覆盖本仓库自有代码，不改变上述第三方组件的授权条款。
+
