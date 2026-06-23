@@ -92,7 +92,7 @@ const mockHubModels = [
 const baseSteps = (): PipelineStep[] => [
   { key: 'separate', label: '人声分离', status: 'wait' },
   { key: 'f0', label: 'F0 提取', status: 'wait' },
-  { key: 'infer', label: 'SVC 推理', status: 'wait' },
+  { key: 'infer', label: '模型推理', status: 'wait' },
   { key: 'mix', label: '混音合成', status: 'wait' },
 ]
 
@@ -142,7 +142,8 @@ export const mock = {
       tools: [
         { key: 'uvr', name: 'Ultimate Vocal Remover', desc: '人声 / 伴奏分离引擎，自动提取翻唱所需干声', version: 'v5.6', status: '已就绪', ok: true },
         { key: 'ffmpeg', name: 'ffmpeg', desc: '音频转码 / 重采样 / 剪辑，统一格式与采样率', version: 'v6.1', status: '已就绪', ok: true },
-        { key: 'svc', name: 'SVC 推理引擎', desc: '加载用户 SVC 模型进行歌声转换推理', version: 'torch', status: 'cuda', ok: true },
+        { key: 'svc', name: 'So-VITS-SVC 推理引擎', desc: '加载用户 So-VITS-SVC 模型进行歌声转换推理', version: 'torch', status: 'cuda', ok: true },
+        { key: 'rvc', name: 'RVC 推理引擎', desc: '加载用户 RVC 模型（.pth + 可选 .index）进行歌声转换推理', version: 'rvc-python', status: 'cuda', ok: true },
       ],
     }
   },
@@ -158,22 +159,34 @@ export const mock = {
   pickConfigFile(): Promise<string | null> {
     return browserPickFile('.json,.yaml,.yml')
   },
+  pickIndexFile(): Promise<string | null> {
+    return browserPickFile('.index')
+  },
   importModel(payload: ImportModelPayload): ModelDTO | null {
-    if (!payload.main_model || !payload.main_config) return null
+    if (!payload.main_model) return null
+    const framework = payload.framework || 'so-vits-svc'
+    const isRvc = framework === 'rvc'
+    if (!isRvc && !payload.main_config) return null
     const m: ModelDTO = {
       id: rid('mdl_'),
       name: payload.name || fileName(payload.main_model).replace(/\.[^.]+$/, ''),
-      type: fileName(payload.main_model).toLowerCase().includes('rvc') ? 'RVC' : 'So-VITS',
+      type: isRvc ? 'RVC' : 'So-VITS',
+      framework,
       sample_rate: '44.1kHz',
       size: '400 MB',
       imported_at: new Date().toISOString().slice(5, 10),
       main_model: { name: fileName(payload.main_model), path: payload.main_model },
-      main_config: { name: fileName(payload.main_config), path: payload.main_config },
+      main_config: payload.main_config
+        ? { name: fileName(payload.main_config), path: payload.main_config }
+        : { name: '', path: '' },
       diffusion_model: payload.diffusion_model
         ? { name: fileName(payload.diffusion_model), path: payload.diffusion_model }
         : null,
       diffusion_config: payload.diffusion_config
         ? { name: fileName(payload.diffusion_config), path: payload.diffusion_config }
+        : null,
+      index_file: payload.index_file
+        ? { name: fileName(payload.index_file), path: payload.index_file }
         : null,
     }
     mockModels.unshift(m)

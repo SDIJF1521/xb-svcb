@@ -19,7 +19,7 @@
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.6"
+#define MyAppVersion "0.0.7"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 
@@ -92,6 +92,7 @@ Filename: "{app}\{#MyAppExe}"; Description: "立即启动 {#MyAppShort}"; \
 ; 卸载时清理安装目录内生成的环境与下载物（用户数据在 ~/.xb-svcb，保留）
 Type: filesandordirs; Name: "{app}\.venv-uvr"
 Type: filesandordirs; Name: "{app}\.venv-svc"
+Type: filesandordirs; Name: "{app}\.venv-rvc"
 Type: filesandordirs; Name: "{app}\.venv-hub"
 Type: filesandordirs; Name: "{app}\engines"
 Type: filesandordirs; Name: "{app}\models"

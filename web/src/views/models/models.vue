@@ -27,9 +27,27 @@
     <template v-if="tab === 'local'">
       <!-- 导入卡片 -->
       <div class="block">
-        <div class="block-head"><h2>导入模型</h2><span class="muted">主模型 + 配置为必填，扩散模型可选</span></div>
+        <div class="block-head">
+          <h2>导入模型</h2>
+          <span class="muted">{{ impFramework === 'rvc' ? '主模型(.pth) 必填，检索文件(.index) 可选' : '主模型 + 配置为必填，扩散模型可选' }}</span>
+        </div>
         <div class="import-card glass">
-          <div class="imp-grid">
+          <!-- 框架选择 -->
+          <div class="fw-row">
+            <label>模型框架</label>
+            <div class="seg">
+              <button
+                v-for="opt in importFrameworks"
+                :key="opt.id"
+                class="seg-btn"
+                :class="{ on: impFramework === opt.id }"
+                @click="impFramework = opt.id"
+              >{{ opt.name }}</button>
+            </div>
+          </div>
+
+          <!-- So-VITS-SVC：主模型 + 配置 + 可选扩散 -->
+          <div v-if="impFramework !== 'rvc'" class="imp-grid">
             <div class="imp-field" :class="{ filled: !!imp.mainModel }">
               <label>主模型权重 <i>*</i></label>
               <button class="picker" @click="pick('mainModel', 'model')">
@@ -63,6 +81,26 @@
               </button>
             </div>
           </div>
+
+          <!-- RVC：主模型(.pth) + 可选检索特征(.index) -->
+          <div v-else class="imp-grid">
+            <div class="imp-field" :class="{ filled: !!imp.mainModel }">
+              <label>RVC 主模型 <i>*</i></label>
+              <button class="picker" @click="pick('mainModel', 'model')">
+                <el-icon><Document /></el-icon>
+                <span class="picker-text">{{ baseName(imp.mainModel) || '选择 model.pth' }}</span>
+                <el-icon class="picker-arrow"><Plus /></el-icon>
+              </button>
+            </div>
+            <div class="imp-field" :class="{ filled: !!imp.indexFile }">
+              <label>检索特征 .index（可选）</label>
+              <button class="picker" @click="pick('indexFile', 'index')">
+                <el-icon><Document /></el-icon>
+                <span class="picker-text">{{ baseName(imp.indexFile) || '选择 added_xxx.index' }}</span>
+                <el-icon class="picker-arrow"><Plus /></el-icon>
+              </button>
+            </div>
+          </div>
           <div class="imp-foot">
             <div class="name-field">
               <label>模型名称</label>
@@ -84,8 +122,10 @@
             <div class="row-main">
               <div class="row-title" :title="m.name">
                 {{ m.name }}
+                <span class="fw-tag">{{ frameworkLabel(m.framework) }}</span>
                 <span v-if="m.id === modelsStore.defaultId" class="def-tag">默认</span>
                 <span v-if="m.hasDiffusion" class="diff-tag">扩散</span>
+                <span v-if="m.framework === 'rvc' && m.indexFile !== '—'" class="diff-tag">index</span>
               </div>
               <div class="row-sub">{{ m.type }} · {{ m.sr }} · {{ m.size }} · {{ m.date }}</div>
             </div>
@@ -294,8 +334,19 @@ function guessFramework(type: string): string {
   return 'so-vits-svc'
 }
 
+function frameworkLabel(id: string): string {
+  return frameworks.value.find((f) => f.id === id)?.name || id || 'So-VITS-SVC'
+}
+
 /* ---------- 本地导入 ---------- */
-const imp = ref({ name: '', mainModel: '', mainConfig: '', diffusionModel: '', diffusionConfig: '' })
+/* 导入仅支持已实现推理引擎的框架（so-vits-svc / rvc） */
+type ImportFw = 'so-vits-svc' | 'rvc'
+const importFrameworks: { id: ImportFw; name: string }[] = [
+  { id: 'so-vits-svc', name: 'So-VITS-SVC' },
+  { id: 'rvc', name: 'RVC' },
+]
+const impFramework = ref<ImportFw>('so-vits-svc')
+const imp = ref({ name: '', mainModel: '', mainConfig: '', diffusionModel: '', diffusionConfig: '', indexFile: '' })
 const importing = ref(false)
 
 function baseName(p: string): string {
@@ -303,27 +354,48 @@ function baseName(p: string): string {
 }
 
 const suggestedName = computed(() => baseName(imp.value.mainModel).replace(/\.[^.]+$/, ''))
-const canImport = computed(() => !!imp.value.mainModel && !!imp.value.mainConfig)
+const canImport = computed(() =>
+  impFramework.value === 'rvc'
+    ? !!imp.value.mainModel
+    : !!imp.value.mainModel && !!imp.value.mainConfig,
+)
 
-async function pick(field: keyof typeof imp.value, kind: 'model' | 'config') {
-  const path = kind === 'model' ? await api.pickModelFile() : await api.pickConfigFile()
-  if (path) imp.value[field] = path
+async function pick(field: keyof typeof imp.value, kind: 'model' | 'config' | 'index') {
+  const path =
+    kind === 'index'
+      ? await api.pickIndexFile()
+      : kind === 'model'
+        ? await api.pickModelFile()
+        : await api.pickConfigFile()
+  if (!path) return
+  imp.value[field] = path
+  // RVC：选择 .pth 主模型时，尝试自动带出同目录同名 .index（不存在则后端会忽略）
+  if (impFramework.value === 'rvc' && field === 'mainModel' && !imp.value.indexFile) {
+    imp.value.indexFile = path.replace(/\.[^.\\/]+$/, '.index')
+  }
+}
+
+function resetImport() {
+  imp.value = { name: '', mainModel: '', mainConfig: '', diffusionModel: '', diffusionConfig: '', indexFile: '' }
 }
 
 async function doImport() {
   if (!canImport.value) return
   importing.value = true
   try {
+    const isRvc = impFramework.value === 'rvc'
     const created = await modelsStore.importModel({
       name: imp.value.name.trim() || undefined,
+      framework: impFramework.value,
       main_model: imp.value.mainModel,
-      main_config: imp.value.mainConfig,
-      diffusion_model: imp.value.diffusionModel || null,
-      diffusion_config: imp.value.diffusionConfig || null,
+      main_config: isRvc ? undefined : imp.value.mainConfig,
+      diffusion_model: isRvc ? null : imp.value.diffusionModel || null,
+      diffusion_config: isRvc ? null : imp.value.diffusionConfig || null,
+      index_file: isRvc ? imp.value.indexFile || null : null,
     })
     if (created) {
       ElMessage.success('已导入：' + created.name)
-      imp.value = { name: '', mainModel: '', mainConfig: '', diffusionModel: '', diffusionConfig: '' }
+      resetImport()
     } else {
       ElMessage.error('导入失败，请检查所选文件')
     }
@@ -553,6 +625,12 @@ onMounted(async () => {
 
 /* 导入卡片 */
 .import-card { border-radius: 10px; padding: 20px; }
+.fw-row { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+.fw-row > label { font-size: 13px; font-weight: 600; color: var(--xb-text); }
+.seg { display: inline-flex; gap: 4px; padding: 4px; border-radius: 9px; background: rgba(var(--xb-fill-rgb), 0.06); border: 1px solid var(--xb-border); }
+.seg-btn { padding: 7px 18px; border-radius: 6px; border: none; background: transparent; color: var(--xb-muted); font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.2s; }
+.seg-btn:hover { color: var(--xb-text); }
+.seg-btn.on { background: linear-gradient(135deg, var(--xb-primary), var(--xb-primary-2)); color: var(--xb-on-primary); }
 .imp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .imp-field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 7px; color: var(--xb-text); }
 .imp-field label i { color: var(--xb-accent); font-style: normal; }

@@ -9,7 +9,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.6"
+APP_VERSION = "0.0.7"
 APP_BG = "#05060d"
 
 
@@ -120,6 +120,30 @@ def svc_engine_ready() -> bool:
         and SVC_PYTHON
         and SVC_PYTHON.exists()
     )
+
+
+# ---- RVC 推理引擎（rvc-python）----
+# 在独立的 .venv-rvc 中运行 rvc-python（依赖与 so-vits-svc 环境隔离，避免 torch/numpy 冲突）。
+# 缺失时 RvcEngine 自动降级为占位音频，整条链路仍可跑通。
+RVC_VENV_DIR = ROOT_DIR / ".venv-rvc"
+
+
+def _detect_rvc_python() -> Path | None:
+    env = os.environ.get("XB_RVC_PYTHON")
+    if env:
+        return Path(env)
+    return _first_existing([_venv_python(RVC_VENV_DIR)])
+
+
+# 运行 RVC 推理的 Python 解释器（需装有 rvc-python + torch）
+RVC_PYTHON = _detect_rvc_python()
+# RVC 推理子进程脚本（由 .venv-rvc 的 Python 读取，需为磁盘真实文件）
+RVC_WORKER = BUNDLE_DIR / "infrastructure" / "rvc_worker.py"
+
+
+def rvc_engine_ready() -> bool:
+    """RVC 推理环境是否齐备：worker 存在、解释器存在。"""
+    return bool(RVC_WORKER.exists() and RVC_PYTHON and RVC_PYTHON.exists())
 
 
 # ---- UVR 人声分离引擎（audio-separator + 复用本地 UVR 模型）----

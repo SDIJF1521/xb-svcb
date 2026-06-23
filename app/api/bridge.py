@@ -27,7 +27,9 @@ from application import (
     WorkService,
 )
 from infrastructure import paths
+from infrastructure.engine import EngineRegistry
 from infrastructure.ffmpeg_tool import FfmpegTool
+from infrastructure.rvc_engine import RvcEngine
 from infrastructure.storage import ListRepository, SettingsStore
 from infrastructure.svc_engine import SvcEngine
 from infrastructure.uvr_tool import UvrTool
@@ -98,8 +100,17 @@ class Api:
         )
         return result[0] if result else None
 
+    def pick_index_file(self) -> str | None:
+        """选择 RVC 检索特征文件（.index）。"""
+        result = self._open_dialog(
+            "选择 RVC 检索特征文件",
+            multiple=False,
+            file_types=("RVC 检索特征 (*.index)", "所有文件 (*.*)"),
+        )
+        return result[0] if result else None
+
     def import_model(self, payload: dict[str, Any]) -> dict[str, Any] | None:
-        """导入一组模型（主模型 + 主配置 + 扩散模型 + 扩散配置）。"""
+        """导入一组模型，按 framework 分支：so-vits（主模型+配置+可选扩散）/ rvc（主模型+可选 index）。"""
         return self._models.import_model(payload or {})
 
     def set_default_model(self, model_id: str) -> bool:
@@ -385,15 +396,18 @@ def build_api() -> Api:
     ffmpeg = FfmpegTool()
     uvr = UvrTool()
     svc = SvcEngine()
+    rvc = RvcEngine()
+    # 引擎注册表：按模型 framework 路由推理引擎（缺省回退 so-vits-svc）
+    engines = EngineRegistry([svc, rvc])
 
     models_repo = ListRepository(config.MODELS_DB)
     works_repo = ListRepository(config.WORKS_DB)
     settings = SettingsStore(config.SETTINGS_DB)
 
     # 应用服务
-    system_service = SystemService(ffmpeg, uvr, svc)
+    system_service = SystemService(ffmpeg, uvr, svc, rvc)
     model_service = ModelService(models_repo, settings)
-    conversion_service = ConversionService(works_repo, ffmpeg, uvr, svc)
+    conversion_service = ConversionService(works_repo, ffmpeg, uvr, engines)
     work_service = WorkService(works_repo, conversion_service, model_service)
     music_service = MusicService(settings)
     hub_service = ModelHubService(settings, model_service)

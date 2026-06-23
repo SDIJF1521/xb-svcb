@@ -54,7 +54,7 @@ for pkg in ("webview", "clr_loader", "pythonnet", "bottle", "proxy_tools", "http
 datas += [(str(APP.parent / "web" / "dist"), "web/dist")]
 
 # worker 脚本：必须是磁盘上的真实 .py，供外部环境的 Python 读取执行
-for w in ("svc_worker.py", "f0_worker.py", "uvr_worker.py", "hub_worker.py"):
+for w in ("svc_worker.py", "f0_worker.py", "uvr_worker.py", "hub_worker.py", "rvc_worker.py"):
     datas += [(str(APP / "infrastructure" / w), "infrastructure")]
 
 

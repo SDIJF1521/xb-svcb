@@ -6,6 +6,8 @@ export interface ModelVM {
   id: string
   name: string
   type: string
+  /** 模型框架 id：so-vits-svc / rvc / …。 */
+  framework: string
   sr: string
   size: string
   date: string
@@ -15,6 +17,15 @@ export interface ModelVM {
   diffusionModel: string
   diffusionConfig: string
   hasDiffusion: boolean
+  /** RVC 检索特征文件名（无则为 '—'）。 */
+  indexFile: string
+}
+
+function guessFramework(type: string): string {
+  const t = (type || '').toLowerCase()
+  if (t.includes('rvc')) return 'rvc'
+  if (t.includes('ddsp')) return 'ddsp-svc'
+  return 'so-vits-svc'
 }
 
 function toVM(m: ModelDTO): ModelVM {
@@ -22,6 +33,7 @@ function toVM(m: ModelDTO): ModelVM {
     id: m.id,
     name: m.name,
     type: m.type,
+    framework: m.framework || guessFramework(m.type),
     sr: m.sample_rate,
     size: m.size,
     date: m.imported_at,
@@ -31,6 +43,7 @@ function toVM(m: ModelDTO): ModelVM {
     diffusionModel: m.diffusion_model?.name || '—',
     diffusionConfig: m.diffusion_config?.name || '—',
     hasDiffusion: !!m.diffusion_model,
+    indexFile: m.index_file?.name || '—',
   }
 }
 

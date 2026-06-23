@@ -22,6 +22,9 @@ from domain import InferenceParams
 
 
 class SvcEngine:
+    # 框架标识：供 EngineRegistry 按模型 framework 路由
+    framework = "so-vits-svc"
+
     @property
     def available(self) -> bool:
         """是否具备真实推理能力（仓库 + worker + 解释器齐备）。"""
@@ -47,10 +50,7 @@ class SvcEngine:
 
     def infer(
         self,
-        main_model: str,
-        main_config: str,
-        diffusion_model: str,
-        diffusion_config: str,
+        model: dict,
         vocals: Path,
         out_path: Path,
         params: InferenceParams,
@@ -59,9 +59,15 @@ class SvcEngine:
     ) -> Path:
         """执行歌声转换推理，主模型 + 浅扩散模型共同作用，输出转换后人声 WAV。
 
+        ``model`` 为已解析的文件角色字典，包含 ``main_model_path`` / ``main_config_path``
+        / ``diffusion_model_path`` / ``diffusion_config_path``。
         环境就绪时调子进程跑真实推理；否则降级为占位音频。真实推理失败会抛出异常，
         以便上层把任务标记为失败并展示错误信息。
         """
+        main_model = (model or {}).get("main_model_path", "") or ""
+        main_config = (model or {}).get("main_config_path", "") or ""
+        diffusion_model = (model or {}).get("diffusion_model_path", "") or ""
+        diffusion_config = (model or {}).get("diffusion_config_path", "") or ""
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         ready = (

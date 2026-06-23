@@ -14,9 +14,9 @@ from typing import Any
 import config
 from domain import InferenceParams, JobStatus, StepStatus
 from infrastructure import paths
+from infrastructure.engine import EngineRegistry
 from infrastructure.ffmpeg_tool import FfmpegTool
 from infrastructure.storage import ListRepository
-from infrastructure.svc_engine import SvcEngine
 from infrastructure.uvr_tool import UvrTool
 
 
@@ -24,7 +24,7 @@ def default_steps() -> list[dict[str, Any]]:
     return [
         {"key": "separate", "label": "人声分离", "status": StepStatus.WAIT.value},
         {"key": "f0", "label": "F0 提取", "status": StepStatus.WAIT.value},
-        {"key": "infer", "label": "SVC 推理", "status": StepStatus.WAIT.value},
+        {"key": "infer", "label": "模型推理", "status": StepStatus.WAIT.value},
         {"key": "mix", "label": "混音合成", "status": StepStatus.WAIT.value},
     ]
 
@@ -46,12 +46,14 @@ class ConversionService:
         repo: ListRepository,
         ffmpeg: FfmpegTool,
         uvr: UvrTool,
-        svc: SvcEngine,
+        engines: EngineRegistry,
     ) -> None:
         self._repo = repo
         self._ffmpeg = ffmpeg
         self._uvr = uvr
-        self._svc = svc
+        self._engines = engines
+        # so-vits 引擎引用：供 F0 探针（仅 so-vits 有意义）使用
+        self._svc = engines.sovits
         # 串行执行：单 GPU 上一次只跑一个任务，避免并发推理叠加导致显存 OOM
         self._gpu_lock = threading.Lock()
 
@@ -115,6 +117,9 @@ class ConversionService:
 
         try:
             params = InferenceParams.from_dict(work.get("params", {}))
+            framework = config.modelhub_normalize_framework(work.get("framework"))
+            is_sovits = framework == "so-vits-svc"
+            engine = self._engines.for_framework(framework)
             source = Path(work["source_path"]) if work.get("source_path") else None
             duration = (
                 self._ffmpeg.probe_duration(source)
@@ -181,14 +186,22 @@ class ConversionService:
                 if self._ffmpeg.convert(infer_input, wav_input):
                     infer_input = wav_input
             self._log(log_file, f"[2/4] 推理输入已准备: {infer_input}")
-            # 真实 F0 提取（rmvpe 等），保存曲线并校验是否检测到人声
-            f0_stats = self._svc.extract_f0(
-                infer_input,
-                work_dir / "f0.npy",
-                work.get("main_config_path", ""),
-                params,
-                log_file,
-            )
+            # 真实 F0 提取（rmvpe 等），保存曲线并校验是否检测到人声。
+            # F0 探针为 so-vits 专属；其它框架（如 RVC 内部自行处理 F0）跳过该步。
+            f0_stats = None
+            if is_sovits and self._svc is not None:
+                f0_stats = self._svc.extract_f0(
+                    infer_input,
+                    work_dir / "f0.npy",
+                    work.get("main_config_path", ""),
+                    params,
+                    log_file,
+                )
+            elif not is_sovits:
+                self._log(
+                    log_file,
+                    f"  F0 探针跳过（{config.MODELHUB_FRAMEWORKS.get(framework, framework)} 框架推理内部自行处理基频）",
+                )
             if f0_stats:
                 self._log(
                     log_file,
@@ -210,19 +223,24 @@ class ConversionService:
             work["progress"] = 50
             self._save(work)
 
-            # 3) SVC 推理（主模型 + 浅扩散，子进程调用 so-vits-svc）
+            # 3) 推理（按模型框架路由引擎：so-vits-svc / rvc / …）
             self._set_step(work, "infer", StepStatus.ACTIVE.value)
             self._save(work)
+            fw_label = config.MODELHUB_FRAMEWORKS.get(framework, framework)
             self._log(
                 log_file,
-                f"[3/4] SVC 推理开始（引擎 {'可用' if self._svc.available else '降级模式'}）",
+                f"[3/4] {fw_label} 推理开始（引擎 {'可用' if getattr(engine, 'available', False) else '降级模式'}）",
             )
             converted = work_dir / "converted.wav"
-            self._svc.infer(
-                main_model=work.get("main_model_path", ""),
-                main_config=work.get("main_config_path", ""),
-                diffusion_model=work.get("diffusion_model_path", ""),
-                diffusion_config=work.get("diffusion_config_path", ""),
+            engine.infer(
+                model={
+                    "framework": framework,
+                    "main_model_path": work.get("main_model_path", ""),
+                    "main_config_path": work.get("main_config_path", ""),
+                    "diffusion_model_path": work.get("diffusion_model_path", ""),
+                    "diffusion_config_path": work.get("diffusion_config_path", ""),
+                    "index_path": work.get("index_path", ""),
+                },
                 vocals=infer_input,
                 out_path=converted,
                 params=params,
@@ -232,7 +250,7 @@ class ConversionService:
             self._set_step(work, "infer", StepStatus.DONE.value)
             work["progress"] = 75
             self._save(work)
-            self._log(log_file, "  SVC 推理完成")
+            self._log(log_file, "  模型推理完成")
 
             # 4) 混音合成：转换后人声 + 原伴奏 → 完整翻唱；无伴奏则仅输出干声
             self._set_step(work, "mix", StepStatus.ACTIVE.value)
@@ -421,25 +439,30 @@ class ConversionService:
             #    电流声、咔哒声并拼出卡顿。整轨推理保证上下文连续、无边界伪声。
             self._set_step(work, "infer", StepStatus.ACTIVE.value)
             self._save(work)
-            self._log(
-                log_file,
-                f"[3/5] 整轨逐模型推理（引擎 {'可用' if self._svc.available else '降级模式'}）",
-            )
+            self._log(log_file, "[3/5] 整轨逐模型推理（按各模型框架路由引擎）")
             full_renders: dict[str, Path] = {}
             for n, mid in enumerate(used_models):
                 model = seg_models.get(mid) or {}
                 seg_params = InferenceParams.from_dict(model.get("params", {}))
+                seg_framework = config.modelhub_normalize_framework(model.get("framework"))
+                seg_engine = self._engines.for_framework(seg_framework)
                 full_raw = work_dir / f"full_{mid}.wav"
+                fw_label = config.MODELHUB_FRAMEWORKS.get(seg_framework, seg_framework)
                 self._log(
                     log_file,
-                    f"  [{n + 1}/{len(used_models)}] 模型 {model.get('name', mid)} 整轨推理…",
+                    f"  [{n + 1}/{len(used_models)}] 模型 {model.get('name', mid)} "
+                    f"[{fw_label}] 整轨推理（引擎 {'可用' if getattr(seg_engine, 'available', False) else '降级模式'}）…",
                 )
                 try:
-                    self._svc.infer(
-                        main_model=model.get("main_model_path", ""),
-                        main_config=model.get("main_config_path", ""),
-                        diffusion_model=model.get("diffusion_model_path", ""),
-                        diffusion_config=model.get("diffusion_config_path", ""),
+                    seg_engine.infer(
+                        model={
+                            "framework": seg_framework,
+                            "main_model_path": model.get("main_model_path", ""),
+                            "main_config_path": model.get("main_config_path", ""),
+                            "diffusion_model_path": model.get("diffusion_model_path", ""),
+                            "diffusion_config_path": model.get("diffusion_config_path", ""),
+                            "index_path": model.get("index_path", ""),
+                        },
                         vocals=infer_input,
                         out_path=full_raw,
                         params=seg_params,

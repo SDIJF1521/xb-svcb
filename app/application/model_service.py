@@ -34,16 +34,25 @@ class ModelService:
 
     # ---- 命令 ----
     def import_model(self, payload: dict[str, Any]) -> dict[str, Any] | None:
-        """导入一组模型（主模型 + 主配置 + 扩散模型 + 扩散配置）。
+        """导入一组模型，按 ``framework`` 分支处理所需文件。
 
-        payload 字段（均为本地文件绝对路径）：
-            main_model, main_config, diffusion_model, diffusion_config, name(可选)
-        主模型与主配置为必填；缺失则返回 None。
+        payload 字段（文件均为本地绝对路径）：
+            framework: so-vits-svc / rvc / …（缺省 so-vits-svc）
+            name(可选), sample_rate(可选)
+            - so-vits-svc：main_model + main_config 必填，diffusion_model / diffusion_config 可选。
+            - rvc：main_model(.pth) 必填，index_file(.index) 可选，无需 main_config。
+        必填文件缺失则返回 None。
         """
         paths.ensure_dirs()
+        framework = config.modelhub_normalize_framework(payload.get("framework"))
+        is_rvc = framework == "rvc"
+
         main_model_src = payload.get("main_model")
         main_config_src = payload.get("main_config")
-        if not main_model_src or not main_config_src:
+        if not main_model_src:
+            return None
+        # so-vits 需要主配置；RVC 不需要
+        if not is_rvc and not main_config_src:
             return None
 
         model_id = paths.new_id("mdl_")
@@ -64,15 +73,26 @@ class ModelService:
             return ModelFile(name=src.name, path=str(dst))
 
         main_model = copy(main_model_src)
-        main_config = copy(main_config_src)
-        if main_model is None or main_config is None:
+        if main_model is None:
             shutil.rmtree(dst_dir, ignore_errors=True)
             return None
-        diffusion_model = copy(payload.get("diffusion_model"))
-        diffusion_config = copy(payload.get("diffusion_config"))
+
+        main_config = None
+        diffusion_model = None
+        diffusion_config = None
+        index_file = None
+        if is_rvc:
+            index_file = copy(payload.get("index_file"))
+        else:
+            main_config = copy(main_config_src)
+            if main_config is None:
+                shutil.rmtree(dst_dir, ignore_errors=True)
+                return None
+            diffusion_model = copy(payload.get("diffusion_model"))
+            diffusion_config = copy(payload.get("diffusion_config"))
 
         total = 0
-        for mf in (main_model, main_config, diffusion_model, diffusion_config):
+        for mf in (main_model, main_config, diffusion_model, diffusion_config, index_file):
             if mf:
                 try:
                     total += Path(mf.path).stat().st_size
@@ -80,17 +100,20 @@ class ModelService:
                     pass
 
         name = payload.get("name") or Path(main_model_src).stem
+        model_type = ModelType.RVC.value if is_rvc else ModelType.guess(main_model.name).value
         info = ModelInfo(
             id=model_id,
             name=name,
-            type=ModelType.guess(main_model.name).value,
+            type=model_type,
             sample_rate=str(payload.get("sample_rate", "44.1kHz")),
             size=paths.human_size(total),
             imported_at=datetime.now().strftime("%Y-%m-%d"),
             main_model=main_model,
-            main_config=main_config,
+            main_config=main_config or ModelFile("", ""),
             diffusion_model=diffusion_model,
             diffusion_config=diffusion_config,
+            framework=framework,
+            index_file=index_file,
         )
         self._repo.add(info.to_dict())
         if not self._settings.get("default_model_id"):

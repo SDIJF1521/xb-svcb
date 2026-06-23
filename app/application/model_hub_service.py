@@ -389,9 +389,11 @@ class ModelHubService:
         if data.get("magic") != config.MODELHUB_MAGIC:
             return None
         files = data.get("files")
-        if not isinstance(files, dict) or not files.get("main_model") or not files.get(
-            "main_config"
-        ):
+        if not isinstance(files, dict) or not files.get("main_model"):
+            return None
+        # so-vits 需要主配置；RVC 无主配置（仅 .pth + 可选 .index）
+        fw = config.modelhub_normalize_framework(data.get("framework"))
+        if fw != "rvc" and not files.get("main_config"):
             return None
         return data
 
@@ -407,12 +409,15 @@ class ModelHubService:
             self._set_progress(key, "error", 0, "清单校验失败")
             return {"ok": False, "error": "该模型不是本软件上传或清单校验失败，已跳过"}
 
+        fw = config.modelhub_normalize_framework(manifest.get("framework"))
+        is_rvc = fw == "rvc"
         files = manifest.get("files") or {}
         roles = {
             "main_model": files.get("main_model"),
             "main_config": files.get("main_config"),
             "diffusion_model": files.get("diffusion_model"),
             "diffusion_config": files.get("diffusion_config"),
+            "index_file": files.get("index_file"),
         }
         to_dl = [(role, str(fn)) for role, fn in roles.items() if fn]
         paths.ensure_dirs()
@@ -444,16 +449,18 @@ class ModelHubService:
                     key, "download", min(88.0, pct), f"下载 {base}", done_bytes, total_bytes
                 )
 
+            required_roles = ("main_model",) if is_rvc else ("main_model", "main_config")
             ok = await self._download_to(repo_id, fname, dst, _cb)
             if not ok:
-                if role in ("main_model", "main_config"):
+                if role in required_roles:
                     shutil.rmtree(stage, ignore_errors=True)
                     self._set_progress(key, "error", 0, f"下载失败：{base}")
                     return {"ok": False, "error": f"下载文件失败：{fname}"}
-                continue  # 扩散等可选文件缺失不致命
+                continue  # 扩散 / index 等可选文件缺失不致命
             local_paths[role] = str(dst)
 
-        if "main_model" not in local_paths or "main_config" not in local_paths:
+        need_config = not is_rvc
+        if "main_model" not in local_paths or (need_config and "main_config" not in local_paths):
             shutil.rmtree(stage, ignore_errors=True)
             self._set_progress(key, "error", 0, "模型主文件缺失")
             return {"ok": False, "error": "模型主文件缺失，下载中止"}
@@ -461,11 +468,13 @@ class ModelHubService:
         self._set_progress(key, "import", 92, "导入本地模型库…", done_bytes, total_bytes)
         payload = {
             "name": manifest.get("name") or repo_id.split("/", 1)[-1],
+            "framework": fw,
             "sample_rate": manifest.get("sample_rate", "44.1kHz"),
             "main_model": local_paths.get("main_model"),
             "main_config": local_paths.get("main_config"),
             "diffusion_model": local_paths.get("diffusion_model"),
             "diffusion_config": local_paths.get("diffusion_config"),
+            "index_file": local_paths.get("index_file"),
         }
         imported = self._models.import_model(payload)
         shutil.rmtree(stage, ignore_errors=True)  # 导入会复制一份，暂存可清理
@@ -533,8 +542,10 @@ class ModelHubService:
             "main_config": _copy_role("main_config"),
             "diffusion_model": _copy_role("diffusion_model"),
             "diffusion_config": _copy_role("diffusion_config"),
+            "index_file": _copy_role("index_file"),
         }
-        if not roles["main_model"] or not roles["main_config"]:
+        # 主模型必备；so-vits 还需主配置，RVC 则不需要
+        if not roles["main_model"] or (fw != "rvc" and not roles["main_config"]):
             shutil.rmtree(stage, ignore_errors=True)
             return {"ok": False, "error": "模型主文件缺失，无法上传"}
 

@@ -77,12 +77,22 @@
         <section v-if="mode === 'single'" class="card glass">
           <div class="card-head">
             <span class="step-no">02</span>
-            <h2>选择 SVC 模型</h2>
+            <h2>选择你的模型</h2>
             <router-link to="/models" class="head-link">管理模型 <el-icon><Right /></el-icon></router-link>
           </div>
-          <div class="model-list">
+          <div v-if="availableFrameworks.length > 1" class="model-filter">
+            <button class="filter-chip" :class="{ on: modelFilter === '' }" @click="modelFilter = ''">全部</button>
             <button
-              v-for="m in models"
+              v-for="fw in availableFrameworks"
+              :key="fw"
+              class="filter-chip"
+              :class="{ on: modelFilter === fw }"
+              @click="modelFilter = fw"
+            >{{ frameworkLabel(fw) }}</button>
+          </div>
+          <div v-if="filteredModels.length" class="model-list">
+            <button
+              v-for="m in filteredModels"
               :key="m.id"
               class="model-item"
               :class="{ active: selectedModel === m.id }"
@@ -92,12 +102,15 @@
                 <el-icon><Microphone /></el-icon>
               </div>
               <div class="model-text">
-                <div class="model-name">{{ m.name }}</div>
+                <div class="model-name">
+                  {{ m.name }}<span class="fw-chip">{{ frameworkLabel(m.framework) }}</span>
+                </div>
                 <div class="model-tag">{{ m.type }} · {{ m.sr }}</div>
               </div>
               <el-icon v-if="selectedModel === m.id" class="model-check"><Select /></el-icon>
             </button>
           </div>
+          <p v-else class="field-tip">该框架下暂无模型，切换筛选或前往「管理模型」导入。</p>
         </section>
 
         <!-- 选择模型（多模型 + 各自参数） -->
@@ -107,9 +120,19 @@
             <h2>选择参与模型</h2>
             <router-link to="/models" class="head-link">管理模型 <el-icon><Right /></el-icon></router-link>
           </div>
-          <p class="field-tip">勾选本次要混合的模型，每个模型可单独展开设置参数</p>
+          <p class="field-tip">勾选本次要混合的模型（可跨框架：RVC 与 So-VITS-SVC 同曲混用），每个模型可单独展开设置参数</p>
+          <div v-if="availableFrameworks.length > 1" class="model-filter">
+            <button class="filter-chip" :class="{ on: modelFilter === '' }" @click="modelFilter = ''">全部</button>
+            <button
+              v-for="fw in availableFrameworks"
+              :key="fw"
+              class="filter-chip"
+              :class="{ on: modelFilter === fw }"
+              @click="modelFilter = fw"
+            >{{ frameworkLabel(fw) }}</button>
+          </div>
           <div class="model-list">
-            <div v-for="m in models" :key="m.id" class="multi-model">
+            <div v-for="m in filteredModels" :key="m.id" class="multi-model">
               <button
                 class="model-item"
                 :class="{ active: isPicked(m.id) }"
@@ -119,7 +142,9 @@
                   <el-icon><Microphone /></el-icon>
                 </div>
                 <div class="model-text">
-                  <div class="model-name">{{ m.name }}</div>
+                  <div class="model-name">
+                    {{ m.name }}<span class="fw-chip">{{ frameworkLabel(m.framework) }}</span>
+                  </div>
                   <div class="model-tag">{{ m.type }} · {{ m.sr }}</div>
                 </div>
                 <span v-if="isPicked(m.id)" class="model-badge" :style="{ background: m.color }">
@@ -133,10 +158,20 @@
                   <label>变调 {{ mp(m.id).pitch > 0 ? '+' + mp(m.id).pitch : mp(m.id).pitch }}</label>
                   <input type="range" min="-12" max="12" step="1" v-model.number="mp(m.id).pitch" />
                 </div>
-                <div class="mp-row">
+                <div v-if="frameworkOf(m.id) !== 'rvc'" class="mp-row">
                   <label>扩散占比 {{ Math.round(mp(m.id).diffusionRatio * 100) }}%</label>
                   <input type="range" min="0" max="1" step="0.05" v-model.number="mp(m.id).diffusionRatio" />
                 </div>
+                <template v-else>
+                  <div class="mp-row">
+                    <label>清辅音保护 {{ mp(m.id).protect.toFixed(2) }}</label>
+                    <input type="range" min="0" max="0.5" step="0.01" v-model.number="mp(m.id).protect" />
+                  </div>
+                  <div class="mp-row">
+                    <label>检索比率 {{ mp(m.id).indexRate.toFixed(2) }}</label>
+                    <input type="range" min="0" max="1" step="0.05" v-model.number="mp(m.id).indexRate" />
+                  </div>
+                </template>
                 <div class="mp-inline">
                   <div class="mp-mini">
                     <span>F0</span>
@@ -148,6 +183,12 @@
                     <span>设备</span>
                     <select v-model="mp(m.id).device">
                       <option v-for="d in deviceOptions" :key="d.v" :value="d.v">{{ d.label }}</option>
+                    </select>
+                  </div>
+                  <div v-if="frameworkOf(m.id) === 'rvc'" class="mp-mini">
+                    <span>版本</span>
+                    <select v-model="mp(m.id).rvcVersion">
+                      <option v-for="v in rvcVersions" :key="v" :value="v">{{ v }}</option>
                     </select>
                   </div>
                 </div>
@@ -181,7 +222,11 @@
             <h2>推理参数</h2>
           </div>
 
-          <div class="field">
+          <div class="fw-banner">
+            当前模型框架：<b>{{ frameworkLabel(selectedFramework) }}</b>
+          </div>
+
+          <div v-if="selectedFramework !== 'rvc'" class="field">
             <div class="field-row">
               <label>主模型 / 扩散模型 比例</label>
               <span class="field-val">
@@ -227,7 +272,7 @@
                 @click="device = d.v"
               >{{ d.label }}</button>
             </div>
-            <div class="field-hint">同时作用于人声分离与 SVC 推理；GPU 加速需 NVIDIA 显卡（CUDA），无显卡或显存不足时选 CPU</div>
+            <div class="field-hint">同时作用于人声分离与模型推理；GPU 加速需 NVIDIA 显卡（CUDA），无显卡或显存不足时选 CPU</div>
           </div>
 
           <div class="field">
@@ -245,6 +290,40 @@
             </div>
             <input type="range" min="0" max="1" step="0.05" v-model.number="rmsMix" />
           </div>
+
+          <!-- RVC 专属参数 -->
+          <template v-if="selectedFramework === 'rvc'">
+            <div class="field">
+              <div class="field-row">
+                <label>清辅音保护 (protect)</label>
+                <span class="field-val">{{ protect.toFixed(2) }}</span>
+              </div>
+              <input type="range" min="0" max="0.5" step="0.01" v-model.number="protect" />
+              <div class="field-hint">越小越贴合目标音色，越大越保留原声辅音/呼吸（0~0.5）</div>
+            </div>
+
+            <div class="field">
+              <div class="field-row">
+                <label>F0 中值滤波半径</label>
+                <span class="field-val">{{ filterRadius }}</span>
+              </div>
+              <input type="range" min="0" max="7" step="1" v-model.number="filterRadius" />
+              <div class="field-hint">≥3 可降低呼吸杂音（仅对 harvest 等有效）</div>
+            </div>
+
+            <div class="field">
+              <label class="field-block-label">RVC 模型版本</label>
+              <div class="seg">
+                <button
+                  v-for="v in rvcVersions"
+                  :key="v"
+                  class="seg-item"
+                  :class="{ active: rvcVersion === v }"
+                  @click="rvcVersion = v"
+                >{{ v }}</button>
+              </div>
+            </div>
+          </template>
         </section>
 
         <!-- 歌词与分句指派（多模型） -->
@@ -477,6 +556,43 @@ const indexRate = ref(num(prefs.indexRate, 0.75))
 const rmsMix = ref(num(prefs.rmsMix, 0.25))
 const diffusionRatio = ref(num(prefs.diffusionRatio, 0.5))
 
+/* RVC 专属参数 */
+const rvcVersions = ['v2', 'v1']
+const protect = ref(num(prefs.protect, 0.33))
+const filterRadius = ref(num(prefs.filterRadius, 3))
+const rvcVersion = ref(str(prefs.rvcVersion, 'v2'))
+
+/* 模型框架辅助：用于单/多模型参数面板按框架切换、下拉显示框架标签 */
+function frameworkOf(id: string): string {
+  return models.value.find((m) => m.id === id)?.framework || 'so-vits-svc'
+}
+function frameworkLabel(id: string): string {
+  const map: Record<string, string> = {
+    'so-vits-svc': 'So-VITS-SVC',
+    rvc: 'RVC',
+    'ddsp-svc': 'DDSP-SVC',
+    other: '其他',
+  }
+  return map[id] || id || 'So-VITS-SVC'
+}
+const selectedFramework = computed(() => frameworkOf(selectedModel.value))
+
+/* 模型框架筛选：'' = 全部；只在存在多种框架时展示筛选条 */
+const modelFilter = ref('')
+const availableFrameworks = computed(() => {
+  const seen: string[] = []
+  for (const m of models.value) {
+    const fw = m.framework || 'so-vits-svc'
+    if (!seen.includes(fw)) seen.push(fw)
+  }
+  return seen
+})
+const filteredModels = computed(() =>
+  modelFilter.value
+    ? models.value.filter((m) => (m.framework || 'so-vits-svc') === modelFilter.value)
+    : models.value,
+)
+
 const deviceOptions = [
   { v: 'cuda', label: 'GPU (CUDA)' },
   { v: 'cpu', label: 'CPU' },
@@ -491,6 +607,9 @@ type MultiParams = {
   device: string
   indexRate: number
   rmsMix: number
+  protect: number
+  filterRadius: number
+  rvcVersion: string
 }
 const mode = ref<'single' | 'multi'>(prefs.mode === 'multi' ? 'multi' : 'single')
 
@@ -506,6 +625,9 @@ function defaultParams(): MultiParams {
     device: device.value,
     indexRate: indexRate.value,
     rmsMix: rmsMix.value,
+    protect: protect.value,
+    filterRadius: filterRadius.value,
+    rvcVersion: rvcVersion.value,
   }
 }
 function mp(id: string): MultiParams {
@@ -609,25 +731,31 @@ const alignStatus = computed(() => {
 })
 
 // 任一参数变化即写回 localStorage
-watch([uvrModel, f0Method, pitch, indexRate, rmsMix, diffusionRatio, device, mode], () => {
-  try {
-    localStorage.setItem(
-      PREFS_KEY,
-      JSON.stringify({
-        uvrModel: uvrModel.value,
-        f0Method: f0Method.value,
-        pitch: pitch.value,
-        indexRate: indexRate.value,
-        rmsMix: rmsMix.value,
-        diffusionRatio: diffusionRatio.value,
-        device: device.value,
-        mode: mode.value,
-      }),
-    )
-  } catch {
-    /* ignore */
-  }
-})
+watch(
+  [uvrModel, f0Method, pitch, indexRate, rmsMix, diffusionRatio, device, mode, protect, filterRadius, rvcVersion],
+  () => {
+    try {
+      localStorage.setItem(
+        PREFS_KEY,
+        JSON.stringify({
+          uvrModel: uvrModel.value,
+          f0Method: f0Method.value,
+          pitch: pitch.value,
+          indexRate: indexRate.value,
+          rmsMix: rmsMix.value,
+          diffusionRatio: diffusionRatio.value,
+          device: device.value,
+          mode: mode.value,
+          protect: protect.value,
+          filterRadius: filterRadius.value,
+          rvcVersion: rvcVersion.value,
+        }),
+      )
+    } catch {
+      /* ignore */
+    }
+  },
+)
 
 const isPlaying = ref(false)
 const currentWork = ref<WorkDTO | null>(null)
@@ -643,7 +771,7 @@ const stepMeta: Record<string, string> = {
 const singlePipeline: PipelineStep[] = [
   { key: 'separate', label: '人声分离', status: 'wait' },
   { key: 'f0', label: 'F0 提取', status: 'wait' },
-  { key: 'infer', label: 'SVC 推理', status: 'wait' },
+  { key: 'infer', label: '模型推理', status: 'wait' },
   { key: 'mix', label: '混音合成', status: 'wait' },
 ]
 const multiPipeline: PipelineStep[] = [
@@ -789,6 +917,9 @@ const generate = async () => {
           uvr_model: uvrModel.value,
           diffusion_ratio: p.diffusionRatio,
           device: p.device,
+          protect: p.protect,
+          filter_radius: p.filterRadius,
+          rvc_version: p.rvcVersion,
         },
       }
     })
@@ -817,6 +948,9 @@ const generate = async () => {
       uvr_model: uvrModel.value,
       diffusion_ratio: diffusionRatio.value,
       device: device.value,
+      protect: protect.value,
+      filter_radius: filterRadius.value,
+      rvc_version: rvcVersion.value,
     },
   })
   currentWork.value = work
@@ -1079,6 +1213,13 @@ onUnmounted(stopPolling)
 .model-text { flex: 1; }
 .model-name { font-weight: 600; font-size: 14px; color: var(--xb-text); }
 .model-tag { font-size: 12px; color: var(--xb-muted); margin-top: 2px; }
+.fw-chip { display: inline-block; margin-left: 8px; padding: 0 7px; border-radius: 6px; font-size: 11px; font-weight: 700; vertical-align: middle; color: var(--xb-accent); background: rgba(var(--xb-accent-rgb), 0.14); border: 1px solid rgba(var(--xb-accent-rgb), 0.35); }
+.model-filter { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.filter-chip { padding: 5px 14px; border-radius: 20px; border: 1px solid var(--xb-border); background: rgba(var(--xb-fill-rgb), 0.04); color: var(--xb-muted); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.filter-chip:hover { color: var(--xb-text); border-color: var(--xb-primary); }
+.filter-chip.on { background: linear-gradient(135deg, var(--xb-primary), var(--xb-primary-2)); color: var(--xb-on-primary); border-color: transparent; }
+.fw-banner { font-size: 12.5px; color: var(--xb-muted); margin-bottom: 14px; padding: 8px 12px; border-radius: 8px; background: rgba(var(--xb-primary-rgb), 0.06); border: 1px solid var(--xb-border); }
+.fw-banner b { color: var(--xb-primary); }
 .model-check { color: var(--xb-primary); font-size: 18px; }
 
 /* 模式切换 */

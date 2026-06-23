@@ -33,14 +33,23 @@ export interface ModelDTO {
   main_config: ModelFileDTO
   diffusion_model?: ModelFileDTO | null
   diffusion_config?: ModelFileDTO | null
+  /** 模型框架：so-vits-svc / rvc / …（缺省 so-vits-svc）。 */
+  framework?: string
+  /** RVC 检索特征文件（.index），可选。 */
+  index_file?: ModelFileDTO | null
 }
 
 export interface ImportModelPayload {
   name?: string
+  /** 模型框架：so-vits-svc（默认）/ rvc。 */
+  framework?: string
   main_model: string
-  main_config: string
+  /** so-vits 必填；RVC 不需要。 */
+  main_config?: string
   diffusion_model?: string | null
   diffusion_config?: string | null
+  /** RVC 检索特征文件（.index），可选。 */
+  index_file?: string | null
 }
 
 export interface PipelineStep {
@@ -57,6 +66,12 @@ export interface InferenceParams {
   uvr_model?: string
   diffusion_ratio?: number
   device?: string
+  /** RVC：清辅音/呼吸保护 (0~0.5)。 */
+  protect?: number
+  /** RVC：F0 中值滤波半径 (0~7)。 */
+  filter_radius?: number
+  /** RVC：模型版本 v1 / v2。 */
+  rvc_version?: string
 }
 
 export interface WorkDTO {

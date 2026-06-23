@@ -139,19 +139,30 @@ class WorkService:
 
     @staticmethod
     def _resolve_model_paths(model: dict[str, Any] | None) -> dict[str, str]:
-        """从模型记录提取推理所需的四个本地文件路径。"""
+        """从模型记录提取推理所需的文件路径与框架标识。
+
+        返回含 ``framework``（路由引擎用）、so-vits 的 main/diffusion 路径、
+        以及 RVC 的 ``index_path``；推理引擎按 ``framework`` 各取所需。
+        """
         if not model:
             return {
+                "framework": config.MODELHUB_DEFAULT_FRAMEWORK,
                 "main_model_path": "",
                 "main_config_path": "",
                 "diffusion_model_path": "",
                 "diffusion_config_path": "",
+                "index_path": "",
             }
+        framework = config.modelhub_normalize_framework(
+            model.get("framework") or config.modelhub_guess_framework(model.get("type"))
+        )
         return {
+            "framework": framework,
             "main_model_path": (model.get("main_model") or {}).get("path", ""),
             "main_config_path": (model.get("main_config") or {}).get("path", ""),
             "diffusion_model_path": (model.get("diffusion_model") or {}).get("path", ""),
             "diffusion_config_path": (model.get("diffusion_config") or {}).get("path", ""),
+            "index_path": (model.get("index_file") or {}).get("path", ""),
         }
 
     def retry(self, work_id: str) -> bool:

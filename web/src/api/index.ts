@@ -40,6 +40,9 @@ export const api = {
   pickConfigFile: () =>
     invoke<string | null>('pick_config_file', [], () => mock.pickConfigFile()),
 
+  pickIndexFile: () =>
+    invoke<string | null>('pick_index_file', [], () => mock.pickIndexFile()),
+
   importModel: (payload: ImportModelPayload) =>
     invoke<ModelDTO | null>('import_model', [payload], () => mock.importModel(payload)),
 

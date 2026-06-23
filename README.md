@@ -22,7 +22,8 @@
 
 - 🎚️ **全自动流水线** —— 一次点击走完「分离 → 去混响 → F0 → 推理 → 混音」。
 - 🗣️ **真实 so-vits-svc 4.1 推理** —— 支持主模型 + 浅扩散，可调变调、F0 预测器、扩散步数。
-- 🧬 **多模型混合翻唱** —— 按歌名自动获取带时间轴歌词并做时长对齐校验，逐句把不同段落指派给不同模型；每个模型在完整人声上整轨推理，再「同源连唱合并、换人处交叉淡化」无缝拼成一首多人合唱。
+- 🎛️ **多框架推理（So-VITS-SVC / RVC）** —— 推理引擎按模型「框架」可插拔：内置 **RVC**（基于 `rvc-python`，自动识别 `.index` 检索特征），导入与创建页按框架切换专属参数（protect / filter_radius / 版本 v1·v2）；统一引擎接口为后续框架预留扩展点。
+- 🧬 **多模型混合翻唱（可跨框架）** —— 按歌名自动获取带时间轴歌词并做时长对齐校验，逐句把不同段落指派给不同模型；**同一首歌可混用 RVC 与 so-vits-svc 模型**；每个模型在完整人声上整轨推理，再「同源连唱合并、换人处交叉淡化」无缝拼成一首多人合唱。
 - 🎵 **在线资源获取** —— 内置 **网易云 / QQ音乐** 曲库的搜索、试听、下载（QQ 可填会员 Cookie 取高品质音频），下载素材可一键进入翻唱。
 - 🌐 **模型站（魔搭社区）** —— 基于 **ModelScope** 一键**上传/下载**声音模型：填自己的访问令牌即可发布到自有公开仓库，按关键词**模糊搜索**社区模型并直接导入；带**架构标签**（So-VITS-SVC / RVC 等）与**清单防污染**校验，上传/下载全程显示**进度条**。
 - 🎼 **专业人声分离** —— `5_HP-Karaoke-UVR` 分离 + `UVR-DeEcho-DeReverb` 去混响，得到干净干声。
@@ -30,10 +31,12 @@
 - 🎨 **双主题自由切换** —— 「赛博霓虹（暗）/ 二次元蓝粉（亮）」一键切换并记忆，连 pywebview **原生窗口标题栏/边框**也随主题变色。
 - 👤 **个性化** —— 自定义头像与昵称、内置消息通知中心（实时汇总任务进度与失败原因）。
 - 📦 **开箱即用** —— 应用本体单文件 `XB-SVCB.exe`（自带应用图标），起界面无需 Python / Node。
-- 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-uvr`），互不污染。
+- 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-uvr`），互不污染。
 - 🎧 **作品库** —— 试听 / 导出成品，单独试听伴奏与干声，失败任务一键查日志；删除作品同步真实清理本地生成文件。
 
-> **最新版本 v0.0.6**：新增 **模型站（ModelScope 魔搭社区）**——用自己的访问令牌把本地模型一键发布到自有公开仓库，并按关键词**模糊搜索**、直接下载导入社区模型；模型带**架构标签**（So-VITS-SVC / RVC…）、**清单防污染**校验，上传/下载全程**进度条**实时反馈。
+> **最新版本 v0.0.7**：新增 **RVC 推理**（基于 `rvc-python`）与**多框架推理抽象**——推理引擎按模型「框架」可插拔，导入/创建页按框架切换专属参数（protect / filter_radius / 版本 v1·v2），**混合翻唱可在同一首歌混用 RVC 与 so-vits-svc 模型**；RVC 跑在独立子环境 `.venv-rvc`，自动识别 `.index` 检索特征。
+>
+> v0.0.6：新增 **模型站（ModelScope 魔搭社区）**——用自己的访问令牌把本地模型一键发布到自有公开仓库，并按关键词**模糊搜索**、直接下载导入社区模型；模型带**架构标签**（So-VITS-SVC / RVC…）、**清单防污染**校验，上传/下载全程**进度条**实时反馈。
 >
 > v0.0.5：重做 **多模型混合翻唱** 合成——每个模型在完整人声上**整轨推理**，再「同一歌手连唱合并、仅在换人处交叉淡化」拼接，彻底消除逐句碎片推理带来的电流声 / 咔哒声 / 卡顿。
 >
@@ -105,19 +108,21 @@ setup_env.bat
 
 | 步骤 | 产物 | 说明 |
 | --- | --- | --- |
-| 1 | `app/.venv` | 主程序环境（pywebview） |
-| 2 | `web/dist` | 前端构建产物 |
-| 3 | `.venv-uvr` | 人声分离环境（audio-separator） |
-| 4 | `engines/so-vits-svc` + `.venv-svc` | so-vits-svc 4.1 仓库与推理环境 |
-| 5 | `models/`、`engines/so-vits-svc/pretrain/` | UVR 模型与底模 |
-| 6 | `.venv-hub` | 模型站上传组件（`modelscope` SDK；仅上传需要） |
+| 1 (`app`) | `app/.venv` | 主程序环境（pywebview） |
+| 2 (`web`) | `web/dist` | 前端构建产物 |
+| 3 (`uvr`) | `.venv-uvr` | 人声分离环境（audio-separator） |
+| 4 (`svc`) | `engines/so-vits-svc` + `.venv-svc` | so-vits-svc 4.1 仓库与推理环境（Python 3.9 / cu121） |
+| 5 (`rvc`) | `.venv-rvc` | RVC 推理环境（`rvc-python`，Python 3.9 / cu118；首启自动下载 hubert/rmvpe 底模） |
+| 6 (`hub`) | `.venv-hub` | 模型站上传组件（`modelscope` SDK；仅上传需要） |
+| 7 (`models`) | `models/`、`engines/so-vits-svc/pretrain/` | UVR 模型与底模 |
 
 更细的控制可直接调用 `install.py`：
 
 ```bat
 python install\install.py --cpu          rem 强制 CPU 版
 python install\install.py --gpu          rem 强制 CUDA 版
-python install\install.py --only svc     rem 只重跑某一步：app / web / uvr / svc / models / hub
+python install\install.py --only svc     rem 只重跑某一步：app / web / uvr / svc / rvc / hub / models
+python install\install.py --only rvc     rem 只搭建 RVC 推理环境 .venv-rvc（rvc-python）
 python install\install.py --skip-svc     rem 跳过 so-vits-svc（仅装壳 + 分离 + 前端）
 ```
 
@@ -325,7 +330,7 @@ CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\inst
 - [x] 模型站
 - [x] 模型上传 / 下载
 - [x] 多模型混唱
-- [ ] RVC 支持
+- [x] RVC 支持
 - [ ] 可视化时间轴
 - [ ] 音频编辑器
 - [ ] 多框架统一管理
@@ -347,9 +352,9 @@ CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\inst
 <details>
 <summary><b>阶段一 · 推理生态完善（近期）</b> —— 支持主流 VC 模型、完善模型管理、提升推理体验</summary>
 
-- [ ] RVC 支持
-- [ ] RVC Index 自动识别
-- [ ] 后端统一接口抽象
+- [x] RVC 支持
+- [x] RVC Index 自动识别
+- [x] 后端统一接口抽象
 - [ ] 模型元数据标准化
 - [ ] 模型自动检测与修复
 - [ ] 推理任务队列

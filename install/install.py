@@ -5,6 +5,8 @@
   app/.venv      —— 主程序环境（pywebview，桌面壳）
   .venv-uvr/     —— 人声分离环境（audio-separator）
   .venv-svc/     —— so-vits-svc 4.1 推理环境（torch + fairseq 等）
+  .venv-rvc/     —— RVC 推理环境（rvc-python，torch cu118）
+  .venv-hub/     —— 模型上传组件（modelscope）
   engines/so-vits-svc/         —— 自动克隆的 so-vits-svc 4.1 仓库
   engines/so-vits-svc/pretrain —— 底模（contentvec / nsf_hifigan / rmvpe）
   models/uvr/    —— UVR 分离模型（5_HP-Karaoke / DeEcho-DeReverb）
@@ -23,7 +25,8 @@
   python install/install.py --cpu          # 强制 CPU
   python install/install.py --gpu          # 强制 CUDA
   python install/install.py --skip-svc     # 跳过 so-vits-svc（仅装壳+分离+前端）
-  python install/install.py --only models  # 只跑某一步：app/web/uvr/svc/models
+  python install/install.py --only rvc     # 只装 RVC 推理环境（.venv-rvc）
+  python install/install.py --only models  # 只跑某一步：app/web/uvr/svc/rvc/hub/models
 """
 
 from __future__ import annotations
@@ -50,6 +53,7 @@ PRETRAIN_DIR = SOVITS_DIR / "pretrain"
 UVR_VENV = ROOT / ".venv-uvr"
 SVC_VENV = ROOT / ".venv-svc"
 HUB_VENV = ROOT / ".venv-hub"
+RVC_VENV = ROOT / ".venv-rvc"
 UVR_MODELS_DIR = ROOT / "models" / "uvr"
 
 # 随安装包一起分发的「自带模型」目录：安装时直接本地复制，免联网慢下载。
@@ -60,7 +64,7 @@ ASSETS_MODELS_DIR = Path(__file__).resolve().parent.parent / "assets" / "models"
 def _derive_paths(root: Path) -> None:
     """以 root 为基准重新计算所有产物路径（供 --root 覆盖）。"""
     global ROOT, APP_DIR, WEB_DIR, ENGINES_DIR, SOVITS_DIR, PRETRAIN_DIR
-    global UVR_VENV, SVC_VENV, HUB_VENV, UVR_MODELS_DIR
+    global UVR_VENV, SVC_VENV, HUB_VENV, RVC_VENV, UVR_MODELS_DIR
     ROOT = root
     APP_DIR = root / "app"
     WEB_DIR = root / "web"
@@ -70,6 +74,7 @@ def _derive_paths(root: Path) -> None:
     UVR_VENV = root / ".venv-uvr"
     SVC_VENV = root / ".venv-svc"
     HUB_VENV = root / ".venv-hub"
+    RVC_VENV = root / ".venv-rvc"
     UVR_MODELS_DIR = root / "models" / "uvr"
 
 SOVITS_REPO_URL = "https://github.com/svc-develop-team/so-vits-svc.git"
@@ -82,6 +87,8 @@ SOVITS_ZIP_URL = (
 # CUDA wheel 源（cu121 兼容 30/40 系显卡）；CPU 用官方默认源
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu121"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+# RVC（rvc-python）推荐 torch 2.1.1 + cu118，单独固定，避免与 so-vits 的 cu121 冲突
+TORCH_RVC_CUDA_INDEX = "https://download.pytorch.org/whl/cu118"
 
 # 底模下载清单（见 README 与 so-vits-svc 官方说明）
 # HuggingFace 在国内常连不上，统一走「镜像优先 + 官方回退」。
@@ -129,6 +136,9 @@ PYTHON_FOR_ENGINES = "3.10"
 # 源码现场编译并失败（numpy 用到 3.10 改签名的 _Py_HashDouble；pyworld 的构建依赖又拉
 # 旧 numpy）。因此 SVC 引擎固定用 Python 3.9，整套依赖直接装 wheel、零编译。
 PYTHON_FOR_SVC = "3.9"
+# RVC（rvc-python）依赖 fairseq==0.12.2 + numpy<=1.23.5，与 so-vits 同属老栈，
+# 同样固定 Python 3.9 以最大化预编译 wheel 命中、规避 fairseq 现场编译失败。
+PYTHON_FOR_RVC = "3.9"
 
 # so-vits-svc requirements 里只服务 WebUI / 实时变声 / ONNX 导出、推理用不到，
 # 且在 Windows 上常因缺少预编译包而现场编译失败的包，安装时一并剔除：
@@ -330,13 +340,13 @@ def copy_bundled(rel: str, dest: Path) -> bool:
 
 # ---------- 各安装步骤 ----------
 def step_app(uv: str) -> None:
-    hr("1/6 主程序环境 app/.venv")
+    hr("1/7 主程序环境 app/.venv")
     run(uv_cmd(uv, "sync"), cwd=APP_DIR)
     print(c("g", "主程序环境就绪"))
 
 
 def step_web() -> None:
-    hr("2/6 前端构建 web/dist")
+    hr("2/7 前端构建 web/dist")
     if not have("npm"):
         raise RuntimeError("未检测到 npm，请先安装 Node.js LTS 后重试（或 --skip-web）")
     # 优先 npm ci（依赖 lock）；无 lock 时回退 npm install
@@ -349,7 +359,7 @@ def step_web() -> None:
 
 
 def step_uvr(uv: str, use_gpu: bool) -> None:
-    hr("3/6 人声分离环境 .venv-uvr（audio-separator）")
+    hr("3/7 人声分离环境 .venv-uvr（audio-separator）")
     if not venv_python(UVR_VENV).exists():
         run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_ENGINES, str(UVR_VENV)))
     py = str(venv_python(UVR_VENV))
@@ -412,7 +422,7 @@ def _venv_pyver(py: Path) -> str | None:
 
 
 def step_svc(uv: str, use_gpu: bool) -> None:
-    hr("4/6 推理引擎 so-vits-svc + .venv-svc")
+    hr("4/7 推理引擎 so-vits-svc + .venv-svc")
     fetch_sovits()
 
     # 创建环境（强制 Python 3.9）。若已存在但版本不符，则重建，避免旧依赖在 3.10 现场编译失败。
@@ -474,8 +484,38 @@ def _filter_requirements(src: Path) -> Path:
     return out
 
 
+def step_rvc(uv: str, use_gpu: bool) -> None:
+    hr("5/7 RVC 推理环境 .venv-rvc（rvc-python）")
+    # RVC 推理在独立环境运行（rvc-python），与 so-vits 的 cu121 栈隔离。
+    # 首次推理时 rvc-python 会自动下载 hubert / rmvpe 底模（无需在此预置）。
+    py_path = venv_python(RVC_VENV)
+    if py_path.exists():
+        ver = _venv_pyver(py_path)
+        if ver != PYTHON_FOR_RVC:
+            print(c("y", f"    现有 .venv-rvc 为 Python {ver or '未知'}，需要 {PYTHON_FOR_RVC}，重建中 …"))
+            shutil.rmtree(RVC_VENV, ignore_errors=True)
+    if not venv_python(RVC_VENV).exists():
+        run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_RVC, str(RVC_VENV)))
+    py = str(venv_python(RVC_VENV))
+
+    def pip(*args: str, index: str | None = None) -> None:
+        uv_pip_install(uv, py, *args, index=index)
+
+    # uv venv 默认不含 setuptools；fairseq/rvc 运行时可能用到 pkg_resources，先补齐
+    pip("setuptools<81", "wheel")
+    # 先装 torch（决定 CUDA/CPU）：RVC 用 2.1.1 + cu118（rvc-python 推荐组合）
+    pip(
+        "torch==2.1.1",
+        "torchaudio==2.1.1",
+        index=TORCH_RVC_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX,
+    )
+    # rvc-python（含 fairseq / faiss 等推理依赖）
+    pip("rvc-python")
+    print(c("g", "RVC 推理环境就绪"))
+
+
 def step_hub(uv: str) -> None:
-    hr("5/6 模型上传组件 .venv-hub（modelscope）")
+    hr("6/7 模型上传组件 .venv-hub（modelscope）")
     # 仅「分享到模型站（上传）」需要 modelscope SDK；搜索 / 下载走纯 HTTP，不依赖本环境。
     # 用 3.10（与 UVR 一致），装 modelscope hub 能力即可（上传用 upload_folder，无需本地 git）。
     if not venv_python(HUB_VENV).exists():
@@ -493,7 +533,7 @@ def step_hub(uv: str) -> None:
 
 
 def step_models(uv: str) -> None:
-    hr("6/6 底模 + UVR 模型（自带优先，缺失才联网下载）")
+    hr("7/7 底模 + UVR 模型（自带优先，缺失才联网下载）")
     PRETRAIN_DIR.mkdir(parents=True, exist_ok=True)
     if ASSETS_MODELS_DIR.exists():
         print(c("g", f"  检测到自带模型目录：{ASSETS_MODELS_DIR}"))
@@ -599,10 +639,11 @@ STEPS = {
     "web": lambda uv, gpu: step_web(),
     "uvr": lambda uv, gpu: step_uvr(uv, gpu),
     "svc": lambda uv, gpu: step_svc(uv, gpu),
+    "rvc": lambda uv, gpu: step_rvc(uv, gpu),
     "hub": lambda uv, gpu: step_hub(uv),
     "models": lambda uv, gpu: step_models(uv),
 }
-ORDER = ["app", "web", "uvr", "svc", "hub", "models"]
+ORDER = ["app", "web", "uvr", "svc", "rvc", "hub", "models"]
 
 
 def main() -> int:
@@ -618,7 +659,7 @@ def main() -> int:
         "--only",
         choices=ORDER,
         nargs="+",
-        help="只执行指定步骤（可多选）：app web uvr svc models",
+        help="只执行指定步骤（可多选）：app web uvr svc rvc hub models",
     )
     for s in ORDER:
         p.add_argument(f"--skip-{s}", action="store_true", help=f"跳过 {s} 步骤")
