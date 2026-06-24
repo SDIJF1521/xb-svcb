@@ -19,6 +19,8 @@ import type {
   HubDownloadResult,
   HubUploadResult,
   HubProgress,
+  HubStartResult,
+  HubJob,
   ModelFramework,
 } from './types'
 
@@ -315,17 +317,19 @@ export const mock = {
     mockMusicCookie = cookie.trim()
     return true
   },
-  searchMusic(msg: string, g = 13, source = mockMusicSource): MusicSearchResult {
+  searchMusic(msg: string, page = 1, pageSize = 15, source = mockMusicSource): MusicSearchResult {
     if (!mockMusicKey) return { ok: false, error: '未配置 API Key，请先在「API 设置」中填写' }
     if (!msg.trim()) return { ok: false, error: '请输入搜索关键词' }
-    const songs = Array.from({ length: Math.min(g, 8) }, (_, i) => ({
+    const total = 23 // 模拟全站约 23 条结果
+    const g = Math.min(total, page * pageSize)
+    const songs = Array.from({ length: g }, (_, i) => ({
       n: i + 1,
       name: `${msg}${i === 0 ? '' : `（版本 ${i + 1}）`}`,
       singer: ['洛天依', '国风堂', '云梦', 'Reze'][i % 4] as string,
       album: msg,
       pay: source === 'qq' && i % 3 === 0 ? '[收费]' : '',
     }))
-    return { ok: true, keyword: msg, source, songs }
+    return { ok: true, keyword: msg, source, songs, page, page_size: pageSize, has_more: g < total }
   },
   getMusicSong(msg: string, n: number, _source = mockMusicSource): MusicSongResult {
     void _source
@@ -397,15 +401,17 @@ export const mock = {
   listModelFrameworks(): ModelFramework[] {
     return [...mockFrameworks]
   },
-  hubSearchModels(query = '', page = 1, framework?: string): HubSearchResult {
+  hubSearchModels(query = '', page = 1, framework?: string, pageSize = 12): HubSearchResult {
     const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
     const fw = (framework || '').trim().toLowerCase()
-    const items = mockHubModels.filter((m) => {
+    const all = mockHubModels.filter((m) => {
       const hay = `${m.name} ${m.repo_id}`.toLowerCase()
       const hit = tokens.every((t) => hay.includes(t))
       return hit && (!fw || m.framework === fw)
     })
-    return { ok: true, items, page }
+    const startIdx = (page - 1) * pageSize
+    const items = all.slice(startIdx, startIdx + pageSize)
+    return { ok: true, items, page, page_size: pageSize, has_more: startIdx + pageSize < all.length }
   },
   hubDownloadModel(repoId: string): HubDownloadResult {
     const hit = mockHubModels.find((m) => m.repo_id === repoId)
@@ -446,6 +452,80 @@ export const mock = {
       total: 100,
     }
   },
+
+  hubStartDownload(repoId: string): HubStartResult {
+    const key = `dl:${repoId}`
+    mockProgress[key] = 0
+    mockJobs[key] = {
+      key,
+      kind: 'download',
+      title: repoId,
+      status: 'running',
+      pct: 0,
+      msg: '排队中…',
+      phase: 'start',
+      created_at: new Date().toISOString(),
+    }
+    return { ok: true, key }
+  },
+  hubStartUpload(modelId: string, name?: string, framework?: string): HubStartResult {
+    void framework
+    if (!mockHubToken) return { ok: false, error: '未填写 ModelScope 访问令牌' }
+    const model = mockModels.find((m) => m.id === modelId)
+    const key = `ul:${modelId}`
+    mockProgress[key] = 0
+    mockJobs[key] = {
+      key,
+      kind: 'upload',
+      title: name || model?.name || modelId,
+      status: 'running',
+      pct: 0,
+      msg: '排队中…',
+      phase: 'start',
+      created_at: new Date().toISOString(),
+    }
+    return { ok: true, key }
+  },
+  hubListJobs(): HubJob[] {
+    // 每次轮询推进进度，到 100% 标记完成（下载完成时模拟导入一条本地模型）
+    for (const key of Object.keys(mockJobs)) {
+      const job = mockJobs[key]!
+      if (job.status !== 'running') continue
+      const cur = Math.min(100, (mockProgress[key] ?? 0) + 20)
+      mockProgress[key] = cur
+      job.pct = cur
+      job.msg = cur >= 100 ? '完成' : `处理中 ${cur}%`
+      job.phase = cur >= 100 ? 'done' : job.kind
+      if (cur >= 100) {
+        job.status = 'done'
+        if (job.kind === 'download') {
+          const m: ModelDTO = {
+            id: rid('mdl_'),
+            name: job.title.split('/').pop() || job.title,
+            type: 'So-VITS',
+            sample_rate: '44.1kHz',
+            size: '400 MB',
+            imported_at: new Date().toISOString().slice(5, 10),
+            main_model: { name: 'G_30000.pth', path: '' },
+            main_config: { name: 'config.json', path: '' },
+            diffusion_model: null,
+            diffusion_config: null,
+          }
+          mockModels.unshift(m)
+          job.result = { model: m }
+        }
+      }
+    }
+    return Object.values(mockJobs).sort((a, b) =>
+      String(b.created_at).localeCompare(String(a.created_at)),
+    )
+  },
+  hubClearJob(key: string): boolean {
+    delete mockJobs[key]
+    delete mockProgress[key]
+    return true
+  },
 }
 
 const mockProgress: Record<string, number> = {}
+const mockJobs: Record<string, HubJob> = {}

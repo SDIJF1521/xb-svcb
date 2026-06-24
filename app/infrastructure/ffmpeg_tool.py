@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import shutil
 import subprocess
@@ -354,12 +355,107 @@ class FfmpegTool:
                     str(instrumental),
                     "-filter_complex",
                     filt,
-                    "-map",
-                    "[a]",
-                    "-ar",
-                    str(sample_rate),
-                    str(dst),
-                ],
+                "-map",
+                "[a]",
+                "-ar",
+                str(sample_rate),
+                str(dst),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,
+            **config.subprocess_no_window(),
+            )
+            return res.returncode == 0 and dst.exists()
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def mix_vocals(
+        self, inputs: list[Path], dst: Path, sample_rate: int = 44100
+    ) -> bool:
+        """把多路人声（同一句、不同模型）叠加为「合唱」人声。成功返回 True。
+
+        若只是把多路同音高人声直接相加，它们高度相干、相互掩盖，听感上会糊成
+        「一个更响的声音」而非「多人合唱」。为让每个声部都清晰可辨，这里对每一
+        路做去相关处理：
+
+        1. **恒功率声像分布** —— 把 N 个声部沿立体声场均匀铺开（左→右），
+           人耳能从不同方位分辨出不同声部；
+        2. **微失谐（detune）** —— 给每路 ±几音分的轻微变调（``asetrate``+``atempo``
+           保持时长不变），破坏「同音高完全重合」，形成自然的合唱团厚度；
+        3. **微延迟去相关（Haas）** —— 每路加几毫秒不等延迟，破坏相位对齐、进一步
+           拉宽声场（仍被感知为同一句、不串拍）；
+        4. **等响度增益补偿** —— 去相关后按略高于 ``1/sqrt(N)`` 压低再 ``amix`` 求和
+           （``normalize=0``），最后软限幅 ``alimiter`` 防破音，使合唱句与独唱句
+           整体响度大体一致。
+        """
+        if not self.ffmpeg:
+            return False
+        srcs = [p for p in inputs if p and Path(p).exists()]
+        if not srcs:
+            return False
+        if len(srcs) == 1:
+            return self.convert(srcs[0], dst, sample_rate)
+        try:
+            n = len(srcs)
+            # 去相关后更接近能量相加，给 1/sqrt(N) 一点回补避免合唱句偏轻
+            gain = 1.0 / (n ** 0.5) * 1.12
+            spread = 0.85  # 声像展开范围（1.0=完全左右，过宽会听感分离失衡）
+            # 每路微失谐（音分）/ 微延迟（ms）模板：首路居中不动，其余左右展开
+            cents_tbl = [0.0, 9.0, -9.0, 6.0, -6.0, 12.0, -12.0, 4.0]
+            delay_tbl = [0, 13, 21, 8, 26, 17, 5, 30]
+            parts: list[str] = []
+            labels = ""
+            for i in range(n):
+                # 声像位置 pos ∈ [-spread, spread]，单声部居中
+                pos = 0.0 if n == 1 else (-1.0 + 2.0 * i / (n - 1)) * spread
+                ang = (pos + 1.0) * 0.5 * (math.pi / 2.0)  # 恒功率声像
+                gl = math.cos(ang)
+                gr = math.sin(ang)
+                cents = cents_tbl[i % len(cents_tbl)]
+                delay = delay_tbl[i % len(delay_tbl)]
+                chain = (
+                    f"[{i}:a]aresample={sample_rate},"
+                    "aformat=channel_layouts=mono"
+                )
+                if abs(cents) > 0.01:
+                    ratio = 2.0 ** (cents / 1200.0)
+                    # asetrate 升调缩时 → aresample 回采样率 → atempo 还原时长（保音高）
+                    chain += (
+                        f",asetrate={int(sample_rate * ratio)},"
+                        f"aresample={sample_rate},atempo={1.0 / ratio:.6f}"
+                    )
+                if delay > 0:
+                    chain += f",adelay={delay}"
+                chain += (
+                    f",volume={gain:.4f}[d{i}];"
+                    f"[d{i}]pan=stereo|c0={gl:.4f}*c0|c1={gr:.4f}*c0[a{i}];"
+                )
+                parts.append(chain)
+                labels += f"[a{i}]"
+            filt = (
+                "".join(parts)
+                + f"{labels}amix=inputs={n}:duration=longest:normalize=0[mx];"
+                "[mx]alimiter=limit=0.97[a]"
+            )
+            cmd = [self.ffmpeg, "-y"]
+            for p in srcs:
+                cmd += ["-i", str(p)]
+            cmd += [
+                "-filter_complex",
+                filt,
+                "-map",
+                "[a]",
+                "-ar",
+                str(sample_rate),
+                "-ac",
+                "2",
+                str(dst),
+            ]
+            res = subprocess.run(
+                cmd,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

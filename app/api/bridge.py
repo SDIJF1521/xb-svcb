@@ -139,10 +139,14 @@ class Api:
         return self._hub.list_frameworks()
 
     def hub_search_models(
-        self, query: str = "", page: int = 1, framework: str | None = None
+        self,
+        query: str = "",
+        page: int = 1,
+        framework: str | None = None,
+        page_size: int = 12,
     ) -> dict[str, Any]:
-        """搜索模型站中由本软件上传的翻唱模型（可按架构筛选）。"""
-        return self._hub.search(query or "", int(page or 1), framework)
+        """搜索模型站中由本软件上传的翻唱模型（可按架构筛选、分页）。"""
+        return self._hub.search(query or "", int(page or 1), framework, int(page_size or 12))
 
     def hub_download_model(self, repo_id: str) -> dict[str, Any]:
         """下载模型站中的模型并导入本地模型库。"""
@@ -157,6 +161,24 @@ class Api:
     def hub_progress(self, key: str) -> dict[str, Any]:
         """轮询上传/下载进度。key 形如 'dl:<repo_id>' 或 'ul:<model_id>'。"""
         return self._hub.get_progress(key or "")
+
+    def hub_start_download(self, repo_id: str) -> dict[str, Any]:
+        """后台下载并导入模型，立即返回 {ok, key}，不阻塞前端。"""
+        return self._hub.start_download(repo_id)
+
+    def hub_start_upload(
+        self, model_id: str, name: str | None = None, framework: str | None = None
+    ) -> dict[str, Any]:
+        """后台上传本地模型到模型站，立即返回 {ok, key}，不阻塞前端。"""
+        return self._hub.start_upload(model_id, name, framework)
+
+    def hub_list_jobs(self) -> list[dict[str, Any]]:
+        """列出全部上传/下载后台任务（含实时进度）。"""
+        return self._hub.list_jobs()
+
+    def hub_clear_job(self, key: str) -> bool:
+        """清理一条已完成/失败的传输任务记录。"""
+        return self._hub.clear_job(key or "")
 
     # ---- 作品 / 翻唱 ----
     def pick_audio_file(self) -> str | None:
@@ -265,8 +287,10 @@ class Api:
     def set_music_cookie(self, cookie: str) -> bool:
         return self._music.set_cookie(cookie)
 
-    def search_music(self, msg: str, g: int = 13, source: str | None = None) -> dict[str, Any]:
-        return self._music.search(msg, g, source)
+    def search_music(
+        self, msg: str, page: int = 1, page_size: int = 15, source: str | None = None
+    ) -> dict[str, Any]:
+        return self._music.search(msg, int(page or 1), int(page_size or 15), source)
 
     def get_music_song(self, msg: str, n: int, source: str | None = None) -> dict[str, Any]:
         return self._music.get_song(msg, n, source)

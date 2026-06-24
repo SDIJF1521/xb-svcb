@@ -83,6 +83,60 @@
           <span class="theme-name">{{ themeLabel }}</span>
         </button>
 
+        <!-- 后台传输（模型上传 / 下载）-->
+        <div ref="transfersWrap" class="menu-wrap">
+          <button
+            class="icon-btn"
+            :class="{ active: openMenu === 'transfers' }"
+            title="传输任务（模型上传 / 下载）"
+            @click="toggleMenu('transfers')"
+          >
+            <el-icon :class="{ spin: transfersActive > 0 }">
+              <component :is="transfersActive > 0 ? Loading : Download" />
+            </el-icon>
+            <span v-if="transfersActive > 0" class="badge">{{ transfersActive }}</span>
+          </button>
+          <transition name="pop">
+            <div v-if="openMenu === 'transfers'" class="popover notif-pop">
+              <div class="pop-head">
+                <span>传输任务</span>
+                <button v-if="transfers.jobs.some((j) => j.status !== 'running')" class="pop-link" @click="transfers.clearFinished()">
+                  清除已完成
+                </button>
+              </div>
+              <div v-if="transfers.jobs.length" class="notif-list">
+                <div v-for="j in transfers.jobs" :key="j.key" class="xfer-item">
+                  <div class="xfer-top">
+                    <span class="xfer-kind" :class="j.kind">{{ j.kind === 'upload' ? '上传' : '下载' }}</span>
+                    <span class="xfer-title" :title="j.title">{{ j.title }}</span>
+                    <button
+                      v-if="j.status !== 'running'"
+                      class="xfer-x"
+                      title="移除"
+                      @click="transfers.clear(j.key)"
+                    >
+                      <el-icon><Close /></el-icon>
+                    </button>
+                  </div>
+                  <el-progress
+                    :percentage="Math.round(j.pct || 0)"
+                    :stroke-width="5"
+                    :show-text="false"
+                    :status="j.status === 'failed' ? 'exception' : j.status === 'done' ? 'success' : ''"
+                    striped
+                    :striped-flow="j.status === 'running'"
+                  />
+                  <span class="xfer-msg" :class="j.status">{{ j.status === 'failed' ? (j.error || '失败') : j.msg }}</span>
+                </div>
+              </div>
+              <div v-else class="pop-empty">
+                <el-icon><Download /></el-icon>
+                <span>暂无传输任务</span>
+              </div>
+            </div>
+          </transition>
+        </div>
+
         <!-- 消息通知 -->
         <div ref="notifWrap" class="menu-wrap">
           <button
@@ -174,12 +228,13 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Sunny, Moon, Picture, Close, Right, Download } from '@element-plus/icons-vue'
+import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Sunny, Moon, Picture, Close, Right, Download, Loading } from '@element-plus/icons-vue'
 import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
 import { useModelsStore } from '@/stores/models'
 import { useProfileStore } from '@/stores/profile'
 import { useThemeStore, THEMES } from '@/stores/theme'
+import { useTransfersStore } from '@/stores/transfers'
 
 defineOptions({ name: 'AppHeader' })
 
@@ -205,9 +260,14 @@ const envTitle = computed(() =>
   tools.value.map((t) => `${t.name}: ${t.status}`).join('  |  ') || '正在检测集成工具…',
 )
 
-/* ----- 弹出菜单（消息 / 资料）----- */
-type MenuName = 'none' | 'notif' | 'profile'
+/* ----- 后台传输任务中心 ----- */
+const transfers = useTransfersStore()
+const transfersActive = computed(() => transfers.activeCount)
+
+/* ----- 弹出菜单（传输 / 消息 / 资料）----- */
+type MenuName = 'none' | 'transfers' | 'notif' | 'profile'
 const openMenu = ref<MenuName>('none')
+const transfersWrap = ref<HTMLElement>()
 const notifWrap = ref<HTMLElement>()
 const profileWrap = ref<HTMLElement>()
 
@@ -219,7 +279,13 @@ function toggleMenu(which: Exclude<MenuName, 'none'>) {
 
 function onDocClick(e: MouseEvent) {
   const t = e.target as Node
-  if (!(notifWrap.value?.contains(t) || profileWrap.value?.contains(t))) {
+  if (
+    !(
+      transfersWrap.value?.contains(t) ||
+      notifWrap.value?.contains(t) ||
+      profileWrap.value?.contains(t)
+    )
+  ) {
     openMenu.value = 'none'
   }
   if (!searchWrap.value?.contains(t)) {
@@ -392,6 +458,7 @@ onMounted(() => {
   if (!loaded.value) systemStore.load()
   worksStore.ensureLoaded()
   modelsStore.ensureLoaded()
+  transfers.start()
   document.addEventListener('click', onDocClick)
 })
 
@@ -454,28 +521,44 @@ onUnmounted(() => {
 .nav-links {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
 }
 .nav-link {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 8px 14px;
+  padding: 9px 14px;
   border-radius: 9px;
   color: var(--xb-muted);
   text-decoration: none;
   font-size: 14.5px;
   font-weight: 500;
-  transition: all 0.2s;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+.nav-link .el-icon {
+  font-size: 16px;
+  transition: transform 0.2s ease;
 }
 .nav-link:hover {
   color: var(--xb-text);
-  background: rgba(var(--xb-primary-rgb), 0.06);
+  background: rgba(var(--xb-fill-rgb), 0.05);
 }
 .nav-link.active {
   color: var(--xb-primary);
-  background: rgba(var(--xb-primary-rgb), 0.1);
-  box-shadow: inset 0 0 0 1px rgba(var(--xb-primary-rgb), 0.3);
+  font-weight: 600;
+}
+.nav-link.active .el-icon { transform: scale(1.05); }
+/* 选中态：底部滑动下划线 */
+.nav-link.active::after {
+  content: '';
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--xb-brand-gradient);
 }
 
 /* 右侧 */
@@ -590,6 +673,65 @@ onUnmounted(() => {
 }
 
 .icon-btn.active { color: var(--xb-primary); border-color: var(--xb-primary); }
+.icon-btn .badge {
+  position: absolute;
+  top: -5px; right: -5px;
+  min-width: 16px; height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--xb-accent);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 0 8px rgba(var(--xb-accent-rgb, 255, 46, 136), 0.6);
+}
+.icon-btn .spin { animation: xfer-spin 1s linear infinite; }
+@keyframes xfer-spin { to { transform: rotate(360deg); } }
+
+/* ----- 传输任务条目 ----- */
+.xfer-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+.xfer-item:hover { background: rgba(var(--xb-fill-rgb), 0.05); }
+.xfer-top { display: flex; align-items: center; gap: 8px; }
+.xfer-kind {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.xfer-kind.upload { background: rgba(var(--xb-primary-rgb), 0.15); color: var(--xb-primary); }
+.xfer-kind.download { background: rgba(var(--xb-success-rgb), 0.15); color: var(--xb-success); }
+.xfer-title {
+  flex: 1; min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--xb-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.xfer-x {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: var(--xb-muted);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+}
+.xfer-x:hover { color: var(--xb-accent); }
+.xfer-msg { font-size: 11.5px; color: var(--xb-muted); }
+.xfer-msg.done { color: var(--xb-success); }
+.xfer-msg.failed { color: var(--xb-accent); }
 
 .avatar {
   width: 38px; height: 38px;

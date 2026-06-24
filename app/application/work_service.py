@@ -95,17 +95,31 @@ class WorkService:
                 **self._resolve_model_paths(model),
             }
 
-        # 仅保留指派给有效模型的演唱句
-        segments = [
-            {
-                "start": float(s.get("start", 0.0)),
-                "end": float(s.get("end", 0.0)),
-                "model_id": s.get("model_id"),
-            }
-            for s in (payload.get("segments", []) or [])
-            if s.get("model_id") in seg_models
-            and float(s.get("end", 0.0)) > float(s.get("start", 0.0))
-        ]
+        # 仅保留指派给有效模型的演唱句。每句支持「合唱」：可指派多个模型
+        # （model_ids 数组）。兼容旧的单模型字段 model_id。
+        segments: list[dict[str, Any]] = []
+        for s in payload.get("segments", []) or []:
+            try:
+                start = float(s.get("start", 0.0))
+                end = float(s.get("end", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if end <= start:
+                continue
+            raw_ids = s.get("model_ids")
+            if not raw_ids:
+                single = s.get("model_id")
+                raw_ids = [single] if single else []
+            # 去重并仅保留有效模型，保持指派顺序
+            ids: list[str] = []
+            for mid in raw_ids:
+                if mid in seg_models and mid not in ids:
+                    ids.append(mid)
+            if not ids:
+                continue
+            segments.append(
+                {"start": start, "end": end, "model_id": ids[0], "model_ids": ids}
+            )
 
         # 展示用：主模型名取首个模型；基础参数（分离设备/UVR 模型）取首个模型参数
         first = next(iter(seg_models.values()), None)

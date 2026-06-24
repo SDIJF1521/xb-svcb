@@ -208,15 +208,15 @@
               <span v-if="it.has_diffusion" class="diff-tag">扩散</span>
             </div>
             <div class="row-sub">{{ it.sample_rate || '44.1kHz' }} · 作者 {{ it.author }}</div>
-            <div v-if="downloadingRepo === it.repo_id" class="row-prog">
+            <div v-if="dlJob(it.repo_id)?.status === 'running'" class="row-prog">
               <el-progress
-                :percentage="Math.round(hubProg[it.repo_id]?.pct || 0)"
+                :percentage="Math.round(dlJob(it.repo_id)?.pct || 0)"
                 :stroke-width="5"
                 :show-text="false"
                 striped
                 striped-flow
               />
-              <span class="prog-msg">{{ hubProg[it.repo_id]?.msg || '下载中…' }}</span>
+              <span class="prog-msg">{{ dlJob(it.repo_id)?.msg || '下载中…' }}</span>
             </div>
           </div>
           <div class="row-ops">
@@ -225,12 +225,17 @@
             </a>
             <el-button
               round size="small" class="cta-btn"
-              :loading="downloadingRepo === it.repo_id"
+              :loading="dlJob(it.repo_id)?.status === 'running'"
               @click="downloadHub(it)"
             >
-              <el-icon v-if="downloadingRepo !== it.repo_id" class="el-icon--left"><Download /></el-icon>下载导入
+              <el-icon v-if="dlJob(it.repo_id)?.status !== 'running'" class="el-icon--left"><Download /></el-icon>下载导入
             </el-button>
           </div>
+        </div>
+        <div v-if="hubHasMore" class="load-more">
+          <el-button round class="ghost-btn" :loading="hubLoadingMore" @click="loadMoreHub">
+            加载更多
+          </el-button>
         </div>
       </div>
       <div v-else-if="hubSearched && !hubSearching" class="empty glass">
@@ -256,15 +261,10 @@
         <p class="dialog-tip" style="margin: 0">
           请选择该模型的框架类型，便于他人按类型筛选并正确使用（当前以 So-VITS-SVC 为主，后续将支持 RVC 等）。
         </p>
-        <div v-if="!!uploadTarget && uploadingId === uploadTarget.id" class="upload-prog">
-          <el-progress
-            :percentage="Math.round(uploadProg.pct)"
-            :stroke-width="8"
-            striped
-            striped-flow
-          />
-          <p class="prog-msg">{{ uploadProg.msg || '上传中…' }}</p>
-        </div>
+        <p class="dialog-tip" style="margin: 0">
+          <el-icon><InfoFilled /></el-icon>
+          上传将在后台进行，不影响你继续操作；进度可在顶栏「传输」面板查看。
+        </p>
       </div>
       <template #footer>
         <el-button round @click="uploadVisible = false">取消</el-button>
@@ -318,6 +318,7 @@ import {
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, type HubModelItem, type ModelFramework } from '@/api'
 import { useModelsStore, type ModelVM } from '@/stores/models'
+import { useTransfersStore } from '@/stores/transfers'
 
 defineOptions({ name: 'ModelsPage' })
 
@@ -469,31 +470,21 @@ async function saveToken() {
 }
 
 /* ---------- 模型站搜索 / 下载 ---------- */
+const HUB_PAGE_SIZE = 12
 const hubQuery = ref('')
 const hubFramework = ref('')
 const hubSearching = ref(false)
 const hubSearched = ref(false)
 const hubItems = ref<HubModelItem[]>([])
-const downloadingRepo = ref<string | null>(null)
-/* 进度：下载按 repo_id 记录，上传单独记录 */
-const hubProg = ref<Record<string, { pct: number; msg: string }>>({})
-const uploadProg = ref<{ pct: number; msg: string }>({ pct: 0, msg: '' })
+const hubPage = ref(1)
+const hubHasMore = ref(false)
+const hubLoadingMore = ref(false)
 
-/** 轮询某个上传/下载操作的进度，返回一个停止函数。 */
-function pollProgress(key: string, onTick: (pct: number, msg: string) => void): () => void {
-  let stopped = false
-  const tick = async () => {
-    if (stopped) return
-    try {
-      const p = await api.hubProgress(key)
-      if (!stopped) onTick(p.pct || 0, p.msg || '')
-    } catch {
-      /* 忽略单次轮询失败 */
-    }
-    if (!stopped) window.setTimeout(tick, 500)
-  }
-  tick()
-  return () => { stopped = true }
+/* 后台传输：上传 / 下载挂后台，进度统一在顶栏「传输」面板查看；
+   此处仅用于列表行内联显示对应任务的实时进度。 */
+const transfers = useTransfersStore()
+function dlJob(repoId: string) {
+  return transfers.jobByKey(`dl:${repoId}`)
 }
 
 function onFrameworkChange() {
@@ -506,41 +497,66 @@ async function doHubSearch() {
     return
   }
   hubSearching.value = true
+  hubPage.value = 1
   try {
-    const res = await api.hubSearchModels(hubQuery.value.trim(), 1, hubFramework.value || undefined)
+    const res = await api.hubSearchModels(
+      hubQuery.value.trim(),
+      1,
+      hubFramework.value || undefined,
+      HUB_PAGE_SIZE,
+    )
     hubSearched.value = true
     if (!res.ok) {
       hubItems.value = []
+      hubHasMore.value = false
       ElMessage.error(res.error || '搜索失败')
       return
     }
     hubItems.value = res.items || []
+    hubHasMore.value = !!res.has_more
   } finally {
     hubSearching.value = false
   }
 }
 
-async function downloadHub(it: HubModelItem) {
-  downloadingRepo.value = it.repo_id
-  hubProg.value = { ...hubProg.value, [it.repo_id]: { pct: 0, msg: '准备下载…' } }
-  const stop = pollProgress(`dl:${it.repo_id}`, (pct, msg) => {
-    hubProg.value = { ...hubProg.value, [it.repo_id]: { pct, msg } }
-  })
+async function loadMoreHub() {
+  if (hubLoadingMore.value || !hubHasMore.value) return
+  hubLoadingMore.value = true
   try {
-    const res = await api.hubDownloadModel(it.repo_id)
-    if (!res.ok || !res.model) {
-      ElMessage.error(res.error || '下载失败')
+    const next = hubPage.value + 1
+    const res = await api.hubSearchModels(
+      hubQuery.value.trim(),
+      next,
+      hubFramework.value || undefined,
+      HUB_PAGE_SIZE,
+    )
+    if (!res.ok) {
+      ElMessage.error(res.error || '加载失败')
       return
     }
-    await modelsStore.load()
-    ElMessage.success('已下载并导入：' + res.model.name)
+    // 按 repo_id 去重后追加
+    const seen = new Set(hubItems.value.map((m) => m.repo_id))
+    const more = (res.items || []).filter((m) => !seen.has(m.repo_id))
+    hubItems.value = [...hubItems.value, ...more]
+    hubPage.value = next
+    hubHasMore.value = !!res.has_more
   } finally {
-    stop()
-    downloadingRepo.value = null
-    const next = { ...hubProg.value }
-    delete next[it.repo_id]
-    hubProg.value = next
+    hubLoadingMore.value = false
   }
+}
+
+async function downloadHub(it: HubModelItem) {
+  const job = dlJob(it.repo_id)
+  if (job && job.status === 'running') {
+    ElMessage.info('该模型正在后台下载，请在顶栏「传输」查看进度')
+    return
+  }
+  const key = await transfers.startDownload(it.repo_id)
+  if (!key) {
+    ElMessage.error('启动下载失败')
+    return
+  }
+  ElMessage.success('已加入后台下载，可在顶栏「传输」查看进度')
 }
 
 /* ---------- 分享到模型站（上传）---------- */
@@ -568,20 +584,15 @@ async function confirmUpload() {
   const m = uploadTarget.value
   if (!m) return
   uploadingId.value = m.id
-  uploadProg.value = { pct: 0, msg: '准备上传…' }
-  const stop = pollProgress(`ul:${m.id}`, (pct, msg) => {
-    uploadProg.value = { pct, msg }
-  })
   try {
-    const res = await api.hubUploadModel(m.id, m.name, uploadFramework.value)
-    if (res.ok) {
+    const key = await transfers.startUpload(m.id, m.name, uploadFramework.value)
+    if (key) {
       uploadVisible.value = false
-      ElMessage.success('上传成功，已发布到模型站')
+      ElMessage.success('已加入后台上传，可在顶栏「传输」查看进度')
     } else {
-      ElMessage.error(res.error || '上传失败')
+      ElMessage.error('启动上传失败')
     }
   } finally {
-    stop()
     uploadingId.value = null
   }
 }
@@ -657,6 +668,7 @@ onMounted(async () => {
 
 /* 列表 */
 .list { border-radius: 6px; padding: 6px; }
+.load-more { display: flex; justify-content: center; padding: 12px 6px 6px; }
 .row { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 6px; transition: background 0.2s; }
 .row:hover { background: rgba(var(--xb-primary-rgb), 0.05); }
 .row + .row { border-top: 1px solid rgba(var(--xb-fill-rgb), 0.04); }

@@ -99,11 +99,14 @@ export interface WorkDTO {
   segments?: BlendSegment[]
 }
 
-/** 多模型混合：某一句歌词指派给某个模型的时间区间。 */
+/** 多模型混合：某一句歌词指派给一个或多个模型的时间区间。 */
 export interface BlendSegment {
   start: number
   end: number
+  /** 兼容字段：单模型时的主模型 id（取 model_ids 首个）。 */
   model_id: string
+  /** 合唱：参与同唱该句的模型 id 列表（>1 即多模型合唱）。 */
+  model_ids?: string[]
 }
 
 /** 多模型混合：参与本次翻唱的模型及其各自参数。 */
@@ -151,6 +154,11 @@ export interface MusicSearchResult {
   keyword?: string
   source?: string
   songs?: MusicSearchItem[]
+  /** 当前页码（从 1 开始）。 */
+  page?: number
+  page_size?: number
+  /** 是否还有更多结果可「加载更多」。 */
+  has_more?: boolean
 }
 
 /** 单曲详情（含播放与下载地址）。 */
@@ -237,6 +245,9 @@ export interface HubSearchResult {
   error?: string
   items?: HubModelItem[]
   page?: number
+  page_size?: number
+  /** 是否还有更多结果可「加载更多」。 */
+  has_more?: boolean
 }
 
 /** 下载结果：成功时附带导入到本地模型库的模型。 */
@@ -261,4 +272,28 @@ export interface HubProgress {
   msg: string
   done: number
   total: number
+}
+
+/** 启动后台上传/下载任务的返回。 */
+export interface HubStartResult {
+  ok: boolean
+  error?: string
+  /** 任务 key，形如 'dl:<repo_id>' 或 'ul:<model_id>'。 */
+  key?: string
+  /** 该任务已在进行中（重复触发时）。 */
+  already?: boolean
+}
+
+/** 后台传输任务（上传/下载）记录，含实时进度。 */
+export interface HubJob {
+  key: string
+  kind: 'upload' | 'download'
+  title: string
+  status: 'running' | 'done' | 'failed'
+  error?: string | null
+  result?: { model?: ModelDTO; url?: string; repo_id?: string } | null
+  created_at?: string
+  pct: number
+  msg: string
+  phase: string
 }

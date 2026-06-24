@@ -19,6 +19,8 @@ import type {
   HubDownloadResult,
   HubUploadResult,
   HubProgress,
+  HubStartResult,
+  HubJob,
   ModelFramework,
 } from './types'
 
@@ -109,8 +111,10 @@ export const api = {
   setMusicCookie: (cookie: string) =>
     invoke<boolean>('set_music_cookie', [cookie], () => mock.setMusicCookie(cookie)),
 
-  searchMusic: (msg: string, g = 13, source?: string) =>
-    invoke<MusicSearchResult>('search_music', [msg, g, source], () => mock.searchMusic(msg, g, source)),
+  searchMusic: (msg: string, page = 1, pageSize = 15, source?: string) =>
+    invoke<MusicSearchResult>('search_music', [msg, page, pageSize, source], () =>
+      mock.searchMusic(msg, page, pageSize, source),
+    ),
 
   getMusicSong: (msg: string, n: number, source?: string) =>
     invoke<MusicSongResult>('get_music_song', [msg, n, source], () => mock.getMusicSong(msg, n, source)),
@@ -148,9 +152,9 @@ export const api = {
   listModelFrameworks: () =>
     invoke<ModelFramework[]>('list_model_frameworks', [], () => mock.listModelFrameworks()),
 
-  hubSearchModels: (query = '', page = 1, framework?: string) =>
-    invoke<HubSearchResult>('hub_search_models', [query, page, framework], () =>
-      mock.hubSearchModels(query, page, framework),
+  hubSearchModels: (query = '', page = 1, framework?: string, pageSize = 12) =>
+    invoke<HubSearchResult>('hub_search_models', [query, page, framework, pageSize], () =>
+      mock.hubSearchModels(query, page, framework, pageSize),
     ),
 
   hubDownloadModel: (repoId: string) =>
@@ -165,6 +169,23 @@ export const api = {
 
   hubProgress: (key: string) =>
     invoke<HubProgress>('hub_progress', [key], () => mock.hubProgress(key)),
+
+  // 后台传输：上传/下载挂后台，不阻塞前端
+  hubStartDownload: (repoId: string) =>
+    invoke<HubStartResult>('hub_start_download', [repoId], () =>
+      mock.hubStartDownload(repoId),
+    ),
+
+  hubStartUpload: (modelId: string, name?: string, framework?: string) =>
+    invoke<HubStartResult>('hub_start_upload', [modelId, name, framework], () =>
+      mock.hubStartUpload(modelId, name, framework),
+    ),
+
+  hubListJobs: () =>
+    invoke<HubJob[]>('hub_list_jobs', [], () => mock.hubListJobs()),
+
+  hubClearJob: (key: string) =>
+    invoke<boolean>('hub_clear_job', [key], () => mock.hubClearJob(key)),
 }
 
 const palette = ['#00f0ff', '#2f6bff', '#ff2e88', '#19f59a', '#ffae00', '#b65cff', '#5ce0c8', '#ff7ac0']

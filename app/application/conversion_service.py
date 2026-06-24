@@ -315,8 +315,13 @@ class ConversionService:
                 end = min(float(duration), float(s.get("end", 0.0)))
             except (TypeError, ValueError):
                 continue
+            # 兼容合唱（model_ids 数组）与旧单模型（model_id）
+            ids = s.get("model_ids")
+            if not ids:
+                single = s.get("model_id")
+                ids = [single] if single else []
             if end > start:
-                cleaned.append({"start": start, "end": end, "model_id": s.get("model_id")})
+                cleaned.append({"start": start, "end": end, "model_ids": list(ids)})
         cleaned.sort(key=lambda x: x["start"])
 
         timeline: list[dict[str, Any]] = []
@@ -327,11 +332,11 @@ class ConversionService:
             if end <= start:
                 continue
             if start > cursor + 0.05:
-                timeline.append({"start": cursor, "end": start, "model_id": None})
-            timeline.append({"start": start, "end": end, "model_id": s["model_id"]})
+                timeline.append({"start": cursor, "end": start, "model_ids": []})
+            timeline.append({"start": start, "end": end, "model_ids": s["model_ids"]})
             cursor = end
         if cursor < duration - 0.05:
-            timeline.append({"start": cursor, "end": duration, "model_id": None})
+            timeline.append({"start": cursor, "end": duration, "model_ids": []})
         return timeline
 
     def _run_multi(self, work_id: str) -> None:
@@ -420,10 +425,10 @@ class ConversionService:
             timeline = self._build_timeline(segments_in, duration)
             used_models: list[str] = []
             for s in timeline:
-                mid = s.get("model_id")
-                if mid and mid in seg_models and mid not in used_models:
-                    used_models.append(mid)
-            sung = sum(1 for s in timeline if s["model_id"])
+                for mid in s.get("model_ids") or []:
+                    if mid and mid in seg_models and mid not in used_models:
+                        used_models.append(mid)
+            sung = sum(1 for s in timeline if s.get("model_ids"))
             self._log(
                 log_file,
                 f"[2/5] 歌词分割完成：共 {len(timeline)} 段"
@@ -492,9 +497,19 @@ class ConversionService:
             seg_dir = work_dir / "segments"
             seg_dir.mkdir(parents=True, exist_ok=True)
 
-            def _src_key(seg: dict[str, Any]) -> str | None:
-                mid = seg.get("model_id")
-                return mid if (mid and mid in full_renders) else None
+            def _src_key(seg: dict[str, Any]) -> tuple[str, ...]:
+                """该句的「来源指纹」：参与且推理成功的模型集合（有序去重）。
+
+                空元组表示间奏 / 未指派 / 全部推理失败 → 用原始人声占位。
+                单元素=独唱；多元素=合唱（同句多模型叠加）。
+                """
+                ids = [m for m in (seg.get("model_ids") or []) if m in full_renders]
+                # 顺序去重，作为分组键
+                uniq: list[str] = []
+                for m in ids:
+                    if m not in uniq:
+                        uniq.append(m)
+                return tuple(uniq)
 
             runs: list[dict[str, Any]] = []
             for seg in timeline:
@@ -510,20 +525,49 @@ class ConversionService:
             pieces: list[Path] = []
             n_runs = len(runs)
             for i, r in enumerate(runs):
-                key = r["key"]
-                src = full_renders.get(key) if key else infer_input
-                if src is None:
-                    src = infer_input  # 间奏 / 未指派 / 推理失败 → 原始人声
+                key: tuple[str, ...] = r["key"]
                 start = r["start"]
                 end = r["end"]
                 if i < n_runs - 1:
                     end = min(duration, end + xf)  # 多借 xf 秒供交叉淡化、保长度
                 piece = seg_dir / f"piece_{i:03d}.wav"
-                ok = (
-                    self._ffmpeg.slice(Path(src), start, end, piece)
-                    if self._ffmpeg.available and Path(src).exists()
-                    else False
-                )
+                if not key:
+                    # 间奏 / 未指派 / 推理失败 → 原始人声
+                    ok = (
+                        self._ffmpeg.slice(infer_input, start, end, piece)
+                        if self._ffmpeg.available and infer_input.exists()
+                        else False
+                    )
+                elif len(key) == 1:
+                    src = full_renders[key[0]]
+                    ok = (
+                        self._ffmpeg.slice(Path(src), start, end, piece)
+                        if self._ffmpeg.available and Path(src).exists()
+                        else False
+                    )
+                else:
+                    # 合唱：每个模型的整轨结果各切一段，再叠加为一句合唱
+                    parts: list[Path] = []
+                    for j, mid in enumerate(key):
+                        src = full_renders.get(mid)
+                        cut = seg_dir / f"piece_{i:03d}_v{j}.wav"
+                        if (
+                            src
+                            and self._ffmpeg.available
+                            and Path(src).exists()
+                            and self._ffmpeg.slice(Path(src), start, end, cut)
+                        ):
+                            parts.append(cut)
+                    ok = (
+                        self._ffmpeg.mix_vocals(parts, piece)
+                        if self._ffmpeg.available and parts
+                        else False
+                    )
+                    if ok:
+                        self._log(
+                            log_file,
+                            f"  合唱句（{len(key)} 个模型同唱）: {start:.1f}-{end:.1f}s",
+                        )
                 if ok:
                     pieces.append(piece)
 

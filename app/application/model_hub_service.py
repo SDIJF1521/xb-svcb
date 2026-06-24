@@ -72,6 +72,9 @@ class ModelHubService:
         # 进度表：key -> {phase, pct, msg, done, total}；供前端轮询展示进度条。
         # 下载 key 形如 "dl:<repo_id>"，上传 key 形如 "ul:<model_id>"。
         self._progress: dict[str, dict[str, Any]] = {}
+        # 任务表：key -> {key, kind, title, status, result, error, created_at}。
+        # 用于「后台传输」：上传/下载挂后台、前端全局轮询查看，不阻塞操作。
+        self._jobs: dict[str, dict[str, Any]] = {}
         self._progress_lock = threading.Lock()
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
@@ -97,6 +100,118 @@ class ModelHubService:
         with self._progress_lock:
             cur = self._progress.get(key)
             return dict(cur) if cur else {"phase": "", "pct": 0, "msg": "", "done": 0, "total": 0}
+
+    # ---- 后台任务（上传 / 下载挂后台，不阻塞前端）----
+    def _set_job(self, key: str, **fields: Any) -> None:
+        with self._progress_lock:
+            job = self._jobs.get(key) or {"key": key}
+            job.update(fields)
+            self._jobs[key] = job
+
+    def _finish_job(self, key: str, ok: bool, res: Any) -> None:
+        err = None
+        if not ok:
+            err = (res or {}).get("error") if isinstance(res, dict) else "操作失败"
+        self._set_job(
+            key,
+            status="done" if ok else "failed",
+            result=res if (ok and isinstance(res, dict)) else None,
+            error=err,
+        )
+        # 兜底：协程异常未写终态进度时补一条，保证前端进度条收尾
+        cur = self.get_progress(key)
+        if ok and cur.get("phase") != "done":
+            self._set_progress(key, "done", 100, "完成")
+        elif not ok and cur.get("phase") != "error":
+            self._set_progress(key, "error", float(cur.get("pct") or 0), err or "操作失败")
+
+    def _spawn(self, key: str, coro: Any) -> None:
+        """把一个上传/下载协程投递到事件循环后台执行（不等待结果）。"""
+
+        async def _runner() -> None:
+            try:
+                res = await coro
+                ok = bool(res.get("ok")) if isinstance(res, dict) else False
+                self._finish_job(key, ok, res if isinstance(res, dict) else {"ok": ok})
+            except Exception as exc:  # noqa: BLE001 - 后台任务异常需记录而非崩溃
+                self._finish_job(key, False, {"ok": False, "error": str(exc)})
+
+        asyncio.run_coroutine_threadsafe(_runner(), self._loop)
+
+    def start_download(self, repo_id: str) -> dict[str, Any]:
+        """后台下载并导入模型，立即返回任务 key（前端用 hub_progress 轮询）。"""
+        repo_id = (repo_id or "").strip()
+        if not repo_id:
+            return {"ok": False, "error": "缺少模型仓库 ID"}
+        key = f"dl:{repo_id}"
+        with self._progress_lock:
+            existing = self._jobs.get(key)
+            if existing and existing.get("status") == "running":
+                return {"ok": True, "key": key, "already": True}
+        self._set_job(
+            key,
+            kind="download",
+            title=repo_id,
+            status="running",
+            result=None,
+            error=None,
+            created_at=datetime.now().isoformat(timespec="seconds"),
+        )
+        self._set_progress(key, "start", 0, "排队中…")
+        self._spawn(key, self._download(repo_id))
+        return {"ok": True, "key": key}
+
+    def start_upload(
+        self, model_id: str, name: str | None = None, framework: str | None = None
+    ) -> dict[str, Any]:
+        """后台上传本地模型到模型站，立即返回任务 key。"""
+        model_id = (model_id or "").strip()
+        if not model_id:
+            return {"ok": False, "error": "缺少模型 ID"}
+        key = f"ul:{model_id}"
+        with self._progress_lock:
+            existing = self._jobs.get(key)
+            if existing and existing.get("status") == "running":
+                return {"ok": True, "key": key, "already": True}
+        title = name or (self._models.get(model_id) or {}).get("name") or model_id
+        self._set_job(
+            key,
+            kind="upload",
+            title=title,
+            status="running",
+            result=None,
+            error=None,
+            created_at=datetime.now().isoformat(timespec="seconds"),
+        )
+        self._set_progress(key, "start", 0, "排队中…")
+        self._spawn(key, self._upload(model_id, name, framework))
+        return {"ok": True, "key": key}
+
+    def list_jobs(self) -> list[dict[str, Any]]:
+        """列出全部上传/下载任务（含实时进度），供前端任务中心展示。"""
+        with self._progress_lock:
+            jobs = [dict(j) for j in self._jobs.values()]
+            prog = {k: dict(v) for k, v in self._progress.items()}
+        out: list[dict[str, Any]] = []
+        for j in jobs:
+            p = prog.get(j["key"], {})
+            out.append(
+                {
+                    **j,
+                    "pct": p.get("pct", 0),
+                    "msg": p.get("msg", ""),
+                    "phase": p.get("phase", ""),
+                }
+            )
+        out.sort(key=lambda x: str(x.get("created_at", "")), reverse=True)
+        return out
+
+    def clear_job(self, key: str) -> bool:
+        """从任务表移除一条记录（通常用于清理已完成/失败的任务）。"""
+        with self._progress_lock:
+            self._jobs.pop(key, None)
+            self._progress.pop(key, None)
+        return True
 
     # ---- 令牌 ----
     def get_token(self) -> str:
@@ -125,9 +240,15 @@ class ModelHubService:
         return self._submit(self._verify_token(token))
 
     def search(
-        self, query: str = "", page: int = 1, framework: str | None = None
+        self,
+        query: str = "",
+        page: int = 1,
+        framework: str | None = None,
+        page_size: int = 12,
     ) -> dict[str, Any]:
-        return self._submit(self._search(query or "", int(page or 1), framework))
+        return self._submit(
+            self._search(query or "", int(page or 1), framework, int(page_size or 12))
+        )
 
     def download(self, repo_id: str) -> dict[str, Any]:
         return self._submit(self._download(repo_id))
@@ -202,32 +323,45 @@ class ModelHubService:
         return raw if isinstance(raw, list) else []
 
     async def _search(
-        self, query: str, page: int, framework: str | None = None
+        self,
+        query: str,
+        page: int,
+        framework: str | None = None,
+        page_size: int = 12,
     ) -> dict[str, Any]:
         try:
             import httpx  # noqa: F401
         except ImportError:
             return {"ok": False, "error": "缺少 httpx 依赖，请重新安装运行环境"}
         page = max(1, page)
+        page_size = max(1, min(50, int(page_size or 12)))
         q = (query or "").strip()
 
         # 汇集多来源候选条目，保证既能看到自己上传的，也能发现他人分享的：
         raw_entries: list[Any] = []
-        # 来源 1：当前用户自己的命名空间（最可靠——上传后必定能搜到自己的模型）
-        me = await self._verify_token(None)
-        if me.get("ok") and me.get("username"):
-            raw_entries += await self._query_models(
-                {"Path": me["username"], "PageNumber": page, "PageSize": 100}
-            )
+        # 来源 1：当前用户自己的命名空间（仅第 1 页合并，避免翻页时重复堆叠）
+        if page == 1:
+            me = await self._verify_token(None)
+            if me.get("ok") and me.get("username"):
+                raw_entries += await self._query_models(
+                    {"Path": me["username"], "PageNumber": 1, "PageSize": 100}
+                )
         # 来源 2：全站按固定标记关键词模糊搜索（发现社区分享的本软件模型）
-        raw_entries += await self._query_models(
-            {"PageNumber": page, "PageSize": 50, "Search": config.MODELSCOPE_MARKER}
+        marker_raw = await self._query_models(
+            {"PageNumber": page, "PageSize": page_size, "Search": config.MODELSCOPE_MARKER}
         )
+        raw_entries += marker_raw
         # 来源 3：若用户输入了关键词，再按关键词全站模糊搜索一次
+        keyword_raw: list[Any] = []
         if q:
-            raw_entries += await self._query_models(
-                {"PageNumber": page, "PageSize": 50, "Search": q}
+            keyword_raw = await self._query_models(
+                {"PageNumber": page, "PageSize": page_size, "Search": q}
             )
+            raw_entries += keyword_raw
+        # 是否还有下一页：以分页来源的原始条数是否「满页」作启发式判断
+        has_more = len(marker_raw) >= page_size or (
+            bool(q) and len(keyword_raw) >= page_size
+        )
 
         prefix = config.MODELHUB_REPO_PREFIX
         fw_filter = (framework or "").strip().lower()
@@ -274,7 +408,13 @@ class ModelHubService:
                     "url": f"{config.MODELSCOPE_ENDPOINT}/models/{repo_id}",
                 }
             )
-        return {"ok": True, "items": items, "page": page}
+        return {
+            "ok": True,
+            "items": items,
+            "page": page,
+            "page_size": page_size,
+            "has_more": has_more,
+        }
 
     @staticmethod
     def _extract_repo_id(entry: dict[str, Any]) -> str | None:

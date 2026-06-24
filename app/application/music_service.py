@@ -146,8 +146,18 @@ class MusicService:
     def _submit(self, coro: Any) -> Any:
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
 
-    def search(self, msg: str, g: int = 13, source: str | None = None) -> dict[str, Any]:
-        return self._submit(self._search(msg, g, self._normalize_source(source)))
+    def search(
+        self,
+        msg: str,
+        page: int = 1,
+        page_size: int = 15,
+        source: str | None = None,
+    ) -> dict[str, Any]:
+        return self._submit(
+            self._search(
+                msg, int(page or 1), int(page_size or 15), self._normalize_source(source)
+            )
+        )
 
     def get_song(self, msg: str, n: int, source: str | None = None) -> dict[str, Any]:
         return self._submit(self._get_song(msg, n, self._normalize_source(source)))
@@ -222,10 +232,18 @@ class MusicService:
             return {"ok": False, "error": msg or "请求失败"}
         return {"ok": True, "data": data.get("data") or {}}
 
-    async def _search(self, msg: str, g: int, source: str) -> dict[str, Any]:
+    async def _search(
+        self, msg: str, page: int, page_size: int, source: str
+    ) -> dict[str, Any]:
         if not (msg or "").strip():
             return {"ok": False, "error": "请输入搜索关键词"}
-        res = await self._request({"msg": msg, "g": int(g or 13)}, source)
+        # 妖狐 API 只有 g=结果条数（无 page/offset）。分页用「累计取 top-g」实现：
+        # 每页把 g 调大一档，返回完整 top-g 列表（n 序号在同一关键词搜索内稳定，
+        # 下载/试听仍按 (keyword, n) 定位），前端用返回列表整体替换即可。
+        page = max(1, int(page or 1))
+        page_size = max(1, min(30, int(page_size or 15)))
+        g = page * page_size
+        res = await self._request({"msg": msg, "g": g}, source)
         if not res["ok"]:
             return res
         data = res["data"]
@@ -242,7 +260,17 @@ class MusicService:
             for s in songs
             if s.get("n") is not None
         ]
-        return {"ok": True, "songs": items, "keyword": msg, "source": source}
+        # 取回条数达到 g 上限 → 还可能有更多，允许继续「加载更多」
+        has_more = len(items) >= g
+        return {
+            "ok": True,
+            "songs": items,
+            "keyword": msg,
+            "source": source,
+            "page": page,
+            "page_size": page_size,
+            "has_more": has_more,
+        }
 
     async def _get_song(self, msg: str, n: int, source: str) -> dict[str, Any]:
         res = await self._request({"msg": msg, "n": int(n)}, source)

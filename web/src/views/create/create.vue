@@ -369,17 +369,64 @@
               :style="{ '--mc': pm.color }"
               @click="assignAll(pm.id)"
             >全指派给 {{ pm.name }}</button>
+            <span class="muted assign-tip">每句可多选模型 → 合唱同唱一句</span>
           </div>
 
           <!-- 歌词逐句 -->
           <div v-if="lyrics.length" class="lyric-list">
-            <div v-for="(ln, i) in lyrics" :key="i" class="lyric-row">
+            <div
+              v-for="(ln, i) in lyrics"
+              :key="i"
+              class="lyric-row"
+              :class="{ 'is-chorus': (assignments[i] || []).length > 1, 'is-idle': !(assignments[i] || []).length }"
+            >
               <span class="ly-time">{{ fmtTime(ln.time + offset) }}</span>
               <span class="ly-text" :title="ln.text">{{ ln.text }}</span>
-              <select v-model="assignments[i]" class="ly-model" :style="assignColor(i)">
-                <option value="">间奏/不唱</option>
-                <option v-for="pm in pickedModels" :key="pm.id" :value="pm.id">{{ pm.name }}</option>
-              </select>
+              <div class="ly-assign">
+                <span v-if="(assignments[i] || []).length > 1" class="chorus-tag">
+                  <el-icon><Microphone /></el-icon>合唱 ×{{ (assignments[i] || []).length }}
+                </span>
+                <span
+                  v-for="id in (assignments[i] || [])"
+                  :key="id"
+                  class="model-chip"
+                  :style="chipStyle(id)"
+                >
+                  <span class="chip-dot" :style="{ background: modelColor(id) }"></span>
+                  <span class="chip-name">{{ modelName(id) }}</span>
+                  <button class="chip-x" title="移除" @click.stop="removeAssign(i, id)">
+                    <el-icon><Close /></el-icon>
+                  </button>
+                </span>
+                <span v-if="!(assignments[i] || []).length" class="idle-chip">间奏 · 不唱</span>
+                <el-popover
+                  placement="bottom-end"
+                  :width="232"
+                  trigger="click"
+                  popper-class="assign-popover"
+                >
+                  <template #reference>
+                    <button class="add-chip" :title="(assignments[i] || []).length ? '增减演唱模型' : '指派模型'">
+                      <el-icon><Plus /></el-icon>
+                    </button>
+                  </template>
+                  <div class="pick-pop">
+                    <p class="pick-hint">点选模型演唱本句，多选即「合唱」</p>
+                    <button
+                      v-for="pm in pickedModels"
+                      :key="pm.id"
+                      class="pick-item"
+                      :class="{ on: isAssigned(i, pm.id) }"
+                      :style="{ '--mc': pm.color }"
+                      @click="toggleAssign(i, pm.id)"
+                    >
+                      <span class="pick-dot" :style="{ background: pm.color }"></span>
+                      <span class="pick-name">{{ pm.name }}</span>
+                      <el-icon v-if="isAssigned(i, pm.id)" class="pick-check"><Check /></el-icon>
+                    </button>
+                  </div>
+                </el-popover>
+              </div>
             </div>
           </div>
           <div v-else-if="lyricTried && !lyricLoading" class="lyric-empty">
@@ -500,6 +547,8 @@ import {
   RefreshRight,
   Operation,
   Clock,
+  Plus,
+  Check,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import {
@@ -665,7 +714,8 @@ const songIndex = ref(1)
 const lyricSrc = ref('wy')
 const lyricSources = ref<MusicSource[]>([{ id: 'wy', name: '网易云音乐', cookie: false }])
 const lyrics = ref<LyricLine[]>([])
-const assignments = ref<string[]>([])
+// 每句歌词指派的模型 id 列表（空=间奏/不唱，1=独唱，>1=合唱）
+const assignments = ref<string[][]>([])
 const offset = ref(0)
 const lyricLoading = ref(false)
 const lyricTried = ref(false)
@@ -689,7 +739,7 @@ async function fetchLyrics() {
     }
     lyrics.value = res.lines
     const first = pickedModels.value[0]?.id || ''
-    assignments.value = res.lines.map(() => first)
+    assignments.value = res.lines.map(() => (first ? [first] : []))
     if (song.value?.path) {
       audioDuration.value = await api.getAudioDuration(song.value.path)
     }
@@ -699,12 +749,38 @@ async function fetchLyrics() {
 }
 
 function assignAll(id: string) {
-  assignments.value = lyrics.value.map(() => id)
+  assignments.value = lyrics.value.map(() => [id])
 }
-function assignColor(i: number) {
-  const id = assignments.value[i]
-  const m = pickedModels.value.find((x) => x.id === id)
-  return m ? { borderColor: m.color, color: m.color } : {}
+/* ---- 逐句指派：彩色模型胶囊 + 弹出选择 ---- */
+function modelName(id: string): string {
+  return pickedModels.value.find((x) => x.id === id)?.name || '未知模型'
+}
+function modelColor(id: string): string {
+  return pickedModels.value.find((x) => x.id === id)?.color || 'var(--xb-primary)'
+}
+/** 已指派模型胶囊的配色（淡底 + 同色文字/描边）。 */
+function chipStyle(id: string) {
+  const c = modelColor(id)
+  return {
+    color: c,
+    borderColor: c,
+    background: `color-mix(in srgb, ${c} 14%, transparent)`,
+  }
+}
+function isAssigned(i: number, id: string): boolean {
+  return (assignments.value[i] || []).includes(id)
+}
+/** 在第 i 句里切换某模型的「参与合唱」状态。 */
+function toggleAssign(i: number, id: string) {
+  const cur = [...(assignments.value[i] || [])]
+  const idx = cur.indexOf(id)
+  if (idx >= 0) cur.splice(idx, 1)
+  else cur.push(id)
+  assignments.value[i] = cur
+}
+function removeAssign(i: number, id: string) {
+  const cur = assignments.value[i] || []
+  assignments.value[i] = cur.filter((x) => x !== id)
 }
 function fmtTime(t: number) {
   const s = Math.max(0, t)
@@ -799,7 +875,7 @@ const canGenerate = computed(() => {
   return (
     selectedMulti.value.length > 0 &&
     lyrics.value.length > 0 &&
-    assignments.value.some((a) => a)
+    assignments.value.some((a) => a && a.length > 0)
   )
 })
 
@@ -897,13 +973,13 @@ const generate = async () => {
     const segments: BlendSegment[] = []
     for (let i = 0; i < lines.length; i++) {
       const cur = lines[i]
-      const mid = assignments.value[i]
-      if (!cur || !mid) continue
+      const mids = (assignments.value[i] || []).filter(Boolean)
+      if (!cur || mids.length === 0) continue
       const start = Math.max(0, cur.time + offset.value)
       const nextLine = lines[i + 1]
       const next = nextLine ? nextLine.time + offset.value : dur
       const end = Math.min(dur, Math.max(start, next))
-      if (end > start) segments.push({ start, end, model_id: mid })
+      if (end > start) segments.push({ start, end, model_id: mids[0]!, model_ids: mids })
     }
     const blendModels: BlendModel[] = pickedModels.value.map((pm) => {
       const p = mp(pm.id)
@@ -1339,6 +1415,7 @@ onUnmounted(stopPolling)
 /* 批量指派 */
 .assign-quick { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .assign-quick .muted { font-size: 12.5px; color: var(--xb-muted); }
+.assign-tip { margin-left: auto; }
 .quick-btn {
   padding: 5px 10px;
   border-radius: 999px;
@@ -1361,6 +1438,100 @@ onUnmounted(stopPolling)
   border-radius: 8px;
 }
 .lyric-row:hover { background: rgba(var(--xb-primary-rgb), 0.05); }
+.lyric-row.is-idle { opacity: 0.72; }
+.lyric-row.is-chorus {
+  background: linear-gradient(90deg, rgba(var(--xb-primary-rgb), 0.07), transparent);
+  box-shadow: inset 2px 0 0 var(--xb-primary);
+}
+
+/* 逐句指派：彩色模型胶囊 + 弹出选择 */
+.ly-assign {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 60%;
+}
+.chorus-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 9px;
+  border-radius: 999px;
+  color: #fff;
+  background: linear-gradient(90deg, var(--xb-primary), #b06bff);
+  box-shadow: 0 2px 8px rgba(var(--xb-primary-rgb), 0.35);
+  white-space: nowrap;
+}
+.chorus-tag .el-icon { font-size: 12px; }
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px 3px 9px;
+  border-radius: 999px;
+  border: 1px solid;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.model-chip:hover { transform: translateY(-1px); }
+.chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 6px currentColor;
+}
+.chip-name { max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
+.chip-x {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.chip-x:hover { opacity: 1; background: color-mix(in srgb, currentColor 20%, transparent); }
+.idle-chip {
+  font-size: 12px;
+  color: var(--xb-muted);
+  padding: 2px 4px;
+  font-style: italic;
+}
+.add-chip {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px dashed var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-muted);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.16s ease;
+}
+.add-chip:hover {
+  border-color: var(--xb-primary);
+  border-style: solid;
+  color: var(--xb-primary);
+  background: rgba(var(--xb-primary-rgb), 0.1);
+  transform: rotate(90deg);
+}
 .ly-time {
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 12px;
@@ -1579,4 +1750,61 @@ input[type='range'] {
   .layout { grid-template-columns: 1fr; }
   .preview { position: static; }
 }
+</style>
+
+<!-- 逐句指派弹出层会被传送到 body，需用非 scoped 样式命中 -->
+<style>
+.assign-popover.el-popover.el-popper {
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid var(--xb-border);
+  background: var(--xb-bg-2);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
+}
+.assign-popover .pick-pop { display: flex; flex-direction: column; gap: 4px; }
+.assign-popover .pick-hint {
+  margin: 0 4px 6px;
+  font-size: 11.5px;
+  color: var(--xb-muted);
+}
+.assign-popover .pick-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--xb-text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+.assign-popover .pick-item:hover {
+  background: color-mix(in srgb, var(--mc) 12%, transparent);
+}
+.assign-popover .pick-item.on {
+  border-color: var(--mc);
+  background: color-mix(in srgb, var(--mc) 16%, transparent);
+  color: var(--mc);
+  font-weight: 700;
+}
+.assign-popover .pick-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 6px var(--mc);
+}
+.assign-popover .pick-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assign-popover .pick-check { color: var(--mc); font-size: 15px; flex-shrink: 0; }
 </style>
