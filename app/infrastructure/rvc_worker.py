@@ -53,6 +53,23 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        # 50 系（torch>=2.6/cu128）适配：torch>=2.6 起 torch.load 默认 weights_only=True，
+        # rvc-python / fairseq 加载 hubert、字典、.pth 主模型时会报 "Weights only load failed"。
+        # 导入 rvc-python 之前还原旧默认（RVC 的 .pth/.index/底模均为本地可信文件）。
+        # 老栈（torch 2.1.1，默认即 False）加这层无副作用。
+        try:
+            import torch  # noqa: WPS433
+
+            _orig_torch_load = torch.load
+
+            def _torch_load_compat(*a, **kw):  # noqa: ANN001, ANN202
+                kw.setdefault("weights_only", False)
+                return _orig_torch_load(*a, **kw)
+
+            torch.load = _torch_load_compat  # type: ignore[assignment]
+        except Exception:  # noqa: BLE001
+            pass
+
         from rvc_python.infer import RVCInference
     except Exception as exc:  # noqa: BLE001
         print(f"RVC_ERR rvc-python 未安装或导入失败: {exc}", flush=True)

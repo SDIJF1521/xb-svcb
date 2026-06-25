@@ -62,7 +62,7 @@
 - 🎵 **在线资源获取（分页加载 · 可播放校验）** —— 内置 **网易云 / QQ音乐** 曲库的搜索、试听、下载（QQ 可填会员 Cookie 取高品质音频），搜索结果**分页「加载更多」**减少单次等待；**下载前校验资源可播放性**（魔数 / Content-Type / ffprobe），VIP / 无版权 / 失效链接不可下载，避免坑到后续推理；下载素材可一键进入翻唱。
 - 🌐 **模型站（魔搭社区 · 后台传输）** —— 基于 **ModelScope** 一键**上传/下载**声音模型：填自己的访问令牌即可发布到自有公开仓库，按关键词**模糊搜索**（**分页加载**）社区模型并直接导入；带**架构标签**（So-VITS-SVC / RVC 等）与**清单防污染**校验；上传/下载**挂后台执行、不阻塞操作**，顶栏「传输」面板随时查看实时进度。
 - 🎼 **专业人声分离** —— `5_HP-Karaoke-UVR` 分离 + `UVR-DeEcho-DeReverb` 去混响，得到干净干声。
-- ⚡ **GPU / CPU 自由切换** —— 自动识别 NVIDIA 显卡，长音频自动分段避免显存溢出。
+- ⚡ **GPU / CPU 自由切换** —— 自动识别 NVIDIA 显卡（含 **50 系/Blackwell 自动走 cu128 + torch 2.7**），长音频自动分段避免显存溢出。
 - 🎨 **双主题自由切换** —— 「赛博霓虹（暗）/ 二次元蓝粉（亮）」一键切换并记忆，连 pywebview **原生窗口标题栏/边框**也随主题变色。
 - 👤 **个性化** —— 自定义头像与昵称、内置消息通知中心（实时汇总任务进度与失败原因）。
 - 📦 **开箱即用** —— 应用本体单文件 `XB-SVCB.exe`（自带应用图标），起界面无需 Python / Node。
@@ -141,7 +141,7 @@ flowchart LR
 | **uv**                 | 虚拟环境管理工具         | 安装器使用 uv 管理虚拟环境（缺失会自动安装）                                                                                  |
 | **ffmpeg**             | 音频转码 / 混音         | 需在 PATH 中可用                                                                                                      |
 | **Git**（可选）          | 获取 so-vits-svc 仓库 | 没有也行，安装器会自动下载 ZIP                                                                                                |
-| **CUDA 12.1**（可选）    | GPU 加速            | 有 NVIDIA 显卡则自动装 cu121 版 PyTorch，无则用 CPU                                                                          |
+| **CUDA**（可选）    | GPU 加速            | 30/40 系及以下自动装 cu121 版 PyTorch；**50 系（Blackwell）自动改装 cu128 + torch 2.7**；无显卡则用 CPU                                                                          |
 | **Node.js LTS**（含 npm） | 构建前端              | 仅「从源码安装」需要                                                                                                       |
 | **C++ 生成工具**（可选）   | 编译依赖              | 部分 Python 包需要 C++14 编译器；安装时勾选 **Desktop development with C++** |
 
@@ -159,6 +159,8 @@ flowchart LR
 | **C++ Build Tools** | [https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/) |
 
 > 💡 **关于 CUDA**：GPU 版默认安装 PyTorch 的 **cu121** 预编译 wheel（已内置 CUDA 12.1 运行库），通常**只需较新的 NVIDIA 驱动**即可，无需手动装整套 CUDA Toolkit。若需自行安装，可从官方下载 **[CUDA Toolkit 12.1](https://developer.nvidia.com/cuda-12-1-0-download-archive)**（建议显卡驱动版本 ≥ 530）。
+>
+> 🟢 **50 系显卡（RTX 5060/5070/5080/5090，Blackwell, sm_120）**：cu121 无 sm_120 内核，仅升级 torch 还会出哑音，因此安装器**检测到 50 系会自动切换到 cu128 + torch 2.7 的专用栈**（SVC / RVC 改用 Python 3.10，torchaudio I/O 走 soundfile，fairseq 重装并打 `weights_only` 补丁）。需安装 **CUDA 12.8 级别的新版 NVIDIA 驱动**。可用 `--cu128` 强制启用、`--no-cu128` 强制回退老栈；fairseq 在 py3.10 编译可能需要 **C++ Build Tools**。
 
 - 安装建议：**建议直接用图形安装器**，无需任何命令行操作，选择仅此用户安装（用途一个盾标志的选项）。
 ---
@@ -181,8 +183,8 @@ setup_env.bat
 | 1 (`app`)    | `app/.venv`                               | 主程序环境（pywebview）                                                 |
 | 2 (`web`)    | `web/dist`                                | 前端构建产物                                                           |
 | 3 (`uvr`)    | `.venv-uvr`                               | 人声分离环境（audio-separator）                                          |
-| 4 (`svc`)    | `engines/so-vits-svc` + `.venv-svc`       | so-vits-svc 4.1 仓库与推理环境（Python 3.9 / cu121）                      |
-| 5 (`rvc`)    | `.venv-rvc`                               | RVC 推理环境（`rvc-python`，Python 3.9 / cu118；首启自动下载 hubert/rmvpe 底模） |
+| 4 (`svc`)    | `engines/so-vits-svc` + `.venv-svc`       | so-vits-svc 4.1 仓库与推理环境（Python 3.9 / cu121；**50 系：Python 3.10 / cu128 + torch 2.7**）                      |
+| 5 (`rvc`)    | `.venv-rvc`                               | RVC 推理环境（`rvc-python`，Python 3.9 / cu118；**50 系：Python 3.10 / cu128 + torch 2.7**；首启自动下载 hubert/rmvpe 底模） |
 | 6 (`hub`)    | `.venv-hub`                               | 模型站上传组件（`modelscope` SDK；仅上传需要）                                  |
 | 7 (`models`) | `models/`、`engines/so-vits-svc/pretrain/` | UVR 模型与底模                                                        |
 
@@ -405,7 +407,7 @@ uv pip install --python <安装目录>\.venv-svc\Scripts\python.exe "setuptools<
 
 <br/>
 
-CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\install.py --gpu` 重装分离环境即可走 GPU（默认安装 CUDA 12.1 版 PyTorch，一般只需较新 NVIDIA 驱动；如需 Toolkit 见 [CUDA 12.1 下载](https://developer.nvidia.com/cuda-12-1-0-download-archive)）。
+CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\install.py --gpu` 重装分离环境即可走 GPU（默认安装 CUDA 12.1 版 PyTorch，一般只需较新 NVIDIA 驱动；如需 Toolkit 见 [CUDA 12.1 下载](https://developer.nvidia.com/cuda-12-1-0-download-archive)）。**50 系（Blackwell）会自动改用 cu128 + torch 2.7 专用栈**，可用 `--cu128` 强制、`--no-cu128` 回退老栈。
 
 </details>
 

@@ -90,6 +90,14 @@ TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 # RVC（rvc-python）推荐 torch 2.1.1 + cu118，单独固定，避免与 so-vits 的 cu121 冲突
 TORCH_RVC_CUDA_INDEX = "https://download.pytorch.org/whl/cu118"
 
+# ---- 50 系（Blackwell, sm_120）专用栈 ----
+# 50 系必须用 cu128 + torch>=2.7（cu121/cu118 无 sm_120 内核，会"无可用内核"或哑音）。
+# 仅升级 torch/cuda 不够：旧 3.9 + 老 numpy/fairseq/torchaudio 在新 torch 上能加载却出哑音，
+# 因此 Blackwell 走独立的 py3.10 + 新依赖栈（torchaudio I/O 改用 soundfile，fairseq 重装）。
+TORCH_BLACKWELL_INDEX = "https://download.pytorch.org/whl/cu128"
+TORCH_BLACKWELL_VER = "2.7.1"  # cp39/cp310 均有 win 轮子；统一钉此版本以求确定性
+TORCHAUDIO_BLACKWELL_VER = "2.7.1"
+
 # 底模下载清单（见 README 与 so-vits-svc 官方说明）
 # HuggingFace 在国内常连不上，统一走「镜像优先 + 官方回退」。
 HF_PATH_CONTENTVEC = "/lj1995/VoiceConversionWebUI/resolve/main/hubert_base.pt"
@@ -139,6 +147,10 @@ PYTHON_FOR_SVC = "3.9"
 # RVC（rvc-python）依赖 fairseq==0.12.2 + numpy<=1.23.5，与 so-vits 同属老栈，
 # 同样固定 Python 3.9 以最大化预编译 wheel 命中、规避 fairseq 现场编译失败。
 PYTHON_FOR_RVC = "3.9"
+# Blackwell（50 系）下改用 3.10：cu128 的 torch2.7.1 有 cp310 轮子，且 numpy 1.23.5 /
+# pyworld 等在 3.10 也有可用 wheel；3.9 老栈在新 torch 上易出哑音。
+PYTHON_FOR_SVC_BLACKWELL = "3.10"
+PYTHON_FOR_RVC_BLACKWELL = "3.10"
 
 # so-vits-svc requirements 里只服务 WebUI / 实时变声 / ONNX 导出、推理用不到，
 # 且在 Windows 上常因缺少预编译包而现场编译失败的包，安装时一并剔除：
@@ -202,6 +214,42 @@ def detect_gpu() -> bool:
         return True
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def detect_blackwell() -> bool:
+    """判断是否为 50 系（Blackwell, 算力 sm_120 / compute_cap>=12.0）。
+
+    优先用 nvidia-smi 的 compute_cap 字段（新驱动支持，50 系必装新驱动）；
+    该字段不可用时回退按 GPU 名称匹配 RTX 50xx。任一显卡命中即返回 True。
+    """
+    if not have("nvidia-smi"):
+        return False
+    # 1) 直接查算力
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=15,
+        )
+        for line in out.stdout.splitlines():
+            s = line.strip()
+            try:
+                if s and float(s) >= 12.0:
+                    return True
+            except ValueError:
+                continue
+    except (OSError, subprocess.SubprocessError):
+        pass
+    # 2) 回退：按名称匹配 RTX 50 系（5050/5060/5070/5080/5090，含 Ti/Super/Laptop）
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if re.search(r"RTX\s*50\d0", out.stdout, flags=re.IGNORECASE):
+            return True
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return False
 
 
 def ensure_uv() -> str:
@@ -358,7 +406,7 @@ def step_web() -> None:
     print(c("g", "前端构建完成"))
 
 
-def step_uvr(uv: str, use_gpu: bool) -> None:
+def step_uvr(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
     hr("3/7 人声分离环境 .venv-uvr（audio-separator）")
     if not venv_python(UVR_VENV).exists():
         run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_ENGINES, str(UVR_VENV)))
@@ -370,8 +418,15 @@ def step_uvr(uv: str, use_gpu: bool) -> None:
     # uv venv 默认不含 setuptools，部分库运行时需要 pkg_resources，先补齐
     # （setuptools 81+ 已移除 pkg_resources，钉 <81）
     pip("setuptools<81", "wheel")
-    # VR 模型走 torch；GPU 时装 CUDA 版，CPU 时装 CPU 版
-    pip("torch", "torchaudio", index=TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX)
+    # VR 模型走 torch；50 系走 cu128 + torch2.7.1，否则 GPU 走 cu121 / CPU 走默认源
+    if use_blackwell:
+        pip(
+            f"torch=={TORCH_BLACKWELL_VER}",
+            f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
+            index=TORCH_BLACKWELL_INDEX,
+        )
+    else:
+        pip("torch", "torchaudio", index=TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX)
     # audio-separator：gpu 额外组件含 onnxruntime-gpu
     pip("audio-separator[gpu]" if use_gpu else "audio-separator[cpu]")
     print(c("g", "分离环境就绪"))
@@ -421,19 +476,21 @@ def _venv_pyver(py: Path) -> str | None:
         return None
 
 
-def step_svc(uv: str, use_gpu: bool) -> None:
+def step_svc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
     hr("4/7 推理引擎 so-vits-svc + .venv-svc")
     fetch_sovits()
 
-    # 创建环境（强制 Python 3.9）。若已存在但版本不符，则重建，避免旧依赖在 3.10 现场编译失败。
+    # 目标 Python：Blackwell 用 3.10（cu128 轮子 + 3.10 兼容依赖），否则老栈 3.9。
+    target_py = PYTHON_FOR_SVC_BLACKWELL if use_blackwell else PYTHON_FOR_SVC
+    # 创建环境。若已存在但版本不符（含老卡/新卡切换），则重建，避免依赖错配。
     py_path = venv_python(SVC_VENV)
     if py_path.exists():
         ver = _venv_pyver(py_path)
-        if ver != PYTHON_FOR_SVC:
-            print(c("y", f"    现有 .venv-svc 为 Python {ver or '未知'}，需要 {PYTHON_FOR_SVC}，重建中 …"))
+        if ver != target_py:
+            print(c("y", f"    现有 .venv-svc 为 Python {ver or '未知'}，需要 {target_py}，重建中 …"))
             shutil.rmtree(SVC_VENV, ignore_errors=True)
     if not venv_python(SVC_VENV).exists():
-        run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_SVC, str(SVC_VENV)))
+        run(uv_cmd(uv, "venv", "--python", target_py, str(SVC_VENV)))
     py = str(venv_python(SVC_VENV))
 
     def pip(*args: str, index: str | None = None) -> None:
@@ -443,6 +500,41 @@ def step_svc(uv: str, use_gpu: bool) -> None:
     # （pkg_resources 属于 setuptools），缺失会导致推理一加载 librosa 就 ModuleNotFoundError。
     # 注意：setuptools 81+ 已移除 pkg_resources，必须钉 <81 才仍带该模块。
     pip("setuptools<81", "wheel")
+
+    req_win = SOVITS_DIR / "requirements_win.txt"
+    req = SOVITS_DIR / "requirements.txt"
+    req_file = req_win if req_win.exists() else req
+
+    if use_blackwell:
+        # 50 系：cu128 + torch2.7.1。torch.load 的 weights_only 由 svc_worker 在导入前还原；
+        # torchaudio I/O 在 2.7 改走 torchcodec，svc_worker 用 soundfile 垫片规避哑音。
+        pip(
+            f"torch=={TORCH_BLACKWELL_VER}",
+            f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
+            index=TORCH_BLACKWELL_INDEX,
+        )
+        if req_file.exists():
+            # 自管 torch/torchaudio/torchvision/fairseq；numpy/pyworld 覆盖到 3.10 兼容版
+            filtered = _filter_requirements(
+                req_file,
+                extra_deny=BLACKWELL_EXTRA_DENY,
+                overrides=BLACKWELL_REQ_OVERRIDES,
+            )
+            pip("-r", str(filtered))
+            # 显式确保读写音频用的 soundfile 在位（svc_worker 的 torchaudio 垫片依赖它）
+            pip("soundfile")
+            # matplotlib 在 3.10 用较新版本（3.7.5 也可，但 3.10 下放宽到 3.8.x 更易装）
+            pip("matplotlib==3.8.4")
+            # fairseq 单独装（py3.10 无官方 wheel，单列以便定位失败）
+            _install_fairseq_blackwell(pip)
+            # 双保险：把 fairseq 的 checkpoint_utils 也打 weights_only 补丁
+            _patch_fairseq_weights_only(venv_python(SVC_VENV))
+        else:
+            print(c("r", "    未找到 requirements，跳过依赖安装（请检查仓库）"))
+        print(c("g", "推理环境就绪（Blackwell/cu128）"))
+        return
+
+    # 老栈（40 系及以下 / CPU）：保持原有已验证组合不变
     # 先装 torch（决定 CUDA/CPU），再装仓库其余依赖。
     # 钉 <2.6：torch>=2.6 起 torch.load 默认 weights_only=True，会拒绝反序列化
     # so-vits checkpoint 里的非张量对象（argparse.Namespace / numpy 标量），导致
@@ -450,9 +542,6 @@ def step_svc(uv: str, use_gpu: bool) -> None:
     # weights_only=False 的稳定版，避免新装用户拉到不兼容的最新版。
     pip("torch==2.5.1", "torchaudio==2.5.1", index=TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX)
     # 优先 requirements_win.txt（仓库为 Windows 提供的更易装版本）
-    req_win = SOVITS_DIR / "requirements_win.txt"
-    req = SOVITS_DIR / "requirements.txt"
-    req_file = req_win if req_win.exists() else req
     if req_file.exists():
         filtered = _filter_requirements(req_file)
         pip("-r", str(filtered))
@@ -465,9 +554,23 @@ def step_svc(uv: str, use_gpu: bool) -> None:
     print(c("g", "推理环境就绪"))
 
 
-def _filter_requirements(src: Path) -> Path:
-    """剔除推理用不到/装不上的包（见 REQ_DENYLIST），生成精简 requirements。"""
+def _filter_requirements(
+    src: Path,
+    extra_deny: set[str] | None = None,
+    overrides: dict[str, str] | None = None,
+) -> Path:
+    """剔除推理用不到/装不上的包（见 REQ_DENYLIST），生成精简 requirements。
+
+    extra_deny：额外剔除的包名（小写、连字符）；用于 Blackwell 下自行管理的 torch/fairseq 等。
+    overrides：包名 -> 整行 requirement 覆盖（如 numpy 升到 3.10 兼容版本）；命中即替换原行，
+               未在原文件出现的覆盖项会在末尾追加。
+    """
     out = src.parent / "requirements_xb.txt"
+    deny = set(REQ_DENYLIST)
+    if extra_deny:
+        deny |= {d.replace("_", "-").lower() for d in extra_deny}
+    ov = {k.replace("_", "-").lower(): v for k, v in (overrides or {}).items()}
+    seen_ov: set[str] = set()
     kept: list[str] = []
     for raw in src.read_text(encoding="utf-8", errors="replace").splitlines():
         line = raw.strip()
@@ -476,26 +579,110 @@ def _filter_requirements(src: Path) -> Path:
             continue
         name = re.split(r"[<>=!~;\[\s]", line, maxsplit=1)[0].strip().lower()
         name = name.replace("_", "-")
-        if name in REQ_DENYLIST:
+        if name in deny:
             print(c("y", f"    跳过不需要的包：{line}"))
             continue
+        if name in ov:
+            print(c("y", f"    覆盖版本：{line} -> {ov[name]}"))
+            kept.append(ov[name])
+            seen_ov.add(name)
+            continue
         kept.append(raw)
+    for name, spec in ov.items():
+        if name not in seen_ov:
+            print(c("y", f"    追加依赖：{spec}"))
+            kept.append(spec)
     out.write_text("\n".join(kept) + "\n", encoding="utf-8")
     return out
 
 
-def step_rvc(uv: str, use_gpu: bool) -> None:
+# Blackwell（py3.10）下 so-vits / RVC 需要的、对新 torch 友好的依赖覆盖。
+# numpy 1.23.5 仍有 cp310 轮子且兼容 so-vits 代码（未用 1.24 移除的 np.float 等别名）；
+# pyworld 0.3.4 提供 cp310 轮子，避免 0.3.0 在 3.10 现场编译失败。
+BLACKWELL_REQ_OVERRIDES = {
+    "numpy": "numpy==1.23.5",
+    "pyworld": "pyworld==0.3.4",
+}
+# Blackwell 下由我们自行装的包：不让 requirements 里的旧钉死把它们覆盖回去。
+BLACKWELL_EXTRA_DENY = {"torch", "torchaudio", "torchvision", "fairseq"}
+
+
+def _install_fairseq_blackwell(pip) -> None:  # noqa: ANN001
+    """在 Blackwell（py3.10）环境安装 fairseq。
+
+    fairseq 0.12.2 在 py3.10 无官方 win 轮子、且与新 setuptools/torch 冲突。这里优先尝试
+    PyPI（命中预编译/可构建即可），失败则回退 GitHub 源码安装（需 VS C++ Build Tools）。
+    这一步是 50 系适配最易出问题处，失败时请把日志贴出以便定位。
+    """
+    # omegaconf 2.0.6 是 fairseq 0.12.2 的运行期依赖，提前钉好避免被拉到不兼容的新版本
+    try:
+        pip("omegaconf==2.0.6")
+    except subprocess.CalledProcessError:
+        print(c("y", "    omegaconf 2.0.6 安装失败，继续尝试 fairseq（可能用新版 omegaconf）"))
+    try:
+        pip("fairseq==0.12.2")
+        return
+    except subprocess.CalledProcessError:
+        print(c("y", "    PyPI fairseq==0.12.2 安装失败，回退 GitHub 源码安装 …"))
+    pip("git+https://github.com/facebookresearch/fairseq.git")
+
+
+def _patch_fairseq_weights_only(py: Path) -> None:
+    """把目标 venv 内 fairseq 的 checkpoint_utils.py 的 torch.load 强制 weights_only=False。
+
+    torch>=2.6 默认 weights_only=True 会让 fairseq 加载 hubert/字典等 checkpoint 失败
+    （RVC 在 50 系上的典型报错）。直接就地改源码，幂等：已含 weights_only 时跳过。
+    """
+    try:
+        out = subprocess.run(
+            [str(py), "-c", "import os,fairseq;print(os.path.dirname(fairseq.__file__))"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(c("y", f"    定位 fairseq 失败，跳过 weights_only 补丁：{exc}"))
+        return
+    base = out.stdout.strip()
+    if not base:
+        print(c("y", "    未找到 fairseq 安装路径，跳过 weights_only 补丁"))
+        return
+    cu = Path(base) / "checkpoint_utils.py"
+    if not cu.exists():
+        print(c("y", f"    未找到 {cu}，跳过 weights_only 补丁"))
+        return
+    text = cu.read_text(encoding="utf-8", errors="replace")
+    if "weights_only" in text:
+        print(c("g", "    fairseq checkpoint_utils 已含 weights_only，跳过"))
+        return
+    # torch.load(f, map_location=...) -> 追加 weights_only=False
+    patched = re.sub(
+        r"torch\.load\((?P<args>[^)]*?)\)",
+        lambda m: (
+            m.group(0)
+            if "weights_only" in m.group("args")
+            else f"torch.load({m.group('args').rstrip()}, weights_only=False)"
+        ),
+        text,
+    )
+    if patched != text:
+        cu.write_text(patched, encoding="utf-8")
+        print(c("g", "    已给 fairseq checkpoint_utils 打 weights_only=False 补丁"))
+    else:
+        print(c("y", "    fairseq checkpoint_utils 未匹配到 torch.load，未改动"))
+
+
+def step_rvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
     hr("5/7 RVC 推理环境 .venv-rvc（rvc-python）")
-    # RVC 推理在独立环境运行（rvc-python），与 so-vits 的 cu121 栈隔离。
+    # RVC 推理在独立环境运行（rvc-python），与 so-vits 栈隔离。
     # 首次推理时 rvc-python 会自动下载 hubert / rmvpe 底模（无需在此预置）。
+    target_py = PYTHON_FOR_RVC_BLACKWELL if use_blackwell else PYTHON_FOR_RVC
     py_path = venv_python(RVC_VENV)
     if py_path.exists():
         ver = _venv_pyver(py_path)
-        if ver != PYTHON_FOR_RVC:
-            print(c("y", f"    现有 .venv-rvc 为 Python {ver or '未知'}，需要 {PYTHON_FOR_RVC}，重建中 …"))
+        if ver != target_py:
+            print(c("y", f"    现有 .venv-rvc 为 Python {ver or '未知'}，需要 {target_py}，重建中 …"))
             shutil.rmtree(RVC_VENV, ignore_errors=True)
     if not venv_python(RVC_VENV).exists():
-        run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_RVC, str(RVC_VENV)))
+        run(uv_cmd(uv, "venv", "--python", target_py, str(RVC_VENV)))
     py = str(venv_python(RVC_VENV))
 
     def pip(*args: str, index: str | None = None) -> None:
@@ -503,7 +690,20 @@ def step_rvc(uv: str, use_gpu: bool) -> None:
 
     # uv venv 默认不含 setuptools；fairseq/rvc 运行时可能用到 pkg_resources，先补齐
     pip("setuptools<81", "wheel")
-    # 先装 torch（决定 CUDA/CPU）：RVC 用 2.1.1 + cu118（rvc-python 推荐组合）
+    if use_blackwell:
+        # 50 系：cu128 + torch2.7.1。rvc-python 会带回 fairseq，装完再就地打 weights_only 补丁，
+        # 否则新 torch 加载 hubert/字典会报 "Weights only load failed"。
+        pip(
+            f"torch=={TORCH_BLACKWELL_VER}",
+            f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
+            index=TORCH_BLACKWELL_INDEX,
+        )
+        pip("rvc-python")
+        _patch_fairseq_weights_only(venv_python(RVC_VENV))
+        print(c("g", "RVC 推理环境就绪（Blackwell/cu128）"))
+        return
+
+    # 老栈：RVC 用 2.1.1 + cu118（rvc-python 推荐组合）
     pip(
         "torch==2.1.1",
         "torchaudio==2.1.1",
@@ -635,13 +835,13 @@ def step_models(uv: str) -> None:
 
 
 STEPS = {
-    "app": lambda uv, gpu: step_app(uv),
-    "web": lambda uv, gpu: step_web(),
-    "uvr": lambda uv, gpu: step_uvr(uv, gpu),
-    "svc": lambda uv, gpu: step_svc(uv, gpu),
-    "rvc": lambda uv, gpu: step_rvc(uv, gpu),
-    "hub": lambda uv, gpu: step_hub(uv),
-    "models": lambda uv, gpu: step_models(uv),
+    "app": lambda uv, gpu, bw: step_app(uv),
+    "web": lambda uv, gpu, bw: step_web(),
+    "uvr": lambda uv, gpu, bw: step_uvr(uv, gpu, bw),
+    "svc": lambda uv, gpu, bw: step_svc(uv, gpu, bw),
+    "rvc": lambda uv, gpu, bw: step_rvc(uv, gpu, bw),
+    "hub": lambda uv, gpu, bw: step_hub(uv),
+    "models": lambda uv, gpu, bw: step_models(uv),
 }
 ORDER = ["app", "web", "uvr", "svc", "rvc", "hub", "models"]
 
@@ -655,6 +855,17 @@ def main() -> int:
     )
     p.add_argument("--cpu", action="store_true", help="强制安装 CPU 版")
     p.add_argument("--gpu", action="store_true", help="强制安装 CUDA 版")
+    p.add_argument(
+        "--cu128",
+        action="store_true",
+        help="强制按 50 系（Blackwell, cu128 + torch2.7）安装；默认自动探测",
+    )
+    p.add_argument(
+        "--no-cu128",
+        dest="no_cu128",
+        action="store_true",
+        help="禁用 50 系自动适配，强制走 cu121/cu118 老栈",
+    )
     p.add_argument(
         "--only",
         choices=ORDER,
@@ -674,10 +885,25 @@ def main() -> int:
     if args.gpu and args.cpu:
         print(c("r", "--gpu 与 --cpu 不能同时使用"))
         return 2
+    if args.cu128 and args.no_cu128:
+        print(c("r", "--cu128 与 --no-cu128 不能同时使用"))
+        return 2
     use_gpu = True if args.gpu else False if args.cpu else detect_gpu()
-    print(f"安装模式: {c('g', 'CUDA(GPU)') if use_gpu else c('y', 'CPU')}")
+    # Blackwell（50 系）：仅在用 GPU 时才有意义；可用 --cu128/--no-cu128 覆盖自动探测
+    use_blackwell = use_gpu and (
+        args.cu128 or (not args.no_cu128 and detect_blackwell())
+    )
+    if use_blackwell:
+        mode = c("g", "CUDA · Blackwell/50系 (cu128 + torch" + TORCH_BLACKWELL_VER + ")")
+    elif use_gpu:
+        mode = c("g", "CUDA · 40系及以下 (cu121/cu118)")
+    else:
+        mode = c("y", "CPU")
+    print(f"安装模式: {mode}")
     if use_gpu and not args.gpu:
         print("（检测到 NVIDIA 显卡，自动选择 CUDA；如需 CPU 请加 --cpu）")
+    if use_blackwell and not args.cu128:
+        print("（检测到 50 系/Blackwell，自动切换 cu128 栈；如需老栈请加 --no-cu128）")
 
     uv = ensure_uv()
     print(f"uv: {uv}")
@@ -690,7 +916,7 @@ def main() -> int:
             results.append((s, "skip"))
             continue
         try:
-            STEPS[s](uv, use_gpu)
+            STEPS[s](uv, use_gpu, use_blackwell)
             results.append((s, "ok"))
         except Exception as exc:  # noqa: BLE001 - 单步失败不阻断其余步骤
             print(c("r", f"[{s}] 失败: {exc}"))

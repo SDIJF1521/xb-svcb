@@ -80,6 +80,35 @@ def main() -> int:
 
         torch.load = _torch_load_compat  # type: ignore[assignment]
 
+        # 50 系（torch>=2.6/cu128）适配：torchaudio 2.7 的音频 I/O 改走 torchcodec，
+        # 缺失/不兼容时 so-vits 里的 torchaudio.load/save 会读到空波形 -> 输出哑音。
+        # 这里在导入 so-vits 之前把 torchaudio.load/save 重定向到 soundfile，绕过 torchcodec。
+        # 老栈（torch 2.5.1）保持原生 torchaudio 不动。
+        try:
+            _tv = tuple(int(x) for x in torch.__version__.split("+")[0].split(".")[:2])
+        except Exception:  # noqa: BLE001
+            _tv = (0, 0)
+        if _tv >= (2, 6):
+            try:
+                import torchaudio
+
+                def _ta_load(filepath, *a, **kw):  # noqa: ANN001, ANN202
+                    data, sr = soundfile.read(str(filepath), dtype="float32", always_2d=True)
+                    # soundfile: [frames, channels] -> torchaudio 约定 [channels, frames]
+                    return torch.from_numpy(data.T.copy()), sr
+
+                def _ta_save(filepath, src, sample_rate, *a, **kw):  # noqa: ANN001, ANN202
+                    arr = src.detach().cpu().float().numpy()
+                    if arr.ndim == 1:
+                        arr = arr[None, :]
+                    # [channels, frames] -> soundfile 约定 [frames, channels]
+                    soundfile.write(str(filepath), arr.T, int(sample_rate))
+
+                torchaudio.load = _ta_load  # type: ignore[assignment]
+                torchaudio.save = _ta_save  # type: ignore[assignment]
+            except Exception as _ta_exc:  # noqa: BLE001
+                print(f"SVC_WARN torchaudio->soundfile 垫片未生效: {_ta_exc}")
+
         from inference.infer_tool import Svc
     except Exception as exc:  # noqa: BLE001
         print(f"SVC_ERR 依赖导入失败: {exc}")

@@ -346,9 +346,13 @@ class ModelHubService:
                 raw_entries += await self._query_models(
                     {"Path": me["username"], "PageNumber": 1, "PageSize": 100}
                 )
-        # 来源 2：全站按固定标记关键词模糊搜索（发现社区分享的本软件模型）
+        # 来源 2：全站按「仓库名前缀」模糊搜索（发现社区分享的本软件模型）。
+        # 注意：不能用 MODELSCOPE_MARKER 搜——标记只写在 README/清单里，ModelScope 的搜索
+        # 只索引模型名/描述，搜标记会 0 命中（这正是"只搜得到自己上传的"根因）。
+        # 改用仓库名前缀 xb-svcb（每个上传仓库名都带），即可发现所有人的公开模型；
+        # 真伪仍由后续的前缀过滤 + 清单校验把关，避免污染。
         marker_raw = await self._query_models(
-            {"PageNumber": page, "PageSize": page_size, "Search": config.MODELSCOPE_MARKER}
+            {"PageNumber": page, "PageSize": page_size, "Search": config.MODELHUB_REPO_PREFIX}
         )
         raw_entries += marker_raw
         # 来源 3：若用户输入了关键词，再按关键词全站模糊搜索一次
