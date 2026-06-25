@@ -137,17 +137,28 @@ flowchart LR
 
 | 软件                     | 用途                | 说明                                                                                                               |
 | ---------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **Python 3.10+**       | 运行安装器与主程序         | 安装时勾选 *Add to PATH*                                                                                              |
+| **Python 3.10.5+**     | 运行安装器与主程序         | 安装时勾选 *Add to PATH*                                                                                              |
+| **uv**                 | 虚拟环境管理工具         | 安装器使用 uv 管理虚拟环境（缺失会自动安装）                                                                                  |
 | **ffmpeg**             | 音频转码 / 混音         | 需在 PATH 中可用                                                                                                      |
-| Git（可选）                | 获取 so-vits-svc 仓库 | 没有也行，安装器会自动下载 ZIP                                                                                                |
+| **Git**（可选）          | 获取 so-vits-svc 仓库 | 没有也行，安装器会自动下载 ZIP                                                                                                |
+| **CUDA 12.1**（可选）    | GPU 加速            | 有 NVIDIA 显卡则自动装 cu121 版 PyTorch，无则用 CPU                                                                          |
 | **Node.js LTS**（含 npm） | 构建前端              | 仅「从源码安装」需要                                                                                                       |
-| NVIDIA 显卡 + 驱动（可选）     | GPU 加速            | 有则自动装 **CUDA 12.1** 版 PyTorch（[CUDA 12.1 下载](https://developer.nvidia.com/cuda-12-1-0-download-archive)），无则用 CPU |
 
 
-> 安装器使用 [uv](https://github.com/astral-sh/uv) 管理虚拟环境（缺失会自动安装），并能自动获取所需 Python 版本。
->
+#### 🔗 安装链接
+
+| 软件 | 下载链接 |
+|------|----------|
+| **Python 3.10.5** | [https://www.python.org/downloads/release/python-3105/](https://www.python.org/downloads/release/python-3105/) |
+| **uv** | [https://github.com/astral-sh/uv/releases](https://github.com/astral-sh/uv/releases) |
+| **Git** | [https://git-scm.com/downloads](https://git-scm.com/downloads) |
+| **CUDA Toolkit 12.1** | [https://developer.nvidia.com/cuda-12-1-0-download-archive](https://developer.nvidia.com/cuda-12-1-0-download-archive) |
+| **ffmpeg** | [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html) |
+| **Node.js LTS** | [https://nodejs.org/](https://nodejs.org/) |
+
 > 💡 **关于 CUDA**：GPU 版默认安装 PyTorch 的 **cu121** 预编译 wheel（已内置 CUDA 12.1 运行库），通常**只需较新的 NVIDIA 驱动**即可，无需手动装整套 CUDA Toolkit。若需自行安装，可从官方下载 **[CUDA Toolkit 12.1](https://developer.nvidia.com/cuda-12-1-0-download-archive)**（建议显卡驱动版本 ≥ 530）。
 
+- 安装建议：**建议直接用图形安装器**，无需任何命令行操作，选择仅此用户安装（用途一个盾标志的选项）。
 ---
 
 <a id="from-source"></a>
@@ -630,4 +641,3 @@ CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\inst
 > - **UVR 模型**：`5_HP-Karaoke-UVR`、`UVR-DeEcho-DeReverb` 等遵循 Ultimate Vocal Remover 项目相应许可。
 >
 > MIT 仅覆盖本仓库自有代码，不改变上述第三方组件的授权条款。
-
