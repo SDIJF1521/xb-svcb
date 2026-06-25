@@ -296,9 +296,12 @@ class ModelHubService:
     async def _query_models(self, body: dict[str, Any]) -> list[Any]:
         """调用 ModelScope 模型列表/搜索接口（PUT /api/v1/models/），返回原始条目列表。
 
-        ModelScope 接口约定（PascalCase）：
-          - 按命名空间列出：{"Path": owner, ...}
-          - 按关键词模糊搜索：{"Search": text, ...}
+        ModelScope 接口约定（经实测，字段为 PascalCase）：
+          - 按命名空间列出：{"Path": owner, "PageNumber": n, "PageSize": m}
+          - 按关键词模糊搜索：{"Name": text, "PageNumber": n, "PageSize": m}
+            注意：真正生效的搜索字段是「Name」（匹配仓库英文名/中文名）；早期用的
+            "Search"、以及小写的 "search" / "page_size" 都会被服务端「静默忽略」，
+            接口会改回「全站热门第一页」，这正是"只搜得到自己上传的"根因。
         失败时返回空列表，不抛出异常。
         """
         try:
@@ -346,20 +349,23 @@ class ModelHubService:
                 raw_entries += await self._query_models(
                     {"Path": me["username"], "PageNumber": 1, "PageSize": 100}
                 )
-        # 来源 2：全站按「仓库名前缀」模糊搜索（发现社区分享的本软件模型）。
-        # 注意：不能用 MODELSCOPE_MARKER 搜——标记只写在 README/清单里，ModelScope 的搜索
-        # 只索引模型名/描述，搜标记会 0 命中（这正是"只搜得到自己上传的"根因）。
-        # 改用仓库名前缀 xb-svcb（每个上传仓库名都带），即可发现所有人的公开模型；
-        # 真伪仍由后续的前缀过滤 + 清单校验把关，避免污染。
+        # 来源 2：全站按「仓库名前缀」搜索（发现所有人公开分享的本软件模型）。
+        # 经实测：PUT /api/v1/models 真正生效的搜索字段是「Name」（帕斯卡），分页用
+        # PageNumber/PageSize。早期用的 "Search"（及小写 search/page_size）会被服务端
+        # 静默忽略 → 接口改回「全站热门第一页」，经前缀过滤后全被丢弃，于是看起来「只
+        # 搜得到自己上传的」（自己那路靠 Path 命名空间过滤才幸存）。每个上传仓库英文名
+        # 都是 xb-svcb-<slug>-<id>，按 Name=xb-svcb 即可命中所有人；真伪仍由后续的
+        # 「前缀过滤 + 清单 magic 校验」把关，避免污染。
         marker_raw = await self._query_models(
-            {"PageNumber": page, "PageSize": page_size, "Search": config.MODELHUB_REPO_PREFIX}
+            {"Name": config.MODELHUB_REPO_PREFIX, "PageNumber": page, "PageSize": page_size}
         )
         raw_entries += marker_raw
-        # 来源 3：若用户输入了关键词，再按关键词全站模糊搜索一次
+        # 来源 3：若用户输入了关键词，再按关键词全站搜一次（英文名/slug 命中补召回；
+        # 中文名等仍由下方 tokens 客户端过滤兜底）
         keyword_raw: list[Any] = []
         if q:
             keyword_raw = await self._query_models(
-                {"PageNumber": page, "PageSize": page_size, "Search": q}
+                {"Name": q, "PageNumber": page, "PageSize": page_size}
             )
             raw_entries += keyword_raw
         # 是否还有下一页：以分页来源的原始条数是否「满页」作启发式判断

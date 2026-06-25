@@ -9,7 +9,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.9"
+APP_VERSION = "0.0.10"
 APP_BG = "#05060d"
 
 

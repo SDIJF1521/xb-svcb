@@ -527,7 +527,10 @@ def step_svc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
             pip("matplotlib==3.8.4")
             # fairseq 单独装（py3.10 无官方 wheel，单列以便定位失败）
             _install_fairseq_blackwell(pip)
-            # 双保险：把 fairseq 的 checkpoint_utils 也打 weights_only 补丁
+            # 兜底：fairseq 可能把 cu128 torch 换成同号 CPU 版 → 强制校正回 cu128
+            _reaffirm_blackwell_torch(uv, py)
+            # 修复早期错误补丁（weights_only 误插进 torch.device）；weights_only 兼容由
+            # svc_worker 运行时 monkey-patch torch.load 处理
             _patch_fairseq_weights_only(venv_python(SVC_VENV))
         else:
             print(c("r", "    未找到 requirements，跳过依赖安装（请检查仓库）"))
@@ -598,13 +601,39 @@ def _filter_requirements(
 
 # Blackwell（py3.10）下 so-vits / RVC 需要的、对新 torch 友好的依赖覆盖。
 # numpy 1.23.5 仍有 cp310 轮子且兼容 so-vits 代码（未用 1.24 移除的 np.float 等别名）；
-# pyworld 0.3.4 提供 cp310 轮子，避免 0.3.0 在 3.10 现场编译失败。
+# pyworld 0.3.4 提供 cp310 轮子，避免 0.3.0 在 3.10 现场编译失败；
+# scipy 1.10.1 提供 cp310 轮子且兼容 numpy 1.23.5（so-vits 原钉的旧 scipy 在 3.10
+# 无轮子会现场编译失败 / 与 numpy 1.23 不匹配）。
 BLACKWELL_REQ_OVERRIDES = {
     "numpy": "numpy==1.23.5",
     "pyworld": "pyworld==0.3.4",
+    "scipy": "scipy==1.10.1",
 }
 # Blackwell 下由我们自行装的包：不让 requirements 里的旧钉死把它们覆盖回去。
 BLACKWELL_EXTRA_DENY = {"torch", "torchaudio", "torchvision", "fairseq"}
+
+
+def _reaffirm_blackwell_torch(uv: str, py: str) -> None:
+    """兜底：强制把 cu128 的 torch/torchaudio 重新装回来。
+
+    fairseq / rvc-python 等依赖在解析时可能把 cu128 的 torch（2.7.1+cu128）换成
+    PyPI 默认的「同版本号 CPU 版」（2.7.1+cpu），导致 torch.cuda.is_available()=False，
+    推理时报 "Attempting to deserialize object on a CUDA device but
+    torch.cuda.is_available() is False"。普通 install 因版本号相同会判定已满足而不覆盖，
+    这里用 --reinstall-package 只强制重装 torch/torchaudio（不动其它包）。
+    """
+    cmd = uv_cmd(
+        uv, "pip", "install",
+        "--reinstall-package", "torch", "--reinstall-package", "torchaudio",
+        "--python", py,
+        f"torch=={TORCH_BLACKWELL_VER}", f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
+        "--index-url", TORCH_BLACKWELL_INDEX,
+    )
+    try:
+        run(cmd)
+        print(c("g", "    已校正 cu128 torch（防止被依赖替换成 CPU 版）"))
+    except subprocess.CalledProcessError:
+        print(c("y", "    cu128 torch 校正失败，请检查网络/驱动后重跑该步"))
 
 
 def _install_fairseq_blackwell(pip) -> None:  # noqa: ANN001
@@ -628,10 +657,18 @@ def _install_fairseq_blackwell(pip) -> None:  # noqa: ANN001
 
 
 def _patch_fairseq_weights_only(py: Path) -> None:
-    """把目标 venv 内 fairseq 的 checkpoint_utils.py 的 torch.load 强制 weights_only=False。
+    """修复 fairseq 的 checkpoint_utils.py（仅在 Blackwell/新 torch 下调用）。
 
-    torch>=2.6 默认 weights_only=True 会让 fairseq 加载 hubert/字典等 checkpoint 失败
-    （RVC 在 50 系上的典型报错）。直接就地改源码，幂等：已含 weights_only 时跳过。
+    torch>=2.6 默认 weights_only=True 会让 fairseq 加载 hubert/字典等 checkpoint 失败。
+    该兼容现已统一由 worker 在「导入前 monkey-patch torch.load 设 weights_only=False」处理
+    （见 rvc_worker / svc_worker），不再改写源码里的 torch.load。
+
+    本函数只负责「修复」早期版本的错误补丁：当时用的正则无法处理嵌套括号，会把
+    weights_only=False 误插进 torch.device(...)，得到
+        torch.load(f, map_location=torch.device("cpu", weights_only=False))
+    在 torch.device() 阶段即抛 TypeError，连带 hubert 加载失败、RVC 报
+    'tuple' object has no attribute 'dtype'。这里把它还原回 torch.device("cpu")。
+    幂等：无损坏时不改动。
     """
     try:
         out = subprocess.run(
@@ -639,35 +676,28 @@ def _patch_fairseq_weights_only(py: Path) -> None:
             capture_output=True, text=True, timeout=60,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        print(c("y", f"    定位 fairseq 失败，跳过 weights_only 补丁：{exc}"))
+        print(c("y", f"    定位 fairseq 失败，跳过修复：{exc}"))
         return
     base = out.stdout.strip()
     if not base:
-        print(c("y", "    未找到 fairseq 安装路径，跳过 weights_only 补丁"))
+        print(c("y", "    未找到 fairseq 安装路径，跳过修复"))
         return
     cu = Path(base) / "checkpoint_utils.py"
     if not cu.exists():
-        print(c("y", f"    未找到 {cu}，跳过 weights_only 补丁"))
+        print(c("y", f"    未找到 {cu}，跳过修复"))
         return
     text = cu.read_text(encoding="utf-8", errors="replace")
-    if "weights_only" in text:
-        print(c("g", "    fairseq checkpoint_utils 已含 weights_only，跳过"))
-        return
-    # torch.load(f, map_location=...) -> 追加 weights_only=False
-    patched = re.sub(
-        r"torch\.load\((?P<args>[^)]*?)\)",
-        lambda m: (
-            m.group(0)
-            if "weights_only" in m.group("args")
-            else f"torch.load({m.group('args').rstrip()}, weights_only=False)"
-        ),
+    # 还原早期错误补丁：把误插进 torch.device(...) 的 weights_only 去掉（兼容单双引号/空格）
+    fixed = re.sub(
+        r"""torch\.device\(\s*(['"])cpu\1\s*,\s*weights_only\s*=\s*False\s*\)""",
+        lambda m: f"torch.device({m.group(1)}cpu{m.group(1)})",
         text,
     )
-    if patched != text:
-        cu.write_text(patched, encoding="utf-8")
-        print(c("g", "    已给 fairseq checkpoint_utils 打 weights_only=False 补丁"))
+    if fixed != text:
+        cu.write_text(fixed, encoding="utf-8")
+        print(c("g", "    已修复 fairseq checkpoint_utils 的 torch.device 误插补丁"))
     else:
-        print(c("y", "    fairseq checkpoint_utils 未匹配到 torch.load，未改动"))
+        print(c("g", "    fairseq checkpoint_utils 无需修复（weights_only 由 worker 运行时处理）"))
 
 
 def step_rvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
@@ -699,6 +729,8 @@ def step_rvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
             index=TORCH_BLACKWELL_INDEX,
         )
         pip("rvc-python")
+        # 兜底：rvc-python/fairseq 可能把 cu128 torch 换成同号 CPU 版 → 强制校正回 cu128
+        _reaffirm_blackwell_torch(uv, py)
         _patch_fairseq_weights_only(venv_python(RVC_VENV))
         print(c("g", "RVC 推理环境就绪（Blackwell/cu128）"))
         return
