@@ -143,6 +143,7 @@ flowchart LR
 | **Git**（可选）          | 获取 so-vits-svc 仓库 | 没有也行，安装器会自动下载 ZIP                                                                                                |
 | **CUDA 12.1**（可选）    | GPU 加速            | 有 NVIDIA 显卡则自动装 cu121 版 PyTorch，无则用 CPU                                                                          |
 | **Node.js LTS**（含 npm） | 构建前端              | 仅「从源码安装」需要                                                                                                       |
+| **C++ 生成工具**（可选）   | 编译依赖              | 部分 Python 包需要 C++14 编译器；安装时勾选 **Desktop development with C++** |
 
 
 #### 🔗 安装链接
@@ -155,6 +156,7 @@ flowchart LR
 | **CUDA Toolkit 12.1** | [https://developer.nvidia.com/cuda-12-1-0-download-archive](https://developer.nvidia.com/cuda-12-1-0-download-archive) |
 | **ffmpeg** | [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html) |
 | **Node.js LTS** | [https://nodejs.org/](https://nodejs.org/) |
+| **C++ Build Tools** | [https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/) |
 
 > 💡 **关于 CUDA**：GPU 版默认安装 PyTorch 的 **cu121** 预编译 wheel（已内置 CUDA 12.1 运行库），通常**只需较新的 NVIDIA 驱动**即可，无需手动装整套 CUDA Toolkit。若需自行安装，可从官方下载 **[CUDA Toolkit 12.1](https://developer.nvidia.com/cuda-12-1-0-download-archive)**（建议显卡驱动版本 ≥ 530）。
 
