@@ -5,7 +5,7 @@
       <div>
         <p class="eyebrow">// AI 翻唱</p>
         <h1>歌声转换工作台</h1>
-        <p class="page-sub">上传歌曲 → 选择 SVC 模型 → 调整参数 → 一键生成翻唱</p>
+        <p class="page-sub">上传歌曲 → 选择 S模型 → 调整参数 → 一键生成翻唱</p>
       </div>
     </div>
 
@@ -332,7 +332,7 @@
             <span class="step-no">04</span>
             <h2>歌词分句指派</h2>
           </div>
-          <p class="field-tip">按歌名获取带时间轴的歌词，再为每句指派演唱模型</p>
+          <p class="field-tip">按歌名在线获取，或导入带时间轴的歌词文件（.lrc），再为每句指派演唱模型</p>
 
           <div class="lyric-fetch">
             <input
@@ -347,6 +347,16 @@
               <el-option v-for="s in lyricSources" :key="s.id" :label="s.name" :value="s.id" />
             </el-select>
             <el-button round class="ghost-btn" :loading="lyricLoading" @click="fetchLyrics">获取歌词</el-button>
+            <el-button round class="ghost-btn" @click="pickLrc">
+              <el-icon class="el-icon--left"><Upload /></el-icon>导入歌词文件
+            </el-button>
+            <input
+              ref="lrcInput"
+              type="file"
+              accept=".lrc,.txt,text/plain"
+              hidden
+              @change="onLrcFile"
+            />
           </div>
 
           <!-- 对齐校验 -->
@@ -360,7 +370,7 @@
           </div>
 
           <!-- 快捷指派 -->
-          <div v-if="lyrics.length && pickedModels.length" class="assign-quick">
+          <div v-if="segments.length && pickedModels.length" class="assign-quick">
             <span class="muted">批量：</span>
             <button
               v-for="pm in pickedModels"
@@ -369,97 +379,188 @@
               :style="{ '--mc': pm.color }"
               @click="assignAll(pm.id)"
             >全指派给 {{ pm.name }}</button>
-            <span class="muted assign-tip">每句可多选模型 → 合唱同唱一句</span>
+            <span class="muted assign-tip">每段可多选模型 → 合唱同唱一段</span>
           </div>
 
-          <!-- 可视化时间轴（总览）-->
-          <div v-if="lyrics.length && pickedModels.length" class="timeline-wrap">
+          <!-- 可视化时间轴（缩略预览，编辑在弹窗中进行，避免撑破内联布局）-->
+          <div v-if="segments.length && pickedModels.length" class="timeline-wrap">
             <div class="timeline-head">
-              <span class="tl-title"><el-icon><Operation /></el-icon> 时间轴总览</span>
+              <span class="tl-title"><el-icon><Operation /></el-icon> 时间轴</span>
+              <div class="tl-tools">
+                <button class="tl-zoom" title="撤销" :disabled="!canUndo" @click="undo"><el-icon><RefreshLeft /></el-icon></button>
+                <button class="tl-zoom" title="重做" :disabled="!canRedo" @click="redo"><el-icon><RefreshRight /></el-icon></button>
+                <button class="tl-zoom" title="复原为初始切分" @click="resetTimeline"><el-icon><Refresh /></el-icon></button>
+                <button class="tl-enlarge" title="放大编辑时间轴" @click="openTlDialog">
+                  <el-icon><FullScreen /></el-icon>放大编辑
+                </button>
+              </div>
+            </div>
+            <div class="tl-legend">
+              <span v-for="pm in pickedModels" :key="pm.id" class="tl-leg">
+                <span class="tl-leg-dot" :style="{ background: pm.color }"></span>{{ pm.name }}
+              </span>
+              <span class="tl-leg"><span class="tl-leg-dot idle"></span>间奏</span>
+            </div>
+            <!-- 内联缩略预览：色块按比例铺满，固定高度 + overflow:hidden，配合已钳制的 left/width 百分比
+                 与固定的总时长，任何极端片段都被裁进容器内，绝不撑破布局。点击进入弹窗编辑。 -->
+            <div class="tl-mini" title="点击放大编辑时间轴" @click="openTlDialog">
+              <div
+                v-for="blk in timelineBlocks"
+                :key="blk.id"
+                class="tl-mini-block"
+                :class="{ 'is-idle': !blk.ids.length, 'is-chorus': blk.ids.length > 1 }"
+                :style="{ left: blk.leftPct + '%', width: blk.widthPct + '%', ...blockStyle(blk.ids) }"
+              ></div>
+            </div>
+            <p class="tl-hint muted">缩略预览。点击「放大编辑」可拖动边界 / 缩放 / 拆分合并；撤销 / 重做 / 复原随时回退误操作。</p>
+          </div>
+
+          <!-- 放大编辑弹窗 -->
+          <el-dialog
+            v-model="tlDialog"
+            title="时间轴编辑"
+            width="92%"
+            top="5vh"
+            append-to-body
+            destroy-on-close
+            class="tl-dialog"
+            @opened="onTlOpened"
+            @closed="onTlClosed"
+          >
+            <div class="tl-dialog-bar">
               <div class="tl-legend">
                 <span v-for="pm in pickedModels" :key="pm.id" class="tl-leg">
                   <span class="tl-leg-dot" :style="{ background: pm.color }"></span>{{ pm.name }}
                 </span>
                 <span class="tl-leg"><span class="tl-leg-dot idle"></span>间奏</span>
               </div>
+              <div class="tl-tools">
+                <button class="tl-zoom" title="撤销" :disabled="!canUndo" @click="undo"><el-icon><RefreshLeft /></el-icon></button>
+                <button class="tl-zoom" title="重做" :disabled="!canRedo" @click="redo"><el-icon><RefreshRight /></el-icon></button>
+                <button class="tl-enlarge" title="复原为初始切分" @click="resetTimeline"><el-icon><Refresh /></el-icon>复原</button>
+                <span class="tl-sep"></span>
+                <button class="tl-zoom" title="缩小" @click="zoomOut"><el-icon><ZoomOut /></el-icon></button>
+                <span class="tl-zoom-val">{{ Math.round(zoom * 100) }}%</span>
+                <button class="tl-zoom" title="放大" @click="zoomIn"><el-icon><ZoomIn /></el-icon></button>
+                <button class="tl-zoom" title="重置缩放" @click="zoomReset"><el-icon><FullScreen /></el-icon></button>
+              </div>
             </div>
-            <!-- 时间刻度 -->
-            <div class="tl-ruler">
-              <span
-                v-for="mk in rulerMarks"
-                :key="mk.pct"
-                class="tl-tick"
-                :style="{ left: mk.pct + '%' }"
-              >{{ mk.label }}</span>
-            </div>
-            <!-- 片段轨道 -->
-            <div class="tl-track">
-              <el-popover
-                v-for="blk in timelineBlocks"
-                :key="blk.i"
-                placement="top"
-                :width="232"
-                trigger="click"
-                popper-class="assign-popover"
-              >
-                <template #reference>
-                  <button
-                    class="tl-block"
-                    :class="{ 'is-idle': !blk.ids.length, 'is-chorus': blk.ids.length > 1 }"
-                    :style="{ left: blk.leftPct + '%', width: blk.widthPct + '%', ...blockStyle(blk.ids) }"
-                    :title="`${fmtTime(blk.start)} - ${fmtTime(blk.end)}　${blk.text}`"
-                  >
-                    <span v-if="blk.ids.length > 1" class="tl-block-chorus">{{ blk.ids.length }}</span>
-                    <span class="tl-block-label">{{ blk.label }}</span>
-                  </button>
-                </template>
-                <div class="pick-pop">
-                  <p class="pick-hint">{{ fmtTime(blk.start) }} · {{ blk.text || '（无歌词）' }}</p>
-                  <button
-                    v-for="pm in pickedModels"
-                    :key="pm.id"
-                    class="pick-item"
-                    :class="{ on: isAssigned(blk.i, pm.id) }"
-                    :style="{ '--mc': pm.color }"
-                    @click="toggleAssign(blk.i, pm.id)"
-                  >
-                    <span class="pick-dot" :style="{ background: pm.color }"></span>
-                    <span class="pick-name">{{ pm.name }}</span>
-                    <el-icon v-if="isAssigned(blk.i, pm.id)" class="pick-check"><Check /></el-icon>
-                  </button>
+            <!-- 横向可滚动的缩放视口：trackEl 量取的是固定宽度的外层视口，
+                 与内部会随缩放变宽的 .tl-inner 彻底解耦，避免 ResizeObserver 自反馈把轨道越撑越大 -->
+            <div ref="trackEl" class="tl-viewport">
+              <div class="tl-scroll tl-scroll-lg">
+                <div class="tl-inner" :style="{ width: innerPx + 'px' }">
+                <!-- 时间刻度 -->
+                <div class="tl-ruler">
+                  <span
+                    v-for="mk in rulerMarks"
+                    :key="mk.pct"
+                    class="tl-tick"
+                    :style="{ left: mk.pct + '%' }"
+                  >{{ mk.label }}</span>
                 </div>
-              </el-popover>
+                <!-- 片段轨道 -->
+                <div class="tl-track tl-track-lg">
+                  <el-popover
+                    v-for="blk in timelineBlocks"
+                    :key="blk.id"
+                    placement="top"
+                    :width="248"
+                    trigger="click"
+                    popper-class="assign-popover"
+                  >
+                    <template #reference>
+                      <div
+                        class="tl-block"
+                        :class="{ 'is-idle': !blk.ids.length, 'is-chorus': blk.ids.length > 1, dragging: draggingId === blk.id }"
+                        :style="{ left: blk.leftPct + '%', width: blk.widthPct + '%', ...blockStyle(blk.ids) }"
+                        :title="`${fmtTime(blk.start)} - ${fmtTime(blk.end)}　${blk.text}`"
+                      >
+                        <span
+                          class="tl-grip l"
+                          title="拖动调整起点（吸附歌词时间）"
+                          @pointerdown="beginDrag(blk.seg, 'start', $event)"
+                          @click.stop
+                        ></span>
+                        <span v-if="blk.ids.length > 1" class="tl-block-chorus">{{ blk.ids.length }}</span>
+                        <span class="tl-block-label">{{ blk.label }}</span>
+                        <span
+                          class="tl-grip r"
+                          title="拖动调整终点（吸附歌词时间）"
+                          @pointerdown="beginDrag(blk.seg, 'end', $event)"
+                          @click.stop
+                        ></span>
+                      </div>
+                    </template>
+                    <div class="pick-pop">
+                      <p class="pick-hint">{{ fmtTime(blk.start) }} – {{ fmtTime(blk.end) }} · {{ blk.text || '（无歌词）' }}</p>
+                      <button
+                        v-for="pm in pickedModels"
+                        :key="pm.id"
+                        class="pick-item"
+                        :class="{ on: isAssigned(blk.id, pm.id) }"
+                        :style="{ '--mc': pm.color }"
+                        @click="toggleAssign(blk.id, pm.id)"
+                      >
+                        <span class="pick-dot" :style="{ background: pm.color }"></span>
+                        <span class="pick-name">{{ pm.name }}</span>
+                        <el-icon v-if="isAssigned(blk.id, pm.id)" class="pick-check"><Check /></el-icon>
+                      </button>
+                      <div class="pick-acts">
+                        <button class="pick-act" title="从中点拆分" @click="splitSegment(blk.seg)">
+                          <el-icon><Scissor /></el-icon>拆分
+                        </button>
+                        <button class="pick-act" title="与后一段合并" @click="mergeWithNext(blk.seg)">
+                          <el-icon><Connection /></el-icon>合并
+                        </button>
+                        <button class="pick-act" title="设为间奏（不唱）" @click="clearSegModels(blk.id)">
+                          <el-icon><Mute /></el-icon>间奏
+                        </button>
+                        <button class="pick-act danger" title="删除该片段" @click="removeSegment(blk.seg)">
+                          <el-icon><Delete /></el-icon>删除
+                        </button>
+                      </div>
+                    </div>
+                  </el-popover>
+                </div>
+              </div>
+              </div>
             </div>
-            <p class="tl-hint muted">点击色块为该句指派 / 增减模型；色块宽度即该句时长，多模型为「合唱」。</p>
-          </div>
+            <p class="tl-hint muted">拖动色块左右边缘调整起止（自动吸附歌词时间）；点击色块指派模型 / 拆分 / 合并 / 删除；缩放放大局部精修；左上角可撤销 / 重做 / 复原。</p>
+          </el-dialog>
 
-          <!-- 歌词逐句 -->
-          <div v-if="lyrics.length" class="lyric-list">
+          <!-- 片段逐段（与时间轴同一数据源）-->
+          <div v-if="segments.length" class="lyric-list">
             <div
-              v-for="(ln, i) in lyrics"
-              :key="i"
+              v-for="blk in timelineBlocks"
+              :key="blk.id"
               class="lyric-row"
-              :class="{ 'is-chorus': (assignments[i] || []).length > 1, 'is-idle': !(assignments[i] || []).length }"
+              :class="{ 'is-chorus': blk.ids.length > 1, 'is-idle': !blk.ids.length }"
             >
-              <span class="ly-time">{{ fmtTime(ln.time + offset) }}</span>
-              <span class="ly-text" :title="ln.text">{{ ln.text }}</span>
+              <span class="ly-time">{{ fmtTime(blk.start) }}<br />{{ fmtTime(blk.end) }}</span>
+              <span class="ly-text" :title="blk.text">{{ blk.text || '（无歌词）' }}</span>
               <div class="ly-assign">
-                <span v-if="(assignments[i] || []).length > 1" class="chorus-tag">
-                  <el-icon><Microphone /></el-icon>合唱 ×{{ (assignments[i] || []).length }}
+                <span v-if="blk.ids.length > 1" class="chorus-tag">
+                  <el-icon><Microphone /></el-icon>合唱 ×{{ blk.ids.length }}
                 </span>
                 <span
-                  v-for="id in (assignments[i] || [])"
+                  v-for="id in visibleChips(blk.seg)"
                   :key="id"
                   class="model-chip"
                   :style="chipStyle(id)"
                 >
                   <span class="chip-dot" :style="{ background: modelColor(id) }"></span>
                   <span class="chip-name">{{ modelName(id) }}</span>
-                  <button class="chip-x" title="移除" @click.stop="removeAssign(i, id)">
+                  <button class="chip-x" title="移除" @click.stop="removeAssign(blk.id, id)">
                     <el-icon><Close /></el-icon>
                   </button>
                 </span>
-                <span v-if="!(assignments[i] || []).length" class="idle-chip">间奏 · 不唱</span>
+                <button
+                  v-if="blk.ids.length > visibleChips(blk.seg).length || (isExpanded(blk.id) && blk.ids.length > 3)"
+                  class="more-chip"
+                  @click.stop="toggleExpand(blk.id)"
+                >{{ isExpanded(blk.id) ? '收起' : '+' + (blk.ids.length - 3) }}</button>
+                <span v-if="!blk.ids.length" class="idle-chip">间奏 · 不唱</span>
                 <el-popover
                   placement="bottom-end"
                   :width="232"
@@ -467,31 +568,36 @@
                   popper-class="assign-popover"
                 >
                   <template #reference>
-                    <button class="add-chip" :title="(assignments[i] || []).length ? '增减演唱模型' : '指派模型'">
+                    <button class="add-chip" :title="blk.ids.length ? '增减演唱模型' : '指派模型'">
                       <el-icon><Plus /></el-icon>
                     </button>
                   </template>
                   <div class="pick-pop">
-                    <p class="pick-hint">点选模型演唱本句，多选即「合唱」</p>
+                    <p class="pick-hint">点选模型演唱本段，多选即「合唱」</p>
                     <button
                       v-for="pm in pickedModels"
                       :key="pm.id"
                       class="pick-item"
-                      :class="{ on: isAssigned(i, pm.id) }"
+                      :class="{ on: isAssigned(blk.id, pm.id) }"
                       :style="{ '--mc': pm.color }"
-                      @click="toggleAssign(i, pm.id)"
+                      @click="toggleAssign(blk.id, pm.id)"
                     >
                       <span class="pick-dot" :style="{ background: pm.color }"></span>
                       <span class="pick-name">{{ pm.name }}</span>
-                      <el-icon v-if="isAssigned(i, pm.id)" class="pick-check"><Check /></el-icon>
+                      <el-icon v-if="isAssigned(blk.id, pm.id)" class="pick-check"><Check /></el-icon>
                     </button>
                   </div>
                 </el-popover>
+                <div class="seg-ops">
+                  <button class="seg-op" title="从中点拆分" @click.stop="splitSegment(blk.seg)"><el-icon><Scissor /></el-icon></button>
+                  <button class="seg-op" title="与后一段合并" @click.stop="mergeWithNext(blk.seg)"><el-icon><Connection /></el-icon></button>
+                  <button class="seg-op danger" title="删除片段" @click.stop="removeSegment(blk.seg)"><el-icon><Delete /></el-icon></button>
+                </div>
               </div>
             </div>
           </div>
           <div v-else-if="lyricTried && !lyricLoading" class="lyric-empty">
-            未获取到歌词，请检查歌名 / 序号 / 曲库后重试。
+            未获取到歌词，请检查歌名 / 序号 / 曲库后重试，或导入 .lrc 歌词文件。
           </div>
         </section>
 
@@ -610,8 +716,18 @@ import {
   Clock,
   Plus,
   Check,
+  Upload,
+  ZoomIn,
+  ZoomOut,
+  Refresh,
+  Scissor,
+  Connection,
+  Mute,
+  Delete,
+  FullScreen,
+  RefreshLeft,
 } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   api,
   type WorkDTO,
@@ -775,12 +891,51 @@ const songIndex = ref(1)
 const lyricSrc = ref('wy')
 const lyricSources = ref<MusicSource[]>([{ id: 'wy', name: '网易云音乐', cookie: false }])
 const lyrics = ref<LyricLine[]>([])
-// 每句歌词指派的模型 id 列表（空=间奏/不唱，1=独唱，>1=合唱）
-const assignments = ref<string[][]>([])
 const offset = ref(0)
 const lyricLoading = ref(false)
 const lyricTried = ref(false)
 const audioDuration = ref(0)
+
+/* ====== 可编辑片段（多模型时间轴的唯一数据源） ======
+   片段与歌词解耦：歌词只作为「初始切分」与「吸附锚点」，
+   片段拥有独立的起止时间与模型指派，可拖动边界 / 拆分 / 合并。 */
+interface EditSegment {
+  id: string
+  start: number
+  end: number
+  modelIds: string[]
+  text: string
+}
+const segments = ref<EditSegment[]>([])
+let segSeq = 0
+function newSegId() {
+  segSeq += 1
+  return `seg_${segSeq}_${Date.now().toString(36)}`
+}
+
+/** 由当前歌词（含 offset）初始化片段：逐句一段，默认指派首个已选模型。 */
+function buildSegmentsFromLyrics() {
+  const arr = lyrics.value
+  const first = pickedModels.value[0]?.id || ''
+  const dur = audioDuration.value || (arr.length ? (arr[arr.length - 1]!.time + offset.value + 5) : 0)
+  segments.value = arr.map((ln, i) => {
+    const start = Math.max(0, ln.time + offset.value)
+    const nextLine = arr[i + 1]
+    const end = nextLine ? Math.max(start, nextLine.time + offset.value) : Math.max(start + 1, dur)
+    return {
+      id: newSegId(),
+      start,
+      end,
+      modelIds: first ? [first] : [],
+      text: ln.text,
+    }
+  })
+}
+
+/** 片段按起点排序（模板与生成都以此为准）。 */
+const sortedSegments = computed(() =>
+  [...segments.value].sort((a, b) => a.start - b.start),
+)
 
 async function fetchLyrics() {
   const q = songQuery.value.trim()
@@ -794,25 +949,136 @@ async function fetchLyrics() {
     const res = await api.getMusicLyrics(q, songIndex.value || 1, lyricSrc.value)
     if (!res.ok || !res.lines?.length) {
       lyrics.value = []
-      assignments.value = []
+      segments.value = []
       ElMessage.error(res.error || '未获取到歌词')
       return
     }
     lyrics.value = res.lines
-    const first = pickedModels.value[0]?.id || ''
-    assignments.value = res.lines.map(() => (first ? [first] : []))
     if (song.value?.path) {
       audioDuration.value = await api.getAudioDuration(song.value.path)
     }
+    buildSegmentsFromLyrics()
+    clearHistory()
   } finally {
     lyricLoading.value = false
   }
 }
 
-function assignAll(id: string) {
-  assignments.value = lyrics.value.map(() => [id])
+/* ---- 导入本地带时间轴的歌词文件（.lrc）---- */
+const lrcInput = ref<HTMLInputElement | null>(null)
+function pickLrc() {
+  lrcInput.value?.click()
 }
-/* ---- 逐句指派：彩色模型胶囊 + 弹出选择 ---- */
+function onLrcFile(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = async () => {
+    const lines = parseLrc(String(reader.result || ''))
+    if (!lines.length) {
+      ElMessage.error('未在文件中找到带时间轴的歌词（需 LRC 格式，形如 [00:12.34] 歌词）')
+      return
+    }
+    lyrics.value = lines
+    lyricTried.value = true
+    if (song.value?.path && !audioDuration.value) {
+      audioDuration.value = await api.getAudioDuration(song.value.path)
+    }
+    buildSegmentsFromLyrics()
+    clearHistory()
+    ElMessage.success(`已导入 ${lines.length} 句歌词`)
+  }
+  reader.onerror = () => ElMessage.error('读取歌词文件失败')
+  reader.readAsText(file, 'utf-8')
+}
+/** 解析 LRC 文本为按时间排序的歌词行；支持一行多时间标签，忽略元数据与纯时间空行。 */
+function parseLrc(text: string): LyricLine[] {
+  const out: LyricLine[] = []
+  const tagRe = /\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g
+  for (const raw of text.split(/\r?\n/)) {
+    tagRe.lastIndex = 0
+    const times: number[] = []
+    let m: RegExpExecArray | null
+    while ((m = tagRe.exec(raw)) !== null) {
+      const mm = parseInt(m[1]!, 10)
+      const ss = parseInt(m[2]!, 10)
+      let frac = 0
+      if (m[3]) frac = parseInt(m[3], 10) / Math.pow(10, m[3].length)
+      times.push(mm * 60 + ss + frac)
+    }
+    if (!times.length) continue
+    const content = raw.replace(tagRe, '').trim()
+    if (!content) continue
+    for (const t of times) out.push({ time: Math.max(0, t), text: content })
+  }
+  out.sort((a, b) => a.time - b.time)
+  return out
+}
+
+const MIN_SEG = 0.3 // 片段最短时长（秒），防止拖出零宽片段
+const SNAP_PX = 8 // 吸附阈值（像素）
+
+function clamp(v: number, lo: number, hi: number) {
+  return Math.min(hi, Math.max(lo, v))
+}
+function segById(id: string): EditSegment | undefined {
+  return segments.value.find((s) => s.id === id)
+}
+
+/* ====== 撤销 / 重做 / 复原 ======
+   每次会改动片段的操作前调用 commit() 存一份快照；
+   undo/redo 在过去/未来栈之间搬运，reset 复原为歌词初始切分。 */
+const past = ref<string[]>([])
+const future = ref<string[]>([])
+const HIST_MAX = 120
+function snapshot(): string {
+  return JSON.stringify(segments.value)
+}
+/** 在改动发生「之前」保存当前状态，并清空重做栈。 */
+function commit() {
+  past.value.push(snapshot())
+  if (past.value.length > HIST_MAX) past.value.shift()
+  future.value = []
+}
+function clearHistory() {
+  past.value = []
+  future.value = []
+}
+const canUndo = computed(() => past.value.length > 0)
+const canRedo = computed(() => future.value.length > 0)
+function undo() {
+  if (!past.value.length) return
+  future.value.push(snapshot())
+  segments.value = JSON.parse(past.value.pop() as string)
+}
+function redo() {
+  if (!future.value.length) return
+  past.value.push(snapshot())
+  segments.value = JSON.parse(future.value.pop() as string)
+}
+async function resetTimeline() {
+  if (!lyrics.value.length) return
+  try {
+    await ElMessageBox.confirm(
+      '将丢弃所有拖动 / 拆分 / 合并 / 指派的修改，恢复为按歌词时间的初始切分。是否继续？',
+      '复原时间轴',
+      { confirmButtonText: '复原', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  commit()
+  buildSegmentsFromLyrics()
+  ElMessage.success('已复原为初始时间轴')
+}
+
+/* ---- 片段模型指派（独立于歌词，按片段 id 操作）---- */
+function assignAll(id: string) {
+  commit()
+  for (const s of segments.value) s.modelIds = [id]
+}
 function modelName(id: string): string {
   return pickedModels.value.find((x) => x.id === id)?.name || '未知模型'
 }
@@ -828,21 +1094,90 @@ function chipStyle(id: string) {
     background: `color-mix(in srgb, ${c} 14%, transparent)`,
   }
 }
-function isAssigned(i: number, id: string): boolean {
-  return (assignments.value[i] || []).includes(id)
+function isAssigned(segId: string, id: string): boolean {
+  return !!segById(segId)?.modelIds.includes(id)
 }
-/** 在第 i 句里切换某模型的「参与合唱」状态。 */
-function toggleAssign(i: number, id: string) {
-  const cur = [...(assignments.value[i] || [])]
-  const idx = cur.indexOf(id)
-  if (idx >= 0) cur.splice(idx, 1)
-  else cur.push(id)
-  assignments.value[i] = cur
+/** 切换某模型在该片段的「参与演唱 / 合唱」状态。 */
+function toggleAssign(segId: string, id: string) {
+  const s = segById(segId)
+  if (!s) return
+  commit()
+  const idx = s.modelIds.indexOf(id)
+  if (idx >= 0) s.modelIds.splice(idx, 1)
+  else s.modelIds.push(id)
 }
-function removeAssign(i: number, id: string) {
-  const cur = assignments.value[i] || []
-  assignments.value[i] = cur.filter((x) => x !== id)
+function removeAssign(segId: string, id: string) {
+  const s = segById(segId)
+  if (!s) return
+  commit()
+  s.modelIds = s.modelIds.filter((x) => x !== id)
 }
+function clearSegModels(segId: string) {
+  const s = segById(segId)
+  if (!s) return
+  commit()
+  s.modelIds = []
+}
+
+/* ---- 合唱多模型：超过上限折叠为 +N，避免撑破布局 ---- */
+const CHIP_LIMIT = 3
+const expandedSegs = ref<Set<string>>(new Set())
+function isExpanded(id: string): boolean {
+  return expandedSegs.value.has(id)
+}
+function toggleExpand(id: string) {
+  const next = new Set(expandedSegs.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  expandedSegs.value = next
+}
+function visibleChips(seg: EditSegment): string[] {
+  if (isExpanded(seg.id) || seg.modelIds.length <= CHIP_LIMIT) return seg.modelIds
+  return seg.modelIds.slice(0, CHIP_LIMIT)
+}
+
+/* ---- 拆分 / 合并 / 删除片段 ---- */
+function splitSegment(seg: EditSegment) {
+  const mid = (seg.start + seg.end) / 2
+  if (mid - seg.start < MIN_SEG || seg.end - mid < MIN_SEG) {
+    ElMessage.info('片段太短，无法拆分')
+    return
+  }
+  commit()
+  const right: EditSegment = {
+    id: newSegId(),
+    start: mid,
+    end: seg.end,
+    modelIds: [...seg.modelIds],
+    text: seg.text,
+  }
+  seg.end = mid
+  const idx = segments.value.findIndex((s) => s.id === seg.id)
+  segments.value.splice(idx + 1, 0, right)
+  rederiveTexts()
+}
+function mergeWithNext(seg: EditSegment) {
+  const ord = sortedSegments.value
+  const pos = ord.findIndex((s) => s.id === seg.id)
+  const next = ord[pos + 1]
+  if (!next) {
+    ElMessage.info('已是最后一个片段')
+    return
+  }
+  commit()
+  seg.end = Math.max(seg.end, next.end)
+  const merged = [...seg.modelIds]
+  for (const m of next.modelIds) if (!merged.includes(m)) merged.push(m)
+  seg.modelIds = merged
+  seg.text = [seg.text, next.text].filter(Boolean).join(' ')
+  segments.value = segments.value.filter((s) => s.id !== next.id)
+  rederiveTexts()
+}
+function removeSegment(seg: EditSegment) {
+  commit()
+  segments.value = segments.value.filter((s) => s.id !== seg.id)
+}
+
 function fmtTime(t: number) {
   const s = Math.max(0, t)
   const mm = Math.floor(s / 60)
@@ -850,46 +1185,120 @@ function fmtTime(t: number) {
   return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
 }
 
-/* ---- 可视化时间轴（总览）---- */
-/** 时间轴总时长：优先用音频实际时长，否则用末句时间兜底。 */
+/* ---- 时间轴尺寸 / 缩放 ---- */
+const zoom = ref(1)
+const trackEl = ref<HTMLElement | null>(null)
+const trackW = ref(800)
+function measureTrack() {
+  // 仅在元素可见（宽度 > 0）时更新，避免对话框关闭/隐藏瞬间量到 0 造成换算错乱
+  const w = trackEl.value?.clientWidth ?? 0
+  if (w > 0) trackW.value = w
+}
+/** 时间轴内容像素宽（= 可视宽 × 缩放倍数），用于像素↔时间换算。 */
+const innerPx = computed(() => Math.max(320, trackW.value * zoom.value))
+function zoomIn() {
+  zoom.value = Math.min(10, +(zoom.value * 1.5).toFixed(3))
+}
+function zoomOut() {
+  zoom.value = Math.max(1, +(zoom.value / 1.5).toFixed(3))
+}
+function zoomReset() {
+  zoom.value = 1
+}
+
+/* ---- 弹出放大编辑 ---- */
+const tlDialog = ref(false)
+function openTlDialog() {
+  // 每次进入放大编辑都从 100% 起步，避免上次的缩放残留把轨道撑爆
+  zoom.value = 1
+  tlDialog.value = true
+}
+function onTlOpened() {
+  // 对话框过渡结束后再量取轨道宽度，保证像素↔时间换算正确
+  measureTrack()
+}
+function onTlClosed() {
+  // 关闭即复位缩放，确保任何缩放状态都不会泄漏到关闭后的视图
+  zoom.value = 1
+}
+
+/* ---- 时间轴总览 ---- */
+/** 拖动期间冻结的总时长：拖动时锁定，避免「拖长片段→总时长变大→整轴重新缩放→边缘跑飞」的自反馈。 */
+const frozenDur = ref(0)
+/** 总时长（= 时间轴总宽度）：仅由音频时长 / 歌词兜底决定，是一条固定的轴。
+    刻意不把「片段最末端」纳入计算——否则拉长某个片段会撑大总时长，导致整轴（含迷你预览）
+    被等比例重新缩放。固定总宽后，编辑片段只是在这条轴上重新分配，永远不会超过总宽。
+    拖动中返回冻结值保持比例稳定。 */
 const timelineDuration = computed(() => {
+  if (frozenDur.value > 0) return frozenDur.value
   const arr = lyrics.value
   const last = arr[arr.length - 1]
   const byLyric = last ? last.time + offset.value + 5 : 0
-  return Math.max(1, audioDuration.value || byLyric)
+  return Math.max(1, audioDuration.value || 0, byLyric)
 })
 
-/** 每句歌词映射成时间轴色块：起止由本句与下一句时间决定，按比例定位。 */
+/** 吸附锚点：0 / 总时长 / 各歌词时间 / 其它片段边界。 */
+function snapCandidates(excludeId: string): number[] {
+  const out: number[] = [0, timelineDuration.value]
+  for (const ln of lyrics.value) out.push(Math.max(0, ln.time + offset.value))
+  for (const s of segments.value) {
+    if (s.id === excludeId) continue
+    out.push(s.start, s.end)
+  }
+  return out
+}
+/** 把时间吸附到最近的锚点（阈值内）。pxPerSec 传入拖动锁定值，确保吸附判定与屏幕一致。 */
+function applySnap(t: number, excludeId: string, pxPerSec?: number): number {
+  const pps = pxPerSec ?? innerPx.value / timelineDuration.value
+  let best = t
+  let bestDpx = SNAP_PX + 1
+  for (const c of snapCandidates(excludeId)) {
+    const dpx = Math.abs((c - t) * pps)
+    if (dpx < bestDpx) {
+      bestDpx = dpx
+      best = c
+    }
+  }
+  return bestDpx <= SNAP_PX ? best : t
+}
+
+/** 片段映射为时间轴色块（按片段排序，百分比定位于内容宽度内）。 */
 const timelineBlocks = computed(() => {
   const dur = timelineDuration.value
-  const arr = lyrics.value
-  return arr.map((ln, i) => {
-    const start = Math.max(0, ln.time + offset.value)
-    const nextLine = arr[i + 1]
-    const next = nextLine ? nextLine.time + offset.value : dur
-    const end = Math.min(dur, Math.max(start, next))
-    const ids = assignments.value[i] || []
-    const label = ids.length === 0 ? '' : ids.length === 1 ? modelName(ids[0]!) : `合唱`
+  return sortedSegments.value.map((s) => {
+    const ids = s.modelIds
+    const label = ids.length === 0 ? '' : ids.length === 1 ? modelName(ids[0]!) : '合唱'
+    const leftPct = clamp((s.start / dur) * 100, 0, 100)
+    const rawWidthPct = ((s.end - s.start) / dur) * 100
     return {
-      i,
-      start,
-      end,
+      id: s.id,
+      seg: s,
+      start: s.start,
+      end: s.end,
       ids,
-      text: ln.text,
+      text: s.text,
       label,
-      leftPct: (start / dur) * 100,
-      widthPct: Math.max(0.6, ((end - start) / dur) * 100),
+      leftPct,
+      // 宽度封顶到「轴右边界 - 左起点」，任何越界片段都被裁进 100% 内，绝不撑破轨道
+      widthPct: clamp(Math.max(0.4, rawWidthPct), 0.4, Math.max(0.4, 100 - leftPct)),
     }
   })
 })
 
-/** 时间刻度（0% / 25% / 50% / 75% / 100%）。 */
+/** 自适应时间刻度：随缩放在内容宽度上约每 ~90px 一格。 */
 const rulerMarks = computed(() => {
   const dur = timelineDuration.value
-  return [0, 0.25, 0.5, 0.75, 1].map((r) => ({
-    pct: r * 100,
-    label: fmtTime(dur * r),
-  }))
+  const target = Math.max(4, Math.round(innerPx.value / 90))
+  const rawStep = dur / target
+  const nice = [1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 300]
+  let step = nice.find((s) => s >= rawStep) || Math.ceil(rawStep)
+  // 安全阀：刻度数量封顶，杜绝异常时长/缩放导致刷出成千上万个刻度撑爆 DOM
+  if (dur / step > 400) step = Math.ceil(dur / 400)
+  const marks: { pct: number; label: string }[] = []
+  for (let t = 0; t <= dur + 0.001; t += step) {
+    marks.push({ pct: (t / dur) * 100, label: fmtTime(t) })
+  }
+  return marks
 })
 
 /** 色块配色：无模型=间奏底色；单模型=该色；多模型=合唱渐变。 */
@@ -901,6 +1310,129 @@ function blockStyle(ids: string[]) {
   }
   const stops = ids.map((id) => modelColor(id)).join(', ')
   return { background: `linear-gradient(90deg, ${stops})`, borderColor: 'transparent' }
+}
+
+/* ---- 边界拖动（pointer 事件，支持吸附）---- */
+type DragEdge = 'start' | 'end' | 'move'
+interface DragState {
+  id: string
+  edge: DragEdge
+  startX: number
+  origStart: number
+  origEnd: number
+  /** 拖动起始时锁定的「像素/秒」——取轨道真实渲染宽度，保证拖动距离与屏幕完全一致。 */
+  pxPerSec: number
+}
+let drag: DragState | null = null
+const draggingId = ref<string | null>(null)
+/** 轨道真实渲染像素宽：以实际 DOM 宽度为准（而非 innerPx 计算值），
+    避免 min-width / 量取滞后导致「像素↔秒」换算偏大，从而拖一点却拉伸很多。 */
+function trackPxWidth(): number {
+  const inner = trackEl.value?.querySelector('.tl-inner') as HTMLElement | null
+  const w = inner?.getBoundingClientRect().width || 0
+  return w > 0 ? w : Math.max(320, innerPx.value)
+}
+function beginDrag(seg: EditSegment, edge: DragEdge, ev: PointerEvent) {
+  ev.preventDefault()
+  ev.stopPropagation()
+  commit() // 每次拖动存一份拖动前快照，便于撤销
+  // 冻结总时长 + 像素基准：整段拖动期间比例完全稳定，不会越拖越长
+  const durStart = timelineDuration.value
+  frozenDur.value = durStart
+  const pxPerSec = trackPxWidth() / durStart
+  drag = { id: seg.id, edge, startX: ev.clientX, origStart: seg.start, origEnd: seg.end, pxPerSec }
+  draggingId.value = seg.id
+  window.addEventListener('pointermove', onDragMove)
+  window.addEventListener('pointerup', onDragEnd)
+}
+function onDragMove(ev: PointerEvent) {
+  if (!drag) return
+  const seg = segById(drag.id)
+  if (!seg) return
+  const dur = timelineDuration.value
+  const dt = (ev.clientX - drag.startX) / drag.pxPerSec
+  if (drag.edge === 'start') {
+    let ns = clamp(drag.origStart + dt, 0, seg.end - MIN_SEG)
+    ns = clamp(applySnap(ns, seg.id, drag.pxPerSec), 0, seg.end - MIN_SEG)
+    seg.start = ns
+  } else if (drag.edge === 'end') {
+    let ne = clamp(drag.origEnd + dt, seg.start + MIN_SEG, dur)
+    ne = clamp(applySnap(ne, seg.id, drag.pxPerSec), seg.start + MIN_SEG, dur)
+    seg.end = ne
+  } else {
+    const len = drag.origEnd - drag.origStart
+    let ns = clamp(drag.origStart + dt, 0, dur - len)
+    ns = clamp(applySnap(ns, seg.id, drag.pxPerSec), 0, dur - len)
+    seg.start = ns
+    seg.end = ns + len
+  }
+}
+function onDragEnd() {
+  if (drag) {
+    const seg = segById(drag.id)
+    const moved =
+      !!seg && (Math.abs(seg.start - drag.origStart) > 1e-3 || Math.abs(seg.end - drag.origEnd) > 1e-3)
+    const id = drag.id
+    drag = null
+    draggingId.value = null
+    frozenDur.value = 0 // 解冻总时长
+    window.removeEventListener('pointermove', onDragMove)
+    window.removeEventListener('pointerup', onDragEnd)
+    // 拉伸覆盖到邻居时：自动吞并 / 推挤消除重叠，再按覆盖到的歌词刷新文案
+    if (moved) {
+      consolidateOverlaps(id)
+      rederiveTexts()
+    } else {
+      // 没有实际移动（只是点了下手柄）→ 回收刚才多存的快照，避免空撤销
+      past.value.pop()
+    }
+    return
+  }
+  drag = null
+  draggingId.value = null
+  frozenDur.value = 0
+  window.removeEventListener('pointermove', onDragMove)
+  window.removeEventListener('pointerup', onDragEnd)
+}
+
+/** 让被拖动片段 d 「吞并 / 推挤」与之重叠的邻居，保证片段不重叠。
+    完全落入 d 范围的邻居被吞并（删除，覆盖权归 d）；部分重叠的邻居被推挤出 d。 */
+function consolidateOverlaps(id: string) {
+  const d = segById(id)
+  if (!d) return
+  const keep: EditSegment[] = []
+  for (const o of segments.value) {
+    if (o.id === id) {
+      keep.push(o)
+      continue
+    }
+    // 完全被 d 覆盖 → 吞并丢弃
+    if (o.start >= d.start - 1e-3 && o.end <= d.end + 1e-3) continue
+    // d 夹在 o 内部（极少见）→ 截到 d 左侧
+    if (o.start < d.start && o.end > d.end) {
+      o.end = d.start
+    } else {
+      // 右侧部分重叠：o 起点落在 d 内 → 推后
+      if (o.start < d.end - 1e-3 && o.start >= d.start - 1e-3) o.start = d.end
+      // 左侧部分重叠：o 终点落在 d 内 → 提前
+      if (o.end > d.start + 1e-3 && o.end <= d.end + 1e-3) o.end = d.start
+    }
+    if (o.end - o.start >= MIN_SEG) keep.push(o)
+  }
+  segments.value = keep
+}
+
+/** 依据各片段「覆盖到的歌词起点」重算文案——拖动 / 拆分 / 合并后让歌词标注与覆盖范围保持一致。 */
+function rederiveTexts() {
+  const ls = lyrics.value.map((l) => ({
+    t: Math.max(0, l.time + offset.value),
+    text: l.text,
+  }))
+  for (const s of segments.value) {
+    const hit = ls.filter((l) => l.t >= s.start - 1e-3 && l.t < s.end - 1e-3).map((l) => l.text)
+    // 仅在确有歌词起点落入时才覆盖，避免把跨越长音的片段误清空
+    if (hit.length) s.text = hit.join(' ')
+  }
 }
 
 const alignStatus = computed(() => {
@@ -985,11 +1517,10 @@ const failed = computed(() => currentWork.value?.status === 'failed')
 const canGenerate = computed(() => {
   if (!song.value) return false
   if (mode.value === 'single') return !!selectedModel.value
-  // 多模型：至少选 1 个模型，且至少 1 句已指派
+  // 多模型：至少选 1 个模型，且至少 1 个片段已指派
   return (
     selectedMulti.value.length > 0 &&
-    lyrics.value.length > 0 &&
-    assignments.value.some((a) => a && a.length > 0)
+    segments.value.some((s) => s.modelIds.length > 0)
   )
 })
 
@@ -1081,19 +1612,14 @@ const generate = async () => {
   const title = song.value.name.replace(/\.[^.]+$/, '')
 
   if (mode.value === 'multi') {
-    const lines = lyrics.value
-    const lastLine = lines[lines.length - 1]
-    const dur = audioDuration.value || (lastLine ? lastLine.time + offset.value + 5 : 180)
-    const segments: BlendSegment[] = []
-    for (let i = 0; i < lines.length; i++) {
-      const cur = lines[i]
-      const mids = (assignments.value[i] || []).filter(Boolean)
-      if (!cur || mids.length === 0) continue
-      const start = Math.max(0, cur.time + offset.value)
-      const nextLine = lines[i + 1]
-      const next = nextLine ? nextLine.time + offset.value : dur
-      const end = Math.min(dur, Math.max(start, next))
-      if (end > start) segments.push({ start, end, model_id: mids[0]!, model_ids: mids })
+    // 片段为唯一数据源：起止已是绝对时间（offset 已并入），直接产出
+    const outSegments: BlendSegment[] = []
+    for (const s of sortedSegments.value) {
+      const mids = s.modelIds.filter(Boolean)
+      if (mids.length === 0) continue
+      const start = Math.max(0, s.start)
+      const end = Math.max(start, s.end)
+      if (end > start) outSegments.push({ start, end, model_id: mids[0]!, model_ids: mids })
     }
     const blendModels: BlendModel[] = pickedModels.value.map((pm) => {
       const p = mp(pm.id)
@@ -1118,7 +1644,7 @@ const generate = async () => {
       mode: 'multi',
       source_path: song.value.path,
       models: blendModels,
-      segments,
+      segments: outSegments,
       params: blendModels[0]?.params,
     })
     currentWork.value = work
@@ -1162,6 +1688,38 @@ watch(song, (s) => {
   audioDuration.value = 0
 })
 
+// 整体偏移按增量平移所有片段，保留已做的拆分 / 合并 / 边界编辑
+watch(offset, (nv, ov) => {
+  const d = nv - ov
+  if (!d || !segments.value.length) return
+  for (const s of segments.value) {
+    s.start = Math.max(0, s.start + d)
+    s.end = Math.max(s.start + MIN_SEG, s.end + d)
+  }
+})
+
+let trackRO: ResizeObserver | null = null
+let roRaf = 0
+watch(trackEl, (el) => {
+  trackRO?.disconnect()
+  if (roRaf) {
+    cancelAnimationFrame(roRaf)
+    roRaf = 0
+  }
+  if (el && 'ResizeObserver' in window) {
+    // 用 rAF 合并量取，彻底规避 “ResizeObserver loop” 的同步自反馈
+    trackRO = new ResizeObserver(() => {
+      if (roRaf) return
+      roRaf = requestAnimationFrame(() => {
+        roRaf = 0
+        measureTrack()
+      })
+    })
+    trackRO.observe(el)
+    measureTrack()
+  }
+})
+
 onMounted(async () => {
   await modelsStore.ensureLoaded()
   selectedModel.value = defaultId.value || models.value[0]?.id || ''
@@ -1191,7 +1749,12 @@ onMounted(async () => {
     songQuery.value = name.replace(/\.[^.]+$/, '')
   }
 })
-onUnmounted(stopPolling)
+onUnmounted(() => {
+  stopPolling()
+  trackRO?.disconnect()
+  window.removeEventListener('pointermove', onDragMove)
+  window.removeEventListener('pointerup', onDragEnd)
+})
 </script>
 
 <style scoped>
@@ -1216,13 +1779,16 @@ onUnmounted(stopPolling)
   gap: 22px;
   align-items: start;
 }
-.config { display: flex; flex-direction: column; gap: 18px; }
+/* min-width:0 必不可少：grid 子项默认 min-width:auto，会被超长歌词等内容按内容固有宽度撑开，
+   从而把整个布局顶出可视区。归零后列宽严格遵循 1fr / 0.85fr，长内容交由内部省略号 / 换行处理。 */
+.config { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .preview {
   display: flex;
   flex-direction: column;
   gap: 18px;
   position: sticky;
   top: 84px;
+  min-width: 0;
 }
 
 .glass {
@@ -1234,6 +1800,7 @@ onUnmounted(stopPolling)
 .card {
   border-radius: 6px;
   padding: 22px;
+  min-width: 0;
 }
 .card-head {
   display: flex;
@@ -1373,7 +1940,7 @@ onUnmounted(stopPolling)
 .lib-size { font-size: 12px; color: var(--xb-muted); flex-shrink: 0; }
 
 /* 模型选择 */
-.model-list { display: flex; flex-direction: column; gap: 10px; }
+.model-list { display: flex; flex-direction: column; gap: 10px; max-height: 460px; overflow-y: auto; padding-right: 2px; }
 .model-item {
   display: flex;
   align-items: center;
@@ -1566,7 +2133,88 @@ onUnmounted(stopPolling)
   font-weight: 700;
   color: var(--xb-text);
 }
-.tl-legend { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tl-tools { display: inline-flex; align-items: center; gap: 4px; }
+.tl-zoom {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-text);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.14s ease;
+}
+.tl-zoom:hover { border-color: var(--xb-primary); color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.1); }
+.tl-zoom-val {
+  min-width: 42px;
+  text-align: center;
+  font-size: 12px;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  color: var(--xb-muted);
+}
+.tl-enlarge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--xb-primary);
+  background: rgba(var(--xb-primary-rgb), 0.1);
+  color: var(--xb-primary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.14s ease;
+}
+.tl-enlarge:hover { background: rgba(var(--xb-primary-rgb), 0.18); }
+.tl-zoom:disabled { opacity: 0.4; cursor: not-allowed; }
+.tl-sep { width: 1px; height: 18px; background: var(--xb-border); margin: 0 2px; }
+/* 内联缩略预览：固定高度 + overflow:hidden + 宽度恒为 100%，绝不撑破布局 */
+.tl-mini {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  height: 26px;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(var(--xb-fill-rgb), 0.05),
+    rgba(var(--xb-fill-rgb), 0.05) 1px,
+    transparent 1px,
+    transparent 25%
+  );
+  border: 1px solid var(--xb-border);
+  transition: border-color 0.14s ease;
+}
+.tl-mini:hover { border-color: var(--xb-primary); }
+.tl-mini-block {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.tl-mini-block.is-idle { background: rgba(var(--xb-fill-rgb), 0.1); box-shadow: none; }
+.tl-mini-block.is-chorus { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4); }
+/* 放大编辑弹窗 */
+.tl-dialog-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.tl-scroll-lg { padding-bottom: 8px; }
+.tl-track-lg { height: 88px; }
+.tl-legend { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
 .tl-leg {
   display: inline-flex;
   align-items: center;
@@ -1574,6 +2222,24 @@ onUnmounted(stopPolling)
   font-size: 12px;
   color: var(--xb-muted);
 }
+/* 固定宽度视口：始终 = 弹窗主体宽度，作为像素↔时间换算的稳定基准 */
+.tl-viewport {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+.tl-scroll {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+}
+.tl-scroll::-webkit-scrollbar { height: 8px; }
+.tl-scroll::-webkit-scrollbar-thumb { background: rgba(var(--xb-fill-rgb), 0.25); border-radius: 4px; }
+.tl-inner { position: relative; min-width: 100%; }
 .tl-leg-dot {
   width: 9px;
   height: 9px;
@@ -1663,6 +2329,59 @@ onUnmounted(stopPolling)
   font-weight: 800;
   flex-shrink: 0;
 }
+.tl-block.dragging { z-index: 5; filter: brightness(1.18); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4); }
+/* 边界拖动手柄 */
+.tl-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 3;
+  touch-action: none;
+}
+.tl-grip.l { left: -1px; border-radius: 6px 0 0 6px; }
+.tl-grip.r { right: -1px; border-radius: 0 6px 6px 0; }
+.tl-grip::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 56%;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.7);
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+.tl-block:hover .tl-grip::after { opacity: 0.85; }
+.tl-block.is-idle .tl-grip::after { background: var(--xb-muted); }
+/* 弹窗内的片段操作 */
+.pick-acts {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--xb-border);
+}
+.pick-act {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 5px 4px;
+  border-radius: 7px;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-text);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+.pick-act:hover { border-color: var(--xb-primary); color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.1); }
+.pick-act.danger:hover { border-color: var(--xb-accent); color: var(--xb-accent); background: rgba(var(--xb-accent-rgb), 0.1); }
 .tl-hint { margin: 8px 0 0; font-size: 11.5px; }
 
 /* 歌词逐句 */
@@ -1769,12 +2488,45 @@ onUnmounted(stopPolling)
   background: rgba(var(--xb-primary-rgb), 0.1);
   transform: rotate(90deg);
 }
+/* 合唱多模型折叠：+N / 收起 */
+.more-chip {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.06);
+  color: var(--xb-muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+.more-chip:hover { border-color: var(--xb-primary); color: var(--xb-primary); }
+/* 片段操作（拆分 / 合并 / 删除）*/
+.seg-ops { display: inline-flex; gap: 3px; flex-shrink: 0; margin-left: 2px; }
+.seg-op {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-muted);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.14s ease;
+}
+.seg-op:hover { border-color: var(--xb-primary); color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.1); }
+.seg-op.danger:hover { border-color: var(--xb-accent); color: var(--xb-accent); background: rgba(var(--xb-accent-rgb), 0.1); }
 .ly-time {
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  font-size: 12px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  text-align: center;
   color: var(--xb-muted);
   flex-shrink: 0;
-  width: 44px;
+  width: 48px;
 }
 .ly-text {
   flex: 1;
@@ -1998,7 +2750,7 @@ input[type='range'] {
   background: var(--xb-bg-2);
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.32);
 }
-.assign-popover .pick-pop { display: flex; flex-direction: column; gap: 4px; }
+.assign-popover .pick-pop { display: flex; flex-direction: column; gap: 4px; max-height: 60vh; overflow-y: auto; }
 .assign-popover .pick-hint {
   margin: 0 4px 6px;
   font-size: 11.5px;
@@ -2044,4 +2796,17 @@ input[type='range'] {
   white-space: nowrap;
 }
 .assign-popover .pick-check { color: var(--mc); font-size: 15px; flex-shrink: 0; }
+
+/* 时间轴放大编辑弹窗（el-dialog 传送到 body，需非 scoped 命中外框）*/
+.tl-dialog.el-dialog {
+  background: var(--xb-bg-2);
+  border: 1px solid var(--xb-border);
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+}
+/* 关键：弹窗主体禁止被超宽内容撑开，缩放后的超宽轨道只在 .tl-scroll 内部横向滚动 */
+.tl-dialog .el-dialog__body { overflow: hidden; min-width: 0; }
+.tl-dialog .el-dialog__title { color: var(--xb-text); font-weight: 700; }
+.tl-dialog .el-dialog__headerbtn .el-dialog__close { color: var(--xb-muted); }
+.tl-dialog .el-dialog__headerbtn:hover .el-dialog__close { color: var(--xb-primary); }
 </style>

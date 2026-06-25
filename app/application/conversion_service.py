@@ -137,8 +137,12 @@ class ConversionService:
             )
             instrumental: Path | None = None
             if source and source.exists():
+                # 先把源音频统一转码成标准 wav 再分离：在线下载的文件常把 m4a/flac
+                # 误存成 .mp3，mp3 专用解码器会读到「junk」而失败导致分离降级。
+                # ffmpeg 按内容（而非扩展名）解码，可一并纠正这类格式错配。
+                sep_source = self._normalize_source(source, work_dir, log_file)
                 sep_model = params.uvr_model or config.UVR_SEP_MODEL
-                sep = self._uvr.separate(source, work_dir, sep_model, params.device)
+                sep = self._uvr.separate(sep_source, work_dir, sep_model, params.device)
                 vocals = sep.vocals
                 instrumental = sep.instrumental
                 if sep.simulated:
@@ -299,6 +303,22 @@ class ConversionService:
             self._save(work)
 
     # ---- 多模型混合翻唱 ----
+    def _normalize_source(self, source: Path, work_dir: Path, log_file: Path) -> Path:
+        """把源音频统一转码为标准 wav 后返回；转码失败/无 ffmpeg 时回退原文件。
+
+        在线下载的素材常把 m4a/flac 误存成 .mp3，按扩展名选解码器会失败；ffmpeg
+        按文件内容解码，能纠正这类错配，使分离 / F0 / 推理拿到干净一致的 wav。
+        """
+        try:
+            if self._ffmpeg.available and source.exists():
+                norm = work_dir / "source.wav"
+                if self._ffmpeg.convert(source, norm) and norm.exists():
+                    self._log(log_file, f"  源音频已统一转码: {norm.name}")
+                    return norm
+        except (OSError, ValueError):
+            pass
+        return source
+
     @staticmethod
     def _build_timeline(
         segments: list[dict[str, Any]], duration: float
@@ -386,8 +406,10 @@ class ConversionService:
             )
             instrumental: Path | None = None
             if source and source.exists():
+                # 先统一转码成标准 wav（修正在线下载的格式错配，避免分离降级）
+                sep_source = self._normalize_source(source, work_dir, log_file)
                 sep_model = base_params.uvr_model or config.UVR_SEP_MODEL
-                sep = self._uvr.separate(source, work_dir, sep_model, base_params.device)
+                sep = self._uvr.separate(sep_source, work_dir, sep_model, base_params.device)
                 vocals = sep.vocals
                 instrumental = sep.instrumental
                 if sep.simulated:

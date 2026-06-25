@@ -54,6 +54,57 @@ def _sanitize_filename(name: str) -> str:
     return cleaned[:120] or "music"
 
 
+# Content-Type → 音频扩展名映射（用于纠正下载文件的真实格式）
+_CTYPE_EXT = {
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/mp4": ".m4a",
+    "audio/m4a": ".m4a",
+    "audio/x-m4a": ".m4a",
+    "audio/aac": ".m4a",
+    "audio/flac": ".flac",
+    "audio/x-flac": ".flac",
+    "audio/ogg": ".ogg",
+    "application/ogg": ".ogg",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/wave": ".wav",
+}
+
+
+def _ext_from_url(url: str) -> str | None:
+    """从 URL 路径（忽略查询串）推断音频扩展名。"""
+    path = re.sub(r"[?#].*$", "", url or "")
+    m = re.search(r"\.([A-Za-z0-9]{1,5})$", path)
+    if not m:
+        return None
+    ext = "." + m.group(1).lower()
+    return ext if ext in config.AUDIO_EXTS else None
+
+
+def _sniff_audio_ext(head: bytes) -> str | None:
+    """根据文件头魔数判断真实音频格式；非音频（HTML/JSON 等）返回 None。
+
+    下载接口有时会把 ``.m4a`` / ``.flac`` 当成 ``.mp3`` 下发，或在 VIP / 失效时
+    返回一段 HTML/JSON 错误体。靠扩展名判断会让后续解码器（如 mp3 专用解码器）
+    读到「junk」而报错，这里改用文件头精确识别真实容器格式。
+    """
+    if not head:
+        return None
+    if head[:3] == b"ID3" or (len(head) >= 2 and head[0] == 0xFF and (head[1] & 0xE0) == 0xE0):
+        return ".mp3"
+    if head[:4] == b"fLaC":
+        return ".flac"
+    if head[:4] == b"OggS":
+        return ".ogg"
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return ".wav"
+    # ISO BMFF（mp4 / m4a / aac 容器）：第 4-8 字节为 'ftyp'
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        return ".m4a"
+    return None
+
+
 # LRC 时间标签：[mm:ss.xx] / [mm:ss.xxx] / [mm:ss]
 _LRC_TAG = re.compile(r"\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
 
@@ -361,26 +412,67 @@ class MusicService:
         if song.get("singer"):
             base = f"{base} - {song['singer']}"
         base = _sanitize_filename(base)
-        dest = config.MUSIC_DIR / f"{base}.mp3"
-        idx = 1
-        while dest.exists():
-            dest = config.MUSIC_DIR / f"{base} ({idx}).mp3"
-            idx += 1
+
+        # 真实扩展名按「文件头魔数 > Content-Type > URL 后缀 > .mp3」优先级判定，
+        # 避免把 m4a/flac 误存成 .mp3 导致后续 mp3 专用解码器读到 junk 而失败。
+        url_ext = _ext_from_url(url)
+        tmp = config.MUSIC_DIR / f".{base}.part"
 
         await self._limiter.wait()
         try:
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
                 async with client.stream("GET", url) as resp:
                     resp.raise_for_status()
-                    with dest.open("wb") as f:
+                    ctype = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+                    head = b""
+                    with tmp.open("wb") as f:
                         async for chunk in resp.aiter_bytes(65536):
+                            if len(head) < 16:
+                                head += chunk[: 16 - len(head)]
                             f.write(chunk)
         except Exception as exc:  # noqa: BLE001 - 下载失败需清理半成品文件
             try:
-                dest.unlink(missing_ok=True)
+                tmp.unlink(missing_ok=True)
             except OSError:
                 pass
             return {"ok": False, "error": f"下载失败：{exc}"}
+
+        # 校验确实是「可以听」的音频：
+        # 1) 文件头魔数 / Content-Type 必须指向音频（HTML/JSON 错误体一律拒绝；
+        #    URL 后缀不可单独采信——失效链接也常是 .mp3 结尾却返回错误页）；
+        # 2) 文件体量过小基本是错误响应；
+        # 3) 有 ffprobe 时进一步探测可解码且时长>0，确认确实能播放。
+        sniff_ext = _sniff_audio_ext(head)
+        ctype_ext = _CTYPE_EXT.get(ctype)
+        size = tmp.stat().st_size if tmp.exists() else 0
+
+        def _fail(msg: str) -> dict[str, Any]:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return {"ok": False, "error": msg}
+
+        if sniff_ext is None and ctype_ext is None:
+            return _fail("该资源无法播放，不能下载（可能为 VIP / 无版权 / 链接失效）")
+        if size < 16 * 1024:
+            return _fail("该资源无法播放，不能下载（返回内容过小，疑似失效链接）")
+
+        ext = sniff_ext or ctype_ext or url_ext or ".mp3"
+
+        # ffprobe 实测可播放性（拿不到 ffprobe 时跳过此步，前两步已足够过滤）
+        if not self._probe_playable(tmp):
+            return _fail("该资源无法播放，不能下载（音频无法解码）")
+
+        dest = config.MUSIC_DIR / f"{base}{ext}"
+        idx = 1
+        while dest.exists():
+            dest = config.MUSIC_DIR / f"{base} ({idx}){ext}"
+            idx += 1
+        try:
+            tmp.replace(dest)
+        except OSError as exc:
+            return _fail(f"保存文件失败：{exc}")
 
         return {
             "ok": True,
@@ -388,3 +480,36 @@ class MusicService:
             "name": dest.stem,
             "size": paths.file_size_label(dest),
         }
+
+    @staticmethod
+    def _probe_playable(path) -> bool:
+        """用 ffprobe 探测音频是否可解码且时长>0；拿不到 ffprobe 则视为通过。"""
+        import shutil
+        import subprocess
+
+        ffprobe = shutil.which("ffprobe")
+        if not ffprobe:
+            return True  # 无 ffprobe 时不阻断（魔数/Content-Type 已过滤非音频）
+        try:
+            out = subprocess.run(
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=20,
+                **config.subprocess_no_window(),
+            )
+            val = (out.stdout or "").strip()
+            return bool(val) and float(val) > 0.1
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return False

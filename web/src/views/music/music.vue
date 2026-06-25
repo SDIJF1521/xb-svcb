@@ -74,6 +74,7 @@
           <div class="row-main">
             <div class="row-title" :title="r.name">
               {{ r.name }}<span v-if="r.pay" class="pay-tag">{{ payLabel(r.pay) }}</span>
+              <span v-if="isUnplayable(r.n)" class="dead-tag">不可播放</span>
             </div>
             <div class="row-sub">{{ r.singer }}<span v-if="r.album"> · {{ r.album }}</span></div>
           </div>
@@ -83,6 +84,8 @@
               size="small"
               class="ghost-btn"
               :loading="downloadingN === r.n"
+              :disabled="isUnplayable(r.n)"
+              :title="isUnplayable(r.n) ? '该资源不可播放，无法下载' : '下载'"
               @click="doDownload(r)"
             >
               <el-icon v-if="downloadingN !== r.n" class="el-icon--left"><Download /></el-icon>
@@ -93,6 +96,7 @@
               size="small"
               class="cta-btn"
               :loading="toCreateN === r.n"
+              :disabled="isUnplayable(r.n)"
               @click="downloadAndCreate(r)"
             >
               <el-icon v-if="toCreateN !== r.n" class="el-icon--left"><Microphone /></el-icon>
@@ -233,6 +237,7 @@ async function onSourceChange(val: string) {
   resultKeyword.value = ''
   hasMore.value = false
   page.value = 1
+  unplayable.value = []
 }
 
 const downloaded = ref<DownloadedMusic[]>([])
@@ -244,6 +249,19 @@ const toCreateN = ref<number | null>(null)
 const audioEl = ref<HTMLAudioElement | null>(null)
 const playingN = ref<number | null>(null)
 const previewLoadingN = ref<number | null>(null)
+
+/* 已判定「不可播放」的曲目序号（试听失败 / 下载校验失败）→ 禁止下载 */
+const unplayable = ref<number[]>([])
+function isUnplayable(n: number): boolean {
+  return unplayable.value.includes(n)
+}
+function markUnplayable(n: number) {
+  if (!unplayable.value.includes(n)) unplayable.value = [...unplayable.value, n]
+}
+/** 错误信息是否表示「资源不可播放」（而非网络抖动等临时失败）。 */
+function isUnplayableError(msg?: string): boolean {
+  return /无法播放|VIP|版权|失效|有效音频|无可试听/.test(msg || '')
+}
 
 const onAudioPause = () => {
   if (audioEl.value && audioEl.value.ended) playingN.value = null
@@ -261,19 +279,23 @@ async function togglePreview(item: MusicSearchItem) {
   try {
     const res = await api.getMusicSong(resultKeyword.value, item.n, resultSource.value)
     if (!res.ok || !res.song) {
+      if (isUnplayableError(res.error)) markUnplayable(item.n)
       ElMessage.error(res.error || '获取歌曲信息失败')
       return
     }
     const src = res.song.musicurl || res.song.url
     if (!src) {
-      ElMessage.warning('该歌曲暂无可试听地址（可能为 VIP / 无版权）')
+      markUnplayable(item.n)
+      ElMessage.warning('该歌曲不可播放，无法下载（可能为 VIP / 无版权）')
       return
     }
     el.src = src
     await el.play()
     playingN.value = item.n
   } catch {
-    ElMessage.error('试听失败')
+    // 拿到地址却播放失败（格式不支持 / 链接失效）→ 同样视为不可下载
+    markUnplayable(item.n)
+    ElMessage.error('该资源无法播放，无法下载')
   } finally {
     previewLoadingN.value = null
   }
@@ -292,6 +314,7 @@ async function doSearch() {
   }
   searching.value = true
   page.value = 1
+  unplayable.value = []
   const usedSource = source.value
   try {
     const res = await api.searchMusic(kw, 1, pageSize.value || 15, usedSource)
@@ -340,10 +363,15 @@ async function loadMore() {
 
 /* ----- 下载 ----- */
 async function doDownload(item: MusicSearchItem): Promise<DownloadedMusic | null> {
+  if (isUnplayable(item.n)) {
+    ElMessage.warning('该资源不可播放，无法下载')
+    return null
+  }
   downloadingN.value = item.n
   try {
     const res = await api.downloadMusic(resultKeyword.value, item.n, resultSource.value)
     if (!res.ok || !res.path) {
+      if (isUnplayableError(res.error)) markUnplayable(item.n)
       ElMessage.error(res.error || '下载失败')
       return null
     }
@@ -651,6 +679,18 @@ onMounted(async () => {
   color: var(--xb-warn);
   background: rgba(var(--xb-warn-rgb), 0.14);
   border: 1px solid rgba(var(--xb-warn-rgb), 0.35);
+}
+.dead-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+  color: var(--xb-accent);
+  background: rgba(var(--xb-accent-rgb), 0.14);
+  border: 1px solid rgba(var(--xb-accent-rgb), 0.35);
 }
 .row-ops { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .op {
