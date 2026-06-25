@@ -372,6 +372,67 @@
             <span class="muted assign-tip">每句可多选模型 → 合唱同唱一句</span>
           </div>
 
+          <!-- 可视化时间轴（总览）-->
+          <div v-if="lyrics.length && pickedModels.length" class="timeline-wrap">
+            <div class="timeline-head">
+              <span class="tl-title"><el-icon><Operation /></el-icon> 时间轴总览</span>
+              <div class="tl-legend">
+                <span v-for="pm in pickedModels" :key="pm.id" class="tl-leg">
+                  <span class="tl-leg-dot" :style="{ background: pm.color }"></span>{{ pm.name }}
+                </span>
+                <span class="tl-leg"><span class="tl-leg-dot idle"></span>间奏</span>
+              </div>
+            </div>
+            <!-- 时间刻度 -->
+            <div class="tl-ruler">
+              <span
+                v-for="mk in rulerMarks"
+                :key="mk.pct"
+                class="tl-tick"
+                :style="{ left: mk.pct + '%' }"
+              >{{ mk.label }}</span>
+            </div>
+            <!-- 片段轨道 -->
+            <div class="tl-track">
+              <el-popover
+                v-for="blk in timelineBlocks"
+                :key="blk.i"
+                placement="top"
+                :width="232"
+                trigger="click"
+                popper-class="assign-popover"
+              >
+                <template #reference>
+                  <button
+                    class="tl-block"
+                    :class="{ 'is-idle': !blk.ids.length, 'is-chorus': blk.ids.length > 1 }"
+                    :style="{ left: blk.leftPct + '%', width: blk.widthPct + '%', ...blockStyle(blk.ids) }"
+                    :title="`${fmtTime(blk.start)} - ${fmtTime(blk.end)}　${blk.text}`"
+                  >
+                    <span v-if="blk.ids.length > 1" class="tl-block-chorus">{{ blk.ids.length }}</span>
+                    <span class="tl-block-label">{{ blk.label }}</span>
+                  </button>
+                </template>
+                <div class="pick-pop">
+                  <p class="pick-hint">{{ fmtTime(blk.start) }} · {{ blk.text || '（无歌词）' }}</p>
+                  <button
+                    v-for="pm in pickedModels"
+                    :key="pm.id"
+                    class="pick-item"
+                    :class="{ on: isAssigned(blk.i, pm.id) }"
+                    :style="{ '--mc': pm.color }"
+                    @click="toggleAssign(blk.i, pm.id)"
+                  >
+                    <span class="pick-dot" :style="{ background: pm.color }"></span>
+                    <span class="pick-name">{{ pm.name }}</span>
+                    <el-icon v-if="isAssigned(blk.i, pm.id)" class="pick-check"><Check /></el-icon>
+                  </button>
+                </div>
+              </el-popover>
+            </div>
+            <p class="tl-hint muted">点击色块为该句指派 / 增减模型；色块宽度即该句时长，多模型为「合唱」。</p>
+          </div>
+
           <!-- 歌词逐句 -->
           <div v-if="lyrics.length" class="lyric-list">
             <div
@@ -787,6 +848,59 @@ function fmtTime(t: number) {
   const mm = Math.floor(s / 60)
   const ss = Math.floor(s % 60)
   return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
+}
+
+/* ---- 可视化时间轴（总览）---- */
+/** 时间轴总时长：优先用音频实际时长，否则用末句时间兜底。 */
+const timelineDuration = computed(() => {
+  const arr = lyrics.value
+  const last = arr[arr.length - 1]
+  const byLyric = last ? last.time + offset.value + 5 : 0
+  return Math.max(1, audioDuration.value || byLyric)
+})
+
+/** 每句歌词映射成时间轴色块：起止由本句与下一句时间决定，按比例定位。 */
+const timelineBlocks = computed(() => {
+  const dur = timelineDuration.value
+  const arr = lyrics.value
+  return arr.map((ln, i) => {
+    const start = Math.max(0, ln.time + offset.value)
+    const nextLine = arr[i + 1]
+    const next = nextLine ? nextLine.time + offset.value : dur
+    const end = Math.min(dur, Math.max(start, next))
+    const ids = assignments.value[i] || []
+    const label = ids.length === 0 ? '' : ids.length === 1 ? modelName(ids[0]!) : `合唱`
+    return {
+      i,
+      start,
+      end,
+      ids,
+      text: ln.text,
+      label,
+      leftPct: (start / dur) * 100,
+      widthPct: Math.max(0.6, ((end - start) / dur) * 100),
+    }
+  })
+})
+
+/** 时间刻度（0% / 25% / 50% / 75% / 100%）。 */
+const rulerMarks = computed(() => {
+  const dur = timelineDuration.value
+  return [0, 0.25, 0.5, 0.75, 1].map((r) => ({
+    pct: r * 100,
+    label: fmtTime(dur * r),
+  }))
+})
+
+/** 色块配色：无模型=间奏底色；单模型=该色；多模型=合唱渐变。 */
+function blockStyle(ids: string[]) {
+  if (!ids.length) return {}
+  if (ids.length === 1) {
+    const c = modelColor(ids[0]!)
+    return { background: c, borderColor: c }
+  }
+  const stops = ids.map((id) => modelColor(id)).join(', ')
+  return { background: `linear-gradient(90deg, ${stops})`, borderColor: 'transparent' }
 }
 
 const alignStatus = computed(() => {
@@ -1427,6 +1541,129 @@ onUnmounted(stopPolling)
   cursor: pointer;
 }
 .quick-btn:hover { background: color-mix(in srgb, var(--mc) 14%, transparent); }
+
+/* 可视化时间轴（总览）*/
+.timeline-wrap {
+  margin-bottom: 14px;
+  padding: 12px 14px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.03);
+}
+.timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.tl-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--xb-text);
+}
+.tl-legend { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tl-leg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--xb-muted);
+}
+.tl-leg-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 6px currentColor;
+}
+.tl-leg-dot.idle {
+  background: var(--xb-border);
+  box-shadow: none;
+  border: 1px solid var(--xb-muted);
+}
+.tl-ruler {
+  position: relative;
+  height: 16px;
+  margin: 0 2px;
+}
+.tl-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  color: var(--xb-muted);
+  white-space: nowrap;
+}
+.tl-tick:first-child { transform: none; }
+.tl-tick:last-child { transform: translateX(-100%); }
+.tl-track {
+  position: relative;
+  height: 40px;
+  border-radius: 8px;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(var(--xb-fill-rgb), 0.05),
+    rgba(var(--xb-fill-rgb), 0.05) 1px,
+    transparent 1px,
+    transparent 25%
+  );
+  overflow: hidden;
+}
+.tl-block {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  transition: filter 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+.tl-block:hover {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+  z-index: 2;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.tl-block.is-idle {
+  background: rgba(var(--xb-fill-rgb), 0.08);
+  border-color: var(--xb-border);
+  color: var(--xb-muted);
+}
+.tl-block.is-chorus { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35); }
+.tl-block-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+.tl-block-chorus {
+  display: grid;
+  place-items: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.28);
+  font-size: 10px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.tl-hint { margin: 8px 0 0; font-size: 11.5px; }
 
 /* 歌词逐句 */
 .lyric-list { max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
