@@ -93,7 +93,13 @@ def main() -> int:
                 import torchaudio
 
                 def _ta_load(filepath, *a, **kw):  # noqa: ANN001, ANN202
-                    data, sr = soundfile.read(str(filepath), dtype="float32", always_2d=True)
+                    # so-vits-svc 内部可能传入 io.BytesIO 等文件对象，soundfile 支持直接读取
+                    import io
+
+                    if isinstance(filepath, (io.BytesIO, io.RawIOBase, io.BufferedIOBase)):
+                        data, sr = soundfile.read(filepath, dtype="float32", always_2d=True)
+                    else:
+                        data, sr = soundfile.read(str(filepath), dtype="float32", always_2d=True)
                     # soundfile: [frames, channels] -> torchaudio 约定 [channels, frames]
                     return torch.from_numpy(data.T.copy()), sr
 
