@@ -98,18 +98,36 @@
 
 ```mermaid
 flowchart LR
-    A[🎵 源歌曲] --> B[人声分离<br/>5_HP-Karaoke-UVR]
-    B --> C[去混响<br/>UVR-DeEcho-DeReverb]
-    B --> I[🎹 伴奏]
-    C --> D[F0 提取<br/>rmvpe<br/>so-vits-svc 专用]
-    C --> E
-    D --> E{模型推理<br/>引擎按框架路由}
-    E --> S[So-VITS-SVC 4.1]
-    E --> R[RVC<br/>rvc-python · .index]
-    S --> F[ffmpeg 混音]
-    R --> F
-    I --> F
-    F --> G[🎤 成品翻唱]
+    UI[Vue 3 WebUI<br/>歌声转换工作台] --> WF{高级工作流}
+    WF -->|自动混音合成| SRC[🎵 源歌曲]
+    WF -->|自动 + 编辑器二次调整| SRC
+    WF -->|多模型人声合并| SRC
+    WF -->|全手动编辑| ED[Audio Editor Lite<br/>编辑工程]
+
+    SRC --> UVR[人声分离<br/>5_HP-Karaoke-UVR]
+    UVR --> DR[去混响<br/>UVR-DeEcho-DeReverb]
+    UVR --> INS[🎹 伴奏]
+    DR --> MODE{翻唱模式}
+
+    MODE -->|单模型| INFER{模型推理<br/>EngineRegistry 路由}
+    MODE -->|多模型| TL[歌词时间轴<br/>逐句指派 / 合唱]
+    TL --> INFER
+
+    INFER --> SVC[So-VITS-SVC 4.1<br/>.venv-svc]
+    INFER --> RVC[RVC<br/>rvc-python · .index<br/>.venv-rvc]
+    SVC --> VOCAL[AI 人声]
+    RVC --> VOCAL
+
+    VOCAL --> MERGE{需要人声合并?}
+    MERGE -->|多模型| VM[同源连唱合并<br/>换人处交叉淡化]
+    MERGE -->|单模型 / 默认| MIX[ffmpeg 混音 / 仅人声输出]
+    VM --> MIX
+    INS --> MIX
+    MIX --> WORKS[🎤 作品库]
+
+    WORKS -->|进入编辑器| ED
+    ED --> WAVE[真实波形<br/>剪切 / 淡化 / 声道 / 局部重推理]
+    WAVE --> EXPORT[导出 WAV / MP3 / FLAC]
 ```
 
 
@@ -119,8 +137,9 @@ flowchart LR
 | ----- | -------------------------------------------------- | --------------------------------------------------- |
 | 前端    | Vue 3 + Vite + Element Plus                        | 交互界面                                                |
 | 桌面壳   | pywebview                                          | 把前端包成桌面应用                                           |
-| 业务    | Python 分层（api / application / infrastructure）      | 编排流水线、模型/作品服务                                       |
+| 业务    | Python 分层（api / application / infrastructure）      | 编排转换流水线、模型/作品/编辑工程服务                                |
 | 推理引擎层 | `EngineRegistry` 统一接口                              | 按模型「框架」路由到对应引擎，为多框架预留扩展点                            |
+| 音频编辑层 | `AudioEditorService` + `FFmpegEngine`              | 多轨时间轴、真实波形、剪切淡化、声道 routing、混音预览与导出                  |
 | AI 引擎 | So-VITS-SVC 4.1 · RVC（rvc-python）· audio-separator | 子进程运行于隔离环境（`.venv-svc` / `.venv-rvc` / `.venv-uvr`） |
 
 
