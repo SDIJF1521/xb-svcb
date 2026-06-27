@@ -17,6 +17,15 @@ from .model_service import ModelService
 
 
 class WorkService:
+    _WORKFLOWS = {
+        "auto_mix",
+        "auto_vocal_merge",
+        "manual_vocal_merge",
+        "auto_then_editor",
+        "full_manual_editor",
+    }
+    _VOCAL_MERGE_WORKFLOWS = {"auto_vocal_merge", "manual_vocal_merge"}
+
     def __init__(
         self,
         repo: ListRepository,
@@ -44,6 +53,7 @@ class WorkService:
         model_id = payload.get("model_id") or self._models.default_id()
         model = self._models.get(model_id) if model_id else None
         source_path = payload.get("source_path")
+        workflow = self._workflow(payload, mode="single")
 
         title = payload.get("title")
         if not title:
@@ -66,6 +76,7 @@ class WorkService:
             source_path=source_path,
             params=payload.get("params", {}) or {},
             steps=default_steps(),
+            workflow=workflow,
         )
         record = work.to_dict()
         record.update(self._resolve_model_paths(model))
@@ -81,6 +92,7 @@ class WorkService:
         )
 
         # 收集本次用到的模型及其各自参数（解析为可推理的本地路径）
+        workflow = self._workflow(payload, mode="multi")
         seg_models: dict[str, Any] = {}
         for entry in payload.get("models", []) or []:
             mid = entry.get("model_id")
@@ -142,6 +154,7 @@ class WorkService:
             source_path=source_path,
             params=base_params,
             steps=default_steps_multi(),
+            workflow=workflow,
             mode="multi",
             segments=segments,
         )
@@ -150,6 +163,15 @@ class WorkService:
         self._repo.add(record)
         self._conversion.start(work.id)
         return self._view(record)
+
+    @classmethod
+    def _workflow(cls, payload: dict[str, Any], mode: str = "single") -> str:
+        value = str((payload or {}).get("workflow") or "auto_mix")
+        if value not in cls._WORKFLOWS:
+            return "auto_mix"
+        if mode != "multi" and value in cls._VOCAL_MERGE_WORKFLOWS:
+            return "auto_mix"
+        return value
 
     @staticmethod
     def _resolve_model_paths(model: dict[str, Any] | None) -> dict[str, str]:

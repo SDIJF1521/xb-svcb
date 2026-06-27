@@ -10,7 +10,7 @@
       <!-- 主导航 -->
       <nav class="nav-links">
         <router-link
-          v-for="item in navItems"
+          v-for="item in primaryNavItems"
           :key="item.to"
           :to="item.to"
           class="nav-link"
@@ -19,6 +19,38 @@
           <el-icon><component :is="item.icon" /></el-icon>
           <span>{{ item.label }}</span>
         </router-link>
+        <div ref="navMoreWrap" class="menu-wrap nav-more-wrap">
+          <button
+            class="nav-more"
+            :class="{ active: libraryActive, open: openMenu === 'navMore' }"
+            title="资料库"
+            @click="toggleMenu('navMore')"
+          >
+            <el-icon><FolderOpened /></el-icon>
+            <span>资料库</span>
+            <el-icon class="nav-more-arrow"><ArrowDown /></el-icon>
+          </button>
+          <transition name="pop">
+            <div v-if="openMenu === 'navMore'" class="popover nav-pop">
+              <button
+                v-for="item in libraryNavItems"
+                :key="item.to"
+                class="nav-pop-item"
+                :class="{ active: route.path === item.to || route.path.startsWith(`${item.to}/`) }"
+                @click="gotoNav(item.to)"
+              >
+                <span class="nav-pop-icon">
+                  <el-icon><component :is="item.icon" /></el-icon>
+                </span>
+                <span class="nav-pop-copy">
+                  <span class="nav-pop-title">{{ item.label }}</span>
+                  <span class="nav-pop-desc">{{ item.desc }}</span>
+                </span>
+                <el-icon class="nav-pop-go"><Right /></el-icon>
+              </button>
+            </div>
+          </transition>
+        </div>
       </nav>
 
       <!-- 右侧操作 -->
@@ -226,9 +258,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Sunny, Moon, Picture, Close, Right, Download, Loading } from '@element-plus/icons-vue'
+import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Sunny, Moon, Picture, Close, Right, Download, Loading, Scissor, ArrowDown } from '@element-plus/icons-vue'
 import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
 import { useModelsStore } from '@/stores/models'
@@ -239,18 +271,27 @@ import { useTransfersStore } from '@/stores/transfers'
 defineOptions({ name: 'AppHeader' })
 
 const router = useRouter()
+const route = useRoute()
 
 const themeStore = useThemeStore()
 const { theme } = storeToRefs(themeStore)
 const themeLabel = computed(() => THEMES.find((t) => t.value === theme.value)?.label ?? '主题')
 
-const navItems = [
+const primaryNavItems = [
   { label: '首页', to: '/', icon: HomeFilled },
   { label: 'AI 翻唱', to: '/create', icon: Microphone },
-  { label: '资源获取', to: '/music', icon: Download },
-  { label: '我的模型', to: '/models', icon: FolderOpened },
-  { label: '我的作品', to: '/works', icon: Files },
+  { label: '音频编辑', to: '/editor/projects', icon: Scissor },
 ]
+
+const libraryNavItems = [
+  { label: '资源获取', desc: '找歌与伴奏素材', to: '/music', icon: Download },
+  { label: '我的模型', desc: '管理声音模型', to: '/models', icon: FolderOpened },
+  { label: '我的作品', desc: '查看生成任务', to: '/works', icon: Files },
+]
+
+const libraryActive = computed(() =>
+  libraryNavItems.some((item) => route.path === item.to || route.path.startsWith(`${item.to}/`)),
+)
 
 const systemStore = useSystemStore()
 const { tools, loaded } = storeToRefs(systemStore)
@@ -264,9 +305,10 @@ const envTitle = computed(() =>
 const transfers = useTransfersStore()
 const transfersActive = computed(() => transfers.activeCount)
 
-/* ----- 弹出菜单（传输 / 消息 / 资料）----- */
-type MenuName = 'none' | 'transfers' | 'notif' | 'profile'
+/* ----- 弹出菜单（导航 / 传输 / 消息 / 资料）----- */
+type MenuName = 'none' | 'navMore' | 'transfers' | 'notif' | 'profile'
 const openMenu = ref<MenuName>('none')
+const navMoreWrap = ref<HTMLElement>()
 const transfersWrap = ref<HTMLElement>()
 const notifWrap = ref<HTMLElement>()
 const profileWrap = ref<HTMLElement>()
@@ -282,6 +324,7 @@ function onDocClick(e: MouseEvent) {
   if (
     !(
       transfersWrap.value?.contains(t) ||
+      navMoreWrap.value?.contains(t) ||
       notifWrap.value?.contains(t) ||
       profileWrap.value?.contains(t)
     )
@@ -291,6 +334,11 @@ function onDocClick(e: MouseEvent) {
   if (!searchWrap.value?.contains(t)) {
     searchOpen.value = false
   }
+}
+
+function gotoNav(to: string) {
+  openMenu.value = 'none'
+  router.push(to)
 }
 
 /* ----- 全局搜索（作品 / 模型）----- */
@@ -483,7 +531,7 @@ onUnmounted(() => {
   padding: 0 24px;
   display: flex;
   align-items: center;
-  gap: 28px;
+  gap: 20px;
 }
 
 /* 品牌 */
@@ -521,36 +569,50 @@ onUnmounted(() => {
 .nav-links {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
 }
-.nav-link {
+.nav-link,
+.nav-more {
   position: relative;
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 9px 14px;
-  border-radius: 9px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
   color: var(--xb-muted);
   text-decoration: none;
-  font-size: 14.5px;
-  font-weight: 500;
-  transition: color 0.2s ease, background 0.2s ease;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
 }
-.nav-link .el-icon {
+.nav-link .el-icon,
+.nav-more .el-icon {
   font-size: 16px;
   transition: transform 0.2s ease;
 }
-.nav-link:hover {
+.nav-link:hover,
+.nav-more:hover,
+.nav-more.open {
   color: var(--xb-text);
   background: rgba(var(--xb-fill-rgb), 0.05);
+  border-color: var(--xb-border);
 }
-.nav-link.active {
+.nav-link.active,
+.nav-more.active {
   color: var(--xb-primary);
   font-weight: 600;
 }
-.nav-link.active .el-icon { transform: scale(1.05); }
+.nav-link.active .el-icon,
+.nav-more.active .el-icon { transform: scale(1.05); }
 /* 选中态：底部滑动下划线 */
-.nav-link.active::after {
+.nav-link.active::after,
+.nav-more.active::after {
   content: '';
   position: absolute;
   left: 14px;
@@ -560,13 +622,82 @@ onUnmounted(() => {
   border-radius: 2px;
   background: var(--xb-brand-gradient);
 }
+.nav-more-arrow {
+  margin-left: -2px;
+  font-size: 12px !important;
+}
+.nav-more.open .nav-more-arrow { transform: rotate(180deg); }
+.nav-pop {
+  left: 0;
+  right: auto;
+  width: 230px;
+  padding: 6px;
+}
+.nav-pop-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--xb-text);
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+.nav-pop-item:hover,
+.nav-pop-item.active {
+  background: rgba(var(--xb-fill-rgb), 0.06);
+}
+.nav-pop-item.active .nav-pop-title,
+.nav-pop-item.active .nav-pop-go {
+  color: var(--xb-primary);
+}
+.nav-pop-icon {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--xb-primary);
+  background: rgba(var(--xb-primary-rgb), 0.12);
+  font-size: 16px;
+}
+.nav-pop-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nav-pop-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.nav-pop-desc {
+  font-size: 12px;
+  color: var(--xb-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-pop-go {
+  flex-shrink: 0;
+  color: var(--xb-muted);
+  font-size: 13px;
+}
 
 /* 右侧 */
 .header-actions {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
 }
 .search {
   display: flex;
@@ -577,7 +708,7 @@ onUnmounted(() => {
   background: rgba(var(--xb-fill-rgb), 0.04);
   border: 1px solid var(--xb-border);
   color: var(--xb-muted);
-  width: 220px;
+  width: 180px;
 }
 .search input {
   background: transparent;
@@ -902,9 +1033,10 @@ onUnmounted(() => {
 .theme-toggle {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
   height: 38px;
-  padding: 0 14px 0 6px;
+  width: 38px;
+  padding: 0;
   border-radius: 999px;
   border: 1px solid var(--xb-border);
   background: rgba(var(--xb-fill-rgb), 0.04);
@@ -930,14 +1062,42 @@ onUnmounted(() => {
   transition: transform 0.4s ease;
 }
 .theme-toggle.anime .theme-knob { transform: rotate(360deg); }
-.theme-name { letter-spacing: 0.5px; }
+.theme-name { display: none; }
 
-@media (max-width: 1080px) {
-  .search { width: 150px; }
+@media (max-width: 1180px) {
+  .env-status span:last-child { display: none; }
+  .env-status { padding: 7px 10px; }
 }
-@media (max-width: 860px) {
-  .nav-link span { display: none; }
-  .search, .env-status, .theme-name { display: none; }
-  .theme-toggle { padding: 0 5px; }
+@media (max-width: 1080px) {
+  .search { width: 140px; }
+}
+@media (max-width: 980px) {
+  .header-inner {
+    gap: 12px;
+    padding: 0 16px;
+  }
+  .brand-text { display: none; }
+  .nav-link span,
+  .nav-more > span { display: none; }
+  .nav-link,
+  .nav-more {
+    width: 38px;
+    padding: 0;
+    justify-content: center;
+  }
+  .nav-more-arrow { display: none; }
+  .search, .env-status { display: none; }
+}
+@media (max-width: 640px) {
+  .nav-link:first-child,
+  .theme-toggle {
+    display: none;
+  }
+  .header-actions { gap: 8px; }
+  .icon-btn,
+  .avatar {
+    width: 36px;
+    height: 36px;
+  }
 }
 </style>

@@ -17,6 +17,8 @@ def ensure_dirs() -> None:
         config.TEMP_DIR,
         config.MUSIC_DIR,
         config.MODELHUB_DIR,
+        config.EDITOR_DIR,
+        config.EDITOR_CACHE_DIR,
     ):
         d.mkdir(parents=True, exist_ok=True)
 

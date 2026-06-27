@@ -6,6 +6,7 @@ from .work_service import WorkService
 from .conversion_service import ConversionService
 from .music_service import MusicService
 from .model_hub_service import ModelHubService
+from .audio_editor_service import AudioEditorService
 
 __all__ = [
     "SystemService",
@@ -14,4 +15,5 @@ __all__ = [
     "ConversionService",
     "MusicService",
     "ModelHubService",
+    "AudioEditorService",
 ]

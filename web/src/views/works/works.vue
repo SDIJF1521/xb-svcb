@@ -83,6 +83,7 @@
         <span class="col-ops">
           <button class="op" title="重命名" @click="onRename(w.id, w.title)"><el-icon><EditPen /></el-icon></button>
           <button class="op" :disabled="w.status !== 'done'" title="下载" @click="onDownload(w.id)"><el-icon><Download /></el-icon></button>
+          <button class="op" :disabled="w.status !== 'done'" title="进入音频编辑" @click="onEdit(w.id)"><el-icon><Scissor /></el-icon></button>
           <button class="op" v-if="w.status === 'failed'" title="打开日志" @click="onOpenLog(w.id)"><el-icon><Document /></el-icon></button>
           <button class="op" title="重新生成" @click="onRetry(w.id)"><el-icon><RefreshRight /></el-icon></button>
           <button class="op danger" title="删除" @click="onRemove(w.id)"><el-icon><Delete /></el-icon></button>
@@ -104,7 +105,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import {
   Plus,
@@ -113,6 +114,7 @@ import {
   VideoPause,
   Headset,
   Download,
+  Scissor,
   RefreshRight,
   Delete,
   Document,
@@ -127,6 +129,7 @@ defineOptions({ name: 'WorksPage' })
 
 const worksStore = useWorksStore()
 const { works } = storeToRefs(worksStore)
+const router = useRouter()
 
 const tabs: { key: JobStatus | 'all'; label: string }[] = [
   { key: 'all', label: '全部' },
@@ -198,6 +201,7 @@ const onDownload = async (id: string) => {
 const onRetry = (id: string) => worksStore.retry(id)
 const onRemove = (id: string) => worksStore.remove(id)
 const onOpenLog = (id: string) => api.openWorkLog(id)
+const onEdit = (id: string) => router.push({ path: '/editor', query: { work: id } })
 
 const onRename = async (id: string, current: string) => {
   try {

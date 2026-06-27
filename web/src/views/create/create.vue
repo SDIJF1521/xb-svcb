@@ -30,6 +30,31 @@
           </button>
         </section>
 
+        <section class="card glass workflow-card">
+          <div class="card-head">
+            <span class="step-no">ADV</span>
+            <h2>高级功能</h2>
+          </div>
+          <div class="workflow-grid">
+            <button
+              v-for="item in availableWorkflowOptions"
+              :key="item.key"
+              class="workflow-item"
+              :class="{ active: workflow === item.key }"
+              @click="workflow = item.key"
+            >
+              <span class="workflow-no">{{ item.no }}</span>
+              <span class="workflow-copy">
+                <span class="workflow-title">
+                  {{ item.title }}
+                  <i v-if="item.tag">{{ item.tag }}</i>
+                </span>
+                <span class="workflow-desc">{{ item.desc }}</span>
+              </span>
+            </button>
+          </div>
+        </section>
+
         <!-- 上传歌曲 -->
         <section class="card glass">
           <div class="card-head">
@@ -609,7 +634,7 @@
           @click="generate"
         >
           <el-icon class="el-icon--left"><MagicStick /></el-icon>
-          {{ isGenerating ? '生成中…' : '开始生成翻唱' }}
+          {{ isGenerating ? '生成中...' : workflow === 'full_manual_editor' ? '进入全手动编辑' : '开始生成翻唱' }}
         </el-button>
       </div>
 
@@ -640,6 +665,9 @@
               </button>
               <el-button round class="ghost-btn" :disabled="!done" @click="onExport">
                 <el-icon class="el-icon--left"><Download /></el-icon>导出
+              </el-button>
+              <el-button v-if="editorAvailable" round class="ghost-btn" @click="openCurrentWorkEditor">
+                <el-icon class="el-icon--left"><Operation /></el-icon>进入编辑器
               </el-button>
             </div>
           </div>
@@ -696,7 +724,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import {
   UploadFilled,
@@ -737,6 +765,7 @@ import {
   type MusicSource,
   type BlendModel,
   type BlendSegment,
+  type CreateWorkflow,
 } from '@/api'
 import { useModelsStore } from '@/stores/models'
 import { useWorksStore } from '@/stores/works'
@@ -745,6 +774,7 @@ defineOptions({ name: 'CreatePage' })
 
 const modelsStore = useModelsStore()
 const worksStore = useWorksStore()
+const router = useRouter()
 const { models, defaultId } = storeToRefs(modelsStore)
 
 interface Song {
@@ -838,6 +868,49 @@ type MultiParams = {
   rvcVersion: string
 }
 const mode = ref<'single' | 'multi'>(prefs.mode === 'multi' ? 'multi' : 'single')
+const workflowKeys: CreateWorkflow[] = [
+  'auto_mix',
+  'auto_vocal_merge',
+  'manual_vocal_merge',
+  'auto_then_editor',
+  'full_manual_editor',
+]
+const vocalMergeWorkflows: CreateWorkflow[] = ['auto_vocal_merge', 'manual_vocal_merge']
+const isWorkflow = (value: unknown): value is CreateWorkflow =>
+  typeof value === 'string' && workflowKeys.includes(value as CreateWorkflow)
+function isVocalMergeWorkflow(value: CreateWorkflow) {
+  return vocalMergeWorkflows.includes(value)
+}
+function normalizeWorkflowForMode(value: CreateWorkflow, targetMode = mode.value): CreateWorkflow {
+  return targetMode === 'single' && isVocalMergeWorkflow(value) ? 'auto_mix' : value
+}
+const workflow = ref<CreateWorkflow>(
+  normalizeWorkflowForMode(isWorkflow(prefs.workflow) ? prefs.workflow : 'auto_mix', mode.value),
+)
+const workflowOptions: {
+  key: CreateWorkflow
+  no: string
+  title: string
+  desc: string
+  tag?: string
+}[] = [
+  { key: 'auto_mix', no: '01', title: '自动混音合成', desc: '自动输出人声 + 伴奏的完整成品', tag: '默认' },
+  { key: 'auto_vocal_merge', no: '02', title: '自动人声合并', desc: '自动合并转换后人声，只输出人声成品' },
+  { key: 'manual_vocal_merge', no: '03', title: '手动人声合并', desc: '生成可编辑素材，完成后进入编辑器合并' },
+  { key: 'auto_then_editor', no: '04', title: '自动 + 编辑器二次调整', desc: '先自动出成品，再进入编辑器微调' },
+  { key: 'full_manual_editor', no: '05', title: '全手动编辑', desc: '不启动自动推理，直接创建编辑工程' },
+]
+const availableWorkflowOptions = computed(() =>
+  workflowOptions.filter((item) => mode.value === 'multi' || !isVocalMergeWorkflow(item.key)),
+)
+function workflowOpensEditor(value: CreateWorkflow, targetMode: 'single' | 'multi') {
+  return value === 'auto_then_editor' || (targetMode === 'multi' && value === 'manual_vocal_merge')
+}
+
+watch([mode, workflow], () => {
+  const next = normalizeWorkflowForMode(workflow.value, mode.value)
+  if (next !== workflow.value) workflow.value = next
+})
 
 // 已勾选模型的 id（保持勾选顺序）与各自参数
 const selectedMulti = ref<string[]>([])
@@ -1454,7 +1527,7 @@ const alignStatus = computed(() => {
 
 // 任一参数变化即写回 localStorage
 watch(
-  [uvrModel, f0Method, pitch, indexRate, rmsMix, diffusionRatio, device, mode, protect, filterRadius, rvcVersion],
+  [uvrModel, f0Method, pitch, indexRate, rmsMix, diffusionRatio, device, mode, workflow, protect, filterRadius, rvcVersion],
   () => {
     try {
       localStorage.setItem(
@@ -1468,6 +1541,7 @@ watch(
           diffusionRatio: diffusionRatio.value,
           device: device.value,
           mode: mode.value,
+          workflow: workflow.value,
           protect: protect.value,
           filterRadius: filterRadius.value,
           rvcVersion: rvcVersion.value,
@@ -1514,8 +1588,19 @@ const isGenerating = computed(
 )
 const done = computed(() => currentWork.value?.status === 'done')
 const failed = computed(() => currentWork.value?.status === 'failed')
+const activeWorkflow = computed<CreateWorkflow>(() => {
+  const saved = currentWork.value?.workflow
+  return isWorkflow(saved) ? saved : workflow.value
+})
+const activeMode = computed<'single' | 'multi'>(() =>
+  currentWork.value?.mode === 'multi' ? 'multi' : mode.value,
+)
+const editorAvailable = computed(() =>
+  done.value && workflowOpensEditor(activeWorkflow.value, activeMode.value),
+)
 const canGenerate = computed(() => {
   if (!song.value) return false
+  if (workflow.value === 'full_manual_editor') return true
   if (mode.value === 'single') return !!selectedModel.value
   // 多模型：至少选 1 个模型，且至少 1 个片段已指派
   return (
@@ -1526,6 +1611,7 @@ const canGenerate = computed(() => {
 
 const audioEl = ref<HTMLAudioElement | null>(null)
 const audioLoadedFor = ref<string | null>(null)
+const editorOpenedFor = ref<string | null>(null)
 
 async function onTogglePlay() {
   const work = currentWork.value
@@ -1556,11 +1642,47 @@ async function openLog() {
   if (currentWork.value) await api.openWorkLog(currentWork.value.id)
 }
 
+async function openWorkEditor(work = currentWork.value, auto = false) {
+  if (!work || work.status !== 'done') return
+  const project = await api.createEditorProjectFromWork(work.id)
+  if (!project) {
+    ElMessage.error(auto ? '自动进入编辑器失败，请手动打开编辑器' : '无法从该作品创建编辑工程')
+    return
+  }
+  await router.push({ path: '/editor', query: { project: project.id } })
+}
+
+async function openCurrentWorkEditor() {
+  await openWorkEditor(currentWork.value, false)
+}
+
+async function maybeOpenEditor(work: WorkDTO) {
+  if (work.status !== 'done') return
+  const wf = isWorkflow(work.workflow) ? work.workflow : workflow.value
+  const workMode = work.mode === 'multi' ? 'multi' : 'single'
+  if (!workflowOpensEditor(wf, workMode) || editorOpenedFor.value === work.id) return
+  editorOpenedFor.value = work.id
+  await openWorkEditor(work, true)
+}
+
+async function openManualEditor(title: string) {
+  if (!song.value) return
+  const project = await api.createEditorProjectFromAudio(song.value.path, title)
+  if (!project) {
+    ElMessage.error('无法创建全手动编辑工程，请确认音频文件仍然存在')
+    return
+  }
+  await router.push({ path: '/editor', query: { project: project.id } })
+}
+
 async function retry() {
   const id = currentWork.value?.id
   if (!id) return
   const ok = await api.retryWork(id)
-  if (ok) startPolling(id)
+  if (ok) {
+    editorOpenedFor.value = null
+    startPolling(id)
+  }
 }
 
 const overallState = computed(() => {
@@ -1602,14 +1724,28 @@ function startPolling(id: string) {
   timer = setInterval(async () => {
     const w = await api.getWork(id)
     if (w) currentWork.value = w
-    if (!w || w.status === 'done' || w.status === 'failed') stopPolling()
+    if (!w || w.status === 'done' || w.status === 'failed') {
+      stopPolling()
+      if (w?.status === 'done') void maybeOpenEditor(w)
+    }
   }, 800)
 }
+
+watch(currentWork, (work) => {
+  if (work?.status === 'done') void maybeOpenEditor(work)
+})
 
 const generate = async () => {
   if (!canGenerate.value || isGenerating.value || !song.value) return
   isPlaying.value = false
   const title = song.value.name.replace(/\.[^.]+$/, '')
+  const currentWorkflow = normalizeWorkflowForMode(workflow.value, mode.value)
+  if (currentWorkflow !== workflow.value) workflow.value = currentWorkflow
+
+  if (currentWorkflow === 'full_manual_editor') {
+    await openManualEditor(title)
+    return
+  }
 
   if (mode.value === 'multi') {
     // 片段为唯一数据源：起止已是绝对时间（offset 已并入），直接产出
@@ -1642,12 +1778,14 @@ const generate = async () => {
     const work = await worksStore.create({
       title,
       mode: 'multi',
+      workflow: currentWorkflow,
       source_path: song.value.path,
       models: blendModels,
       segments: outSegments,
       params: blendModels[0]?.params,
     })
     currentWork.value = work
+    editorOpenedFor.value = null
     startPolling(work.id)
     return
   }
@@ -1655,6 +1793,7 @@ const generate = async () => {
   const work = await worksStore.create({
     title,
     model_id: selectedModel.value,
+    workflow: currentWorkflow,
     source_path: song.value.path,
     params: {
       pitch: pitch.value,
@@ -1670,6 +1809,7 @@ const generate = async () => {
     },
   })
   currentWork.value = work
+  editorOpenedFor.value = null
   startPolling(work.id)
 }
 
@@ -2001,6 +2141,80 @@ onUnmounted(() => {
 .mode-item.active .el-icon { color: var(--xb-primary); }
 .mode-name { font-weight: 700; font-size: 14px; }
 .mode-desc { font-size: 12px; color: var(--xb-muted); margin-top: 2px; }
+
+.workflow-card { padding-top: 18px; }
+.workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.workflow-item {
+  min-height: 82px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.02);
+  color: var(--xb-text);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+.workflow-item:hover {
+  border-color: rgba(var(--xb-primary-rgb), 0.5);
+  background: rgba(var(--xb-primary-rgb), 0.05);
+}
+.workflow-item.active {
+  border-color: var(--xb-primary);
+  background: rgba(var(--xb-primary-rgb), 0.1);
+  box-shadow: inset 0 0 0 1px rgba(var(--xb-primary-rgb), 0.26);
+}
+.workflow-no {
+  min-width: 30px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 7px;
+  background: rgba(var(--xb-fill-rgb), 0.08);
+  color: var(--xb-muted);
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font-size: 12px;
+  font-weight: 800;
+}
+.workflow-item.active .workflow-no {
+  color: var(--xb-on-primary);
+  background: linear-gradient(135deg, var(--xb-primary), var(--xb-primary-2));
+}
+.workflow-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.workflow-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+  font-weight: 800;
+}
+.workflow-title i {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(var(--xb-success-rgb), 0.12);
+  color: var(--xb-success);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+.workflow-desc {
+  color: var(--xb-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
 
 /* 多模型：每个模型 + 参数 */
 .multi-model { display: flex; flex-direction: column; }
@@ -2738,6 +2952,7 @@ input[type='range'] {
 @media (max-width: 980px) {
   .layout { grid-template-columns: 1fr; }
   .preview { position: static; }
+  .workflow-grid { grid-template-columns: 1fr; }
 }
 </style>
 

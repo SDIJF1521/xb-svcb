@@ -19,6 +19,15 @@ from infrastructure.ffmpeg_tool import FfmpegTool
 from infrastructure.storage import ListRepository
 from infrastructure.uvr_tool import UvrTool
 
+_VOCAL_OUTPUT_WORKFLOWS = {"auto_vocal_merge", "manual_vocal_merge"}
+
+
+def _wants_vocal_output(work: dict[str, Any]) -> bool:
+    return (
+        work.get("mode") == "multi"
+        and str(work.get("workflow") or "auto_mix") in _VOCAL_OUTPUT_WORKFLOWS
+    )
+
 
 def default_steps() -> list[dict[str, Any]]:
     return [
@@ -261,7 +270,10 @@ class ConversionService:
             self._save(work)
             output = work_dir / "output.wav"
             mixed = False
-            if (
+            vocal_output = _wants_vocal_output(work)
+            if vocal_output:
+                self._log(log_file, "  人声合并流程：跳过伴奏混音，输出转换后人声")
+            elif (
                 instrumental
                 and instrumental.exists()
                 and converted.exists()
@@ -287,6 +299,8 @@ class ConversionService:
             work["progress"] = 100
             work["status"] = JobStatus.DONE.value
             work["output_path"] = str(output)
+            work["converted_path"] = str(converted)
+            work["ai_vocal_paths"] = [str(converted)]
             work["format"] = output.suffix.lstrip(".").upper() or "WAV"
             work["size"] = paths.file_size_label(output)
             work["duration"] = self._format_duration(duration)
@@ -614,6 +628,9 @@ class ConversionService:
                     log_file,
                     f"[4/5] 人声合并完成（{len(timeline)} 句合并为 {len(pieces)} 段）：{full_vocal}",
                 )
+            work["converted_path"] = str(full_vocal)
+            work["ai_vocal_paths"] = [str(p) for p in full_renders.values()]
+            work["ai_merged_vocal_path"] = str(full_vocal)
             self._set_step(work, "merge", StepStatus.DONE.value)
             work["progress"] = 88
             self._save(work)
@@ -623,7 +640,10 @@ class ConversionService:
             self._save(work)
             output = work_dir / "output.wav"
             mixed = False
-            if (
+            vocal_output = _wants_vocal_output(work)
+            if vocal_output:
+                self._log(log_file, "  人声合并流程：跳过伴奏混音，输出合并后人声")
+            elif (
                 instrumental
                 and Path(instrumental).exists()
                 and Path(full_vocal).exists()

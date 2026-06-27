@@ -22,6 +22,10 @@ import type {
   HubStartResult,
   HubJob,
   ModelFramework,
+  EditorProject,
+  EditorProjectSummary,
+  EditorWaveform,
+  EditorRerunResult,
 } from './types'
 
 export * from './types'
@@ -186,6 +190,84 @@ export const api = {
 
   hubClearJob: (key: string) =>
     invoke<boolean>('hub_clear_job', [key], () => mock.hubClearJob(key)),
+
+  // ---- 音频编辑器 ----
+  listEditorProjects: () =>
+    invoke<EditorProjectSummary[]>('list_editor_projects', [], () => mock.listEditorProjects()),
+
+  getEditorProject: (projectId: string) =>
+    invoke<EditorProject | null>('get_editor_project', [projectId], () =>
+      mock.getEditorProject(projectId),
+    ),
+
+  deleteEditorProject: (projectId: string) =>
+    invoke<boolean>('delete_editor_project', [projectId], () =>
+      mock.deleteEditorProject(projectId),
+    ),
+
+  createEditorProjectFromAudio: (path: string, title?: string) =>
+    invoke<EditorProject | null>('create_editor_project_from_audio', [path, title], () =>
+      mock.createEditorProjectFromAudio(path, title),
+    ),
+
+  createEditorProjectFromWork: (workId: string) =>
+    invoke<EditorProject | null>('create_editor_project_from_work', [workId], () =>
+      mock.createEditorProjectFromWork(workId),
+    ),
+
+  saveEditorProject: (project: EditorProject) =>
+    invoke<EditorProject | null>('save_editor_project', [project], () =>
+      mock.saveEditorProject(project),
+    ),
+
+  undoEditorProject: (projectId: string) =>
+    invoke<EditorProject | null>('undo_editor_project', [projectId], () =>
+      mock.undoEditorProject(projectId),
+    ),
+
+  redoEditorProject: (projectId: string) =>
+    invoke<EditorProject | null>('redo_editor_project', [projectId], () =>
+      mock.redoEditorProject(projectId),
+    ),
+
+  getEditorClipAudio: (projectId: string, clipId: string) =>
+    invoke<string>('get_editor_clip_audio', [projectId, clipId], () =>
+      mock.getEditorClipAudio(projectId, clipId),
+    ),
+
+  renderEditorPreview: (projectId: string) =>
+    invoke<string>('render_editor_preview', [projectId], () => mock.renderEditorPreview(projectId)),
+
+  renderEditorProject: (projectId: string, fmt = 'wav') =>
+    invoke<string>('render_editor_project', [projectId, fmt], () =>
+      mock.renderEditorProject(projectId, fmt),
+    ),
+
+  exportEditorProject: (projectId: string, fmt = 'wav') =>
+    invoke<string>('export_editor_project', [projectId, fmt], () =>
+      mock.exportEditorProject(projectId, fmt),
+    ),
+
+  getEditorWaveform: (projectId: string, clipId: string, bins = 160) =>
+    invoke<EditorWaveform>('get_editor_waveform', [projectId, clipId, bins], () =>
+      mock.getEditorWaveform(projectId, clipId, bins),
+    ),
+
+  preloadEditorWaveforms: (projectId: string, bins = 160) =>
+    invoke<boolean>('preload_editor_waveforms', [projectId, bins], () =>
+      mock.preloadEditorWaveforms(projectId, bins),
+    ),
+
+  rerunEditorClip: (
+    projectId: string,
+    trackId: string,
+    clipId: string,
+    modelId: string,
+    params?: Record<string, unknown>,
+  ) =>
+    invoke<EditorRerunResult>('rerun_editor_clip', [projectId, trackId, clipId, modelId, params], () =>
+      mock.rerunEditorClip(projectId, trackId, clipId, modelId, params),
+    ),
 }
 
 const palette = ['#00f0ff', '#2f6bff', '#ff2e88', '#19f59a', '#ffae00', '#b65cff', '#5ce0c8', '#ff7ac0']

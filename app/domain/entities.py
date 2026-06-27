@@ -158,6 +158,7 @@ class Work:
     error: Optional[str] = None
     params: dict[str, Any] = field(default_factory=dict)
     steps: list[dict[str, Any]] = field(default_factory=list)
+    workflow: str = "auto_mix"
     # 翻唱模式：single=单模型；multi=多模型混合（按歌词分句指派模型）
     mode: str = "single"
     # 多模型模式下，每个已指派模型的演唱片段：{start, end, model_id}
@@ -184,6 +185,7 @@ class Work:
             error=data.get("error"),
             params=data.get("params", {}) or {},
             steps=data.get("steps", []) or [],
+            workflow=data.get("workflow", "auto_mix"),
             mode=data.get("mode", "single"),
             segments=data.get("segments", []) or [],
         )

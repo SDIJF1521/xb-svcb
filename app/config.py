@@ -9,7 +9,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.10"
+APP_VERSION = "0.0.11"
 APP_BG = "#05060d"
 
 
@@ -317,6 +317,10 @@ def modelhub_guess_framework(model_type: str | None) -> str:
 
 # 上传 / 下载暂存目录
 MODELHUB_DIR = DATA_DIR / "modelhub"
+# 轻量音频编辑器工程与缓存目录
+EDITOR_DIR = DATA_DIR / "editor"
+EDITOR_CACHE_DIR = EDITOR_DIR / "cache"
+EDITOR_PROJECTS_DB = DATA_DIR / "editor_projects.json"
 # ModelScope 接口限流（客户端侧保守值）
 MODELSCOPE_QPS = 5
 # settings.json 中保存 ModelScope 访问令牌的键名

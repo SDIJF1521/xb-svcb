@@ -2,6 +2,7 @@
 // 仅在未运行于 pywebview 时生效。
 
 import type {
+  CreateWorkflow,
   CreateWorkPayload,
   ImportModelPayload,
   ModelDTO,
@@ -22,6 +23,10 @@ import type {
   HubStartResult,
   HubJob,
   ModelFramework,
+  EditorProject,
+  EditorProjectSummary,
+  EditorWaveform,
+  EditorRerunResult,
 } from './types'
 
 const now = () => new Date().toISOString()
@@ -111,6 +116,82 @@ const mockWorks: WorkDTO[] = [
   { id: 'w2', title: '夜空中最亮的星 (AI 翻唱)', model: 'Hoshino_so-vits.pth', model_id: 'm2', status: 'done', progress: 100, duration: '04:05', format: 'FLAC', size: '42 MB', created_at: now(), time: '今天 13:08', steps: baseSteps().map((s) => ({ ...s, status: 'done' })), output: 'demo.flac' },
   { id: 'w4', title: '起风了 (AI 翻唱)', model: 'Ethereal_so-vits.pth', model_id: 'm5', status: 'done', progress: 100, duration: '05:11', format: 'MP3', size: '11 MB', created_at: now(), time: '昨天', steps: baseSteps().map((s) => ({ ...s, status: 'done' })), output: 'demo.mp3' },
 ]
+
+const cloneProject = (p: EditorProject): EditorProject => JSON.parse(JSON.stringify(p)) as EditorProject
+const mockEditorProjects: EditorProject[] = []
+const mockEditorHistory: Record<string, EditorProject[]> = {}
+const mockEditorFuture: Record<string, EditorProject[]> = {}
+const mockMinRerunClipSeconds = 1
+const mockWorkflowKeys: CreateWorkflow[] = [
+  'auto_mix',
+  'auto_vocal_merge',
+  'manual_vocal_merge',
+  'auto_then_editor',
+  'full_manual_editor',
+]
+const mockVocalMergeWorkflows: CreateWorkflow[] = ['auto_vocal_merge', 'manual_vocal_merge']
+
+function normalizeMockWorkflow(value: unknown, isMulti: boolean): CreateWorkflow {
+  const workflow = mockWorkflowKeys.includes(value as CreateWorkflow)
+    ? value as CreateWorkflow
+    : 'auto_mix'
+  return !isMulti && mockVocalMergeWorkflows.includes(workflow) ? 'auto_mix' : workflow
+}
+
+function projectDuration(project: EditorProject): number {
+  return Math.max(0.05, ...project.tracks.flatMap((t) => t.clips.map((c) => c.end || 0)))
+}
+
+function makeEditorProject(title: string, source = 'C:/music/demo.wav'): EditorProject {
+  const id = rid('edt_')
+  const created = now()
+  return {
+    id,
+    title,
+    duration: 160,
+    sample_rate: 44100,
+    waveform_cache: {},
+    metadata: { source_path: source, mode: 'mock' },
+    created_at: created,
+    updated_at: created,
+    tracks: [
+      {
+        id: rid('trk_'),
+        name: '人声轨',
+        type: 'vocal',
+        volume: 1,
+        mute: false,
+        locked: false,
+        clips: [
+          { id: rid('clp_'), name: 'verse vocal', start: 8, end: 42, offset: 0, volume: 1, mute: false, file: source, effects: [], locked: false, fade_in: 0.08, fade_out: 0.08, channel: 'stereo', metadata: {} },
+          { id: rid('clp_'), name: 'chorus vocal', start: 48, end: 84, offset: 0, volume: 1, mute: false, file: source, effects: [], locked: false, fade_in: 0.08, fade_out: 0.08, channel: 'stereo', metadata: {} },
+        ],
+      },
+      {
+        id: rid('trk_'),
+        name: 'BGM 轨',
+        type: 'bgm',
+        volume: 0.86,
+        mute: false,
+        locked: false,
+        clips: [
+          { id: rid('clp_'), name: 'instrumental', start: 0, end: 160, offset: 0, volume: 1, mute: false, file: source, effects: [], locked: true, fade_in: 0, fade_out: 0, channel: 'stereo', metadata: {} },
+        ],
+      },
+      {
+        id: rid('trk_'),
+        name: 'AI 转换轨',
+        type: 'ai',
+        volume: 1,
+        mute: false,
+        locked: false,
+        clips: [
+          { id: rid('clp_'), name: 'AI take', start: 88, end: 126, offset: 0, volume: 1, mute: false, file: source, effects: [], locked: false, fade_in: 0.06, fade_out: 0.06, channel: 'stereo', metadata: {} },
+        ],
+      },
+    ],
+  }
+}
 
 function advance(work: WorkDTO) {
   const total = work.steps.length
@@ -222,6 +303,7 @@ export const mock = {
   },
   createWork(payload: CreateWorkPayload): WorkDTO {
     const isMulti = payload.mode === 'multi'
+    const workflow = normalizeMockWorkflow(payload.workflow, isMulti)
     const model = mockModels.find((m) => m.id === (payload.model_id || defaultModelId))
     const rawTitle = payload.title || (payload.source_path ? payload.source_path.split(/[/\\]/).pop()?.replace(/\.[^.]+$/, '') : '') || '未命名翻唱'
     const work: WorkDTO = {
@@ -238,6 +320,7 @@ export const mock = {
       time: '刚刚',
       source_path: payload.source_path,
       params: payload.params,
+      workflow,
       mode: isMulti ? 'multi' : 'single',
       segments: payload.segments,
       steps: isMulti ? multiSteps() : baseSteps(),
@@ -249,7 +332,7 @@ export const mock = {
   retryWork(id: string): boolean {
     const w = mockWorks.find((x) => x.id === id)
     if (!w) return false
-    w.steps = baseSteps()
+    w.steps = w.mode === 'multi' ? multiSteps() : baseSteps()
     w.progress = 0
     advance(w)
     return true
@@ -524,6 +607,130 @@ export const mock = {
     delete mockJobs[key]
     delete mockProgress[key]
     return true
+  },
+
+  // ---- 音频编辑器（浏览器开发环境模拟）----
+  listEditorProjects(): EditorProjectSummary[] {
+    return mockEditorProjects.map((p) => ({
+      id: p.id,
+      title: p.title,
+      duration: p.duration,
+      tracks: p.tracks.length,
+      updated_at: p.updated_at,
+    }))
+  },
+  getEditorProject(projectId: string): EditorProject | null {
+    const p = mockEditorProjects.find((x) => x.id === projectId)
+    return p ? cloneProject(p) : null
+  },
+  deleteEditorProject(projectId: string): boolean {
+    const idx = mockEditorProjects.findIndex((p) => p.id === projectId)
+    if (idx < 0) return false
+    mockEditorProjects.splice(idx, 1)
+    delete mockEditorHistory[projectId]
+    delete mockEditorFuture[projectId]
+    return true
+  },
+  createEditorProjectFromAudio(path: string, title?: string): EditorProject | null {
+    if (!path) return null
+    const project = makeEditorProject(title || fileName(path).replace(/\.[^.]+$/, ''), path)
+    mockEditorProjects.unshift(project)
+    mockEditorHistory[project.id] = []
+    mockEditorFuture[project.id] = []
+    return cloneProject(project)
+  },
+  createEditorProjectFromWork(workId: string): EditorProject | null {
+    const work = mockWorks.find((w) => w.id === workId)
+    if (!work) return null
+    const project = makeEditorProject(`${work.title} · 编辑`, work.output || 'demo.wav')
+    project.metadata.work_id = workId
+    mockEditorProjects.unshift(project)
+    mockEditorHistory[project.id] = []
+    mockEditorFuture[project.id] = []
+    return cloneProject(project)
+  },
+  saveEditorProject(project: EditorProject): EditorProject | null {
+    const idx = mockEditorProjects.findIndex((p) => p.id === project.id)
+    const next = cloneProject(project)
+    next.duration = projectDuration(next)
+    next.updated_at = now()
+    if (idx >= 0) {
+      mockEditorHistory[next.id] = [...(mockEditorHistory[next.id] || []), cloneProject(mockEditorProjects[idx]!)]
+      mockEditorFuture[next.id] = []
+      mockEditorProjects[idx] = next
+    } else {
+      mockEditorProjects.unshift(next)
+      mockEditorHistory[next.id] = []
+      mockEditorFuture[next.id] = []
+    }
+    return cloneProject(next)
+  },
+  undoEditorProject(projectId: string): EditorProject | null {
+    const idx = mockEditorProjects.findIndex((p) => p.id === projectId)
+    const hist = mockEditorHistory[projectId] || []
+    if (idx < 0 || !hist.length) return idx >= 0 ? cloneProject(mockEditorProjects[idx]!) : null
+    const current = mockEditorProjects[idx]!
+    const prev = hist.pop()!
+    mockEditorFuture[projectId] = [...(mockEditorFuture[projectId] || []), cloneProject(current)]
+    mockEditorProjects[idx] = cloneProject(prev)
+    return cloneProject(prev)
+  },
+  redoEditorProject(projectId: string): EditorProject | null {
+    const idx = mockEditorProjects.findIndex((p) => p.id === projectId)
+    const future = mockEditorFuture[projectId] || []
+    if (idx < 0 || !future.length) return idx >= 0 ? cloneProject(mockEditorProjects[idx]!) : null
+    const current = mockEditorProjects[idx]!
+    const next = future.pop()!
+    mockEditorHistory[projectId] = [...(mockEditorHistory[projectId] || []), cloneProject(current)]
+    mockEditorProjects[idx] = cloneProject(next)
+    return cloneProject(next)
+  },
+  getEditorClipAudio(projectId: string, clipId: string): string {
+    console.info('[mock] getEditorClipAudio', projectId, clipId)
+    return ''
+  },
+  renderEditorPreview(projectId: string): string {
+    console.info('[mock] renderEditorPreview', projectId)
+    return ''
+  },
+  renderEditorProject(projectId: string, fmt = 'wav'): string {
+    return `C:/exports/${projectId}.${fmt}`
+  },
+  exportEditorProject(projectId: string, fmt = 'wav'): string {
+    return `C:/exports/${projectId}.${fmt}`
+  },
+  getEditorWaveform(_projectId: string, clipId: string, bins = 160): EditorWaveform {
+    const count = Math.max(16, Math.min(900, bins))
+    const peaks = Array.from({ length: count }, (_, i) => {
+      const a = Math.abs(Math.sin(i * 0.18))
+      const b = Math.abs(Math.sin(i * 0.047 + 1.2))
+      return Number(Math.min(1, 0.18 + a * 0.52 + b * 0.22).toFixed(4))
+    })
+    return { ok: true, clip_id: clipId, bins: count, peaks }
+  },
+  preloadEditorWaveforms(projectId: string, bins = 160): boolean {
+    console.info('[mock] preloadEditorWaveforms', projectId, bins)
+    return true
+  },
+  rerunEditorClip(
+    projectId: string,
+    trackId: string,
+    clipId: string,
+    modelId: string,
+    _params?: Record<string, unknown>,
+  ): EditorRerunResult {
+    const project = mockEditorProjects.find((p) => p.id === projectId)
+    if (!project) return { ok: false, error: '工程不存在' }
+    const track = project.tracks.find((t) => t.id === trackId)
+    const clip = track?.clips.find((c) => c.id === clipId)
+    if (!track || !clip) return { ok: false, error: '片段不存在' }
+    if ((clip.end || 0) - (clip.start || 0) < mockMinRerunClipSeconds) {
+      return { ok: false, error: `片段过短：至少 ${mockMinRerunClipSeconds.toFixed(2)} 秒才能重推理` }
+    }
+    clip.name = `${clip.name} · ${modelId}`
+    clip.metadata = { ...(clip.metadata || {}), rerun_model_id: modelId }
+    project.updated_at = now()
+    return { ok: true, project: cloneProject(project), clip: { ...clip } }
   },
 }
 

@@ -58,6 +58,13 @@ export interface PipelineStep {
   status: StepStatus
 }
 
+export type CreateWorkflow =
+  | 'auto_mix'
+  | 'auto_vocal_merge'
+  | 'manual_vocal_merge'
+  | 'auto_then_editor'
+  | 'full_manual_editor'
+
 export interface InferenceParams {
   pitch?: number
   f0_method?: string
@@ -96,6 +103,7 @@ export interface WorkDTO {
   params?: InferenceParams
   steps: PipelineStep[]
   mode?: 'single' | 'multi'
+  workflow?: CreateWorkflow
   segments?: BlendSegment[]
 }
 
@@ -120,6 +128,7 @@ export interface CreateWorkPayload {
   model_id?: string
   source_path?: string | null
   params?: InferenceParams
+  workflow?: CreateWorkflow
   /** 翻唱模式：single=单模型（默认）；multi=多模型混合。 */
   mode?: 'single' | 'multi'
   /** 多模型混合时参与的模型与参数。 */
@@ -296,4 +305,70 @@ export interface HubJob {
   pct: number
   msg: string
   phase: string
+}
+
+// ---- 音频编辑器（Audio Editor Lite）----
+
+export type EditorTrackType = 'source' | 'vocal' | 'bgm' | 'ai' | 'effect'
+export type EditorClipChannel = 'stereo' | 'left' | 'right'
+
+export interface EditorClip {
+  id: string
+  name: string
+  start: number
+  end: number
+  offset: number
+  volume: number
+  mute: boolean
+  file: string
+  effects: { type: string; [key: string]: unknown }[]
+  locked: boolean
+  fade_in: number
+  fade_out: number
+  channel?: EditorClipChannel
+  metadata: Record<string, unknown>
+}
+
+export interface EditorTrack {
+  id: string
+  name: string
+  type: EditorTrackType | string
+  clips: EditorClip[]
+  locked?: boolean
+  mute?: boolean
+  volume?: number
+}
+
+export interface EditorProject {
+  id: string
+  title: string
+  tracks: EditorTrack[]
+  duration: number
+  sample_rate: number
+  waveform_cache: Record<string, unknown>
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface EditorProjectSummary {
+  id: string
+  title: string
+  duration: number
+  tracks: number
+  updated_at: string
+}
+
+export interface EditorWaveform {
+  ok: boolean
+  clip_id?: string
+  bins?: number
+  peaks: number[]
+}
+
+export interface EditorRerunResult {
+  ok: boolean
+  error?: string
+  project?: EditorProject
+  clip?: EditorClip
 }

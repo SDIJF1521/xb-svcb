@@ -19,6 +19,7 @@ from typing import Any
 
 import config
 from application import (
+    AudioEditorService,
     ConversionService,
     ModelHubService,
     ModelService,
@@ -49,12 +50,14 @@ class Api:
         works: WorkService,
         music: MusicService,
         hub: ModelHubService,
+        editor: AudioEditorService,
     ) -> None:
         self._system = system
         self._models = models
         self._works = works
         self._music = music
         self._hub = hub
+        self._editor = editor
         self._window = None
 
     def set_window(self, window) -> None:  # noqa: ANN001
@@ -352,6 +355,78 @@ class Api:
             return False
         return self._reveal(Path(path))
 
+    # ---- 音频编辑器 ----
+    def list_editor_projects(self) -> list[dict[str, Any]]:
+        return self._editor.list()
+
+    def get_editor_project(self, project_id: str) -> dict[str, Any] | None:
+        return self._editor.get(project_id)
+
+    def delete_editor_project(self, project_id: str) -> bool:
+        return self._editor.remove(project_id)
+
+    def create_editor_project_from_audio(
+        self, path: str, title: str | None = None
+    ) -> dict[str, Any] | None:
+        return self._editor.create_from_audio(path, title)
+
+    def create_editor_project_from_work(self, work_id: str) -> dict[str, Any] | None:
+        return self._editor.create_from_work(work_id)
+
+    def save_editor_project(self, project: dict[str, Any]) -> dict[str, Any] | None:
+        return self._editor.save(project or {}, push_history=True)
+
+    def undo_editor_project(self, project_id: str) -> dict[str, Any] | None:
+        return self._editor.undo(project_id)
+
+    def redo_editor_project(self, project_id: str) -> dict[str, Any] | None:
+        return self._editor.redo(project_id)
+
+    def get_editor_clip_audio(self, project_id: str, clip_id: str) -> str:
+        return self._editor.clip_audio(project_id, clip_id)
+
+    def render_editor_preview(self, project_id: str) -> str:
+        return self._editor.render_preview(project_id)
+
+    def render_editor_project(self, project_id: str, fmt: str = "wav") -> str:
+        path = self._editor.render(project_id, fmt)
+        return str(path) if path else ""
+
+    def export_editor_project(self, project_id: str, fmt: str = "wav") -> str:
+        src = self._editor.render(project_id, fmt)
+        if src is None:
+            return ""
+        project = self._editor.get(project_id) or {}
+        title = (project.get("title") or src.stem).strip()
+        ext = "." + (fmt or "wav").strip().lower().lstrip(".")
+        filename = f"{_safe_filename(title)}{ext}"
+        dest = self._save_dialog("导出编辑器混音", filename)
+        if not dest:
+            return ""
+        try:
+            shutil.copyfile(src, dest)
+            return dest
+        except OSError:
+            return ""
+
+    def get_editor_waveform(
+        self, project_id: str, clip_id: str, bins: int = 160
+    ) -> dict[str, Any]:
+        return self._editor.waveform(project_id, clip_id, int(bins or 160))
+
+    def preload_editor_waveforms(self, project_id: str, bins: int = 160) -> bool:
+        return self._editor.preload_waveforms(project_id, int(bins or 160))
+
+    def rerun_editor_clip(
+        self,
+        project_id: str,
+        track_id: str,
+        clip_id: str,
+        model_id: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._editor.rerun_clip(project_id, track_id, clip_id, model_id, params or {})
+
     @staticmethod
     def _reveal(path: Path) -> bool:
         """跨平台打开文件/文件夹。"""
@@ -426,6 +501,7 @@ def build_api() -> Api:
 
     models_repo = ListRepository(config.MODELS_DB)
     works_repo = ListRepository(config.WORKS_DB)
+    editor_repo = ListRepository(config.EDITOR_PROJECTS_DB)
     settings = SettingsStore(config.SETTINGS_DB)
 
     # 应用服务
@@ -435,8 +511,18 @@ def build_api() -> Api:
     work_service = WorkService(works_repo, conversion_service, model_service)
     music_service = MusicService(settings)
     hub_service = ModelHubService(settings, model_service)
+    editor_service = AudioEditorService(
+        editor_repo, works_repo, model_service, ffmpeg, engines
+    )
 
     # 启动时回收上次会话残留的"处理中"任务（其后台线程已随进程退出而终止）
     work_service.recover_stale()
 
-    return Api(system_service, model_service, work_service, music_service, hub_service)
+    return Api(
+        system_service,
+        model_service,
+        work_service,
+        music_service,
+        hub_service,
+        editor_service,
+    )

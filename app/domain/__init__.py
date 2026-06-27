@@ -2,6 +2,7 @@
 
 from .enums import JobStatus, ModelType, StepStatus
 from .entities import ModelInfo, ModelFile, Work, PipelineStep, InferenceParams
+from .audio_editor import EditorClip, EditorProject, EditorTrack
 
 __all__ = [
     "JobStatus",
@@ -12,4 +13,7 @@ __all__ = [
     "Work",
     "PipelineStep",
     "InferenceParams",
+    "EditorClip",
+    "EditorProject",
+    "EditorTrack",
 ]
