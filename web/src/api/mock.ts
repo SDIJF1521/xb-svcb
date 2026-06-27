@@ -32,6 +32,10 @@ import type {
 const now = () => new Date().toISOString()
 const rid = (p: string) => p + Math.random().toString(36).slice(2, 12)
 const fileName = (p: string) => p.split(/[/\\]/).pop() || p
+const editorFormat = (fmt = 'wav') => {
+  const value = fmt.trim().toLowerCase().replace(/^\./, '')
+  return ['wav', 'mp3', 'flac'].includes(value) ? value : 'wav'
+}
 
 // 浏览器环境下用真实的系统文件选择框（无法拿到完整本地路径，仅用于开发预览）。
 function browserPickFile(accept: string): Promise<string | null> {
@@ -642,7 +646,105 @@ export const mock = {
   createEditorProjectFromWork(workId: string): EditorProject | null {
     const work = mockWorks.find((w) => w.id === workId)
     if (!work) return null
-    const project = makeEditorProject(`${work.title} · 编辑`, work.output || 'demo.wav')
+    let project: EditorProject
+    if (work.mode === 'multi' && work.segments?.length) {
+      const created = now()
+      const source = work.source_path || work.output || 'demo.wav'
+      const duration = Math.max(160, ...work.segments.map((s) => s.end || 0))
+      const vocalExport = work.workflow === 'manual_vocal_merge'
+      const orderedSegments = [...work.segments].sort((a, b) => (a.start || 0) - (b.start || 0))
+      const segmentCrossfade = 0.06
+      const segmentHalfCrossfade = segmentCrossfade / 2
+      const modelIds: string[] = []
+      for (const seg of orderedSegments) {
+        for (const id of seg.model_ids || [seg.model_id]) {
+          if (id && !modelIds.includes(id)) modelIds.push(id)
+        }
+      }
+      project = {
+        id: rid('edt_'),
+        title: `${work.title} · 编辑`,
+        duration,
+        sample_rate: 44100,
+        waveform_cache: {},
+        metadata: {
+          work_id: workId,
+          mode: 'from_work',
+          workflow: work.workflow || 'auto_mix',
+          export_mode: vocalExport ? 'vocal' : 'mix',
+        },
+        created_at: created,
+        updated_at: created,
+        tracks: [
+          {
+            id: rid('trk_'),
+            name: '原始音频',
+            type: 'source',
+            volume: 1,
+            mute: true,
+            locked: true,
+            clips: [
+              { id: rid('clp_'), name: 'source', start: 0, end: duration, offset: 0, volume: 1, mute: false, file: source, effects: [], locked: true, fade_in: 0, fade_out: 0, channel: 'stereo', metadata: { work_id: workId, stem: 'source' } },
+            ],
+          },
+          {
+            id: rid('trk_'),
+            name: 'BGM 轨',
+            type: 'bgm',
+            volume: 0.86,
+            mute: vocalExport,
+            locked: false,
+            clips: [
+              { id: rid('clp_'), name: 'instrumental', start: 0, end: duration, offset: 0, volume: 1, mute: false, file: source, effects: [], locked: false, fade_in: 0, fade_out: 0, channel: 'stereo', metadata: { work_id: workId, stem: 'bgm' } },
+            ],
+          },
+          ...modelIds.map((modelId) => {
+            const model = mockModels.find((m) => m.id === modelId)
+            return {
+              id: rid('trk_'),
+              name: `AI · ${model?.name || modelId}`,
+              type: 'ai',
+              volume: 1,
+              mute: false,
+              locked: false,
+              clips: orderedSegments
+                .filter((seg) => (seg.model_ids || [seg.model_id]).includes(modelId))
+                .map((seg) => {
+                  const idx = orderedSegments.indexOf(seg)
+                  const hasPrev = idx > 0 && (orderedSegments[idx - 1]?.model_ids || [orderedSegments[idx - 1]?.model_id]).some(Boolean)
+                  const hasNext = idx >= 0 && idx + 1 < orderedSegments.length && (orderedSegments[idx + 1]?.model_ids || [orderedSegments[idx + 1]?.model_id]).some(Boolean)
+                  const start = Math.max(0, (seg.start || 0) - (hasPrev ? segmentHalfCrossfade : 0))
+                  const end = Math.min(duration, (seg.end || 0) + (hasNext ? segmentHalfCrossfade : 0))
+                  return {
+                    id: rid('clp_'),
+                    name: `${model?.name || modelId} ${Math.floor((seg.start || 0) / 60)}:${String(Math.floor(seg.start || 0) % 60).padStart(2, '0')}`,
+                    start,
+                    end,
+                    offset: 0,
+                    volume: 1,
+                    mute: false,
+                    file: `C:/mock/editor-segments/${workId}/${modelId}/seg_${Math.round(start * 1000)}_${Math.round(end * 1000)}.wav`,
+                    effects: [],
+                    locked: false,
+                    fade_in: hasPrev ? segmentCrossfade : 0,
+                    fade_out: hasNext ? segmentCrossfade : 0,
+                    channel: 'stereo' as const,
+                    metadata: {
+                      work_id: workId,
+                      stem: 'ai_model_segment',
+                      model_id: modelId,
+                      source_start: seg.start,
+                      source_end: seg.end,
+                    },
+                  }
+                }),
+            }
+          }),
+        ],
+      }
+    } else {
+      project = makeEditorProject(`${work.title} · 编辑`, work.output || 'demo.wav')
+    }
     project.metadata.work_id = workId
     mockEditorProjects.unshift(project)
     mockEditorHistory[project.id] = []
@@ -694,10 +796,10 @@ export const mock = {
     return ''
   },
   renderEditorProject(projectId: string, fmt = 'wav'): string {
-    return `C:/exports/${projectId}.${fmt}`
+    return `C:/exports/${projectId}.${editorFormat(fmt)}`
   },
   exportEditorProject(projectId: string, fmt = 'wav'): string {
-    return `C:/exports/${projectId}.${fmt}`
+    return `C:/exports/${projectId}.${editorFormat(fmt)}`
   },
   getEditorWaveform(_projectId: string, clipId: string, bins = 160): EditorWaveform {
     const count = Math.max(16, Math.min(900, bins))

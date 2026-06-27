@@ -398,14 +398,23 @@ class Api:
             return ""
         project = self._editor.get(project_id) or {}
         title = (project.get("title") or src.stem).strip()
-        ext = "." + (fmt or "wav").strip().lower().lstrip(".")
+        ext = "." + self._editor._normalize_format(fmt)
         filename = f"{_safe_filename(title)}{ext}"
-        dest = self._save_dialog("导出编辑器混音", filename)
+        metadata = project.get("metadata") or {}
+        dialog_title = (
+            "导出编辑器人声"
+            if metadata.get("export_mode") == "vocal"
+            else "导出编辑器混音"
+        )
+        dest = self._save_dialog(dialog_title, filename)
         if not dest:
             return ""
+        dest_path = Path(dest)
+        if dest_path.suffix.lower() != ext:
+            dest_path = dest_path.with_suffix(ext)
         try:
-            shutil.copyfile(src, dest)
-            return dest
+            shutil.copyfile(src, dest_path)
+            return str(dest_path)
         except OSError:
             return ""
 

@@ -28,6 +28,7 @@ class AudioEditorService:
 
     _HISTORY_LIMIT = 60
     _MIN_RERUN_DURATION = 1.0
+    _RENDER_VERSION = "channel-route-v4"
 
     def __init__(
         self,
@@ -130,6 +131,8 @@ class AudioEditorService:
         now = self._now()
         tracks: list[dict[str, Any]] = []
         known: set[str] = set()
+        workflow = str(work.get("workflow") or "auto_mix")
+        vocal_export = workflow == "manual_vocal_merge"
 
         def add_track(
             name: str,
@@ -184,9 +187,136 @@ class AudioEditorService:
             except OSError:
                 pass
 
+        def model_id_from_path(raw: str) -> str:
+            stem = Path(raw).stem
+            if stem.startswith("full_"):
+                stem = stem[5:]
+            if stem.endswith("_fix"):
+                stem = stem[:-4]
+            return stem
+
+        def add_model_timeline_tracks(ai_paths: list[str]) -> bool:
+            seg_models = work.get("seg_models") or {}
+            segments = work.get("segments") or []
+            segment_clips = work.get("ai_segment_clips") or []
+            if segment_clips:
+                clips_by_model: dict[str, list[dict[str, Any]]] = {}
+                names_by_model: dict[str, str] = {}
+                for item in segment_clips:
+                    model_id = str(item.get("model_id") or "").strip()
+                    src = Path(str(item.get("file") or ""))
+                    if not model_id or not src.exists():
+                        continue
+                    try:
+                        start = max(0.0, float(item.get("start") or 0.0))
+                        end = max(start, float(item.get("end") or 0.0))
+                        offset = max(0.0, float(item.get("offset") or 0.0))
+                        fade_in = max(0.0, float(item.get("fade_in") or 0.0))
+                        fade_out = max(0.0, float(item.get("fade_out") or 0.0))
+                    except (TypeError, ValueError):
+                        continue
+                    if end <= start:
+                        continue
+                    model_name = (
+                        str(item.get("model_name") or "").strip()
+                        or (seg_models.get(model_id) or {}).get("name")
+                        or model_id
+                    )
+                    names_by_model[model_id] = model_name
+                    clips_by_model.setdefault(model_id, []).append(
+                        EditorClip(
+                            id=paths.new_id("clp_"),
+                            name=f"{model_name} {self._fmt_time(start)}",
+                            start=start,
+                            end=end,
+                            offset=offset,
+                            volume=1.0,
+                            mute=False,
+                            file=str(src),
+                            fade_in=fade_in,
+                            fade_out=fade_out,
+                            metadata={
+                                "work_id": work_id,
+                                "stem": "ai_model_segment",
+                                "model_id": model_id,
+                                "source_start": item.get("source_start", start),
+                                "source_end": item.get("source_end", end),
+                            },
+                        ).to_dict()
+                    )
+                    remember(str(src))
+                for idx, (model_id, clips) in enumerate(clips_by_model.items(), start=1):
+                    model_name = names_by_model.get(model_id) or model_id or str(idx)
+                    tracks.append(
+                        EditorTrack(
+                            id=paths.new_id("trk_"),
+                            name=f"AI · {model_name}",
+                            type="ai",
+                            clips=sorted(clips, key=lambda c: float(c.get("start") or 0.0)),
+                        ).to_dict()
+                    )
+                return bool(clips_by_model)
+
+            path_by_model = {model_id_from_path(raw): raw for raw in ai_paths}
+            if not segments or not path_by_model:
+                return False
+            added = False
+            for idx, (model_id, raw) in enumerate(path_by_model.items(), start=1):
+                src = Path(raw)
+                if not src.exists():
+                    continue
+                model_name = (seg_models.get(model_id) or {}).get("name") or model_id or str(idx)
+                clips: list[dict[str, Any]] = []
+                for seg in segments:
+                    raw_ids = seg.get("model_ids") or (
+                        [seg.get("model_id")] if seg.get("model_id") else []
+                    )
+                    mids = raw_ids if isinstance(raw_ids, list) else [raw_ids]
+                    if model_id not in mids:
+                        continue
+                    try:
+                        start = max(0.0, float(seg.get("start") or 0.0))
+                        end = max(start, float(seg.get("end") or 0.0))
+                    except (TypeError, ValueError):
+                        continue
+                    if end <= start:
+                        continue
+                    clips.append(
+                        EditorClip(
+                            id=paths.new_id("clp_"),
+                            name=f"{model_name} {self._fmt_time(start)}",
+                            start=start,
+                            end=end,
+                            offset=start,
+                            volume=1.0,
+                            mute=False,
+                            file=str(src),
+                            fade_in=0.03,
+                            fade_out=0.03,
+                            metadata={
+                                "work_id": work_id,
+                                "stem": "ai_model_segment",
+                                "model_id": model_id,
+                            },
+                        ).to_dict()
+                    )
+                if not clips:
+                    continue
+                remember(raw)
+                tracks.append(
+                    EditorTrack(
+                        id=paths.new_id("trk_"),
+                        name=f"AI · {model_name}",
+                        type="ai",
+                        clips=clips,
+                    ).to_dict()
+                )
+                added = True
+            return added
+
         add_track("原始音频", "source", work.get("source_path"), locked=True, mute=True)
         add_track("原始人声", "vocal", work.get("vocals_path"), mute=True)
-        add_track("BGM 轨", "bgm", work.get("instrumental_path"))
+        add_track("BGM 轨", "bgm", work.get("instrumental_path"), mute=vocal_export)
         remember(work.get("output_path"))
 
         work_dir = config.WORKS_DIR / work_id
@@ -202,19 +332,18 @@ class AudioEditorService:
         ]
         is_multi = work.get("mode") == "multi"
         if is_multi:
-            add_track("AI 合并干声", "ai", ai_merged, metadata={"stem": "ai_merged"})
-            seg_models = work.get("seg_models") or {}
-            for idx, raw in enumerate(ai_paths, start=1):
-                path = Path(raw)
-                model_id = path.stem.removeprefix("full_").removesuffix("_fix")
-                model_name = (seg_models.get(model_id) or {}).get("name") or model_id or str(idx)
-                add_track(
-                    f"AI 干声 · {model_name}",
-                    "ai",
-                    raw,
-                    mute=True,
-                    metadata={"stem": "ai_model", "model_id": model_id},
-                )
+            remember(ai_merged)
+            if not add_model_timeline_tracks(ai_paths):
+                seg_models = work.get("seg_models") or {}
+                for idx, raw in enumerate(ai_paths, start=1):
+                    model_id = model_id_from_path(raw)
+                    model_name = (seg_models.get(model_id) or {}).get("name") or model_id or str(idx)
+                    add_track(
+                        f"AI · {model_name}",
+                        "ai",
+                        raw,
+                        metadata={"stem": "ai_model", "model_id": model_id},
+                    )
         else:
             add_track("AI 翻唱干声", "ai", ai_merged or (ai_paths[0] if ai_paths else None))
 
@@ -264,7 +393,12 @@ class AudioEditorService:
             title=f"{work.get('title', '翻唱作品')} · 编辑",
             tracks=tracks,
             duration=max(duration, 0.05),
-            metadata={"work_id": work_id, "mode": "from_work"},
+            metadata={
+                "work_id": work_id,
+                "mode": "from_work",
+                "workflow": workflow,
+                "export_mode": "vocal" if vocal_export else "mix",
+            },
             created_at=now,
             updated_at=now,
         ).to_dict()
@@ -325,14 +459,59 @@ class AudioEditorService:
 
     def clip_audio(self, project_id: str, clip_id: str) -> str:
         project = self._repo.get(project_id)
-        clip = self._find_clip(project, clip_id) if project else None
-        if not clip:
+        track: dict[str, Any] | None = None
+        clip: dict[str, Any] | None = None
+        if project:
+            for item in project.get("tracks", []) or []:
+                hit = next(
+                    (c for c in item.get("clips", []) or [] if c.get("id") == clip_id),
+                    None,
+                )
+                if hit:
+                    track = item
+                    clip = hit
+                    break
+        if not project or not track or not clip:
             return ""
-        return self._audio_data(Path(str(clip.get("file") or "")))
+        try:
+            length = max(0.01, float(clip.get("end") or 0.0) - float(clip.get("start") or 0.0))
+        except (TypeError, ValueError):
+            length = 0.01
+        preview_clip = copy.deepcopy(clip)
+        preview_clip["start"] = 0.0
+        preview_clip["end"] = length
+        preview_project = {
+            "id": project_id,
+            "duration": length,
+            "sample_rate": project.get("sample_rate") or 44100,
+            "tracks": [
+                {
+                    "id": track.get("id"),
+                    "name": track.get("name", ""),
+                    "type": track.get("type", "audio"),
+                    "volume": track.get("volume", 1.0),
+                    "mute": False,
+                    "clips": [preview_clip],
+                }
+            ],
+        }
+        key = FFmpegEngine.cache_key(
+            {
+                "render_version": self._RENDER_VERSION,
+                "project_id": project_id,
+                "clip": preview_clip,
+                "track_volume": track.get("volume", 1.0),
+                "sample_rate": preview_project["sample_rate"],
+            }
+        )
+        dst = config.EDITOR_CACHE_DIR / f"{project_id}_{clip_id}_{key}.wav"
+        if not dst.exists():
+            self._audio.render_timeline(preview_project, dst, config.EDITOR_CACHE_DIR, "wav")
+        return self._audio_data(dst, exact=True) if dst.exists() else ""
 
     def render_preview(self, project_id: str) -> str:
-        path = self.render(project_id, "mp3")
-        return self._audio_data(path) if path else ""
+        path = self.render(project_id, "wav")
+        return self._audio_data(path, exact=True) if path else ""
 
     def render(self, project_id: str, output_format: str = "wav") -> Path | None:
         project = self._repo.get(project_id)
@@ -456,6 +635,11 @@ class AudioEditorService:
         return datetime.now().isoformat(timespec="seconds")
 
     @staticmethod
+    def _fmt_time(seconds: float) -> str:
+        s = max(0, int(seconds or 0))
+        return f"{s // 60:02d}:{s % 60:02d}"
+
+    @staticmethod
     def _public(project: dict[str, Any] | None) -> dict[str, Any] | None:
         if not project:
             return None
@@ -525,17 +709,27 @@ class AudioEditorService:
                     return track, idx, clip
         return None, -1, None
 
-    def _audio_data(self, src: Path) -> str:
+    def _audio_data(self, src: Path, exact: bool = False) -> str:
         if not src.exists():
             return ""
         data: bytes | None = None
-        mime = "audio/wav"
+        mime_by_ext = {
+            ".flac": "audio/flac",
+            ".mp3": "audio/mpeg",
+            ".wav": "audio/wav",
+        }
+        mime = mime_by_ext.get(src.suffix.lower(), "audio/wav")
+        if exact or src.suffix.lower() == ".mp3":
+            try:
+                data = src.read_bytes()
+            except OSError:
+                data = None
         if self._ffmpeg.available:
             try:
                 tmp = config.EDITOR_CACHE_DIR / f"aud_{FFmpegEngine.cache_key(str(src))}.mp3"
-                if not tmp.exists():
+                if data is None and not tmp.exists():
                     self._ffmpeg.convert(src, tmp)
-                if tmp.exists():
+                if data is None and tmp.exists():
                     data = tmp.read_bytes()
                     mime = "audio/mpeg"
             except OSError:
@@ -560,7 +754,14 @@ class AudioEditorService:
                     stats.append((str(path), st.st_size, int(st.st_mtime)))
                 except OSError:
                     stats.append((str(path), 0, 0))
-        return FFmpegEngine.cache_key({"project": payload, "stats": stats, "format": fmt})
+        return FFmpegEngine.cache_key(
+            {
+                "render_version": self._RENDER_VERSION,
+                "project": payload,
+                "stats": stats,
+                "format": fmt,
+            }
+        )
 
     def _waveform_key(self, clip: dict[str, Any], bins: int) -> str:
         path = Path(str(clip.get("file") or ""))

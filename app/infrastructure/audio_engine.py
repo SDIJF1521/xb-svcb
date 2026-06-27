@@ -181,9 +181,9 @@ class FFmpegEngine:
             if fade_out > 0:
                 chain += f",afade=t=out:st={max(0.0, length - fade_out):.3f}:d={fade_out:.3f}"
             if channel == "left":
-                chain += ",pan=stereo|c0=c0|c1=0"
+                chain += ",pan=stereo|c0=0.5*c0+0.5*c1|c1=0*c0"
             elif channel == "right":
-                chain += ",pan=stereo|c0=0|c1=c1"
+                chain += ",pan=stereo|c0=0*c0|c1=0.5*c0+0.5*c1"
             chain += f",adelay={delay_ms}|{delay_ms}[a{idx}]"
             filters.append(chain)
             labels += f"[a{idx}]"
@@ -195,7 +195,7 @@ class FFmpegEngine:
         ext = output_format.lower().lstrip(".")
         codec: list[str] = []
         if ext == "mp3":
-            codec = ["-codec:a", "libmp3lame", "-q:a", "2"]
+            codec = ["-codec:a", "libmp3lame", "-q:a", "2", "-joint_stereo", "0"]
         elif ext == "flac":
             codec = ["-codec:a", "flac"]
         elif ext == "wav":

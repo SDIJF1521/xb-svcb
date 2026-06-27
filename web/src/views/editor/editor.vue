@@ -29,7 +29,7 @@
         </el-button>
         <el-dropdown :disabled="!project" trigger="click" @command="(cmd: string | number | object) => exportMix(String(cmd))">
           <el-button :disabled="!project" round class="ghost-btn">
-            <el-icon class="el-icon--left"><Download /></el-icon>导出
+            <el-icon class="el-icon--left"><Download /></el-icon>{{ exportLabel }}
           </el-button>
           <template #dropdown>
             <el-dropdown-menu>
@@ -84,20 +84,21 @@
           </div>
           <div class="field-grid">
             <label>开始</label>
-            <input type="number" step="0.01" :value="round(selectedClip.start)" @change="setClipNumber('start', $event)" />
+            <input type="number" step="0.01" :value="round(selectedClip.start)" :disabled="!selectedClipEditable" @change="setClipNumber('start', $event)" />
             <label>结束</label>
-            <input type="number" step="0.01" :value="round(selectedClip.end)" @change="setClipNumber('end', $event)" />
+            <input type="number" step="0.01" :value="round(selectedClip.end)" :disabled="!selectedClipEditable" @change="setClipNumber('end', $event)" />
             <label>偏移</label>
-            <input type="number" step="0.01" :value="round(selectedClip.offset)" @change="setClipNumber('offset', $event)" />
+            <input type="number" step="0.01" :value="round(selectedClip.offset)" :disabled="!selectedClipEditable" @change="setClipNumber('offset', $event)" />
           </div>
           <div class="channel-row">
-            <span>声道</span>
+            <span>片段声道</span>
             <div class="channel-segment">
               <button
                 v-for="option in channelOptions"
                 :key="option.value"
                 :class="{ active: clipChannel(selectedClip) === option.value }"
                 :title="option.title"
+                :disabled="!selectedClipEditable"
                 @click="setClipChannel(option.value)"
               >
                 {{ option.label }}
@@ -106,18 +107,18 @@
           </div>
           <div class="slider-row">
             <span>音量</span>
-            <el-slider v-model="selectedClip.volume" :min="0" :max="2" :step="0.01" @change="saveProject" />
+            <el-slider v-model="selectedClip.volume" :disabled="!selectedClipEditable" :min="0" :max="2" :step="0.01" @change="saveProject" />
           </div>
           <div class="slider-row">
             <span>淡入</span>
-            <el-slider v-model="selectedClip.fade_in" :min="0" :max="2" :step="0.01" @change="saveProject" />
+            <el-slider v-model="selectedClip.fade_in" :disabled="!selectedClipEditable" :min="0" :max="2" :step="0.01" @change="saveProject" />
           </div>
           <div class="slider-row">
             <span>淡出</span>
-            <el-slider v-model="selectedClip.fade_out" :min="0" :max="2" :step="0.01" @change="saveProject" />
+            <el-slider v-model="selectedClip.fade_out" :disabled="!selectedClipEditable" :min="0" :max="2" :step="0.01" @change="saveProject" />
           </div>
           <div class="clip-actions">
-            <button title="静音片段" :class="{ active: selectedClip.mute }" @click="toggleClipMute">
+            <button title="静音片段" :disabled="!selectedClipEditable" :class="{ active: selectedClip.mute }" @click="toggleClipMute">
               <el-icon><Mute /></el-icon>
             </button>
             <button title="按播放头剪切" :disabled="!canSplitAtPlayhead" @click="splitAtPlayhead">
@@ -126,7 +127,7 @@
             <button title="预览片段" @click="playSelectedClip">
               <el-icon><Aim /></el-icon>
             </button>
-            <button title="删除片段" class="danger" @click="deleteSelectedClip">
+            <button title="删除片段" class="danger" :disabled="!selectedClipEditable" @click="deleteSelectedClip">
               <el-icon><Delete /></el-icon>
             </button>
           </div>
@@ -344,14 +345,20 @@ const selectedClip = computed(() => {
   if (!track || !selected.value) return null
   return track.clips.find((c) => c.id === selected.value?.clipId) || null
 })
+const exportLabel = computed(() =>
+  project.value?.metadata?.export_mode === 'vocal' ? '导出人声' : '导出',
+)
 const selectedClipDuration = computed(() => {
   const clip = selectedClip.value
   return clip ? Math.max(0, clip.end - clip.start) : 0
 })
-const canRerunSelectedClip = computed(() => {
+const selectedClipEditable = computed(() => {
   const clip = selectedClip.value
   const track = selectedTrack.value
-  return !!clip && !clip.locked && !track?.locked && selectedClipDuration.value >= MIN_RERUN_CLIP_SECONDS
+  return !!clip && !clip.locked && !track?.locked
+})
+const canRerunSelectedClip = computed(() => {
+  return selectedClipEditable.value && selectedClipDuration.value >= MIN_RERUN_CLIP_SECONDS
 })
 const rerunGuardText = computed(() => {
   if (!selectedClip.value) return ''
@@ -663,6 +670,7 @@ function toggleTrackLock(track: EditorTrack) {
 }
 function toggleClipMute() {
   if (!selectedClip.value) return
+  if (!selectedClipEditable.value) return
   pushHistory()
   selectedClip.value.mute = !selectedClip.value.mute
   saveProject()
@@ -675,19 +683,25 @@ function toggleClipLock() {
 function deleteSelectedClip() {
   if (!project.value || !selected.value) return
   const track = selectedTrack.value
-  if (!track) return
+  if (!track || !selectedClipEditable.value) return
   pushHistory()
   track.clips = track.clips.filter((c) => c.id !== selected.value?.clipId)
   selected.value = null
   saveProject()
 }
 
-function setClipChannel(channel: EditorClipChannel) {
+async function setClipChannel(channel: EditorClipChannel) {
   const clip = selectedClip.value
   if (!clip || clipChannel(clip) === channel) return
+  if (!selectedClipEditable.value) {
+    ElMessage.info('锁定片段不能修改声道')
+    return
+  }
   pushHistory()
+  stopPlayback()
   clip.channel = channel
-  saveProject()
+  renderedPath.value = ''
+  await saveProject()
 }
 
 function clipChannel(clip?: EditorClip | null): EditorClipChannel {
@@ -788,6 +802,7 @@ async function splitAtPlayhead() {
 async function setClipNumber(field: 'start' | 'end' | 'offset', e: Event) {
   const clip = selectedClip.value
   if (!clip) return
+  if (!selectedClipEditable.value) return
   const value = Number((e.target as HTMLInputElement).value)
   if (!Number.isFinite(value)) return
   pushHistory()
@@ -813,7 +828,11 @@ function stopPlayback() {
     clearTimeout(clipStopTimer)
     clipStopTimer = null
   }
-  audioEl.value?.pause()
+  if (audioEl.value) {
+    audioEl.value.pause()
+    audioEl.value.removeAttribute('src')
+    audioEl.value.load()
+  }
   playing.value = false
   playbackMode.value = 'none'
 }
@@ -855,6 +874,8 @@ async function playMix() {
 
 async function playSelectedClip() {
   if (!project.value || !selectedClip.value || !audioEl.value) return
+  await saveProject()
+  if (!project.value || !selectedClip.value) return
   const clip = selectedClip.value
   const data = await api.getEditorClipAudio(project.value.id, clip.id)
   if (!data) {
@@ -864,7 +885,7 @@ async function playSelectedClip() {
   if (clipStopTimer) clearTimeout(clipStopTimer)
   playbackMode.value = 'clip'
   audioEl.value.src = data
-  audioEl.value.currentTime = Math.max(0, clip.offset || 0)
+  audioEl.value.currentTime = 0
   await audioEl.value.play()
   playing.value = true
   clipStopTimer = setTimeout(() => {

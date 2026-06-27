@@ -28,6 +28,8 @@
 
 <sub>Windows 一键安装 · 内置前端与底模 · 无需手动配置 Python / Node</sub>
 
+<sub>用户交流 / 反馈 QQ 群：**1038366109**</sub>
+
 </div>
 
 ---

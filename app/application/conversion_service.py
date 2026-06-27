@@ -526,6 +526,94 @@ class ConversionService:
             work["progress"] = 75
             self._save(work)
 
+            # 给编辑器准备真正的“按模型、按句段”素材。
+            # full_renders 仍是为了整轨推理的连续上下文，但编辑器不直接使用整轨；
+            # 每个 clip 文件只包含该模型在该句负责的声音。
+            editor_seg_dir = work_dir / "editor_segments"
+            editor_seg_dir.mkdir(parents=True, exist_ok=True)
+            editor_clips: list[dict[str, Any]] = []
+            editor_xf = 0.06
+            editor_half_xf = editor_xf / 2.0
+
+            def _has_rendered_voice(seg: dict[str, Any] | None) -> bool:
+                if not seg:
+                    return False
+                return any(mid in full_renders for mid in (seg.get("model_ids") or []))
+
+            for i, seg in enumerate(timeline):
+                try:
+                    start = max(0.0, float(seg.get("start") or 0.0))
+                    end = min(duration, max(start, float(seg.get("end") or start)))
+                except (TypeError, ValueError):
+                    continue
+                if end <= start:
+                    continue
+                ids: list[str] = []
+                for mid in seg.get("model_ids") or []:
+                    if mid in full_renders and mid not in ids:
+                        ids.append(mid)
+                for mid in ids:
+                    src = full_renders.get(mid)
+                    if not src or not Path(src).exists() or not self._ffmpeg.available:
+                        continue
+                    clip_dir = editor_seg_dir / mid
+                    prev_seg = timeline[i - 1] if i > 0 else None
+                    next_seg = timeline[i + 1] if i + 1 < len(timeline) else None
+                    pad_before = editor_half_xf if _has_rendered_voice(prev_seg) else 0.0
+                    pad_after = editor_half_xf if _has_rendered_voice(next_seg) else 0.0
+                    clip_start = max(0.0, start - pad_before)
+                    clip_end = min(duration, end + pad_after)
+                    fade_in = min(editor_xf, max(0.0, clip_end - clip_start) / 2.0) if pad_before else 0.0
+                    fade_out = min(editor_xf, max(0.0, clip_end - clip_start) / 2.0) if pad_after else 0.0
+                    clip = clip_dir / (
+                        f"seg_{i:03d}_{int(clip_start * 1000):08d}_"
+                        f"{int(clip_end * 1000):08d}.wav"
+                    )
+                    if self._ffmpeg.slice(Path(src), clip_start, clip_end, clip):
+                        model_name = (seg_models.get(mid) or {}).get("name") or mid
+                        editor_clips.append(
+                            {
+                                "model_id": mid,
+                                "model_name": model_name,
+                                "start": clip_start,
+                                "end": clip_end,
+                                "offset": 0.0,
+                                "fade_in": fade_in,
+                                "fade_out": fade_out,
+                                "source_start": start,
+                                "source_end": end,
+                                "file": str(clip),
+                            }
+                        )
+            work["ai_segment_clips"] = editor_clips
+            self._log(
+                log_file,
+                f"  已生成编辑器分段素材：{len(editor_clips)} 段"
+                f"（每段仅含对应 AI 声音）",
+            )
+
+            if str(work.get("workflow") or "auto_mix") == "manual_vocal_merge":
+                self._set_step(work, "merge", StepStatus.ACTIVE.value)
+                self._save(work)
+                self._log(
+                    log_file,
+                    "[4/5] 手动人声合并：跳过自动拼接，等待进入编辑器逐段合并",
+                )
+                work["converted_path"] = ""
+                work["ai_vocal_paths"] = []
+                work["ai_merged_vocal_path"] = ""
+                self._set_step(work, "merge", StepStatus.DONE.value)
+                self._set_step(work, "mix", StepStatus.DONE.value)
+                work["progress"] = 100
+                work["status"] = JobStatus.DONE.value
+                work["output_path"] = ""
+                work["format"] = "EDITOR"
+                work["size"] = f"{len(editor_clips)} 段"
+                work["duration"] = self._format_duration(duration)
+                self._save(work)
+                self._log(log_file, "=== 完成：可编辑人声片段已准备 ===")
+                return
+
             # 4) 人声合并：先把「相邻且用同一来源」的句子并成连续段，避免在同
             #    一歌手连唱处反复切割造成卡顿；再仅在真正换人处用交叉淡化平滑衔接。
             self._set_step(work, "merge", StepStatus.ACTIVE.value)
