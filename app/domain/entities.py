@@ -185,7 +185,6 @@ class Work:
             error=data.get("error"),
             params=data.get("params", {}) or {},
             steps=data.get("steps", []) or [],
-            workflow=data.get("workflow", "auto_mix"),
             mode=data.get("mode", "single"),
             segments=data.get("segments", []) or [],
         )
