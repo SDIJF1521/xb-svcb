@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { api, pickColor, type ImportModelPayload, type ModelDTO } from '@/api'
+import { api, pickColor, type ImportModelPayload, type ModelDTO, type ModelLibraryOverview } from '@/api'
 
 export interface ModelVM {
   id: string
@@ -19,6 +19,8 @@ export interface ModelVM {
   hasDiffusion: boolean
   /** RVC 检索特征文件名（无则为 '—'）。 */
   indexFile: string
+  favorite: boolean
+  health: 'ok' | 'warn' | 'error' | 'unknown'
 }
 
 function guessFramework(type: string): string {
@@ -44,18 +46,26 @@ function toVM(m: ModelDTO): ModelVM {
     diffusionConfig: m.diffusion_config?.name || '—',
     hasDiffusion: !!m.diffusion_model,
     indexFile: m.index_file?.name || '—',
+    favorite: !!m.favorite,
+    health: m.metadata?.valid === true ? 'ok' : m.metadata?.valid === false ? 'error' : 'unknown',
   }
 }
 
 export const useModelsStore = defineStore('models', () => {
   const models = ref<ModelVM[]>([])
   const defaultId = ref<string | null>(null)
+  const overview = ref<ModelLibraryOverview | null>(null)
   const loaded = ref(false)
 
   async function load() {
-    const [list, def] = await Promise.all([api.listModels(), api.getDefaultModel()])
+    const [list, def, summary] = await Promise.all([
+      api.listModels(),
+      api.getDefaultModel(),
+      api.getModelLibraryOverview(),
+    ])
     models.value = list.map(toVM)
     defaultId.value = def
+    overview.value = summary
     loaded.value = true
   }
 
@@ -81,7 +91,32 @@ export const useModelsStore = defineStore('models', () => {
     return ok
   }
 
+  async function toggleFavorite(id: string) {
+    const updated = await api.toggleModelFavorite(id)
+    if (updated) await load()
+    return updated
+  }
+
+  async function inspect(id: string, repair = false) {
+    const res = await api.inspectModel(id, repair)
+    if (repair && res.model) await load()
+    return res
+  }
+
   const count = computed(() => models.value.length)
 
-  return { models, defaultId, loaded, count, load, ensureLoaded, importModel, setDefault, remove }
+  return {
+    models,
+    defaultId,
+    overview,
+    loaded,
+    count,
+    load,
+    ensureLoaded,
+    importModel,
+    setDefault,
+    remove,
+    toggleFavorite,
+    inspect,
+  }
 })

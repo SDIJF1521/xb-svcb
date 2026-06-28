@@ -73,6 +73,28 @@
             <span>切口淡化</span>
             <el-slider v-model="cutCrossfade" :min="0.02" :max="0.8" :step="0.01" />
           </div>
+          <div class="tool-row">
+            <span>静音阈值</span>
+            <el-slider v-model="silenceThresholdDb" :min="-60" :max="-20" :step="1" :format-tooltip="dbTooltip" />
+          </div>
+          <div class="tool-row">
+            <span>静音时长</span>
+            <el-slider v-model="minSilenceSeconds" :min="0.15" :max="1.5" :step="0.05" :format-tooltip="secondsTooltip" />
+          </div>
+          <div class="tool-row">
+            <span>最短片段</span>
+            <el-slider v-model="silenceMinClipSeconds" :min="0.15" :max="3" :step="0.05" :format-tooltip="secondsTooltip" />
+          </div>
+          <el-button
+            :disabled="!canSplitBySilence || silenceSplitting"
+            :loading="silenceSplitting"
+            round
+            class="ghost-btn mini"
+            title="静音检测切句"
+            @click="splitSelectedClipBySilence"
+          >
+            <el-icon class="el-icon--left"><MagicStick /></el-icon>静音切句
+          </el-button>
         </div>
 
         <div v-if="selectedClip && selectedTrack" class="clip-block">
@@ -124,6 +146,9 @@
             <button title="按播放头剪切" :disabled="!canSplitAtPlayhead" @click="splitAtPlayhead">
               <el-icon><Scissor /></el-icon>
             </button>
+            <button title="静音检测切句" :disabled="!canSplitBySilence || silenceSplitting" @click="splitSelectedClipBySilence">
+              <el-icon><MagicStick /></el-icon>
+            </button>
             <button title="预览片段" @click="playSelectedClip">
               <el-icon><Aim /></el-icon>
             </button>
@@ -174,6 +199,15 @@
               >
                 <el-icon><Scissor /></el-icon>
                 <span>剪切</span>
+              </button>
+              <button
+                class="split-btn"
+                :disabled="!canSplitBySilence || silenceSplitting"
+                title="静音检测切句"
+                @click="splitSelectedClipBySilence"
+              >
+                <el-icon><MagicStick /></el-icon>
+                <span>静音切句</span>
               </button>
               <span class="xf-badge">{{ cutCrossfade.toFixed(2) }}s</span>
             </div>
@@ -269,6 +303,7 @@ import {
   Download,
   FolderAdd,
   Lock,
+  MagicStick,
   Mouse,
   Mute,
   RefreshLeft,
@@ -308,10 +343,14 @@ const waveformMap = ref<Record<string, number[]>>({})
 const zoom = ref(64)
 const snapEnabled = ref(true)
 const cutCrossfade = ref(0.08)
+const silenceThresholdDb = ref(-40)
+const minSilenceSeconds = ref(0.35)
+const silenceMinClipSeconds = ref(0.45)
 const playhead = ref(0)
 const playing = ref(false)
 const previewing = ref(false)
 const rerunning = ref(false)
+const silenceSplitting = ref(false)
 const playbackMode = ref<PlaybackMode>('none')
 const timelineSeeking = ref(false)
 const rerunModelId = ref('')
@@ -359,6 +398,9 @@ const selectedClipEditable = computed(() => {
 })
 const canRerunSelectedClip = computed(() => {
   return selectedClipEditable.value && selectedClipDuration.value >= MIN_RERUN_CLIP_SECONDS
+})
+const canSplitBySilence = computed(() => {
+  return selectedClipEditable.value && selectedClipDuration.value >= silenceMinClipSeconds.value * 2
 })
 const rerunGuardText = computed(() => {
   if (!selectedClip.value) return ''
@@ -799,6 +841,51 @@ async function splitAtPlayhead() {
   ElMessage.success(fade > 0 ? `已剪切，切口交叉淡化 ${fade.toFixed(2)}s` : '已剪切')
 }
 
+async function splitSelectedClipBySilence() {
+  if (!project.value || !selected.value || !selectedClip.value) {
+    ElMessage.info('选择一个可编辑片段')
+    return
+  }
+  if (!canSplitBySilence.value) {
+    ElMessage.info('片段过短或已锁定')
+    return
+  }
+  const current = { ...selected.value }
+  stopPlayback()
+  silenceSplitting.value = true
+  try {
+    const res = await api.splitEditorClipBySilence(
+      project.value.id,
+      current.trackId,
+      current.clipId,
+      {
+        threshold_db: silenceThresholdDb.value,
+        min_silence: minSilenceSeconds.value,
+        min_clip: silenceMinClipSeconds.value,
+        crossfade: cutCrossfade.value,
+      },
+    )
+    if (!res.ok || !res.project) {
+      const message = res.error || '静音切句失败'
+      if (message.includes('没有检测到') || message.includes('太靠近')) ElMessage.info(message)
+      else ElMessage.error(message)
+      return
+    }
+    history.value = []
+    future.value = []
+    renderedPath.value = ''
+    applyProject(res.project)
+    const firstClip = res.clips?.[0]
+    if (firstClip) selected.value = { trackId: current.trackId, clipId: firstClip.id }
+    const count = res.clips?.length || 0
+    ElMessage.success(count ? `已按静音切成 ${count} 段` : '已完成静音切句')
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '静音切句失败')
+  } finally {
+    silenceSplitting.value = false
+  }
+}
+
 async function setClipNumber(field: 'start' | 'end' | 'offset', e: Event) {
   const clip = selectedClip.value
   if (!clip) return
@@ -1030,6 +1117,12 @@ function fmtTime(seconds: number) {
 }
 function fmtTick(seconds: number) {
   return fmtTime(seconds)
+}
+function secondsTooltip(value: number) {
+  return `${Number(value || 0).toFixed(2)}s`
+}
+function dbTooltip(value: number) {
+  return `${Math.round(Number(value || 0))} dB`
 }
 function round(value: number | undefined) {
   return Number(value || 0).toFixed(2)
@@ -1298,6 +1391,9 @@ onUnmounted(() => {
 }
 .mini {
   width: 100%;
+}
+.tool-block .mini {
+  margin-top: 10px;
 }
 .empty-side {
   min-height: 220px;

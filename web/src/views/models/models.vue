@@ -5,7 +5,7 @@
       <div>
         <p class="eyebrow">// 模型管理</p>
         <h1>声音模型</h1>
-        <p class="page-sub">导入本地 SVC 模型，或在「模型站」分享与获取社区模型</p>
+        <p class="page-sub">统一管理 So-VITS-SVC / RVC 等声音模型，导入、筛选、分享与默认模型设置集中完成</p>
       </div>
       <el-button size="large" round class="ghost-btn" @click="openSettings">
         <el-icon class="el-icon--left"><Setting /></el-icon>ModelScope 设置
@@ -25,6 +25,38 @@
 
     <!-- ===================== 本地模型 ===================== -->
     <template v-if="tab === 'local'">
+      <div class="block">
+        <div class="block-head">
+          <h2>多框架统一管理</h2>
+          <span class="muted">{{ modelsStore.overview?.total || 0 }} 个模型 · {{ modelsStore.overview?.total_size || '—' }}</span>
+        </div>
+        <div class="framework-grid">
+          <button
+            class="fw-card glass"
+            :class="{ active: localFramework === '' }"
+            @click="localFramework = ''"
+          >
+            <span class="fw-card-title">全部框架</span>
+            <strong>{{ modelsStore.overview?.total || 0 }}</strong>
+            <small>默认：{{ defaultModelName || '未设置' }}</small>
+          </button>
+          <button
+            v-for="fw in visibleFrameworkSummaries"
+            :key="fw.id"
+            class="fw-card glass"
+            :class="{ active: localFramework === fw.id }"
+            @click="toggleLocalFramework(fw.id)"
+          >
+            <span class="fw-card-top">
+              <span class="fw-card-title">{{ fw.name }}</span>
+              <i :class="{ ready: fw.supported }">{{ fw.supported ? '可推理' : '预留' }}</i>
+            </span>
+            <strong>{{ fw.count }}</strong>
+            <small>{{ fw.size }}<template v-if="fw.default_model_name"> · 默认 {{ fw.default_model_name }}</template></small>
+          </button>
+        </div>
+      </div>
+
       <!-- 导入卡片 -->
       <div class="block">
         <div class="block-head">
@@ -115,21 +147,51 @@
 
       <!-- 本地模型列表 -->
       <div class="block">
-        <div class="block-head"><h2>我的模型</h2><span class="muted">{{ modelsStore.count }} 个</span></div>
-        <div v-if="modelsStore.models.length" class="list glass">
-          <div class="row" v-for="m in modelsStore.models" :key="m.id">
+        <div class="block-head"><h2>我的模型</h2><span class="muted">{{ filteredLocalModels.length }} / {{ modelsStore.count }} 个</span></div>
+        <div class="local-tools glass">
+          <div class="fw-field">
+            <el-select v-model="localFramework" class="fw-select" placeholder="框架">
+              <el-option label="全部框架" value="" />
+              <el-option v-for="f in localFrameworkOptions" :key="f.id" :label="f.name" :value="f.id" />
+            </el-select>
+          </div>
+          <div class="search">
+            <el-icon><Search /></el-icon>
+            <input
+              v-model="localQuery"
+              type="text"
+              placeholder="搜索本地模型名、权重、配置、index…"
+            />
+            <button v-if="localQuery" class="search-clear" title="清除" @click="localQuery = ''">
+              <el-icon><Close /></el-icon>
+            </button>
+          </div>
+        </div>
+        <div v-if="filteredLocalModels.length" class="list glass">
+          <div class="row" v-for="m in filteredLocalModels" :key="m.id">
             <div class="row-cover" :style="{ background: m.color }"><el-icon><Microphone /></el-icon></div>
             <div class="row-main">
               <div class="row-title" :title="m.name">
                 {{ m.name }}
                 <span class="fw-tag">{{ frameworkLabel(m.framework) }}</span>
                 <span v-if="m.id === modelsStore.defaultId" class="def-tag">默认</span>
+                <span v-if="m.favorite" class="fav-tag">收藏</span>
+                <span v-if="m.health !== 'unknown'" class="health-tag" :class="m.health">{{ m.health === 'ok' ? '已检测' : '需修复' }}</span>
                 <span v-if="m.hasDiffusion" class="diff-tag">扩散</span>
                 <span v-if="m.framework === 'rvc' && m.indexFile !== '—'" class="diff-tag">index</span>
               </div>
               <div class="row-sub">{{ m.type }} · {{ m.sr }} · {{ m.size }} · {{ m.date }}</div>
             </div>
             <div class="row-ops">
+              <button class="op" :class="{ active: m.favorite }" :title="m.favorite ? '取消收藏' : '收藏模型'" @click="toggleFavorite(m)">
+                <el-icon><Star /></el-icon>
+              </button>
+              <button class="op" title="检测模型" @click="inspectModel(m, false)">
+                <el-icon><CircleCheck /></el-icon>
+              </button>
+              <button class="op" title="检测并修复元数据" @click="inspectModel(m, true)">
+                <el-icon><WarningFilled /></el-icon>
+              </button>
               <el-button
                 v-if="m.id !== modelsStore.defaultId"
                 round size="small" class="ghost-btn"
@@ -151,7 +213,7 @@
           </div>
         </div>
         <div v-else class="empty glass small">
-          <span>还没有本地模型，使用上方「导入模型」添加，或在「模型站」下载社区模型。</span>
+          <span>{{ modelsStore.models.length ? '没有匹配当前筛选的模型。' : '还没有本地模型，使用上方「导入模型」添加，或在「模型站」下载社区模型。' }}</span>
         </div>
       </div>
     </template>
@@ -259,7 +321,7 @@
           <el-option v-for="f in frameworks" :key="f.id" :label="f.name" :value="f.id" />
         </el-select>
         <p class="dialog-tip" style="margin: 0">
-          请选择该模型的框架类型，便于他人按类型筛选并正确使用（当前以 So-VITS-SVC 为主，后续将支持 RVC 等）。
+          请选择该模型的框架类型，模型站和本地模型库会按统一框架标签筛选，并在推理时路由到对应引擎。
         </p>
         <p class="dialog-tip" style="margin: 0">
           <el-icon><InfoFilled /></el-icon>
@@ -324,6 +386,8 @@ defineOptions({ name: 'ModelsPage' })
 
 const modelsStore = useModelsStore()
 const tab = ref<'local' | 'hub'>('local')
+const localFramework = ref('')
+const localQuery = ref('')
 
 /* 模型架构标签（so-vits-svc / rvc …），用于上传标注与搜索筛选 */
 const frameworks = ref<ModelFramework[]>([])
@@ -337,6 +401,40 @@ function guessFramework(type: string): string {
 
 function frameworkLabel(id: string): string {
   return frameworks.value.find((f) => f.id === id)?.name || id || 'So-VITS-SVC'
+}
+
+const defaultModelName = computed(() =>
+  modelsStore.models.find((m) => m.id === modelsStore.defaultId)?.name || '',
+)
+const visibleFrameworkSummaries = computed(() =>
+  (modelsStore.overview?.frameworks || []).filter((fw) => fw.count > 0 || fw.supported),
+)
+const localFrameworkOptions = computed(() =>
+  (modelsStore.overview?.frameworks || frameworks.value).filter((fw) =>
+    modelsStore.models.some((m) => (m.framework || 'so-vits-svc') === fw.id),
+  ),
+)
+const filteredLocalModels = computed(() => {
+  const q = localQuery.value.trim().toLowerCase()
+  return [...modelsStore.models].sort((a, b) => Number(b.favorite) - Number(a.favorite)).filter((m) => {
+    if (localFramework.value && (m.framework || 'so-vits-svc') !== localFramework.value) return false
+    if (!q) return true
+    const hay = [
+      m.name,
+      m.type,
+      frameworkLabel(m.framework),
+      m.mainModel,
+      m.mainConfig,
+      m.diffusionModel,
+      m.diffusionConfig,
+      m.indexFile,
+    ].join(' ').toLowerCase()
+    return hay.includes(q)
+  })
+})
+
+function toggleLocalFramework(id: string) {
+  localFramework.value = localFramework.value === id ? '' : id
 }
 
 /* ---------- 本地导入 ---------- */
@@ -407,6 +505,24 @@ async function doImport() {
 
 async function setDefault(id: string) {
   if (await modelsStore.setDefault(id)) ElMessage.success('已设为默认模型')
+}
+
+async function toggleFavorite(m: ModelVM) {
+  const updated = await modelsStore.toggleFavorite(m.id)
+  if (updated) ElMessage.success(updated.favorite ? '已收藏模型' : '已取消收藏')
+}
+
+async function inspectModel(m: ModelVM, repair: boolean) {
+  const res = await modelsStore.inspect(m.id, repair)
+  if (!res.model && res.error) {
+    ElMessage.error(res.error)
+    return
+  }
+  if (res.ok) {
+    ElMessage.success(repair ? '模型元数据已检测并修复' : '模型检测通过')
+  } else {
+    ElMessage.warning((res.issues || []).map((i) => i.message).join('；') || '模型需要修复')
+  }
 }
 
 async function removeModel(m: ModelVM) {
@@ -576,7 +692,7 @@ function uploadModel(m: ModelVM) {
     return
   }
   uploadTarget.value = m
-  uploadFramework.value = guessFramework(m.type)
+  uploadFramework.value = m.framework || guessFramework(m.type)
   uploadVisible.value = true
 }
 
@@ -634,6 +750,74 @@ onMounted(async () => {
 .block-head h2 { font-size: 20px; font-weight: 800; margin: 0; }
 .muted { color: var(--xb-muted); font-size: 13px; }
 
+/* 多框架概览 */
+.framework-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.fw-card {
+  min-width: 0;
+  min-height: 116px;
+  border-radius: 6px;
+  padding: 15px;
+  color: var(--xb-text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s, background 0.18s, transform 0.18s;
+}
+.fw-card:hover,
+.fw-card.active {
+  border-color: var(--xb-primary);
+  background: rgba(var(--xb-primary-rgb), 0.07);
+}
+.fw-card:hover { transform: translateY(-2px); }
+.fw-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.fw-card-title {
+  display: block;
+  min-width: 0;
+  color: var(--xb-muted);
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fw-card i {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 6px;
+  color: var(--xb-warn);
+  background: rgba(var(--xb-warn-rgb), 0.12);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+.fw-card i.ready {
+  color: var(--xb-success);
+  background: rgba(var(--xb-success-rgb), 0.12);
+}
+.fw-card strong {
+  display: block;
+  margin-top: 12px;
+  font-size: 30px;
+  line-height: 1;
+}
+.fw-card small {
+  display: block;
+  margin-top: 10px;
+  color: var(--xb-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 导入卡片 */
 .import-card { border-radius: 10px; padding: 20px; }
 .fw-row { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
@@ -658,6 +842,7 @@ onMounted(async () => {
 
 /* 工具条 */
 .toolbar { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 6px; margin-bottom: 14px; }
+.local-tools { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 6px; margin-bottom: 12px; }
 .search { flex: 1; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 9px; background: rgba(var(--xb-fill-rgb), 0.04); border: 1px solid var(--xb-border); color: var(--xb-muted); }
 .search input { flex: 1; background: transparent; border: none; outline: none; color: var(--xb-text); font-size: 14px; }
 .search input::placeholder { color: var(--xb-muted); }
@@ -677,10 +862,13 @@ onMounted(async () => {
 .row-main { flex: 1; min-width: 0; }
 .row-title { font-weight: 600; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-sub { font-size: 12.5px; color: var(--xb-muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.def-tag, .diff-tag, .fw-tag { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 6px; font-size: 11px; font-weight: 700; vertical-align: middle; }
+.def-tag, .diff-tag, .fw-tag, .fav-tag, .health-tag { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 6px; font-size: 11px; font-weight: 700; vertical-align: middle; }
 .def-tag { color: var(--xb-on-primary); background: var(--xb-primary); }
 .diff-tag { color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.14); border: 1px solid rgba(var(--xb-primary-rgb), 0.35); }
 .fw-tag { color: var(--xb-accent); background: rgba(var(--xb-accent-rgb), 0.14); border: 1px solid rgba(var(--xb-accent-rgb), 0.35); }
+.fav-tag { color: #f5a524; background: rgba(245, 165, 36, 0.14); border: 1px solid rgba(245, 165, 36, 0.35); }
+.health-tag.ok { color: #27c08a; background: rgba(39, 192, 138, 0.14); border: 1px solid rgba(39, 192, 138, 0.35); }
+.health-tag.error { color: var(--xb-accent); background: rgba(var(--xb-accent-rgb), 0.12); border: 1px solid rgba(var(--xb-accent-rgb), 0.3); }
 
 /* 架构筛选下拉 */
 .fw-field { flex-shrink: 0; }
@@ -695,6 +883,7 @@ onMounted(async () => {
 .row-ops { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .op { width: 34px; height: 34px; border-radius: 8px; border: none; background: transparent; color: var(--xb-muted); cursor: pointer; display: grid; place-items: center; font-size: 16px; transition: all 0.2s; text-decoration: none; }
 .op:hover { color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.1); }
+.op.active { color: #f5a524; background: rgba(245, 165, 36, 0.12); }
 .op.danger:hover { color: var(--xb-accent); background: rgba(var(--xb-accent-rgb), 0.1); }
 
 /* 提示条 */
@@ -730,7 +919,13 @@ onMounted(async () => {
 
 @media (max-width: 720px) {
   .page-head { flex-direction: column; align-items: flex-start; }
+  .framework-grid { grid-template-columns: 1fr; }
   .imp-grid { grid-template-columns: 1fr; }
+  .local-tools { flex-direction: column; align-items: stretch; }
+  .local-tools .fw-select { width: 100%; }
   .row-ops .el-button span { display: none; }
+}
+@media (min-width: 721px) and (max-width: 1080px) {
+  .framework-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 </style>

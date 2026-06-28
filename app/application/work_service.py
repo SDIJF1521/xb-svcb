@@ -10,7 +10,7 @@ from typing import Any
 import config
 from domain import JobStatus, Work
 from infrastructure import paths
-from infrastructure.storage import ListRepository
+from infrastructure.storage import ListRepository, SettingsStore
 
 from .conversion_service import ConversionService, default_steps, default_steps_multi
 from .model_service import ModelService
@@ -31,10 +31,12 @@ class WorkService:
         repo: ListRepository,
         conversion: ConversionService,
         models: ModelService,
+        settings: SettingsStore,
     ) -> None:
         self._repo = repo
         self._conversion = conversion
         self._models = models
+        self._settings = settings
 
     def list(self) -> list[dict[str, Any]]:
         return [self._view(w) for w in self._repo.all()]
@@ -48,6 +50,62 @@ class WorkService:
         if (payload or {}).get("mode") == "multi":
             return self._create_multi(payload or {})
         return self._create_single(payload or {})
+
+    def create_batch(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        """批量创建单模型翻唱任务，任务会进入串行推理队列。"""
+        sources = payload.get("source_paths") or []
+        created: list[dict[str, Any]] = []
+        for raw in sources:
+            if not raw:
+                continue
+            item = dict(payload)
+            item.pop("source_paths", None)
+            item["source_path"] = raw
+            if not item.get("title"):
+                item["title"] = Path(str(raw)).stem
+            created.append(self.create(item))
+        return created
+
+    def queue_status(self) -> dict[str, Any]:
+        return self._conversion.queue_status()
+
+    def history(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for work in self._repo.all():
+            for item in work.get("history") or []:
+                rows.append(
+                    {
+                        **item,
+                        "work_id": work.get("id"),
+                        "title": work.get("title", ""),
+                        "model": work.get("model", ""),
+                        "workflow": work.get("workflow", "auto_mix"),
+                    }
+                )
+        rows.sort(key=lambda x: str(x.get("finished_at") or ""), reverse=True)
+        return rows[: max(1, int(limit or 50))]
+
+    def list_presets(self) -> list[dict[str, Any]]:
+        return list(self._settings.get("inference_presets", []) or [])
+
+    def save_preset(self, name: str, params: dict[str, Any]) -> dict[str, Any]:
+        presets = self.list_presets()
+        preset = {
+            "id": paths.new_id("pre_"),
+            "name": (name or "未命名预设").strip() or "未命名预设",
+            "params": params or {},
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        presets = [p for p in presets if p.get("name") != preset["name"]]
+        presets.insert(0, preset)
+        self._settings.set("inference_presets", presets[:30])
+        return preset
+
+    def delete_preset(self, preset_id: str) -> bool:
+        presets = self.list_presets()
+        next_presets = [p for p in presets if p.get("id") != preset_id]
+        self._settings.set("inference_presets", next_presets)
+        return len(next_presets) != len(presets)
 
     def _create_single(self, payload: dict[str, Any]) -> dict[str, Any]:
         model_id = payload.get("model_id") or self._models.default_id()

@@ -4,7 +4,13 @@ import { invoke } from './bridge'
 import { mock } from './mock'
 import type {
   CreateWorkPayload,
+  CreateBatchWorkPayload,
+  InferenceHistoryItem,
+  InferencePreset,
+  InferenceQueueStatus,
   ImportModelPayload,
+  ModelLibraryOverview,
+  ModelInspectResult,
   ModelDTO,
   SystemStatus,
   WorkDTO,
@@ -26,6 +32,8 @@ import type {
   EditorProjectSummary,
   EditorWaveform,
   EditorRerunResult,
+  EditorSilenceSplitOptions,
+  EditorSilenceSplitResult,
 } from './types'
 
 export * from './types'
@@ -36,6 +44,11 @@ export const api = {
     invoke<SystemStatus>('get_system_status', [], () => mock.getSystemStatus()),
 
   listModels: () => invoke<ModelDTO[]>('list_models', [], () => mock.listModels()),
+
+  getModelLibraryOverview: () =>
+    invoke<ModelLibraryOverview>('get_model_library_overview', [], () =>
+      mock.getModelLibraryOverview(),
+    ),
 
   getDefaultModel: () =>
     invoke<string | null>('get_default_model', [], () => mock.getDefaultModel()),
@@ -58,8 +71,21 @@ export const api = {
   deleteModel: (id: string) =>
     invoke<boolean>('delete_model', [id], () => mock.deleteModel(id)),
 
+  inspectModel: (id: string, repair = false) =>
+    invoke<ModelInspectResult>('inspect_model', [id, repair], () =>
+      mock.inspectModel(id, repair),
+    ),
+
+  toggleModelFavorite: (id: string) =>
+    invoke<ModelDTO | null>('toggle_model_favorite', [id], () =>
+      mock.toggleModelFavorite(id),
+    ),
+
   pickAudioFile: () =>
     invoke<string | null>('pick_audio_file', [], () => mock.pickAudioFile()),
+
+  pickAudioFiles: () =>
+    invoke<string[]>('pick_audio_files', [], () => mock.pickAudioFiles()),
 
   listWorks: () => invoke<WorkDTO[]>('list_works', [], () => mock.listWorks()),
 
@@ -68,6 +94,28 @@ export const api = {
 
   createWork: (payload: CreateWorkPayload) =>
     invoke<WorkDTO>('create_work', [payload], () => mock.createWork(payload)),
+
+  createBatchWork: (payload: CreateBatchWorkPayload) =>
+    invoke<WorkDTO[]>('create_batch_work', [payload], () => mock.createBatchWork(payload)),
+
+  getInferenceQueue: () =>
+    invoke<InferenceQueueStatus>('get_inference_queue', [], () => mock.getInferenceQueue()),
+
+  listInferenceHistory: (limit = 50) =>
+    invoke<InferenceHistoryItem[]>('list_inference_history', [limit], () =>
+      mock.listInferenceHistory(limit),
+    ),
+
+  listInferencePresets: () =>
+    invoke<InferencePreset[]>('list_inference_presets', [], () => mock.listInferencePresets()),
+
+  saveInferencePreset: (name: string, params: Record<string, unknown>) =>
+    invoke<InferencePreset>('save_inference_preset', [name, params], () =>
+      mock.saveInferencePreset(name, params),
+    ),
+
+  deleteInferencePreset: (id: string) =>
+    invoke<boolean>('delete_inference_preset', [id], () => mock.deleteInferencePreset(id)),
 
   retryWork: (id: string) =>
     invoke<boolean>('retry_work', [id], () => mock.retryWork(id)),
@@ -256,6 +304,18 @@ export const api = {
   preloadEditorWaveforms: (projectId: string, bins = 160) =>
     invoke<boolean>('preload_editor_waveforms', [projectId, bins], () =>
       mock.preloadEditorWaveforms(projectId, bins),
+    ),
+
+  splitEditorClipBySilence: (
+    projectId: string,
+    trackId: string,
+    clipId: string,
+    options?: EditorSilenceSplitOptions,
+  ) =>
+    invoke<EditorSilenceSplitResult>(
+      'split_editor_clip_by_silence',
+      [projectId, trackId, clipId, options],
+      () => mock.splitEditorClipBySilence(projectId, trackId, clipId, options),
     ),
 
   rerunEditorClip: (

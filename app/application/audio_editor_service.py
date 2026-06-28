@@ -28,7 +28,7 @@ class AudioEditorService:
 
     _HISTORY_LIMIT = 60
     _MIN_RERUN_DURATION = 1.0
-    _RENDER_VERSION = "channel-route-v4"
+    _RENDER_VERSION = "channel-route-v5-flac-preview"
 
     def __init__(
         self,
@@ -349,7 +349,16 @@ class AudioEditorService:
 
         mid_clips: list[dict[str, Any]] = []
         if work_dir.exists():
-            for p in sorted(work_dir.rglob("*")):
+            candidates = [
+                work_dir / "infer_input.wav",
+                work_dir / "converted.wav",
+                work_dir / "output.wav",
+                work_dir / "vocals.wav",
+                work_dir / "instrumental.wav",
+            ]
+            candidates.extend(sorted(work_dir.glob("full_*.wav"))[:6])
+            candidates.extend(sorted((work_dir / "segments").glob("piece_*.wav"))[:4])
+            for p in candidates:
                 if not p.is_file() or p.suffix.lower() not in config.AUDIO_EXTS + (".wav",):
                     continue
                 try:
@@ -504,13 +513,13 @@ class AudioEditorService:
                 "sample_rate": preview_project["sample_rate"],
             }
         )
-        dst = config.EDITOR_CACHE_DIR / f"{project_id}_{clip_id}_{key}.wav"
+        dst = config.EDITOR_CACHE_DIR / f"{project_id}_{clip_id}_{key}.flac"
         if not dst.exists():
-            self._audio.render_timeline(preview_project, dst, config.EDITOR_CACHE_DIR, "wav")
+            self._audio.render_timeline(preview_project, dst, config.EDITOR_CACHE_DIR, "flac")
         return self._audio_data(dst, exact=True) if dst.exists() else ""
 
     def render_preview(self, project_id: str) -> str:
-        path = self.render(project_id, "wav")
+        path = self.render(project_id, "flac")
         return self._audio_data(path, exact=True) if path else ""
 
     def render(self, project_id: str, output_format: str = "wav") -> Path | None:
@@ -569,6 +578,142 @@ class AudioEditorService:
 
         threading.Thread(target=worker, daemon=True).start()
         return True
+
+    def split_clip_by_silence(
+        self,
+        project_id: str,
+        track_id: str,
+        clip_id: str,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        track, idx, clip = self._find_clip_ref(project, track_id, clip_id)
+        if not track or idx < 0 or not clip:
+            return {"ok": False, "error": "片段不存在"}
+        if track.get("locked") or clip.get("locked"):
+            return {"ok": False, "error": "片段已锁定"}
+        src = Path(str(clip.get("file") or ""))
+        if not src.exists():
+            return {"ok": False, "error": "片段音频不存在"}
+        if not self._ffmpeg.available:
+            return {"ok": False, "error": "未找到 ffmpeg，无法进行静音检测"}
+
+        opts = options if isinstance(options, dict) else {}
+
+        def opt(name: str, default: float) -> float:
+            try:
+                return float(opts.get(name, default))
+            except (TypeError, ValueError):
+                return default
+
+        noise_db = min(-1.0, max(-90.0, opt("threshold_db", opt("noise_db", -40.0))))
+        min_silence = max(0.1, min(5.0, opt("min_silence", 0.35)))
+        min_clip = max(0.05, min(30.0, opt("min_clip", 0.45)))
+        crossfade = max(0.0, min(0.8, opt("crossfade", 0.06)))
+        try:
+            start = float(clip.get("start") or 0.0)
+            end = float(clip.get("end") or 0.0)
+            offset = max(0.0, float(clip.get("offset") or 0.0))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "片段时间无效"}
+        duration = max(0.0, end - start)
+        if duration < max(0.1, min_clip * 2):
+            return {"ok": False, "error": "片段太短，无法按静音切句"}
+
+        silences = self._ffmpeg.detect_silences(
+            src,
+            start=offset,
+            end=offset + duration,
+            noise_db=noise_db,
+            min_duration=min_silence,
+        )
+        cuts: list[float] = []
+        for silence in silences:
+            try:
+                silence_start = max(0.0, min(duration, float(silence.get("start") or 0.0)))
+                silence_end = max(silence_start, min(duration, float(silence.get("end") or 0.0)))
+            except (TypeError, ValueError):
+                continue
+            if silence_end - silence_start < min_silence:
+                continue
+            cut = round((silence_start + silence_end) / 2.0, 3)
+            if cut <= min_clip or duration - cut < min_clip:
+                continue
+            if cuts and cut - cuts[-1] < min_clip:
+                continue
+            cuts.append(cut)
+
+        if not cuts:
+            error = (
+                "没有检测到足够长的静音"
+                if not silences
+                else "检测到的静音点太靠近片段边缘"
+            )
+            return {"ok": False, "error": error, "silences": silences}
+
+        next_project = copy.deepcopy(project)
+        next_track, next_idx, original = self._find_clip_ref(next_project, track_id, clip_id)
+        if not next_track or next_idx < 0 or not original:
+            return {"ok": False, "error": "片段切分失败"}
+
+        original = copy.deepcopy(original)
+        total = len(cuts) + 1
+        max_fade = max(0.0, min_clip / 2.0 - 0.001)
+        fade = round(min(crossfade, max_fade), 3)
+        half = fade / 2.0
+        boundaries = [0.0, *cuts, duration]
+        base_name = str(original.get("name") or src.stem or "片段")
+        new_clips: list[dict[str, Any]] = []
+        for i in range(total):
+            base_start = boundaries[i]
+            base_end = boundaries[i + 1]
+            rel_start = max(0.0, base_start - (half if i > 0 else 0.0))
+            rel_end = min(duration, base_end + (half if i < total - 1 else 0.0))
+            if rel_end - rel_start < 0.05:
+                continue
+            item = copy.deepcopy(original)
+            item["id"] = str(original.get("id")) if i == 0 else paths.new_id("clp_")
+            item["name"] = f"{base_name} {i + 1:02d}/{total:02d}"
+            item["start"] = round(start + rel_start, 3)
+            item["end"] = round(start + rel_end, 3)
+            item["offset"] = round(offset + rel_start, 3)
+            item["fade_in"] = float(original.get("fade_in") or 0.0) if i == 0 else fade
+            item["fade_out"] = float(original.get("fade_out") or 0.0) if i == total - 1 else fade
+            item["effects"] = copy.deepcopy(original.get("effects") or [])
+            meta = dict(original.get("metadata") or {})
+            meta.update(
+                {
+                    "silence_split": True,
+                    "silence_split_at": self._now(),
+                    "silence_split_index": i + 1,
+                    "silence_split_total": total,
+                    "silence_split_source": original.get("id"),
+                    "silence_split_range": [round(base_start, 3), round(base_end, 3)],
+                    "silence_split_threshold_db": noise_db,
+                    "silence_split_min_silence": min_silence,
+                }
+            )
+            item["metadata"] = meta
+            new_clips.append(item)
+
+        if len(new_clips) <= 1:
+            return {"ok": False, "error": "切分结果不足两段", "silences": silences}
+
+        clips = list(next_track.get("clips") or [])
+        clips[next_idx : next_idx + 1] = new_clips
+        next_track["clips"] = sorted(clips, key=lambda c: float(c.get("start") or 0.0))
+        next_project["waveform_cache"] = {}
+        saved = self.save(next_project, push_history=True)
+        return {
+            "ok": True,
+            "project": saved,
+            "clips": new_clips,
+            "cuts": [round(start + cut, 3) for cut in cuts],
+            "relative_cuts": cuts,
+            "silences": silences,
+        }
 
     def rerun_clip(
         self,

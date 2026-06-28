@@ -63,13 +63,33 @@ class ConversionService:
         self._engines = engines
         # so-vits 引擎引用：供 F0 探针（仅 so-vits 有意义）使用
         self._svc = engines.sovits
-        # 串行执行：单 GPU 上一次只跑一个任务，避免并发推理叠加导致显存 OOM
-        self._gpu_lock = threading.Lock()
+        # 串行任务队列：单 GPU 上一次只跑一个任务，避免并发推理叠加导致显存 OOM
+        self._queue: list[str] = []
+        self._queue_lock = threading.RLock()
+        self._worker_running = False
 
     def start(self, work_id: str) -> None:
-        """在后台线程启动转换。"""
-        thread = threading.Thread(target=self._run, args=(work_id,), daemon=True)
-        thread.start()
+        """把转换任务加入后台队列。"""
+        with self._queue_lock:
+            if work_id not in self._queue:
+                self._queue.append(work_id)
+                work = self._repo.get(work_id)
+                if work:
+                    work["queue_position"] = len(self._queue)
+                    work["queued_at"] = datetime.now().isoformat(timespec="seconds")
+                    self._repo.update(work_id, work)
+            if self._worker_running:
+                return
+            self._worker_running = True
+        threading.Thread(target=self._queue_worker, daemon=True).start()
+
+    def queue_status(self) -> dict[str, Any]:
+        with self._queue_lock:
+            return {
+                "running": self._worker_running,
+                "pending": list(self._queue),
+                "size": len(self._queue),
+            }
 
     # ---- 内部 ----
     def _save(self, work: dict[str, Any]) -> None:
@@ -82,6 +102,20 @@ class ConversionService:
                 break
 
     @staticmethod
+    def _record_history(work: dict[str, Any]) -> None:
+        history = list(work.get("history") or [])
+        history.append(
+            {
+                "status": work.get("status"),
+                "progress": work.get("progress", 0),
+                "output_path": work.get("output_path"),
+                "error": work.get("error"),
+                "finished_at": datetime.now().isoformat(timespec="seconds"),
+            }
+        )
+        work["history"] = history[-20:]
+
+    @staticmethod
     def _log(log_file: Path, msg: str) -> None:
         """向作品日志追加一行带时间戳的记录（失败不抛出）。"""
         try:
@@ -92,13 +126,30 @@ class ConversionService:
             pass
 
     def _run(self, work_id: str) -> None:
-        # 等待 GPU 空闲（串行），期间任务保持排队状态
-        with self._gpu_lock:
-            work = self._repo.get(work_id)
-            if work and work.get("mode") == "multi":
-                self._run_multi(work_id)
-            else:
-                self._run_locked(work_id)
+        work = self._repo.get(work_id)
+        if work and work.get("mode") == "multi":
+            self._run_multi(work_id)
+        else:
+            self._run_locked(work_id)
+
+    def _queue_worker(self) -> None:
+        try:
+            while True:
+                with self._queue_lock:
+                    if not self._queue:
+                        self._worker_running = False
+                        return
+                    work_id = self._queue.pop(0)
+                    for pos, queued_id in enumerate(self._queue, start=1):
+                        queued = self._repo.get(queued_id)
+                        if queued:
+                            queued["queue_position"] = pos
+                            self._repo.update(queued_id, queued)
+                self._run(work_id)
+        finally:
+            with self._queue_lock:
+                if not self._queue:
+                    self._worker_running = False
 
     def _run_locked(self, work_id: str) -> None:
         work = self._repo.get(work_id)
@@ -304,6 +355,7 @@ class ConversionService:
             work["format"] = output.suffix.lstrip(".").upper() or "WAV"
             work["size"] = paths.file_size_label(output)
             work["duration"] = self._format_duration(duration)
+            self._record_history(work)
             self._save(work)
             self._log(log_file, "任务完成 ✅")
         except Exception as exc:  # noqa: BLE001 - 任务失败需记录而非崩溃
@@ -314,6 +366,7 @@ class ConversionService:
             for step in work["steps"]:
                 if step["status"] == StepStatus.ACTIVE.value:
                     step["status"] = StepStatus.FAILED.value
+            self._record_history(work)
             self._save(work)
 
     # ---- 多模型混合翻唱 ----
@@ -610,6 +663,7 @@ class ConversionService:
                 work["format"] = "EDITOR"
                 work["size"] = f"{len(editor_clips)} 段"
                 work["duration"] = self._format_duration(duration)
+                self._record_history(work)
                 self._save(work)
                 self._log(log_file, "=== 完成：可编辑人声片段已准备 ===")
                 return
@@ -756,6 +810,7 @@ class ConversionService:
             work["format"] = output.suffix.lstrip(".").upper() or "WAV"
             work["size"] = paths.file_size_label(output)
             work["duration"] = self._format_duration(duration)
+            self._record_history(work)
             self._save(work)
             self._log(log_file, "任务完成 ✅")
         except Exception as exc:  # noqa: BLE001 - 任务失败需记录而非崩溃
@@ -766,6 +821,7 @@ class ConversionService:
             for step in work["steps"]:
                 if step["status"] == StepStatus.ACTIVE.value:
                     step["status"] = StepStatus.FAILED.value
+            self._record_history(work)
             self._save(work)
 
     @staticmethod

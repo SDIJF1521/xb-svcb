@@ -82,6 +82,9 @@ class Api:
     def list_models(self) -> list[dict[str, Any]]:
         return self._models.list()
 
+    def get_model_library_overview(self) -> dict[str, Any]:
+        return self._models.overview()
+
     def get_default_model(self) -> str | None:
         return self._models.default_id()
 
@@ -121,6 +124,12 @@ class Api:
 
     def delete_model(self, model_id: str) -> bool:
         return self._models.remove(model_id)
+
+    def inspect_model(self, model_id: str, repair: bool = False) -> dict[str, Any]:
+        return self._models.inspect(model_id, bool(repair))
+
+    def toggle_model_favorite(self, model_id: str) -> dict[str, Any] | None:
+        return self._models.toggle_favorite(model_id)
 
     # ---- 模型站（ModelScope 魔搭社区）----
     def get_modelscope_token(self) -> str:
@@ -195,6 +204,17 @@ class Api:
         )
         return result[0] if result else None
 
+    def pick_audio_files(self) -> list[str]:
+        result = self._open_dialog(
+            "选择多个歌曲音频",
+            multiple=True,
+            file_types=(
+                "音频文件 (*.mp3;*.wav;*.flac;*.m4a;*.ogg;*.aac)",
+                "所有文件 (*.*)",
+            ),
+        )
+        return list(result or [])
+
     def list_works(self) -> list[dict[str, Any]]:
         return self._works.list()
 
@@ -203,6 +223,24 @@ class Api:
 
     def create_work(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._works.create(payload or {})
+
+    def create_batch_work(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        return self._works.create_batch(payload or {})
+
+    def get_inference_queue(self) -> dict[str, Any]:
+        return self._works.queue_status()
+
+    def list_inference_history(self, limit: int = 50) -> list[dict[str, Any]]:
+        return self._works.history(int(limit or 50))
+
+    def list_inference_presets(self) -> list[dict[str, Any]]:
+        return self._works.list_presets()
+
+    def save_inference_preset(self, name: str, params: dict[str, Any]) -> dict[str, Any]:
+        return self._works.save_preset(name, params or {})
+
+    def delete_inference_preset(self, preset_id: str) -> bool:
+        return self._works.delete_preset(preset_id)
 
     def retry_work(self, work_id: str) -> bool:
         return self._works.retry(work_id)
@@ -426,6 +464,17 @@ class Api:
     def preload_editor_waveforms(self, project_id: str, bins: int = 160) -> bool:
         return self._editor.preload_waveforms(project_id, int(bins or 160))
 
+    def split_editor_clip_by_silence(
+        self,
+        project_id: str,
+        track_id: str,
+        clip_id: str,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._editor.split_clip_by_silence(
+            project_id, track_id, clip_id, options or {}
+        )
+
     def rerun_editor_clip(
         self,
         project_id: str,
@@ -517,7 +566,7 @@ def build_api() -> Api:
     system_service = SystemService(ffmpeg, uvr, svc, rvc)
     model_service = ModelService(models_repo, settings)
     conversion_service = ConversionService(works_repo, ffmpeg, uvr, engines)
-    work_service = WorkService(works_repo, conversion_service, model_service)
+    work_service = WorkService(works_repo, conversion_service, model_service, settings)
     music_service = MusicService(settings)
     hub_service = ModelHubService(settings, model_service)
     editor_service = AudioEditorService(

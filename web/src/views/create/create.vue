@@ -626,6 +626,33 @@
           </div>
         </section>
 
+        <section class="card glass infer-tools">
+          <div class="card-head">
+            <span class="step-no">ECO</span>
+            <h2>推理生态</h2>
+          </div>
+          <div class="infer-tool-row">
+            <el-select v-model="selectedPresetId" class="preset-select" placeholder="选择参数预设" @change="applyPreset">
+              <el-option v-for="p in presets" :key="p.id" :label="p.name" :value="p.id" />
+            </el-select>
+            <el-button round class="ghost-btn" :disabled="!selectedPresetId" @click="applyPreset">
+              <el-icon class="el-icon--left"><Check /></el-icon>应用
+            </el-button>
+            <el-button round class="ghost-btn" @click="savePreset">
+              <el-icon class="el-icon--left"><Plus /></el-icon>保存预设
+            </el-button>
+            <button class="preset-delete" :disabled="!selectedPresetId" title="删除预设" @click="deletePreset">
+              <el-icon><Delete /></el-icon>
+            </button>
+          </div>
+          <div class="infer-tool-row">
+            <span class="queue-text">队列：{{ queueStatus.size }} 个等待</span>
+            <el-button round class="ghost-btn" :disabled="mode !== 'single' || !selectedModel" @click="batchGenerate">
+              <el-icon class="el-icon--left"><Document /></el-icon>批量推理
+            </el-button>
+          </div>
+        </section>
+
         <el-button
           size="large"
           round
@@ -766,6 +793,8 @@ import {
   type BlendModel,
   type BlendSegment,
   type CreateWorkflow,
+  type InferencePreset,
+  type InferenceQueueStatus,
 } from '@/api'
 import { useModelsStore } from '@/stores/models'
 import { useWorksStore } from '@/stores/works'
@@ -811,6 +840,9 @@ const pitch = ref(num(prefs.pitch, 0))
 const indexRate = ref(num(prefs.indexRate, 0.75))
 const rmsMix = ref(num(prefs.rmsMix, 0.25))
 const diffusionRatio = ref(num(prefs.diffusionRatio, 0.5))
+const presets = ref<InferencePreset[]>([])
+const selectedPresetId = ref('')
+const queueStatus = ref<InferenceQueueStatus>({ running: false, pending: [], size: 0 })
 
 /* RVC 专属参数 */
 const rvcVersions = ['v2', 'v1']
@@ -1642,6 +1674,101 @@ async function openLog() {
   if (currentWork.value) await api.openWorkLog(currentWork.value.id)
 }
 
+function currentParams() {
+  return {
+    pitch: pitch.value,
+    f0_method: f0Method.value,
+    index_rate: indexRate.value,
+    rms_mix: rmsMix.value,
+    uvr_model: uvrModel.value,
+    diffusion_ratio: diffusionRatio.value,
+    device: device.value,
+    protect: protect.value,
+    filter_radius: filterRadius.value,
+    rvc_version: rvcVersion.value,
+  }
+}
+
+function applyParams(raw: Record<string, unknown>) {
+  const next = {
+    pitch: num(raw.pitch, pitch.value),
+    f0Method: str(raw.f0_method, f0Method.value),
+    indexRate: num(raw.index_rate, indexRate.value),
+    rmsMix: num(raw.rms_mix, rmsMix.value),
+    uvrModel: str(raw.uvr_model, uvrModel.value),
+    diffusionRatio: num(raw.diffusion_ratio, diffusionRatio.value),
+    device: str(raw.device, device.value),
+    protect: num(raw.protect, protect.value),
+    filterRadius: num(raw.filter_radius, filterRadius.value),
+    rvcVersion: str(raw.rvc_version, rvcVersion.value),
+  }
+  pitch.value = next.pitch
+  f0Method.value = next.f0Method
+  indexRate.value = next.indexRate
+  rmsMix.value = next.rmsMix
+  uvrModel.value = next.uvrModel
+  diffusionRatio.value = next.diffusionRatio
+  device.value = next.device
+  protect.value = next.protect
+  filterRadius.value = next.filterRadius
+  rvcVersion.value = next.rvcVersion
+  for (const id of selectedMulti.value) {
+    const p = mp(id)
+    p.pitch = next.pitch
+    p.f0Method = next.f0Method
+    p.indexRate = next.indexRate
+    p.rmsMix = next.rmsMix
+    p.diffusionRatio = next.diffusionRatio
+    p.device = next.device
+    p.protect = next.protect
+    p.filterRadius = next.filterRadius
+    p.rvcVersion = next.rvcVersion
+  }
+}
+
+function applyPreset() {
+  const preset = presets.value.find((p) => p.id === selectedPresetId.value)
+  if (!preset) return
+  applyParams(preset.params as Record<string, unknown>)
+  ElMessage.success('已应用预设：' + preset.name)
+}
+
+async function savePreset() {
+  try {
+    const { value } = await ElMessageBox.prompt('给当前参数起一个名字', '保存参数预设', {
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValue: `预设 ${presets.value.length + 1}`,
+    })
+    const preset = await api.saveInferencePreset(value, currentParams())
+    presets.value = await api.listInferencePresets()
+    selectedPresetId.value = preset.id
+    ElMessage.success('参数预设已保存')
+  } catch {
+    /* cancelled */
+  }
+}
+
+async function deletePreset() {
+  const id = selectedPresetId.value
+  const preset = presets.value.find((p) => p.id === id)
+  if (!id || !preset) return
+  try {
+    await ElMessageBox.confirm(`确定删除预设「${preset.name}」吗？`, '删除预设', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+    if (await api.deleteInferencePreset(id)) {
+      presets.value = await api.listInferencePresets()
+      selectedPresetId.value = ''
+      ElMessage.success('预设已删除')
+    }
+  } catch {
+    /* cancelled */
+  }
+}
+
 async function openWorkEditor(work = currentWork.value, auto = false) {
   if (!work || work.status !== 'done') return
   const project = await api.createEditorProjectFromWork(work.id)
@@ -1795,22 +1922,30 @@ const generate = async () => {
     model_id: selectedModel.value,
     workflow: currentWorkflow,
     source_path: song.value.path,
-    params: {
-      pitch: pitch.value,
-      f0_method: f0Method.value,
-      index_rate: indexRate.value,
-      rms_mix: rmsMix.value,
-      uvr_model: uvrModel.value,
-      diffusion_ratio: diffusionRatio.value,
-      device: device.value,
-      protect: protect.value,
-      filter_radius: filterRadius.value,
-      rvc_version: rvcVersion.value,
-    },
+    params: currentParams(),
   })
   currentWork.value = work
   editorOpenedFor.value = null
   startPolling(work.id)
+}
+
+async function batchGenerate() {
+  if (mode.value !== 'single' || !selectedModel.value) return
+  const paths = await api.pickAudioFiles()
+  if (!paths.length) return
+  const created = await api.createBatchWork({
+    source_paths: paths,
+    model_id: selectedModel.value,
+    workflow: normalizeWorkflowForMode(workflow.value, 'single'),
+    params: currentParams(),
+  })
+  queueStatus.value = await api.getInferenceQueue()
+  ElMessage.success(`已加入推理队列：${created.length} 个任务`)
+  if (created[0]) {
+    currentWork.value = created[0]
+    editorOpenedFor.value = null
+    startPolling(created[0].id)
+  }
 }
 
 const barStyle = (n: number) => ({
@@ -1862,6 +1997,8 @@ watch(trackEl, (el) => {
 
 onMounted(async () => {
   await modelsStore.ensureLoaded()
+  presets.value = await api.listInferencePresets()
+  queueStatus.value = await api.getInferenceQueue()
   selectedModel.value = defaultId.value || models.value[0]?.id || ''
   // 默认勾选默认模型，便于直接进入多模型流程
   if (selectedModel.value && selectedMulti.value.length === 0) {
@@ -1992,6 +2129,25 @@ onUnmounted(() => {
   font-weight: 600;
 }
 .generate-btn { width: 100%; padding: 24px; font-size: 16px; }
+.infer-tools { display: grid; gap: 12px; }
+.infer-tool-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.preset-select { flex: 1; min-width: 0; }
+.queue-text { flex: 1; color: var(--xb-muted); font-size: 13px; }
+.preset-delete {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  border: 1px solid rgba(var(--xb-accent-rgb), 0.28);
+  background: rgba(var(--xb-accent-rgb), 0.08);
+  color: var(--xb-accent);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.preset-delete:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
 
 /* 上传 */
 .dropzone {

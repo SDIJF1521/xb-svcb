@@ -5,6 +5,7 @@ import type {
   CreateWorkflow,
   CreateWorkPayload,
   ImportModelPayload,
+  ModelLibraryOverview,
   ModelDTO,
   SystemStatus,
   WorkDTO,
@@ -23,10 +24,18 @@ import type {
   HubStartResult,
   HubJob,
   ModelFramework,
+  ModelInspectResult,
+  InferencePreset,
+  InferenceHistoryItem,
+  InferenceQueueStatus,
+  CreateBatchWorkPayload,
+  EditorClip,
   EditorProject,
   EditorProjectSummary,
   EditorWaveform,
   EditorRerunResult,
+  EditorSilenceSplitOptions,
+  EditorSilenceSplitResult,
 } from './types'
 
 const now = () => new Date().toISOString()
@@ -76,6 +85,7 @@ const mockModels: ModelDTO[] = [
   },
 ]
 let defaultModelId = 'm1'
+let mockInferencePresets: InferencePreset[] = []
 
 // 音乐资源获取的模拟状态（仅浏览器开发环境）
 let mockMusicKey = ''
@@ -99,6 +109,38 @@ const mockHubModels = [
   { repo_id: 'demo-user/xb-svcb-luotianyi-a1b2c3', name: '洛天依（社区）', type: 'So-VITS', framework: 'so-vits-svc', framework_label: 'So-VITS-SVC', sample_rate: '44.1kHz', author: 'demo-user', has_diffusion: true, url: '#' },
   { repo_id: 'demo-user/xb-svcb-reze-d4e5f6', name: 'Reze（社区）', type: 'RVC', framework: 'rvc', framework_label: 'RVC', sample_rate: '44.1kHz', author: 'demo-user', has_diffusion: false, url: '#' },
 ]
+
+function mockModelOverview(): ModelLibraryOverview {
+  const rows = mockFrameworks.map((f) => ({
+    id: f.id,
+    name: f.name,
+    count: 0,
+    size_bytes: 0,
+    size: '0 B',
+    default_model_id: null as string | null,
+    default_model_name: '',
+    supported: ['so-vits-svc', 'rvc'].includes(f.id),
+  }))
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  for (const m of mockModels) {
+    const fw = m.framework || 'so-vits-svc'
+    const row = byId.get(fw) || byId.get('so-vits-svc')!
+    row.count += 1
+    row.size_bytes += 0
+    if (m.id === defaultModelId) {
+      row.default_model_id = m.id
+      row.default_model_name = m.name
+    }
+  }
+  rows.sort((a, b) => (b.count - a.count) || a.name.localeCompare(b.name))
+  return {
+    total: mockModels.length,
+    total_size_bytes: 0,
+    total_size: '—',
+    default_model_id: defaultModelId || null,
+    frameworks: rows,
+  }
+}
 
 const baseSteps = (): PipelineStep[] => [
   { key: 'separate', label: '人声分离', status: 'wait' },
@@ -237,6 +279,9 @@ export const mock = {
   listModels(): ModelDTO[] {
     return [...mockModels]
   },
+  getModelLibraryOverview(): ModelLibraryOverview {
+    return mockModelOverview()
+  },
   getDefaultModel(): string | null {
     return defaultModelId
   },
@@ -275,6 +320,9 @@ export const mock = {
       index_file: payload.index_file
         ? { name: fileName(payload.index_file), path: payload.index_file }
         : null,
+      favorite: false,
+      tags: [framework],
+      metadata: { schema: 'xb-svcb.model.v1', framework, valid: true },
     }
     mockModels.unshift(m)
     return m
@@ -295,8 +343,29 @@ export const mock = {
     }
     return false
   },
+  inspectModel(id: string, repair = false): ModelInspectResult {
+    const m = mockModels.find((x) => x.id === id)
+    if (!m) return { ok: false, error: '模型不存在', issues: [] }
+    if (repair) {
+      m.metadata = { ...(m.metadata || {}), schema: 'xb-svcb.model.v1', framework: m.framework || 'so-vits-svc', valid: true }
+      m.tags = Array.from(new Set([...(m.tags || []), m.framework || 'so-vits-svc']))
+    }
+    return { ok: true, model: { ...m }, issues: [], fixed: repair ? ['metadata'] : [] }
+  },
+  toggleModelFavorite(id: string): ModelDTO | null {
+    const m = mockModels.find((x) => x.id === id)
+    if (!m) return null
+    m.favorite = !m.favorite
+    return { ...m }
+  },
   pickAudioFile(): string | null {
     return `C:/music/示例歌曲_${Date.now()}.mp3`
+  },
+  pickAudioFiles(): string[] {
+    return [
+      `C:/music/批量歌曲_A_${Date.now()}.mp3`,
+      `C:/music/批量歌曲_B_${Date.now()}.mp3`,
+    ]
   },
   listWorks(): WorkDTO[] {
     return mockWorks.map((w) => ({ ...w, steps: w.steps.map((s) => ({ ...s })) }))
@@ -332,6 +401,42 @@ export const mock = {
     mockWorks.unshift(work)
     advance(work)
     return { ...work, steps: work.steps.map((s) => ({ ...s })) }
+  },
+  createBatchWork(payload: CreateBatchWorkPayload): WorkDTO[] {
+    return (payload.source_paths || []).map((path) => this.createWork({ ...payload, source_path: path }))
+  },
+  getInferenceQueue(): InferenceQueueStatus {
+    const pending = mockWorks.filter((w) => w.status === 'queue').map((w) => w.id)
+    return { running: mockWorks.some((w) => w.status === 'running'), pending, size: pending.length }
+  },
+  listInferenceHistory(limit = 50): InferenceHistoryItem[] {
+    return mockWorks
+      .filter((w) => w.status === 'done' || w.status === 'failed')
+      .slice(0, limit)
+      .map((w) => ({
+        work_id: w.id,
+        title: w.title,
+        model: w.model,
+        workflow: w.workflow,
+        status: w.status,
+        progress: w.progress,
+        output_path: w.output_path,
+        error: w.error,
+        finished_at: w.created_at,
+      }))
+  },
+  listInferencePresets(): InferencePreset[] {
+    return [...mockInferencePresets]
+  },
+  saveInferencePreset(name: string, params: Record<string, unknown>): InferencePreset {
+    const preset = { id: rid('pre_'), name: name || '未命名预设', params, updated_at: now() } as InferencePreset
+    mockInferencePresets = [preset, ...mockInferencePresets.filter((p) => p.name !== preset.name)].slice(0, 30)
+    return preset
+  },
+  deleteInferencePreset(id: string): boolean {
+    const before = mockInferencePresets.length
+    mockInferencePresets = mockInferencePresets.filter((p) => p.id !== id)
+    return mockInferencePresets.length !== before
   },
   retryWork(id: string): boolean {
     const w = mockWorks.find((x) => x.id === id)
@@ -813,6 +918,103 @@ export const mock = {
   preloadEditorWaveforms(projectId: string, bins = 160): boolean {
     console.info('[mock] preloadEditorWaveforms', projectId, bins)
     return true
+  },
+  splitEditorClipBySilence(
+    projectId: string,
+    trackId: string,
+    clipId: string,
+    options?: EditorSilenceSplitOptions,
+  ): EditorSilenceSplitResult {
+    const project = mockEditorProjects.find((p) => p.id === projectId)
+    if (!project) return { ok: false, error: '工程不存在' }
+    const track = project.tracks.find((t) => t.id === trackId)
+    const idx = track?.clips.findIndex((c) => c.id === clipId) ?? -1
+    const clip = idx >= 0 ? track?.clips[idx] : null
+    if (!track || !clip) return { ok: false, error: '片段不存在' }
+    if (track.locked || clip.locked) return { ok: false, error: '片段已锁定' }
+
+    const asNumber = (value: unknown, fallback: number) => {
+      const n = Number(value)
+      return Number.isFinite(n) ? n : fallback
+    }
+    const minSilence = Math.max(0.1, Math.min(5, asNumber(options?.min_silence, 0.35)))
+    const minClip = Math.max(0.05, Math.min(30, asNumber(options?.min_clip, 0.45)))
+    const crossfade = Math.max(0, Math.min(0.8, asNumber(options?.crossfade, 0.06)))
+    const threshold = Math.max(-90, Math.min(-1, asNumber(options?.threshold_db ?? options?.noise_db, -40)))
+    const duration = Math.max(0, Number(clip.end || 0) - Number(clip.start || 0))
+    if (duration < Math.max(0.1, minClip * 2)) {
+      return { ok: false, error: '片段太短，无法按静音切句' }
+    }
+
+    const targetParts = Math.max(2, Math.min(6, Math.floor(duration / Math.max(8, minClip * 2))))
+    const cuts = Array.from({ length: targetParts - 1 }, (_, i) =>
+      Number((duration * (i + 1) / targetParts).toFixed(3)),
+    ).filter((cut) => cut > minClip && duration - cut > minClip)
+    if (!cuts.length) return { ok: false, error: '没有检测到足够长的静音' }
+
+    mockEditorHistory[projectId] = [...(mockEditorHistory[projectId] || []), cloneProject(project)]
+    mockEditorFuture[projectId] = []
+
+    const original = cloneProject({
+      ...project,
+      tracks: [{ ...track, clips: [clip] }],
+    }).tracks[0]!.clips[0] as EditorClip
+    const total = cuts.length + 1
+    const fade = Number(Math.min(crossfade, Math.max(0, minClip / 2 - 0.001)).toFixed(3))
+    const half = fade / 2
+    const boundaries = [0, ...cuts, duration]
+    const baseName = original.name || '片段'
+    const newClips: EditorClip[] = []
+    for (let i = 0; i < total; i += 1) {
+      const baseStart = boundaries[i] || 0
+      const baseEnd = boundaries[i + 1] || duration
+      const relStart = Math.max(0, baseStart - (i > 0 ? half : 0))
+      const relEnd = Math.min(duration, baseEnd + (i < total - 1 ? half : 0))
+      newClips.push({
+        ...original,
+        id: i === 0 ? original.id : rid('clp_'),
+        name: `${baseName} ${String(i + 1).padStart(2, '0')}/${String(total).padStart(2, '0')}`,
+        start: Number((Number(original.start || 0) + relStart).toFixed(3)),
+        end: Number((Number(original.start || 0) + relEnd).toFixed(3)),
+        offset: Number((Number(original.offset || 0) + relStart).toFixed(3)),
+        fade_in: i === 0 ? Number(original.fade_in || 0) : fade,
+        fade_out: i === total - 1 ? Number(original.fade_out || 0) : fade,
+        effects: [...(original.effects || [])],
+        metadata: {
+          ...(original.metadata || {}),
+          silence_split: true,
+          silence_split_index: i + 1,
+          silence_split_total: total,
+          silence_split_source: original.id,
+          silence_split_range: [Number(baseStart.toFixed(3)), Number(baseEnd.toFixed(3))],
+          silence_split_threshold_db: threshold,
+          silence_split_min_silence: minSilence,
+        },
+      })
+    }
+
+    track.clips.splice(idx, 1, ...newClips)
+    track.clips.sort((a, b) => Number(a.start || 0) - Number(b.start || 0))
+    project.duration = projectDuration(project)
+    project.waveform_cache = {}
+    project.updated_at = now()
+    const silences = cuts.map((cut) => {
+      const start = Math.max(0, cut - minSilence / 2)
+      const end = Math.min(duration, cut + minSilence / 2)
+      return {
+        start: Number(start.toFixed(3)),
+        end: Number(end.toFixed(3)),
+        duration: Number((end - start).toFixed(3)),
+      }
+    })
+    return {
+      ok: true,
+      project: cloneProject(project),
+      clips: newClips.map((c) => ({ ...c, metadata: { ...(c.metadata || {}) } })),
+      cuts: cuts.map((cut) => Number((Number(original.start || 0) + cut).toFixed(3))),
+      relative_cuts: cuts,
+      silences,
+    }
   },
   rerunEditorClip(
     projectId: string,

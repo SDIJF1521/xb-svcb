@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -20,7 +21,63 @@ class ModelService:
 
     # ---- 查询 ----
     def list(self) -> list[dict[str, Any]]:
-        return self._repo.all()
+        return [self._normalize_item(item, refresh_size=False) for item in self._repo.all()]
+
+    def overview(self) -> dict[str, Any]:
+        """返回本地模型库的多框架统一概览。"""
+        default_id = self.default_id()
+        summaries: dict[str, dict[str, Any]] = {}
+        total_size = 0
+        supported = {"so-vits-svc", "rvc"}
+
+        for fw, name in config.MODELHUB_FRAMEWORKS.items():
+            summaries[fw] = {
+                "id": fw,
+                "name": name,
+                "count": 0,
+                "size_bytes": 0,
+                "size": "0 B",
+                "default_model_id": None,
+                "default_model_name": "",
+                "supported": fw in supported,
+            }
+
+        for item in self._repo.all():
+            framework = config.modelhub_normalize_framework(
+                item.get("framework") or config.modelhub_guess_framework(item.get("type"))
+            )
+            if framework not in summaries:
+                summaries[framework] = {
+                    "id": framework,
+                    "name": config.MODELHUB_FRAMEWORKS.get(framework, framework),
+                    "count": 0,
+                    "size_bytes": 0,
+                    "size": "0 B",
+                    "default_model_id": None,
+                    "default_model_name": "",
+                    "supported": framework in supported,
+                }
+            size = self._model_size_bytes(item)
+            total_size += size
+            entry = summaries[framework]
+            entry["count"] += 1
+            entry["size_bytes"] += size
+            if item.get("id") == default_id:
+                entry["default_model_id"] = item.get("id")
+                entry["default_model_name"] = item.get("name", "")
+
+        rows = []
+        for entry in summaries.values():
+            entry["size"] = paths.human_size(int(entry.get("size_bytes") or 0))
+            rows.append(entry)
+        rows.sort(key=lambda x: (0 if x.get("count") else 1, str(x.get("name") or "")))
+        return {
+            "total": sum(int(x.get("count") or 0) for x in rows),
+            "total_size_bytes": total_size,
+            "total_size": paths.human_size(total_size),
+            "default_model_id": default_id,
+            "frameworks": rows,
+        }
 
     def default_id(self) -> str | None:
         default = self._settings.get("default_model_id")
@@ -115,10 +172,91 @@ class ModelService:
             framework=framework,
             index_file=index_file,
         )
-        self._repo.add(info.to_dict())
+        record = self._normalize_item(info.to_dict(), refresh_size=True)
+        self._repo.add(record)
         if not self._settings.get("default_model_id"):
             self._settings.set("default_model_id", model_id)
-        return info.to_dict()
+        return record
+
+    def toggle_favorite(self, model_id: str) -> dict[str, Any] | None:
+        item = self._repo.get(model_id)
+        if not item:
+            return None
+        item = self._normalize_item(item, refresh_size=False)
+        item["favorite"] = not bool(item.get("favorite"))
+        self._repo.update(model_id, item)
+        return item
+
+    def inspect(self, model_id: str, repair: bool = False) -> dict[str, Any]:
+        item = self._repo.get(model_id)
+        if not item:
+            return {"ok": False, "error": "模型不存在", "issues": []}
+        normalized = self._normalize_item(item, refresh_size=True)
+        issues: list[dict[str, Any]] = []
+        fixed: list[str] = []
+        framework = config.modelhub_normalize_framework(
+            normalized.get("framework") or config.modelhub_guess_framework(normalized.get("type"))
+        )
+        normalized["framework"] = framework
+
+        checks = [("main_model", "主模型")]
+        if framework != "rvc":
+            checks.append(("main_config", "主配置"))
+        for key, label in checks:
+            raw = normalized.get(key) or {}
+            path = Path(str(raw.get("path") or ""))
+            if not path.exists():
+                issues.append({"key": key, "level": "error", "message": f"{label}文件缺失"})
+
+        if framework == "rvc":
+            idx = normalized.get("index_file") or {}
+            idx_path = Path(str(idx.get("path") or ""))
+            if not idx_path.exists():
+                main = Path(str((normalized.get("main_model") or {}).get("path") or ""))
+                candidates = sorted(main.parent.glob("*.index")) if main.parent.exists() else []
+                if candidates:
+                    issues.append({"key": "index_file", "level": "warn", "message": "未绑定 index，发现可修复候选"})
+                    if repair:
+                        normalized["index_file"] = {
+                            "name": candidates[0].name,
+                            "path": str(candidates[0]),
+                        }
+                        fixed.append("index_file")
+
+        if framework != "rvc":
+            cfg = Path(str((normalized.get("main_config") or {}).get("path") or ""))
+            if cfg.exists():
+                try:
+                    data = json.loads(cfg.read_text(encoding="utf-8"))
+                    sr = data.get("sampling_rate") or data.get("sample_rate")
+                    if sr:
+                        normalized["sample_rate"] = f"{int(sr) / 1000:g}kHz"
+                        if repair:
+                            fixed.append("sample_rate")
+                except (OSError, ValueError, TypeError):
+                    issues.append({"key": "main_config", "level": "warn", "message": "配置文件无法解析"})
+
+        size = self._model_size_bytes(normalized)
+        normalized["size"] = paths.human_size(size)
+        metadata = dict(normalized.get("metadata") or {})
+        metadata.update(
+            {
+                "schema": "xb-svcb.model.v1",
+                "framework": framework,
+                "checked_at": datetime.now().isoformat(timespec="seconds"),
+                "valid": not any(i.get("level") == "error" for i in issues),
+                "issues": issues,
+            }
+        )
+        normalized["metadata"] = metadata
+        if repair:
+            self._repo.update(model_id, normalized)
+        return {
+            "ok": metadata["valid"],
+            "model": normalized,
+            "issues": issues,
+            "fixed": fixed,
+        }
 
     def set_default(self, model_id: str) -> bool:
         if not self._repo.get(model_id):
@@ -141,3 +279,49 @@ class ModelService:
                 "default_model_id", remaining[0]["id"] if remaining else None
             )
         return True
+
+    def _normalize_item(self, item: dict[str, Any], refresh_size: bool = False) -> dict[str, Any]:
+        normalized = dict(item)
+        framework = config.modelhub_normalize_framework(
+            normalized.get("framework") or config.modelhub_guess_framework(normalized.get("type"))
+        )
+        normalized["framework"] = framework
+        normalized.setdefault("favorite", False)
+        normalized.setdefault("tags", [])
+        normalized.setdefault("metadata", {})
+        normalized["metadata"] = {
+            "schema": "xb-svcb.model.v1",
+            "framework": framework,
+            **(normalized.get("metadata") or {}),
+        }
+        if not normalized.get("type"):
+            normalized["type"] = ModelType.RVC.value if framework == "rvc" else "So-VITS"
+        if not normalized.get("sample_rate"):
+            normalized["sample_rate"] = "44.1kHz"
+        if refresh_size or not normalized.get("size"):
+            normalized["size"] = paths.human_size(self._model_size_bytes(normalized))
+        for key in ("main_model", "main_config"):
+            normalized.setdefault(key, {"name": "", "path": ""})
+        return normalized
+
+    @staticmethod
+    def _model_size_bytes(item: dict[str, Any]) -> int:
+        total = 0
+        for key in (
+            "main_model",
+            "main_config",
+            "diffusion_model",
+            "diffusion_config",
+            "index_file",
+        ):
+            raw = item.get(key)
+            if not isinstance(raw, dict):
+                continue
+            path = raw.get("path")
+            if not path:
+                continue
+            try:
+                total += Path(str(path)).stat().st_size
+            except OSError:
+                pass
+        return total

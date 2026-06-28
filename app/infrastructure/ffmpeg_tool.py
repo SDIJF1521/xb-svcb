@@ -83,6 +83,114 @@ class FfmpegTool:
         except (wave.Error, OSError, EOFError):
             return None
 
+    def detect_silences(
+        self,
+        src: Path,
+        start: float = 0.0,
+        end: float | None = None,
+        noise_db: float = -40.0,
+        min_duration: float = 0.35,
+    ) -> list[dict[str, float]]:
+        """Return silence intervals relative to the requested audio window."""
+        if not self.ffmpeg:
+            return []
+        try:
+            start = max(0.0, float(start or 0.0))
+            source_duration = self.probe_duration(src)
+            absolute_end = float(end) if end is not None else float(source_duration or 0.0)
+            absolute_end = max(start, absolute_end)
+            duration = absolute_end - start
+            noise_db = min(-1.0, max(-90.0, float(noise_db)))
+            min_duration = max(0.05, min(10.0, float(min_duration)))
+        except (TypeError, ValueError):
+            return []
+        if duration <= 0.0:
+            return []
+
+        af = (
+            f"atrim=start={start:.3f}:duration={duration:.3f},"
+            "asetpts=PTS-STARTPTS,"
+            f"silencedetect=noise={noise_db:.1f}dB:d={min_duration:.3f}"
+        )
+        try:
+            res = subprocess.run(
+                [
+                    self.ffmpeg,
+                    "-hide_banner",
+                    "-v",
+                    "info",
+                    "-i",
+                    str(src),
+                    "-af",
+                    af,
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=max(60, min(900, int(duration * 2 + 30))),
+                **config.subprocess_no_window(),
+            )
+        except (OSError, subprocess.SubprocessError):
+            return []
+        if res.returncode != 0:
+            return []
+
+        num = r"([-+]?\d+(?:\.\d+)?)"
+        start_re = re.compile(r"silence_start:\s*" + num)
+        end_re = re.compile(r"silence_end:\s*" + num + r"\s*\|\s*silence_duration:\s*" + num)
+        intervals: list[dict[str, float]] = []
+        current_start: float | None = None
+
+        def add_interval(raw_start: float, raw_end: float) -> None:
+            s = max(0.0, min(duration, raw_start))
+            e = max(0.0, min(duration, raw_end))
+            if e - s >= min_duration:
+                intervals.append(
+                    {
+                        "start": round(s, 3),
+                        "end": round(e, 3),
+                        "duration": round(e - s, 3),
+                    }
+                )
+
+        for line in f"{res.stdout or ''}\n{res.stderr or ''}".splitlines():
+            start_match = start_re.search(line)
+            if start_match:
+                try:
+                    current_start = float(start_match.group(1))
+                except ValueError:
+                    current_start = None
+            end_match = end_re.search(line)
+            if not end_match:
+                continue
+            try:
+                silence_end = float(end_match.group(1))
+                silence_duration = float(end_match.group(2))
+            except ValueError:
+                continue
+            silence_start = (
+                current_start
+                if current_start is not None
+                else silence_end - silence_duration
+            )
+            add_interval(silence_start, silence_end)
+            current_start = None
+        if current_start is not None:
+            add_interval(current_start, duration)
+
+        merged: list[dict[str, float]] = []
+        for item in sorted(intervals, key=lambda x: x["start"]):
+            if not merged or item["start"] > merged[-1]["end"] + 0.005:
+                merged.append(dict(item))
+                continue
+            merged[-1]["end"] = max(merged[-1]["end"], item["end"])
+            merged[-1]["duration"] = round(merged[-1]["end"] - merged[-1]["start"], 3)
+        return merged
+
     def convert(self, src: Path, dst: Path, sample_rate: int = 44100) -> bool:
         """转码到目标文件。成功返回 True。"""
         if not self.ffmpeg:

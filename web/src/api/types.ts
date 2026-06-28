@@ -37,6 +37,42 @@ export interface ModelDTO {
   framework?: string
   /** RVC 检索特征文件（.index），可选。 */
   index_file?: ModelFileDTO | null
+  favorite?: boolean
+  tags?: string[]
+  metadata?: Record<string, unknown>
+}
+
+export interface ModelInspectIssue {
+  key: string
+  level: 'error' | 'warn' | string
+  message: string
+}
+
+export interface ModelInspectResult {
+  ok: boolean
+  error?: string
+  model?: ModelDTO
+  issues: ModelInspectIssue[]
+  fixed?: string[]
+}
+
+export interface ModelFrameworkSummary {
+  id: string
+  name: string
+  count: number
+  size_bytes: number
+  size: string
+  default_model_id?: string | null
+  default_model_name?: string
+  supported: boolean
+}
+
+export interface ModelLibraryOverview {
+  total: number
+  total_size_bytes: number
+  total_size: string
+  default_model_id?: string | null
+  frameworks: ModelFrameworkSummary[]
 }
 
 export interface ImportModelPayload {
@@ -105,6 +141,33 @@ export interface WorkDTO {
   mode?: 'single' | 'multi'
   workflow?: CreateWorkflow
   segments?: BlendSegment[]
+  queue_position?: number
+  history?: InferenceHistoryItem[]
+}
+
+export interface InferenceHistoryItem {
+  work_id?: string
+  title?: string
+  model?: string
+  workflow?: CreateWorkflow | string
+  status: JobStatus | string
+  progress?: number
+  output_path?: string | null
+  error?: string | null
+  finished_at: string
+}
+
+export interface InferenceQueueStatus {
+  running: boolean
+  pending: string[]
+  size: number
+}
+
+export interface InferencePreset {
+  id: string
+  name: string
+  params: InferenceParams
+  updated_at: string
 }
 
 /** 多模型混合：某一句歌词指派给一个或多个模型的时间区间。 */
@@ -135,6 +198,10 @@ export interface CreateWorkPayload {
   models?: BlendModel[]
   /** 多模型混合时每句歌词的模型指派。 */
   segments?: BlendSegment[]
+}
+
+export interface CreateBatchWorkPayload extends CreateWorkPayload {
+  source_paths: string[]
 }
 
 // ---- 音乐资源获取（妖狐 API）----
@@ -371,4 +438,28 @@ export interface EditorRerunResult {
   error?: string
   project?: EditorProject
   clip?: EditorClip
+}
+
+export interface EditorSilenceSplitOptions {
+  threshold_db?: number
+  noise_db?: number
+  min_silence?: number
+  min_clip?: number
+  crossfade?: number
+}
+
+export interface EditorSilenceInterval {
+  start: number
+  end: number
+  duration: number
+}
+
+export interface EditorSilenceSplitResult {
+  ok: boolean
+  error?: string
+  project?: EditorProject
+  clips?: EditorClip[]
+  cuts?: number[]
+  relative_cuts?: number[]
+  silences?: EditorSilenceInterval[]
 }
