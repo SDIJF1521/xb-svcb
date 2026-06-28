@@ -34,6 +34,8 @@ import type {
   EditorRerunResult,
   EditorSilenceSplitOptions,
   EditorSilenceSplitResult,
+  DataMigrationResult,
+  DataStorageStatus,
 } from './types'
 
 export * from './types'
@@ -42,6 +44,19 @@ export { isDesktop, whenReady } from './bridge'
 export const api = {
   getSystemStatus: () =>
     invoke<SystemStatus>('get_system_status', [], () => mock.getSystemStatus()),
+
+  getDataStorageStatus: () =>
+    invoke<DataStorageStatus>('get_data_storage_status', [], () =>
+      mock.getDataStorageStatus(),
+    ),
+
+  pickDataDir: () =>
+    invoke<string>('pick_data_dir', [], () => mock.pickDataDir()),
+
+  migrateDataDir: (targetDir: string) =>
+    invoke<DataMigrationResult>('migrate_data_dir', [targetDir], () =>
+      mock.migrateDataDir(targetDir),
+    ),
 
   listModels: () => invoke<ModelDTO[]>('list_models', [], () => mock.listModels()),
 

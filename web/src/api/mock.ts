@@ -36,6 +36,8 @@ import type {
   EditorRerunResult,
   EditorSilenceSplitOptions,
   EditorSilenceSplitResult,
+  DataMigrationResult,
+  DataStorageStatus,
 } from './types'
 
 const now = () => new Date().toISOString()
@@ -274,6 +276,32 @@ export const mock = {
         { key: 'svc', name: 'So-VITS-SVC 推理引擎', desc: '加载用户 So-VITS-SVC 模型进行歌声转换推理', version: 'torch', status: 'cuda', ok: true },
         { key: 'rvc', name: 'RVC 推理引擎', desc: '加载用户 RVC 模型（.pth + 可选 .index）进行歌声转换推理', version: 'rvc-python', status: 'cuda', ok: true },
       ],
+    }
+  },
+  getDataStorageStatus(): DataStorageStatus {
+    return {
+      data_dir: 'D:/XB-SVCB-Data',
+      used_bytes: 8_420_000_000,
+      used: '7.8 GB',
+      free_bytes: 118_000_000_000,
+      free: '109.9 GB',
+      total_bytes: 512_000_000_000,
+      total: '476.8 GB',
+      pointer_file: 'C:/Program Files/XB-SVCB/data_home.json',
+    }
+  },
+  pickDataDir(): string {
+    return 'D:/XB-SVCB-Data'
+  },
+  migrateDataDir(targetDir: string): DataMigrationResult {
+    const base = this.getDataStorageStatus()
+    return {
+      ...base,
+      ok: true,
+      data_dir: targetDir || base.data_dir,
+      old_data_dir: base.data_dir,
+      message: '数据目录已迁移。请重启软件。',
+      restart_required: true,
     }
   },
   listModels(): ModelDTO[] {

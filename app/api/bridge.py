@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import shutil
@@ -77,6 +78,129 @@ class Api:
 
         name = theme if theme in ("cyber", "anime") else "cyber"
         return _apply_window_theme(config.APP_TITLE, name)
+
+    def get_data_storage_status(self) -> dict[str, Any]:
+        """返回用户数据目录、占用和所在磁盘剩余空间。"""
+        return self._data_storage_payload()
+
+    def pick_data_dir(self) -> str:
+        """选择新的用户数据目录。"""
+        result = self._folder_dialog("选择 XB-SVCB 用户数据目录")
+        return result or ""
+
+    def migrate_data_dir(self, target_dir: str) -> dict[str, Any]:
+        """把用户数据目录复制到新位置，并写入下次启动使用的新目录。"""
+        queue = self._works.queue_status()
+        if queue.get("running") or queue.get("size"):
+            return {
+                "ok": False,
+                "error": "当前有推理任务正在运行或排队，请等待任务结束后再迁移数据目录。",
+                **self._data_storage_payload(),
+            }
+        try:
+            src = config.DATA_DIR.resolve()
+            target = Path(target_dir or "").expanduser().resolve()
+        except OSError:
+            return {"ok": False, "error": "目标目录无效。", **self._data_storage_payload()}
+        if not target:
+            return {"ok": False, "error": "请选择目标目录。", **self._data_storage_payload()}
+        if target == src:
+            return {"ok": False, "error": "目标目录与当前目录相同。", **self._data_storage_payload()}
+        if target.parent == target:
+            return {"ok": False, "error": "目标目录不能直接使用磁盘根目录。", **self._data_storage_payload()}
+        if target.exists() and not target.is_dir():
+            return {"ok": False, "error": "目标路径不是文件夹。", **self._data_storage_payload()}
+        if self._is_relative_path(target, src) or self._is_relative_path(src, target):
+            return {
+                "ok": False,
+                "error": "目标目录不能位于当前数据目录内部，也不能包含当前数据目录。",
+                **self._data_storage_payload(),
+            }
+        if target.exists() and any(target.iterdir()):
+            marker = target / config.DATA_MARKER_FILE
+            if not marker.exists():
+                return {
+                    "ok": False,
+                    "error": "目标目录不是空目录。请选择空目录，或选择已有 XB-SVCB 数据目录。",
+                    **self._data_storage_payload(),
+                }
+
+        required = self._dir_size(src)
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            usage = shutil.disk_usage(target)
+        except OSError:
+            return {"ok": False, "error": "无法访问目标目录或磁盘。", **self._data_storage_payload()}
+        safety = max(512 * 1024 * 1024, int(required * 0.08))
+        if usage.free < required + safety:
+            return {
+                "ok": False,
+                "error": (
+                    f"目标磁盘空间不足：需要至少 {paths.human_size(required + safety)}，"
+                    f"当前可用 {paths.human_size(usage.free)}。"
+                ),
+                **self._data_storage_payload(),
+            }
+        if not self._test_writable(target):
+            return {"ok": False, "error": "目标目录不可写。", **self._data_storage_payload()}
+
+        staging = target.with_name(target.name + ".migrating")
+        try:
+            if staging.exists():
+                shutil.rmtree(staging)
+            if target.exists() and any(target.iterdir()):
+                # 已有 XB-SVCB 数据目录：先不覆盖，直接切换指针。
+                staging = target
+            else:
+                shutil.copytree(src, staging, ignore=shutil.ignore_patterns("*.tmp"))
+                if target.exists():
+                    target.rmdir()
+                staging.replace(target)
+            (target / config.DATA_MARKER_FILE).write_text(
+                json.dumps(
+                    {
+                        "app": config.APP_NAME,
+                        "migrated_from": str(src),
+                        "version": config.APP_VERSION,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (src / config.DATA_MIGRATION_MARKER).write_text(
+                json.dumps({"target": str(target)}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            if not config.write_data_home(target, pending_delete=src):
+                return {
+                    "ok": False,
+                    "error": "数据已复制，但写入数据目录指针失败。",
+                    **self._data_storage_payload(),
+                }
+            next_usage = shutil.disk_usage(target)
+            return {
+                "ok": True,
+                "restart_required": True,
+                "message": "数据目录已迁移。请重启软件，重启后将使用新目录并自动清理旧目录。",
+                "data_dir": str(target),
+                "old_data_dir": str(src),
+                "used_bytes": required,
+                "used": paths.human_size(required),
+                "free_bytes": next_usage.free,
+                "free": paths.human_size(next_usage.free),
+            }
+        except OSError as exc:
+            try:
+                if staging.exists() and staging != target:
+                    shutil.rmtree(staging)
+            except OSError:
+                pass
+            return {
+                "ok": False,
+                "error": f"迁移失败：{exc}",
+                **self._data_storage_payload(),
+            }
 
     # ---- 模型 ----
     def list_models(self) -> list[dict[str, Any]]:
@@ -486,6 +610,59 @@ class Api:
         return self._editor.rerun_clip(project_id, track_id, clip_id, model_id, params or {})
 
     @staticmethod
+    def _dir_size(root: Path) -> int:
+        total = 0
+        if not root.exists():
+            return 0
+        for item in root.rglob("*"):
+            try:
+                if item.is_file():
+                    total += item.stat().st_size
+            except OSError:
+                pass
+        return total
+
+    @staticmethod
+    def _is_relative_path(path: Path, parent: Path) -> bool:
+        try:
+            path.relative_to(parent)
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _test_writable(path: Path) -> bool:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            probe = path / ".xb_xvcb_write_test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return True
+        except OSError:
+            return False
+
+    def _data_storage_payload(self) -> dict[str, Any]:
+        data_dir = config.DATA_DIR
+        used = self._dir_size(data_dir)
+        try:
+            usage = shutil.disk_usage(data_dir if data_dir.exists() else data_dir.parent)
+            free = usage.free
+            total = usage.total
+        except OSError:
+            free = 0
+            total = 0
+        return {
+            "data_dir": str(data_dir),
+            "used_bytes": used,
+            "used": paths.human_size(used),
+            "free_bytes": free,
+            "free": paths.human_size(free),
+            "total_bytes": total,
+            "total": paths.human_size(total),
+            "pointer_file": str(config.DATA_HOME_FILE),
+        }
+
+    @staticmethod
     def _reveal(path: Path) -> bool:
         """跨平台打开文件/文件夹。"""
         try:
@@ -538,6 +715,22 @@ class Api:
                 webview.SAVE_DIALOG,
                 save_filename=filename,
             )
+            if not result:
+                return ""
+            return result if isinstance(result, str) else str(result[0])
+        except Exception:  # noqa: BLE001 - 无 GUI 环境时静默返回
+            return ""
+
+    def _folder_dialog(self, title: str) -> str:
+        try:
+            import webview
+
+            window = self._window or webview.active_window()
+            if window is None and webview.windows:
+                window = webview.windows[0]
+            if window is None:
+                return ""
+            result = window.create_file_dialog(webview.FOLDER_DIALOG)
             if not result:
                 return ""
             return result if isinstance(result, str) else str(result[0])

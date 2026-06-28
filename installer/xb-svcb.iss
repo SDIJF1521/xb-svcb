@@ -89,7 +89,7 @@ Filename: "{app}\{#MyAppExe}"; Description: "立即启动 {#MyAppShort}"; \
   WorkingDir: "{app}"; Flags: postinstall shellexec skipifsilent unchecked
 
 [UninstallDelete]
-; 卸载时清理安装目录内生成的环境与下载物（用户数据在 ~/.xb-svcb，保留）
+; 卸载时清理安装目录内生成的环境与下载物（用户数据在 .xb_xvcb，保留）
 Type: filesandordirs; Name: "{app}\.venv-uvr"
 Type: filesandordirs; Name: "{app}\.venv-svc"
 Type: filesandordirs; Name: "{app}\.venv-rvc"
@@ -98,6 +98,25 @@ Type: filesandordirs; Name: "{app}\engines"
 Type: filesandordirs; Name: "{app}\models"
 
 [Code]
+var
+  DataDirPage: TInputDirWizardPage;
+
+function JsonEscape(const S: String): String;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 1 to Length(S) do
+  begin
+    if S[I] = '\' then
+      Result := Result + '\\'
+    else if S[I] = '"' then
+      Result := Result + '\"'
+    else
+      Result := Result + S[I];
+  end;
+end;
+
 function CmdAvailable(const Exe: String): Boolean;
 var
   ResultCode: Integer;
@@ -125,4 +144,43 @@ begin
       mbInformation, MB_OK);
 
   Result := True;
+end;
+
+procedure InitializeWizard();
+begin
+  DataDirPage := CreateInputDirPage(
+    wpSelectDir,
+    '选择用户数据存储位置',
+    '模型、作品、下载素材与编辑工程保存在哪里？',
+    '建议选择空间充足的磁盘。该目录后续也可以在软件首页迁移。',
+    False,
+    ''
+  );
+  DataDirPage.Add('用户数据目录：');
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID = DataDirPage.ID then
+  begin
+    if DataDirPage.Values[0] = '' then
+      DataDirPage.Values[0] := ExpandConstant('{app}\.xb_xvcb');
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  DataDir, Payload: String;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    DataDir := DataDirPage.Values[0];
+    if DataDir = '' then
+      DataDir := ExpandConstant('{app}\.xb_xvcb');
+    ForceDirectories(DataDir);
+    Payload := '{' + #13#10 +
+      '  "data_dir": "' + JsonEscape(DataDir) + '"' + #13#10 +
+      '}' + #13#10;
+    SaveStringToFile(ExpandConstant('{app}\data_home.json'), Payload, False);
+  end;
 end;

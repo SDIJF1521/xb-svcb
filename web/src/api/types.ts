@@ -17,6 +17,25 @@ export interface SystemStatus {
   tools: ToolStatus[]
 }
 
+export interface DataStorageStatus {
+  data_dir: string
+  used_bytes: number
+  used: string
+  free_bytes: number
+  free: string
+  total_bytes?: number
+  total?: string
+  pointer_file?: string
+}
+
+export interface DataMigrationResult extends DataStorageStatus {
+  ok: boolean
+  error?: string
+  message?: string
+  restart_required?: boolean
+  old_data_dir?: string
+}
+
 export interface ModelFileDTO {
   name: string
   path: string

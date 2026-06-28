@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -233,7 +235,118 @@ def modelhub_upload_ready() -> bool:
     return bool(HUB_PYTHON and HUB_PYTHON.exists() and HUB_WORKER.exists())
 
 # 用户数据目录（模型 / 作品 / 缓存 / 配置均保存在本地）
-DATA_DIR = Path.home() / ".xb-svcb"
+# 优先级：
+# 1. 环境变量 XB_DATA_DIR / XB_SVCB_DATA_DIR / XB_XVCB_DATA_DIR（可用于自定义存储盘）
+# 2. 安装器 / 应用内迁移写入的 data_home.json
+# 3. 默认目录 .xb_xvcb；旧版本 .xb-svcb / .xb_svcb 仅用于兼容升级
+# 4. 新安装时默认落在安装目录下，避免把数据写到系统盘 C 盘
+
+DATA_DIR_NAME = ".xb_xvcb"
+DATA_HOME_FILE = BASE_DIR / "data_home.json"
+DATA_MARKER_FILE = ".xb_xvcb_data"
+DATA_MIGRATION_MARKER = ".xb_xvcb_migration_source"
+LEGACY_DATA_DIR_NAMES = (".xb-svcb", ".xb_svcb")
+LEGACY_DATA_MIGRATION_MARKERS = (".xb_svcb_migration_source",)
+
+
+def _read_data_home() -> Path | None:
+    try:
+        data = json.loads(DATA_HOME_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    raw = data.get("data_dir") if isinstance(data, dict) else None
+    if not raw:
+        return None
+    try:
+        return Path(str(raw)).expanduser().resolve()
+    except OSError:
+        return None
+
+
+def _resolve_data_dir() -> Path:
+    env = (
+        os.environ.get("XB_DATA_DIR")
+        or os.environ.get("XB_SVCB_DATA_DIR")
+        or os.environ.get("XB_XVCB_DATA_DIR")
+    )
+    if env:
+        return Path(env).expanduser().resolve()
+
+    configured = _read_data_home()
+    if configured:
+        return configured
+
+    for base in (BASE_DIR, Path.home()):
+        preferred = base / DATA_DIR_NAME
+        if preferred.exists():
+            return preferred
+    for base in (BASE_DIR, Path.home()):
+        for name in LEGACY_DATA_DIR_NAMES:
+            legacy_dir = base / name
+            if legacy_dir.exists():
+                return legacy_dir
+
+    return BASE_DIR / DATA_DIR_NAME
+
+
+def write_data_home(data_dir: Path, pending_delete: Path | None = None) -> bool:
+    """写入持久化数据目录指针。应用内迁移和安装器使用同一文件。"""
+    try:
+        target = data_dir.expanduser().resolve()
+        DATA_HOME_FILE.parent.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, str] = {"data_dir": str(target)}
+        if pending_delete:
+            payload["pending_delete"] = str(pending_delete.expanduser().resolve())
+        tmp = DATA_HOME_FILE.with_suffix(DATA_HOME_FILE.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(DATA_HOME_FILE)
+        return True
+    except OSError:
+        return False
+
+
+def cleanup_pending_migration() -> None:
+    """启动到新数据目录后，清理上次迁移留下的旧目录。
+
+    只有旧目录内存在迁移标记且标记指向当前 DATA_DIR 时才删除，避免误删用户
+    手动指定的普通文件夹。
+    """
+    try:
+        data = json.loads(DATA_HOME_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(data, dict) or not data.get("pending_delete"):
+        return
+    try:
+        old = Path(str(data["pending_delete"])).expanduser().resolve()
+        current = DATA_DIR.resolve()
+    except OSError:
+        return
+    if old == current or not old.exists() or old.parent == old:
+        return
+    marker = old / DATA_MIGRATION_MARKER
+    if not marker.exists():
+        for legacy_name in LEGACY_DATA_MIGRATION_MARKERS:
+            legacy_marker = old / legacy_name
+            if legacy_marker.exists():
+                marker = legacy_marker
+                break
+    try:
+        marker_payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(marker_payload, dict):
+        return
+    if str(marker_payload.get("target") or "") != str(current):
+        return
+    try:
+        shutil.rmtree(old)
+        write_data_home(current)
+    except OSError:
+        pass
+
+
+DATA_DIR = _resolve_data_dir()
 MODELS_DIR = DATA_DIR / "models"
 WORKS_DIR = DATA_DIR / "works"
 TEMP_DIR = DATA_DIR / "temp"

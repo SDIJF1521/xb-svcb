@@ -10,6 +10,7 @@ import config
 
 def ensure_dirs() -> None:
     """确保所有数据目录存在。"""
+    config.cleanup_pending_migration()
     for d in (
         config.DATA_DIR,
         config.MODELS_DIR,

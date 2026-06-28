@@ -46,6 +46,31 @@
       </div>
     </section>
 
+    <!-- 数据存储 -->
+    <section class="storage-card glass" v-if="dataStorage">
+      <div class="storage-main">
+        <div class="storage-icon">
+          <el-icon><Files /></el-icon>
+        </div>
+        <div class="storage-info">
+          <div class="storage-title">数据存储位置</div>
+          <div class="storage-path" :title="dataStorage.data_dir">{{ dataStorage.data_dir }}</div>
+          <div class="storage-meta">
+            <span>已用 {{ dataStorage.used }}</span>
+            <span>所在磁盘可用 {{ dataStorage.free }}</span>
+          </div>
+        </div>
+      </div>
+      <div class="storage-actions">
+        <el-button round class="ghost-btn" @click="openDataDir">
+          <el-icon class="el-icon--left"><FolderOpened /></el-icon>打开目录
+        </el-button>
+        <el-button round class="cta-btn" :loading="migratingData" @click="chooseAndMigrateDataDir">
+          <el-icon class="el-icon--left"><FolderAdd /></el-icon>选择并迁移
+        </el-button>
+      </div>
+    </section>
+
     <!-- 快捷功能 -->
     <section class="block">
       <div class="block-head">
@@ -221,7 +246,7 @@ import { useSystemStore } from '@/stores/system'
 import { useModelsStore } from '@/stores/models'
 import { useWorksStore } from '@/stores/works'
 import { api } from '@/api'
-import type { JobStatus } from '@/api'
+import type { DataStorageStatus, JobStatus } from '@/api'
 
 defineOptions({ name: 'Index' })
 
@@ -235,6 +260,8 @@ const { models } = storeToRefs(modelsStore)
 const { works } = storeToRefs(worksStore)
 
 const importing = ref(false)
+const migratingData = ref(false)
+const dataStorage = ref<DataStorageStatus | null>(null)
 
 const allReady = computed(() => tools.value.length > 0 && tools.value.every((t) => t.ok))
 const displayModels = computed(() => models.value.slice(0, 5))
@@ -346,10 +373,55 @@ function onImport() {
   router.push('/models')
 }
 
+async function loadDataStorage() {
+  dataStorage.value = await api.getDataStorageStatus()
+}
+
+async function openDataDir() {
+  if (!dataStorage.value?.data_dir) return
+  const ok = await api.openPath(dataStorage.value.data_dir)
+  if (!ok) ElMessage.error('无法打开数据目录')
+}
+
+async function chooseAndMigrateDataDir() {
+  const target = await api.pickDataDir()
+  if (!target) return
+  try {
+    await ElMessageBox.confirm(
+      `将把模型、作品、下载素材和编辑工程迁移到：\n${target}\n\n迁移期间请不要关闭软件；完成后需要重启软件。`,
+      '迁移数据目录',
+      {
+        confirmButtonText: '开始迁移',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+  migratingData.value = true
+  try {
+    const res = await api.migrateDataDir(target)
+    if (res.ok) {
+      dataStorage.value = res
+      ElMessageBox.alert(res.message || '数据目录已迁移，请重启软件。', '迁移完成', {
+        confirmButtonText: '我知道了',
+        type: 'success',
+      })
+    } else {
+      ElMessage.error(res.error || '迁移失败')
+      await loadDataStorage()
+    }
+  } finally {
+    migratingData.value = false
+  }
+}
+
 onMounted(() => {
   systemStore.load()
   modelsStore.ensureLoaded()
   worksStore.ensureLoaded()
+  loadDataStorage()
 })
 </script>
 
@@ -490,6 +562,63 @@ onMounted(() => {
   font-size: 13px;
   color: var(--xb-muted);
   margin-top: 4px;
+}
+
+/* 数据存储 */
+.storage-card {
+  margin-top: 18px;
+  border-radius: 6px;
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.storage-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.storage-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  font-size: 22px;
+  color: var(--xb-primary);
+  background: rgba(var(--xb-primary-rgb), 0.12);
+  border: 1px solid rgba(var(--xb-primary-rgb), 0.26);
+}
+.storage-info { min-width: 0; }
+.storage-title {
+  font-size: 14px;
+  font-weight: 800;
+  margin-bottom: 5px;
+}
+.storage-path {
+  max-width: min(760px, 58vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--xb-text);
+  font-size: 13px;
+}
+.storage-meta {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--xb-muted);
+  font-size: 12px;
+}
+.storage-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
 }
 
 /* 区块 */
@@ -829,12 +958,22 @@ onMounted(() => {
 @media (max-width: 880px) {
   .welcome { grid-template-columns: 1fr; }
   .stats { grid-template-columns: repeat(2, 1fr); }
+  .storage-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .storage-path { max-width: 100%; }
+  .storage-actions { justify-content: flex-start; }
   .work-bar, .work-time { display: none; }
 }
 @media (max-width: 560px) {
   .model-grid { grid-template-columns: repeat(2, 1fr); }
   .quick-grid { grid-template-columns: 1fr; }
   .stats { grid-template-columns: 1fr; }
+  .storage-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
   .welcome-text h1 { font-size: 28px; }
 }
 </style>
