@@ -339,6 +339,40 @@ class Api:
         )
         return list(result or [])
 
+    def pick_lyrics_file(self) -> dict[str, Any]:
+        result = self._open_dialog(
+            "选择歌词文件",
+            multiple=False,
+            file_types=(
+                "歌词文件 (*.lrc;*.txt)",
+                "所有文件 (*.*)",
+            ),
+        )
+        if not result:
+            return {"ok": False, "cancelled": True}
+        path = Path(result[0])
+        if not path.exists() or not path.is_file():
+            return {"ok": False, "error": "歌词文件不存在"}
+        try:
+            if path.stat().st_size > 2 * 1024 * 1024:
+                return {"ok": False, "error": "歌词文件过大"}
+        except OSError:
+            return {"ok": False, "error": "无法读取歌词文件"}
+        for encoding in ("utf-8-sig", "utf-8", "gb18030"):
+            try:
+                text = path.read_text(encoding=encoding)
+                return {
+                    "ok": True,
+                    "path": str(path),
+                    "name": path.name,
+                    "text": text,
+                }
+            except UnicodeDecodeError:
+                continue
+            except OSError:
+                return {"ok": False, "error": "无法读取歌词文件"}
+        return {"ok": False, "error": "歌词文件编码不支持"}
+
     def list_works(self) -> list[dict[str, Any]]:
         return self._works.list()
 
@@ -535,6 +569,23 @@ class Api:
     def create_editor_project_from_work(self, work_id: str) -> dict[str, Any] | None:
         return self._editor.create_from_work(work_id)
 
+    def add_editor_track(
+        self, project_id: str, name: str | None = None, kind: str = "audio"
+    ) -> dict[str, Any]:
+        return self._editor.add_track(project_id, name, kind)
+
+    def delete_editor_track(self, project_id: str, track_id: str) -> dict[str, Any]:
+        return self._editor.delete_track(project_id, track_id)
+
+    def import_audio_to_editor_track(
+        self,
+        project_id: str,
+        path: str,
+        track_id: str | None = None,
+        start: float = 0.0,
+    ) -> dict[str, Any]:
+        return self._editor.import_audio_to_track(project_id, path, track_id, float(start or 0.0))
+
     def save_editor_project(self, project: dict[str, Any]) -> dict[str, Any] | None:
         return self._editor.save(project or {}, push_history=True)
 
@@ -597,6 +648,27 @@ class Api:
     ) -> dict[str, Any]:
         return self._editor.split_clip_by_silence(
             project_id, track_id, clip_id, options or {}
+        )
+
+    def separate_editor_clip_vocals(
+        self,
+        project_id: str,
+        track_id: str,
+        clip_id: str,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._editor.separate_clip_vocals(project_id, track_id, clip_id, options or {})
+
+    def split_editor_clip_by_lyrics(
+        self,
+        project_id: str,
+        track_id: str,
+        clip_id: str,
+        lyrics: Any,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._editor.split_clip_by_lyrics(
+            project_id, track_id, clip_id, lyrics, options or {}
         )
 
     def rerun_editor_clip(
@@ -763,7 +835,7 @@ def build_api() -> Api:
     music_service = MusicService(settings)
     hub_service = ModelHubService(settings, model_service)
     editor_service = AudioEditorService(
-        editor_repo, works_repo, model_service, ffmpeg, engines
+        editor_repo, works_repo, model_service, ffmpeg, uvr, engines
     )
 
     # 启动时回收上次会话残留的"处理中"任务（其后台线程已随进程退出而终止）

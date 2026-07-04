@@ -163,7 +163,7 @@
                 :class="{ active: isPicked(m.id) }"
                 @click="togglePick(m.id)"
               >
-                <div class="model-dot" :style="{ '--mc': m.color }">
+                <div class="model-dot" :style="{ '--mc': modelDisplayColor(m.id, m.color) }">
                   <el-icon><Microphone /></el-icon>
                 </div>
                 <div class="model-text">
@@ -172,7 +172,7 @@
                   </div>
                   <div class="model-tag">{{ m.type }} · {{ m.sr }}</div>
                 </div>
-                <span v-if="isPicked(m.id)" class="model-badge" :style="{ background: m.color }">
+                <span v-if="isPicked(m.id)" class="model-badge" :style="{ background: pickedModelColor(m.id) }">
                   {{ pickedIndex(m.id) + 1 }}
                 </span>
                 <el-icon v-if="isPicked(m.id)" class="model-check"><Select /></el-icon>
@@ -422,7 +422,7 @@
             </div>
             <div class="tl-legend">
               <span v-for="pm in pickedModels" :key="pm.id" class="tl-leg">
-                <span class="tl-leg-dot" :style="{ background: pm.color }"></span>{{ pm.name }}
+                <span class="tl-leg-dot" :style="{ background: pm.color }">{{ pickedIndex(pm.id) + 1 }}</span>{{ pm.name }}
               </span>
               <span class="tl-leg"><span class="tl-leg-dot idle"></span>间奏</span>
             </div>
@@ -455,7 +455,7 @@
             <div class="tl-dialog-bar">
               <div class="tl-legend">
                 <span v-for="pm in pickedModels" :key="pm.id" class="tl-leg">
-                  <span class="tl-leg-dot" :style="{ background: pm.color }"></span>{{ pm.name }}
+                  <span class="tl-leg-dot" :style="{ background: pm.color }">{{ pickedIndex(pm.id) + 1 }}</span>{{ pm.name }}
                 </span>
                 <span class="tl-leg"><span class="tl-leg-dot idle"></span>间奏</span>
               </div>
@@ -947,6 +947,28 @@ watch([mode, workflow], () => {
 // 已勾选模型的 id（保持勾选顺序）与各自参数
 const selectedMulti = ref<string[]>([])
 const modelParams = reactive<Record<string, MultiParams>>({})
+const TIMELINE_MODEL_COLORS = [
+  '#00d5ff',
+  '#ff4f8b',
+  '#35d07f',
+  '#ffb02e',
+  '#8b6dff',
+  '#2dd4bf',
+  '#ff6b35',
+  '#5c8dff',
+  '#f43f5e',
+  '#84cc16',
+  '#e879f9',
+  '#14b8a6',
+]
+
+function timelineModelColor(index: number): string {
+  if (index >= 0 && index < TIMELINE_MODEL_COLORS.length) {
+    return TIMELINE_MODEL_COLORS[index]!
+  }
+  const hue = Math.round((index * 137.508) % 360)
+  return `hsl(${hue} 78% 56%)`
+}
 
 function defaultParams(): MultiParams {
   return {
@@ -975,6 +997,14 @@ function isPicked(id: string) {
 function pickedIndex(id: string) {
   return selectedMulti.value.indexOf(id)
 }
+function pickedModelColor(id: string): string {
+  const idx = pickedIndex(id)
+  if (idx >= 0) return timelineModelColor(idx)
+  return models.value.find((m) => m.id === id)?.color || 'var(--xb-primary)'
+}
+function modelDisplayColor(id: string, fallback: string) {
+  return isPicked(id) ? pickedModelColor(id) : fallback
+}
 function togglePick(id: string) {
   if (isPicked(id)) {
     selectedMulti.value = selectedMulti.value.filter((x) => x !== id)
@@ -985,9 +1015,11 @@ function togglePick(id: string) {
 }
 const pickedModels = computed(() =>
   selectedMulti.value
-    .map((id) => models.value.find((m) => m.id === id))
-    .filter((m): m is NonNullable<typeof m> => !!m)
-    .map((m) => ({ id: m.id, name: m.name, color: m.color })),
+    .map((id, index) => {
+      const model = models.value.find((m) => m.id === id)
+      return model ? { id: model.id, name: model.name, color: timelineModelColor(index) } : null
+    })
+    .filter((m): m is { id: string; name: string; color: string } => !!m),
 )
 
 // 歌词获取与对齐
@@ -2611,12 +2643,21 @@ onUnmounted(() => {
 .tl-scroll::-webkit-scrollbar-thumb { background: rgba(var(--xb-fill-rgb), 0.25); border-radius: 4px; }
 .tl-inner { position: relative; min-width: 100%; }
 .tl-leg-dot {
-  width: 9px;
-  height: 9px;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  box-shadow: 0 0 6px currentColor;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.36), 0 0 8px rgba(0, 0, 0, 0.18);
 }
 .tl-leg-dot.idle {
+  width: 9px;
+  height: 9px;
   background: var(--xb-border);
   box-shadow: none;
   border: 1px solid var(--xb-muted);

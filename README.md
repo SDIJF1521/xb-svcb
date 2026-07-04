@@ -74,7 +74,9 @@
 - 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-uvr`），互不污染。
 - 🎧 **作品库** —— 试听 / 导出成品，单独试听伴奏与干声，失败任务一键查日志；删除作品同步真实清理本地生成文件。
 
-> **最新版本 v0.0.13**：新增 **用户数据目录选择与迁移**——安装时可把 `.xb_xvcb` 数据目录放到空间充足的磁盘，软件首页也可查看占用/剩余空间并一键迁移模型、作品、下载素材、编辑工程与缓存；手动人声合并改为真正的**逐段编辑工程**，每个参与 AI 独立成轨，轨内只包含该 AI 负责的分段音频；试听与导出统一走带交叉淡化的时间轴渲染，片段声道选择（双声道 / L / R）在编辑判断时即可听到真实效果。
+> **最新版本 v0.0.14**：聚焦 **音频编辑工作台与安装器完整化**——编辑器支持添加/删除音轨、导入音频时选择目标音轨、可选人声分离、按歌词切分人声音频（支持 API 获取歌词或导入 `.lrc` 文件）；局部重新推理可微调模型与推理参数，时间轴为不同模型/框架分配更容易区分的颜色；安装器同步升级为单一 EXE 窗口流程，会先检查运行环境再选择安装路径，可自动检测/安装 Python、Git、ffmpeg、uv、CUDA 与 C++ Build Tools，CUDA 与 torch 栈会复核实际显卡，CPU 或不兼容显卡会跳过 CUDA 并安装 CPU 版 torch，前置依赖与运行环境搭建阶段会显示进度条，不再弹出 PowerShell/命令行窗口，日志写入安装目录，并可选择在安装器窗口内显示详细安装信息。
+>
+> v0.0.13：新增 **用户数据目录选择与迁移**——安装时可把 `.xb_xvcb` 数据目录放到空间充足的磁盘，软件首页也可查看占用/剩余空间并一键迁移模型、作品、下载素材、编辑工程与缓存；手动人声合并改为真正的**逐段编辑工程**，每个参与 AI 独立成轨，轨内只包含该 AI 负责的分段音频；试听与导出统一走带交叉淡化的时间轴渲染，片段声道选择（双声道 / L / R）在编辑判断时即可听到真实效果。
 >
 > v0.0.12：聚焦 **稳定性与创作效率**——增强音频编辑器工程管理、工作流预设与复用、模型管理与传输体验、任务通知与日志入口；优化长音频处理、混音预览、时间轴操作和安装器环境修复流程；修复编辑器状态不同步、长音频导出偶发失败、模型站传输状态刷新不及时、以及主题/缩放后部分界面布局异常等问题。
 >
@@ -183,7 +185,7 @@ flowchart LR
 | **uv**                 | 虚拟环境管理工具         | 安装器使用 uv 管理虚拟环境（缺失会自动安装）                                                                                  |
 | **ffmpeg**             | 音频转码 / 混音         | 需在 PATH 中可用                                                                                                      |
 | **Git**（可选）          | 获取 so-vits-svc 仓库 | 没有也行，安装器会自动下载 ZIP                                                                                                |
-| **CUDA**（可选）    | GPU 加速            | 30/40 系及以下自动装 cu121 版 PyTorch；**50 系（Blackwell）自动改装 cu128 + torch 2.7**；无显卡则用 CPU                                                                          |
+| **CUDA**（可选）    | GPU 加速            | 40 系及以下兼容 NVIDIA 自动装 cu121/cu118 版 PyTorch；**50 系（Blackwell）自动改装 cu128 + torch 2.7**；CPU 或不兼容显卡会跳过 CUDA 并使用 CPU torch                                                                          |
 | **Node.js LTS**（含 npm） | 构建前端              | 仅「从源码安装」需要                                                                                                       |
 | **C++ 生成工具**（可选）   | 编译依赖              | 部分 Python 包需要 C++14 编译器；安装时勾选 **Desktop development with C++** |
 
@@ -195,14 +197,14 @@ flowchart LR
 | **Python 3.10.5** | [https://www.python.org/downloads/release/python-3105/](https://www.python.org/downloads/release/python-3105/) |
 | **uv** | [https://github.com/astral-sh/uv/releases](https://github.com/astral-sh/uv/releases) |
 | **Git** | [https://git-scm.com/downloads](https://git-scm.com/downloads) |
-| **CUDA Toolkit 12.1** | [https://developer.nvidia.com/cuda-12-1-0-download-archive](https://developer.nvidia.com/cuda-12-1-0-download-archive) |
+| **CUDA Toolkit 12.1 / 12.8** | [https://developer.nvidia.com/cuda-toolkit-archive](https://developer.nvidia.com/cuda-toolkit-archive) |
 | **ffmpeg** | [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html) |
 | **Node.js LTS** | [https://nodejs.org/](https://nodejs.org/) |
 | **C++ Build Tools** | [https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/) |
 
-> 💡 **关于 CUDA**：GPU 版默认安装 PyTorch 的 **cu121** 预编译 wheel（已内置 CUDA 12.1 运行库），通常**只需较新的 NVIDIA 驱动**即可，无需手动装整套 CUDA Toolkit。若需自行安装，可从官方下载 **[CUDA Toolkit 12.1](https://developer.nvidia.com/cuda-12-1-0-download-archive)**（建议显卡驱动版本 ≥ 530）。
+> 💡 **关于 CUDA**：安装器会先复核实际显卡，40 系及以下兼容 NVIDIA 使用 **cu121/cu118**，50 系 Blackwell 使用 **cu128**；CPU 或不兼容显卡会跳过 CUDA 并安装 CPU 版 torch。PyTorch wheel 已内置对应 CUDA 运行库，通常只需匹配的新 NVIDIA 驱动，完整 CUDA Toolkit 仅用于本地编译/工具链。
 >
-> 🟢 **50 系显卡（RTX 5060/5070/5080/5090，Blackwell, sm_120）**：cu121 无 sm_120 内核，仅升级 torch 还会出哑音，因此安装器**检测到 50 系会自动切换到 cu128 + torch 2.7 的专用栈**（SVC / RVC 改用 Python 3.10，torchaudio I/O 走 soundfile，fairseq 重装并打 `weights_only` 补丁）。需安装 **CUDA 12.8 级别的新版 NVIDIA 驱动**。可用 `--cu128` 强制启用、`--no-cu128` 强制回退老栈；fairseq 在 py3.10 编译可能需要 **C++ Build Tools**。
+> 🟢 **50 系显卡（RTX 5060/5070/5080/5090，Blackwell, sm_120）**：cu121 无 sm_120 内核，仅升级 torch 还会出哑音，因此安装器**检测到 50 系会自动切换到 cu128 + torch 2.7 的专用栈**（SVC / RVC 改用 Python 3.10，torchaudio I/O 走 soundfile，fairseq 重装并打 `weights_only` 补丁）。需安装 **CUDA 12.8 级别的新版 NVIDIA 驱动**；若检测不到兼容 NVIDIA 显卡，会自动回退 CPU 版 torch，避免装错 CUDA 栈。
 
 - 安装建议：**建议直接用图形安装器**，无需任何命令行操作，选择仅此用户安装（用途一个盾标志的选项）。
 ---
@@ -234,8 +236,8 @@ setup_env.bat
 更细的控制可直接调用 `install.py`：
 
 ```bat
-python install\install.py --cpu          rem 强制 CPU 版
-python install\install.py --gpu          rem 强制 CUDA 版
+python install\install.py --cpu          rem CPU 版
+python install\install.py --gpu          rem 请求 CUDA 版（会复核兼容 NVIDIA 显卡）
 python install\install.py --only svc     rem 只重跑某一步：app / web / uvr / svc / rvc / hub / models
 python install\install.py --only rvc     rem 只搭建 RVC 推理环境 .venv-rvc（rvc-python）
 python install\install.py --skip-svc     rem 跳过 so-vits-svc（仅装壳 + 分离 + 前端）
@@ -469,7 +471,7 @@ uv pip install --python <安装目录>\.venv-svc\Scripts\python.exe "setuptools<
 
 <br/>
 
-CPU 模式下 svc 模型较慢。装有 NVIDIA 显卡时用 `python install\install.py --gpu` 重装分离环境即可走 GPU（默认安装 CUDA 12.1 版 PyTorch，一般只需较新 NVIDIA 驱动；如需 Toolkit 见 [CUDA 12.1 下载](https://developer.nvidia.com/cuda-12-1-0-download-archive)）。**50 系（Blackwell）会自动改用 cu128 + torch 2.7 专用栈**，可用 `--cu128` 强制、`--no-cu128` 回退老栈。
+CPU 模式下 svc 模型较慢。装有兼容 NVIDIA 显卡时用 `python install\install.py --gpu` 重装分离环境即可走 GPU；脚本会复核实际显卡，40 系及以下使用 cu121/cu118，**50 系（Blackwell）自动改用 cu128 + torch 2.7 专用栈**，CPU 或不兼容显卡会继续使用 CPU torch。
 
 </details>
 

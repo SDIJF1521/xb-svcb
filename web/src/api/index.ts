@@ -6,6 +6,7 @@ import type {
   CreateWorkPayload,
   CreateBatchWorkPayload,
   InferenceHistoryItem,
+  InferenceParams,
   InferencePreset,
   InferenceQueueStatus,
   ImportModelPayload,
@@ -20,6 +21,7 @@ import type {
   DownloadedMusic,
   MusicSource,
   LyricsResult,
+  LyricsFileResult,
   HubTokenResult,
   HubSearchResult,
   HubDownloadResult,
@@ -34,6 +36,10 @@ import type {
   EditorRerunResult,
   EditorSilenceSplitOptions,
   EditorSilenceSplitResult,
+  EditorTrackMutationResult,
+  EditorSeparationResult,
+  EditorLyricSplitOptions,
+  EditorLyricSplitResult,
   DataMigrationResult,
   DataStorageStatus,
 } from './types'
@@ -101,6 +107,9 @@ export const api = {
 
   pickAudioFiles: () =>
     invoke<string[]>('pick_audio_files', [], () => mock.pickAudioFiles()),
+
+  pickLyricsFile: () =>
+    invoke<LyricsFileResult>('pick_lyrics_file', [], () => mock.pickLyricsFile()),
 
   listWorks: () => invoke<WorkDTO[]>('list_works', [], () => mock.listWorks()),
 
@@ -278,6 +287,28 @@ export const api = {
       mock.createEditorProjectFromWork(workId),
     ),
 
+  addEditorTrack: (projectId: string, name?: string, kind = 'audio') =>
+    invoke<EditorTrackMutationResult>('add_editor_track', [projectId, name, kind], () =>
+      mock.addEditorTrack(projectId, name, kind),
+    ),
+
+  deleteEditorTrack: (projectId: string, trackId: string) =>
+    invoke<EditorTrackMutationResult>('delete_editor_track', [projectId, trackId], () =>
+      mock.deleteEditorTrack(projectId, trackId),
+    ),
+
+  importAudioToEditorTrack: (
+    projectId: string,
+    path: string,
+    trackId?: string | null,
+    start = 0,
+  ) =>
+    invoke<EditorTrackMutationResult>(
+      'import_audio_to_editor_track',
+      [projectId, path, trackId, start],
+      () => mock.importAudioToEditorTrack(projectId, path, trackId, start),
+    ),
+
   saveEditorProject: (project: EditorProject) =>
     invoke<EditorProject | null>('save_editor_project', [project], () =>
       mock.saveEditorProject(project),
@@ -333,12 +364,37 @@ export const api = {
       () => mock.splitEditorClipBySilence(projectId, trackId, clipId, options),
     ),
 
+  separateEditorClipVocals: (
+    projectId: string,
+    trackId: string,
+    clipId: string,
+    options?: Record<string, unknown>,
+  ) =>
+    invoke<EditorSeparationResult>(
+      'separate_editor_clip_vocals',
+      [projectId, trackId, clipId, options],
+      () => mock.separateEditorClipVocals(projectId, trackId, clipId, options),
+    ),
+
+  splitEditorClipByLyrics: (
+    projectId: string,
+    trackId: string,
+    clipId: string,
+    lyrics: string | { time: number; text: string }[],
+    options?: EditorLyricSplitOptions,
+  ) =>
+    invoke<EditorLyricSplitResult>(
+      'split_editor_clip_by_lyrics',
+      [projectId, trackId, clipId, lyrics, options],
+      () => mock.splitEditorClipByLyrics(projectId, trackId, clipId, lyrics, options),
+    ),
+
   rerunEditorClip: (
     projectId: string,
     trackId: string,
     clipId: string,
     modelId: string,
-    params?: Record<string, unknown>,
+    params?: InferenceParams,
   ) =>
     invoke<EditorRerunResult>('rerun_editor_clip', [projectId, trackId, clipId, modelId, params], () =>
       mock.rerunEditorClip(projectId, trackId, clipId, modelId, params),

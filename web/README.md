@@ -1,48 +1,27 @@
-# web
+# XB-SVCB 前端
 
-This template should help get you started developing with Vue 3 in Vite.
+版本：`0.0.14`
 
-## Recommended IDE Setup
+这里是 XB-SVCB 桌面应用的 Vue 3 + Vite 前端。生产构建产物会由 `installer/xb-svcb-app.spec` 打进 `XB-SVCB.exe`。
 
-[VS Code](https://code.visualstudio.com/) + [Vue (Official)](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur).
-
-## Recommended Browser Setup
-
-- Chromium-based browsers (Chrome, Edge, Brave, etc.):
-  - [Vue.js devtools](https://chromewebstore.google.com/detail/vuejs-devtools/nhdogjmejiglipccpnnnanhbledajbpd)
-  - [Turn on Custom Object Formatter in Chrome DevTools](http://bit.ly/object-formatters)
-- Firefox:
-  - [Vue.js devtools](https://addons.mozilla.org/en-US/firefox/addon/vue-js-devtools/)
-  - [Turn on Custom Object Formatter in Firefox DevTools](https://fxdx.dev/firefox-devtools-custom-object-formatters/)
-
-## Type Support for `.vue` Imports in TS
-
-TypeScript cannot handle type information for `.vue` imports by default, so we replace the `tsc` CLI with `vue-tsc` for type checking. In editors, we need [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) to make the TypeScript language service aware of `.vue` types.
-
-## Customize configuration
-
-See [Vite Configuration Reference](https://vite.dev/config/).
-
-## Project Setup
+## 开发
 
 ```sh
 npm install
-```
-
-### Compile and Hot-Reload for Development
-
-```sh
 npm run dev
 ```
 
-### Type-Check, Compile and Minify for Production
+## 构建
 
 ```sh
 npm run build
 ```
 
-### Run Unit Tests with [Vitest](https://vitest.dev/)
+构建输出目录是 `web/dist`，随后由桌面本体打包流程内置进应用。
 
-```sh
-npm run test:unit
-```
+## v0.0.14 重点
+
+- 音频编辑器支持添加/删除音轨，并在导入音频时选择目标音轨。
+- 编辑器接入可选人声分离与按歌词切分人声音频。
+- 局部重新推理支持对选中片段微调推理参数。
+- 多模型/多框架时间轴颜色更容易区分。

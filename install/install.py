@@ -42,6 +42,10 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+
 # 所有产物（引擎/虚拟环境/模型）都落在 ROOT 下。默认取本脚本上级目录；
 # 安装器会用 --root 显式指定为用户选择的安装目录，确保依赖装进该目录。
 ROOT = Path(__file__).resolve().parent.parent
@@ -169,9 +173,12 @@ REQ_DENYLIST = {
 
 # ---- 终端着色（Windows 终端默认支持 ANSI）----
 _C = {"g": "\033[32m", "y": "\033[33m", "r": "\033[31m", "b": "\033[36m", "0": "\033[0m"}
+_COLOR_ENABLED = os.environ.get("XB_FROM_INSTALLER") != "1" and os.environ.get("NO_COLOR") is None
 
 
 def c(tag: str, text: str) -> str:
+    if not _COLOR_ENABLED:
+        return text
     return f"{_C.get(tag, '')}{text}{_C['0']}"
 
 
@@ -203,53 +210,60 @@ def have(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
 
-def detect_gpu() -> bool:
-    """通过 nvidia-smi 粗略判断是否有 NVIDIA 显卡。"""
+def detect_gpu_stack() -> str:
+    """返回 cpu、cu121 或 cu128，保证 torch/CUDA 栈和实际兼容显卡一致。"""
     if not have("nvidia-smi"):
-        return False
+        return "cpu"
     try:
-        subprocess.run(
-            ["nvidia-smi"], capture_output=True, check=True, timeout=15
-        )
-        return True
+        subprocess.run(["nvidia-smi"], capture_output=True, check=True, timeout=15)
     except (OSError, subprocess.SubprocessError):
-        return False
+        return "cpu"
 
-
-def detect_blackwell() -> bool:
-    """判断是否为 50 系（Blackwell, 算力 sm_120 / compute_cap>=12.0）。
-
-    优先用 nvidia-smi 的 compute_cap 字段（新驱动支持，50 系必装新驱动）；
-    该字段不可用时回退按 GPU 名称匹配 RTX 50xx。任一显卡命中即返回 True。
-    """
-    if not have("nvidia-smi"):
-        return False
-    # 1) 直接查算力
     try:
         out = subprocess.run(
             ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
+        caps: list[float] = []
         for line in out.stdout.splitlines():
-            s = line.strip()
             try:
-                if s and float(s) >= 12.0:
-                    return True
+                caps.append(float(line.strip()))
             except ValueError:
                 continue
+        if any(cap >= 12.0 for cap in caps):
+            return "cu128"
+        if any(cap >= 5.0 for cap in caps):
+            return "cu121"
+        if caps:
+            return "cpu"
     except (OSError, subprocess.SubprocessError):
         pass
-    # 2) 回退：按名称匹配 RTX 50 系（5050/5060/5070/5080/5090，含 Ti/Super/Laptop）
+
     try:
         out = subprocess.run(
             ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
-        if re.search(r"RTX\s*50\d0", out.stdout, flags=re.IGNORECASE):
-            return True
+        names = out.stdout.strip()
+        if re.search(r"RTX\s*50\d0", names, flags=re.IGNORECASE):
+            return "cu128"
+        if names:
+            return "cu121"
     except (OSError, subprocess.SubprocessError):
         pass
-    return False
+    return "cpu"
+
+
+def detect_gpu() -> bool:
+    return detect_gpu_stack() != "cpu"
+
+
+def detect_blackwell() -> bool:
+    return detect_gpu_stack() == "cu128"
 
 
 def ensure_uv() -> str:
@@ -878,6 +892,14 @@ STEPS = {
 ORDER = ["app", "web", "uvr", "svc", "rvc", "hub", "models"]
 
 
+def installer_progress(percent: int, message: str) -> None:
+    """Emit progress markers consumed by the Inno installer."""
+    if os.environ.get("XB_FROM_INSTALLER") != "1":
+        return
+    percent = max(0, min(100, int(percent)))
+    print(f"[XB-PROGRESS] {percent} {message}", flush=True)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="XB-SVCB 一键安装器")
     p.add_argument(
@@ -885,18 +907,18 @@ def main() -> int:
         default=None,
         help="安装根目录（引擎/虚拟环境/模型都装到此处）；默认取脚本上级目录",
     )
-    p.add_argument("--cpu", action="store_true", help="强制安装 CPU 版")
-    p.add_argument("--gpu", action="store_true", help="强制安装 CUDA 版")
+    p.add_argument("--cpu", action="store_true", help="安装 CPU 版")
+    p.add_argument("--gpu", action="store_true", help="请求安装 CUDA 版；会复核兼容 NVIDIA 显卡")
     p.add_argument(
         "--cu128",
         action="store_true",
-        help="强制按 50 系（Blackwell, cu128 + torch2.7）安装；默认自动探测",
+        help="请求按 50 系（Blackwell, cu128 + torch2.7）安装；会复核实际显卡",
     )
     p.add_argument(
         "--no-cu128",
         dest="no_cu128",
         action="store_true",
-        help="禁用 50 系自动适配，强制走 cu121/cu118 老栈",
+        help="请求使用 cu121/cu118 老栈；50 系会被复核并改回 cu128",
     )
     p.add_argument(
         "--only",
@@ -908,6 +930,7 @@ def main() -> int:
         p.add_argument(f"--skip-{s}", action="store_true", help=f"跳过 {s} 步骤")
     args = p.parse_args()
 
+    installer_progress(2, "Resolving runtime root")
     if args.root:
         _derive_paths(Path(args.root).expanduser().resolve())
 
@@ -920,11 +943,16 @@ def main() -> int:
     if args.cu128 and args.no_cu128:
         print(c("r", "--cu128 与 --no-cu128 不能同时使用"))
         return 2
-    use_gpu = True if args.gpu else False if args.cpu else detect_gpu()
-    # Blackwell（50 系）：仅在用 GPU 时才有意义；可用 --cu128/--no-cu128 覆盖自动探测
-    use_blackwell = use_gpu and (
-        args.cu128 or (not args.no_cu128 and detect_blackwell())
-    )
+    detected_stack = "cpu" if args.cpu else detect_gpu_stack()
+    if args.gpu and detected_stack == "cpu":
+        print(c("y", "未检测到兼容 NVIDIA 显卡，已改用 CPU 版 torch。"))
+    if args.cu128 and detected_stack == "cu121":
+        print(c("y", "当前显卡不是 50 系，忽略 cu128 请求，改用 cu121/cu118 栈。"))
+    if args.no_cu128 and detected_stack == "cu128":
+        print(c("y", "检测到 50 系/Blackwell，忽略老 CUDA 栈请求，改用 cu128。"))
+    use_gpu = detected_stack != "cpu"
+    use_blackwell = detected_stack == "cu128"
+    installer_progress(8, "Checking GPU and CUDA mode")
     if use_blackwell:
         mode = c("g", "CUDA · Blackwell/50系 (cu128 + torch" + TORCH_BLACKWELL_VER + ")")
     elif use_gpu:
@@ -935,24 +963,31 @@ def main() -> int:
     if use_gpu and not args.gpu:
         print("（检测到 NVIDIA 显卡，自动选择 CUDA；如需 CPU 请加 --cpu）")
     if use_blackwell and not args.cu128:
-        print("（检测到 50 系/Blackwell，自动切换 cu128 栈；如需老栈请加 --no-cu128）")
+        print("（检测到 50 系/Blackwell，自动切换 cu128 栈）")
 
+    installer_progress(12, "Preparing uv package manager")
     uv = ensure_uv()
     print(f"uv: {uv}")
+    installer_progress(18, "uv package manager is ready")
 
     selected = args.only if args.only else [s for s in ORDER if not getattr(args, f"skip_{s}")]
+    selected_count = max(1, len(selected))
+    completed_count = 0
 
     results: list[tuple[str, str]] = []
     for s in ORDER:
         if s not in selected:
             results.append((s, "skip"))
             continue
+        installer_progress(18 + (completed_count * 76) // selected_count, f"Running runtime step: {s}")
         try:
             STEPS[s](uv, use_gpu, use_blackwell)
             results.append((s, "ok"))
         except Exception as exc:  # noqa: BLE001 - 单步失败不阻断其余步骤
             print(c("r", f"[{s}] 失败: {exc}"))
             results.append((s, "fail"))
+        completed_count += 1
+        installer_progress(18 + (completed_count * 76) // selected_count, f"Finished runtime step: {s}")
 
     hr("安装结果汇总")
     label = {"ok": c("g", "成功"), "fail": c("r", "失败"), "skip": c("y", "跳过")}
@@ -962,9 +997,11 @@ def main() -> int:
     if any(st == "fail" for _, st in results):
         print(c("y", "\n有步骤失败。可单独重试，例如: python install/install.py --only svc"))
         print(c("y", "失败项的手动补救方式见 install/README 或项目根 README。"))
+        installer_progress(100, "Runtime environment finished with errors")
         return 1
 
-    hr("全部完成 ✅")
+    installer_progress(100, "Runtime environment complete")
+    hr("全部完成")
     app_exe = ROOT / "XB-SVCB.exe"
     if app_exe.exists():
         # 安装版：应用本体为打包好的 exe

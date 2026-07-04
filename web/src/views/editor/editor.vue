@@ -8,6 +8,26 @@
       @timeupdate="onAudioTimeUpdate"
     />
 
+    <el-dialog v-model="importTrackDialogOpen" title="选择导入音轨" width="420px" class="import-track-dialog">
+      <div class="import-track-options">
+        <el-radio-group v-model="importTargetTrackId">
+          <el-radio
+            v-for="track in project?.tracks || []"
+            :key="track.id"
+            :value="track.id"
+            :disabled="track.locked"
+          >
+            {{ track.name }}
+          </el-radio>
+          <el-radio value="__new__">新建音轨</el-radio>
+        </el-radio-group>
+      </div>
+      <template #footer>
+        <el-button round class="ghost-btn" @click="importTrackDialogOpen = false">取消</el-button>
+        <el-button round class="cta-btn" @click="confirmImportTrack">选择音频</el-button>
+      </template>
+    </el-dialog>
+
     <div class="editor-head">
       <div>
         <p class="eyebrow">// Audio Editor Lite</p>
@@ -16,6 +36,12 @@
       <div class="head-actions">
         <el-button round class="ghost-btn" @click="importAudio">
           <el-icon class="el-icon--left"><FolderAdd /></el-icon>导入音频
+        </el-button>
+        <el-button :disabled="!project" round class="ghost-btn" @click="addEmptyTrack">
+          <el-icon class="el-icon--left"><FolderAdd /></el-icon>新音轨
+        </el-button>
+        <el-button :disabled="!project" round class="ghost-btn" @click="importAudioToSelectedTrack">
+          <el-icon class="el-icon--left"><FolderAdd /></el-icon>导入到音轨
         </el-button>
         <el-button :disabled="!project" round class="ghost-btn" @click="undo">
           <el-icon class="el-icon--left"><RefreshLeft /></el-icon>撤销
@@ -104,6 +130,31 @@
               <el-icon><Lock /></el-icon>
             </button>
           </div>
+          <div class="inspector-tabs">
+            <button
+              type="button"
+              :class="{ active: activeInspectorPanel === 'clip' }"
+              @click="activeInspectorPanel = 'clip'"
+            >
+              片段
+            </button>
+            <button
+              type="button"
+              :class="{ active: activeInspectorPanel === 'vocal' }"
+              @click="activeInspectorPanel = 'vocal'"
+            >
+              人声
+            </button>
+            <button
+              type="button"
+              :class="{ active: activeInspectorPanel === 'rerun' }"
+              @click="activeInspectorPanel = 'rerun'"
+            >
+              重推理
+            </button>
+          </div>
+
+          <div v-if="activeInspectorPanel === 'clip'" class="clip-panel">
           <div class="field-grid">
             <label>开始</label>
             <input type="number" step="0.01" :value="round(selectedClip.start)" :disabled="!selectedClipEditable" @change="setClipNumber('start', $event)" />
@@ -156,13 +207,173 @@
               <el-icon><Delete /></el-icon>
             </button>
           </div>
+          </div>
 
-          <div class="rerun-box">
+          <div v-if="activeInspectorPanel === 'vocal'" class="stem-box">
+            <label>人声编辑</label>
+            <el-button
+              :disabled="!selectedClipEditable || separating"
+              :loading="separating"
+              round
+              class="ghost-btn mini"
+              @click="separateSelectedClip"
+            >
+              <el-icon class="el-icon--left"><MagicStick /></el-icon>分离人声
+            </el-button>
+            <div class="lyric-source-tabs">
+              <button
+                type="button"
+                :class="{ active: lyricSourceMode === 'manual' }"
+                @click="setLyricSourceMode('manual')"
+              >
+                粘贴
+              </button>
+              <button
+                type="button"
+                :class="{ active: lyricSourceMode === 'api' }"
+                @click="setLyricSourceMode('api')"
+              >
+                API
+              </button>
+              <button
+                type="button"
+                :class="{ active: lyricSourceMode === 'file' }"
+                @click="setLyricSourceMode('file')"
+              >
+                文件
+              </button>
+            </div>
+            <div v-if="lyricSourceMode === 'api'" class="lyric-api-panel">
+              <input v-model="lyricApiKeyword" placeholder="歌曲名 / 歌手" />
+              <div class="lyric-api-row">
+                <input v-model.number="lyricApiIndex" type="number" min="1" step="1" />
+                <select v-model="lyricApiSource">
+                  <option value="">默认源</option>
+                  <option v-for="source in lyricSources" :key="source.id" :value="source.id">
+                    {{ source.name }}
+                  </option>
+                </select>
+              </div>
+              <el-button
+                :disabled="lyricFetching || !lyricApiKeyword.trim()"
+                :loading="lyricFetching"
+                round
+                class="ghost-btn mini"
+                @click="fetchLyricsFromApi"
+              >
+                获取歌词
+              </el-button>
+            </div>
+            <div v-if="lyricSourceMode === 'file'" class="lyric-file-panel">
+              <el-button
+                :disabled="lyricImporting"
+                :loading="lyricImporting"
+                round
+                class="ghost-btn mini"
+                @click="importLyricsFile"
+              >
+                导入歌词文件
+              </el-button>
+              <span v-if="lyricFileName" class="lyric-file-name">{{ lyricFileName }}</span>
+            </div>
+            <textarea v-model="lyricSplitText" class="lyric-input" rows="5" placeholder="[00:12.30] 歌词"></textarea>
+            <div class="lyric-controls">
+              <select v-model="lyricTimeMode">
+                <option value="project">工程时间</option>
+                <option value="clip">片段时间</option>
+              </select>
+              <el-button
+                :disabled="!selectedClipEditable || lyricSplitting || !lyricSplitText.trim()"
+                :loading="lyricSplitting"
+                round
+                class="ghost-btn mini"
+                @click="splitSelectedClipByLyrics"
+              >
+                <el-icon class="el-icon--left"><Scissor /></el-icon>歌词切分
+              </el-button>
+            </div>
+          </div>
+
+          <div v-if="activeInspectorPanel === 'rerun'" class="rerun-box">
             <label>局部重推理</label>
             <select v-model="rerunModelId">
               <option value="">选择模型</option>
-              <option v-for="m in models" :key="m.id" :value="m.id">{{ m.name }}</option>
+              <option v-for="m in models" :key="m.id" :value="m.id">
+                {{ m.name }} · {{ modelFrameworkLabel(m.framework) }}
+              </option>
             </select>
+            <div v-if="rerunModelId" class="rerun-param-head">
+              <span>{{ rerunFrameworkText }}</span>
+              <button type="button" title="恢复默认参数" @click="resetRerunParams">
+                <el-icon><RefreshLeft /></el-icon>
+              </button>
+            </div>
+            <div v-if="rerunModelId" class="rerun-params">
+              <div class="rerun-param">
+                <div class="rerun-param-label">
+                  <span>变调</span>
+                  <b>{{ signedRerunPitch }}</b>
+                </div>
+                <input v-model.number="rerunPitch" type="range" min="-12" max="12" step="1" />
+              </div>
+              <div v-if="!isRvcRerunModel" class="rerun-param">
+                <div class="rerun-param-label">
+                  <span>扩散占比</span>
+                  <b>{{ Math.round(rerunDiffusionRatio * 100) }}%</b>
+                </div>
+                <input v-model.number="rerunDiffusionRatio" type="range" min="0" max="1" step="0.05" />
+              </div>
+              <template v-else>
+                <div class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>检索比率</span>
+                    <b>{{ rerunIndexRate.toFixed(2) }}</b>
+                  </div>
+                  <input v-model.number="rerunIndexRate" type="range" min="0" max="1" step="0.05" />
+                </div>
+                <div class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>响度融合</span>
+                    <b>{{ rerunRmsMix.toFixed(2) }}</b>
+                  </div>
+                  <input v-model.number="rerunRmsMix" type="range" min="0" max="1" step="0.05" />
+                </div>
+                <div class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>清辅音保护</span>
+                    <b>{{ rerunProtect.toFixed(2) }}</b>
+                  </div>
+                  <input v-model.number="rerunProtect" type="range" min="0" max="0.5" step="0.01" />
+                </div>
+                <div class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>滤波半径</span>
+                    <b>{{ rerunFilterRadius }}</b>
+                  </div>
+                  <input v-model.number="rerunFilterRadius" type="range" min="0" max="7" step="1" />
+                </div>
+              </template>
+              <div class="rerun-mini-grid">
+                <div class="rerun-mini">
+                  <span>F0</span>
+                  <select v-model="rerunF0Method">
+                    <option v-for="f in f0Methods" :key="f" :value="f">{{ f }}</option>
+                  </select>
+                </div>
+                <div class="rerun-mini">
+                  <span>设备</span>
+                  <select v-model="rerunDevice">
+                    <option v-for="d in deviceOptions" :key="d.value" :value="d.value">{{ d.label }}</option>
+                  </select>
+                </div>
+                <div v-if="isRvcRerunModel" class="rerun-mini">
+                  <span>版本</span>
+                  <select v-model="rerunRvcVersion">
+                    <option v-for="v in rvcVersions" :key="v" :value="v">{{ v }}</option>
+                  </select>
+                </div>
+              </div>
+            </div>
             <span v-if="rerunGuardText" class="rerun-hint">{{ rerunGuardText }}</span>
             <el-button
               :disabled="!rerunModelId || rerunning || !canRerunSelectedClip"
@@ -236,6 +447,12 @@
                 </button>
                 <button :title="track.mute ? '取消静音' : '静音轨道'" :class="{ active: track.mute }" @click="toggleTrackMute(track)">
                   <el-icon><Mute /></el-icon>
+                </button>
+                <button title="导入音频" :disabled="track.locked" @click="importAudioToTrack(track.id)">
+                  <el-icon><FolderAdd /></el-icon>
+                </button>
+                <button title="删除音轨" class="danger" :disabled="track.locked" @click="deleteTrack(track)">
+                  <el-icon><Delete /></el-icon>
                 </button>
                 <el-tooltip :content="track.name" placement="right" :show-after="250">
                   <span class="track-name" :title="track.name">{{ track.name }}</span>
@@ -315,12 +532,14 @@ import {
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
 import { useModelsStore } from '@/stores/models'
-import type { EditorClip, EditorClipChannel, EditorProject, EditorTrack } from '@/api'
+import type { EditorClip, EditorClipChannel, EditorProject, EditorTrack, InferenceParams } from '@/api'
 
 defineOptions({ name: 'AudioEditorPage' })
 
 type DragMode = 'move' | 'start' | 'end'
 type PlaybackMode = 'none' | 'mix' | 'clip'
+type LyricSourceMode = 'manual' | 'api' | 'file'
+type InspectorPanel = 'clip' | 'vocal' | 'rerun'
 interface Selection { trackId: string; clipId: string }
 interface DragState {
   mode: DragMode
@@ -330,6 +549,17 @@ interface DragState {
   clipId: string
   original: EditorClip
   originalTrackIndex: number
+}
+interface RerunPrefs {
+  pitch?: number
+  f0Method?: string
+  indexRate?: number
+  rmsMix?: number
+  diffusionRatio?: number
+  device?: string
+  protect?: number
+  filterRadius?: number
+  rvcVersion?: string
 }
 
 const router = useRouter()
@@ -351,8 +581,23 @@ const playing = ref(false)
 const previewing = ref(false)
 const rerunning = ref(false)
 const silenceSplitting = ref(false)
+const separating = ref(false)
+const lyricSplitting = ref(false)
+const lyricSplitText = ref('')
+const lyricTimeMode = ref<'project' | 'clip'>('project')
+const lyricSourceMode = ref<LyricSourceMode>('manual')
+const lyricApiKeyword = ref('')
+const lyricApiIndex = ref(1)
+const lyricApiSource = ref('')
+const lyricSources = ref<{ id: string; name: string }[]>([])
+const lyricFetching = ref(false)
+const lyricImporting = ref(false)
+const lyricFileName = ref('')
+const importTrackDialogOpen = ref(false)
+const importTargetTrackId = ref('')
 const playbackMode = ref<PlaybackMode>('none')
 const timelineSeeking = ref(false)
+const activeInspectorPanel = ref<InspectorPanel>('clip')
 const rerunModelId = ref('')
 const renderedPath = ref('')
 const audioEl = ref<HTMLAudioElement | null>(null)
@@ -369,11 +614,46 @@ const waveformLoading = new Set<string>()
 const fallbackPeaks = Array.from({ length: 56 }, (_, i) => 0.18 + Math.abs(Math.sin(i * 0.33)) * 0.5)
 const MIN_RERUN_CLIP_SECONDS = 1
 const PLAY_TOGGLE_DEBOUNCE_MS = 350
+const RERUN_PREFS_KEY = 'xb-editor-rerun-params'
+const f0Methods = ['rmvpe', 'crepe', 'harvest', 'pm']
+const deviceOptions = [
+  { value: 'auto', label: '自动' },
+  { value: 'cuda', label: 'GPU' },
+  { value: 'cpu', label: 'CPU' },
+]
+const rvcVersions = ['v2', 'v1']
 const channelOptions: { value: EditorClipChannel; label: string; title: string }[] = [
   { value: 'stereo', label: '双', title: '双声道' },
   { value: 'left', label: 'L', title: '左声道' },
   { value: 'right', label: 'R', title: '右声道' },
 ]
+
+function loadRerunPrefs(): RerunPrefs {
+  try {
+    const raw = localStorage.getItem(RERUN_PREFS_KEY)
+    return raw ? JSON.parse(raw) as RerunPrefs : {}
+  } catch {
+    return {}
+  }
+}
+function prefNum(value: unknown, fallback: number, min: number, max: number) {
+  const n = typeof value === 'number' && Number.isFinite(value) ? value : fallback
+  return Math.max(min, Math.min(max, n))
+}
+function prefStr(value: unknown, fallback: string, allowed?: string[]) {
+  const next = typeof value === 'string' && value ? value : fallback
+  return allowed && !allowed.includes(next) ? fallback : next
+}
+const rerunPrefs = loadRerunPrefs()
+const rerunPitch = ref(prefNum(rerunPrefs.pitch, 0, -12, 12))
+const rerunF0Method = ref(prefStr(rerunPrefs.f0Method, 'rmvpe', f0Methods))
+const rerunIndexRate = ref(prefNum(rerunPrefs.indexRate, 0.75, 0, 1))
+const rerunRmsMix = ref(prefNum(rerunPrefs.rmsMix, 0.25, 0, 1))
+const rerunDiffusionRatio = ref(prefNum(rerunPrefs.diffusionRatio, 0.5, 0, 1))
+const rerunDevice = ref(prefStr(rerunPrefs.device, 'auto', deviceOptions.map((d) => d.value)))
+const rerunProtect = ref(prefNum(rerunPrefs.protect, 0.33, 0, 0.5))
+const rerunFilterRadius = ref(prefNum(rerunPrefs.filterRadius, 3, 0, 7))
+const rerunRvcVersion = ref(prefStr(rerunPrefs.rvcVersion, 'v2', rvcVersions))
 
 const selectedTrack = computed(() => {
   if (!project.value || !selected.value) return null
@@ -399,6 +679,11 @@ const selectedClipEditable = computed(() => {
 const canRerunSelectedClip = computed(() => {
   return selectedClipEditable.value && selectedClipDuration.value >= MIN_RERUN_CLIP_SECONDS
 })
+const selectedRerunModel = computed(() => models.value.find((m) => m.id === rerunModelId.value) || null)
+const selectedRerunFramework = computed(() => selectedRerunModel.value?.framework || 'so-vits-svc')
+const isRvcRerunModel = computed(() => selectedRerunFramework.value === 'rvc')
+const rerunFrameworkText = computed(() => modelFrameworkLabel(selectedRerunFramework.value))
+const signedRerunPitch = computed(() => rerunPitch.value > 0 ? `+${rerunPitch.value}` : String(rerunPitch.value))
 const canSplitBySilence = computed(() => {
   return selectedClipEditable.value && selectedClipDuration.value >= silenceMinClipSeconds.value * 2
 })
@@ -420,6 +705,42 @@ const ticks = computed(() => {
   for (let t = 0; t <= total + tickStep.value; t += tickStep.value) arr.push(t)
   return arr
 })
+
+function modelFrameworkLabel(framework: string | undefined) {
+  const map: Record<string, string> = {
+    'so-vits-svc': 'So-VITS-SVC',
+    rvc: 'RVC',
+    'ddsp-svc': 'DDSP-SVC',
+    other: '其他',
+  }
+  return map[framework || 'so-vits-svc'] || framework || 'So-VITS-SVC'
+}
+
+function currentRerunParams(): InferenceParams {
+  return {
+    pitch: Math.round(rerunPitch.value),
+    f0_method: rerunF0Method.value,
+    index_rate: Number(rerunIndexRate.value.toFixed(3)),
+    rms_mix: Number(rerunRmsMix.value.toFixed(3)),
+    diffusion_ratio: Number(rerunDiffusionRatio.value.toFixed(3)),
+    device: rerunDevice.value,
+    protect: Number(rerunProtect.value.toFixed(3)),
+    filter_radius: Math.round(rerunFilterRadius.value),
+    rvc_version: rerunRvcVersion.value,
+  }
+}
+
+function resetRerunParams() {
+  rerunPitch.value = 0
+  rerunF0Method.value = 'rmvpe'
+  rerunIndexRate.value = 0.75
+  rerunRmsMix.value = 0.25
+  rerunDiffusionRatio.value = 0.5
+  rerunDevice.value = 'auto'
+  rerunProtect.value = 0.33
+  rerunFilterRadius.value = 3
+  rerunRvcVersion.value = 'v2'
+}
 
 function snapshot(): EditorProject | null {
   return project.value ? JSON.parse(JSON.stringify(project.value)) as EditorProject : null
@@ -475,6 +796,75 @@ async function importAudio() {
   history.value = []
   future.value = []
   applyProject(created)
+}
+
+async function addEmptyTrack() {
+  if (!project.value) return
+  stopPlayback()
+  const res = await api.addEditorTrack(project.value.id)
+  if (!res.ok || !res.project) {
+    ElMessage.error(res.error || '添加音轨失败')
+    return
+  }
+  history.value = []
+  future.value = []
+  applyProject(res.project)
+  ElMessage.success('已添加音轨')
+}
+
+async function importAudioToSelectedTrack() {
+  if (!project.value) return
+  const preferred = selectedTrack.value && !selectedTrack.value.locked
+    ? selectedTrack.value.id
+    : project.value.tracks.find((track) => !track.locked)?.id
+  importTargetTrackId.value = preferred || '__new__'
+  importTrackDialogOpen.value = true
+}
+
+async function confirmImportTrack() {
+  const target = importTargetTrackId.value === '__new__' ? null : importTargetTrackId.value
+  importTrackDialogOpen.value = false
+  await importAudioToTrack(target)
+}
+
+async function importAudioToTrack(trackId?: string | null) {
+  if (!project.value) return
+  const picked = await api.pickAudioFiles()
+  const paths = picked.length ? picked : []
+  if (!paths.length) return
+  stopPlayback()
+  let targetTrackId = trackId || null
+  let cursor = playhead.value
+  let latestProject = project.value
+  let latestTrackId = ''
+  let latestClipId = ''
+  for (const path of paths) {
+    const res = await api.importAudioToEditorTrack(
+      latestProject.id,
+      path,
+      targetTrackId,
+      cursor,
+    )
+    if (!res.ok || !res.project) {
+      ElMessage.error(res.error || '导入到音轨失败')
+      return
+    }
+    latestProject = res.project
+    if (res.track) {
+      targetTrackId = res.track.id
+      latestTrackId = res.track.id
+    }
+    if (res.clip) {
+      latestClipId = res.clip.id
+      cursor = res.clip.end
+    }
+  }
+  history.value = []
+  future.value = []
+  renderedPath.value = ''
+  applyProject(latestProject)
+  if (latestTrackId && latestClipId) selected.value = { trackId: latestTrackId, clipId: latestClipId }
+  ElMessage.success(paths.length > 1 ? `已导入 ${paths.length} 个音频资源` : '已导入到音轨')
 }
 
 async function saveProject() {
@@ -710,6 +1100,34 @@ function toggleTrackLock(track: EditorTrack) {
   track.locked = !track.locked
   saveProject()
 }
+async function deleteTrack(track: EditorTrack) {
+  if (!project.value || track.locked) return
+  try {
+    await ElMessageBox.confirm(
+      `删除音轨「${track.name}」会从当前工程移除该轨道上的所有片段，但不会删除原始音频文件。`,
+      '删除音轨',
+      {
+        confirmButtonText: '删除音轨',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+  stopPlayback()
+  const res = await api.deleteEditorTrack(project.value.id, track.id)
+  if (!res.ok || !res.project) {
+    ElMessage.error(res.error || '删除音轨失败')
+    return
+  }
+  history.value = []
+  future.value = []
+  renderedPath.value = ''
+  if (selected.value?.trackId === track.id) selected.value = null
+  applyProject(res.project)
+  ElMessage.success('已删除音轨')
+}
 function toggleClipMute() {
   if (!selectedClip.value) return
   if (!selectedClipEditable.value) return
@@ -886,6 +1304,161 @@ async function splitSelectedClipBySilence() {
   }
 }
 
+async function separateSelectedClip() {
+  if (!project.value || !selected.value || !selectedClip.value) {
+    ElMessage.info('选择一个可编辑片段')
+    return
+  }
+  if (!selectedClipEditable.value) {
+    ElMessage.info('片段或音轨已锁定')
+    return
+  }
+  const current = { ...selected.value }
+  stopPlayback()
+  separating.value = true
+  try {
+    await saveProject()
+    const res = await api.separateEditorClipVocals(
+      project.value.id,
+      current.trackId,
+      current.clipId,
+      { mute_source: true },
+    )
+    if (!res.ok || !res.project) {
+      ElMessage.error(res.error || '人声分离失败')
+      return
+    }
+    history.value = []
+    future.value = []
+    renderedPath.value = ''
+    applyProject(res.project)
+    const first = res.tracks?.[0]?.clips?.[0]
+    if (res.tracks?.[0] && first) selected.value = { trackId: res.tracks[0].id, clipId: first.id }
+    ElMessage.success(res.simulated ? '已创建人声轨（UVR 降级模式）' : '人声与伴奏已加入时间线')
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '人声分离失败')
+  } finally {
+    separating.value = false
+  }
+}
+
+function setLyricSourceMode(mode: LyricSourceMode) {
+  lyricSourceMode.value = mode
+  if (mode === 'api') void ensureLyricSources()
+}
+
+async function ensureLyricSources() {
+  if (lyricSources.value.length) return
+  try {
+    lyricSources.value = (await api.listMusicSources()).map((source) => ({
+      id: source.id,
+      name: source.name,
+    }))
+    if (!lyricApiSource.value) lyricApiSource.value = await api.getMusicSource()
+  } catch {
+    lyricSources.value = []
+  }
+}
+
+function formatLyricStamp(seconds: number) {
+  const total = Math.max(0, Math.round(Number(seconds || 0) * 100))
+  const minutes = Math.floor(total / 6000)
+  const sec = Math.floor(total / 100) % 60
+  const cent = total % 100
+  return `[${String(minutes).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cent).padStart(2, '0')}]`
+}
+
+function lyricLinesToText(lines: { time: number; text: string }[]) {
+  return lines
+    .filter((line) => Number.isFinite(Number(line.time)))
+    .map((line) => `${formatLyricStamp(Number(line.time))}${line.text || ''}`)
+    .join('\n')
+}
+
+async function fetchLyricsFromApi() {
+  const keyword = lyricApiKeyword.value.trim()
+  if (!keyword) {
+    ElMessage.info('输入歌曲名或歌手')
+    return
+  }
+  lyricFetching.value = true
+  try {
+    await ensureLyricSources()
+    const index = Math.max(1, Math.round(Number(lyricApiIndex.value || 1)))
+    const res = await api.getMusicLyrics(keyword, index, lyricApiSource.value || undefined)
+    if (!res.ok || !res.lines?.length) {
+      ElMessage.error(res.error || '没有获取到带时间戳的歌词')
+      return
+    }
+    lyricSplitText.value = lyricLinesToText(res.lines)
+    lyricFileName.value = res.name ? `${res.name}${res.singer ? ` - ${res.singer}` : ''}` : ''
+    ElMessage.success(`已获取 ${res.lines.length} 行歌词`)
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '获取歌词失败')
+  } finally {
+    lyricFetching.value = false
+  }
+}
+
+async function importLyricsFile() {
+  lyricImporting.value = true
+  try {
+    const res = await api.pickLyricsFile()
+    if (res.cancelled) return
+    if (!res.ok || !res.text) {
+      ElMessage.error(res.error || '导入歌词文件失败')
+      return
+    }
+    lyricSplitText.value = res.text
+    lyricFileName.value = res.name || ''
+    ElMessage.success('已导入歌词文件')
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '导入歌词文件失败')
+  } finally {
+    lyricImporting.value = false
+  }
+}
+
+async function splitSelectedClipByLyrics() {
+  if (!project.value || !selected.value || !selectedClip.value) {
+    ElMessage.info('选择一个可编辑片段')
+    return
+  }
+  const text = lyricSplitText.value.trim()
+  if (!text) return
+  if (!selectedClipEditable.value) {
+    ElMessage.info('片段或音轨已锁定')
+    return
+  }
+  const current = { ...selected.value }
+  stopPlayback()
+  lyricSplitting.value = true
+  try {
+    const res = await api.splitEditorClipByLyrics(
+      project.value.id,
+      current.trackId,
+      current.clipId,
+      text,
+      { padding: 0.04, min_clip: 0.2, time_mode: lyricTimeMode.value },
+    )
+    if (!res.ok || !res.project) {
+      ElMessage.error(res.error || '歌词切分失败')
+      return
+    }
+    history.value = []
+    future.value = []
+    renderedPath.value = ''
+    applyProject(res.project)
+    const first = res.clips?.[0]
+    if (first) selected.value = { trackId: current.trackId, clipId: first.id }
+    ElMessage.success(`已按歌词切成 ${res.clips?.length || 0} 段`)
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '歌词切分失败')
+  } finally {
+    lyricSplitting.value = false
+  }
+}
+
 async function setClipNumber(field: 'start' | 'end' | 'offset', e: Event) {
   const clip = selectedClip.value
   if (!clip) return
@@ -1043,7 +1616,7 @@ async function rerunClip() {
     selected.value.trackId,
     selected.value.clipId,
     rerunModelId.value,
-    {},
+    currentRerunParams(),
   )
   rerunning.value = false
   if (!res.ok || !res.project) {
@@ -1105,6 +1678,40 @@ watch(zoom, () => {
     void loadWaveforms()
   }, 140)
 })
+
+watch(
+  [
+    rerunPitch,
+    rerunF0Method,
+    rerunIndexRate,
+    rerunRmsMix,
+    rerunDiffusionRatio,
+    rerunDevice,
+    rerunProtect,
+    rerunFilterRadius,
+    rerunRvcVersion,
+  ],
+  () => {
+    try {
+      localStorage.setItem(
+        RERUN_PREFS_KEY,
+        JSON.stringify({
+          pitch: rerunPitch.value,
+          f0Method: rerunF0Method.value,
+          indexRate: rerunIndexRate.value,
+          rmsMix: rerunRmsMix.value,
+          diffusionRatio: rerunDiffusionRatio.value,
+          device: rerunDevice.value,
+          protect: rerunProtect.value,
+          filterRadius: rerunFilterRadius.value,
+          rvcVersion: rerunRvcVersion.value,
+        }),
+      )
+    } catch {
+      /* ignore */
+    }
+  },
+)
 
 function calcDuration(p: EditorProject) {
   return Math.max(0.05, ...p.tracks.flatMap((t) => t.clips.map((c) => c.end || 0)))
@@ -1230,6 +1837,19 @@ onUnmounted(() => {
   color: var(--xb-accent) !important;
   font-weight: 700;
 }
+.import-track-options :deep(.el-radio-group) {
+  display: grid;
+  gap: 8px;
+  align-items: stretch;
+}
+.import-track-options :deep(.el-radio) {
+  min-height: 34px;
+  margin-right: 0;
+  padding: 0 10px;
+  border: 1px solid var(--xb-border);
+  border-radius: 8px;
+  background: rgba(var(--xb-fill-rgb), 0.04);
+}
 .editor-shell {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
@@ -1239,9 +1859,14 @@ onUnmounted(() => {
 .inspector {
   border-radius: 6px;
   padding: 18px;
-  min-height: 640px;
+  position: sticky;
+  top: 18px;
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 .project-block label,
+.stem-box label,
 .rerun-box label {
   display: block;
   color: var(--xb-muted);
@@ -1250,6 +1875,9 @@ onUnmounted(() => {
 }
 .title-input,
 .field-grid input,
+.stem-box input,
+.stem-box select,
+.lyric-input,
 .rerun-box select {
   width: 100%;
   height: 36px;
@@ -1262,6 +1890,9 @@ onUnmounted(() => {
 }
 .title-input:focus,
 .field-grid input:focus,
+.stem-box input:focus,
+.stem-box select:focus,
+.lyric-input:focus,
 .rerun-box select:focus {
   border-color: var(--xb-primary);
 }
@@ -1359,11 +1990,15 @@ onUnmounted(() => {
 }
 .clip-actions button:disabled,
 .transport button:disabled,
-.edit-tools button:disabled {
+.edit-tools button:disabled,
+.track-label button:disabled {
   opacity: 0.42;
   cursor: not-allowed;
 }
 .clip-actions button.danger {
+  color: var(--xb-accent);
+}
+.track-label button.danger {
   color: var(--xb-accent);
 }
 .field-grid {
@@ -1379,10 +2014,169 @@ onUnmounted(() => {
   gap: 8px;
   margin-top: 12px;
 }
+.clip-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.inspector-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--xb-border);
+  border-radius: 8px;
+  background: rgba(var(--xb-fill-rgb), 0.04);
+}
+.inspector-tabs button {
+  height: 30px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--xb-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.inspector-tabs button.active,
+.inspector-tabs button:hover {
+  color: var(--xb-on-primary);
+  background: var(--xb-brand-gradient);
+}
+.stem-box,
 .rerun-box {
   display: grid;
   gap: 10px;
   margin-top: 18px;
+}
+.clip-block .stem-box,
+.clip-block .rerun-box {
+  margin-top: 12px;
+}
+.lyric-source-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--xb-border);
+  border-radius: 8px;
+  background: rgba(var(--xb-fill-rgb), 0.04);
+}
+.lyric-source-tabs button {
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--xb-muted);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+.lyric-source-tabs button.active,
+.lyric-source-tabs button:hover {
+  color: var(--xb-on-primary);
+  background: var(--xb-brand-gradient);
+}
+.lyric-api-panel,
+.lyric-file-panel {
+  display: grid;
+  gap: 8px;
+}
+.lyric-api-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+}
+.lyric-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--xb-muted);
+  font-size: 12px;
+}
+.lyric-input {
+  height: auto;
+  min-height: 92px;
+  resize: vertical;
+  padding: 10px;
+  line-height: 1.5;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+.lyric-controls {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+.rerun-param-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--xb-primary);
+  font-size: 12px;
+  font-weight: 800;
+}
+.rerun-param-head button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--xb-border);
+  border-radius: 8px;
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-muted);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+.rerun-param-head button:hover {
+  color: var(--xb-primary);
+  border-color: var(--xb-primary);
+}
+.rerun-params {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--xb-border);
+  border-radius: 8px;
+  background: rgba(var(--xb-fill-rgb), 0.035);
+}
+.rerun-param {
+  display: grid;
+  gap: 6px;
+}
+.rerun-param-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--xb-muted);
+  font-size: 12px;
+}
+.rerun-param-label b {
+  color: var(--xb-text);
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+.rerun-param input[type='range'] {
+  width: 100%;
+}
+.rerun-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.rerun-mini {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.rerun-mini span {
+  color: var(--xb-muted);
+  font-size: 12px;
+}
+.rerun-mini select {
+  height: 32px;
 }
 .rerun-hint {
   color: var(--xb-warn);
@@ -1521,25 +2315,47 @@ onUnmounted(() => {
   left: 0;
   z-index: 4;
   display: grid;
-  grid-template-columns: 30px 30px minmax(0, 1fr);
+  grid-template-columns: repeat(4, 24px) minmax(0, 1fr);
+  grid-template-rows: 20px 24px;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   padding: 8px;
   background: var(--xb-bg-2);
   border-right: 1px solid var(--xb-border);
+  overflow: hidden;
 }
 .track-label button {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
+  grid-row: 2;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.track-label button:nth-of-type(1) {
+  grid-column: 1;
+}
+.track-label button:nth-of-type(2) {
+  grid-column: 2;
+}
+.track-label button:nth-of-type(3) {
+  grid-column: 3;
+}
+.track-label button:nth-of-type(4) {
+  grid-column: 4;
 }
 .track-name {
   display: block;
+  grid-column: 1 / -1;
+  grid-row: 1;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
-  font-weight: 700;
+  color: var(--xb-text);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 20px;
 }
 .track-lane {
   position: relative;

@@ -304,6 +304,15 @@ export interface LyricsResult {
   singer?: string
 }
 
+export interface LyricsFileResult {
+  ok: boolean
+  cancelled?: boolean
+  error?: string
+  path?: string
+  name?: string
+  text?: string
+}
+
 // ---- 模型站（ModelScope 魔搭社区）----
 
 /** 校验 ModelScope 访问令牌的结果。 */
@@ -395,7 +404,7 @@ export interface HubJob {
 
 // ---- 音频编辑器（Audio Editor Lite）----
 
-export type EditorTrackType = 'source' | 'vocal' | 'bgm' | 'ai' | 'effect'
+export type EditorTrackType = 'source' | 'vocal' | 'bgm' | 'ai' | 'effect' | 'audio'
 export type EditorClipChannel = 'stereo' | 'left' | 'right'
 
 export interface EditorClip {
@@ -465,6 +474,8 @@ export interface EditorSilenceSplitOptions {
   min_silence?: number
   min_clip?: number
   crossfade?: number
+  padding?: number
+  adaptive?: boolean
 }
 
 export interface EditorSilenceInterval {
@@ -481,4 +492,41 @@ export interface EditorSilenceSplitResult {
   cuts?: number[]
   relative_cuts?: number[]
   silences?: EditorSilenceInterval[]
+}
+
+export interface EditorTrackMutationResult {
+  ok: boolean
+  error?: string
+  project?: EditorProject
+  track?: EditorTrack
+  clip?: EditorClip
+  removed_track_id?: string
+}
+
+export interface EditorSeparationResult {
+  ok: boolean
+  error?: string
+  project?: EditorProject
+  tracks?: EditorTrack[]
+  clips?: EditorClip[]
+  simulated?: boolean
+}
+
+export interface EditorLyricSplitOptions {
+  padding?: number
+  min_clip?: number
+  time_mode?: 'project' | 'clip'
+}
+
+export interface EditorLyricLine {
+  time: number
+  text: string
+}
+
+export interface EditorLyricSplitResult {
+  ok: boolean
+  error?: string
+  project?: EditorProject
+  clips?: EditorClip[]
+  lines?: EditorLyricLine[]
 }

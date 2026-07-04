@@ -10,6 +10,9 @@ wheels/
 .mypy_cache/
 .ruff_cache/
 
+# ===== Local scratch / extracted reference docs =====
+.tmp/
+
 # 虚拟环境
 .venv/
 .venv-*/

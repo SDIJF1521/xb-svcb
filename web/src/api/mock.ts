@@ -16,6 +16,7 @@ import type {
   DownloadedMusic,
   MusicSource,
   LyricsResult,
+  LyricsFileResult,
   HubTokenResult,
   HubSearchResult,
   HubDownloadResult,
@@ -27,15 +28,22 @@ import type {
   ModelInspectResult,
   InferencePreset,
   InferenceHistoryItem,
+  InferenceParams,
   InferenceQueueStatus,
   CreateBatchWorkPayload,
   EditorClip,
   EditorProject,
   EditorProjectSummary,
+  EditorTrack,
   EditorWaveform,
   EditorRerunResult,
   EditorSilenceSplitOptions,
   EditorSilenceSplitResult,
+  EditorTrackMutationResult,
+  EditorSeparationResult,
+  EditorLyricSplitOptions,
+  EditorLyricSplitResult,
+  EditorLyricLine,
   DataMigrationResult,
   DataStorageStatus,
 } from './types'
@@ -67,6 +75,43 @@ function browserPickFile(accept: string): Promise<string | null> {
     window.addEventListener(
       'focus',
       () => setTimeout(() => finish(input.files?.[0]?.name ?? null), 400),
+      { once: true },
+    )
+    document.body.appendChild(input)
+    input.click()
+  })
+}
+
+function browserPickTextFile(accept: string): Promise<LyricsFileResult> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = accept
+    input.style.display = 'none'
+    let done = false
+    const finish = (val: LyricsFileResult) => {
+      if (done) return
+      done = true
+      input.remove()
+      resolve(val)
+    }
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      if (!file) {
+        finish({ ok: false, cancelled: true })
+        return
+      }
+      try {
+        finish({ ok: true, name: file.name, path: file.name, text: await file.text() })
+      } catch {
+        finish({ ok: false, error: '无法读取歌词文件' })
+      }
+    }
+    window.addEventListener(
+      'focus',
+      () => setTimeout(() => {
+        if (!input.files?.length) finish({ ok: false, cancelled: true })
+      }, 400),
       { once: true },
     )
     document.body.appendChild(input)
@@ -188,6 +233,30 @@ function normalizeMockWorkflow(value: unknown, isMulti: boolean): CreateWorkflow
 
 function projectDuration(project: EditorProject): number {
   return Math.max(0.05, ...project.tracks.flatMap((t) => t.clips.map((c) => c.end || 0)))
+}
+
+function parseMockLyrics(lyrics: string | EditorLyricLine[]): EditorLyricLine[] {
+  if (Array.isArray(lyrics)) {
+    return lyrics
+      .map((line) => ({ time: Number(line.time || 0), text: String(line.text || '') }))
+      .filter((line) => Number.isFinite(line.time) && line.time >= 0)
+      .sort((a, b) => a.time - b.time)
+  }
+  const lines: EditorLyricLine[] = []
+  const stampRe = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g
+  for (const raw of String(lyrics || '').split(/\r?\n/)) {
+    const matches = [...raw.matchAll(stampRe)]
+    if (!matches.length) continue
+    const text = raw.replace(stampRe, '').trim()
+    for (const match of matches) {
+      const minute = Number(match[1] || 0)
+      const second = Number(match[2] || 0)
+      const fractionRaw = match[3] || '0'
+      const fraction = Number(fractionRaw) / (10 ** fractionRaw.length)
+      lines.push({ time: Number((minute * 60 + second + fraction).toFixed(3)), text })
+    }
+  }
+  return lines.sort((a, b) => a.time - b.time)
 }
 
 function makeEditorProject(title: string, source = 'C:/music/demo.wav'): EditorProject {
@@ -394,6 +463,9 @@ export const mock = {
       `C:/music/批量歌曲_A_${Date.now()}.mp3`,
       `C:/music/批量歌曲_B_${Date.now()}.mp3`,
     ]
+  },
+  pickLyricsFile(): Promise<LyricsFileResult> {
+    return browserPickTextFile('.lrc,.txt')
   },
   listWorks(): WorkDTO[] {
     return mockWorks.map((w) => ({ ...w, steps: w.steps.map((s) => ({ ...s })) }))
@@ -884,6 +956,80 @@ export const mock = {
     mockEditorFuture[project.id] = []
     return cloneProject(project)
   },
+  addEditorTrack(projectId: string, name?: string, kind = 'audio'): EditorTrackMutationResult {
+    const project = mockEditorProjects.find((p) => p.id === projectId)
+    if (!project) return { ok: false, error: '工程不存在' }
+    const track = {
+      id: rid('trk_'),
+      name: name?.trim() || `音轨 ${project.tracks.length + 1}`,
+      type: kind || 'audio',
+      volume: 1,
+      mute: false,
+      locked: false,
+      clips: [],
+    }
+    mockEditorHistory[projectId] = [...(mockEditorHistory[projectId] || []), cloneProject(project)]
+    mockEditorFuture[projectId] = []
+    project.tracks.push(track)
+    project.updated_at = now()
+    return { ok: true, project: cloneProject(project), track }
+  },
+  deleteEditorTrack(projectId: string, trackId: string): EditorTrackMutationResult {
+    const project = mockEditorProjects.find((p) => p.id === projectId)
+    if (!project) return { ok: false, error: '工程不存在' }
+    const idx = project.tracks.findIndex((track) => track.id === trackId)
+    if (idx < 0) return { ok: false, error: '音轨不存在' }
+    if (project.tracks[idx]?.locked) return { ok: false, error: '音轨已锁定，不能删除' }
+    mockEditorHistory[projectId] = [...(mockEditorHistory[projectId] || []), cloneProject(project)]
+    mockEditorFuture[projectId] = []
+    project.tracks.splice(idx, 1)
+    project.waveform_cache = {}
+    project.duration = projectDuration(project)
+    project.updated_at = now()
+    return { ok: true, project: cloneProject(project), removed_track_id: trackId }
+  },
+  importAudioToEditorTrack(
+    projectId: string,
+    path: string,
+    trackId?: string | null,
+    start = 0,
+  ): EditorTrackMutationResult {
+    const project = mockEditorProjects.find((p) => p.id === projectId)
+    if (!project) return { ok: false, error: '工程不存在' }
+    const track = project.tracks.find((t) => t.id === trackId) || {
+      id: rid('trk_'),
+      name: `音轨 ${project.tracks.length + 1}`,
+      type: 'audio',
+      volume: 1,
+      mute: false,
+      locked: false,
+      clips: [],
+    }
+    if (!project.tracks.some((t) => t.id === track.id)) project.tracks.push(track)
+    const clip: EditorClip = {
+      id: rid('clp_'),
+      name: fileName(path).replace(/\.[^.]+$/, ''),
+      start: Math.max(0, Number(start || 0)),
+      end: Math.max(0, Number(start || 0)) + 48,
+      offset: 0,
+      volume: 1,
+      mute: false,
+      file: path,
+      effects: [],
+      locked: false,
+      fade_in: 0,
+      fade_out: 0,
+      channel: 'stereo',
+      metadata: { source: 'import' },
+    }
+    mockEditorHistory[projectId] = [...(mockEditorHistory[projectId] || []), cloneProject(project)]
+    mockEditorFuture[projectId] = []
+    track.clips.push(clip)
+    track.clips.sort((a, b) => Number(a.start || 0) - Number(b.start || 0))
+    project.duration = projectDuration(project)
+    project.updated_at = now()
+    return { ok: true, project: cloneProject(project), track, clip }
+  },
   saveEditorProject(project: EditorProject): EditorProject | null {
     const idx = mockEditorProjects.findIndex((p) => p.id === project.id)
     const next = cloneProject(project)
@@ -1044,12 +1190,135 @@ export const mock = {
       silences,
     }
   },
+  separateEditorClipVocals(
+    projectId: string,
+    trackId: string,
+    clipId: string,
+    options?: Record<string, unknown>,
+  ): EditorSeparationResult {
+    const project = mockEditorProjects.find((p) => p.id === projectId)
+    if (!project) return { ok: false, error: '工程不存在' }
+    const track = project.tracks.find((t) => t.id === trackId)
+    const clip = track?.clips.find((c) => c.id === clipId)
+    if (!track || !clip) return { ok: false, error: '片段不存在' }
+    if (track.locked || clip.locked) return { ok: false, error: '片段已锁定' }
+    const muteSource = options?.mute_source !== false
+    const duration = Math.max(0.05, Number(clip.end || 0) - Number(clip.start || 0))
+    const vocalClip: EditorClip = {
+      ...clip,
+      id: rid('clp_'),
+      name: `${clip.name || 'clip'} - 人声`,
+      offset: 0,
+      file: `C:/mock/stems/${clip.id}/vocals.wav`,
+      metadata: { ...(clip.metadata || {}), source: 'uvr_separation', stem: 'vocals' },
+    }
+    const bgmClip: EditorClip = {
+      ...clip,
+      id: rid('clp_'),
+      name: `${clip.name || 'clip'} - 伴奏`,
+      offset: 0,
+      file: `C:/mock/stems/${clip.id}/instrumental.wav`,
+      metadata: { ...(clip.metadata || {}), source: 'uvr_separation', stem: 'instrumental' },
+    }
+    vocalClip.end = vocalClip.start + duration
+    bgmClip.end = bgmClip.start + duration
+    const created: EditorTrack[] = [
+      {
+        id: rid('trk_'),
+        name: `人声 - ${clip.name || 'clip'}`,
+        type: 'vocal',
+        volume: 1,
+        mute: false,
+        locked: false,
+        clips: [vocalClip],
+      },
+      {
+        id: rid('trk_'),
+        name: `伴奏 - ${clip.name || 'clip'}`,
+        type: 'bgm',
+        volume: 1,
+        mute: false,
+        locked: false,
+        clips: [bgmClip],
+      },
+    ]
+    mockEditorHistory[projectId] = [...(mockEditorHistory[projectId] || []), cloneProject(project)]
+    mockEditorFuture[projectId] = []
+    if (muteSource) clip.mute = true
+    const insertAt = project.tracks.findIndex((t) => t.id === trackId) + 1
+    project.tracks.splice(insertAt || project.tracks.length, 0, ...created)
+    project.waveform_cache = {}
+    project.updated_at = now()
+    return { ok: true, project: cloneProject(project), tracks: created, clips: [vocalClip, bgmClip], simulated: false }
+  },
+  splitEditorClipByLyrics(
+    projectId: string,
+    trackId: string,
+    clipId: string,
+    lyrics: string | EditorLyricLine[],
+    options?: EditorLyricSplitOptions,
+  ): EditorLyricSplitResult {
+    const project = mockEditorProjects.find((p) => p.id === projectId)
+    if (!project) return { ok: false, error: '工程不存在' }
+    const track = project.tracks.find((t) => t.id === trackId)
+    const idx = track?.clips.findIndex((c) => c.id === clipId) ?? -1
+    const clip = idx >= 0 ? track?.clips[idx] : null
+    if (!track || !clip) return { ok: false, error: '片段不存在' }
+    if (track.locked || clip.locked) return { ok: false, error: '片段已锁定' }
+    const lines = parseMockLyrics(lyrics)
+    if (!lines.length) return { ok: false, error: '没有识别到带时间戳的歌词' }
+    const padding = Math.max(0, Math.min(0.5, Number(options?.padding ?? 0.04)))
+    const minClip = Math.max(0.05, Math.min(10, Number(options?.min_clip ?? 0.2)))
+    const timeMode = options?.time_mode || 'project'
+    const duration = Math.max(0, Number(clip.end || 0) - Number(clip.start || 0))
+    const ranges = lines
+      .map((line, i) => {
+        const next = lines[i + 1]
+        const rawStart = line.time
+        const rawEnd = next ? next.time : (timeMode === 'clip' ? duration : Number(clip.end || 0))
+        const absStart = timeMode === 'clip' ? Number(clip.start || 0) + rawStart : rawStart
+        const absEnd = timeMode === 'clip' ? Number(clip.start || 0) + rawEnd : rawEnd
+        const relStart = Math.max(0, Math.min(duration, absStart - Number(clip.start || 0) - padding))
+        const relEnd = Math.max(relStart, Math.min(duration, absEnd - Number(clip.start || 0) + padding))
+        return { line, relStart, relEnd }
+      })
+      .filter((item) => item.relEnd - item.relStart >= minClip)
+    if (ranges.length <= 1) return { ok: false, error: '歌词时间点不足以切成多个片段', lines }
+
+    mockEditorHistory[projectId] = [...(mockEditorHistory[projectId] || []), cloneProject(project)]
+    mockEditorFuture[projectId] = []
+    const original = { ...clip, metadata: { ...(clip.metadata || {}) }, effects: [...(clip.effects || [])] }
+    const total = ranges.length
+    const newClips = ranges.map((item, i) => ({
+      ...original,
+      id: i === 0 ? original.id : rid('clp_'),
+      name: `${original.name || '人声'} ${String(i + 1).padStart(2, '0')}/${String(total).padStart(2, '0')}${item.line.text ? ` ${item.line.text.slice(0, 18)}` : ''}`,
+      start: Number((Number(original.start || 0) + item.relStart).toFixed(3)),
+      end: Number((Number(original.start || 0) + item.relEnd).toFixed(3)),
+      offset: Number((Number(original.offset || 0) + item.relStart).toFixed(3)),
+      metadata: {
+        ...(original.metadata || {}),
+        lyric_split: true,
+        lyric_split_index: i + 1,
+        lyric_split_total: total,
+        lyric_text: item.line.text,
+        lyric_time: item.line.time,
+        lyric_time_mode: timeMode,
+      },
+    }))
+    track.clips.splice(idx, 1, ...newClips)
+    track.clips.sort((a, b) => Number(a.start || 0) - Number(b.start || 0))
+    project.waveform_cache = {}
+    project.duration = projectDuration(project)
+    project.updated_at = now()
+    return { ok: true, project: cloneProject(project), clips: newClips, lines }
+  },
   rerunEditorClip(
     projectId: string,
     trackId: string,
     clipId: string,
     modelId: string,
-    _params?: Record<string, unknown>,
+    params?: InferenceParams,
   ): EditorRerunResult {
     const project = mockEditorProjects.find((p) => p.id === projectId)
     if (!project) return { ok: false, error: '工程不存在' }
@@ -1060,7 +1329,7 @@ export const mock = {
       return { ok: false, error: `片段过短：至少 ${mockMinRerunClipSeconds.toFixed(2)} 秒才能重推理` }
     }
     clip.name = `${clip.name} · ${modelId}`
-    clip.metadata = { ...(clip.metadata || {}), rerun_model_id: modelId }
+    clip.metadata = { ...(clip.metadata || {}), rerun_model_id: modelId, rerun_params: { ...(params || {}) } }
     project.updated_at = now()
     return { ok: true, project: cloneProject(project), clip: { ...clip } }
   },
