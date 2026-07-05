@@ -225,11 +225,23 @@ def run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> Non
     subprocess.run(cmd, cwd=str(cwd) if cwd else None, env=full_env, check=True)
 
 
-def pypi_index_args(index: str | None = None) -> list[str]:
+def pypi_index_args(
+    index: str | None = None,
+    *,
+    use_mirror: bool = True,
+) -> list[str]:
     """Return uv index args. Torch installs pass their own PyTorch index."""
+    args: list[str] = []
     if index:
-        return ["--index", index, "--index", PYPI_MIRROR, "--default-index", PYPI_FALLBACK_INDEX]
-    return ["--index", PYPI_MIRROR, "--default-index", PYPI_FALLBACK_INDEX]
+        args += ["--index", index]
+    if use_mirror and PYPI_MIRROR and PYPI_MIRROR != PYPI_FALLBACK_INDEX:
+        args += ["--index", PYPI_MIRROR]
+    args += ["--default-index", PYPI_FALLBACK_INDEX]
+    return args
+
+
+def warn_pypi_fallback() -> None:
+    print(c("y", f"    PyPI mirror failed; retrying with official PyPI: {PYPI_FALLBACK_INDEX}"))
 
 
 def venv_python(venv_dir: Path) -> Path:
@@ -306,20 +318,37 @@ def ensure_uv() -> str:
     if have("uv"):
         return "uv"
     print(c("y", "未检测到 uv，尝试通过 pip 安装 …"))
-    run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "-U",
-            "uv",
-            "-i",
-            PYPI_MIRROR,
-            "--extra-index-url",
-            PYPI_FALLBACK_INDEX,
-        ]
-    )
+    try:
+        run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "-U",
+                "uv",
+                "-i",
+                PYPI_MIRROR,
+                "--extra-index-url",
+                PYPI_FALLBACK_INDEX,
+            ]
+        )
+    except subprocess.CalledProcessError:
+        if PYPI_MIRROR == PYPI_FALLBACK_INDEX:
+            raise
+        warn_pypi_fallback()
+        run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "-U",
+                "uv",
+                "-i",
+                PYPI_FALLBACK_INDEX,
+            ]
+        )
     if have("uv"):
         return "uv"
     # pip 装到 Scripts 目录但未加入 PATH 时，直接用绝对路径
@@ -333,7 +362,12 @@ def uv_cmd(uv: str, *args: str) -> list[str]:
     return [uv, *args]
 
 
-def uv_pip_install(uv: str, py: str, *args: str, index: str | None = None) -> None:
+def uv_pip_install(
+    uv: str,
+    py: str,
+    *args: str,
+    index: str | None = None,
+) -> None:
     """`uv pip install`；失败时自动加 --reinstall 重试一次。
 
     用于自愈被中断的半成品安装：典型表现是 site-packages 里留下空的
@@ -341,20 +375,40 @@ def uv_pip_install(uv: str, py: str, *args: str, index: str | None = None) -> No
     `failed to open file ... METADATA (os error 2)`。--reinstall 会强制
     重新下载并覆盖，绕过损坏的旧元数据。
     """
-    def build(reinstall: bool) -> list[str]:
+    def build(reinstall: bool, use_mirror: bool = True) -> list[str]:
         extra = ["--reinstall"] if reinstall else []
         cmd = uv_cmd(uv, "pip", "install", *extra, "--python", py, *args)
-        cmd += pypi_index_args(index)
+        cmd += pypi_index_args(index, use_mirror=use_mirror)
         return cmd
 
     try:
         run(build(reinstall=False))
     except subprocess.CalledProcessError:
         print(c("y", "    安装失败，尝试 --reinstall 重装以修复损坏/残缺的旧安装 …"))
-        run(build(reinstall=True))
+        try:
+            run(build(reinstall=True))
+        except subprocess.CalledProcessError:
+            if PYPI_MIRROR == PYPI_FALLBACK_INDEX:
+                raise
+            warn_pypi_fallback()
+            try:
+                run(build(reinstall=False, use_mirror=False))
+            except subprocess.CalledProcessError:
+                print(c("y", "    Official PyPI retry failed; trying --reinstall once..."))
+                run(build(reinstall=True, use_mirror=False))
 
 
 # ---------- 下载工具 ----------
+def uv_sync(uv: str, cwd: Path) -> None:
+    try:
+        run(uv_cmd(uv, "sync", *pypi_index_args()), cwd=cwd)
+    except subprocess.CalledProcessError:
+        if PYPI_MIRROR == PYPI_FALLBACK_INDEX:
+            raise
+        warn_pypi_fallback()
+        run(uv_cmd(uv, "sync", *pypi_index_args(use_mirror=False)), cwd=cwd)
+
+
 def _progress(blocks: int, bs: int, total: int) -> None:
     if total <= 0:
         return
@@ -602,7 +656,7 @@ def seed_rvc_base_models(py: Path) -> None:
 # ---------- 各安装步骤 ----------
 def step_app(uv: str) -> None:
     hr("1/7 主程序环境 app/.venv")
-    run(uv_cmd(uv, "sync", *pypi_index_args()), cwd=APP_DIR)
+    uv_sync(uv, APP_DIR)
     print(c("g", "主程序环境就绪"))
 
 

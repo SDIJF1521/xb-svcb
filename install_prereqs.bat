@@ -300,12 +300,20 @@ if defined XB_PYTHON_EXE if exist "%XB_PYTHON_EXE%" (
   echo [miss] uv not found; installing with Python pip...
   if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 86 正在安装 uv
   "%XB_PYTHON_EXE%" -m pip install -U uv -i "%PIP_INDEX_URL%" --extra-index-url https://pypi.org/simple
+  if errorlevel 1 (
+    echo [warn] PyPI mirror failed; retrying uv install with official PyPI...
+    "%XB_PYTHON_EXE%" -m pip install -U uv -i https://pypi.org/simple
+  )
   exit /b 0
 )
 where python >nul 2>&1 && (
   echo [miss] uv not found; installing with Python pip...
   if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 86 正在安装 uv
   python -m pip install -U uv -i "%PIP_INDEX_URL%" --extra-index-url https://pypi.org/simple
+  if errorlevel 1 (
+    echo [warn] PyPI mirror failed; retrying uv install with official PyPI...
+    python -m pip install -U uv -i https://pypi.org/simple
+  )
   exit /b 0
 )
 echo [miss] uv not installed and Python is unavailable.
