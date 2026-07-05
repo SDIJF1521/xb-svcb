@@ -71,8 +71,9 @@ os.environ.setdefault("UV_DEFAULT_INDEX", PYPI_MIRROR)
 os.environ.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
 
 for _stream in (sys.stdout, sys.stderr):
-    if hasattr(_stream, "reconfigure"):
-        _stream.reconfigure(errors="replace")
+    _reconfigure = getattr(_stream, "reconfigure", None)
+    if callable(_reconfigure):
+        _reconfigure(errors="replace")
 
 # 所有产物（引擎/虚拟环境/模型）都落在 ROOT 下。默认取本脚本上级目录；
 # 安装器会用 --root 显式指定为用户选择的安装目录，确保依赖装进该目录。
