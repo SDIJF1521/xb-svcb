@@ -1,6 +1,6 @@
 // 前端统一 API 入口：桌面环境调用 pywebview 后端，浏览器回退 mock。
 
-import { invoke } from './bridge'
+import { hasDesktopApiMethod, invoke, isDesktop, whenReady } from './bridge'
 import { mock } from './mock'
 import type {
   CreateWorkPayload,
@@ -40,12 +40,37 @@ import type {
   EditorSeparationResult,
   EditorLyricSplitOptions,
   EditorLyricSplitResult,
+  DataDirSwitchResult,
   DataMigrationResult,
+  DataMigrationStartResult,
+  DataMigrationProgress,
   DataStorageStatus,
 } from './types'
 
 export * from './types'
 export { isDesktop, whenReady } from './bridge'
+
+function migrationResultToProgress(
+  res: DataMigrationResult,
+  targetDir: string,
+): DataMigrationStartResult {
+  const done = !!res.ok
+  return {
+    status: done ? 'done' : 'failed',
+    phase: done ? 'done' : 'failed',
+    message: res.message || res.error || (done ? '数据目录已迁移。' : '迁移失败'),
+    target_dir: targetDir,
+    copied_bytes: res.used_bytes || 0,
+    copied: res.used || '0 B',
+    total_bytes: res.used_bytes || 0,
+    total: res.used || '0 B',
+    percent: done ? 100 : 0,
+    ok: done,
+    started: true,
+    error: res.error,
+    result: done ? res : undefined,
+  }
+}
 
 export const api = {
   getSystemStatus: () =>
@@ -59,9 +84,32 @@ export const api = {
   pickDataDir: () =>
     invoke<string>('pick_data_dir', [], () => mock.pickDataDir()),
 
+  setDataDir: (targetDir: string) =>
+    invoke<DataDirSwitchResult>('set_data_dir', [targetDir], () =>
+      mock.setDataDir(targetDir),
+    ),
+
   migrateDataDir: (targetDir: string) =>
     invoke<DataMigrationResult>('migrate_data_dir', [targetDir], () =>
       mock.migrateDataDir(targetDir),
+    ),
+
+  startDataMigration: async (targetDir: string) => {
+    await whenReady()
+    if (isDesktop() && !hasDesktopApiMethod('start_data_migration')) {
+      const res = await invoke<DataMigrationResult>('migrate_data_dir', [targetDir], () =>
+        mock.migrateDataDir(targetDir),
+      )
+      return migrationResultToProgress(res, targetDir)
+    }
+    return invoke<DataMigrationStartResult>('start_data_migration', [targetDir], () =>
+      mock.startDataMigration(targetDir),
+    )
+  },
+
+  getDataMigrationStatus: () =>
+    invoke<DataMigrationProgress>('get_data_migration_status', [], () =>
+      mock.getDataMigrationStatus(),
     ),
 
   listModels: () => invoke<ModelDTO[]>('list_models', [], () => mock.listModels()),

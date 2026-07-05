@@ -15,10 +15,19 @@ if not defined XB_PREREQ_AUTO set "XB_PREREQ_AUTO=0"
 if not defined XB_ENV_CONFIGURE set "XB_ENV_CONFIGURE=1"
 if not defined XB_GPU_STACK set "XB_GPU_STACK=auto"
 if not defined XB_GPU_STACK_REQUESTED set "XB_GPU_STACK_REQUESTED=%XB_GPU_STACK%"
+if not defined XB_HF_MIRROR set "XB_HF_MIRROR=https://hf-mirror.com"
+if not defined HF_ENDPOINT set "HF_ENDPOINT=%XB_HF_MIRROR%"
+if not defined HUGGINGFACE_HUB_ENDPOINT set "HUGGINGFACE_HUB_ENDPOINT=%XB_HF_MIRROR%"
+if not defined XB_PYPI_MIRROR set "XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple"
+if not defined PIP_INDEX_URL set "PIP_INDEX_URL=%XB_PYPI_MIRROR%"
+if not defined UV_DEFAULT_INDEX set "UV_DEFAULT_INDEX=%XB_PYPI_MIRROR%"
+if not defined PIP_DISABLE_PIP_VERSION_CHECK set "PIP_DISABLE_PIP_VERSION_CHECK=1"
 
 echo [XB-SVCB] Checking prerequisites...
 echo           auto install : %XB_PREREQ_AUTO%
 echo           gpu request  : %XB_GPU_STACK_REQUESTED%
+echo           HF mirror    : %HF_ENDPOINT%
+echo           PyPI mirror  : %PIP_INDEX_URL%
 echo.
 
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 5 正在解析依赖路径
@@ -290,13 +299,13 @@ if not "%XB_PREREQ_AUTO%"=="1" (
 if defined XB_PYTHON_EXE if exist "%XB_PYTHON_EXE%" (
   echo [miss] uv not found; installing with Python pip...
   if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 86 正在安装 uv
-  "%XB_PYTHON_EXE%" -m pip install -U uv
+  "%XB_PYTHON_EXE%" -m pip install -U uv -i "%PIP_INDEX_URL%" --extra-index-url https://pypi.org/simple
   exit /b 0
 )
 where python >nul 2>&1 && (
   echo [miss] uv not found; installing with Python pip...
   if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 86 正在安装 uv
-  python -m pip install -U uv
+  python -m pip install -U uv -i "%PIP_INDEX_URL%" --extra-index-url https://pypi.org/simple
   exit /b 0
 )
 echo [miss] uv not installed and Python is unavailable.
@@ -350,6 +359,13 @@ if defined XB_FFMPEG_BIN call :ADD_USER_PATH "%XB_FFMPEG_BIN%"
 if defined XB_CUDA_BIN call :ADD_USER_PATH "%XB_CUDA_BIN%"
 if defined XB_CUDA_DIR reg add HKCU\Environment /v CUDA_PATH /t REG_EXPAND_SZ /d "%XB_CUDA_DIR%" /f >nul
 if defined XB_VSINSTALLDIR reg add HKCU\Environment /v VSINSTALLDIR /t REG_EXPAND_SZ /d "%XB_VSINSTALLDIR%" /f >nul
+if defined XB_HF_MIRROR reg add HKCU\Environment /v XB_HF_MIRROR /t REG_SZ /d "%XB_HF_MIRROR%" /f >nul
+if defined HF_ENDPOINT reg add HKCU\Environment /v HF_ENDPOINT /t REG_SZ /d "%HF_ENDPOINT%" /f >nul
+if defined HUGGINGFACE_HUB_ENDPOINT reg add HKCU\Environment /v HUGGINGFACE_HUB_ENDPOINT /t REG_SZ /d "%HUGGINGFACE_HUB_ENDPOINT%" /f >nul
+if defined XB_PYPI_MIRROR reg add HKCU\Environment /v XB_PYPI_MIRROR /t REG_SZ /d "%XB_PYPI_MIRROR%" /f >nul
+if defined PIP_INDEX_URL reg add HKCU\Environment /v PIP_INDEX_URL /t REG_SZ /d "%PIP_INDEX_URL%" /f >nul
+if defined UV_DEFAULT_INDEX reg add HKCU\Environment /v UV_DEFAULT_INDEX /t REG_SZ /d "%UV_DEFAULT_INDEX%" /f >nul
+if defined PIP_DISABLE_PIP_VERSION_CHECK reg add HKCU\Environment /v PIP_DISABLE_PIP_VERSION_CHECK /t REG_SZ /d "%PIP_DISABLE_PIP_VERSION_CHECK%" /f >nul
 exit /b 0
 
 :ADD_USER_PATH

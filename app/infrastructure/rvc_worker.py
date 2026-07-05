@@ -4,19 +4,272 @@
 - 成功：``RVC_OK <output_path>``
 - 失败：``RVC_ERR <message>``
 
-rvc-python 首次实例化时会自动下载 hubert / rmvpe 底模（满足「RVC Index 自动识别」
-与底模自备需求）。``load_model`` 直接接受 ``.pth`` 路径与可选 ``.index`` 路径。
+rvc-python 默认会在首次实例化时下载 hubert / rmvpe 底模；本 worker 会先从安装包
+自带的 ``assets/models/pretrain`` 预置底模，避免新用户首次 RVC 推理时卡在外网下载。
+``load_model`` 直接接受 ``.pth`` 路径与可选 ``.index`` 路径。
 """
 
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 import sys
 import traceback
+import urllib.request
+from pathlib import Path
 
 
 # RVC 支持的 F0 算法；其余（如 so-vits 的 dio/fcpe）统一回退 rmvpe
 _RVC_F0_METHODS = {"harvest", "crepe", "rmvpe", "pm"}
+_MIN_BASE_MODEL_BYTES = 32 * 1024 * 1024
+_HF_MIRROR = (
+    os.environ.get("XB_HF_MIRROR")
+    or os.environ.get("HF_ENDPOINT")
+    or "https://hf-mirror.com"
+).strip().rstrip("/")
+_RVC_BASE_DOWNLOADS = {
+    "hubert_base.pt": [
+        f"{_HF_MIRROR}/Daswer123/RVC_Base/resolve/main/hubert_base.pt",
+        "https://huggingface.co/Daswer123/RVC_Base/resolve/main/hubert_base.pt",
+    ],
+    "rmvpe.pt": [
+        f"{_HF_MIRROR}/Daswer123/RVC_Base/resolve/main/rmvpe.pt",
+        "https://huggingface.co/Daswer123/RVC_Base/resolve/main/rmvpe.pt",
+    ],
+}
+_RVC_BASE_SOURCES = {
+    "hubert_base.pt": (
+        "rvc/hubert_base.pt",
+        "pretrain/hubert_base.pt",
+        "pretrain/checkpoint_best_legacy_500.pt",
+        "checkpoint_best_legacy_500.pt",
+    ),
+    "rmvpe.pt": (
+        "rvc/rmvpe.pt",
+        "pretrain/rmvpe.pt",
+        "rmvpe.pt",
+    ),
+    "rmvpe.onnx": (
+        "rvc/rmvpe.onnx",
+        "pretrain/rmvpe.onnx",
+        "rmvpe.onnx",
+    ),
+}
+
+
+def _usable_file(path: Path, min_bytes: int = _MIN_BASE_MODEL_BYTES) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size >= min_bytes
+    except OSError:
+        return False
+
+
+def _candidate_model_files(relative_paths: tuple[str, ...]) -> list[Path]:
+    bases: list[Path] = []
+    for key in ("XB_RVC_BASE_MODEL_DIR", "XB_RVC_PRETRAIN_DIR", "XB_PRETRAIN_DIR"):
+        raw = os.environ.get(key)
+        if raw:
+            bases.append(Path(raw).expanduser())
+
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        bases.extend(
+            [
+                parent / "assets" / "models",
+                parent / "engines" / "so-vits-svc",
+                parent / "engines" / "so-vits-svc" / "pretrain",
+                parent,
+            ]
+        )
+
+    seen: set[str] = set()
+    out: list[Path] = []
+    for base in bases:
+        for rel in relative_paths:
+            rel_path = Path(rel)
+            for path in (base / rel_path, base / rel_path.name):
+                key = str(path).lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(path)
+    return out
+
+
+def _link_or_copy(src: Path, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".xbtmp")
+    try:
+        tmp.unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        os.link(src, tmp)
+    except OSError:
+        shutil.copy2(src, tmp)
+    tmp.replace(dest)
+
+
+def _load_torch_checkpoint(path: Path):  # noqa: ANN202
+    import torch  # noqa: WPS433
+
+    try:
+        return torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location="cpu")
+
+
+def _extract_rvc_rmvpe_state(obj):  # noqa: ANN001, ANN202
+    state = obj.get("model") if isinstance(obj, dict) else None
+    changed = False
+    if isinstance(state, dict):
+        obj = state
+        changed = True
+    if not isinstance(obj, dict):
+        return None, False
+    cleaned = {key: val for key, val in obj.items() if not key.startswith("unet.tf.")}
+    if len(cleaned) != len(obj):
+        obj = cleaned
+        changed = True
+    expected = ("unet.encoder.bn.weight", "cnn.weight", "fc.1.bias")
+    if any(key in obj for key in expected):
+        return obj, changed
+    return None, False
+
+
+def _ensure_rvc_rmvpe_checkpoint(path: Path) -> bool:
+    if not _usable_file(path):
+        return False
+    try:
+        obj = _load_torch_checkpoint(path)
+        state, changed = _extract_rvc_rmvpe_state(obj)
+        if state is None:
+            return False
+        if not changed:
+            return True
+        tmp = path.with_name(path.name + ".xbtmp")
+        import torch  # noqa: WPS433
+
+        torch.save(state, tmp)
+        tmp.replace(path)
+        print("XB: normalized RMVPE checkpoint for RVC", flush=True)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"XB: RMVPE checkpoint validation failed: {exc}", flush=True)
+        try:
+            path.with_name(path.name + ".xbtmp").unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+
+def _write_rvc_rmvpe_checkpoint(src: Path, dest: Path) -> bool:
+    try:
+        obj = _load_torch_checkpoint(src)
+        state, _changed = _extract_rvc_rmvpe_state(obj)
+        if state is None:
+            print(f"XB: skipped incompatible RMVPE checkpoint: {src}", flush=True)
+            return False
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".xbtmp")
+        import torch  # noqa: WPS433
+
+        torch.save(state, tmp)
+        tmp.replace(dest)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"XB: failed to prepare RMVPE checkpoint {src}: {exc}", flush=True)
+        try:
+            dest.with_name(dest.name + ".xbtmp").unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+
+def _copy_bundled_base_model(name: str, dest: Path, *, required: bool) -> bool:
+    sources = [src for src in _candidate_model_files(_RVC_BASE_SOURCES[name]) if _usable_file(src)]
+    if name == "rmvpe.pt":
+        if _ensure_rvc_rmvpe_checkpoint(dest):
+            return True
+        for src in sources:
+            if _write_rvc_rmvpe_checkpoint(src, dest):
+                print(f"XB: RVC base model ready locally: {name}", flush=True)
+                return True
+        return not required
+
+    if _usable_file(dest):
+        if not sources:
+            return True
+        try:
+            if any(dest.stat().st_size == src.stat().st_size for src in sources):
+                return True
+        except OSError:
+            pass
+
+    for src in sources:
+        _link_or_copy(src, dest)
+        print(f"XB: RVC base model ready locally: {name}", flush=True)
+        return True
+
+    return not required
+
+
+def _download_base_model(name: str, dest: Path) -> bool:
+    if name == "rmvpe.pt":
+        if _ensure_rvc_rmvpe_checkpoint(dest):
+            return True
+    elif _usable_file(dest):
+        return True
+    urls = _RVC_BASE_DOWNLOADS.get(name, ())
+    tmp = dest.with_name(dest.name + ".download")
+    for url in urls:
+        try:
+            print(f"XB: downloading missing RVC base model {name}: {url}", flush=True)
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp, tmp.open("wb") as f:
+                shutil.copyfileobj(resp, f, length=1024 * 1024)
+            if not _usable_file(tmp):
+                raise RuntimeError("downloaded file is too small or empty")
+            tmp.replace(dest)
+            if name == "rmvpe.pt" and not _ensure_rvc_rmvpe_checkpoint(dest):
+                raise RuntimeError("downloaded RMVPE checkpoint is incompatible")
+            return True
+        except Exception as exc:  # noqa: BLE001
+            print(f"XB: RVC base model source failed: {exc}", flush=True)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return False
+
+
+def _prepare_rvc_base_models(lib_dir: str) -> None:
+    """Pre-seed rvc-python base models from XB bundled assets before it goes online."""
+    base_dir = Path(lib_dir) / "base_model"
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    missing: list[str] = []
+    for name in ("hubert_base.pt", "rmvpe.pt"):
+        dest = base_dir / name
+        if _copy_bundled_base_model(name, dest, required=True):
+            continue
+        if _download_base_model(name, dest):
+            continue
+        missing.append(name)
+
+    # rvc-python downloads rmvpe.onnx unconditionally, but this worker uses the
+    # PyTorch RMVPE path. Copy it when bundled, without making it a hard runtime
+    # dependency.
+    _copy_bundled_base_model("rmvpe.onnx", base_dir / "rmvpe.onnx", required=False)
+
+    if missing:
+        raise RuntimeError(
+            "RVC 底模缺失，且本地自带模型/镜像下载都不可用："
+            + ", ".join(missing)
+            + "。请重新运行“搭建/修复运行环境”，或把 hubert_base.pt / rmvpe.pt 放到 "
+            + str(base_dir)
+        )
 
 
 def _resolve_device(requested: str) -> str:
@@ -34,6 +287,39 @@ def _resolve_device(requested: str) -> str:
     except Exception:  # noqa: BLE001
         pass
     return "cpu:0"
+
+
+def _infer_file_checked(rvc, input_path: str, output_path: str) -> str:  # noqa: ANN001
+    """Run rvc-python inference and surface vc_single failures before wav writing."""
+    if not rvc.current_model:
+        raise ValueError("Please load a model first.")
+
+    model_info = rvc.models[rvc.current_model]
+    file_index = model_info.get("index", "")
+    wav_opt = rvc.vc.vc_single(
+        sid=0,
+        input_audio_path=input_path,
+        f0_up_key=rvc.f0up_key,
+        f0_method=rvc.f0method,
+        file_index=file_index,
+        index_rate=rvc.index_rate,
+        filter_radius=rvc.filter_radius,
+        resample_sr=rvc.resample_sr,
+        rms_mix_rate=rvc.rms_mix_rate,
+        protect=rvc.protect,
+        f0_file="",
+        file_index2="",
+    )
+    if isinstance(wav_opt, tuple):
+        message = wav_opt[0] if wav_opt and isinstance(wav_opt[0], str) else repr(wav_opt)
+        raise RuntimeError(message.strip() or "RVC vc_single failed")
+    if not hasattr(wav_opt, "dtype"):
+        raise RuntimeError(f"RVC returned non-audio output: {type(wav_opt).__name__}")
+
+    from scipy.io import wavfile  # noqa: WPS433
+
+    wavfile.write(output_path, rvc.vc.tgt_sr, wav_opt)
+    return output_path
 
 
 def main() -> int:
@@ -70,7 +356,12 @@ def main() -> int:
         except Exception:  # noqa: BLE001
             pass
 
-        from rvc_python.infer import RVCInference
+        import rvc_python.download_model as rvc_download_model
+        import rvc_python.infer as rvc_infer
+
+        rvc_download_model.download_rvc_models = _prepare_rvc_base_models
+        rvc_infer.download_rvc_models = _prepare_rvc_base_models
+        RVCInference = rvc_infer.RVCInference
     except Exception as exc:  # noqa: BLE001
         print(f"RVC_ERR rvc-python 未安装或导入失败: {exc}", flush=True)
         return 1
@@ -130,7 +421,7 @@ def main() -> int:
             protect=float(args.protect),
             filter_radius=int(args.filter_radius),
         )
-        rvc.infer_file(args.input, args.output)
+        _infer_file_checked(rvc, args.input, args.output)
         print(f"RVC_OK {args.output}", flush=True)
         return 0
     except Exception as exc:  # noqa: BLE001

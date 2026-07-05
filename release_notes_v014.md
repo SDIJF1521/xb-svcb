@@ -14,6 +14,7 @@
 - 🎨 **时间轴模型颜色区分**：同一时间轴上使用不同模型/框架推理时，片段颜色更容易区分，降低多模型翻唱工作台的误判成本。
 - 🧭 **编辑工作台布局收敛**：侧边栏过长的问题已优化，常用编辑功能更集中，音轨与时间轴区域获得更多可用空间。
 - 🪟 **安装过程单窗口化**：安装器先显示环境检查与前置依赖页面，再进入安装路径选择；运行环境搭建改为隐藏批处理执行，不再弹出 PowerShell 或命令行窗口；前置依赖与虚拟环境搭建阶段会继续推进安装页进度条；安装详情写入 `install_logs`，也可勾选在安装器窗口内显示详细安装信息。
+- 🌐 **国内镜像自动配置**：安装器会为当前安装流程与用户环境写入 `XB_HF_MIRROR` / `HF_ENDPOINT=https://hf-mirror.com`，并配置 `XB_PYPI_MIRROR` / `PIP_INDEX_URL` / `UV_DEFAULT_INDEX` 到清华 PyPI 镜像；普通 Python 依赖优先走国内源、官方 PyPI 兜底，torch 仍保留 PyTorch 专用 CUDA/CPU wheel 源。
 
 ### 修复
 
@@ -31,5 +32,5 @@
 
 - 下载并运行 `XB-SVCB-Setup.exe` 一键安装。
 - 前端包、应用本体与安装器版本已同步更新为 **v0.0.14**。
-- 40 系及以下兼容 NVIDIA GPU 默认使用 cu121/cu118 栈；50 系（Blackwell）使用 cu128 栈；CPU 或不兼容显卡会跳过 CUDA 并使用 CPU torch。
+- 40 系及以下兼容 NVIDIA GPU 默认使用 cu121 栈；50 系（Blackwell）使用 cu128 栈；CPU 或不兼容显卡会跳过 CUDA 并使用 CPU torch。
 - 安装器会先检查 Python、Git、ffmpeg、uv、CUDA、winget 等环境，再让用户选择安装路径；运行环境日志会保存到 `{app}\install_logs`，如需在 EXE 窗口内查看详情，可在前置依赖页面勾选「在安装器窗口显示详细安装信息」。

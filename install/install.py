@@ -5,7 +5,7 @@
   app/.venv      —— 主程序环境（pywebview，桌面壳）
   .venv-uvr/     —— 人声分离环境（audio-separator）
   .venv-svc/     —— so-vits-svc 4.1 推理环境（torch + fairseq 等）
-  .venv-rvc/     —— RVC 推理环境（rvc-python，torch cu118）
+  .venv-rvc/     —— RVC 推理环境（rvc-python；40 系及以下 cu121，50 系 cu128，CPU 版）
   .venv-hub/     —— 模型上传组件（modelscope）
   engines/so-vits-svc/         —— 自动克隆的 so-vits-svc 4.1 仓库
   engines/so-vits-svc/pretrain —— 底模（contentvec / nsf_hifigan / rmvpe）
@@ -41,6 +41,34 @@ import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
+
+DEFAULT_HF_MIRROR = "https://hf-mirror.com"
+DEFAULT_PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
+PYPI_FALLBACK_INDEX = "https://pypi.org/simple"
+
+
+def _normalize_url(raw: str | None, default: str = "") -> str:
+    val = (raw or "").strip().rstrip("/")
+    return val or default
+
+
+HF_MIRROR = _normalize_url(
+    os.environ.get("XB_HF_MIRROR") or os.environ.get("HF_ENDPOINT"),
+    DEFAULT_HF_MIRROR,
+)
+PYPI_MIRROR = _normalize_url(
+    os.environ.get("XB_PYPI_MIRROR")
+    or os.environ.get("UV_DEFAULT_INDEX")
+    or os.environ.get("PIP_INDEX_URL"),
+    DEFAULT_PYPI_MIRROR,
+)
+os.environ.setdefault("XB_HF_MIRROR", HF_MIRROR)
+os.environ.setdefault("HF_ENDPOINT", HF_MIRROR)
+os.environ.setdefault("HUGGINGFACE_HUB_ENDPOINT", HF_MIRROR)
+os.environ.setdefault("XB_PYPI_MIRROR", PYPI_MIRROR)
+os.environ.setdefault("PIP_INDEX_URL", PYPI_MIRROR)
+os.environ.setdefault("UV_DEFAULT_INDEX", PYPI_MIRROR)
+os.environ.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
 
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
@@ -88,14 +116,14 @@ SOVITS_ZIP_URL = (
     "https://github.com/svc-develop-team/so-vits-svc/archive/refs/heads/4.1-Stable.zip"
 )
 
-# CUDA wheel 源（cu121 兼容 30/40 系显卡）；CPU 用官方默认源
+# CUDA wheel 源（cu121 兼容 40 系及以下 NVIDIA 显卡）；CPU 用官方默认源
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu121"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
-# RVC（rvc-python）推荐 torch 2.1.1 + cu118，单独固定，避免与 so-vits 的 cu121 冲突
-TORCH_RVC_CUDA_INDEX = "https://download.pytorch.org/whl/cu118"
+# RVC 旧栈仍固定 torch 2.1.1，但 CUDA wheel 与其它环境统一走 cu121。
+TORCH_RVC_CUDA_INDEX = TORCH_CUDA_INDEX
 
 # ---- 50 系（Blackwell, sm_120）专用栈 ----
-# 50 系必须用 cu128 + torch>=2.7（cu121/cu118 无 sm_120 内核，会"无可用内核"或哑音）。
+# 50 系必须用 cu128 + torch>=2.7（cu121 无 sm_120 内核，会"无可用内核"或哑音）。
 # 仅升级 torch/cuda 不够：旧 3.9 + 老 numpy/fairseq/torchaudio 在新 torch 上能加载却出哑音，
 # 因此 Blackwell 走独立的 py3.10 + 新依赖栈（torchaudio I/O 改用 soundfile，fairseq 重装）。
 TORCH_BLACKWELL_INDEX = "https://download.pytorch.org/whl/cu128"
@@ -112,9 +140,9 @@ NSF_HIFIGAN_GH = (
 )
 RMVPE_GH = "https://github.com/yxlllc/RMVPE/releases/download/230917/rmvpe.zip"
 
-# 镜像主机（按顺序尝试；可用 XB_HF_MIRROR / XB_GH_MIRROR 环境变量覆盖）
+# 镜像主机（按顺序尝试；可用 XB_HF_MIRROR / HF_ENDPOINT / XB_GH_MIRROR 覆盖）
 HF_HOSTS = [
-    os.environ.get("XB_HF_MIRROR", "https://hf-mirror.com").rstrip("/"),
+    HF_MIRROR,
     "https://huggingface.co",
 ]
 GH_PROXIES = [
@@ -197,6 +225,13 @@ def run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> Non
     subprocess.run(cmd, cwd=str(cwd) if cwd else None, env=full_env, check=True)
 
 
+def pypi_index_args(index: str | None = None) -> list[str]:
+    """Return uv index args. Torch installs pass their own PyTorch index."""
+    if index:
+        return ["--index", index, "--index", PYPI_MIRROR, "--default-index", PYPI_FALLBACK_INDEX]
+    return ["--index", PYPI_MIRROR, "--default-index", PYPI_FALLBACK_INDEX]
+
+
 def venv_python(venv_dir: Path) -> Path:
     return (
         venv_dir / "Scripts" / "python.exe"
@@ -271,7 +306,20 @@ def ensure_uv() -> str:
     if have("uv"):
         return "uv"
     print(c("y", "未检测到 uv，尝试通过 pip 安装 …"))
-    run([sys.executable, "-m", "pip", "install", "-U", "uv"])
+    run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "-U",
+            "uv",
+            "-i",
+            PYPI_MIRROR,
+            "--extra-index-url",
+            PYPI_FALLBACK_INDEX,
+        ]
+    )
     if have("uv"):
         return "uv"
     # pip 装到 Scripts 目录但未加入 PATH 时，直接用绝对路径
@@ -296,8 +344,7 @@ def uv_pip_install(uv: str, py: str, *args: str, index: str | None = None) -> No
     def build(reinstall: bool) -> list[str]:
         extra = ["--reinstall"] if reinstall else []
         cmd = uv_cmd(uv, "pip", "install", *extra, "--python", py, *args)
-        if index:
-            cmd += ["--index-url", index]
+        cmd += pypi_index_args(index)
         return cmd
 
     try:
@@ -400,10 +447,162 @@ def copy_bundled(rel: str, dest: Path) -> bool:
     return True
 
 
+def _is_large_model_file(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size >= 32 * 1024 * 1024
+    except OSError:
+        return False
+
+
+def _link_or_copy_model(src: Path, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".xbtmp")
+    tmp.unlink(missing_ok=True)
+    try:
+        os.link(src, tmp)
+    except OSError:
+        shutil.copy2(src, tmp)
+    tmp.replace(dest)
+
+
+def _normalize_rvc_rmvpe_checkpoint(py: Path, src: Path, dest: Path) -> bool:
+    script = r"""
+import pathlib
+import sys
+
+import torch
+
+src = pathlib.Path(sys.argv[1])
+dest = pathlib.Path(sys.argv[2])
+
+def load_checkpoint(path):
+    try:
+        return torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location="cpu")
+
+obj = load_checkpoint(src)
+wrapped = False
+state = obj.get("model") if isinstance(obj, dict) else None
+if isinstance(state, dict):
+    obj = state
+    wrapped = True
+if isinstance(obj, dict):
+    cleaned = {key: val for key, val in obj.items() if not key.startswith("unet.tf.")}
+    if len(cleaned) != len(obj):
+        obj = cleaned
+        wrapped = True
+expected = ("unet.encoder.bn.weight", "cnn.weight", "fc.1.bias")
+if not isinstance(obj, dict) or not any(key in obj for key in expected):
+    raise SystemExit("incompatible RMVPE checkpoint")
+if src.resolve() == dest.resolve() and not wrapped:
+    raise SystemExit(0)
+dest.parent.mkdir(parents=True, exist_ok=True)
+tmp = dest.with_name(dest.name + ".xbtmp")
+torch.save(obj, tmp)
+tmp.replace(dest)
+"""
+    try:
+        out = subprocess.run(
+            [str(py), "-c", script, str(src), str(dest)],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(c("y", f"    RMVPE 底模格式修复失败：{exc}"))
+        return False
+    if out.returncode == 0:
+        return True
+    tail = (out.stderr or out.stdout or "").strip().splitlines()[-1:]
+    print(c("y", f"    RMVPE 底模格式不兼容，跳过：{src} {' '.join(tail)}"))
+    return False
+
+
+def _find_rvc_base_source(*rels: str) -> Path | None:
+    roots = [ASSETS_MODELS_DIR, PRETRAIN_DIR]
+    for root in roots:
+        for rel in rels:
+            rel_path = Path(rel)
+            for candidate in (root / rel_path, root / rel_path.name):
+                if _is_large_model_file(candidate):
+                    return candidate
+    return None
+
+
+def seed_rvc_base_models(py: Path) -> None:
+    """把自带底模预置到 rvc-python 包内，避免首次推理再连 HuggingFace。"""
+    try:
+        out = subprocess.run(
+            [
+                str(py),
+                "-c",
+                "import pathlib,rvc_python;print(pathlib.Path(rvc_python.__file__).resolve().parent)",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(c("y", f"    定位 rvc-python 失败，跳过 RVC 底模预置：{exc}"))
+        return
+    if out.returncode != 0 or not out.stdout.strip():
+        tail = (out.stderr or out.stdout or "").strip().splitlines()[-1:]
+        print(c("y", f"    rvc-python 尚不可导入，跳过 RVC 底模预置：{' '.join(tail)}"))
+        return
+
+    base_dir = Path(out.stdout.strip()) / "base_model"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    mapping = {
+        "hubert_base.pt": (
+            "rvc/hubert_base.pt",
+            "pretrain/hubert_base.pt",
+            "pretrain/checkpoint_best_legacy_500.pt",
+            "checkpoint_best_legacy_500.pt",
+        ),
+        "rmvpe.pt": (
+            "rvc/rmvpe.pt",
+            "pretrain/rmvpe.pt",
+            "rmvpe.pt",
+        ),
+        "rmvpe.onnx": (
+            "rvc/rmvpe.onnx",
+            "pretrain/rmvpe.onnx",
+            "rmvpe.onnx",
+        ),
+    }
+    for name, rels in mapping.items():
+        dest = base_dir / name
+        src = _find_rvc_base_source(*rels)
+        if name == "rmvpe.pt":
+            if _is_large_model_file(dest) and _normalize_rvc_rmvpe_checkpoint(py, dest, dest):
+                print(c("g", f"    RVC 底模已存在/已修复：{name}"))
+                continue
+            if src is None:
+                print(c("y", f"    未找到自带 RVC 底模 {name}，运行时将尝试镜像下载"))
+                continue
+            if _normalize_rvc_rmvpe_checkpoint(py, src, dest):
+                print(c("g", f"    RVC 底模已预置：{name}"))
+            continue
+        if _is_large_model_file(dest):
+            try:
+                if src is None or dest.stat().st_size == src.stat().st_size:
+                    print(c("g", f"    RVC 底模已存在，跳过：{name}"))
+                    continue
+            except OSError:
+                pass
+        if src is None:
+            if name != "rmvpe.onnx":
+                print(c("y", f"    未找到自带 RVC 底模 {name}，运行时将尝试镜像下载"))
+            continue
+        _link_or_copy_model(src, dest)
+        print(c("g", f"    RVC 底模已预置：{name}"))
+
+
 # ---------- 各安装步骤 ----------
 def step_app(uv: str) -> None:
     hr("1/7 主程序环境 app/.venv")
-    run(uv_cmd(uv, "sync"), cwd=APP_DIR)
+    run(uv_cmd(uv, "sync", *pypi_index_args()), cwd=APP_DIR)
     print(c("g", "主程序环境就绪"))
 
 
@@ -432,7 +631,7 @@ def step_uvr(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
     # uv venv 默认不含 setuptools，部分库运行时需要 pkg_resources，先补齐
     # （setuptools 81+ 已移除 pkg_resources，钉 <81）
     pip("setuptools<81", "wheel")
-    # VR 模型走 torch；50 系走 cu128 + torch2.7.1，否则 GPU 走 cu121 / CPU 走默认源
+    # UVR 也严格跟随全局 torch 栈：50 系 cu128；40 系及以下 NVIDIA cu121；CPU/非 NVIDIA 用 CPU torch。
     if use_blackwell:
         pip(
             f"torch=={TORCH_BLACKWELL_VER}",
@@ -641,7 +840,7 @@ def _reaffirm_blackwell_torch(uv: str, py: str) -> None:
         "--reinstall-package", "torch", "--reinstall-package", "torchaudio",
         "--python", py,
         f"torch=={TORCH_BLACKWELL_VER}", f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
-        "--index-url", TORCH_BLACKWELL_INDEX,
+        *pypi_index_args(TORCH_BLACKWELL_INDEX),
     )
     try:
         run(cmd)
@@ -717,7 +916,8 @@ def _patch_fairseq_weights_only(py: Path) -> None:
 def step_rvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
     hr("5/7 RVC 推理环境 .venv-rvc（rvc-python）")
     # RVC 推理在独立环境运行（rvc-python），与 so-vits 栈隔离。
-    # 首次推理时 rvc-python 会自动下载 hubert / rmvpe 底模（无需在此预置）。
+    # rvc-python 默认会在首次推理时下载 hubert / rmvpe；这里安装后立即预置，
+    # 避免新用户运行 RVC 时因为 HuggingFace 连接失败而报 HTTPSConnectionPool。
     target_py = PYTHON_FOR_RVC_BLACKWELL if use_blackwell else PYTHON_FOR_RVC
     py_path = venv_python(RVC_VENV)
     if py_path.exists():
@@ -743,13 +943,14 @@ def step_rvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
             index=TORCH_BLACKWELL_INDEX,
         )
         pip("rvc-python")
+        seed_rvc_base_models(venv_python(RVC_VENV))
         # 兜底：rvc-python/fairseq 可能把 cu128 torch 换成同号 CPU 版 → 强制校正回 cu128
         _reaffirm_blackwell_torch(uv, py)
         _patch_fairseq_weights_only(venv_python(RVC_VENV))
         print(c("g", "RVC 推理环境就绪（Blackwell/cu128）"))
         return
 
-    # 老栈：RVC 用 2.1.1 + cu118（rvc-python 推荐组合）
+    # 老栈：RVC 固定 torch 2.1.1；40 系及以下 NVIDIA 用 cu121，CPU/非 NVIDIA 用 CPU torch。
     pip(
         "torch==2.1.1",
         "torchaudio==2.1.1",
@@ -757,6 +958,7 @@ def step_rvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
     )
     # rvc-python（含 fairseq / faiss 等推理依赖）
     pip("rvc-python")
+    seed_rvc_base_models(venv_python(RVC_VENV))
     print(c("g", "RVC 推理环境就绪"))
 
 
@@ -918,7 +1120,7 @@ def main() -> int:
         "--no-cu128",
         dest="no_cu128",
         action="store_true",
-        help="请求使用 cu121/cu118 老栈；50 系会被复核并改回 cu128",
+        help="请求使用 40 系及以下的 cu121 老栈；50 系会被复核并改回 cu128",
     )
     p.add_argument(
         "--only",
@@ -947,7 +1149,7 @@ def main() -> int:
     if args.gpu and detected_stack == "cpu":
         print(c("y", "未检测到兼容 NVIDIA 显卡，已改用 CPU 版 torch。"))
     if args.cu128 and detected_stack == "cu121":
-        print(c("y", "当前显卡不是 50 系，忽略 cu128 请求，改用 cu121/cu118 栈。"))
+        print(c("y", "当前显卡不是 50 系，忽略 cu128 请求，改用 cu121 栈。"))
     if args.no_cu128 and detected_stack == "cu128":
         print(c("y", "检测到 50 系/Blackwell，忽略老 CUDA 栈请求，改用 cu128。"))
     use_gpu = detected_stack != "cpu"
@@ -956,7 +1158,7 @@ def main() -> int:
     if use_blackwell:
         mode = c("g", "CUDA · Blackwell/50系 (cu128 + torch" + TORCH_BLACKWELL_VER + ")")
     elif use_gpu:
-        mode = c("g", "CUDA · 40系及以下 (cu121/cu118)")
+        mode = c("g", "CUDA · 40系及以下 (cu121)")
     else:
         mode = c("y", "CPU")
     print(f"安装模式: {mode}")

@@ -59,14 +59,29 @@
             <span>已用 {{ dataStorage.used }}</span>
             <span>所在磁盘可用 {{ dataStorage.free }}</span>
           </div>
+          <div v-if="migrationProgress && migratingData" class="migration-progress">
+            <div class="migration-progress-head">
+              <span>{{ migrationProgress.message }}</span>
+              <span>{{ migrationProgress.copied }} / {{ migrationProgress.total }}</span>
+            </div>
+            <el-progress
+              :percentage="migrationProgress.percent"
+              :stroke-width="8"
+              :show-text="false"
+              :status="migrationProgress.status === 'failed' ? 'exception' : undefined"
+            />
+          </div>
         </div>
       </div>
       <div class="storage-actions">
-        <el-button round class="ghost-btn" @click="openDataDir">
+        <el-button round class="ghost-btn" :disabled="migratingData || changingDataDir" @click="openDataDir">
           <el-icon class="el-icon--left"><FolderOpened /></el-icon>打开目录
         </el-button>
-        <el-button round class="cta-btn" :loading="migratingData" @click="chooseAndMigrateDataDir">
-          <el-icon class="el-icon--left"><FolderAdd /></el-icon>选择并迁移
+        <el-button round class="ghost-btn" :loading="changingDataDir" :disabled="migratingData" @click="chooseDataDir">
+          <el-icon class="el-icon--left"><FolderAdd /></el-icon>选择目录
+        </el-button>
+        <el-button round class="cta-btn" :loading="migratingData" :disabled="changingDataDir" @click="chooseAndMigrateDataDir">
+          <el-icon class="el-icon--left"><RefreshRight /></el-icon>迁移数据
         </el-button>
       </div>
     </section>
@@ -213,7 +228,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, type Component } from 'vue'
+import { computed, onMounted, onUnmounted, ref, type Component } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import {
@@ -246,7 +261,7 @@ import { useSystemStore } from '@/stores/system'
 import { useModelsStore } from '@/stores/models'
 import { useWorksStore } from '@/stores/works'
 import { api } from '@/api'
-import type { DataStorageStatus, JobStatus } from '@/api'
+import type { DataMigrationProgress, DataStorageStatus, JobStatus } from '@/api'
 
 defineOptions({ name: 'Index' })
 
@@ -261,7 +276,10 @@ const { works } = storeToRefs(worksStore)
 
 const importing = ref(false)
 const migratingData = ref(false)
+const changingDataDir = ref(false)
 const dataStorage = ref<DataStorageStatus | null>(null)
+const migrationProgress = ref<DataMigrationProgress | null>(null)
+let migrationPollTimer: ReturnType<typeof window.setInterval> | null = null
 
 const allReady = computed(() => tools.value.length > 0 && tools.value.every((t) => t.ok))
 const displayModels = computed(() => models.value.slice(0, 5))
@@ -377,10 +395,129 @@ async function loadDataStorage() {
   dataStorage.value = await api.getDataStorageStatus()
 }
 
+async function refreshDataBackedViews() {
+  await Promise.all([
+    loadDataStorage(),
+    modelsStore.load(),
+    worksStore.load(),
+  ])
+}
+
+function errorText(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
 async function openDataDir() {
   if (!dataStorage.value?.data_dir) return
   const ok = await api.openPath(dataStorage.value.data_dir)
   if (!ok) ElMessage.error('无法打开数据目录')
+}
+
+function stopMigrationPoll() {
+  if (migrationPollTimer) {
+    window.clearInterval(migrationPollTimer)
+    migrationPollTimer = null
+  }
+}
+
+async function finishMigration(status: DataMigrationProgress) {
+  stopMigrationPoll()
+  migratingData.value = false
+  migrationProgress.value = status
+  if (status.status === 'done') {
+    const migratedDir = status.target_dir || status.result?.data_dir || ''
+    if (status.result) {
+      dataStorage.value = {
+        ...status.result,
+        data_dir: migratedDir || status.result.data_dir,
+      }
+    } else if (migratedDir && dataStorage.value) {
+      dataStorage.value = {
+        ...dataStorage.value,
+        data_dir: migratedDir,
+      }
+    }
+    await refreshDataBackedViews()
+    try {
+      await ElMessageBox.alert(
+        status.result?.message || status.message || '数据目录已迁移，请重启软件。',
+        '迁移完成',
+        {
+          confirmButtonText: '我知道了',
+          type: 'success',
+        },
+      )
+    } finally {
+      migrationProgress.value = null
+    }
+  } else if (status.status === 'failed') {
+    ElMessage.error(status.error || status.message || '迁移失败')
+    migrationProgress.value = null
+    await loadDataStorage()
+  }
+}
+
+async function pollMigrationStatus() {
+  try {
+    const status = await api.getDataMigrationStatus()
+    migrationProgress.value = status
+    if (status.status === 'done' || status.status === 'failed') {
+      await finishMigration(status)
+    }
+  } catch (error) {
+    stopMigrationPoll()
+    migratingData.value = false
+    migrationProgress.value = null
+    ElMessage.error(errorText(error, '读取迁移进度失败'))
+  }
+}
+
+function startMigrationPoll() {
+  stopMigrationPoll()
+  migrationPollTimer = window.setInterval(() => {
+    void pollMigrationStatus()
+  }, 500)
+}
+
+async function chooseDataDir() {
+  const target = await api.pickDataDir()
+  if (!target) return
+  try {
+    await ElMessageBox.confirm(
+      `将把后续新生成的模型、作品、下载素材和编辑工程写入：\n${target}\n\n此操作不会复制当前目录里的已有数据；如果需要带走已有数据，请使用“迁移数据”。`,
+      '选择数据目录',
+      {
+        confirmButtonText: '切换目录',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+  changingDataDir.value = true
+  try {
+    const result = await api.setDataDir(target)
+    if (!result.ok) {
+      ElMessage.error(result.error || '切换数据目录失败')
+      await loadDataStorage()
+      return
+    }
+    dataStorage.value = result
+    await refreshDataBackedViews()
+    await ElMessageBox.alert(
+      result.message || '数据目录已切换，请重启软件。',
+      '目录已切换',
+      {
+        confirmButtonText: '我知道了',
+        type: 'success',
+      },
+    )
+  } catch (error) {
+    ElMessage.error(errorText(error, '切换数据目录失败'))
+  } finally {
+    changingDataDir.value = false
+  }
 }
 
 async function chooseAndMigrateDataDir() {
@@ -400,20 +537,37 @@ async function chooseAndMigrateDataDir() {
     return
   }
   migratingData.value = true
+  migrationProgress.value = {
+    status: 'running',
+    phase: 'starting',
+    message: '正在启动迁移...',
+    target_dir: target,
+    copied_bytes: 0,
+    copied: '0 B',
+    total_bytes: dataStorage.value?.used_bytes || 0,
+    total: dataStorage.value?.used || '0 B',
+    percent: 0,
+  }
   try {
-    const res = await api.migrateDataDir(target)
-    if (res.ok) {
-      dataStorage.value = res
-      ElMessageBox.alert(res.message || '数据目录已迁移，请重启软件。', '迁移完成', {
-        confirmButtonText: '我知道了',
-        type: 'success',
-      })
-    } else {
-      ElMessage.error(res.error || '迁移失败')
+    const started = await api.startDataMigration(target)
+    migrationProgress.value = started
+    if (!started.ok) {
+      ElMessage.error(started.error || '迁移启动失败')
+      migratingData.value = false
+      migrationProgress.value = null
       await loadDataStorage()
+      return
     }
-  } finally {
+    if (started.status === 'done' || started.status === 'failed') {
+      await finishMigration(started)
+    } else {
+      startMigrationPoll()
+      await pollMigrationStatus()
+    }
+  } catch (error) {
+    ElMessage.error(errorText(error, '迁移启动失败'))
     migratingData.value = false
+    migrationProgress.value = null
   }
 }
 
@@ -422,6 +576,10 @@ onMounted(() => {
   modelsStore.ensureLoaded()
   worksStore.ensureLoaded()
   loadDataStorage()
+})
+
+onUnmounted(() => {
+  stopMigrationPoll()
 })
 </script>
 
@@ -614,9 +772,40 @@ onMounted(() => {
   color: var(--xb-muted);
   font-size: 12px;
 }
+.migration-progress {
+  width: min(620px, 58vw);
+  margin-top: 12px;
+}
+.migration-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--xb-muted);
+}
+.migration-progress-head span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.migration-progress-head span:last-child {
+  flex: 0 0 auto;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+.migration-progress :deep(.el-progress-bar__outer) {
+  background: rgba(var(--xb-fill-rgb), 0.12);
+}
+.migration-progress :deep(.el-progress-bar__inner) {
+  background: linear-gradient(90deg, var(--xb-primary), var(--xb-primary-2));
+}
 .storage-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
   flex: 0 0 auto;
 }
@@ -963,6 +1152,7 @@ onMounted(() => {
     flex-direction: column;
   }
   .storage-path { max-width: 100%; }
+  .migration-progress { width: 100%; }
   .storage-actions { justify-content: flex-start; }
   .work-bar, .work-time { display: none; }
 }

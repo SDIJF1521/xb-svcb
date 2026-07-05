@@ -26,6 +26,7 @@ export interface DataStorageStatus {
   total_bytes?: number
   total?: string
   pointer_file?: string
+  pointer_files?: string[]
 }
 
 export interface DataMigrationResult extends DataStorageStatus {
@@ -34,6 +35,34 @@ export interface DataMigrationResult extends DataStorageStatus {
   message?: string
   restart_required?: boolean
   old_data_dir?: string
+}
+
+export interface DataDirSwitchResult extends DataStorageStatus {
+  ok: boolean
+  error?: string
+  message?: string
+  restart_required?: boolean
+}
+
+export type DataMigrationStatusName = 'idle' | 'running' | 'done' | 'failed'
+
+export interface DataMigrationProgress {
+  status: DataMigrationStatusName
+  phase: string
+  message: string
+  target_dir?: string
+  copied_bytes: number
+  copied: string
+  total_bytes: number
+  total: string
+  percent: number
+  error?: string
+  result?: DataMigrationResult
+}
+
+export interface DataMigrationStartResult extends DataMigrationProgress {
+  ok: boolean
+  started?: boolean
 }
 
 export interface ModelFileDTO {

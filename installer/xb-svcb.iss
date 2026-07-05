@@ -20,7 +20,7 @@
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.14"
+#define MyAppVersion "0.0.15"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 
@@ -86,7 +86,7 @@ Filename: "{app}\{#MyAppExe}"; Description: "立即启动 {#MyAppShort}"; \
   WorkingDir: "{app}"; Flags: postinstall shellexec skipifsilent unchecked
 
 [UninstallDelete]
-; 卸载时清理安装目录内生成的环境与下载物（用户数据在 .xb_xvcb，保留）
+; 卸载时清理安装目录内生成的环境与下载物（用户数据在 .sb-svcb，保留）
 Type: filesandordirs; Name: "{app}\.venv-uvr"
 Type: filesandordirs; Name: "{app}\.venv-svc"
 Type: filesandordirs; Name: "{app}\.venv-rvc"
@@ -127,6 +127,64 @@ begin
     else
       Result := Result + S[I];
   end;
+end;
+
+function PathJoin(const A, B: String): String;
+begin
+  Result := AddBackslash(A) + B;
+end;
+
+function IsDriveRootPath(const S: String): Boolean;
+begin
+  Result := Uppercase(AddBackslash(S)) = Uppercase(AddBackslash(ExtractFileDrive(S)));
+end;
+
+function DirectoryHasEntries(const Dir: String): Boolean;
+var
+  FindRec: TFindRec;
+begin
+  Result := False;
+  if FindFirst(PathJoin(Dir, '*'), FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+        begin
+          Result := True;
+          Exit;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
+function IsXbDataDir(const Dir: String): Boolean;
+begin
+  Result :=
+    FileExists(PathJoin(Dir, '.sb-svcb_data')) or
+    FileExists(PathJoin(Dir, '.xb_xvcb_data')) or
+    FileExists(PathJoin(Dir, '.sv-xvcb_data')) or
+    FileExists(PathJoin(Dir, 'models.json')) or
+    FileExists(PathJoin(Dir, 'works.json')) or
+    FileExists(PathJoin(Dir, 'settings.json'));
+end;
+
+function ResolveInstallerDataDir(const Raw: String): String;
+var
+  Selected: String;
+begin
+  Selected := RemoveBackslashUnlessRoot(ExpandConstant(Raw));
+  if Selected = '' then
+    Selected := ExpandConstant('{app}\.sb-svcb');
+
+  if IsDriveRootPath(Selected) then
+    Result := PathJoin(Selected, '.sb-svcb')
+  else if DirExists(Selected) and DirectoryHasEntries(Selected) and (not IsXbDataDir(Selected)) then
+    Result := PathJoin(Selected, '.sb-svcb')
+  else
+    Result := Selected;
 end;
 
 function BatchEscape(const S: String): String;
@@ -257,7 +315,7 @@ begin
   if Stack = 'cu128' then
     Result := 'NVIDIA 50 系 / Blackwell，使用 CUDA 12.8 与 cu128 torch'
   else if Stack = 'cu121' then
-    Result := 'NVIDIA 40 系及以下兼容显卡，使用 CUDA 12.1 与 cu121/cu118 torch'
+    Result := 'NVIDIA 40 系及以下兼容显卡，使用 CUDA 12.1 与 cu121 torch'
   else
     Result := 'CPU 或未检测到兼容 NVIDIA 显卡，跳过 CUDA 并安装 CPU 版 torch';
 end;
@@ -468,13 +526,13 @@ begin
     wpSelectDir,
     'GPU 与 CUDA 栈',
     '选择本机要使用的推理依赖栈',
-    '安装器会复核实际显卡：RTX 50 系使用 cu128 + torch 2.7，40 系及以下使用 cu121/cu118；CPU 或不兼容显卡会跳过 CUDA 并安装 CPU 版 torch。',
+    '安装器会复核实际显卡：RTX 50 系使用 cu128 + torch 2.7，40 系及以下使用 cu121；CPU 或不兼容显卡会跳过 CUDA 并安装 CPU 版 torch。',
     True,
     False
   );
   GpuStackPage.Add('自动检测（推荐）');
   GpuStackPage.Add('CPU 模式');
-  GpuStackPage.Add('NVIDIA 40 系及以下：cu121 / cu118');
+  GpuStackPage.Add('NVIDIA 40 系及以下：cu121');
   GpuStackPage.Add('NVIDIA 50 系 Blackwell：cu128');
   GpuStackPage.Values[0] := True;
 
@@ -573,7 +631,7 @@ begin
   if CurPageID = DataDirPage.ID then
   begin
     if DataDirPage.Values[0] = '' then
-      DataDirPage.Values[0] := ExpandConstant('{app}\.xb_xvcb');
+      DataDirPage.Values[0] := ExpandConstant('{app}\.sb-svcb');
   end;
   if CurPageID = PrereqPathPage.ID then
   begin
@@ -616,6 +674,26 @@ begin
     Result := not ShowInstallDetails();
 end;
 
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  DataDir: String;
+begin
+  Result := True;
+  if CurPageID = DataDirPage.ID then
+  begin
+    DataDir := ResolveInstallerDataDir(DataDirPage.Values[0]);
+    if not ForceDirectories(DataDir) then
+    begin
+      MsgBox('无法创建用户数据目录：' + DataDir + #13#10 +
+        '请换一个有写入权限、空间充足的位置。',
+        mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+    DataDirPage.Values[0] := DataDir;
+  end;
+end;
+
 procedure WriteInstallerEnv();
 var
   Payload, Stack: String;
@@ -631,7 +709,14 @@ begin
     'set "XB_GIT_DIR=' + BatchEscape(PrereqPathPage.Values[1]) + '"' + #13#10 +
     'set "XB_FFMPEG_DIR=' + BatchEscape(PrereqPathPage.Values[2]) + '"' + #13#10 +
     'set "XB_CUDA_DIR=' + BatchEscape(PrereqPathPage.Values[3]) + '"' + #13#10 +
-    'set "XB_VSBT_DIR=' + BatchEscape(PrereqPathPage.Values[4]) + '"' + #13#10;
+    'set "XB_VSBT_DIR=' + BatchEscape(PrereqPathPage.Values[4]) + '"' + #13#10 +
+    'set "XB_HF_MIRROR=https://hf-mirror.com"' + #13#10 +
+    'set "HF_ENDPOINT=https://hf-mirror.com"' + #13#10 +
+    'set "HUGGINGFACE_HUB_ENDPOINT=https://hf-mirror.com"' + #13#10 +
+    'set "XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple"' + #13#10 +
+    'set "PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple"' + #13#10 +
+    'set "UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple"' + #13#10 +
+    'set "PIP_DISABLE_PIP_VERSION_CHECK=1"' + #13#10;
   SaveStringToFile(ExpandConstant('{app}\installer_env.cmd'), Payload, False);
 end;
 
@@ -696,14 +781,14 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
-    DataDir := DataDirPage.Values[0];
-    if DataDir = '' then
-      DataDir := ExpandConstant('{app}\.xb_xvcb');
+    DataDir := ResolveInstallerDataDir(DataDirPage.Values[0]);
     ForceDirectories(DataDir);
     Payload := '{' + #13#10 +
       '  "data_dir": "' + JsonEscape(DataDir) + '"' + #13#10 +
       '}' + #13#10;
     SaveStringToFile(ExpandConstant('{app}\data_home.json'), Payload, False);
+    ForceDirectories(ExpandConstant('{userappdata}\XB-SVCB'));
+    SaveStringToFile(ExpandConstant('{userappdata}\XB-SVCB\data_home.json'), Payload, False);
 
     if BuildEnvSelected() then
     begin

@@ -17,10 +17,14 @@ from typing import Any
 class JsonStore:
     def __init__(self, path: Path, default: Any) -> None:
         self._path = path
+        self._default = default
         self._lock = threading.RLock()
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        if not self._path.exists():
-            self._write(default)
+        self._ensure_file()
+
+    def set_path(self, path: Path) -> None:
+        with self._lock:
+            self._path = path
+            self._ensure_file()
 
     def read(self) -> Any:
         with self._lock:
@@ -38,6 +42,11 @@ class JsonStore:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self._path)
 
+    def _ensure_file(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        if not self._path.exists():
+            self._write(self._default)
+
 
 class ListRepository:
     """以 id 为主键的列表仓储。"""
@@ -45,6 +54,10 @@ class ListRepository:
     def __init__(self, path: Path) -> None:
         self._store = JsonStore(path, [])
         self._lock = threading.RLock()
+
+    def set_path(self, path: Path) -> None:
+        with self._lock:
+            self._store.set_path(path)
 
     def all(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -78,6 +91,9 @@ class ListRepository:
 class SettingsStore:
     def __init__(self, path: Path) -> None:
         self._store = JsonStore(path, {})
+
+    def set_path(self, path: Path) -> None:
+        self._store.set_path(path)
 
     def get(self, key: str, default: Any = None) -> Any:
         data = self._store.read() or {}

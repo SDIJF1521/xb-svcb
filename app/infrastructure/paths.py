@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 
@@ -22,6 +23,16 @@ def ensure_dirs() -> None:
         config.EDITOR_CACHE_DIR,
     ):
         d.mkdir(parents=True, exist_ok=True)
+    marker = config.DATA_DIR / config.DATA_MARKER_FILE
+    if not marker.exists():
+        marker.write_text(
+            json.dumps(
+                {"app": config.APP_NAME, "version": config.APP_VERSION},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
 
 def new_id(prefix: str = "") -> str:

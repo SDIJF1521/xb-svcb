@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.14"
+APP_VERSION = "0.0.15"
 APP_BG = "#05060d"
 
 
@@ -236,39 +236,89 @@ def modelhub_upload_ready() -> bool:
 
 # 用户数据目录（模型 / 作品 / 缓存 / 配置均保存在本地）
 # 优先级：
-# 1. 环境变量 XB_DATA_DIR / XB_SVCB_DATA_DIR / XB_XVCB_DATA_DIR（可用于自定义存储盘）
+# 1. 环境变量 XB_DATA_DIR / XB_SVCB_DATA_DIR / XB_SB_SVCB_DATA_DIR / XB_XVCB_DATA_DIR（可用于自定义存储盘）
 # 2. 安装器 / 应用内迁移写入的 data_home.json
-# 3. 默认目录 .xb_xvcb；旧版本 .xb-svcb / .xb_svcb 仅用于兼容升级
+# 3. 默认目录 .sb-svcb；旧版本 .xb_xvcb / .sv-xvcb / .xb-svcb / .xb_svcb 仅用于兼容升级
 # 4. 新安装时默认落在安装目录下，避免把数据写到系统盘 C 盘
 
-DATA_DIR_NAME = ".xb_xvcb"
+DATA_DIR_NAME = ".sb-svcb"
 DATA_HOME_FILE = BASE_DIR / "data_home.json"
-DATA_MARKER_FILE = ".xb_xvcb_data"
-DATA_MIGRATION_MARKER = ".xb_xvcb_migration_source"
-LEGACY_DATA_DIR_NAMES = (".xb-svcb", ".xb_svcb")
-LEGACY_DATA_MIGRATION_MARKERS = (".xb_svcb_migration_source",)
+USER_DATA_HOME_FILE = (
+    Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+    / APP_NAME
+    / "data_home.json"
+)
+DATA_HOME_FILES = (USER_DATA_HOME_FILE, DATA_HOME_FILE)
+DATA_MARKER_FILE = ".sb-svcb_data"
+DATA_MIGRATION_MARKER = ".sb-svcb_migration_source"
+LEGACY_DATA_MARKER_FILES = (".xb_xvcb_data", ".sv-xvcb_data", ".xb_svcb_data")
+LEGACY_DATA_DIR_NAMES = (".xb_xvcb", ".sv-xvcb", ".xb-svcb", ".xb_svcb")
+LEGACY_DATA_MIGRATION_MARKERS = (
+    ".xb_xvcb_migration_source",
+    ".sv-xvcb_migration_source",
+    ".xb_svcb_migration_source",
+)
 
 
-def _read_data_home() -> Path | None:
+def data_dir_env_override() -> str | None:
+    return (
+        os.environ.get("XB_DATA_DIR")
+        or os.environ.get("XB_SVCB_DATA_DIR")
+        or os.environ.get("XB_SB_SVCB_DATA_DIR")
+        or os.environ.get("XB_XVCB_DATA_DIR")
+    )
+
+
+def _read_data_home_file(path: Path) -> tuple[Path, dict[str, str], float] | None:
     try:
-        data = json.loads(DATA_HOME_FILE.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     raw = data.get("data_dir") if isinstance(data, dict) else None
     if not raw:
         return None
     try:
-        return Path(str(raw)).expanduser().resolve()
+        target = Path(str(raw)).expanduser().resolve()
+        mtime = path.stat().st_mtime
     except OSError:
         return None
+    payload = {str(k): str(v) for k, v in data.items() if isinstance(k, str)}
+    return target, payload, mtime
+
+
+def _read_data_home_rows() -> list[tuple[Path, Path, dict[str, str], float]]:
+    rows: list[tuple[Path, Path, dict[str, str], float]] = []
+    for path in DATA_HOME_FILES:
+        row = _read_data_home_file(path)
+        if row:
+            rows.append((path, *row))
+    return rows
+
+
+def _active_data_home_row() -> tuple[Path, Path, dict[str, str], float] | None:
+    rows = _read_data_home_rows()
+    if not rows:
+        return None
+    return max(rows, key=lambda item: item[3])
+
+
+def _read_data_home() -> Path | None:
+    row = _active_data_home_row()
+    return row[1] if row else None
+
+
+def active_data_home_file() -> Path:
+    row = _active_data_home_row()
+    return row[0] if row else DATA_HOME_FILE
+
+
+def active_data_home_payload() -> dict[str, str]:
+    row = _active_data_home_row()
+    return dict(row[2]) if row else {}
 
 
 def _resolve_data_dir() -> Path:
-    env = (
-        os.environ.get("XB_DATA_DIR")
-        or os.environ.get("XB_SVCB_DATA_DIR")
-        or os.environ.get("XB_XVCB_DATA_DIR")
-    )
+    env = data_dir_env_override()
     if env:
         return Path(env).expanduser().resolve()
 
@@ -293,16 +343,39 @@ def write_data_home(data_dir: Path, pending_delete: Path | None = None) -> bool:
     """写入持久化数据目录指针。应用内迁移和安装器使用同一文件。"""
     try:
         target = data_dir.expanduser().resolve()
-        DATA_HOME_FILE.parent.mkdir(parents=True, exist_ok=True)
-        payload: dict[str, str] = {"data_dir": str(target)}
-        if pending_delete:
-            payload["pending_delete"] = str(pending_delete.expanduser().resolve())
-        tmp = DATA_HOME_FILE.with_suffix(DATA_HOME_FILE.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(DATA_HOME_FILE)
-        return True
+        pending = pending_delete.expanduser().resolve() if pending_delete else None
     except OSError:
         return False
+    payload: dict[str, str] = {"data_dir": str(target)}
+    if pending:
+        payload["pending_delete"] = str(pending)
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    ok = False
+    for path in DATA_HOME_FILES:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(text, encoding="utf-8")
+            tmp.replace(path)
+            ok = True
+        except OSError:
+            continue
+    return ok and _read_data_home() == target
+
+
+def refresh_data_dir_from_home() -> bool:
+    """从最新有效指针重新同步当前进程的数据目录。"""
+    configured = _read_data_home()
+    if not configured:
+        return False
+    try:
+        current = DATA_DIR.resolve()
+    except OSError:
+        return False
+    if configured == current:
+        return False
+    _apply_data_dir(configured)
+    return True
 
 
 def cleanup_pending_migration() -> None:
@@ -311,10 +384,7 @@ def cleanup_pending_migration() -> None:
     只有旧目录内存在迁移标记且标记指向当前 DATA_DIR 时才删除，避免误删用户
     手动指定的普通文件夹。
     """
-    try:
-        data = json.loads(DATA_HOME_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
+    data = active_data_home_payload()
     if not isinstance(data, dict) or not data.get("pending_delete"):
         return
     try:
@@ -346,19 +416,39 @@ def cleanup_pending_migration() -> None:
         pass
 
 
-DATA_DIR = _resolve_data_dir()
-MODELS_DIR = DATA_DIR / "models"
-WORKS_DIR = DATA_DIR / "works"
-TEMP_DIR = DATA_DIR / "temp"
-# 在线下载的歌曲存放目录（资源获取页下载的素材，可在翻唱页选用）
-MUSIC_DIR = DATA_DIR / "music"
-# WebView2 持久化目录：存放前端 localStorage / cookie，使主题、头像等设置跨重启记忆。
-# 必须配合 webview.start(private_mode=False, storage_path=WEBVIEW_DIR) 才会持久化。
-WEBVIEW_DIR = DATA_DIR / "webview"
+def _apply_data_dir(data_dir: Path) -> None:
+    """更新当前进程内的数据目录派生路径。"""
+    global DATA_DIR, MODELS_DIR, WORKS_DIR, TEMP_DIR, MUSIC_DIR, WEBVIEW_DIR
+    global MODELS_DB, WORKS_DB, SETTINGS_DB, MODELHUB_DIR, EDITOR_DIR
+    global EDITOR_CACHE_DIR, EDITOR_PROJECTS_DB
 
-MODELS_DB = DATA_DIR / "models.json"
-WORKS_DB = DATA_DIR / "works.json"
-SETTINGS_DB = DATA_DIR / "settings.json"
+    DATA_DIR = data_dir.expanduser().resolve()
+    MODELS_DIR = DATA_DIR / "models"
+    WORKS_DIR = DATA_DIR / "works"
+    TEMP_DIR = DATA_DIR / "temp"
+    # 在线下载的歌曲存放目录（资源获取页下载的素材，可在翻唱页选用）
+    MUSIC_DIR = DATA_DIR / "music"
+    # WebView2 持久化目录：存放前端 localStorage / cookie，使主题、头像等设置跨重启记忆。
+    # 必须配合 webview.start(private_mode=False, storage_path=WEBVIEW_DIR) 才会持久化。
+    WEBVIEW_DIR = DATA_DIR / "webview"
+
+    MODELS_DB = DATA_DIR / "models.json"
+    WORKS_DB = DATA_DIR / "works.json"
+    SETTINGS_DB = DATA_DIR / "settings.json"
+    # 上传 / 下载暂存目录
+    MODELHUB_DIR = DATA_DIR / "modelhub"
+    # 轻量音频编辑器工程与缓存目录
+    EDITOR_DIR = DATA_DIR / "editor"
+    EDITOR_CACHE_DIR = EDITOR_DIR / "cache"
+    EDITOR_PROJECTS_DB = DATA_DIR / "editor_projects.json"
+
+
+def switch_data_dir(data_dir: Path) -> None:
+    """迁移完成后让当前会话立刻使用新的用户数据目录。"""
+    _apply_data_dir(data_dir)
+
+
+_apply_data_dir(_resolve_data_dir())
 
 # ---- 在线音乐资源 API（妖狐 API）----
 # 用户需在「资源获取」页填写自己的 API Key（控制台->密钥管理）。

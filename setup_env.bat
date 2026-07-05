@@ -9,6 +9,15 @@ cd /d "%~dp0"
 chcp 65001 >nul
 
 if exist "%~dp0installer_env.cmd" call "%~dp0installer_env.cmd"
+if not defined XB_HF_MIRROR set "XB_HF_MIRROR=https://hf-mirror.com"
+if not defined HF_ENDPOINT set "HF_ENDPOINT=%XB_HF_MIRROR%"
+if not defined HUGGINGFACE_HUB_ENDPOINT set "HUGGINGFACE_HUB_ENDPOINT=%XB_HF_MIRROR%"
+if not defined XB_PYPI_MIRROR set "XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple"
+if not defined PIP_INDEX_URL set "PIP_INDEX_URL=%XB_PYPI_MIRROR%"
+if not defined UV_DEFAULT_INDEX set "UV_DEFAULT_INDEX=%XB_PYPI_MIRROR%"
+if not defined PIP_DISABLE_PIP_VERSION_CHECK set "PIP_DISABLE_PIP_VERSION_CHECK=1"
+echo [XB-SVCB] HuggingFace mirror: %HF_ENDPOINT%
+echo [XB-SVCB] PyPI mirror       : %PIP_INDEX_URL%
 
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 3 正在查找 Python 运行时
 set "PYEXE="

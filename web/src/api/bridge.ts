@@ -13,6 +13,12 @@ export function isDesktop(): boolean {
   return !!w.pywebview?.api
 }
 
+export function hasDesktopApiMethod(method: string): boolean {
+  if (!isDesktop()) return false
+  const w = window as PywebviewWindow
+  return typeof w.pywebview?.api?.[method] === 'function'
+}
+
 let readyPromise: Promise<boolean> | null = null
 
 /** 等待 pywebview 注入完成；浏览器环境在超时后以 mock 模式继续。 */
@@ -51,6 +57,7 @@ export async function invoke<T>(
     if (typeof fn === 'function') {
       return (await fn(...args)) as T
     }
+    throw new Error(`桌面后端缺少 API：${method}`)
   }
   return await mockFn()
 }

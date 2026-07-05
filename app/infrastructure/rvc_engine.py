@@ -101,6 +101,14 @@ class RvcEngine:
         env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
+        hf_mirror = (
+            env.get("XB_HF_MIRROR")
+            or env.get("HF_ENDPOINT")
+            or "https://hf-mirror.com"
+        ).strip().rstrip("/")
+        env.setdefault("XB_HF_MIRROR", hf_mirror)
+        env.setdefault("HF_ENDPOINT", hf_mirror)
+        env.setdefault("HUGGINGFACE_HUB_ENDPOINT", hf_mirror)
 
         try:
             proc = subprocess.run(

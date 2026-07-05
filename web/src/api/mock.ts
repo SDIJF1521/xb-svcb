@@ -44,7 +44,10 @@ import type {
   EditorLyricSplitOptions,
   EditorLyricSplitResult,
   EditorLyricLine,
+  DataDirSwitchResult,
   DataMigrationResult,
+  DataMigrationProgress,
+  DataMigrationStartResult,
   DataStorageStatus,
 } from './types'
 
@@ -156,6 +159,27 @@ const mockHubModels = [
   { repo_id: 'demo-user/xb-svcb-luotianyi-a1b2c3', name: '洛天依（社区）', type: 'So-VITS', framework: 'so-vits-svc', framework_label: 'So-VITS-SVC', sample_rate: '44.1kHz', author: 'demo-user', has_diffusion: true, url: '#' },
   { repo_id: 'demo-user/xb-svcb-reze-d4e5f6', name: 'Reze（社区）', type: 'RVC', framework: 'rvc', framework_label: 'RVC', sample_rate: '44.1kHz', author: 'demo-user', has_diffusion: false, url: '#' },
 ]
+
+let mockMigrationTimer: ReturnType<typeof setInterval> | null = null
+let mockDataDir = 'D:/XB-SVCB-Data'
+let mockMigrationStatus: DataMigrationProgress = {
+  status: 'idle',
+  phase: 'idle',
+  message: '未开始迁移。',
+  target_dir: '',
+  copied_bytes: 0,
+  copied: '0 B',
+  total_bytes: 0,
+  total: '0 B',
+  percent: 0,
+}
+
+function formatMockSize(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${bytes} B`
+}
 
 function mockModelOverview(): ModelLibraryOverview {
   const rows = mockFrameworks.map((f) => ({
@@ -349,7 +373,7 @@ export const mock = {
   },
   getDataStorageStatus(): DataStorageStatus {
     return {
-      data_dir: 'D:/XB-SVCB-Data',
+      data_dir: mockDataDir,
       used_bytes: 8_420_000_000,
       used: '7.8 GB',
       free_bytes: 118_000_000_000,
@@ -360,18 +384,90 @@ export const mock = {
     }
   },
   pickDataDir(): string {
-    return 'D:/XB-SVCB-Data'
+    return 'E:/XB-SVCB-Data'
+  },
+  setDataDir(targetDir: string): DataDirSwitchResult {
+    const dataDir = targetDir || mockDataDir
+    mockDataDir = dataDir
+    return {
+      ...this.getDataStorageStatus(),
+      ok: true,
+      data_dir: dataDir,
+      message: '数据目录已切换。建议重启软件。',
+      restart_required: true,
+    }
   },
   migrateDataDir(targetDir: string): DataMigrationResult {
     const base = this.getDataStorageStatus()
+    mockDataDir = targetDir || base.data_dir
     return {
       ...base,
       ok: true,
-      data_dir: targetDir || base.data_dir,
+      data_dir: mockDataDir,
       old_data_dir: base.data_dir,
       message: '数据目录已迁移。请重启软件。',
       restart_required: true,
     }
+  },
+  startDataMigration(targetDir: string): DataMigrationStartResult {
+    if (mockMigrationStatus.status === 'running') {
+      return {
+        ...mockMigrationStatus,
+        ok: false,
+        error: '数据目录迁移正在进行中，请等待当前迁移完成。',
+      }
+    }
+    if (mockMigrationTimer) {
+      clearInterval(mockMigrationTimer)
+      mockMigrationTimer = null
+    }
+    const base = this.getDataStorageStatus()
+    const total = base.used_bytes
+    mockMigrationStatus = {
+      status: 'running',
+      phase: 'copying',
+      message: '正在复制数据...',
+      target_dir: targetDir,
+      copied_bytes: 0,
+      copied: '0 B',
+      total_bytes: total,
+      total: base.used,
+      percent: 0,
+    }
+    mockMigrationTimer = setInterval(() => {
+      const nextPercent = Math.min(100, mockMigrationStatus.percent + 8)
+      const copied = Math.round(total * (nextPercent / 100))
+      mockMigrationStatus = {
+        ...mockMigrationStatus,
+        copied_bytes: copied,
+        copied: formatMockSize(copied),
+        percent: nextPercent,
+      }
+      if (nextPercent >= 100) {
+        if (mockMigrationTimer) clearInterval(mockMigrationTimer)
+        mockMigrationTimer = null
+        mockDataDir = targetDir || base.data_dir
+        const result: DataMigrationResult = {
+          ...base,
+          ok: true,
+          data_dir: mockDataDir,
+          old_data_dir: base.data_dir,
+          message: '数据目录已迁移。请重启软件。',
+          restart_required: true,
+        }
+        mockMigrationStatus = {
+          ...mockMigrationStatus,
+          status: 'done',
+          phase: 'done',
+          message: result.message || '数据目录已迁移。请重启软件。',
+          result,
+        }
+      }
+    }, 500)
+    return { ...mockMigrationStatus, ok: true, started: true }
+  },
+  getDataMigrationStatus(): DataMigrationProgress {
+    return { ...mockMigrationStatus }
   },
   listModels(): ModelDTO[] {
     return [...mockModels]
