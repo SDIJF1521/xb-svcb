@@ -436,6 +436,36 @@ export interface HubJob {
 export type EditorTrackType = 'source' | 'vocal' | 'bgm' | 'ai' | 'effect' | 'audio'
 export type EditorClipChannel = 'stereo' | 'left' | 'right'
 
+export interface EditorRole {
+  id: string
+  name: string
+  color: string
+  model_id?: string
+  pitch?: number
+  notes?: string
+}
+
+export interface EditorTimelineTemplateRole {
+  name: string
+  color: string
+  pitch?: number
+  notes?: string
+}
+
+export interface EditorTimelineTemplateTrack {
+  name: string
+  type: EditorTrackType | string
+  roleIndex?: number
+}
+
+export interface EditorTimelineTemplate {
+  id: string
+  name: string
+  description: string
+  roles: EditorTimelineTemplateRole[]
+  tracks: EditorTimelineTemplateTrack[]
+}
+
 export interface EditorClip {
   id: string
   name: string
@@ -461,12 +491,14 @@ export interface EditorTrack {
   locked?: boolean
   mute?: boolean
   volume?: number
+  metadata?: Record<string, unknown>
 }
 
 export interface EditorProject {
   id: string
   title: string
   tracks: EditorTrack[]
+  roles?: EditorRole[]
   duration: number
   sample_rate: number
   waveform_cache: Record<string, unknown>

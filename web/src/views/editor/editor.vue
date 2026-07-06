@@ -123,6 +123,28 @@
           </el-button>
         </div>
 
+        <div class="role-block">
+          <EditorRoleManager
+            :roles="projectRoles"
+            :models="models"
+            :selected-role-id="selectedClipRoleId"
+            :has-selected-clip="!!selectedClip"
+            @add="addRole"
+            @update="updateRole"
+            @remove="removeRole"
+            @assign="assignRoleToSelectedClip"
+          />
+        </div>
+
+        <div class="template-block">
+          <TimelineTemplatePanel
+            :templates="timelineTemplates"
+            :active-template-id="activeTemplateId"
+            :disabled="!project"
+            @apply="applyTimelineTemplate"
+          />
+        </div>
+
         <div v-if="selectedClip && selectedTrack" class="clip-block">
           <div class="clip-title">
             <span>{{ selectedClip.name || '片段' }}</span>
@@ -177,6 +199,19 @@
                 {{ option.label }}
               </button>
             </div>
+          </div>
+          <div class="role-row">
+            <span>角色</span>
+            <select
+              :value="selectedClipRoleId"
+              :disabled="!selectedClipEditable"
+              @change="onSelectedClipRoleChange"
+            >
+              <option value="">未分配</option>
+              <option v-for="role in projectRoles" :key="role.id" :value="role.id">
+                {{ role.name }}
+              </option>
+            </select>
           </div>
           <div class="slider-row">
             <span>音量</span>
@@ -455,7 +490,14 @@
                   <el-icon><Delete /></el-icon>
                 </button>
                 <el-tooltip :content="track.name" placement="right" :show-after="250">
-                  <span class="track-name" :title="track.name">{{ track.name }}</span>
+                  <span class="track-name" :title="track.name">
+                    <i
+                      v-if="trackRole(track)"
+                      class="track-role-dot"
+                      :style="{ '--role-color': trackRole(track)?.color }"
+                    ></i>
+                    <span class="track-name-text">{{ track.name }}</span>
+                  </span>
                 </el-tooltip>
               </div>
 
@@ -470,9 +512,10 @@
                       selected: selected?.clipId === clip.id,
                       muted: clip.mute || track.mute,
                       locked: clip.locked || track.locked,
+                      'has-role': !!clipRole(clip),
                     },
                   ]"
-                  :style="clipStyle(clip)"
+                  :style="[clipStyle(clip), clipRoleStyle(clip)]"
                   @pointerdown.stop="startDrag($event, track, clip, 'move')"
                   @click.stop="selectClip(track.id, clip.id)"
                 >
@@ -487,6 +530,13 @@
                   <span v-if="clip.fade_in > 0" class="fade-guide fade-in" :style="fadeStyle(clip.fade_in, clip)"></span>
                   <span v-if="clip.fade_out > 0" class="fade-guide fade-out" :style="fadeStyle(clip.fade_out, clip)"></span>
                   <span v-if="clipChannel(clip) !== 'stereo'" class="channel-pill">{{ channelLabel(clipChannel(clip)) }}</span>
+                  <span
+                    v-if="clipRole(clip)"
+                    class="role-pill"
+                    :style="{ '--role-color': clipRole(clip)?.color }"
+                  >
+                    {{ clipRole(clip)?.name }}
+                  </span>
                   <span class="clip-name">{{ clip.name }}</span>
                   <button class="handle right" @pointerdown.stop="startDrag($event, track, clip, 'end')"></button>
                 </div>
@@ -530,9 +580,19 @@ import {
   VideoPlay,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import EditorRoleManager from '@/components/editor/EditorRoleManager.vue'
+import TimelineTemplatePanel from '@/components/editor/TimelineTemplatePanel.vue'
 import { api } from '@/api'
 import { useModelsStore } from '@/stores/models'
-import type { EditorClip, EditorClipChannel, EditorProject, EditorTrack, InferenceParams } from '@/api'
+import type {
+  EditorClip,
+  EditorClipChannel,
+  EditorProject,
+  EditorRole,
+  EditorTimelineTemplate,
+  EditorTrack,
+  InferenceParams,
+} from '@/api'
 
 defineOptions({ name: 'AudioEditorPage' })
 
@@ -627,6 +687,69 @@ const channelOptions: { value: EditorClipChannel; label: string; title: string }
   { value: 'left', label: 'L', title: '左声道' },
   { value: 'right', label: 'R', title: '右声道' },
 ]
+const DEFAULT_ROLE_COLOR = '#4f8cff'
+const rolePalette = ['#4f8cff', '#ff7aa8', '#2fc7a1', '#f3a13b', '#8c7cf6', '#16b8a6']
+const timelineTemplates: EditorTimelineTemplate[] = [
+  {
+    id: 'solo',
+    name: '独唱基础',
+    description: '主唱、人声、伴奏三轨结构',
+    roles: [{ name: '主唱', color: '#4f8cff' }],
+    tracks: [
+      { name: '主唱轨', type: 'vocal', roleIndex: 0 },
+      { name: '人声参考', type: 'source' },
+      { name: '伴奏轨', type: 'bgm' },
+    ],
+  },
+  {
+    id: 'duet',
+    name: '双人对唱',
+    description: 'A/B 两个角色分轨编排',
+    roles: [
+      { name: '角色 A', color: '#4f8cff' },
+      { name: '角色 B', color: '#ff7aa8' },
+    ],
+    tracks: [
+      { name: '角色 A 轨', type: 'vocal', roleIndex: 0 },
+      { name: '角色 B 轨', type: 'vocal', roleIndex: 1 },
+      { name: '合唱叠加', type: 'ai' },
+      { name: '伴奏轨', type: 'bgm' },
+    ],
+  },
+  {
+    id: 'harmony',
+    name: '主唱 + 和声',
+    description: '主旋律、和声、气声铺底',
+    roles: [
+      { name: '主唱', color: '#4f8cff' },
+      { name: '和声', color: '#2fc7a1', pitch: 3 },
+      { name: '气声', color: '#8c7cf6' },
+    ],
+    tracks: [
+      { name: '主唱轨', type: 'vocal', roleIndex: 0 },
+      { name: '和声轨', type: 'ai', roleIndex: 1 },
+      { name: '气声铺底', type: 'effect', roleIndex: 2 },
+      { name: '伴奏轨', type: 'bgm' },
+    ],
+  },
+  {
+    id: 'drama',
+    name: '三角色剧情',
+    description: '旁白、角色与合唱分层',
+    roles: [
+      { name: '旁白', color: '#f3a13b' },
+      { name: '角色 A', color: '#4f8cff' },
+      { name: '角色 B', color: '#ff7aa8' },
+    ],
+    tracks: [
+      { name: '旁白轨', type: 'source', roleIndex: 0 },
+      { name: '角色 A 轨', type: 'vocal', roleIndex: 1 },
+      { name: '角色 B 轨', type: 'vocal', roleIndex: 2 },
+      { name: '合唱 / 群像', type: 'ai' },
+      { name: '环境音效', type: 'effect' },
+    ],
+  },
+]
 
 function loadRerunPrefs(): RerunPrefs {
   try {
@@ -663,6 +786,12 @@ const selectedClip = computed(() => {
   const track = selectedTrack.value
   if (!track || !selected.value) return null
   return track.clips.find((c) => c.id === selected.value?.clipId) || null
+})
+const projectRoles = computed(() => project.value?.roles || [])
+const selectedClipRoleId = computed(() => roleIdFromMetadata(selectedClip.value?.metadata))
+const activeTemplateId = computed(() => {
+  const value = project.value?.metadata?.timeline_template_id
+  return typeof value === 'string' ? value : ''
 })
 const exportLabel = computed(() =>
   project.value?.metadata?.export_mode === 'vocal' ? '导出人声' : '导出',
@@ -754,12 +883,238 @@ function pushHistory() {
 }
 function applyProject(next: EditorProject | null) {
   if (!next) return
+  ensureEditorProjectStructure(next)
   project.value = next
   waveformMap.value = {}
   waveformLoading.clear()
   selected.value = keepSelection(next)
   router.replace({ path: '/editor', query: { project: next.id } })
   nextTick(loadWaveforms)
+}
+
+function ensureEditorProjectStructure(next: EditorProject) {
+  next.metadata = next.metadata || {}
+  next.waveform_cache = next.waveform_cache || {}
+  next.roles = sanitizeRoles(next.roles)
+  if (!next.roles.length) {
+    next.roles = [createRole('主唱', rolePalette[0])]
+  }
+  for (const track of next.tracks || []) {
+    track.metadata = track.metadata || {}
+    track.clips = track.clips || []
+    for (const clip of track.clips) {
+      clip.metadata = clip.metadata || {}
+      clip.effects = clip.effects || []
+    }
+  }
+}
+
+function sanitizeRoles(input: EditorRole[] | undefined): EditorRole[] {
+  const seen = new Set<string>()
+  return (Array.isArray(input) ? input : [])
+    .map((role, index) => ({
+      id: typeof role.id === 'string' && role.id ? role.id : makeId('role_'),
+      name: typeof role.name === 'string' && role.name.trim() ? role.name.trim().slice(0, 18) : `角色 ${index + 1}`,
+      color: isHexColor(role.color) ? role.color : rolePaletteColor(index),
+      model_id: typeof role.model_id === 'string' && role.model_id ? role.model_id : undefined,
+      pitch: typeof role.pitch === 'number' && Number.isFinite(role.pitch) ? clamp(Math.round(role.pitch), -24, 24) : 0,
+      notes: typeof role.notes === 'string' ? role.notes.slice(0, 40) : '',
+    }))
+    .filter((role) => {
+      if (seen.has(role.id)) return false
+      seen.add(role.id)
+      return true
+    })
+}
+
+function rolePaletteColor(index: number) {
+  return rolePalette[index % rolePalette.length] || DEFAULT_ROLE_COLOR
+}
+
+function createRole(name = '新角色', color = DEFAULT_ROLE_COLOR): EditorRole {
+  return {
+    id: makeId('role_'),
+    name,
+    color,
+    model_id: models.value[0]?.id,
+    pitch: 0,
+    notes: '',
+  }
+}
+
+function isHexColor(value: unknown): value is string {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)
+}
+
+function roleIdFromMetadata(metadata: Record<string, unknown> | undefined): string {
+  const value = metadata?.role_id
+  return typeof value === 'string' ? value : ''
+}
+
+function roleById(id: string) {
+  return projectRoles.value.find((role) => role.id === id) || null
+}
+
+function clipRole(clip: EditorClip) {
+  return roleById(roleIdFromMetadata(clip.metadata))
+}
+
+function trackRole(track: EditorTrack) {
+  return roleById(roleIdFromMetadata(track.metadata))
+}
+
+function clipRoleStyle(clip: EditorClip): Record<string, string> {
+  const role = clipRole(clip)
+  return role ? { '--clip-role': role.color } : {}
+}
+
+async function addRole() {
+  if (!project.value) return
+  pushHistory()
+  const roles = project.value.roles || []
+  const next = createRole(`角色 ${roles.length + 1}`, rolePaletteColor(roles.length))
+  project.value.roles = [...roles, next]
+  await saveProject()
+}
+
+async function updateRole(id: string, patch: Partial<EditorRole>) {
+  if (!project.value) return
+  const roles = project.value.roles || []
+  const index = roles.findIndex((role) => role.id === id)
+  if (index < 0) return
+  const current = roles[index]
+  if (!current) return
+  pushHistory()
+  const next: EditorRole = { ...current, ...patch, id: current.id }
+  next.name = (next.name || '角色').trim().slice(0, 18)
+  next.color = isHexColor(next.color) ? next.color : rolePaletteColor(index)
+  next.pitch = typeof next.pitch === 'number' && Number.isFinite(next.pitch) ? clamp(Math.round(next.pitch), -24, 24) : 0
+  next.notes = typeof next.notes === 'string' ? next.notes.slice(0, 40) : ''
+  project.value.roles = roles.map((role) => role.id === id ? next : role)
+  await saveProject()
+}
+
+async function removeRole(id: string) {
+  if (!project.value || projectRoles.value.length <= 1) {
+    ElMessage.info('至少保留一个角色')
+    return
+  }
+  const role = roleById(id)
+  if (!role) return
+  try {
+    await ElMessageBox.confirm(
+      `删除角色「${role.name}」后，已分配给它的片段会变为未分配。`,
+      '删除角色？',
+      {
+        confirmButtonText: '删除角色',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+  pushHistory()
+  project.value.roles = projectRoles.value.filter((item) => item.id !== id)
+  for (const track of project.value.tracks) {
+    if (roleIdFromMetadata(track.metadata) === id) {
+      track.metadata = { ...(track.metadata || {}) }
+      delete track.metadata.role_id
+    }
+    for (const clip of track.clips) {
+      if (roleIdFromMetadata(clip.metadata) === id) {
+        clip.metadata = { ...(clip.metadata || {}) }
+        delete clip.metadata.role_id
+      }
+    }
+  }
+  await saveProject()
+}
+
+async function assignRoleToSelectedClip(id: string) {
+  await setSelectedClipRole(id)
+}
+
+function onSelectedClipRoleChange(e: Event) {
+  void setSelectedClipRole((e.target as HTMLSelectElement).value)
+}
+
+async function setSelectedClipRole(id: string) {
+  const clip = selectedClip.value
+  if (!clip) return
+  if (!selectedClipEditable.value) {
+    ElMessage.info('片段或音轨已锁定')
+    return
+  }
+  if (id && !roleById(id)) return
+  pushHistory()
+  clip.metadata = { ...(clip.metadata || {}) }
+  if (id) {
+    clip.metadata.role_id = id
+  } else {
+    delete clip.metadata.role_id
+  }
+  renderedPath.value = ''
+  await saveProject()
+}
+
+function matchingRole(name: string) {
+  const target = name.trim().toLowerCase()
+  return projectRoles.value.find((role) => role.name.trim().toLowerCase() === target) || null
+}
+
+function roleForTemplate(name: string, color: string, pitch = 0, notes = '') {
+  const existing = matchingRole(name)
+  if (existing) return existing
+  const role: EditorRole = {
+    ...createRole(name, color),
+    pitch,
+    notes,
+  }
+  project.value!.roles = [...projectRoles.value, role]
+  return role
+}
+
+async function applyTimelineTemplate(templateId: string) {
+  if (!project.value) return
+  const template = timelineTemplates.find((item) => item.id === templateId)
+  if (!template) return
+  stopPlayback()
+  pushHistory()
+  ensureEditorProjectStructure(project.value)
+  const roleMap = template.roles.map((role) =>
+    roleForTemplate(role.name, role.color, role.pitch || 0, role.notes || ''),
+  )
+  let added = 0
+  for (const spec of template.tracks) {
+    const role = typeof spec.roleIndex === 'number' ? roleMap[spec.roleIndex] : null
+    const alreadyAdded = project.value.tracks.some((track) =>
+      track.metadata?.template_id === template.id && track.name === spec.name,
+    )
+    if (alreadyAdded) continue
+    project.value.tracks.push({
+      id: makeId('trk_'),
+      name: spec.name,
+      type: spec.type,
+      clips: [],
+      locked: false,
+      mute: false,
+      volume: 1,
+      metadata: {
+        template_id: template.id,
+        ...(role ? { role_id: role.id } : {}),
+      },
+    })
+    added += 1
+  }
+  project.value.metadata = {
+    ...(project.value.metadata || {}),
+    timeline_template_id: template.id,
+    timeline_template_name: template.name,
+  }
+  renderedPath.value = ''
+  await saveProject()
+  ElMessage.success(added ? `已应用「${template.name}」，新增 ${added} 条轨道` : `「${template.name}」已在时间轴中`)
 }
 function keepSelection(next: EditorProject): Selection | null {
   if (!selected.value) return null
@@ -1910,6 +2265,8 @@ onUnmounted(() => {
   background: rgba(var(--xb-fill-rgb), 0.05);
 }
 .tool-block,
+.role-block,
+.template-block,
 .clip-block {
   margin-top: 18px;
   padding-top: 18px;
@@ -1917,7 +2274,8 @@ onUnmounted(() => {
 }
 .tool-row,
 .slider-row,
-.channel-row {
+.channel-row,
+.role-row {
   display: grid;
   grid-template-columns: 66px minmax(0, 1fr);
   align-items: center;
@@ -1926,8 +2284,26 @@ onUnmounted(() => {
   color: var(--xb-muted);
   font-size: 13px;
 }
-.channel-row {
+.channel-row,
+.role-row {
   margin-top: 12px;
+}
+.role-row select {
+  width: 100%;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.05);
+  color: var(--xb-text);
+  padding: 0 10px;
+  outline: none;
+}
+.role-row select:focus {
+  border-color: var(--xb-primary);
+}
+.role-row select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .channel-segment {
   display: grid;
@@ -2344,7 +2720,9 @@ onUnmounted(() => {
   grid-column: 4;
 }
 .track-name {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 5px;
   grid-column: 1 / -1;
   grid-row: 1;
   min-width: 0;
@@ -2356,6 +2734,20 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: 800;
   line-height: 20px;
+}
+.track-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.track-role-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--role-color);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--role-color) 55%, transparent);
 }
 .track-lane {
   position: relative;
@@ -2390,6 +2782,10 @@ onUnmounted(() => {
 .clip.effect {
   border-color: rgba(var(--xb-warn-rgb), 0.48);
   background: rgba(var(--xb-warn-rgb), 0.14);
+}
+.clip.has-role {
+  border-color: color-mix(in srgb, var(--clip-role) 58%, var(--xb-border));
+  background: color-mix(in srgb, var(--clip-role) 18%, transparent);
 }
 .clip.selected {
   border-color: var(--xb-primary);
@@ -2449,6 +2845,25 @@ onUnmounted(() => {
   font-weight: 900;
   line-height: 18px;
   text-align: center;
+}
+.role-pill {
+  position: absolute;
+  top: 4px;
+  left: 10px;
+  z-index: 3;
+  max-width: calc(100% - 52px);
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--role-color) 16%, var(--xb-bg));
+  color: var(--role-color);
+  border: 1px solid color-mix(in srgb, var(--role-color) 42%, transparent);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .clip-name {
   position: absolute;

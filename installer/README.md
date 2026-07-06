@@ -1,6 +1,6 @@
 # XB-SVCB 安装器
 
-版本：`0.0.15`
+版本：`0.0.16`
 
 安装器由 Inno Setup 读取 `installer/xb-svcb.iss` 构建，负责打包桌面本体、环境搭建脚本、自带模型和文档。
 
@@ -11,6 +11,14 @@
 3. 使用 Inno Setup 6 的 `ISCC.exe` 编译 `installer/xb-svcb.iss`。
 
 本地发布构建建议使用 `installer/build.ps1` 作为一键入口。
+
+## v0.0.16 安装器行为
+
+- 应用版本为 `0.0.16`。
+- 发布包同步包含新版前端主题系统、自定义主题编辑器、多角色管理和时间轴模板。
+- UVR/RVC/SVC 环境部署会复核并保护 GPU torch 栈；检测到兼容 NVIDIA GPU 时不再在 UVR 安装阶段把 GPU 版 PyTorch 替换成 CPU 版。
+- CUDA 策略保持一致：40 系及以下兼容 NVIDIA 使用 cu121，50 系 Blackwell 使用 cu128；CPU 或不兼容显卡才回退 CPU torch。
+- 继续沿用 `.sb-svcb` 用户数据目录、镜像源配置、安装日志和隐藏命令行窗口的安装流程。
 
 ## v0.0.15 安装器行为
 

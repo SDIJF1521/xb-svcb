@@ -286,6 +286,8 @@ function parseMockLyrics(lyrics: string | EditorLyricLine[]): EditorLyricLine[] 
 function makeEditorProject(title: string, source = 'C:/music/demo.wav'): EditorProject {
   const id = rid('edt_')
   const created = now()
+  const leadRoleId = rid('role_')
+  const harmonyRoleId = rid('role_')
   return {
     id,
     title,
@@ -293,6 +295,10 @@ function makeEditorProject(title: string, source = 'C:/music/demo.wav'): EditorP
     sample_rate: 44100,
     waveform_cache: {},
     metadata: { source_path: source, mode: 'mock' },
+    roles: [
+      { id: leadRoleId, name: '主唱', color: '#4f8cff', model_id: mockModels[0]?.id, pitch: 0, notes: '主旋律' },
+      { id: harmonyRoleId, name: '和声', color: '#2fc7a1', model_id: mockModels[1]?.id, pitch: 3, notes: '副歌叠加' },
+    ],
     created_at: created,
     updated_at: created,
     tracks: [
@@ -304,8 +310,8 @@ function makeEditorProject(title: string, source = 'C:/music/demo.wav'): EditorP
         mute: false,
         locked: false,
         clips: [
-          { id: rid('clp_'), name: 'verse vocal', start: 8, end: 42, offset: 0, volume: 1, mute: false, file: source, effects: [], locked: false, fade_in: 0.08, fade_out: 0.08, channel: 'stereo', metadata: {} },
-          { id: rid('clp_'), name: 'chorus vocal', start: 48, end: 84, offset: 0, volume: 1, mute: false, file: source, effects: [], locked: false, fade_in: 0.08, fade_out: 0.08, channel: 'stereo', metadata: {} },
+          { id: rid('clp_'), name: 'verse vocal', start: 8, end: 42, offset: 0, volume: 1, mute: false, file: source, effects: [], locked: false, fade_in: 0.08, fade_out: 0.08, channel: 'stereo', metadata: { role_id: leadRoleId } },
+          { id: rid('clp_'), name: 'chorus vocal', start: 48, end: 84, offset: 0, volume: 1, mute: false, file: source, effects: [], locked: false, fade_in: 0.08, fade_out: 0.08, channel: 'stereo', metadata: { role_id: leadRoleId } },
         ],
       },
       {
@@ -326,8 +332,9 @@ function makeEditorProject(title: string, source = 'C:/music/demo.wav'): EditorP
         volume: 1,
         mute: false,
         locked: false,
+        metadata: { role_id: harmonyRoleId },
         clips: [
-          { id: rid('clp_'), name: 'AI take', start: 88, end: 126, offset: 0, volume: 1, mute: false, file: source, effects: [], locked: false, fade_in: 0.06, fade_out: 0.06, channel: 'stereo', metadata: {} },
+          { id: rid('clp_'), name: 'AI take', start: 88, end: 126, offset: 0, volume: 1, mute: false, file: source, effects: [], locked: false, fade_in: 0.06, fade_out: 0.06, channel: 'stereo', metadata: { role_id: harmonyRoleId } },
         ],
       },
     ],

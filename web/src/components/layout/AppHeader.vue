@@ -102,18 +102,7 @@
           <span>{{ allReady ? '环境就绪' : '降级模式' }}</span>
         </div>
 
-        <!-- 主题切换 -->
-        <button
-          class="theme-toggle"
-          :class="theme"
-          :title="`当前：${themeLabel}（点击切换主题）`"
-          @click="themeStore.toggle()"
-        >
-          <span class="theme-knob">
-            <el-icon><component :is="theme === 'anime' ? Sunny : Moon" /></el-icon>
-          </span>
-          <span class="theme-name">{{ themeLabel }}</span>
-        </button>
+        <ThemeSwitcher />
 
         <!-- 后台传输（模型上传 / 下载）-->
         <div ref="transfersWrap" class="menu-wrap">
@@ -260,22 +249,18 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Sunny, Moon, Picture, Close, Right, Download, Loading, Scissor, ArrowDown } from '@element-plus/icons-vue'
+import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Picture, Close, Right, Download, Loading, Scissor, ArrowDown } from '@element-plus/icons-vue'
+import ThemeSwitcher from '@/components/theme/ThemeSwitcher.vue'
 import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
 import { useModelsStore } from '@/stores/models'
 import { useProfileStore } from '@/stores/profile'
-import { useThemeStore, THEMES } from '@/stores/theme'
 import { useTransfersStore } from '@/stores/transfers'
 
 defineOptions({ name: 'AppHeader' })
 
 const router = useRouter()
 const route = useRoute()
-
-const themeStore = useThemeStore()
-const { theme } = storeToRefs(themeStore)
-const themeLabel = computed(() => THEMES.find((t) => t.value === theme.value)?.label ?? '主题')
 
 const primaryNavItems = [
   { label: '首页', to: '/', icon: HomeFilled },
@@ -1029,41 +1014,6 @@ onUnmounted(() => {
 }
 .pf-btn.primary:hover { box-shadow: 0 0 16px rgba(var(--xb-primary-rgb), 0.4); color: var(--xb-on-primary); }
 
-/* 主题切换按钮 */
-.theme-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 38px;
-  width: 38px;
-  padding: 0;
-  border-radius: 999px;
-  border: 1px solid var(--xb-border);
-  background: rgba(var(--xb-fill-rgb), 0.04);
-  color: var(--xb-text);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-  transition: all 0.25s;
-}
-.theme-toggle:hover {
-  border-color: var(--xb-primary);
-  box-shadow: 0 0 16px rgba(var(--xb-primary-rgb), 0.25);
-}
-.theme-knob {
-  width: 28px; height: 28px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  font-size: 15px;
-  color: var(--xb-on-primary);
-  background: var(--xb-brand-gradient);
-  box-shadow: 0 0 12px rgba(var(--xb-primary-rgb), 0.45);
-  transition: transform 0.4s ease;
-}
-.theme-toggle.anime .theme-knob { transform: rotate(360deg); }
-.theme-name { display: none; }
-
 @media (max-width: 1180px) {
   .env-status span:last-child { display: none; }
   .env-status { padding: 7px 10px; }
@@ -1089,8 +1039,7 @@ onUnmounted(() => {
   .search, .env-status { display: none; }
 }
 @media (max-width: 640px) {
-  .nav-link:first-child,
-  .theme-toggle {
+  .nav-link:first-child {
     display: none;
   }
   .header-actions { gap: 8px; }

@@ -688,15 +688,30 @@ def step_uvr(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
     pip("setuptools<81", "wheel")
     # UVR 也严格跟随全局 torch 栈：50 系 cu128；40 系及以下 NVIDIA cu121；CPU/非 NVIDIA 用 CPU torch。
     if use_blackwell:
-        pip(
+        torch_specs = [
             f"torch=={TORCH_BLACKWELL_VER}",
             f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
-            index=TORCH_BLACKWELL_INDEX,
-        )
+        ]
+        torch_index = TORCH_BLACKWELL_INDEX
+        torch_label = "cu128"
+        pip(*torch_specs, index=torch_index)
+    elif use_gpu:
+        torch_specs = ["torch", "torchaudio"]
+        torch_index = TORCH_CUDA_INDEX
+        torch_label = "cu121"
+        pip(*torch_specs, index=torch_index)
     else:
-        pip("torch", "torchaudio", index=TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX)
+        torch_specs = ["torch", "torchaudio"]
+        torch_index = TORCH_CPU_INDEX
+        torch_label = "CPU"
+        pip(*torch_specs, index=torch_index)
     # audio-separator：gpu 额外组件含 onnxruntime-gpu
-    pip("audio-separator[gpu]" if use_gpu else "audio-separator[cpu]")
+    if use_gpu:
+        # 安装 audio-separator 时也带上 PyTorch wheel 源，避免依赖解析把 CUDA torch 换成 PyPI CPU 版。
+        pip("audio-separator[gpu]", index=torch_index)
+        _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, torch_label)
+    else:
+        pip("audio-separator[cpu]")
     print(c("g", "分离环境就绪"))
 
 
@@ -881,11 +896,17 @@ BLACKWELL_REQ_OVERRIDES = {
 BLACKWELL_EXTRA_DENY = {"torch", "torchaudio", "torchvision", "fairseq"}
 
 
-def _reaffirm_blackwell_torch(uv: str, py: str) -> None:
-    """兜底：强制把 cu128 的 torch/torchaudio 重新装回来。
+def _reaffirm_torch_wheels(
+    uv: str,
+    py: str,
+    torch_specs: list[str],
+    index: str,
+    label: str,
+) -> None:
+    """兜底：强制把指定 PyTorch wheel 源里的 torch/torchaudio 重新装回来。
 
-    fairseq / rvc-python 等依赖在解析时可能把 cu128 的 torch（2.7.1+cu128）换成
-    PyPI 默认的「同版本号 CPU 版」（2.7.1+cpu），导致 torch.cuda.is_available()=False，
+    audio-separator / fairseq / rvc-python 等依赖在解析时可能把 CUDA torch 换成
+    PyPI 默认的「同版本号 CPU 版」，导致 torch.cuda.is_available()=False，
     推理时报 "Attempting to deserialize object on a CUDA device but
     torch.cuda.is_available() is False"。普通 install 因版本号相同会判定已满足而不覆盖，
     这里用 --reinstall-package 只强制重装 torch/torchaudio（不动其它包）。
@@ -894,14 +915,24 @@ def _reaffirm_blackwell_torch(uv: str, py: str) -> None:
         uv, "pip", "install",
         "--reinstall-package", "torch", "--reinstall-package", "torchaudio",
         "--python", py,
-        f"torch=={TORCH_BLACKWELL_VER}", f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
-        *pypi_index_args(TORCH_BLACKWELL_INDEX),
+        *torch_specs,
+        *pypi_index_args(index),
     )
     try:
         run(cmd)
-        print(c("g", "    已校正 cu128 torch（防止被依赖替换成 CPU 版）"))
+        print(c("g", f"    已校正 {label} torch（防止被依赖替换成 CPU 版）"))
     except subprocess.CalledProcessError:
-        print(c("y", "    cu128 torch 校正失败，请检查网络/驱动后重跑该步"))
+        print(c("y", f"    {label} torch 校正失败，请检查网络/驱动后重跑该步"))
+
+
+def _reaffirm_blackwell_torch(uv: str, py: str) -> None:
+    _reaffirm_torch_wheels(
+        uv,
+        py,
+        [f"torch=={TORCH_BLACKWELL_VER}", f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}"],
+        TORCH_BLACKWELL_INDEX,
+        "cu128",
+    )
 
 
 def _install_fairseq_blackwell(pip) -> None:  # noqa: ANN001

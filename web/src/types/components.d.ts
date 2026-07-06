@@ -12,6 +12,8 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AppHeader: typeof import('./../components/layout/AppHeader.vue')['default']
+    CustomThemeEditor: typeof import('./../components/theme/CustomThemeEditor.vue')['default']
+    EditorRoleManager: typeof import('./../components/editor/EditorRoleManager.vue')['default']
     ElButton: typeof import('element-plus/es')['ElButton']
     ElDialog: typeof import('element-plus/es')['ElDialog']
     ElDropdown: typeof import('element-plus/es')['ElDropdown']
@@ -30,5 +32,9 @@ declare module 'vue' {
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    ThemeBackground: typeof import('./../components/theme/ThemeBackground.vue')['default']
+    ThemePresetList: typeof import('./../components/theme/ThemePresetList.vue')['default']
+    ThemeSwitcher: typeof import('./../components/theme/ThemeSwitcher.vue')['default']
+    TimelineTemplatePanel: typeof import('./../components/editor/TimelineTemplatePanel.vue')['default']
   }
 }
