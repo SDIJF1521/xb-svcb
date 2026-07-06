@@ -235,6 +235,44 @@ begin
   DeleteFile(TempFile);
 end;
 
+function CmdPath(const S: String): String;
+begin
+  if (Pos('\', S) > 0) or (Pos(' ', S) > 0) then
+    Result := '"' + S + '"'
+  else
+    Result := S;
+end;
+
+function NvidiaSmiCommand(): String;
+var
+  Candidate: String;
+begin
+  Result := '';
+  if CmdAvailable('nvidia-smi') then
+  begin
+    Result := 'nvidia-smi';
+    Exit;
+  end;
+
+  Candidate := ExpandConstant('{win}\System32\nvidia-smi.exe');
+  if FileExists(Candidate) then
+  begin
+    Result := Candidate;
+    Exit;
+  end;
+
+  Candidate := ExpandConstant('{win}\Sysnative\nvidia-smi.exe');
+  if FileExists(Candidate) then
+  begin
+    Result := Candidate;
+    Exit;
+  end;
+
+  Candidate := ExpandConstant('{autopf}\NVIDIA Corporation\NVSMI\nvidia-smi.exe');
+  if FileExists(Candidate) then
+    Result := Candidate;
+end;
+
 function ContainsText(const S, Needle: String): Boolean;
 begin
   Result := Pos(Uppercase(Needle), Uppercase(S)) > 0;
@@ -252,7 +290,7 @@ begin
   begin
     if (Text[I] >= '0') and (Text[I] <= '9') then
     begin
-      Token := Token + Text[I]
+      Token := Token + Text[I];
       I := I + 1;
     end
     else
@@ -287,13 +325,14 @@ end;
 
 function DetectedGpuStackName(): String;
 var
-  Caps, Names: String;
+  Caps, Names, Smi: String;
 begin
   Result := 'cpu';
-  if not CmdAvailable('nvidia-smi') then
+  Smi := NvidiaSmiCommand();
+  if Smi = '' then
     Exit;
 
-  Caps := CommandOutput('nvidia-smi --query-gpu=compute_cap --format=csv,noheader');
+  Caps := CommandOutput(CmdPath(Smi) + ' --query-gpu=compute_cap --format=csv,noheader');
   if Caps <> '' then
   begin
     if HasComputeMajorAtLeast(Caps, 12) then
@@ -303,7 +342,7 @@ begin
     Exit;
   end;
 
-  Names := CommandOutput('nvidia-smi --query-gpu=name --format=csv,noheader');
+  Names := CommandOutput(CmdPath(Smi) + ' --query-gpu=name --format=csv,noheader');
   if ContainsText(Names, 'RTX 50') or ContainsText(Names, 'RTX50') then
     Result := 'cu128'
   else if Names <> '' then
@@ -600,9 +639,9 @@ var
   Requested, Detected: String;
 begin
   Requested := RequestedGpuStackName();
-  if Requested = 'cpu' then
+  if Requested <> 'auto' then
   begin
-    Result := 'cpu';
+    Result := Requested;
     Exit;
   end;
 
@@ -615,15 +654,25 @@ end;
 
 function GpuInstallArgs(): String;
 var
-  Stack: String;
+  Requested, Stack: String;
 begin
-  Stack := GpuStackName();
-  if Stack = 'cpu' then
+  Requested := RequestedGpuStackName();
+  if Requested = 'cpu' then
     Result := '--cpu'
-  else if Stack = 'cu128' then
+  else if Requested = 'cu128' then
     Result := '--gpu --cu128'
+  else if Requested = 'cu121' then
+    Result := '--gpu --no-cu128'
   else
-    Result := '--gpu --no-cu128';
+  begin
+    Stack := GpuStackName();
+    if Stack = 'cu128' then
+      Result := '--gpu --cu128'
+    else if Stack = 'cu121' then
+      Result := '--gpu --no-cu128'
+    else
+      Result := '';
+  end;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);

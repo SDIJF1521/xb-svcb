@@ -78,6 +78,7 @@ if defined XB_FFMPEG_DIR (
 if defined XB_CUDA_DIR (
   if exist "%XB_CUDA_DIR%\bin\nvcc.exe" set "XB_CUDA_BIN=%XB_CUDA_DIR%\bin"
 )
+call :FIND_NVIDIA_SMI
 
 if defined XB_VSBT_DIR (
   if exist "%XB_VSBT_DIR%\VC\Auxiliary\Build\vcvars64.bat" set "XB_VSINSTALLDIR=%XB_VSBT_DIR%\"
@@ -124,10 +125,26 @@ if "%XB_RESOLVED_GPU_STACK%"=="cu128" (
 call :NORMALIZE_CUDA_DIR
 exit /b 0
 
+:FIND_NVIDIA_SMI
+if defined XB_NVIDIA_SMI if exist "%XB_NVIDIA_SMI%" exit /b 0
+set "XB_NVIDIA_SMI="
+for %%P in (
+  "%SystemRoot%\System32\nvidia-smi.exe"
+  "%SystemRoot%\Sysnative\nvidia-smi.exe"
+  "%ProgramFiles%\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
+  "%ProgramW6432%\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
+) do (
+  if exist "%%~fP" if not defined XB_NVIDIA_SMI set "XB_NVIDIA_SMI=%%~fP"
+)
+if defined XB_NVIDIA_SMI exit /b 0
+for /f "delims=" %%P in ('where nvidia-smi 2^>nul') do if not defined XB_NVIDIA_SMI set "XB_NVIDIA_SMI=%%P"
+exit /b 0
+
 :DETECT_GPU_STACK
 set "DETECTED_GPU_STACK=cpu"
-where nvidia-smi >nul 2>&1 || exit /b 0
-for /f "tokens=1 delims=." %%A in ('nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2^>nul') do (
+call :FIND_NVIDIA_SMI
+if not defined XB_NVIDIA_SMI exit /b 0
+for /f "tokens=1 delims=." %%A in ('"%XB_NVIDIA_SMI%" --query-gpu=compute_cap --format=csv,noheader 2^>nul') do (
   set "CAP_MAJOR=%%A"
   for /f "tokens=* delims= " %%B in ("!CAP_MAJOR!") do set "CAP_MAJOR=%%B"
   echo !CAP_MAJOR! | findstr /R "^[0-9][0-9]*$" >nul && (
@@ -136,7 +153,7 @@ for /f "tokens=1 delims=." %%A in ('nvidia-smi --query-gpu=compute_cap --format=
   )
 )
 if not "%DETECTED_GPU_STACK%"=="cpu" exit /b 0
-for /f "delims=" %%G in ('nvidia-smi --query-gpu=name --format=csv,noheader 2^>nul') do (
+for /f "delims=" %%G in ('"%XB_NVIDIA_SMI%" --query-gpu=name --format=csv,noheader 2^>nul') do (
   echo %%G | findstr /I /R "RTX *50[0-9][0-9]" >nul && set "DETECTED_GPU_STACK=cu128"
   if "!DETECTED_GPU_STACK!"=="cpu" set "DETECTED_GPU_STACK=cu121"
 )

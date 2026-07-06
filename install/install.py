@@ -258,18 +258,43 @@ def have(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
 
+def find_nvidia_smi() -> str | None:
+    """Locate nvidia-smi even when it is not exposed through PATH."""
+    found = shutil.which("nvidia-smi")
+    if found:
+        return found
+
+    candidates: list[Path] = []
+    windir = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+    if windir:
+        win = Path(windir)
+        candidates += [
+            win / "System32" / "nvidia-smi.exe",
+            win / "Sysnative" / "nvidia-smi.exe",
+        ]
+    for root in {os.environ.get("ProgramFiles"), os.environ.get("ProgramW6432")}:
+        if root:
+            candidates.append(Path(root) / "NVIDIA Corporation" / "NVSMI" / "nvidia-smi.exe")
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 def detect_gpu_stack() -> str:
     """返回 cpu、cu121 或 cu128，保证 torch/CUDA 栈和实际兼容显卡一致。"""
-    if not have("nvidia-smi"):
+    smi = find_nvidia_smi()
+    if not smi:
         return "cpu"
     try:
-        subprocess.run(["nvidia-smi"], capture_output=True, check=True, timeout=15)
+        subprocess.run([smi], capture_output=True, check=True, timeout=15)
     except (OSError, subprocess.SubprocessError):
         return "cpu"
 
     try:
         out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
+            [smi, "--query-gpu=compute_cap", "--format=csv,noheader"],
             capture_output=True,
             text=True,
             timeout=15,
@@ -291,7 +316,7 @@ def detect_gpu_stack() -> str:
 
     try:
         out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            [smi, "--query-gpu=name", "--format=csv,noheader"],
             capture_output=True,
             text=True,
             timeout=15,
@@ -826,7 +851,9 @@ def step_svc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
     # so-vits checkpoint 里的非张量对象（argparse.Namespace / numpy 标量），导致
     # 加载模型时报 "Weights only load failed"。2.5.1 是支持 py3.9 且仍默认
     # weights_only=False 的稳定版，避免新装用户拉到不兼容的最新版。
-    pip("torch==2.5.1", "torchaudio==2.5.1", index=TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX)
+    torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
+    torch_index = TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX
+    pip(*torch_specs, index=torch_index)
     # 优先 requirements_win.txt（仓库为 Windows 提供的更易装版本）
     if req_file.exists():
         filtered = _filter_requirements(req_file)
@@ -837,6 +864,8 @@ def step_svc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
         pip("matplotlib==3.7.5")
     else:
         print(c("r", "    未找到 requirements，跳过依赖安装（请检查仓库）"))
+    if use_gpu:
+        _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, "cu121")
     print(c("g", "推理环境就绪"))
 
 
@@ -1037,13 +1066,13 @@ def step_rvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
         return
 
     # 老栈：RVC 固定 torch 2.1.1；40 系及以下 NVIDIA 用 cu121，CPU/非 NVIDIA 用 CPU torch。
-    pip(
-        "torch==2.1.1",
-        "torchaudio==2.1.1",
-        index=TORCH_RVC_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX,
-    )
+    torch_specs = ["torch==2.1.1", "torchaudio==2.1.1"]
+    torch_index = TORCH_RVC_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX
+    pip(*torch_specs, index=torch_index)
     # rvc-python（含 fairseq / faiss 等推理依赖）
     pip("rvc-python")
+    if use_gpu:
+        _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, "cu121")
     seed_rvc_base_models(venv_python(RVC_VENV))
     print(c("g", "RVC 推理环境就绪"))
 
