@@ -202,7 +202,7 @@ flowchart LR
 | **uv** | [https://github.com/astral-sh/uv/releases](https://github.com/astral-sh/uv/releases) |
 | **Git** | [https://git-scm.com/downloads](https://git-scm.com/downloads) |
 | **CUDA Toolkit 12.1 / 12.8** | [https://developer.nvidia.com/cuda-toolkit-archive](https://developer.nvidia.com/cuda-toolkit-archive) |
-| **ffmpeg** | [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html) |
+| **ffmpeg** | [https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip](https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip) |
 | **Node.js LTS** | [https://nodejs.org/](https://nodejs.org/) |
 | **C++ Build Tools** | [https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/) |
 
@@ -211,6 +211,33 @@ flowchart LR
 > 🟢 **50 系显卡（RTX 5060/5070/5080/5090，Blackwell, sm_120）**：cu121 无 sm_120 内核，仅升级 torch 还会出哑音，因此安装器**检测到 50 系会自动切换到 cu128 + torch 2.7 的专用栈**（SVC / RVC 改用 Python 3.10，torchaudio I/O 走 soundfile，fairseq 重装并打 `weights_only` 补丁）。需安装 **CUDA 12.8 级别的新版 NVIDIA 驱动**；若检测不到兼容 NVIDIA 显卡，会自动回退 CPU 版 torch，避免装错 CUDA 栈。
 
 - 安装建议：**建议直接用图形安装器**，无需任何命令行操作，选择仅此用户安装（用途一个盾标志的选项）。
+
+#### 🧯 软件安装失败，解决方法
+
+如果图形安装器搭建运行环境失败，可按下面步骤手动补齐依赖后重跑环境安装：
+
+1. 安装 [Python 3.10.5](https://www.python.org/downloads/release/python-3105/)，安装时勾选 **Add Python to PATH**。
+2. 打开终端，输入：
+
+```bat
+pip install uv
+```
+
+3. 按显卡型号安装 CUDA：RTX 50 系显卡安装 [CUDA Toolkit 12.8](https://developer.nvidia.com/cuda-toolkit-archive)，RTX 40 系及以下安装 [CUDA Toolkit 12.1](https://developer.nvidia.com/cuda-toolkit-archive)；CPU 用户可跳过 CUDA。
+4. 安装 [ffmpeg](https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip)，将压缩包解压，打开解压后文件夹里的 `bin` 目录，复制该路径并粘贴到系统环境变量 `Path` 中。
+5. 安装 [C++ Build Tools](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/)，使用这个安装器安装 C++ 环境，建议勾选 **Desktop development with C++**。
+6. 打开 XB-SVCB 软件安装路径文件夹，按住 `Shift` 右键，选择「在此处打开终端」，然后按显卡类型运行：
+
+```bat
+rem 50 系显卡（cu128）
+python install\install.py --root "D:\XB-SVCB" --skip-app --skip-web --cu128 --only uvr svc rvc hub
+
+rem 40 系及以下 NVIDIA 显卡（cu121）
+python install\install.py --root "D:\XB-SVCB" --skip-app --skip-web --no-cu128 --only uvr svc rvc hub
+```
+
+> 如果安装路径不是 `D:\XB-SVCB`，请把命令里的 `D:\XB-SVCB` 改成实际安装目录。等待命令运行完毕后，软件运行环境即安装完成。
+
 ---
 
 <a id="from-source"></a>
