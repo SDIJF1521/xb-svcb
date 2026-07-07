@@ -28,6 +28,13 @@ web/dist-ssr/
 .eslintcache
 *.tsbuildinfo
 
+# ===== Native / JUCE Host 本地构建产物 =====
+native/juce-vst3-host/build/
+native/juce-vst3-host/build-*/
+native/juce-vst3-host/out/
+native/juce-vst3-host/.vs/
+native/juce-vst3-host/CMakeUserPresets.json
+
 # ===== 模型 / 音频 等大文件 =====
 *.pth
 *.onnx

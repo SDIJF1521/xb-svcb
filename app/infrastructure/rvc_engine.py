@@ -42,6 +42,7 @@ class RvcEngine:
     ) -> Path:
         """执行 RVC 歌声转换；环境/模型缺失时降级为占位音频。"""
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        self._clear_output(out_path)
         main_model = (model or {}).get("main_model_path", "") or ""
         index_path = (model or {}).get("index_path", "") or ""
 
@@ -147,3 +148,10 @@ class RvcEngine:
                 return line[len("RVC_ERR") :].strip()
         lines = [ln for ln in text.splitlines() if ln.strip()]
         return " | ".join(lines[-3:]) if lines else "未知错误"
+
+    @staticmethod
+    def _clear_output(out_path: Path) -> None:
+        try:
+            out_path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise RuntimeError(f"无法清理旧推理输出: {out_path}") from exc

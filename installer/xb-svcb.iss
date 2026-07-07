@@ -14,13 +14,14 @@
 ;    - 创建开始菜单与桌面快捷方式（指向 XB-SVCB.exe）
 ;
 ;  用户机前置：安装器可通过 winget 自动安装缺失的 Python/Git/ffmpeg/uv/C++ Build Tools/CUDA Toolkit；
+;  JUCE VST3 Host 是发布包内置的原生组件，不在用户机现场编译。
 ;  已安装则跳过。CUDA 栈可自动检测，也可手动指定 40 系及以下 cu121 / 50 系 cu128。
 ;  应用界面本身由 exe 自带，无需 Node / Python。
 ; ============================================================
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.16"
+#define MyAppVersion "0.0.17"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 
@@ -396,6 +397,7 @@ begin
     '  ffmpeg：' + StatusText(CmdAvailable('ffmpeg')) + #13#10 +
     '  uv：' + StatusText(CmdAvailable('uv')) + #13#10 +
     '  CUDA Toolkit：' + StatusText(CmdAvailable('nvcc')) + #13#10 +
+    '  JUCE VST3 Host：随安装包内置，安装后检查' + #13#10 +
     '  GPU 推理栈：' + GpuStackLabel(DetectedGpuStackName()) + #13#10 +
     '  winget：' + StatusText(CmdAvailable('winget')) + #13#10 +
     '已安装的依赖会自动跳过；自动模式会让 CUDA / torch 与显卡匹配，不兼容或纯 CPU 机器会跳过 CUDA。';

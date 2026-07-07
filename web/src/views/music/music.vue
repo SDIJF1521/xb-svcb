@@ -263,6 +263,15 @@ function isUnplayableError(msg?: string): boolean {
   return /无法播放|VIP|版权|失效|有效音频|无可试听/.test(msg || '')
 }
 
+function audioUrlCandidates(song: { musicurl?: string; url?: string }): string[] {
+  const urls: string[] = []
+  for (const value of [song.musicurl, song.url]) {
+    const url = String(value || '').trim()
+    if (url && !urls.includes(url)) urls.push(url)
+  }
+  return urls
+}
+
 const onAudioPause = () => {
   if (audioEl.value && audioEl.value.ended) playingN.value = null
 }
@@ -283,17 +292,26 @@ async function togglePreview(item: MusicSearchItem) {
       ElMessage.error(res.error || '获取歌曲信息失败')
       return
     }
-    const src = res.song.musicurl || res.song.url
-    if (!src) {
+    const candidates = audioUrlCandidates(res.song)
+    if (!candidates.length) {
       markUnplayable(item.n)
       ElMessage.warning('该歌曲不可播放，无法下载（可能为 VIP / 无版权）')
       return
     }
-    el.src = src
-    await el.play()
-    playingN.value = item.n
+    for (const src of candidates) {
+      try {
+        el.src = src
+        el.load()
+        await el.play()
+        playingN.value = item.n
+        return
+      } catch {
+        // 继续测试下一个候选地址。
+      }
+    }
+    markUnplayable(item.n)
+    ElMessage.error('该资源无法播放，无法下载')
   } catch {
-    // 拿到地址却播放失败（格式不支持 / 链接失效）→ 同样视为不可下载
     markUnplayable(item.n)
     ElMessage.error('该资源无法播放，无法下载')
   } finally {

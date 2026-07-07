@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.16"
+APP_VERSION = "0.0.17"
 APP_BG = "#05060d"
 
 
@@ -146,6 +146,24 @@ RVC_WORKER = BUNDLE_DIR / "infrastructure" / "rvc_worker.py"
 def rvc_engine_ready() -> bool:
     """RVC 推理环境是否齐备：worker 存在、解释器存在。"""
     return bool(RVC_WORKER.exists() and RVC_PYTHON and RVC_PYTHON.exists())
+
+
+# ---- JUCE VST3 Host（编辑器外部效果器插件）----
+# VST3 插件 GUI 必须由原生 host 承载。Python/前端只负责业务状态与调度：
+#   Python（业务逻辑、AI、界面） -> C++ JUCE VST3 Host -> VST3 Plugin GUI
+JUCE_VST3_HOST_DIR = ENGINES_DIR / "juce-vst3-host"
+JUCE_VST3_HOST_EXE = Path(
+    os.environ.get(
+        "XB_JUCE_VST3_HOST",
+        str(JUCE_VST3_HOST_DIR / ("xb-juce-vst3-host.exe" if os.name == "nt" else "xb-juce-vst3-host")),
+    )
+)
+JUCE_VST3_HOST_PROTOCOL = 1
+
+
+def juce_vst3_host_ready() -> bool:
+    """编辑器 VST3 插件 host 是否可用。"""
+    return bool(JUCE_VST3_HOST_EXE and JUCE_VST3_HOST_EXE.exists())
 
 
 # ---- UVR 人声分离引擎（audio-separator + 复用本地 UVR 模型）----

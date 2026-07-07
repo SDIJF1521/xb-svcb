@@ -4,10 +4,12 @@
   Steps:
     1) Build the frontend into web/dist (unless -SkipWebBuild)
     2) Build the app exe with PyInstaller into dist/XB-SVCB (unless -SkipAppBuild)
-    3) Compile installer/xb-svcb.iss with Inno Setup's ISCC
+    3) Build the native JUCE VST3 host into engines/juce-vst3-host (unless -SkipJuceHostBuild)
+    4) Compile installer/xb-svcb.iss with Inno Setup's ISCC
     4) Output: dist/XB-SVCB-Setup.exe
 
   Prerequisites: Node.js (frontend build), app/.venv with pywebview + pyinstaller,
+                 CMake + C++17 compiler + JUCE for the VST3 host,
                  Inno Setup 6 (provides ISCC.exe)
                  Inno Setup download: https://jrsoftware.org/isdl.php
 
@@ -19,7 +21,8 @@
 
 param(
   [switch]$SkipWebBuild,
-  [switch]$SkipAppBuild
+  [switch]$SkipAppBuild,
+  [switch]$SkipJuceHostBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -78,7 +81,30 @@ if (-not (Test-Path (Join-Path $Root "dist\XB-SVCB\XB-SVCB.exe"))) {
   throw "dist\XB-SVCB\XB-SVCB.exe not found. Build the app exe first (do not use -SkipAppBuild)."
 }
 
-# 3) Compile installer
+# 3) Build native JUCE VST3 host and stage it next to the app exe.
+if (-not $SkipJuceHostBuild) {
+  Write-Host "`n==== Building JUCE VST3 host ====" -ForegroundColor Cyan
+  $hostBuild = Join-Path $Root "native\juce-vst3-host\build.ps1"
+  if (-not (Test-Path $hostBuild)) {
+    throw "native\juce-vst3-host\build.ps1 not found."
+  }
+  & $hostBuild
+  if ($LASTEXITCODE -ne 0) { throw "JUCE VST3 host build failed (exit code $LASTEXITCODE)" }
+
+  $hostSrc = Join-Path $Root "engines\juce-vst3-host"
+  $hostDest = Join-Path $Root "dist\XB-SVCB\engines\juce-vst3-host"
+  if (-not (Test-Path $hostSrc)) {
+    throw "JUCE host output not found: $hostSrc"
+  }
+  New-Item -ItemType Directory -Force -Path $hostDest | Out-Null
+  Copy-Item -Path (Join-Path $hostSrc "*") -Destination $hostDest -Recurse -Force
+}
+$stagedHostExe = Join-Path $Root "dist\XB-SVCB\engines\juce-vst3-host\xb-juce-vst3-host.exe"
+if (-not (Test-Path $stagedHostExe)) {
+  throw "JUCE VST3 host is not staged: $stagedHostExe. Build native/juce-vst3-host first; do not ship an installer without this exe."
+}
+
+# 4) Compile installer
 Write-Host "`n==== Compiling installer (Inno Setup) ====" -ForegroundColor Cyan
 $iscc = Find-ISCC
 if (-not $iscc) {

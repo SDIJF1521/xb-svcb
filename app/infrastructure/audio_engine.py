@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import config
+from infrastructure.audio_effects import AudioEffectsProcessor
 from infrastructure.ffmpeg_tool import FfmpegTool
 
 
@@ -21,6 +22,7 @@ class FFmpegEngine:
     def __init__(self, tool: FfmpegTool | None = None) -> None:
         self._tool = tool or FfmpegTool()
         self.ffmpeg = self._tool.ffmpeg
+        self._effects = AudioEffectsProcessor(self._tool)
 
     @property
     def available(self) -> bool:
@@ -148,7 +150,19 @@ class FFmpegEngine:
                     continue
                 if float(clip.get("end") or 0) <= float(clip.get("start") or 0):
                     continue
-                inputs.append((track, clip, {"path": path}))
+                meta = {"path": path, "prepared": False}
+                if self._effects.clip_requires_processing(clip):
+                    key = self._effects.cache_key(path, clip, sample_rate)
+                    prepared = cache_dir / f"fx_{key}.wav"
+                    if prepared.exists() or self._effects.render_clip(
+                        path,
+                        clip,
+                        prepared,
+                        cache_dir,
+                        sample_rate,
+                    ):
+                        meta = {"path": prepared, "prepared": True}
+                inputs.append((track, clip, meta))
 
         if not inputs:
             return self.silence(dst, duration, sample_rate=sample_rate)
@@ -159,11 +173,11 @@ class FFmpegEngine:
 
         filters: list[str] = []
         labels = ""
-        for idx, (track, clip, _) in enumerate(inputs):
+        for idx, (track, clip, meta) in enumerate(inputs):
             start = max(0.0, float(clip.get("start") or 0.0))
             end = max(start, float(clip.get("end") or start))
             length = max(0.01, end - start)
-            offset = max(0.0, float(clip.get("offset") or 0.0))
+            offset = 0.0 if meta.get("prepared") else max(0.0, float(clip.get("offset") or 0.0))
             gain = max(0.0, float(track.get("volume", 1.0)) * float(clip.get("volume", 1.0)))
             fade_in = max(0.0, min(float(clip.get("fade_in") or 0.0), length / 2.0))
             fade_out = max(0.0, min(float(clip.get("fade_out") or 0.0), length / 2.0))
@@ -176,13 +190,16 @@ class FFmpegEngine:
                 "aformat=sample_fmts=s16:channel_layouts=stereo,"
                 f"volume={gain:.4f}"
             )
+            envelope = self._volume_envelope_filter(clip.get("volume_envelope"), length)
+            if envelope:
+                chain += f",{envelope}"
             if fade_in > 0:
                 chain += f",afade=t=in:st=0:d={fade_in:.3f}"
             if fade_out > 0:
                 chain += f",afade=t=out:st={max(0.0, length - fade_out):.3f}:d={fade_out:.3f}"
-            if channel == "left":
+            if not meta.get("prepared") and channel == "left":
                 chain += ",pan=stereo|c0=0.5*c0+0.5*c1|c1=0*c0"
-            elif channel == "right":
+            elif not meta.get("prepared") and channel == "right":
                 chain += ",pan=stereo|c0=0*c0|c1=0.5*c0+0.5*c1"
             chain += f",adelay={delay_ms}|{delay_ms}[a{idx}]"
             filters.append(chain)
@@ -220,6 +237,51 @@ class FFmpegEngine:
     def cache_key(payload: Any) -> str:
         data = repr(payload).encode("utf-8", errors="replace")
         return hashlib.sha256(data).hexdigest()[:24]
+
+    @classmethod
+    def _volume_envelope_filter(cls, raw: Any, duration: float) -> str:
+        points = cls._volume_envelope_points(raw, duration)
+        if len(points) < 2:
+            return ""
+        if all(abs(point[1] - 1.0) < 0.0001 for point in points):
+            return ""
+
+        expr = f"{points[-1][1]:.6f}"
+        for idx in range(len(points) - 2, -1, -1):
+            t0, v0 = points[idx]
+            t1, v1 = points[idx + 1]
+            span = max(0.001, t1 - t0)
+            line = f"{v0:.6f}+({v1:.6f}-{v0:.6f})*(t-{t0:.6f})/{span:.6f}"
+            expr = f"if(lte(t\\,{t1:.6f})\\,{line}\\,{expr})"
+        return f"volume='{expr}':eval=frame"
+
+    @staticmethod
+    def _volume_envelope_points(raw: Any, duration: float) -> list[tuple[float, float]]:
+        if not isinstance(raw, list):
+            return []
+        points: list[tuple[float, float]] = []
+        dur = max(0.01, float(duration or 0.01))
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            try:
+                t = float(item.get("time", item.get("t", 0.0)) or 0.0)
+                v = float(item.get("volume", item.get("value", 1.0)) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            points.append((max(0.0, min(dur, t)), max(0.0, min(2.5, v))))
+        if not points:
+            return []
+
+        by_time: dict[float, float] = {}
+        for t, v in sorted(points, key=lambda point: point[0]):
+            by_time[round(t, 3)] = v
+        normalized = [(t, by_time[t]) for t in sorted(by_time)]
+        if normalized[0][0] > 0.0:
+            normalized.insert(0, (0.0, normalized[0][1]))
+        if normalized[-1][0] < dur:
+            normalized.append((dur, normalized[-1][1]))
+        return normalized
 
     def _run(self, cmd: list[str], timeout: int) -> bool:
         try:

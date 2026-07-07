@@ -32,7 +32,13 @@ import type {
   ModelFramework,
   EditorProject,
   EditorProjectSummary,
+  EditorAudioPasteResult,
   EditorWaveform,
+  EditorAudioCopyResult,
+  EditorPluginHostStatus,
+  EditorPluginInspectResult,
+  EditorPluginWindowResult,
+  EditorPluginCloseResult,
   EditorRerunResult,
   EditorSilenceSplitOptions,
   EditorSilenceSplitResult,
@@ -158,6 +164,9 @@ export const api = {
 
   pickLyricsFile: () =>
     invoke<LyricsFileResult>('pick_lyrics_file', [], () => mock.pickLyricsFile()),
+
+  pickEffectPluginFile: () =>
+    invoke<string | null>('pick_effect_plugin_file', [], () => mock.pickEffectPluginFile()),
 
   listWorks: () => invoke<WorkDTO[]>('list_works', [], () => mock.listWorks()),
 
@@ -357,6 +366,17 @@ export const api = {
       () => mock.importAudioToEditorTrack(projectId, path, trackId, start),
     ),
 
+  pasteAudioToEditorTrack: (
+    projectId: string,
+    trackId?: string | null,
+    start = 0,
+  ) =>
+    invoke<EditorAudioPasteResult>(
+      'paste_audio_to_editor_track',
+      [projectId, trackId, start],
+      () => mock.pasteAudioToEditorTrack(projectId, trackId, start),
+    ),
+
   saveEditorProject: (project: EditorProject) =>
     invoke<EditorProject | null>('save_editor_project', [project], () =>
       mock.saveEditorProject(project),
@@ -375,6 +395,44 @@ export const api = {
   getEditorClipAudio: (projectId: string, clipId: string) =>
     invoke<string>('get_editor_clip_audio', [projectId, clipId], () =>
       mock.getEditorClipAudio(projectId, clipId),
+    ),
+
+  getEditorPluginHostStatus: () =>
+    invoke<EditorPluginHostStatus>('get_editor_plugin_host_status', [], () =>
+      mock.getEditorPluginHostStatus(),
+    ),
+
+  inspectEditorEffectPlugin: (path: string) =>
+    invoke<EditorPluginInspectResult>('inspect_editor_effect_plugin', [path], () =>
+      mock.inspectEditorEffectPlugin(path),
+    ),
+
+  openEditorEffectPlugin: (
+    projectId: string,
+    trackId: string,
+    clipId: string,
+    effectId: string,
+    parentWindow = '',
+  ) =>
+    invoke<EditorPluginWindowResult>(
+      'open_editor_effect_plugin',
+      [projectId, trackId, clipId, effectId, parentWindow],
+      () => mock.openEditorEffectPlugin(projectId, trackId, clipId, effectId, parentWindow),
+    ),
+
+  closeEditorEffectPlugin: (sessionId: string) =>
+    invoke<EditorPluginCloseResult>('close_editor_effect_plugin', [sessionId], () =>
+      mock.closeEditorEffectPlugin(sessionId),
+    ),
+
+  copyEditorClipAudio: (projectId: string, clipId: string, fmt = 'wav') =>
+    invoke<EditorAudioCopyResult>('copy_editor_clip_audio', [projectId, clipId, fmt], () =>
+      mock.copyEditorClipAudio(projectId, clipId, fmt),
+    ),
+
+  copyEditorTrackAudio: (projectId: string, trackId: string, fmt = 'wav') =>
+    invoke<EditorAudioCopyResult>('copy_editor_track_audio', [projectId, trackId, fmt], () =>
+      mock.copyEditorTrackAudio(projectId, trackId, fmt),
     ),
 
   renderEditorPreview: (projectId: string) =>

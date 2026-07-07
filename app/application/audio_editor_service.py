@@ -18,7 +18,9 @@ import config
 from domain import EditorClip, EditorProject, EditorTrack, InferenceParams
 from infrastructure import paths
 from infrastructure.audio_engine import FFmpegEngine
+from infrastructure.clipboard import audio_files_from_clipboard, copy_file_to_clipboard
 from infrastructure.ffmpeg_tool import FfmpegTool
+from infrastructure.juce_vst3_host import JuceVst3Host
 from infrastructure.storage import ListRepository
 from infrastructure.uvr_tool import UvrTool
 
@@ -30,7 +32,7 @@ class AudioEditorService:
 
     _HISTORY_LIMIT = 60
     _MIN_RERUN_DURATION = 1.0
-    _RENDER_VERSION = "channel-route-v5-flac-preview"
+    _RENDER_VERSION = "channel-route-v7-effects-envelope-juce"
 
     def __init__(
         self,
@@ -47,6 +49,8 @@ class AudioEditorService:
         self._ffmpeg = ffmpeg
         self._uvr = uvr
         self._audio = FFmpegEngine(ffmpeg)
+        self._plugin_host = JuceVst3Host()
+        self._plugin_sessions: dict[str, dict[str, str]] = {}
         self._engines = engines
 
     def list(self) -> list[dict[str, Any]]:
@@ -236,6 +240,69 @@ class AudioEditorService:
         next_project["waveform_cache"] = {}
         saved = self.save(next_project, push_history=True)
         return {"ok": True, "project": saved, "track": track, "clip": clip}
+
+    def paste_clipboard_audio_to_track(
+        self,
+        project_id: str,
+        track_id: str | None = None,
+        start: float = 0.0,
+    ) -> dict[str, Any]:
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+
+        audio_paths = audio_files_from_clipboard()
+        if not audio_paths:
+            return {"ok": False, "error": "剪贴板里没有可粘贴的音频文件"}
+
+        try:
+            cursor = max(0.0, float(start or 0.0))
+        except (TypeError, ValueError):
+            cursor = 0.0
+
+        target_track_id = str(track_id or "").strip() or None
+        latest_project: dict[str, Any] | None = None
+        latest_track: dict[str, Any] | None = None
+        clips: list[dict[str, Any]] = []
+
+        for audio_path in audio_paths:
+            result = self.import_audio_to_track(
+                project_id,
+                str(audio_path),
+                target_track_id,
+                cursor,
+            )
+            if not result.get("ok"):
+                if clips:
+                    return {
+                        **result,
+                        "project": latest_project,
+                        "track": latest_track,
+                        "clips": clips,
+                        "paths": [str(p) for p in audio_paths],
+                    }
+                return result
+
+            latest_project = result.get("project")
+            latest_track = result.get("track")
+            if latest_track:
+                target_track_id = str(latest_track.get("id") or target_track_id or "")
+            clip = result.get("clip")
+            if isinstance(clip, dict):
+                clips.append(clip)
+                try:
+                    cursor = max(cursor, float(clip.get("end") or cursor))
+                except (TypeError, ValueError):
+                    pass
+
+        return {
+            "ok": True,
+            "project": latest_project,
+            "track": latest_track,
+            "clip": clips[-1] if clips else None,
+            "clips": clips,
+            "paths": [str(p) for p in audio_paths],
+        }
 
     def separate_clip_vocals(
         self,
@@ -807,6 +874,140 @@ class AudioEditorService:
         return self._public(next_record)
 
     def clip_audio(self, project_id: str, clip_id: str) -> str:
+        dst = self._render_clip_file(project_id, clip_id, "flac", cache=True)
+        return self._audio_data(dst, exact=True) if dst and dst.exists() else ""
+
+    def copy_clip_audio(
+        self,
+        project_id: str,
+        clip_id: str,
+        fmt: str = "wav",
+    ) -> dict[str, Any]:
+        dst = self._render_clip_file(project_id, clip_id, fmt, cache=False)
+        return self._clipboard_payload(dst)
+
+    def copy_track_audio(
+        self,
+        project_id: str,
+        track_id: str,
+        fmt: str = "wav",
+    ) -> dict[str, Any]:
+        dst = self._render_track_file(project_id, track_id, fmt)
+        return self._clipboard_payload(dst)
+
+    def plugin_host_status(self) -> dict[str, Any]:
+        return self._plugin_host.status()
+
+    def inspect_effect_plugin(self, path: str) -> dict[str, Any]:
+        return self._plugin_host.inspect_plugin(path)
+
+    def open_effect_plugin_editor(
+        self,
+        project_id: str,
+        track_id: str,
+        clip_id: str,
+        effect_id: str,
+        parent_window: str = "",
+    ) -> dict[str, Any]:
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在", **self._plugin_host.status()}
+        track, _, clip = self._find_clip_ref(project, track_id, clip_id)
+        if not track or not clip:
+            return {"ok": False, "error": "片段不存在", **self._plugin_host.status()}
+        effect = self._find_effect(clip, effect_id)
+        if not effect:
+            return {"ok": False, "error": "效果器不存在", **self._plugin_host.status()}
+        result = self._plugin_host.show_editor(
+            effect,
+            project_id=project_id,
+            clip_id=clip_id,
+            effect_id=effect_id,
+            parent_window=parent_window,
+        )
+        session_id = str(result.get("session_id") or "")
+        if result.get("ok") and session_id:
+            self._plugin_sessions[session_id] = {
+                "project_id": project_id,
+                "track_id": track_id,
+                "clip_id": clip_id,
+                "effect_id": effect_id,
+            }
+        return result
+
+    def close_effect_plugin_editor(self, session_id: str) -> dict[str, Any]:
+        result = self._plugin_host.close_editor(session_id)
+        ref = self._plugin_sessions.pop(session_id or "", None)
+        if result.get("ok") and ref:
+            project = self._apply_plugin_state(ref, result.get("plugin"))
+            if project:
+                result["project"] = project
+        return result
+
+    def _apply_plugin_state(
+        self,
+        ref: dict[str, str],
+        plugin: Any,
+    ) -> dict[str, Any] | None:
+        if not isinstance(plugin, dict):
+            return None
+        project = self._repo.get(ref.get("project_id", ""))
+        if not project:
+            return None
+        _, _, clip = self._find_clip_ref(
+            project,
+            ref.get("track_id", ""),
+            ref.get("clip_id", ""),
+        )
+        if not clip:
+            return None
+        effect = self._find_effect(clip, ref.get("effect_id", ""))
+        if not effect:
+            return None
+
+        params = dict(effect.get("params") or {})
+        state = plugin.get("state")
+        if isinstance(state, str) and state:
+            params["state"] = state
+        values = plugin.get("parameter_values")
+        if isinstance(values, dict):
+            params["parameters"] = {
+                str(key): value
+                for key, value in values.items()
+                if isinstance(value, (int, float))
+            }
+        name = plugin.get("name")
+        if isinstance(name, str) and name:
+            params["plugin_name"] = name
+        effect["params"] = params
+        project["updated_at"] = self._now()
+        project["duration"] = self._project_duration(project)
+        self._repo.update(str(project.get("id") or ""), project)
+        return self._public(project)
+
+    def render_preview(self, project_id: str) -> str:
+        path = self.render(project_id, "flac")
+        return self._audio_data(path, exact=True) if path else ""
+
+    def render(self, project_id: str, output_format: str = "wav") -> Path | None:
+        project = self._repo.get(project_id)
+        if not project:
+            return None
+        fmt = self._normalize_format(output_format)
+        key = self._render_key(project, fmt)
+        dst = config.EDITOR_CACHE_DIR / f"{project_id}_{key}.{fmt}"
+        if dst.exists():
+            return dst
+        ok = self._audio.render_timeline(project, dst, config.EDITOR_CACHE_DIR, fmt)
+        return dst if ok and dst.exists() else None
+
+    def _render_clip_file(
+        self,
+        project_id: str,
+        clip_id: str,
+        fmt: str = "wav",
+        cache: bool = False,
+    ) -> Path | None:
         project = self._repo.get(project_id)
         track: dict[str, Any] | None = None
         clip: dict[str, Any] | None = None
@@ -821,7 +1022,7 @@ class AudioEditorService:
                     clip = hit
                     break
         if not project or not track or not clip:
-            return ""
+            return None
         try:
             length = max(0.01, float(clip.get("end") or 0.0) - float(clip.get("start") or 0.0))
         except (TypeError, ValueError):
@@ -844,6 +1045,7 @@ class AudioEditorService:
                 }
             ],
         }
+        output_format = self._normalize_format(fmt)
         key = FFmpegEngine.cache_key(
             {
                 "render_version": self._RENDER_VERSION,
@@ -851,27 +1053,54 @@ class AudioEditorService:
                 "clip": preview_clip,
                 "track_volume": track.get("volume", 1.0),
                 "sample_rate": preview_project["sample_rate"],
+                "format": output_format,
             }
         )
-        dst = config.EDITOR_CACHE_DIR / f"{project_id}_{clip_id}_{key}.flac"
-        if not dst.exists():
-            self._audio.render_timeline(preview_project, dst, config.EDITOR_CACHE_DIR, "flac")
-        return self._audio_data(dst, exact=True) if dst.exists() else ""
+        if cache:
+            dst = config.EDITOR_CACHE_DIR / f"{project_id}_{clip_id}_{key}.{output_format}"
+        else:
+            export_dir = self._project_dir(project_id) / "copied"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            name = self._safe_stem(str(clip.get("name") or Path(str(clip.get("file") or "")).stem))
+            dst = export_dir / f"{name}_{key}.{output_format}"
+        if dst.exists():
+            return dst
+        ok = self._audio.render_timeline(preview_project, dst, config.EDITOR_CACHE_DIR, output_format)
+        return dst if ok and dst.exists() else None
 
-    def render_preview(self, project_id: str) -> str:
-        path = self.render(project_id, "flac")
-        return self._audio_data(path, exact=True) if path else ""
-
-    def render(self, project_id: str, output_format: str = "wav") -> Path | None:
+    def _render_track_file(
+        self,
+        project_id: str,
+        track_id: str,
+        fmt: str = "wav",
+    ) -> Path | None:
         project = self._repo.get(project_id)
         if not project:
             return None
-        fmt = self._normalize_format(output_format)
-        key = self._render_key(project, fmt)
-        dst = config.EDITOR_CACHE_DIR / f"{project_id}_{key}.{fmt}"
+        track = next((t for t in project.get("tracks", []) or [] if t.get("id") == track_id), None)
+        if not track:
+            return None
+        output_format = self._normalize_format(fmt)
+        track_project = {
+            "id": project_id,
+            "duration": max(float(project.get("duration") or 0.05), self._project_duration({"tracks": [track]})),
+            "sample_rate": project.get("sample_rate") or 44100,
+            "tracks": [{**copy.deepcopy(track), "mute": False}],
+        }
+        key = FFmpegEngine.cache_key(
+            {
+                "render_version": self._RENDER_VERSION,
+                "project_id": project_id,
+                "track": track_project,
+                "format": output_format,
+            }
+        )
+        export_dir = self._project_dir(project_id) / "copied"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        dst = export_dir / f"{self._safe_stem(str(track.get('name') or 'track'))}_{key}.{output_format}"
         if dst.exists():
             return dst
-        ok = self._audio.render_timeline(project, dst, config.EDITOR_CACHE_DIR, fmt)
+        ok = self._audio.render_timeline(track_project, dst, config.EDITOR_CACHE_DIR, output_format)
         return dst if ok and dst.exists() else None
 
     def waveform(self, project_id: str, clip_id: str, bins: int = 160) -> dict[str, Any]:
@@ -1177,8 +1406,16 @@ class AudioEditorService:
             }
         out_dir = self._project_dir(project_id) / "reruns"
         out_dir.mkdir(parents=True, exist_ok=True)
-        dry = out_dir / f"{clip_id}_input.wav"
-        out = out_dir / f"{clip_id}_{model_id}.wav"
+        infer_params = InferenceParams.from_dict(params or {})
+        used_params = infer_params.to_dict()
+        rerun_key = self._rerun_key(src, clip, model_id, used_params)
+        dry = out_dir / f"{clip_id}_{rerun_key}_input.wav"
+        out = out_dir / f"{clip_id}_{model_id}_{rerun_key}.wav"
+        for stale in (dry, out):
+            try:
+                stale.unlink(missing_ok=True)
+            except OSError:
+                return {"ok": False, "error": "无法清理上一次重推理缓存"}
         if not self._audio.trim(
             src,
             float(clip.get("offset") or 0.0),
@@ -1188,8 +1425,6 @@ class AudioEditorService:
         ):
             return {"ok": False, "error": "片段裁剪失败"}
         model_payload = self._model_payload(model)
-        infer_params = InferenceParams.from_dict(params or {})
-        used_params = infer_params.to_dict()
         engine = self._engines.for_model(model_payload)
         try:
             engine.infer(model_payload, dry, out, infer_params, duration)
@@ -1203,12 +1438,48 @@ class AudioEditorService:
         next_clip["file"] = str(out)
         next_clip["offset"] = 0.0
         next_clip["name"] = f"{next_clip.get('name') or 'clip'} · 重推理"
+        old_effects = self._clean_effects(next_clip.get("effects"))
+        plugin_effects = [effect for effect in old_effects if self._is_plugin_effect(effect)]
+        next_clip["effects"] = [
+            effect for effect in old_effects if not self._is_plugin_effect(effect)
+        ]
         meta = dict(next_clip.get("metadata") or {})
-        meta.update({"rerun_model_id": model_id, "rerun_params": used_params, "rerun_at": self._now()})
+        meta.update(
+            {
+                "rerun_model_id": model_id,
+                "rerun_params": used_params,
+                "rerun_at": self._now(),
+                "rerun_input": str(dry),
+                "rerun_source_file": str(src),
+                "rerun_dry_effects": True,
+            }
+        )
+        if plugin_effects:
+            meta["rerun_removed_plugin_effects"] = plugin_effects
         next_clip["metadata"] = meta
         next_track["clips"][next_idx] = next_clip
+        next_project["waveform_cache"] = {}
         saved = self.save(next_project, push_history=True)
         return {"ok": True, "project": saved, "clip": next_clip}
+
+    @staticmethod
+    def _clipboard_payload(path: Path | None) -> dict[str, Any]:
+        if path is None or not path.exists():
+            return {"ok": False, "error": "音频渲染失败", "path": ""}
+        copied = copy_file_to_clipboard(path)
+        payload: dict[str, Any] = {
+            "ok": True,
+            "path": str(path),
+            "clipboard": copied,
+        }
+        if not copied:
+            payload["error"] = "音频已生成，但系统剪贴板不可用"
+        return payload
+
+    @staticmethod
+    def _safe_stem(name: str) -> str:
+        cleaned = re.sub(r'[\\/:*?"<>|\r\n\t]', "_", name or "").strip().strip(".")
+        return (cleaned[:80] or "audio").strip()
 
     @staticmethod
     def _unique_path(path: Path) -> Path:
@@ -1330,10 +1601,81 @@ class AudioEditorService:
         cleaned.setdefault("waveform_cache", {})
         cleaned.setdefault("metadata", {})
         for track in cleaned.get("tracks", []) or []:
+            track.setdefault("metadata", {})
             for clip in track.get("clips", []) or []:
                 channel = str(clip.get("channel") or "stereo").strip().lower()
                 clip["channel"] = channel if channel in {"stereo", "left", "right"} else "stereo"
+                clip["effects"] = AudioEditorService._clean_effects(clip.get("effects"))
+                try:
+                    clip_duration = max(
+                        0.01,
+                        float(clip.get("end") or 0.0) - float(clip.get("start") or 0.0),
+                    )
+                except (TypeError, ValueError):
+                    clip_duration = 0.01
+                clip["volume_envelope"] = AudioEditorService._clean_volume_envelope(
+                    clip.get("volume_envelope"),
+                    clip_duration,
+                )
         return cleaned
+
+    @staticmethod
+    def _clean_effects(raw: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw, list):
+            return []
+        cleaned: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            effect_type = str(item.get("type") or "").strip().lower().replace("-", "_")
+            if not effect_type:
+                continue
+            params = item.get("params")
+            effect = {
+                "id": str(item.get("id") or paths.new_id("fx_")),
+                "type": effect_type,
+                "name": str(item.get("name") or effect_type),
+                "enabled": item.get("enabled", True) is not False,
+                "params": dict(params) if isinstance(params, dict) else {},
+            }
+            for key, value in item.items():
+                if key not in effect and key not in {"params"}:
+                    effect[key] = value
+            cleaned.append(effect)
+        return cleaned
+
+    @staticmethod
+    def _is_plugin_effect(effect: dict[str, Any]) -> bool:
+        effect_type = str(effect.get("type") or "").strip().lower().replace("-", "_")
+        return effect_type in {
+            "plugin",
+            "vst",
+            "vst3",
+            "external",
+            "external_plugin",
+            "juce",
+            "juce_vst3",
+        }
+
+    @staticmethod
+    def _clean_volume_envelope(raw: Any, duration: float) -> list[dict[str, float]]:
+        if not isinstance(raw, list):
+            return []
+        points: list[tuple[float, float]] = []
+        dur = max(0.01, float(duration or 0.01))
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            try:
+                time_value = float(item.get("time", item.get("t", 0.0)) or 0.0)
+                volume = float(item.get("volume", item.get("value", 1.0)) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            points.append((max(0.0, min(dur, time_value)), max(0.0, min(2.5, volume))))
+        by_time: dict[float, float] = {}
+        for time_value, volume in sorted(points, key=lambda point: point[0]):
+            by_time[round(time_value, 3)] = round(volume, 4)
+        return [{"time": time_value, "volume": by_time[time_value]} for time_value in sorted(by_time)]
 
     @staticmethod
     def _project_duration(project: dict[str, Any]) -> float:
@@ -1350,6 +1692,31 @@ class AudioEditorService:
     def _normalize_format(fmt: str) -> str:
         value = (fmt or "wav").strip().lower().lstrip(".")
         return value if value in {"wav", "mp3", "flac"} else "wav"
+
+    @staticmethod
+    def _rerun_key(
+        src: Path,
+        clip: dict[str, Any],
+        model_id: str,
+        params: dict[str, Any],
+    ) -> str:
+        try:
+            stat = src.stat()
+            source = (str(src.resolve()), stat.st_size, int(stat.st_mtime_ns))
+        except OSError:
+            source = (str(src), 0, 0)
+        return FFmpegEngine.cache_key(
+            {
+                "version": "editor-rerun-dry-v2",
+                "source": source,
+                "offset": clip.get("offset"),
+                "start": clip.get("start"),
+                "end": clip.get("end"),
+                "channel": clip.get("channel"),
+                "model_id": model_id,
+                "params": params,
+            }
+        )
 
     def _project_dir(self, project_id: str) -> Path:
         return config.EDITOR_DIR / project_id
@@ -1375,6 +1742,13 @@ class AudioEditorService:
                 if clip.get("id") == clip_id:
                     return track, idx, clip
         return None, -1, None
+
+    @staticmethod
+    def _find_effect(clip: dict[str, Any], effect_id: str) -> dict[str, Any] | None:
+        for effect in clip.get("effects", []) or []:
+            if isinstance(effect, dict) and str(effect.get("id") or "") == effect_id:
+                return effect
+        return None
 
     def _audio_data(self, src: Path, exact: bool = False) -> str:
         if not src.exists():

@@ -35,6 +35,8 @@ call :RESOLVE_PATHS
 call :RESOLVE_GPU_STACK
 echo           gpu stack    : %XB_RESOLVED_GPU_STACK%
 if defined XB_CUDA_VERSION echo           cuda toolkit: %XB_CUDA_VERSION%
+if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 9 正在检查 JUCE VST3 Host
+call :CHECK_JUCE_HOST
 
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 12 正在检查 Python 3.10
 call :CHECK_PYTHON
@@ -80,6 +82,8 @@ if defined XB_CUDA_DIR (
 )
 call :FIND_NVIDIA_SMI
 
+if not defined XB_JUCE_HOST_EXE set "XB_JUCE_HOST_EXE=%~dp0engines\juce-vst3-host\xb-juce-vst3-host.exe"
+
 if defined XB_VSBT_DIR (
   if exist "%XB_VSBT_DIR%\VC\Auxiliary\Build\vcvars64.bat" set "XB_VSINSTALLDIR=%XB_VSBT_DIR%\"
 )
@@ -88,6 +92,16 @@ if defined XB_PYTHON_EXE set "PATH=%~dp0;%XB_PYTHON_DIR%;%XB_PYTHON_DIR%\Scripts
 if defined XB_GIT_BIN set "PATH=%XB_GIT_BIN%;%PATH%"
 if defined XB_FFMPEG_BIN set "PATH=%XB_FFMPEG_BIN%;%PATH%"
 if defined XB_CUDA_BIN set "PATH=%XB_CUDA_BIN%;%PATH%"
+exit /b 0
+
+:CHECK_JUCE_HOST
+if not defined XB_JUCE_HOST_EXE set "XB_JUCE_HOST_EXE=%~dp0engines\juce-vst3-host\xb-juce-vst3-host.exe"
+if exist "%XB_JUCE_HOST_EXE%" (
+  echo [ok] JUCE VST3 Host found: %XB_JUCE_HOST_EXE%
+  exit /b 0
+)
+echo [warn] JUCE VST3 Host not found: %XB_JUCE_HOST_EXE%
+echo        VST3 plugin effects will be unavailable. Rebuild the installer with native\juce-vst3-host included.
 exit /b 0
 
 :RESOLVE_GPU_STACK

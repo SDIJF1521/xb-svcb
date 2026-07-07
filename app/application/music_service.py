@@ -398,8 +398,8 @@ class MusicService:
         if not detail.get("ok"):
             return detail
         song = detail["song"]
-        url = song.get("musicurl") or song.get("url")
-        if not url:
+        urls = self._song_audio_urls(song)
+        if not urls:
             return {"ok": False, "error": "无法获取下载地址（可能为 VIP / 无版权歌曲）"}
 
         try:
@@ -415,27 +415,81 @@ class MusicService:
 
         # 真实扩展名按「文件头魔数 > Content-Type > URL 后缀 > .mp3」优先级判定，
         # 避免把 m4a/flac 误存成 .mp3 导致后续 mp3 专用解码器读到 junk 而失败。
-        url_ext = _ext_from_url(url)
         tmp = config.MUSIC_DIR / f".{base}.part"
 
-        await self._limiter.wait()
+        last_error = ""
+        success: dict[str, Any] | None = None
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            for url in urls:
+                result = await self._download_candidate(client, url, tmp)
+                if result.get("ok"):
+                    success = result
+                    break
+                last_error = str(result.get("error") or last_error)
+
+        if not success:
+            if len(urls) > 1:
+                return {
+                    "ok": False,
+                    "error": last_error or "两个音频地址均不可播放，不能下载",
+                }
+            return {
+                "ok": False,
+                "error": last_error or "该资源无法播放，不能下载",
+            }
+
+        ext = str(success.get("ext") or ".mp3")
+
+        dest = config.MUSIC_DIR / f"{base}{ext}"
+        idx = 1
+        while dest.exists():
+            dest = config.MUSIC_DIR / f"{base} ({idx}){ext}"
+            idx += 1
         try:
-            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-                async with client.stream("GET", url) as resp:
-                    resp.raise_for_status()
-                    ctype = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
-                    head = b""
-                    with tmp.open("wb") as f:
-                        async for chunk in resp.aiter_bytes(65536):
-                            if len(head) < 16:
-                                head += chunk[: 16 - len(head)]
-                            f.write(chunk)
-        except Exception as exc:  # noqa: BLE001 - 下载失败需清理半成品文件
+            tmp.replace(dest)
+        except OSError as exc:
             try:
                 tmp.unlink(missing_ok=True)
             except OSError:
                 pass
-            return {"ok": False, "error": f"下载失败：{exc}"}
+            return {"ok": False, "error": f"保存文件失败：{exc}"}
+
+        return {
+            "ok": True,
+            "path": str(dest),
+            "name": dest.stem,
+            "size": paths.file_size_label(dest),
+        }
+
+    async def _download_candidate(self, client: Any, url: str, tmp) -> dict[str, Any]:
+        """尝试下载并校验一个候选播放地址。失败时清理半成品并返回原因。"""
+
+        def fail(message: str) -> dict[str, Any]:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return {"ok": False, "error": message}
+
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            return {"ok": False, "error": "无法清理上一次下载临时文件"}
+
+        url_ext = _ext_from_url(url)
+        await self._limiter.wait()
+        try:
+            async with client.stream("GET", url) as resp:
+                resp.raise_for_status()
+                ctype = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+                head = b""
+                with tmp.open("wb") as f:
+                    async for chunk in resp.aiter_bytes(65536):
+                        if len(head) < 16:
+                            head += chunk[: 16 - len(head)]
+                        f.write(chunk)
+        except Exception as exc:  # noqa: BLE001 - 候选地址失败后继续测试下一个地址
+            return fail(f"下载失败：{exc}")
 
         # 校验确实是「可以听」的音频：
         # 1) 文件头魔数 / Content-Type 必须指向音频（HTML/JSON 错误体一律拒绝；
@@ -446,40 +500,24 @@ class MusicService:
         ctype_ext = _CTYPE_EXT.get(ctype)
         size = tmp.stat().st_size if tmp.exists() else 0
 
-        def _fail(msg: str) -> dict[str, Any]:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return {"ok": False, "error": msg}
-
         if sniff_ext is None and ctype_ext is None:
-            return _fail("该资源无法播放，不能下载（可能为 VIP / 无版权 / 链接失效）")
+            return fail("该资源无法播放，不能下载（可能为 VIP / 无版权 / 链接失效）")
         if size < 16 * 1024:
-            return _fail("该资源无法播放，不能下载（返回内容过小，疑似失效链接）")
+            return fail("该资源无法播放，不能下载（返回内容过小，疑似失效链接）")
 
-        ext = sniff_ext or ctype_ext or url_ext or ".mp3"
-
-        # ffprobe 实测可播放性（拿不到 ffprobe 时跳过此步，前两步已足够过滤）
         if not self._probe_playable(tmp):
-            return _fail("该资源无法播放，不能下载（音频无法解码）")
+            return fail("该资源无法播放，不能下载（音频无法解码）")
 
-        dest = config.MUSIC_DIR / f"{base}{ext}"
-        idx = 1
-        while dest.exists():
-            dest = config.MUSIC_DIR / f"{base} ({idx}){ext}"
-            idx += 1
-        try:
-            tmp.replace(dest)
-        except OSError as exc:
-            return _fail(f"保存文件失败：{exc}")
+        return {"ok": True, "url": url, "ext": sniff_ext or ctype_ext or url_ext or ".mp3"}
 
-        return {
-            "ok": True,
-            "path": str(dest),
-            "name": dest.stem,
-            "size": paths.file_size_label(dest),
-        }
+    @staticmethod
+    def _song_audio_urls(song: dict[str, Any]) -> list[str]:
+        urls: list[str] = []
+        for key in ("musicurl", "url"):
+            value = str(song.get(key) or "").strip()
+            if value and value not in urls:
+                urls.append(value)
+        return urls
 
     @staticmethod
     def _probe_playable(path) -> bool:

@@ -23,6 +23,7 @@ class EditorClip:
     fade_in: float = 0.0
     fade_out: float = 0.0
     channel: str = "stereo"
+    volume_envelope: list[dict[str, float]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

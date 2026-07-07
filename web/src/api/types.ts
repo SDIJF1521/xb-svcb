@@ -435,6 +435,32 @@ export interface HubJob {
 
 export type EditorTrackType = 'source' | 'vocal' | 'bgm' | 'ai' | 'effect' | 'audio'
 export type EditorClipChannel = 'stereo' | 'left' | 'right'
+export type EditorEffectType =
+  | 'reverb'
+  | 'denoise'
+  | 'noise_gate'
+  | 'compressor'
+  | 'eq'
+  | 'delay'
+  | 'chorus'
+  | 'limiter'
+  | 'gain'
+  | 'highpass'
+  | 'lowpass'
+  | 'plugin'
+
+export interface EditorClipEffect {
+  id: string
+  type: EditorEffectType | string
+  name: string
+  enabled: boolean
+  params: Record<string, unknown>
+}
+
+export interface EditorVolumeEnvelopePoint {
+  time: number
+  volume: number
+}
 
 export interface EditorRole {
   id: string
@@ -475,11 +501,12 @@ export interface EditorClip {
   volume: number
   mute: boolean
   file: string
-  effects: { type: string; [key: string]: unknown }[]
+  effects: EditorClipEffect[]
   locked: boolean
   fade_in: number
   fade_out: number
   channel?: EditorClipChannel
+  volume_envelope?: EditorVolumeEnvelopePoint[]
   metadata: Record<string, unknown>
 }
 
@@ -522,6 +549,39 @@ export interface EditorWaveform {
   peaks: number[]
 }
 
+export interface EditorAudioCopyResult {
+  ok: boolean
+  error?: string
+  path: string
+  clipboard?: boolean
+}
+
+export interface EditorPluginHostStatus {
+  ok: boolean
+  ready: boolean
+  host_path: string
+  protocol: number
+  schema: string
+  message?: string
+  error?: string
+}
+
+export interface EditorPluginInspectResult extends EditorPluginHostStatus {
+  plugin?: Record<string, unknown>
+}
+
+export interface EditorPluginWindowResult extends EditorPluginHostStatus {
+  session_id?: string
+  state_path?: string
+}
+
+export interface EditorPluginCloseResult extends EditorPluginHostStatus {
+  closed?: boolean
+  state_path?: string
+  plugin?: Record<string, unknown>
+  project?: EditorProject
+}
+
 export interface EditorRerunResult {
   ok: boolean
   error?: string
@@ -562,6 +622,11 @@ export interface EditorTrackMutationResult {
   track?: EditorTrack
   clip?: EditorClip
   removed_track_id?: string
+}
+
+export interface EditorAudioPasteResult extends EditorTrackMutationResult {
+  clips?: EditorClip[]
+  paths?: string[]
 }
 
 export interface EditorSeparationResult {

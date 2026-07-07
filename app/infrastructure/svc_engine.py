@@ -69,6 +69,7 @@ class SvcEngine:
         diffusion_model = (model or {}).get("diffusion_model_path", "") or ""
         diffusion_config = (model or {}).get("diffusion_config_path", "") or ""
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        self._clear_output(out_path)
 
         ready = (
             self.available
@@ -305,3 +306,10 @@ class SvcEngine:
             wf.setsampwidth(2)
             wf.setframerate(sample_rate)
             wf.writeframes(struct.pack("<%dh" % n_samples, *values))
+
+    @staticmethod
+    def _clear_output(out_path: Path) -> None:
+        try:
+            out_path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise RuntimeError(f"无法清理旧推理输出: {out_path}") from exc

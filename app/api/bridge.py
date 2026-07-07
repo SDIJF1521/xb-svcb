@@ -520,6 +520,19 @@ class Api:
                 return {"ok": False, "error": "无法读取歌词文件"}
         return {"ok": False, "error": "歌词文件编码不支持"}
 
+    def pick_effect_plugin_file(self) -> str | None:
+        """选择由 JUCE VST3 Host 承载的本地效果器插件。"""
+        result = self._open_dialog(
+            "选择效果器插件",
+            multiple=False,
+            file_types=(
+                "VST3 效果器插件 (*.vst3)",
+                "效果器插件 (*.vst3;*.dll;*.component)",
+                "所有文件 (*.*)",
+            ),
+        )
+        return result[0] if result else None
+
     def list_works(self) -> list[dict[str, Any]]:
         return self._works.list()
 
@@ -733,6 +746,18 @@ class Api:
     ) -> dict[str, Any]:
         return self._editor.import_audio_to_track(project_id, path, track_id, float(start or 0.0))
 
+    def paste_audio_to_editor_track(
+        self,
+        project_id: str,
+        track_id: str | None = None,
+        start: float = 0.0,
+    ) -> dict[str, Any]:
+        return self._editor.paste_clipboard_audio_to_track(
+            project_id,
+            track_id,
+            float(start or 0.0),
+        )
+
     def save_editor_project(self, project: dict[str, Any]) -> dict[str, Any] | None:
         return self._editor.save(project or {}, push_history=True)
 
@@ -744,6 +769,47 @@ class Api:
 
     def get_editor_clip_audio(self, project_id: str, clip_id: str) -> str:
         return self._editor.clip_audio(project_id, clip_id)
+
+    def get_editor_plugin_host_status(self) -> dict[str, Any]:
+        return self._editor.plugin_host_status()
+
+    def inspect_editor_effect_plugin(self, path: str) -> dict[str, Any]:
+        return self._editor.inspect_effect_plugin(path)
+
+    def open_editor_effect_plugin(
+        self,
+        project_id: str,
+        track_id: str,
+        clip_id: str,
+        effect_id: str,
+        parent_window: str = "",
+    ) -> dict[str, Any]:
+        return self._editor.open_effect_plugin_editor(
+            project_id,
+            track_id,
+            clip_id,
+            effect_id,
+            parent_window,
+        )
+
+    def close_editor_effect_plugin(self, session_id: str) -> dict[str, Any]:
+        return self._editor.close_effect_plugin_editor(session_id)
+
+    def copy_editor_clip_audio(
+        self,
+        project_id: str,
+        clip_id: str,
+        fmt: str = "wav",
+    ) -> dict[str, Any]:
+        return self._editor.copy_clip_audio(project_id, clip_id, fmt)
+
+    def copy_editor_track_audio(
+        self,
+        project_id: str,
+        track_id: str,
+        fmt: str = "wav",
+    ) -> dict[str, Any]:
+        return self._editor.copy_track_audio(project_id, track_id, fmt)
 
     def render_editor_preview(self, project_id: str) -> str:
         return self._editor.render_preview(project_id)

@@ -32,6 +32,12 @@ import type {
   InferenceQueueStatus,
   CreateBatchWorkPayload,
   EditorClip,
+  EditorAudioCopyResult,
+  EditorAudioPasteResult,
+  EditorPluginHostStatus,
+  EditorPluginInspectResult,
+  EditorPluginWindowResult,
+  EditorPluginCloseResult,
   EditorProject,
   EditorProjectSummary,
   EditorTrack,
@@ -569,6 +575,9 @@ export const mock = {
   },
   pickLyricsFile(): Promise<LyricsFileResult> {
     return browserPickTextFile('.lrc,.txt')
+  },
+  pickEffectPluginFile(): Promise<string | null> {
+    return browserPickFile('.vst3,.dll,.component')
   },
   listWorks(): WorkDTO[] {
     return mockWorks.map((w) => ({ ...w, steps: w.steps.map((s) => ({ ...s })) }))
@@ -1133,6 +1142,19 @@ export const mock = {
     project.updated_at = now()
     return { ok: true, project: cloneProject(project), track, clip }
   },
+  pasteAudioToEditorTrack(
+    projectId: string,
+    trackId?: string | null,
+    start = 0,
+  ): EditorAudioPasteResult {
+    const path = 'C:/clipboard/pasted-audio.wav'
+    const res = this.importAudioToEditorTrack(projectId, path, trackId, start)
+    return {
+      ...res,
+      clips: res.clip ? [res.clip] : [],
+      paths: res.ok ? [path] : [],
+    }
+  },
   saveEditorProject(project: EditorProject): EditorProject | null {
     const idx = mockEditorProjects.findIndex((p) => p.id === project.id)
     const next = cloneProject(project)
@@ -1172,6 +1194,63 @@ export const mock = {
   getEditorClipAudio(projectId: string, clipId: string): string {
     console.info('[mock] getEditorClipAudio', projectId, clipId)
     return ''
+  },
+  getEditorPluginHostStatus(): EditorPluginHostStatus {
+    return {
+      ok: true,
+      ready: true,
+      host_path: 'C:/mock/engines/juce-vst3-host/xb-juce-vst3-host.exe',
+      protocol: 1,
+      schema: 'xb-svcb.juce-vst3-host.v1',
+      message: 'JUCE VST3 Host 已就绪',
+    }
+  },
+  inspectEditorEffectPlugin(path: string): EditorPluginInspectResult {
+    return {
+      ...this.getEditorPluginHostStatus(),
+      plugin: {
+        name: fileName(path).replace(/\.[^.]+$/, ''),
+        format: 'VST3',
+        parameters: [],
+      },
+    }
+  },
+  openEditorEffectPlugin(
+    projectId: string,
+    trackId: string,
+    clipId: string,
+    effectId: string,
+    parentWindow = '',
+  ): EditorPluginWindowResult {
+    console.info('[mock] openEditorEffectPlugin', projectId, trackId, clipId, effectId, parentWindow)
+    return {
+      ...this.getEditorPluginHostStatus(),
+      session_id: rid('juce_'),
+    }
+  },
+  closeEditorEffectPlugin(sessionId: string): EditorPluginCloseResult {
+    console.info('[mock] closeEditorEffectPlugin', sessionId)
+    return {
+      ...this.getEditorPluginHostStatus(),
+      closed: true,
+      plugin: {
+        parameter_values: {},
+      },
+    }
+  },
+  copyEditorClipAudio(projectId: string, clipId: string, fmt = 'wav'): EditorAudioCopyResult {
+    return {
+      ok: true,
+      path: `C:/exports/${clipId}.${editorFormat(fmt)}`,
+      clipboard: true,
+    }
+  },
+  copyEditorTrackAudio(projectId: string, trackId: string, fmt = 'wav'): EditorAudioCopyResult {
+    return {
+      ok: true,
+      path: `C:/exports/${projectId}_${trackId}.${editorFormat(fmt)}`,
+      clipboard: true,
+    }
   },
   renderEditorPreview(projectId: string): string {
     console.info('[mock] renderEditorPreview', projectId)

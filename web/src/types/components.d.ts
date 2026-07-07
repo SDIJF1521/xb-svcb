@@ -13,6 +13,8 @@ declare module 'vue' {
   export interface GlobalComponents {
     AppHeader: typeof import('./../components/layout/AppHeader.vue')['default']
     CustomThemeEditor: typeof import('./../components/theme/CustomThemeEditor.vue')['default']
+    EditorImportTrackDialog: typeof import('./../components/editor/EditorImportTrackDialog.vue')['default']
+    EditorPluginDialog: typeof import('./../components/editor/EditorPluginDialog.vue')['default']
     EditorRoleManager: typeof import('./../components/editor/EditorRoleManager.vue')['default']
     ElButton: typeof import('element-plus/es')['ElButton']
     ElDialog: typeof import('element-plus/es')['ElDialog']

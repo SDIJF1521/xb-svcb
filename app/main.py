@@ -21,6 +21,7 @@ import webview
 
 import config
 from api import build_api
+from infrastructure.single_instance import SingleInstance, focus_window
 
 
 def is_dev() -> bool:
@@ -57,54 +58,68 @@ def purge_web_http_cache() -> None:
 
 
 def main() -> None:
+    single = SingleInstance(config.APP_NAME, config.APP_TITLE)
+    if not single.acquire():
+        try:
+            single.notify_existing()
+        finally:
+            single.close()
+        return
+
     dev = is_dev()
-    url = resolve_url()
-    api = build_api()
-
-    window = webview.create_window(
-        config.APP_TITLE,
-        url=url,
-        js_api=api,
-        width=1360,
-        height=880,
-        min_size=(1080, 720),
-        background_color=config.APP_BG,
-        text_select=False,
-    )
-    # 注入窗口引用，供原生文件对话框使用
-    api.set_window(window)
-
-    # 窗口显示后先按默认主题给标题栏/边框上色，避免首帧出现系统默认配色；
-    # 前端就绪后会再按用户持久化的主题二次同步。
-    def _theme_on_shown() -> None:
-        from infrastructure.window_theme import apply as apply_window_theme
-
-        apply_window_theme(config.APP_TITLE, "cyber")
-
     try:
-        window.events.shown += _theme_on_shown
-    except Exception:  # noqa: BLE001 - 个别平台无该事件时忽略
-        pass
+        url = resolve_url()
+        api = build_api()
 
-    # 关闭隐私模式并指定固定存储目录，使前端 localStorage / cookie 跨重启持久化
-    # （主题、头像、昵称、通知已读等设置因此具备记忆性）。
-    try:
-        config.WEBVIEW_DIR.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+        window = webview.create_window(
+            config.APP_TITLE,
+            url=url,
+            js_api=api,
+            width=1360,
+            height=880,
+            min_size=(1080, 720),
+            background_color=config.APP_BG,
+            text_select=False,
+        )
+        # 注入窗口引用，供原生文件对话框使用
+        api.set_window(window)
 
-    # 生产模式下清理 WebView2 旧的 HTTP/代码缓存，避免前端重新构建后仍加载到旧页面
-    # （只删缓存，保留 localStorage，主题/头像等设置不受影响）。
-    if not dev:
-        purge_web_http_cache()
+        # 窗口显示后先按默认主题给标题栏/边框上色，避免首帧出现系统默认配色；
+        # 前端就绪后会再按用户持久化的主题二次同步。
+        def _theme_on_shown() -> None:
+            from infrastructure.window_theme import apply as apply_window_theme
 
-    # 生产模式下用内置 http server 提供静态资源，确保 SPA 路由与资源路径正常。
-    webview.start(
-        debug=dev,
-        http_server=not dev,
-        private_mode=False,
-        storage_path=str(config.WEBVIEW_DIR),
-    )
+            apply_window_theme(config.APP_TITLE, "cyber")
+            focus_window(config.APP_TITLE)
+
+        try:
+            window.events.shown += _theme_on_shown
+        except Exception:  # noqa: BLE001 - 个别平台无该事件时忽略
+            pass
+
+        single.start_listener(lambda: focus_window(config.APP_TITLE))
+
+        # 关闭隐私模式并指定固定存储目录，使前端 localStorage / cookie 跨重启持久化
+        # （主题、头像、昵称、通知已读等设置因此具备记忆性）。
+        try:
+            config.WEBVIEW_DIR.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+
+        # 生产模式下清理 WebView2 旧的 HTTP/代码缓存，避免前端重新构建后仍加载到旧页面
+        # （只删缓存，保留 localStorage，主题/头像等设置不受影响）。
+        if not dev:
+            purge_web_http_cache()
+
+        # 生产模式下用内置 http server 提供静态资源，确保 SPA 路由与资源路径正常。
+        webview.start(
+            debug=dev,
+            http_server=not dev,
+            private_mode=False,
+            storage_path=str(config.WEBVIEW_DIR),
+        )
+    finally:
+        single.close()
 
 
 if __name__ == "__main__":
