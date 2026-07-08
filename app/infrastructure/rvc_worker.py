@@ -376,6 +376,8 @@ def main() -> int:
         # 以便在加载模型前按需切换精度。
         rvc = RVCInference(device=device, version=version)
 
+        # CPU 适配：PyTorch 不支持 CPU half batch_norm，RMVPE 在 is_half=True 时会报
+        # "batch_norm not implemented for Half"。CPU 路径必须在加载模型前切 fp32。
         # 50 系（Blackwell, torch>=2.6/cu128）适配：rvc-python 对 5060/5070/5090 默认开
         # fp16（is_half=True），但 fp16 在 Blackwell + 新 torch 上会产生「虚弱/没气/哑音」
         # 的劣化输出。这里在加载模型前强制 fp32，并切到 fp32 对应的切片窗口参数。
@@ -384,9 +386,18 @@ def main() -> int:
             import torch  # noqa: WPS433
 
             _tv = tuple(int(x) for x in torch.__version__.split("+")[0].split(".")[:2])
+            _cuda_mem_gb = 0.0
+            if device.startswith("cuda") and torch.cuda.is_available():
+                try:
+                    _cuda_idx = int(device.split(":", 1)[1]) if ":" in device else 0
+                except (TypeError, ValueError):
+                    _cuda_idx = 0
+                _cuda_mem_gb = torch.cuda.get_device_properties(_cuda_idx).total_memory / (1024**3)
         except Exception:  # noqa: BLE001
             _tv = (0, 0)
-        if _tv >= (2, 6):
+            _cuda_mem_gb = 0.0
+        force_fp32 = device.startswith("cpu") or _tv >= (2, 6)
+        if force_fp32:
             try:
                 rvc.config.is_half = False
                 # fp32 切片窗口（对应 config.device_config 里 is_half=False 分支）
@@ -394,7 +405,8 @@ def main() -> int:
                 rvc.config.x_query = 6
                 rvc.config.x_center = 38
                 rvc.config.x_max = 41
-                print("XB: 新 torch 检测到，RVC 强制 fp32（规避 50 系 fp16 音质劣化）", flush=True)
+                reason = "CPU 推理" if device.startswith("cpu") else "新 torch"
+                print(f"XB: {reason}检测到，RVC 强制 fp32", flush=True)
             except Exception as exc:  # noqa: BLE001
                 print(f"XB: 设置 fp32 失败（继续用默认精度）: {exc}", flush=True)
             # Blackwell + torch2.7：cuDNN 卷积默认允许 TF32（19 位尾数），HiFiGAN/NSF 声码器
@@ -411,6 +423,17 @@ def main() -> int:
                 print("XB: 已关闭 TF32（cuDNN/matmul），保证 50 系卷积精度", flush=True)
             except Exception as exc:  # noqa: BLE001
                 print(f"XB: 关闭 TF32 失败（继续）: {exc}", flush=True)
+
+        low_vram_cuda = device.startswith("cuda") and 0 < _cuda_mem_gb <= 8.0
+        if low_vram_cuda:
+            try:
+                rvc.config.x_pad = 1
+                rvc.config.x_query = 5
+                rvc.config.x_center = 30
+                rvc.config.x_max = 32
+                print(f"XB: CUDA 显存 {_cuda_mem_gb:.1f}GB，RVC 启用低显存切片", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print(f"XB: 设置低显存切片失败（继续用默认切片）: {exc}", flush=True)
 
         rvc.load_model(args.model, version=version, index_path=index_path)
         rvc.set_params(

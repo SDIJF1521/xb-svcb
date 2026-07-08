@@ -143,6 +143,11 @@ class RvcEngine:
     @staticmethod
     def _error_tail(stdout: str | None, stderr: str | None) -> str:
         text = ((stdout or "") + "\n" + (stderr or "")).strip()
+        if "cuda error: out of memory" in text.lower() or "torch.cuda.outofmemoryerror" in text.lower():
+            return (
+                "CUDA 显存不足：请关闭占用显卡的软件后重试；仍失败时把 F0 算法改为 pm/harvest、"
+                "把检索率调低或改用 CPU。"
+            )
         for line in text.splitlines():
             if line.startswith("RVC_ERR"):
                 return line[len("RVC_ERR") :].strip()
