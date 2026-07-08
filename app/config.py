@@ -67,6 +67,14 @@ def _first_existing(candidates: list[Path]) -> Path | None:
     return None
 
 
+def _existing_env_path(name: str) -> Path | None:
+    raw = os.environ.get(name)
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    return path if path.exists() else None
+
+
 def _venv_python(venv_dir: Path) -> Path:
     """返回 venv 内 Python 解释器路径（兼容 Windows / *nix）。"""
     win = venv_dir / "Scripts" / "python.exe"
@@ -169,12 +177,17 @@ def juce_vst3_host_ready() -> bool:
 # ---- UVR 人声分离引擎（audio-separator + 复用本地 UVR 模型）----
 # 在独立 venv 中运行 audio-separator，复用已安装的 Ultimate Vocal Remover 模型权重。
 
+# 人声/伴奏分离模型：5_HP-Karaoke-UVR（人声更干净、伴奏完整保留）
+UVR_SEP_MODEL = os.environ.get("XB_UVR_SEP_MODEL", "5_HP-Karaoke-UVR.pth")
+# 人声去混响/去回声模型：去掉混响后再送 SVC，可显著缓解"电音/机械音"
+UVR_DEREVERB_MODEL = os.environ.get("XB_UVR_DEREVERB_MODEL", "UVR-DeEcho-DeReverb.pth")
+
 
 def _detect_uvr_python() -> Path | None:
-    env = os.environ.get("XB_UVR_PYTHON")
-    if env:
-        return Path(env)
-    return _first_existing([_venv_python(UVR_VENV_DIR)])
+    env = _existing_env_path("XB_UVR_PYTHON")
+    candidates = [env] if env else []
+    candidates.append(_venv_python(UVR_VENV_DIR))
+    return _first_existing(candidates)
 
 
 # UVR 模型默认下载/存放目录（安装器创建）
@@ -182,10 +195,9 @@ UVR_MODEL_DIR_DEFAULT = ROOT_DIR / "models" / "uvr"
 
 
 def _detect_uvr_model_dir() -> Path | None:
-    env = os.environ.get("XB_UVR_MODEL_DIR")
-    if env:
-        return Path(env)
-    return _first_existing(
+    env = _existing_env_path("XB_UVR_MODEL_DIR")
+    candidates = [env] if env else []
+    candidates.extend(
         [
             # 优先项目内安装器下载的 UVR 模型目录
             UVR_MODEL_DIR_DEFAULT,
@@ -193,37 +205,60 @@ def _detect_uvr_model_dir() -> Path | None:
             Path(r"C:\Ultimate Vocal Remover\models\VR_Models"),
         ]
     )
+    existing = [c for c in candidates if c.exists()]
+    for c in existing:
+        if (c / UVR_SEP_MODEL).exists():
+            return c
+    return existing[0] if existing else None
 
 
 # 运行 audio-separator 的 Python 解释器
 UVR_PYTHON = _detect_uvr_python()
 # UVR 模型目录（复用本地 Ultimate Vocal Remover 的模型权重；默认 VR_Models）
 UVR_MODEL_DIR = _detect_uvr_model_dir()
-# 人声/伴奏分离模型：5_HP-Karaoke-UVR（人声更干净、伴奏完整保留）
-UVR_SEP_MODEL = os.environ.get("XB_UVR_SEP_MODEL", "5_HP-Karaoke-UVR.pth")
-# 人声去混响/去回声模型：去掉混响后再送 SVC，可显著缓解"电音/机械音"
-UVR_DEREVERB_MODEL = os.environ.get("XB_UVR_DEREVERB_MODEL", "UVR-DeEcho-DeReverb.pth")
 # 兼容旧引用：默认分离模型
 UVR_MODEL = UVR_SEP_MODEL
 # 子进程内执行的分离 worker 脚本（由外部 venv 的 Python 读取，需为磁盘上的真实文件）
 UVR_WORKER = BUNDLE_DIR / "infrastructure" / "uvr_worker.py"
 
 
-def uvr_ready() -> bool:
-    """人声分离环境是否齐备：venv 解释器、worker、模型目录与分离模型文件都在。"""
+def uvr_environment_ready() -> bool:
+    """UVR 运行环境是否已安装：解释器与 worker 可用。"""
     return bool(
         UVR_PYTHON
         and UVR_PYTHON.exists()
         and UVR_WORKER.exists()
         and UVR_MODEL_DIR
         and UVR_MODEL_DIR.exists()
-        and (UVR_MODEL_DIR / UVR_SEP_MODEL).exists()
     )
+
+
+def uvr_model_ready() -> bool:
+    """UVR 分离模型是否已就绪。"""
+    return bool(UVR_MODEL_DIR and UVR_MODEL_DIR.exists() and (UVR_MODEL_DIR / UVR_SEP_MODEL).exists())
+
+
+def uvr_ready() -> bool:
+    """人声分离环境是否齐备：venv 解释器、worker、模型目录与分离模型文件都在。"""
+    return uvr_environment_ready() and uvr_model_ready()
+
+
+def uvr_status() -> str:
+    """返回更细粒度的 UVR 状态，便于界面和日志区分“未安装 / 模型未就绪 / 已就绪”。"""
+    if not UVR_PYTHON or not UVR_PYTHON.exists():
+        return "未找到 .venv-uvr"
+    if not UVR_WORKER.exists():
+        return "应用 worker 缺失"
+    if not UVR_MODEL_DIR or not UVR_MODEL_DIR.exists():
+        return "模型目录未就绪"
+    if not (UVR_MODEL_DIR / UVR_SEP_MODEL).exists():
+        return "模型未就绪"
+    return "已就绪"
 
 
 def uvr_dereverb_ready() -> bool:
     """去混响模型是否可用。"""
-    return bool(UVR_MODEL_DIR and (UVR_MODEL_DIR / UVR_DEREVERB_MODEL).exists())
+    return bool(UVR_MODEL_DIR and UVR_MODEL_DIR.exists() and (UVR_MODEL_DIR / UVR_DEREVERB_MODEL).exists())
 
 
 # ---- 模型站（ModelScope 魔搭社区）上传组件 ----

@@ -25,7 +25,7 @@ class SystemService:
                 "name": "Ultimate Vocal Remover",
                 "desc": "人声 / 伴奏分离引擎，自动提取翻唱所需干声",
                 "version": self._uvr.version() or "未安装",
-                "status": "已就绪" if self._uvr.available else "降级模式",
+                "status": self._uvr.status(),
                 "ok": self._uvr.available,
             },
             {

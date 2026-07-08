@@ -825,6 +825,64 @@ begin
     FinishEnvProgress(Status + '完成');
 end;
 
+procedure AppendInstallValidation(const Line: String);
+begin
+  AppendInstallDetail(Line);
+  if LastInstallLog <> '' then
+    SaveStringToFile(LastInstallLog, Line + #13#10, True);
+end;
+
+function AddMissingRuntimeFile(const MissingText, ItemLabel, FilePath: String): String;
+begin
+  Result := MissingText;
+  if Result <> '' then
+    Result := Result + #13#10;
+  Result := Result + ' - ' + ItemLabel + ': ' + FilePath;
+end;
+
+function ValidateUvrRuntime(): Boolean;
+var
+  AppDir, UvrPython, UvrWorker, UvrModel, Missing: String;
+begin
+  AppDir := ExpandConstant('{app}');
+  UvrPython := PathJoin(AppDir, '.venv-uvr\Scripts\python.exe');
+  UvrWorker := PathJoin(AppDir, '_internal\infrastructure\uvr_worker.py');
+  UvrModel := PathJoin(AppDir, 'models\uvr\5_HP-Karaoke-UVR.pth');
+  Missing := '';
+
+  AppendInstallValidation('');
+  AppendInstallValidation('------------------------------------------------------------');
+  AppendInstallValidation('UVR 运行环境最终校验');
+  AppendInstallValidation('安装目录：' + AppDir);
+
+  if not FileExists(UvrPython) then
+    Missing := AddMissingRuntimeFile(Missing, '.venv-uvr Python', UvrPython);
+  if not FileExists(UvrWorker) then
+    Missing := AddMissingRuntimeFile(Missing, 'UVR worker', UvrWorker);
+  if not FileExists(UvrModel) then
+    Missing := AddMissingRuntimeFile(Missing, 'UVR 分离模型', UvrModel);
+
+  Result := Missing = '';
+  if Result then
+  begin
+    AppendInstallValidation('[ok] UVR 运行环境可被软件识别。');
+    Exit;
+  end;
+
+  AppendInstallValidation('[fail] UVR 运行环境不完整，软件会显示“降级模式 / UVR 未安装”。');
+  AppendInstallValidation('缺失项：');
+  AppendInstallValidation(Missing);
+  AppendInstallValidation('建议：从开始菜单运行“搭建/修复运行环境”，或在安装目录执行 setup_env.bat --only uvr models。');
+
+  MsgBox('UVR 运行环境最终校验失败。' + #13#10 +
+    '安装器命令已执行完成，但软件仍无法识别完整 UVR 环境。' + #13#10#13#10 +
+    '缺失项：' + #13#10 + Missing + #13#10#13#10 +
+    '请稍后从开始菜单运行“搭建/修复运行环境”，或在安装目录执行：' + #13#10 +
+    'setup_env.bat --only uvr models' + #13#10#13#10 +
+    '详细日志：' + LastInstallLog,
+    mbError, MB_OK);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   DataDir, Payload: String;
@@ -852,7 +910,11 @@ begin
       end
       else
         SetupProgressStart := 0;
-      RunSetupBatch('setup_env.bat', GpuInstallArgs(), '正在搭建运行环境（创建子环境、复制模型、安装 Python 依赖）…', SetupProgressStart, 100);
+      if RunSetupBatch('setup_env.bat', GpuInstallArgs(), '正在搭建运行环境（创建子环境、复制模型、安装 Python 依赖）…', SetupProgressStart, 100) then
+      begin
+        if not ValidateUvrRuntime() then
+          SetEnvProgress(100, 'UVR 运行环境校验失败，请查看安装详情日志');
+      end;
     end;
   end;
 end;

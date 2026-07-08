@@ -34,9 +34,15 @@ class UvrTool:
         """是否具备真实分离能力（venv + worker + 模型齐备）。"""
         return config.uvr_ready()
 
+    def status(self) -> str:
+        """返回更细粒度的 UVR 状态。"""
+        return config.uvr_status()
+
     def version(self) -> Optional[str]:
-        if not self.available:
+        if not config.uvr_environment_ready():
             return None
+        if not config.uvr_model_ready():
+            return "audio-separator · 模型未就绪"
         return f"audio-separator · {config.UVR_MODEL}"
 
     def separate(
