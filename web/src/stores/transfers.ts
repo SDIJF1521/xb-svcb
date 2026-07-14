@@ -15,6 +15,7 @@ export const useTransfersStore = defineStore('transfers', () => {
   const jobs = ref<HubJob[]>([])
   const polling = ref(false)
   let timer: ReturnType<typeof setInterval> | null = null
+  let refreshPromise: Promise<void> | null = null
   // 已提示过完成的任务 key，避免重复刷新本地模型 / 重复提示
   const settled = new Set<string>()
 
@@ -24,21 +25,27 @@ export const useTransfersStore = defineStore('transfers', () => {
   const hasJobs = computed(() => jobs.value.length > 0)
 
   /** 拉取一次全部任务进度。 */
-  async function refresh() {
-    try {
-      const list = await api.hubListJobs()
-      jobs.value = Array.isArray(list) ? list : []
-      // 下载完成 → 刷新本地模型库一次
-      for (const j of jobs.value) {
-        if (j.status === 'done' && !settled.has(j.key)) {
-          settled.add(j.key)
-          if (j.kind === 'download') useModelsStore().load()
+  function refresh(): Promise<void> {
+    if (refreshPromise) return refreshPromise
+    refreshPromise = (async () => {
+      try {
+        const list = await api.hubListJobs()
+        jobs.value = Array.isArray(list) ? list : []
+        for (const j of jobs.value) {
+          if (j.status === 'running') settled.delete(j.key)
+          if (j.status === 'done' && !settled.has(j.key)) {
+            if (j.kind === 'download') await useModelsStore().load()
+            settled.add(j.key)
+          }
+          if (j.status === 'failed') settled.add(j.key)
         }
-        if (j.status === 'failed') settled.add(j.key)
+      } catch {
+        /* 单次轮询失败忽略，下一轮继续 */
       }
-    } catch {
-      /* 单次轮询失败忽略 */
-    }
+    })().finally(() => {
+      refreshPromise = null
+    })
+    return refreshPromise
   }
 
   /** 启动全局轮询（重复调用安全）。 */
@@ -61,6 +68,7 @@ export const useTransfersStore = defineStore('transfers', () => {
   async function startDownload(repoId: string): Promise<string | null> {
     const res = await api.hubStartDownload(repoId)
     if (!res.ok) return null
+    if (res.key) settled.delete(res.key)
     start()
     await refresh()
     return res.key || null
@@ -86,6 +94,7 @@ export const useTransfersStore = defineStore('transfers', () => {
 
   async function clear(key: string) {
     await api.hubClearJob(key)
+    settled.delete(key)
     jobs.value = jobs.value.filter((j) => j.key !== key)
   }
 
@@ -93,6 +102,7 @@ export const useTransfersStore = defineStore('transfers', () => {
   async function clearFinished() {
     const finished = jobs.value.filter((j) => j.status !== 'running')
     for (const j of finished) await api.hubClearJob(j.key)
+    for (const j of finished) settled.delete(j.key)
     jobs.value = jobs.value.filter((j) => j.status === 'running')
   }
 

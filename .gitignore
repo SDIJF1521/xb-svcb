@@ -40,6 +40,7 @@ native/juce-vst3-host/CMakeUserPresets.json
 *.onnx
 *.pt
 *.ckpt
+*.safetensors
 *.mp3
 *.wav
 *.flac
@@ -78,8 +79,8 @@ models/
 
 .vscode
 
-# ===== 例外：安装器本体与自带模型必须纳入版本库 =====
-# 让「安装器在、且可安装」：保留打包好的安装器，以及它要附带的底模/UVR 模型。
+# ===== 例外：已有自带模型继续纳入版本库 =====
+# 保留安装器要附带的 SVC / RVC 底模与 UVR 模型；大文件通过 Git LFS 管理。
 # 这些例外要放在最后，覆盖前面的 dist/*、*.pt、*.pth 等忽略规则。
 #
 # 注意：单文件体积很大（安装器约 2GB、ContentVec 1.27GB），GitHub 单文件上限 100MB，
@@ -91,6 +92,12 @@ models/
 # 自带模型（安装器附带资源，走 Git LFS）
 !assets/models/
 !assets/models/**
+
+# SeedVC 离线权重仅保留在本机构建环境，并通过 GitHub Release 安装分卷发布。
+# JSON 配置仍纳入版本库，避免源码缺少模型结构与预处理配置。
+assets/models/seedvc/**/*.bin
+assets/models/seedvc/**/*.pt
+assets/models/seedvc/**/*.safetensors
 
 # 安装器本体不入库：超过 GitHub LFS / Release 之外的 2GiB 单文件上限处理，
 # 改为构建后上传到 GitHub Releases 分发（见 README）。dist/* 已忽略，无需额外规则。

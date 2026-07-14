@@ -27,11 +27,19 @@
           :class="{ empty: !modelValue.bgImage }"
           :style="themeImageThumbStyle"
         >
+          <video
+            v-if="isVideoMedia && mediaPreviewSrc"
+            :src="mediaPreviewSrc"
+            autoplay
+            muted
+            loop
+            playsinline
+          ></video>
           <el-icon v-if="!modelValue.bgImage"><Picture /></el-icon>
         </div>
         <div class="theme-image-actions">
-          <button class="pf-btn" type="button" @click="pickThemeImage">
-            <el-icon><Picture /></el-icon><span>{{ modelValue.bgImage ? '更换图片' : '添加图片' }}</span>
+          <button class="pf-btn" type="button" @click="pickThemeMedia">
+            <el-icon><Picture /></el-icon><span>{{ modelValue.bgImage ? '更换背景' : '添加背景' }}</span>
           </button>
           <button v-if="modelValue.bgImage" class="pf-btn" type="button" @click="removeThemeImage">
             <el-icon><Close /></el-icon><span>移除</span>
@@ -40,14 +48,14 @@
         <input
           ref="themeImageInput"
           type="file"
-          accept="image/*"
+          accept="image/*,video/mp4"
           hidden
-          @change="onThemeImageFile"
+          @change="onThemeMediaFile"
         />
       </div>
 
       <label class="theme-slider-field">
-        <span>图片遮罩 <b>{{ Math.round(modelValue.imageOverlay) }}%</b></span>
+        <span>背景遮罩 <b>{{ Math.round(modelValue.imageOverlay) }}%</b></span>
         <input
           type="range"
           min="0"
@@ -88,6 +96,15 @@
     </div>
 
     <div class="theme-preview" :style="draftPreviewStyle">
+      <video
+        v-if="isVideoMedia && mediaPreviewSrc"
+        class="theme-preview-video"
+        :src="mediaPreviewSrc"
+        autoplay
+        muted
+        loop
+        playsinline
+      ></video>
       <span></span>
       <b></b>
       <i></i>
@@ -106,8 +123,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { Check, Close, MagicStick, Picture } from '@element-plus/icons-vue'
+import { api, isDesktop } from '@/api'
 import { CUSTOM_THEME_FIELDS } from '@/stores/theme'
 import type { CustomTheme, CustomThemeField } from '@/stores/theme'
 
@@ -128,6 +147,9 @@ const emit = defineEmits<{
 
 const customThemeFields = CUSTOM_THEME_FIELDS
 const themeImageInput = ref<HTMLInputElement>()
+const mediaPreviewSrc = ref('')
+let mediaResolveTicket = 0
+const isVideoMedia = computed(() => props.modelValue.bgMediaType === 'video')
 
 const draftPreviewStyle = computed<Record<string, string>>(() => ({
   '--draft-bg': props.modelValue.bg,
@@ -136,15 +158,37 @@ const draftPreviewStyle = computed<Record<string, string>>(() => ({
   '--draft-primary': props.modelValue.primary,
   '--draft-primary-2': props.modelValue.primary2,
   '--draft-accent': props.modelValue.accent,
-  '--draft-bg-image': cssUrl(props.modelValue.bgImage),
+  '--draft-bg-image': !isVideoMedia.value ? cssUrl(mediaPreviewSrc.value) : 'none',
   '--draft-image-opacity': props.modelValue.bgImage ? '1' : '0',
   '--draft-overlay': String(props.modelValue.imageOverlay / 100),
   '--draft-particle-opacity': props.modelValue.particles ? '0.78' : '0',
 }))
 
 const themeImageThumbStyle = computed<Record<string, string>>(() => ({
-  '--theme-image-preview': cssUrl(props.modelValue.bgImage),
+  '--theme-image-preview': !isVideoMedia.value ? cssUrl(mediaPreviewSrc.value) : 'none',
 }))
+
+watch(
+  () => [props.modelValue.bgImage, props.modelValue.bgMediaType] as const,
+  async ([media]) => {
+    const ticket = ++mediaResolveTicket
+    if (!media) {
+      mediaPreviewSrc.value = ''
+      return
+    }
+    if (media.startsWith('data:')) {
+      mediaPreviewSrc.value = media
+      return
+    }
+    try {
+      const src = await api.getThemeMediaData(media)
+      if (ticket === mediaResolveTicket) mediaPreviewSrc.value = src
+    } catch {
+      if (ticket === mediaResolveTicket) mediaPreviewSrc.value = ''
+    }
+  },
+  { immediate: true },
+)
 
 function patchCustomTheme(patch: Partial<CustomTheme>) {
   emit('update:modelValue', { ...props.modelValue, ...patch })
@@ -169,12 +213,33 @@ function cssUrl(value: string) {
   return value ? `url("${value.replace(/"/g, '\\"')}")` : 'none'
 }
 
-function pickThemeImage() {
+async function pickThemeMedia() {
+  // 浏览器开发模式使用组件内的文件输入框，避免 body 下的 mock 输入框
+  // 被主题弹窗识别为“点击外部”，导致弹窗提前关闭并丢失预览状态。
+  if (!isDesktop()) {
+    themeImageInput.value?.click()
+    return
+  }
+
+  try {
+    const res = await api.pickThemeMediaFile()
+    if (res.ok && res.path) {
+      patchCustomTheme({ bgImage: res.path, bgMediaType: res.kind === 'video' ? 'video' : 'image' })
+      return
+    }
+    if (res.cancelled) return
+    if (res.error) {
+      ElMessage.error(res.error)
+      return
+    }
+  } catch {
+    /* fallback to browser file input */
+  }
   themeImageInput.value?.click()
 }
 
 function removeThemeImage() {
-  patchCustomTheme({ bgImage: '' })
+  patchCustomTheme({ bgImage: '', bgMediaType: 'image' })
 }
 
 function resizeThemeImage(file: File): Promise<string> {
@@ -206,16 +271,27 @@ function resizeThemeImage(file: File): Promise<string> {
   })
 }
 
-function onThemeImageFile(e: Event) {
+function readThemeVideo(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('Video read failed'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function onThemeMediaFile(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
-  resizeThemeImage(file)
+  const isVideo = file.type === 'video/mp4' || file.name.toLowerCase().endsWith('.mp4')
+  const reader = isVideo ? readThemeVideo(file) : resizeThemeImage(file)
+  reader
     .then((dataUrl) => {
-      patchCustomTheme({ bgImage: dataUrl })
+      patchCustomTheme({ bgImage: dataUrl, bgMediaType: isVideo ? 'video' : 'image' })
     })
-    .catch(() => {})
+    .catch(() => ElMessage.error('读取背景媒体失败'))
 }
 </script>
 
@@ -293,6 +369,7 @@ function onThemeImageFile(e: Event) {
   align-items: stretch;
 }
 .theme-image-thumb {
+  position: relative;
   min-height: 64px;
   display: grid;
   place-items: center;
@@ -310,8 +387,24 @@ function onThemeImageFile(e: Event) {
   background: rgba(var(--xb-fill-rgb), 0.045);
 }
 .theme-image-thumb .el-icon {
+  position: relative;
+  z-index: 1;
   font-size: 20px;
   opacity: 0.7;
+}
+.theme-image-thumb video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.theme-image-thumb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(var(--xb-bg-rgb), 0.16);
+  pointer-events: none;
 }
 .theme-image-actions {
   min-width: 0;
@@ -378,6 +471,7 @@ function onThemeImageFile(e: Event) {
   content: '';
   position: absolute;
   inset: 0;
+  z-index: 1;
   opacity: var(--draft-image-opacity);
   background-image:
     linear-gradient(rgba(0, 0, 0, var(--draft-overlay)), rgba(0, 0, 0, var(--draft-overlay))),
@@ -385,11 +479,19 @@ function onThemeImageFile(e: Event) {
   background-size: cover;
   background-position: center;
 }
+.theme-preview-video {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 .theme-preview span,
 .theme-preview b,
 .theme-preview i {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   display: block;
   height: 12px;
   border-radius: 999px;
@@ -405,7 +507,7 @@ function onThemeImageFile(e: Event) {
 }
 .theme-preview em {
   position: absolute;
-  z-index: 1;
+  z-index: 2;
   width: 4px;
   height: 4px;
   border-radius: 999px;

@@ -145,7 +145,7 @@
             <h2>选择参与模型</h2>
             <router-link to="/models" class="head-link">管理模型 <el-icon><Right /></el-icon></router-link>
           </div>
-          <p class="field-tip">勾选本次要混合的模型（可跨框架：RVC 与 So-VITS-SVC 同曲混用），每个模型可单独展开设置参数</p>
+          <p class="field-tip">勾选本次要混合的模型（可跨框架：So-VITS-SVC / RVC / SeedVC 同曲混用），每个模型可单独展开设置参数</p>
           <div v-if="availableFrameworks.length > 1" class="model-filter">
             <button class="filter-chip" :class="{ on: modelFilter === '' }" @click="modelFilter = ''">全部</button>
             <button
@@ -183,10 +183,19 @@
                   <label>变调 {{ mp(m.id).pitch > 0 ? '+' + mp(m.id).pitch : mp(m.id).pitch }}</label>
                   <input type="range" min="-12" max="12" step="1" v-model.number="mp(m.id).pitch" />
                 </div>
-                <div v-if="frameworkOf(m.id) !== 'rvc'" class="mp-row">
-                  <label>扩散占比 {{ Math.round(mp(m.id).diffusionRatio * 100) }}%</label>
-                  <input type="range" min="0" max="1" step="0.05" v-model.number="mp(m.id).diffusionRatio" />
-                </div>
+                <template v-if="frameworkOf(m.id) !== 'rvc'">
+                  <div class="mp-row">
+                    <label v-if="frameworkOf(m.id) === 'seed-vc'">扩散步数 {{ seedVcSteps(mp(m.id).diffusionRatio) }}</label>
+                    <label v-else>扩散占比 {{ Math.round(mp(m.id).diffusionRatio * 100) }}%</label>
+                    <input type="range" min="0" max="1" step="0.05" v-model.number="mp(m.id).diffusionRatio" />
+                  </div>
+                  <div v-if="frameworkOf(m.id) === 'seed-vc'" class="mp-ref">
+                    <span>参考音频</span>
+                    <button type="button" class="mini-picker" @click="pickMultiReference(m.id)">
+                      {{ baseName(mp(m.id).referenceAudio) || '选择音色参考' }}
+                    </button>
+                  </div>
+                </template>
                 <template v-else>
                   <div class="mp-row">
                     <label>清辅音保护 {{ mp(m.id).protect.toFixed(2) }}</label>
@@ -198,7 +207,7 @@
                   </div>
                 </template>
                 <div class="mp-inline">
-                  <div class="mp-mini">
+                  <div v-if="frameworkOf(m.id) !== 'seed-vc'" class="mp-mini">
                     <span>F0</span>
                     <select v-model="mp(m.id).f0Method">
                       <option v-for="f in f0Methods" :key="f" :value="f">{{ f }}</option>
@@ -251,17 +260,33 @@
             当前模型框架：<b>{{ frameworkLabel(selectedFramework) }}</b>
           </div>
 
+          <div v-if="selectedFramework === 'seed-vc'" class="field">
+            <label class="field-block-label">目标音色参考音频</label>
+            <button type="button" class="path-picker" @click="pickSeedVcReference">
+              <el-icon><Headset /></el-icon>
+              <span>{{ baseName(seedVcReferenceAudio) || '选择本次推理使用的参考音频' }}</span>
+            </button>
+            <div class="field-hint">建议使用 1-30 秒干净人声；这不是模型文件，每次推理可以单独更换</div>
+          </div>
+
           <div v-if="selectedFramework !== 'rvc'" class="field">
             <div class="field-row">
-              <label>主模型 / 扩散模型 比例</label>
+              <label>{{ selectedFramework === 'seed-vc' ? 'SeedVC 推理质量' : '主模型 / 扩散模型 比例' }}</label>
               <span class="field-val">
-                <i class="ratio-main">主 {{ Math.round((1 - diffusionRatio) * 100) }}%</i>
-                ·
-                <i class="ratio-diff">扩散 {{ Math.round(diffusionRatio * 100) }}%</i>
+                <template v-if="selectedFramework === 'seed-vc'">
+                  <i class="ratio-diff">{{ seedVcSteps(diffusionRatio) }} 步</i>
+                </template>
+                <template v-else>
+                  <i class="ratio-main">主 {{ Math.round((1 - diffusionRatio) * 100) }}%</i>
+                  ·
+                  <i class="ratio-diff">扩散 {{ Math.round(diffusionRatio * 100) }}%</i>
+                </template>
               </span>
             </div>
             <input class="ratio-range" type="range" min="0" max="1" step="0.05" v-model.number="diffusionRatio" />
-            <div class="field-hint">两个模型共同参与推理，向右扩散模型占比更高</div>
+            <div class="field-hint">
+              {{ selectedFramework === 'seed-vc' ? 'SeedVC 使用扩散步数控制质量与速度，向右质量更高但更慢' : '两个模型共同参与推理，向右扩散模型占比更高' }}
+            </div>
           </div>
 
           <div class="field">
@@ -273,7 +298,7 @@
             <div class="field-hint">男声转女声建议 +12，女声转男声建议 -12</div>
           </div>
 
-          <div class="field">
+          <div v-if="selectedFramework !== 'seed-vc'" class="field">
             <label class="field-block-label">F0 提取算法</label>
             <div class="seg">
               <button
@@ -300,24 +325,24 @@
             <div class="field-hint">同时作用于人声分离与模型推理；GPU 加速需 NVIDIA 显卡（CUDA），无显卡或显存不足时选 CPU</div>
           </div>
 
-          <div class="field">
-            <div class="field-row">
-              <label>索引比率</label>
-              <span class="field-val">{{ indexRate.toFixed(2) }}</span>
-            </div>
-            <input type="range" min="0" max="1" step="0.05" v-model.number="indexRate" />
-          </div>
-
-          <div class="field">
-            <div class="field-row">
-              <label>响度包络融合</label>
-              <span class="field-val">{{ rmsMix.toFixed(2) }}</span>
-            </div>
-            <input type="range" min="0" max="1" step="0.05" v-model.number="rmsMix" />
-          </div>
-
           <!-- RVC 专属参数 -->
           <template v-if="selectedFramework === 'rvc'">
+            <div class="field">
+              <div class="field-row">
+                <label>索引比率</label>
+                <span class="field-val">{{ indexRate.toFixed(2) }}</span>
+              </div>
+              <input type="range" min="0" max="1" step="0.05" v-model.number="indexRate" />
+            </div>
+
+            <div class="field">
+              <div class="field-row">
+                <label>响度包络融合</label>
+                <span class="field-val">{{ rmsMix.toFixed(2) }}</span>
+              </div>
+              <input type="range" min="0" max="1" step="0.05" v-model.number="rmsMix" />
+            </div>
+
             <div class="field">
               <div class="field-row">
                 <label>清辅音保护 (protect)</label>
@@ -647,7 +672,7 @@
           </div>
           <div class="infer-tool-row">
             <span class="queue-text">队列：{{ queueStatus.size }} 个等待</span>
-            <el-button round class="ghost-btn" :disabled="mode !== 'single' || !selectedModel" @click="batchGenerate">
+            <el-button round class="ghost-btn" :disabled="mode !== 'single' || !selectedModel || (selectedFramework === 'seed-vc' && !seedVcReferenceAudio)" @click="batchGenerate">
               <el-icon class="el-icon--left"><Document /></el-icon>批量推理
             </el-button>
           </div>
@@ -793,6 +818,7 @@ import {
   type BlendModel,
   type BlendSegment,
   type CreateWorkflow,
+  type InferenceParams,
   type InferencePreset,
   type InferenceQueueStatus,
 } from '@/api'
@@ -840,6 +866,7 @@ const pitch = ref(num(prefs.pitch, 0))
 const indexRate = ref(num(prefs.indexRate, 0.75))
 const rmsMix = ref(num(prefs.rmsMix, 0.25))
 const diffusionRatio = ref(num(prefs.diffusionRatio, 0.5))
+const seedVcReferenceAudio = ref(str(prefs.seedVcReferenceAudio, ''))
 const presets = ref<InferencePreset[]>([])
 const selectedPresetId = ref('')
 const queueStatus = ref<InferenceQueueStatus>({ running: false, pending: [], size: 0 })
@@ -858,10 +885,17 @@ function frameworkLabel(id: string): string {
   const map: Record<string, string> = {
     'so-vits-svc': 'So-VITS-SVC',
     rvc: 'RVC',
+    'seed-vc': 'SeedVC',
     'ddsp-svc': 'DDSP-SVC',
     other: '其他',
   }
   return map[id] || id || 'So-VITS-SVC'
+}
+function seedVcSteps(ratio: number): number {
+  return Math.max(1, Math.round(10 + Math.max(0, Math.min(1, ratio || 0)) * 40))
+}
+function baseName(p: string): string {
+  return p ? p.split(/[/\\]/).pop() || p : ''
 }
 const selectedFramework = computed(() => frameworkOf(selectedModel.value))
 
@@ -898,6 +932,32 @@ type MultiParams = {
   protect: number
   filterRadius: number
   rvcVersion: string
+  referenceAudio: string
+}
+
+type ParamValues = MultiParams
+
+function paramsForFramework(framework: string, values: ParamValues): InferenceParams {
+  const params: InferenceParams = {
+    pitch: Math.round(values.pitch),
+    uvr_model: uvrModel.value,
+    device: values.device,
+  }
+  if (framework === 'seed-vc') {
+    params.diffusion_ratio = values.diffusionRatio
+    params.reference_audio = values.referenceAudio
+  } else if (framework === 'rvc') {
+    params.f0_method = values.f0Method
+    params.index_rate = values.indexRate
+    params.rms_mix = values.rmsMix
+    params.protect = values.protect
+    params.filter_radius = Math.round(values.filterRadius)
+    params.rvc_version = values.rvcVersion
+  } else {
+    params.f0_method = values.f0Method
+    params.diffusion_ratio = values.diffusionRatio
+  }
+  return params
 }
 const mode = ref<'single' | 'multi'>(prefs.mode === 'multi' ? 'multi' : 'single')
 const workflowKeys: CreateWorkflow[] = [
@@ -981,6 +1041,7 @@ function defaultParams(): MultiParams {
     protect: protect.value,
     filterRadius: filterRadius.value,
     rvcVersion: rvcVersion.value,
+    referenceAudio: '',
   }
 }
 function mp(id: string): MultiParams {
@@ -1591,7 +1652,7 @@ const alignStatus = computed(() => {
 
 // 任一参数变化即写回 localStorage
 watch(
-  [uvrModel, f0Method, pitch, indexRate, rmsMix, diffusionRatio, device, mode, workflow, protect, filterRadius, rvcVersion],
+  [uvrModel, f0Method, pitch, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion],
   () => {
     try {
       localStorage.setItem(
@@ -1603,6 +1664,7 @@ watch(
           indexRate: indexRate.value,
           rmsMix: rmsMix.value,
           diffusionRatio: diffusionRatio.value,
+          seedVcReferenceAudio: seedVcReferenceAudio.value,
           device: device.value,
           mode: mode.value,
           workflow: workflow.value,
@@ -1665,10 +1727,15 @@ const editorAvailable = computed(() =>
 const canGenerate = computed(() => {
   if (!song.value) return false
   if (workflow.value === 'full_manual_editor') return true
-  if (mode.value === 'single') return !!selectedModel.value
+  if (mode.value === 'single') {
+    if (!selectedModel.value) return false
+    if (selectedFramework.value === 'seed-vc' && !seedVcReferenceAudio.value) return false
+    return true
+  }
   // 多模型：至少选 1 个模型，且至少 1 个片段已指派
   return (
     selectedMulti.value.length > 0 &&
+    selectedMulti.value.every((id) => frameworkOf(id) !== 'seed-vc' || !!mp(id).referenceAudio) &&
     segments.value.some((s) => s.modelIds.length > 0)
   )
 })
@@ -1707,18 +1774,18 @@ async function openLog() {
 }
 
 function currentParams() {
-  return {
+  return paramsForFramework(selectedFramework.value, {
     pitch: pitch.value,
-    f0_method: f0Method.value,
-    index_rate: indexRate.value,
-    rms_mix: rmsMix.value,
-    uvr_model: uvrModel.value,
-    diffusion_ratio: diffusionRatio.value,
+    f0Method: f0Method.value,
+    indexRate: indexRate.value,
+    rmsMix: rmsMix.value,
+    diffusionRatio: diffusionRatio.value,
     device: device.value,
     protect: protect.value,
-    filter_radius: filterRadius.value,
-    rvc_version: rvcVersion.value,
-  }
+    filterRadius: filterRadius.value,
+    rvcVersion: rvcVersion.value,
+    referenceAudio: selectedFramework.value === 'seed-vc' ? seedVcReferenceAudio.value : '',
+  })
 }
 
 function applyParams(raw: Record<string, unknown>) {
@@ -1733,6 +1800,7 @@ function applyParams(raw: Record<string, unknown>) {
     protect: num(raw.protect, protect.value),
     filterRadius: num(raw.filter_radius, filterRadius.value),
     rvcVersion: str(raw.rvc_version, rvcVersion.value),
+    referenceAudio: str(raw.reference_audio, seedVcReferenceAudio.value),
   }
   pitch.value = next.pitch
   f0Method.value = next.f0Method
@@ -1744,6 +1812,7 @@ function applyParams(raw: Record<string, unknown>) {
   protect.value = next.protect
   filterRadius.value = next.filterRadius
   rvcVersion.value = next.rvcVersion
+  seedVcReferenceAudio.value = next.referenceAudio
   for (const id of selectedMulti.value) {
     const p = mp(id)
     p.pitch = next.pitch
@@ -1755,6 +1824,7 @@ function applyParams(raw: Record<string, unknown>) {
     p.protect = next.protect
     p.filterRadius = next.filterRadius
     p.rvcVersion = next.rvcVersion
+    if (frameworkOf(id) === 'seed-vc') p.referenceAudio = next.referenceAudio
   }
 }
 
@@ -1772,7 +1842,7 @@ async function savePreset() {
       cancelButtonText: '取消',
       inputValue: `预设 ${presets.value.length + 1}`,
     })
-    const preset = await api.saveInferencePreset(value, currentParams())
+    const preset = await api.saveInferencePreset(value, { ...currentParams() })
     presets.value = await api.listInferencePresets()
     selectedPresetId.value = preset.id
     ElMessage.success('参数预设已保存')
@@ -1859,6 +1929,16 @@ async function onPickSong() {
   song.value = { name, path, hint: '本地音频已选择' }
 }
 
+async function pickSeedVcReference() {
+  const path = await api.pickAudioFile()
+  if (path) seedVcReferenceAudio.value = path
+}
+
+async function pickMultiReference(id: string) {
+  const path = await api.pickAudioFile()
+  if (path) mp(id).referenceAudio = path
+}
+
 // 已下载素材（来自「资源获取」页）
 const route = useRoute()
 const downloaded = ref<DownloadedMusic[]>([])
@@ -1907,6 +1987,12 @@ const generate = async () => {
   }
 
   if (mode.value === 'multi') {
+    const missing = selectedMulti.value.find((id) => frameworkOf(id) === 'seed-vc' && !mp(id).referenceAudio)
+    if (missing) {
+      const name = models.value.find((m) => m.id === missing)?.name || 'SeedVC 模型'
+      ElMessage.warning(`请为「${name}」选择参考音频`)
+      return
+    }
     // 片段为唯一数据源：起止已是绝对时间（offset 已并入），直接产出
     const outSegments: BlendSegment[] = []
     for (const s of sortedSegments.value) {
@@ -1918,20 +2004,21 @@ const generate = async () => {
     }
     const blendModels: BlendModel[] = pickedModels.value.map((pm) => {
       const p = mp(pm.id)
+      const framework = frameworkOf(pm.id)
       return {
         model_id: pm.id,
-        params: {
+        params: paramsForFramework(framework, {
           pitch: p.pitch,
-          f0_method: p.f0Method,
-          index_rate: p.indexRate,
-          rms_mix: p.rmsMix,
-          uvr_model: uvrModel.value,
-          diffusion_ratio: p.diffusionRatio,
+          f0Method: p.f0Method,
+          indexRate: p.indexRate,
+          rmsMix: p.rmsMix,
+          diffusionRatio: p.diffusionRatio,
           device: p.device,
           protect: p.protect,
-          filter_radius: p.filterRadius,
-          rvc_version: p.rvcVersion,
-        },
+          filterRadius: p.filterRadius,
+          rvcVersion: p.rvcVersion,
+          referenceAudio: framework === 'seed-vc' ? p.referenceAudio : '',
+        }),
       }
     })
     const work = await worksStore.create({
@@ -1949,6 +2036,10 @@ const generate = async () => {
     return
   }
 
+  if (selectedFramework.value === 'seed-vc' && !seedVcReferenceAudio.value) {
+    ElMessage.warning('请先选择 SeedVC 参考音频')
+    return
+  }
   const work = await worksStore.create({
     title,
     model_id: selectedModel.value,
@@ -1963,6 +2054,10 @@ const generate = async () => {
 
 async function batchGenerate() {
   if (mode.value !== 'single' || !selectedModel.value) return
+  if (selectedFramework.value === 'seed-vc' && !seedVcReferenceAudio.value) {
+    ElMessage.warning('请先选择 SeedVC 参考音频')
+    return
+  }
   const paths = await api.pickAudioFiles()
   if (!paths.length) return
   const created = await api.createBatchWork({
@@ -2028,7 +2123,7 @@ watch(trackEl, (el) => {
 })
 
 onMounted(async () => {
-  await modelsStore.ensureLoaded()
+  await modelsStore.load()
   presets.value = await api.listInferencePresets()
   queueStatus.value = await api.getInferenceQueue()
   selectedModel.value = defaultId.value || models.value[0]?.id || ''
@@ -2988,6 +3083,46 @@ onUnmounted(() => {
 }
 .field-hint { font-size: 12px; color: var(--xb-muted); margin-top: 8px; }
 .field-tip { font-size: 13px; color: var(--xb-muted); margin: -6px 0 12px; }
+.path-picker {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--xb-border);
+  border-radius: 8px;
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+.path-picker:hover {
+  border-color: rgba(var(--xb-primary-rgb), 0.55);
+  background: rgba(var(--xb-primary-rgb), 0.08);
+}
+.mp-ref {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--xb-muted);
+}
+.mini-picker {
+  min-width: 0;
+  height: 28px;
+  border: 1px solid var(--xb-border);
+  border-radius: 7px;
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-text);
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.mini-picker:hover { border-color: rgba(var(--xb-primary-rgb), 0.55); }
 input[type='range'] {
   width: 100%;
   accent-color: var(--xb-primary);

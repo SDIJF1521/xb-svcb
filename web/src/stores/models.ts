@@ -25,6 +25,7 @@ export interface ModelVM {
 
 function guessFramework(type: string): string {
   const t = (type || '').toLowerCase()
+  if (t.includes('seed')) return 'seed-vc'
   if (t.includes('rvc')) return 'rvc'
   if (t.includes('ddsp')) return 'ddsp-svc'
   return 'so-vits-svc'

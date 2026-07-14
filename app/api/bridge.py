@@ -35,6 +35,7 @@ from infrastructure import paths
 from infrastructure.engine import EngineRegistry
 from infrastructure.ffmpeg_tool import FfmpegTool
 from infrastructure.rvc_engine import RvcEngine
+from infrastructure.seedvc_engine import SeedVcEngine
 from infrastructure.storage import ListRepository, SettingsStore
 from infrastructure.svc_engine import SvcEngine
 from infrastructure.uvr_tool import UvrTool
@@ -91,6 +92,93 @@ class Api:
 
         name = theme if theme in ("cyber", "anime") else "cyber"
         return _apply_window_theme(config.APP_TITLE, name)
+
+    def pick_theme_media_file(self) -> dict[str, Any]:
+        """选择自定义主题背景媒体，并复制到数据目录以便重启后继续使用。"""
+        result = self._open_dialog(
+            "选择主题背景图片或 MP4 动态壁纸",
+            multiple=False,
+            file_types=(
+                "背景媒体 (*.jpg;*.jpeg;*.png;*.webp;*.gif;*.mp4)",
+                "图片 (*.jpg;*.jpeg;*.png;*.webp;*.gif)",
+                "MP4 视频 (*.mp4)",
+                "所有文件 (*.*)",
+            ),
+        )
+        if not result:
+            return {"ok": False, "cancelled": True}
+        src = Path(result[0])
+        if not src.exists() or not src.is_file():
+            return {"ok": False, "error": "媒体文件不存在"}
+        ext = src.suffix.lower()
+        image_mimes = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+        }
+        if ext == ".mp4":
+            kind = "video"
+            mime = "video/mp4"
+            max_bytes = 200 * 1024 * 1024
+        elif ext in image_mimes:
+            kind = "image"
+            mime = image_mimes[ext]
+            max_bytes = 50 * 1024 * 1024
+        else:
+            return {"ok": False, "error": "仅支持图片或 MP4 视频"}
+        try:
+            if src.stat().st_size > max_bytes:
+                limit = "200MB" if kind == "video" else "50MB"
+                return {"ok": False, "error": f"媒体文件过大，请选择不超过 {limit} 的文件"}
+        except OSError:
+            return {"ok": False, "error": "无法读取媒体文件"}
+
+        paths.ensure_dirs()
+        safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", src.stem).strip("._") or "theme_media"
+        dst = config.THEME_MEDIA_DIR / f"{time.time_ns()}_{safe_stem}{ext}"
+        try:
+            shutil.copy2(src, dst)
+        except OSError as exc:
+            return {"ok": False, "error": f"复制背景媒体失败：{exc}"}
+        return {"ok": True, "path": dst.name, "kind": kind, "mime": mime, "name": src.name}
+
+    def get_theme_media_data(self, media_path: str) -> str:
+        """返回已保存主题媒体的 data URI，供背景图/视频播放。"""
+        raw = str(media_path or "").strip()
+        if not raw:
+            return ""
+        try:
+            candidate = Path(raw)
+            if candidate.is_absolute():
+                path = candidate.expanduser().resolve()
+            else:
+                if candidate.name != raw or candidate.name in {"", ".", ".."}:
+                    return ""
+                path = (config.THEME_MEDIA_DIR / candidate.name).resolve()
+            media_root = config.THEME_MEDIA_DIR.resolve()
+            if path != media_root and media_root not in path.parents:
+                return ""
+            if not path.exists() or not path.is_file():
+                return ""
+            ext = path.suffix.lower()
+            mime_by_ext = {
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".png": "image/png",
+                ".webp": "image/webp",
+                ".gif": "image/gif",
+                ".mp4": "video/mp4",
+            }
+            mime = mime_by_ext.get(ext)
+            if not mime:
+                return ""
+            data = path.read_bytes()
+        except OSError:
+            return ""
+        b64 = base64.b64encode(data).decode("ascii")
+        return f"data:{mime};base64,{b64}"
 
     def get_data_storage_status(self) -> dict[str, Any]:
         """返回用户数据目录、占用和所在磁盘剩余空间。"""
@@ -387,7 +475,7 @@ class Api:
         return result[0] if result else None
 
     def import_model(self, payload: dict[str, Any]) -> dict[str, Any] | None:
-        """导入一组模型，按 framework 分支：so-vits（主模型+配置+可选扩散）/ rvc（主模型+可选 index）。"""
+        """导入一组模型，按 framework 分支处理 so-vits / RVC / SeedVC 文件角色。"""
         return self._models.import_model(payload or {})
 
     def set_default_model(self, model_id: str) -> bool:
@@ -959,6 +1047,7 @@ class Api:
             config.MODELHUB_DIR,
             config.EDITOR_DIR,
             config.EDITOR_CACHE_DIR,
+            config.THEME_MEDIA_DIR,
         ):
             directory.mkdir(parents=True, exist_ok=True)
         self._models_repo.set_path(config.MODELS_DB)
@@ -1276,8 +1365,9 @@ def build_api() -> Api:
     uvr = UvrTool()
     svc = SvcEngine()
     rvc = RvcEngine()
+    seedvc = SeedVcEngine()
     # 引擎注册表：按模型 framework 路由推理引擎（缺省回退 so-vits-svc）
-    engines = EngineRegistry([svc, rvc])
+    engines = EngineRegistry([svc, rvc, seedvc])
 
     models_repo = ListRepository(config.MODELS_DB)
     works_repo = ListRepository(config.WORKS_DB)
@@ -1285,7 +1375,7 @@ def build_api() -> Api:
     settings = SettingsStore(config.SETTINGS_DB)
 
     # 应用服务
-    system_service = SystemService(ffmpeg, uvr, svc, rvc)
+    system_service = SystemService(ffmpeg, uvr, svc, rvc, seedvc)
     model_service = ModelService(models_repo, settings)
     conversion_service = ConversionService(works_repo, ffmpeg, uvr, engines)
     work_service = WorkService(works_repo, conversion_service, model_service, settings)

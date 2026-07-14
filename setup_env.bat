@@ -46,7 +46,7 @@ echo [XB-SVCB] Using %PYEXE%
 echo [XB-SVCB] Building runtime environment, this may take a while...
 echo.
 rem App UI ships as XB-SVCB.exe, so the app/web build steps are not needed here;
-rem only the heavy AI envs (uvr/svc) and models are set up.
+rem only the heavy AI envs (uvr/svc/rvc/seedvc) and models are set up.
 rem --root pins all deps (engines/.venv-svc/.venv-uvr/models) to THIS install folder.
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 18 正在执行运行环境安装脚本
 %PYEXE% "install\install.py" --root "%CD%" --skip-app --skip-web %*
@@ -59,7 +59,7 @@ if "%RC%"=="0" (
 ) else (
   if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 100 运行环境搭建失败
   echo [XB-SVCB] Finished with errors ^(exit code %RC%^). See log above.
-  echo           You can retry a single step, e.g.:  setup_env.bat --only svc
+  echo           You can retry a single step, e.g.:  setup_env.bat --only seedvc
 )
 echo.
 if not "%XB_FROM_INSTALLER%"=="1" pause

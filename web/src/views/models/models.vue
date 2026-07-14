@@ -5,7 +5,7 @@
       <div>
         <p class="eyebrow">// 模型管理</p>
         <h1>声音模型</h1>
-        <p class="page-sub">统一管理 So-VITS-SVC / RVC 等声音模型，导入、筛选、分享与默认模型设置集中完成</p>
+        <p class="page-sub">统一管理 So-VITS-SVC / RVC / SeedVC 等声音模型，导入、筛选、分享与默认模型设置集中完成</p>
       </div>
       <el-button size="large" round class="ghost-btn" @click="openSettings">
         <el-icon class="el-icon--left"><Setting /></el-icon>ModelScope 设置
@@ -61,7 +61,7 @@
       <div class="block">
         <div class="block-head">
           <h2>导入模型</h2>
-          <span class="muted">{{ impFramework === 'rvc' ? '主模型(.pth) 必填，检索文件(.index) 可选' : '主模型 + 配置为必填，扩散模型可选' }}</span>
+          <span class="muted">{{ importHint }}</span>
         </div>
         <div class="import-card glass">
           <!-- 框架选择 -->
@@ -79,7 +79,7 @@
           </div>
 
           <!-- So-VITS-SVC：主模型 + 配置 + 可选扩散 -->
-          <div v-if="impFramework !== 'rvc'" class="imp-grid">
+          <div v-if="impFramework === 'so-vits-svc'" class="imp-grid">
             <div class="imp-field" :class="{ filled: !!imp.mainModel }">
               <label>主模型权重 <i>*</i></label>
               <button class="picker" @click="pick('mainModel', 'model')">
@@ -109,6 +109,26 @@
               <button class="picker" @click="pick('diffusionConfig', 'config')">
                 <el-icon><Document /></el-icon>
                 <span class="picker-text">{{ baseName(imp.diffusionConfig) || '选择 diffusion.yaml' }}</span>
+                <el-icon class="picker-arrow"><Plus /></el-icon>
+              </button>
+            </div>
+          </div>
+
+          <!-- SeedVC：checkpoint + config；参考音频在推理时选择 -->
+          <div v-else-if="impFramework === 'seed-vc'" class="imp-grid">
+            <div class="imp-field" :class="{ filled: !!imp.mainModel }">
+              <label>SeedVC checkpoint <i>*</i></label>
+              <button class="picker" @click="pick('mainModel', 'model')">
+                <el-icon><Document /></el-icon>
+                <span class="picker-text">{{ baseName(imp.mainModel) || '选择 ft_model.pth / checkpoint.pth' }}</span>
+                <el-icon class="picker-arrow"><Plus /></el-icon>
+              </button>
+            </div>
+            <div class="imp-field" :class="{ filled: !!imp.mainConfig }">
+              <label>SeedVC 配置 <i>*</i></label>
+              <button class="picker" @click="pick('mainConfig', 'config')">
+                <el-icon><Document /></el-icon>
+                <span class="picker-text">{{ baseName(imp.mainConfig) || '选择 config.yml / config.yaml' }}</span>
                 <el-icon class="picker-arrow"><Plus /></el-icon>
               </button>
             </div>
@@ -280,6 +300,9 @@
               />
               <span class="prog-msg">{{ dlJob(it.repo_id)?.msg || '下载中…' }}</span>
             </div>
+            <div v-else-if="dlJob(it.repo_id)?.status === 'failed'" class="row-prog failed">
+              <span class="prog-msg">{{ dlJob(it.repo_id)?.error || '下载中断，可继续下载' }}</span>
+            </div>
           </div>
           <div class="row-ops">
             <a v-if="it.url && it.url !== '#'" :href="it.url" target="_blank" rel="noreferrer" class="op" title="在 ModelScope 查看">
@@ -290,7 +313,9 @@
               :loading="dlJob(it.repo_id)?.status === 'running'"
               @click="downloadHub(it)"
             >
-              <el-icon v-if="dlJob(it.repo_id)?.status !== 'running'" class="el-icon--left"><Download /></el-icon>下载导入
+              <el-icon v-if="dlJob(it.repo_id)?.status === 'done'" class="el-icon--left"><CircleCheck /></el-icon>
+              <el-icon v-else-if="dlJob(it.repo_id)?.status !== 'running'" class="el-icon--left"><Download /></el-icon>
+              {{ dlJob(it.repo_id)?.status === 'done' ? '查看本地' : dlJob(it.repo_id)?.status === 'failed' ? '继续下载' : '下载导入' }}
             </el-button>
           </div>
         </div>
@@ -394,6 +419,7 @@ const frameworks = ref<ModelFramework[]>([])
 
 function guessFramework(type: string): string {
   const t = (type || '').toLowerCase()
+  if (t.includes('seed')) return 'seed-vc'
   if (t.includes('rvc')) return 'rvc'
   if (t.includes('ddsp')) return 'ddsp-svc'
   return 'so-vits-svc'
@@ -438,14 +464,22 @@ function toggleLocalFramework(id: string) {
 }
 
 /* ---------- 本地导入 ---------- */
-/* 导入仅支持已实现推理引擎的框架（so-vits-svc / rvc） */
-type ImportFw = 'so-vits-svc' | 'rvc'
+/* 导入仅支持已实现推理引擎的框架（so-vits-svc / rvc / seed-vc） */
+type ImportFw = 'so-vits-svc' | 'rvc' | 'seed-vc'
 const importFrameworks: { id: ImportFw; name: string }[] = [
   { id: 'so-vits-svc', name: 'So-VITS-SVC' },
   { id: 'rvc', name: 'RVC' },
+  { id: 'seed-vc', name: 'SeedVC' },
 ]
 const impFramework = ref<ImportFw>('so-vits-svc')
-const imp = ref({ name: '', mainModel: '', mainConfig: '', diffusionModel: '', diffusionConfig: '', indexFile: '' })
+const imp = ref({
+  name: '',
+  mainModel: '',
+  mainConfig: '',
+  diffusionModel: '',
+  diffusionConfig: '',
+  indexFile: '',
+})
 const importing = ref(false)
 
 function baseName(p: string): string {
@@ -453,6 +487,11 @@ function baseName(p: string): string {
 }
 
 const suggestedName = computed(() => baseName(imp.value.mainModel).replace(/\.[^.]+$/, ''))
+const importHint = computed(() => {
+  if (impFramework.value === 'rvc') return '主模型(.pth) 必填，检索文件(.index) 可选'
+  if (impFramework.value === 'seed-vc') return 'checkpoint + 配置必填；参考音频在推理时选择'
+  return '主模型 + 配置为必填，扩散模型可选'
+})
 const canImport = computed(() =>
   impFramework.value === 'rvc'
     ? !!imp.value.mainModel
@@ -475,7 +514,14 @@ async function pick(field: keyof typeof imp.value, kind: 'model' | 'config' | 'i
 }
 
 function resetImport() {
-  imp.value = { name: '', mainModel: '', mainConfig: '', diffusionModel: '', diffusionConfig: '', indexFile: '' }
+  imp.value = {
+    name: '',
+    mainModel: '',
+    mainConfig: '',
+    diffusionModel: '',
+    diffusionConfig: '',
+    indexFile: '',
+  }
 }
 
 async function doImport() {
@@ -483,13 +529,14 @@ async function doImport() {
   importing.value = true
   try {
     const isRvc = impFramework.value === 'rvc'
+    const isSeedVc = impFramework.value === 'seed-vc'
     const created = await modelsStore.importModel({
       name: imp.value.name.trim() || undefined,
       framework: impFramework.value,
       main_model: imp.value.mainModel,
       main_config: isRvc ? undefined : imp.value.mainConfig,
-      diffusion_model: isRvc ? null : imp.value.diffusionModel || null,
-      diffusion_config: isRvc ? null : imp.value.diffusionConfig || null,
+      diffusion_model: isRvc || isSeedVc ? null : imp.value.diffusionModel || null,
+      diffusion_config: isRvc || isSeedVc ? null : imp.value.diffusionConfig || null,
       index_file: isRvc ? imp.value.indexFile || null : null,
     })
     if (created) {
@@ -667,6 +714,12 @@ async function downloadHub(it: HubModelItem) {
     ElMessage.info('该模型正在后台下载，请在顶栏「传输」查看进度')
     return
   }
+  if (job?.status === 'done') {
+    await modelsStore.load()
+    tab.value = 'local'
+    localQuery.value = job.result?.model?.name || ''
+    return
+  }
   const key = await transfers.startDownload(it.repo_id)
   if (!key) {
     ElMessage.error('启动下载失败')
@@ -714,7 +767,7 @@ async function confirmUpload() {
 }
 
 onMounted(async () => {
-  await modelsStore.ensureLoaded()
+  await modelsStore.load()
   const [token, ready, fws] = await Promise.all([
     api.getModelscopeToken(),
     api.modelhubUploadReady(),
@@ -914,6 +967,7 @@ onMounted(async () => {
 .row-prog :deep(.el-progress) { flex: 1; min-width: 0; }
 .prog-msg { font-size: 12px; color: var(--xb-muted); white-space: nowrap; }
 .row-prog .prog-msg { flex-shrink: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis; }
+.row-prog.failed .prog-msg { max-width: 100%; color: var(--xb-danger, #d14343); }
 .upload-prog { margin-top: 6px; }
 .upload-prog .prog-msg { margin: 6px 0 0; }
 

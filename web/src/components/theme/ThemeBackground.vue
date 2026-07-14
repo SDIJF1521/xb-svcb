@@ -1,6 +1,16 @@
 <template>
   <div class="bg-decor">
-    <div class="custom-bg-image"></div>
+    <video
+      v-if="isCustomVideo && customMediaSrc"
+      class="custom-bg-video"
+      :src="customMediaSrc"
+      autoplay
+      muted
+      loop
+      playsinline
+    ></video>
+    <div v-if="isCustomVideo && customMediaSrc" class="custom-bg-video-overlay"></div>
+    <div class="custom-bg-image" :style="customBgImageStyle"></div>
     <div class="grid-floor"></div>
     <div class="orb orb-1"></div>
     <div class="orb orb-2"></div>
@@ -20,18 +30,53 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import { api } from '@/api'
 import { useThemeStore } from '@/stores/theme'
 
 defineOptions({ name: 'ThemeBackground' })
 
 const themeStore = useThemeStore()
 const { customTheme } = storeToRefs(themeStore)
+const customMediaSrc = ref('')
+let mediaResolveTicket = 0
+
+const isCustomVideo = computed(() => customTheme.value.bgMediaType === 'video' && !!customTheme.value.bgImage)
+const isCustomImage = computed(() => customTheme.value.bgMediaType === 'image' && !!customTheme.value.bgImage)
+const customBgImageStyle = computed<Record<string, string>>(() => ({
+  '--xb-custom-resolved-bg-image': isCustomImage.value ? cssUrl(customMediaSrc.value) : 'none',
+}))
 
 const customParticleCount = computed(() =>
   customTheme.value.particles ? Math.round(customTheme.value.particleDensity) : 0,
 )
+
+watch(
+  () => [customTheme.value.bgImage, customTheme.value.bgMediaType] as const,
+  async ([media]) => {
+    const ticket = ++mediaResolveTicket
+    if (!media) {
+      customMediaSrc.value = ''
+      return
+    }
+    if (media.startsWith('data:')) {
+      customMediaSrc.value = media
+      return
+    }
+    try {
+      const src = await api.getThemeMediaData(media)
+      if (ticket === mediaResolveTicket) customMediaSrc.value = src
+    } catch {
+      if (ticket === mediaResolveTicket) customMediaSrc.value = ''
+    }
+  },
+  { immediate: true },
+)
+
+function cssUrl(value: string) {
+  return value ? `url("${value.replace(/"/g, '\\"')}")` : 'none'
+}
 
 function customParticleStyle(n: number) {
   const left = (n * 17 + 9) % 100
@@ -80,7 +125,7 @@ function petalStyle(n: number) {
   opacity: 0;
   background-image:
     linear-gradient(rgba(var(--xb-bg-rgb), var(--xb-image-overlay)), rgba(var(--xb-bg-rgb), var(--xb-image-overlay))),
-    var(--xb-custom-bg-image);
+    var(--xb-custom-resolved-bg-image);
   background-size: cover;
   background-position: center;
   transform: scale(1.02);
@@ -88,6 +133,26 @@ function petalStyle(n: number) {
 }
 html[data-theme='custom'] .custom-bg-image {
   opacity: var(--xb-custom-image-opacity);
+}
+.custom-bg-video,
+.custom-bg-video-overlay {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+.custom-bg-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.02);
+}
+.custom-bg-video-overlay {
+  background: rgba(var(--xb-bg-rgb), var(--xb-image-overlay));
+}
+html[data-theme='custom'] .custom-bg-video,
+html[data-theme='custom'] .custom-bg-video-overlay {
+  opacity: 1;
 }
 .grid-floor {
   position: absolute;

@@ -55,6 +55,7 @@ import type {
   DataMigrationProgress,
   DataMigrationStartResult,
   DataStorageStatus,
+  ThemeMediaPickResult,
 } from './types'
 
 const now = () => new Date().toISOString()
@@ -84,6 +85,51 @@ function browserPickFile(accept: string): Promise<string | null> {
     window.addEventListener(
       'focus',
       () => setTimeout(() => finish(input.files?.[0]?.name ?? null), 400),
+      { once: true },
+    )
+    document.body.appendChild(input)
+    input.click()
+  })
+}
+
+function browserPickThemeMedia(): Promise<ThemeMediaPickResult> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'image/*,video/mp4'
+    input.style.display = 'none'
+    let done = false
+    const finish = (res: ThemeMediaPickResult) => {
+      if (done) return
+      done = true
+      input.remove()
+      resolve(res)
+    }
+    input.onchange = () => {
+      const file = input.files?.[0]
+      if (!file) {
+        finish({ ok: false, cancelled: true })
+        return
+      }
+      const kind = file.type === 'video/mp4' || file.name.toLowerCase().endsWith('.mp4') ? 'video' : 'image'
+      const reader = new FileReader()
+      reader.onload = () => {
+        finish({
+          ok: true,
+          path: String(reader.result || ''),
+          kind,
+          mime: file.type || (kind === 'video' ? 'video/mp4' : 'image/png'),
+          name: file.name,
+        })
+      }
+      reader.onerror = () => finish({ ok: false, error: '无法读取媒体文件' })
+      reader.readAsDataURL(file)
+    }
+    window.addEventListener(
+      'focus',
+      () => setTimeout(() => {
+        if (!input.files?.length) finish({ ok: false, cancelled: true })
+      }, 400),
       { once: true },
     )
     document.body.appendChild(input)
@@ -158,12 +204,14 @@ let mockHubToken = ''
 const mockFrameworks: ModelFramework[] = [
   { id: 'so-vits-svc', name: 'So-VITS-SVC' },
   { id: 'rvc', name: 'RVC' },
+  { id: 'seed-vc', name: 'SeedVC' },
   { id: 'ddsp-svc', name: 'DDSP-SVC' },
   { id: 'other', name: '其他' },
 ]
 const mockHubModels = [
   { repo_id: 'demo-user/xb-svcb-luotianyi-a1b2c3', name: '洛天依（社区）', type: 'So-VITS', framework: 'so-vits-svc', framework_label: 'So-VITS-SVC', sample_rate: '44.1kHz', author: 'demo-user', has_diffusion: true, url: '#' },
   { repo_id: 'demo-user/xb-svcb-reze-d4e5f6', name: 'Reze（社区）', type: 'RVC', framework: 'rvc', framework_label: 'RVC', sample_rate: '44.1kHz', author: 'demo-user', has_diffusion: false, url: '#' },
+  { repo_id: 'demo-user/xb-svcb-seedvc-demo-a7b8c9', name: 'SeedVC 示例音色', type: 'SeedVC', framework: 'seed-vc', framework_label: 'SeedVC', sample_rate: '44.1kHz', author: 'demo-user', has_diffusion: false, url: '#' },
 ]
 
 let mockMigrationTimer: ReturnType<typeof setInterval> | null = null
@@ -196,7 +244,7 @@ function mockModelOverview(): ModelLibraryOverview {
     size: '0 B',
     default_model_id: null as string | null,
     default_model_name: '',
-    supported: ['so-vits-svc', 'rvc'].includes(f.id),
+    supported: ['so-vits-svc', 'rvc', 'seed-vc'].includes(f.id),
   }))
   const byId = new Map(rows.map((r) => [r.id, r]))
   for (const m of mockModels) {
@@ -381,8 +429,15 @@ export const mock = {
         { key: 'ffmpeg', name: 'ffmpeg', desc: '音频转码 / 重采样 / 剪辑，统一格式与采样率', version: 'v6.1', status: '已就绪', ok: true },
         { key: 'svc', name: 'So-VITS-SVC 推理引擎', desc: '加载用户 So-VITS-SVC 模型进行歌声转换推理', version: 'torch', status: 'cuda', ok: true },
         { key: 'rvc', name: 'RVC 推理引擎', desc: '加载用户 RVC 模型（.pth + 可选 .index）进行歌声转换推理', version: 'rvc-python', status: 'cuda', ok: true },
+        { key: 'seedvc', name: 'SeedVC 推理引擎', desc: '加载 SeedVC checkpoint + 参考音频进行歌声转换推理', version: 'Seed-VC', status: 'cuda', ok: true },
       ],
     }
+  },
+  pickThemeMediaFile(): Promise<ThemeMediaPickResult> {
+    return browserPickThemeMedia()
+  },
+  getThemeMediaData(path: string): string {
+    return path
   },
   getDataStorageStatus(): DataStorageStatus {
     return {
@@ -504,11 +559,12 @@ export const mock = {
     if (!payload.main_model) return null
     const framework = payload.framework || 'so-vits-svc'
     const isRvc = framework === 'rvc'
+    const isSeedVc = framework === 'seed-vc'
     if (!isRvc && !payload.main_config) return null
     const m: ModelDTO = {
       id: rid('mdl_'),
       name: payload.name || fileName(payload.main_model).replace(/\.[^.]+$/, ''),
-      type: isRvc ? 'RVC' : 'So-VITS',
+      type: isRvc ? 'RVC' : isSeedVc ? 'SeedVC' : 'So-VITS',
       framework,
       sample_rate: '44.1kHz',
       size: '400 MB',
@@ -721,19 +777,18 @@ export const mock = {
     mockMusicCookie = cookie.trim()
     return true
   },
-  searchMusic(msg: string, page = 1, pageSize = 15, source = mockMusicSource): MusicSearchResult {
+  searchMusic(msg: string, source = mockMusicSource): MusicSearchResult {
     if (!mockMusicKey) return { ok: false, error: '未配置 API Key，请先在「API 设置」中填写' }
     if (!msg.trim()) return { ok: false, error: '请输入搜索关键词' }
-    const total = 23 // 模拟全站约 23 条结果
-    const g = Math.min(total, page * pageSize)
-    const songs = Array.from({ length: g }, (_, i) => ({
+    const total = source === 'qq' ? 10 : 13
+    const songs = Array.from({ length: total }, (_, i) => ({
       n: i + 1,
       name: `${msg}${i === 0 ? '' : `（版本 ${i + 1}）`}`,
       singer: ['洛天依', '国风堂', '云梦', 'Reze'][i % 4] as string,
       album: msg,
       pay: source === 'qq' && i % 3 === 0 ? '[收费]' : '',
     }))
-    return { ok: true, keyword: msg, source, songs, page, page_size: pageSize, has_more: g < total }
+    return { ok: true, keyword: msg, source, songs }
   },
   getMusicSong(msg: string, n: number, _source = mockMusicSource): MusicSongResult {
     void _source
@@ -831,6 +886,7 @@ export const mock = {
       main_config: { name: 'config.json', path: '' },
       diffusion_model: hit.has_diffusion ? { name: 'diffusion.pt', path: '' } : null,
       diffusion_config: hit.has_diffusion ? { name: 'diffusion.yaml', path: '' } : null,
+      framework: hit.framework,
     }
     mockModels.unshift(m)
     return { ok: true, model: m }

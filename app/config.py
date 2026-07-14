@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.17"
+APP_VERSION = "0.0.18"
 APP_BG = "#05060d"
 
 
@@ -85,6 +85,7 @@ def _venv_python(venv_dir: Path) -> Path:
 # 项目内引擎与环境的约定位置（由安装器创建）
 ENGINES_DIR = ROOT_DIR / "engines"
 SOVITS_REPO_DIR = ENGINES_DIR / "so-vits-svc"
+SEEDVC_REPO_DIR = ENGINES_DIR / "seed-vc"
 SVC_VENV_DIR = ROOT_DIR / ".venv-svc"
 UVR_VENV_DIR = ROOT_DIR / ".venv-uvr"
 
@@ -154,6 +155,43 @@ RVC_WORKER = BUNDLE_DIR / "infrastructure" / "rvc_worker.py"
 def rvc_engine_ready() -> bool:
     """RVC 推理环境是否齐备：worker 存在、解释器存在。"""
     return bool(RVC_WORKER.exists() and RVC_PYTHON and RVC_PYTHON.exists())
+
+
+# ---- SeedVC 推理引擎（Seed-VC）----
+# 在独立 .venv-seedvc 中运行官方 Seed-VC inference.py。SeedVC 是 zero-shot /
+# few-shot 风格，除 checkpoint + config 外，还需要一个目标音色参考音频。
+SEEDVC_VENV_DIR = ROOT_DIR / ".venv-seedvc"
+
+
+def _detect_seedvc_repo() -> Path | None:
+    env = os.environ.get("XB_SEEDVC_REPO")
+    if env:
+        return Path(env)
+    return _first_existing([SEEDVC_REPO_DIR])
+
+
+def _detect_seedvc_python() -> Path | None:
+    env = os.environ.get("XB_SEEDVC_PYTHON")
+    if env:
+        return Path(env)
+    return _first_existing([_venv_python(SEEDVC_VENV_DIR)])
+
+
+SEEDVC_REPO = _detect_seedvc_repo()
+SEEDVC_PYTHON = _detect_seedvc_python()
+SEEDVC_WORKER = BUNDLE_DIR / "infrastructure" / "seedvc_worker.py"
+
+
+def seedvc_engine_ready() -> bool:
+    """SeedVC 推理环境是否齐备：repo、worker、解释器都存在。"""
+    return bool(
+        SEEDVC_REPO
+        and SEEDVC_REPO.exists()
+        and (SEEDVC_REPO / "inference.py").exists()
+        and SEEDVC_WORKER.exists()
+        and SEEDVC_PYTHON
+        and SEEDVC_PYTHON.exists()
+    )
 
 
 # ---- JUCE VST3 Host（编辑器外部效果器插件）----
@@ -473,7 +511,7 @@ def _apply_data_dir(data_dir: Path) -> None:
     """更新当前进程内的数据目录派生路径。"""
     global DATA_DIR, MODELS_DIR, WORKS_DIR, TEMP_DIR, MUSIC_DIR, WEBVIEW_DIR
     global MODELS_DB, WORKS_DB, SETTINGS_DB, MODELHUB_DIR, EDITOR_DIR
-    global EDITOR_CACHE_DIR, EDITOR_PROJECTS_DB
+    global EDITOR_CACHE_DIR, EDITOR_PROJECTS_DB, THEME_MEDIA_DIR
 
     DATA_DIR = data_dir.expanduser().resolve()
     MODELS_DIR = DATA_DIR / "models"
@@ -494,6 +532,8 @@ def _apply_data_dir(data_dir: Path) -> None:
     EDITOR_DIR = DATA_DIR / "editor"
     EDITOR_CACHE_DIR = EDITOR_DIR / "cache"
     EDITOR_PROJECTS_DB = DATA_DIR / "editor_projects.json"
+    # 自定义主题背景媒体（图片 / MP4 动态壁纸）持久化目录
+    THEME_MEDIA_DIR = DATA_DIR / "theme" / "media"
 
 
 def switch_data_dir(data_dir: Path) -> None:
@@ -541,11 +581,12 @@ MODELHUB_REPO_PREFIX = "xb-svcb"
 MODELHUB_MANIFEST = "xb-svcb-model.json"
 MODELHUB_SCHEMA = 1
 MODELHUB_MAGIC = "XB-SVCB-VOICE-MODEL"
-# 模型架构标签（上传时标注，便于将来兼容 RVC 等不同框架并按类型筛选）。
+# 模型架构标签（上传时标注，便于兼容不同框架并按类型筛选）。
 # id -> 显示名；id 写入清单的 framework 字段，下载/筛选据此识别。
 MODELHUB_FRAMEWORKS: dict[str, str] = {
     "so-vits-svc": "So-VITS-SVC",
     "rvc": "RVC",
+    "seed-vc": "SeedVC",
     "ddsp-svc": "DDSP-SVC",
     "other": "其他",
 }
@@ -562,6 +603,8 @@ def modelhub_normalize_framework(framework: str | None) -> str:
 def modelhub_guess_framework(model_type: str | None) -> str:
     """根据本地模型的 type（ModelType 值）推断默认架构 id。"""
     t = (model_type or "").strip().lower()
+    if "seed" in t:
+        return "seed-vc"
     if "rvc" in t:
         return "rvc"
     if "ddsp" in t:

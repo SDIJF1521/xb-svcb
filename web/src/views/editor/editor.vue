@@ -507,13 +507,23 @@
                 </div>
                 <input v-model.number="rerunPitch" type="range" min="-12" max="12" step="1" />
               </div>
-              <div v-if="!isRvcRerunModel" class="rerun-param">
-                <div class="rerun-param-label">
-                  <span>扩散占比</span>
-                  <b>{{ Math.round(rerunDiffusionRatio * 100) }}%</b>
+              <template v-if="!isRvcRerunModel">
+                <div class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>{{ isSeedVcRerunModel ? '扩散步数' : '扩散占比' }}</span>
+                    <b>{{ isSeedVcRerunModel ? seedVcSteps(rerunDiffusionRatio) : Math.round(rerunDiffusionRatio * 100) + '%' }}</b>
+                  </div>
+                  <input v-model.number="rerunDiffusionRatio" type="range" min="0" max="1" step="0.05" />
                 </div>
-                <input v-model.number="rerunDiffusionRatio" type="range" min="0" max="1" step="0.05" />
-              </div>
+                <div v-if="isSeedVcRerunModel" class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>参考音频</span>
+                  </div>
+                  <button type="button" class="rerun-path-picker" @click="pickRerunReference">
+                    {{ baseName(rerunReferenceAudio) || '选择音色参考' }}
+                  </button>
+                </div>
+              </template>
               <template v-else>
                 <div class="rerun-param">
                   <div class="rerun-param-label">
@@ -545,7 +555,7 @@
                 </div>
               </template>
               <div class="rerun-mini-grid">
-                <div class="rerun-mini">
+                <div v-if="!isSeedVcRerunModel" class="rerun-mini">
                   <span>F0</span>
                   <select v-model="rerunF0Method">
                     <option v-for="f in f0Methods" :key="f" :value="f">{{ f }}</option>
@@ -807,6 +817,7 @@ interface RerunPrefs {
   protect?: number
   filterRadius?: number
   rvcVersion?: string
+  referenceAudio?: string
 }
 interface EffectControl {
   key: string
@@ -1096,6 +1107,7 @@ const rerunDevice = ref(prefStr(rerunPrefs.device, 'auto', deviceOptions.map((d)
 const rerunProtect = ref(prefNum(rerunPrefs.protect, 0.33, 0, 0.5))
 const rerunFilterRadius = ref(prefNum(rerunPrefs.filterRadius, 3, 0, 7))
 const rerunRvcVersion = ref(prefStr(rerunPrefs.rvcVersion, 'v2', rvcVersions))
+const rerunReferenceAudio = ref(prefStr(rerunPrefs.referenceAudio, ''))
 
 const selectedTrack = computed(() => {
   if (!project.value || !selected.value) return null
@@ -1130,12 +1142,17 @@ const selectedClipEditable = computed(() => {
   const track = selectedTrack.value
   return !!clip && !clip.locked && !track?.locked
 })
-const canRerunSelectedClip = computed(() => {
-  return selectedClipEditable.value && selectedClipDuration.value >= MIN_RERUN_CLIP_SECONDS
-})
 const selectedRerunModel = computed(() => models.value.find((m) => m.id === rerunModelId.value) || null)
 const selectedRerunFramework = computed(() => selectedRerunModel.value?.framework || 'so-vits-svc')
 const isRvcRerunModel = computed(() => selectedRerunFramework.value === 'rvc')
+const isSeedVcRerunModel = computed(() => selectedRerunFramework.value === 'seed-vc')
+const canRerunSelectedClip = computed(() => {
+  return (
+    selectedClipEditable.value &&
+    selectedClipDuration.value >= MIN_RERUN_CLIP_SECONDS &&
+    (!isSeedVcRerunModel.value || !!rerunReferenceAudio.value)
+  )
+})
 const rerunFrameworkText = computed(() => modelFrameworkLabel(selectedRerunFramework.value))
 const signedRerunPitch = computed(() => rerunPitch.value > 0 ? `+${rerunPitch.value}` : String(rerunPitch.value))
 const canSplitBySilence = computed(() => {
@@ -1147,6 +1164,7 @@ const rerunGuardText = computed(() => {
   if (selectedClipDuration.value < MIN_RERUN_CLIP_SECONDS) {
     return `片段 ${selectedClipDuration.value.toFixed(2)}s，至少 ${MIN_RERUN_CLIP_SECONDS.toFixed(2)}s 才能重推理`
   }
+  if (isSeedVcRerunModel.value && !rerunReferenceAudio.value) return '请先选择 SeedVC 参考音频'
   return ''
 })
 const timelineWidth = computed(() => Math.max(980, (project.value?.duration || 60) * zoom.value + 240))
@@ -1164,24 +1182,39 @@ function modelFrameworkLabel(framework: string | undefined) {
   const map: Record<string, string> = {
     'so-vits-svc': 'So-VITS-SVC',
     rvc: 'RVC',
+    'seed-vc': 'SeedVC',
     'ddsp-svc': 'DDSP-SVC',
     other: '其他',
   }
   return map[framework || 'so-vits-svc'] || framework || 'So-VITS-SVC'
 }
+function seedVcSteps(ratio: number): number {
+  return Math.max(1, Math.round(10 + Math.max(0, Math.min(1, ratio || 0)) * 40))
+}
+function baseName(p: string): string {
+  return p ? p.split(/[/\\]/).pop() || p : ''
+}
 
 function currentRerunParams(): InferenceParams {
-  return {
+  const params: InferenceParams = {
     pitch: Math.round(rerunPitch.value),
-    f0_method: rerunF0Method.value,
-    index_rate: Number(rerunIndexRate.value.toFixed(3)),
-    rms_mix: Number(rerunRmsMix.value.toFixed(3)),
-    diffusion_ratio: Number(rerunDiffusionRatio.value.toFixed(3)),
     device: rerunDevice.value,
-    protect: Number(rerunProtect.value.toFixed(3)),
-    filter_radius: Math.round(rerunFilterRadius.value),
-    rvc_version: rerunRvcVersion.value,
   }
+  if (isSeedVcRerunModel.value) {
+    params.diffusion_ratio = Number(rerunDiffusionRatio.value.toFixed(3))
+    params.reference_audio = rerunReferenceAudio.value
+  } else if (isRvcRerunModel.value) {
+    params.f0_method = rerunF0Method.value
+    params.index_rate = Number(rerunIndexRate.value.toFixed(3))
+    params.rms_mix = Number(rerunRmsMix.value.toFixed(3))
+    params.protect = Number(rerunProtect.value.toFixed(3))
+    params.filter_radius = Math.round(rerunFilterRadius.value)
+    params.rvc_version = rerunRvcVersion.value
+  } else {
+    params.f0_method = rerunF0Method.value
+    params.diffusion_ratio = Number(rerunDiffusionRatio.value.toFixed(3))
+  }
+  return params
 }
 
 function resetRerunParams() {
@@ -1194,6 +1227,12 @@ function resetRerunParams() {
   rerunProtect.value = 0.33
   rerunFilterRadius.value = 3
   rerunRvcVersion.value = 'v2'
+  rerunReferenceAudio.value = ''
+}
+
+async function pickRerunReference() {
+  const path = await api.pickAudioFile()
+  if (path) rerunReferenceAudio.value = path
 }
 
 function snapshot(): EditorProject | null {
@@ -1488,7 +1527,7 @@ function keepSelection(next: EditorProject): Selection | null {
 }
 
 async function loadInitial() {
-  await modelsStore.ensureLoaded()
+  await modelsStore.load()
   const projectId = typeof route.query.project === 'string' ? route.query.project : ''
   const workId = typeof route.query.work === 'string' ? route.query.work : ''
   if (projectId) {
@@ -2822,6 +2861,7 @@ watch(
     rerunProtect,
     rerunFilterRadius,
     rerunRvcVersion,
+    rerunReferenceAudio,
   ],
   () => {
     try {
@@ -2837,6 +2877,7 @@ watch(
           protect: rerunProtect.value,
           filterRadius: rerunFilterRadius.value,
           rvcVersion: rerunRvcVersion.value,
+          referenceAudio: rerunReferenceAudio.value,
         }),
       )
     } catch {
@@ -3452,6 +3493,24 @@ onUnmounted(() => {
 }
 .rerun-param input[type='range'] {
   width: 100%;
+}
+.rerun-path-picker {
+  width: 100%;
+  height: 30px;
+  border: 1px solid var(--xb-border);
+  border-radius: 7px;
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-text);
+  padding: 0 8px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.rerun-path-picker:hover {
+  border-color: rgba(var(--xb-primary-rgb), 0.55);
+  background: rgba(var(--xb-primary-rgb), 0.08);
 }
 .rerun-mini-grid {
   display: grid;

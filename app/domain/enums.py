@@ -29,12 +29,15 @@ class ModelType(str, Enum):
     SVC = "SVC"
     SOVITS = "So-VITS"
     RVC = "RVC"
+    SEEDVC = "SeedVC"
     UNKNOWN = "Unknown"
 
     @classmethod
     def guess(cls, filename: str) -> "ModelType":
         """根据文件名粗略推断模型类型。"""
         name = filename.lower()
+        if "seed" in name:
+            return cls.SEEDVC
         if "rvc" in name or name.endswith(".onnx"):
             return cls.RVC
         if "sovits" in name or "so-vits" in name or "so_vits" in name:

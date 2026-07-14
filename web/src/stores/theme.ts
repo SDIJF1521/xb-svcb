@@ -17,13 +17,14 @@ export interface CustomTheme {
   success: string
   warn: string
   bgImage: string
+  bgMediaType: 'image' | 'video'
   imageOverlay: number
   particles: boolean
   particleDensity: number
   particleSize: number
 }
 
-type CustomThemeColorKey = Exclude<keyof CustomTheme, 'name' | 'bgImage' | 'imageOverlay' | 'particles' | 'particleDensity' | 'particleSize'>
+type CustomThemeColorKey = Exclude<keyof CustomTheme, 'name' | 'bgImage' | 'bgMediaType' | 'imageOverlay' | 'particles' | 'particleDensity' | 'particleSize'>
 
 export interface CustomThemeField {
   key: CustomThemeColorKey
@@ -84,6 +85,7 @@ export const DEFAULT_CUSTOM_THEME: CustomTheme = {
   success: '#21b981',
   warn: '#f3a13b',
   bgImage: '',
+  bgMediaType: 'image',
   imageOverlay: 30,
   particles: true,
   particleDensity: 28,
@@ -134,10 +136,19 @@ function normalizeColor(value: unknown, fallback: string): string {
   return HEX_RE.test(color) ? color.toLowerCase() : fallback
 }
 
-function normalizeImage(value: unknown): string {
+function normalizeMedia(value: unknown): string {
   if (typeof value !== 'string') return ''
-  const image = value.trim()
-  return image.startsWith('data:image/') ? image : ''
+  const media = value.trim()
+  if (!media) return ''
+  if (media.startsWith('data:image/') || media.startsWith('data:video/mp4')) return media
+  return media
+}
+
+function normalizeMediaType(value: unknown, media: string): 'image' | 'video' {
+  if (value === 'video' || media.startsWith('data:video/mp4') || /\.mp4($|\?)/i.test(media)) {
+    return 'video'
+  }
+  return 'image'
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -160,7 +171,8 @@ function sanitizeCustomTheme(value: unknown): CustomTheme {
     fill: normalizeColor(raw.fill, DEFAULT_CUSTOM_THEME.fill),
     success: normalizeColor(raw.success, DEFAULT_CUSTOM_THEME.success),
     warn: normalizeColor(raw.warn, DEFAULT_CUSTOM_THEME.warn),
-    bgImage: normalizeImage(raw.bgImage),
+    bgImage: normalizeMedia(raw.bgImage),
+    bgMediaType: normalizeMediaType(raw.bgMediaType, normalizeMedia(raw.bgImage)),
     imageOverlay: clampNumber(raw.imageOverlay, DEFAULT_CUSTOM_THEME.imageOverlay, 0, 90),
     particles: typeof raw.particles === 'boolean' ? raw.particles : DEFAULT_CUSTOM_THEME.particles,
     particleDensity: clampNumber(raw.particleDensity, DEFAULT_CUSTOM_THEME.particleDensity, 0, 64),
@@ -253,8 +265,13 @@ function applyCustomThemeVars(theme: CustomTheme) {
   root.setProperty('--xb-grid-rgb', primary)
   root.setProperty('--xb-grid-opacity', luminance(theme.bg) > 0.5 ? '0.045' : '0.06')
   root.setProperty('--xb-orb-opacity', luminance(theme.bg) > 0.5 ? '0.42' : '0.34')
-  root.setProperty('--xb-custom-bg-image', theme.bgImage ? `url("${theme.bgImage}")` : 'none')
-  root.setProperty('--xb-custom-image-opacity', theme.bgImage ? '1' : '0')
+  root.setProperty(
+    '--xb-custom-bg-image',
+    theme.bgImage && theme.bgMediaType === 'image' && theme.bgImage.startsWith('data:image/')
+      ? `url("${theme.bgImage}")`
+      : 'none',
+  )
+  root.setProperty('--xb-custom-image-opacity', theme.bgImage && theme.bgMediaType === 'image' ? '1' : '0')
   root.setProperty('--xb-image-overlay', String(theme.imageOverlay / 100))
   root.setProperty('--xb-particle-opacity', theme.particles ? '0.62' : '0')
   root.setProperty('--xb-particle-size', `${theme.particleSize}px`)

@@ -3,10 +3,10 @@
 
 产物：dist/XB-SVCB/XB-SVCB.exe（+ _internal/）。其中：
   - 前端 web/dist 内置进 _internal/web/dist，应用自带界面、无需外置；
-  - worker 脚本（svc/f0/uvr/hub）以「真实磁盘文件」形式放进 _internal/infrastructure，
-    供外部 .venv-svc / .venv-uvr / .venv-hub 的 Python 以子进程读取执行；
-  - 重负载 AI 环境（torch/so-vits-svc/audio-separator）不进 exe，由安装器在
-    安装目录旁单独搭建（engines/.venv-svc/.venv-uvr/models）。
+  - worker 脚本（svc/f0/uvr/rvc/seedvc/hub）以「真实磁盘文件」形式放进
+    _internal/infrastructure，供外部 .venv-* 的 Python 以子进程读取执行；
+  - 重负载 AI 环境（torch/so-vits-svc/RVC/audio-separator/SeedVC）不进 exe，由安装器在
+    安装目录旁单独搭建（engines/.venv-svc/.venv-rvc/.venv-uvr/.venv-seedvc/models）。
 编译：在仓库根执行  pyinstaller installer/xb-svcb-app.spec  （用 app/.venv 的 Python）。
 """
 
@@ -54,7 +54,7 @@ for pkg in ("webview", "clr_loader", "pythonnet", "bottle", "proxy_tools", "http
 datas += [(str(APP.parent / "web" / "dist"), "web/dist")]
 
 # worker 脚本：必须是磁盘上的真实 .py，供外部环境的 Python 读取执行
-for w in ("svc_worker.py", "f0_worker.py", "uvr_worker.py", "hub_worker.py", "rvc_worker.py"):
+for w in ("svc_worker.py", "f0_worker.py", "uvr_worker.py", "hub_worker.py", "rvc_worker.py", "seedvc_worker.py"):
     datas += [(str(APP / "infrastructure" / w), "infrastructure")]
 
 

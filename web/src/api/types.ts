@@ -12,6 +12,16 @@ export interface ToolStatus {
   ok: boolean
 }
 
+export interface ThemeMediaPickResult {
+  ok: boolean
+  cancelled?: boolean
+  error?: string
+  path?: string
+  kind?: 'image' | 'video'
+  mime?: string
+  name?: string
+}
+
 export interface SystemStatus {
   ready: boolean
   tools: ToolStatus[]
@@ -125,7 +135,7 @@ export interface ModelLibraryOverview {
 
 export interface ImportModelPayload {
   name?: string
-  /** 模型框架：so-vits-svc（默认）/ rvc。 */
+  /** 模型框架：so-vits-svc（默认）/ rvc / seed-vc。 */
   framework?: string
   main_model: string
   /** so-vits 必填；RVC 不需要。 */
@@ -163,6 +173,8 @@ export interface InferenceParams {
   filter_radius?: number
   /** RVC：模型版本 v1 / v2。 */
   rvc_version?: string
+  /** SeedVC：本次推理的目标音色参考音频。 */
+  reference_audio?: string
 }
 
 export interface WorkDTO {
@@ -278,11 +290,6 @@ export interface MusicSearchResult {
   keyword?: string
   source?: string
   songs?: MusicSearchItem[]
-  /** 当前页码（从 1 开始）。 */
-  page?: number
-  page_size?: number
-  /** 是否还有更多结果可「加载更多」。 */
-  has_more?: boolean
 }
 
 /** 单曲详情（含播放与下载地址）。 */
@@ -294,6 +301,7 @@ export interface MusicSongDetail {
   picture: string
   url: string
   musicurl: string
+  vipmusicurl?: string
   lrc: string
 }
 

@@ -235,8 +235,8 @@ class WorkService:
     def _resolve_model_paths(model: dict[str, Any] | None) -> dict[str, str]:
         """从模型记录提取推理所需的文件路径与框架标识。
 
-        返回含 ``framework``（路由引擎用）、so-vits 的 main/diffusion 路径、
-        以及 RVC 的 ``index_path``；推理引擎按 ``framework`` 各取所需。
+        返回含 ``framework``（路由引擎用）、so-vits / SeedVC 的 main/config 路径、
+        RVC 的 ``index_path``；推理引擎按 ``framework`` 各取所需。
         """
         if not model:
             return {

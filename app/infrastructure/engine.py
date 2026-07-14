@@ -1,4 +1,4 @@
-"""推理引擎抽象：按模型框架（so-vits-svc / rvc / …）路由到对应引擎。
+"""推理引擎抽象：按模型框架（so-vits-svc / rvc / seed-vc / …）路由到对应引擎。
 
 共享阶段（人声分离 / 去混响 / 合并 / 混音）与框架无关，只有「推理」按模型的
 ``framework`` 字段选择不同引擎。新增框架只需实现 ``VoiceConversionEngine`` 协议并
@@ -19,7 +19,8 @@ class VoiceConversionEngine(Protocol):
     """歌声转换引擎统一接口。
 
     ``model`` 为已解析的模型文件角色字典（由 ``WorkService._resolve_model_paths`` 产出），
-    至少包含 ``framework`` 与各 ``*_path``（so-vits 的 main/diffusion、RVC 的 main/index）。
+    至少包含 ``framework`` 与各 ``*_path``（so-vits 的 main/diffusion、
+    RVC 的 main/index、SeedVC 的 main/config；SeedVC reference audio 由 params 提供）。
     """
 
     framework: str

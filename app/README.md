@@ -1,6 +1,6 @@
 # XB-SVCB 应用本体
 
-版本：`0.0.17`
+版本：`0.0.18`
 
 这里包含打包进 `XB-SVCB.exe` 的桌面应用壳、本地 API 桥接、领域服务和基础设施适配层。
 
@@ -8,7 +8,17 @@
 
 - `app/main.py` 启动 pywebview 桌面壳。
 - `app/config.py` 提供应用元信息、路径与运行环境位置。
-- 重型 AI 依赖不打进应用本体，由安装器放到 `.venv-svc`、`.venv-rvc`、`.venv-uvr`、`.venv-hub` 等隔离环境中。
+- 重型 AI 依赖不打进应用本体，由安装器放到 `.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-uvr`、`.venv-hub` 等隔离环境中。
+
+## v0.0.18 重点
+
+- 应用本体版本同步到 `0.0.18`，本地状态 API、前端与安装器使用同一版本号。
+- 新增 SeedVC 引擎、worker 与运行环境探测，支持 checkpoint + YAML 配置和推理时目标音色参考音频。
+- 模型导入、模型站清单、任务参数和跨框架引擎路由均识别 `seed-vc`。
+- 模型站下载支持 `.part` 断点续传、HTTP Range 与自动重试；清单声明的主模型、配置、扩散模型和 index 全部完整后才导入本地模型库。
+- 主题媒体桥接支持选择图片或 MP4，将文件复制到用户数据目录并按需返回 data URI。
+- 音乐服务适配妖狐 API `V2.1.3.8`：不再发送已废弃的 `g` 参数，并兼容 `vipmusicurl` 与 URL 型歌词。
+- 安装器运行时路径新增 `.venv-seedvc` 与 `engines/seed-vc`，应用状态页可显示 SeedVC 环境是否就绪。
 
 ## v0.0.17 重点
 

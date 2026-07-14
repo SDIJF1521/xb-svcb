@@ -303,11 +303,15 @@ const toolIconMap: Record<string, Component> = {
   uvr: Scissor,
   ffmpeg: VideoCamera,
   svc: Cpu,
+  rvc: Cpu,
+  seedvc: Cpu,
 }
 const toolColorMap: Record<string, string> = {
   uvr: '#ff2e88',
   ffmpeg: 'var(--xb-success)',
   svc: '#00f0ff',
+  rvc: '#19f59a',
+  seedvc: '#ffae00',
 }
 const toolIcon = (key: string): Component => toolIconMap[key] ?? Cpu
 const toolColor = (key: string): string => toolColorMap[key] ?? '#00f0ff'

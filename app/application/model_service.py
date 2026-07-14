@@ -28,7 +28,7 @@ class ModelService:
         default_id = self.default_id()
         summaries: dict[str, dict[str, Any]] = {}
         total_size = 0
-        supported = {"so-vits-svc", "rvc"}
+        supported = {"so-vits-svc", "rvc", "seed-vc"}
 
         for fw, name in config.MODELHUB_FRAMEWORKS.items():
             summaries[fw] = {
@@ -94,21 +94,23 @@ class ModelService:
         """导入一组模型，按 ``framework`` 分支处理所需文件。
 
         payload 字段（文件均为本地绝对路径）：
-            framework: so-vits-svc / rvc / …（缺省 so-vits-svc）
+            framework: so-vits-svc / rvc / seed-vc / …（缺省 so-vits-svc）
             name(可选), sample_rate(可选)
             - so-vits-svc：main_model + main_config 必填，diffusion_model / diffusion_config 可选。
             - rvc：main_model(.pth) 必填，index_file(.index) 可选，无需 main_config。
+            - seed-vc：main_model(.pth) + main_config(.yml/.yaml) 必填；参考音频在推理时选择。
         必填文件缺失则返回 None。
         """
         paths.ensure_dirs()
         framework = config.modelhub_normalize_framework(payload.get("framework"))
         is_rvc = framework == "rvc"
+        is_seedvc = framework == "seed-vc"
 
         main_model_src = payload.get("main_model")
         main_config_src = payload.get("main_config")
         if not main_model_src:
             return None
-        # so-vits 需要主配置；RVC 不需要
+        # so-vits / SeedVC 需要主配置；RVC 不需要
         if not is_rvc and not main_config_src:
             return None
 
@@ -145,11 +147,21 @@ class ModelService:
             if main_config is None:
                 shutil.rmtree(dst_dir, ignore_errors=True)
                 return None
-            diffusion_model = copy(payload.get("diffusion_model"))
-            diffusion_config = copy(payload.get("diffusion_config"))
+            if is_seedvc:
+                diffusion_model = None
+                diffusion_config = None
+            else:
+                diffusion_model = copy(payload.get("diffusion_model"))
+                diffusion_config = copy(payload.get("diffusion_config"))
 
         total = 0
-        for mf in (main_model, main_config, diffusion_model, diffusion_config, index_file):
+        for mf in (
+            main_model,
+            main_config,
+            diffusion_model,
+            diffusion_config,
+            index_file,
+        ):
             if mf:
                 try:
                     total += Path(mf.path).stat().st_size
@@ -157,7 +169,12 @@ class ModelService:
                     pass
 
         name = payload.get("name") or Path(main_model_src).stem
-        model_type = ModelType.RVC.value if is_rvc else ModelType.guess(main_model.name).value
+        if is_rvc:
+            model_type = ModelType.RVC.value
+        elif is_seedvc:
+            model_type = ModelType.SEEDVC.value
+        else:
+            model_type = ModelType.guess(main_model.name).value
         info = ModelInfo(
             id=model_id,
             name=name,
@@ -173,6 +190,12 @@ class ModelService:
             index_file=index_file,
         )
         record = self._normalize_item(info.to_dict(), refresh_size=True)
+        source_repo_id = str(payload.get("source_repo_id") or "").strip().strip("/")
+        if source_repo_id:
+            record["metadata"] = {
+                **(record.get("metadata") or {}),
+                "source_repo_id": source_repo_id,
+            }
         self._repo.add(record)
         if not self._settings.get("default_model_id"):
             self._settings.set("default_model_id", model_id)
@@ -223,7 +246,7 @@ class ModelService:
                         }
                         fixed.append("index_file")
 
-        if framework != "rvc":
+        if framework == "so-vits-svc":
             cfg = Path(str((normalized.get("main_config") or {}).get("path") or ""))
             if cfg.exists():
                 try:
@@ -295,7 +318,12 @@ class ModelService:
             **(normalized.get("metadata") or {}),
         }
         if not normalized.get("type"):
-            normalized["type"] = ModelType.RVC.value if framework == "rvc" else "So-VITS"
+            if framework == "rvc":
+                normalized["type"] = ModelType.RVC.value
+            elif framework == "seed-vc":
+                normalized["type"] = ModelType.SEEDVC.value
+            else:
+                normalized["type"] = "So-VITS"
         if not normalized.get("sample_rate"):
             normalized["sample_rate"] = "44.1kHz"
         if refresh_size or not normalized.get("size"):

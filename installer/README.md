@@ -1,6 +1,6 @@
 # XB-SVCB 安装器
 
-版本：`0.0.17`
+版本：`0.0.18`
 
 安装器由 Inno Setup 读取 `installer/xb-svcb.iss` 构建，负责打包桌面本体、环境搭建脚本、自带模型和文档。
 
@@ -9,10 +9,26 @@
 1. 在 `web/` 执行 `npm run build` 构建前端。
 2. 执行 `pyinstaller installer/xb-svcb-app.spec` 构建桌面本体。
 3. 构建 `native/juce-vst3-host`，并把产物放入 `dist/XB-SVCB/engines/juce-vst3-host/`。
-4. 使用 Inno Setup 6 的 `ISCC.exe` 编译 `installer/xb-svcb.iss`。
+4. 校验内置前端、全部 worker（含 SeedVC）与 JUCE Host。
+5. 使用 Inno Setup 6 的 `ISCC.exe` 编译 `installer/xb-svcb.iss`。
 
 本地发布构建建议使用 `installer/build.ps1` 作为一键入口。
-`installer/build.ps1` 会强制校验 `dist/XB-SVCB/engines/juce-vst3-host/xb-juce-vst3-host.exe`，缺失时不会继续生成安装器。
+`installer/build.ps1` 会校验应用、前端、版本号、全部 worker 和
+`dist/XB-SVCB/engines/juce-vst3-host/xb-juce-vst3-host.exe`，任何一项缺失都不会继续生成安装器。
+
+只检查 PowerShell、版本约束和 Inno Setup/Pascal 脚本，不压缩模型：
+
+```powershell
+./installer/build.ps1 -ValidateOnly
+```
+
+由于自带模型总量超过单文件上限，发布产物是一组不可拆分的文件：
+
+- `XB-SVCB-Setup.exe`
+- `XB-SVCB-Setup-1.bin`
+- 后续编号的 `XB-SVCB-Setup-*.bin`（数量取决于本次模型体积）
+
+安装时必须把 `exe` 和全部 `bin` 放在同一目录，发布 Release 时也必须同时上传。
 
 JUCE VST3 Host 构建需要 CMake、C++ Build Tools 和 JUCE。开发机可设置：
 
@@ -21,6 +37,19 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 ```
 
 临时不打包插件 Host 时可运行 `installer/build.ps1 -SkipJuceHostBuild`。
+
+## v0.0.18 安装器行为
+
+- 应用、前端和安装器版本统一为 `0.0.18`。
+- PyInstaller 包含当前前端、音乐 API 兼容逻辑、SeedVC 引擎以及 SVC / RVC / UVR / SeedVC / Hub workers。
+- 运行环境安装新增 `engines/seed-vc` 与 `.venv-seedvc`，覆盖 CPU、cu121 和 Blackwell/cu128 栈。
+- 发布构建拒绝应用、前端与 Inno Setup 版本号不一致的产物，并检查内置前端、全部 worker 和 JUCE Host。
+- 安装包使用小于 2GB 的分卷数据文件；`XB-SVCB-Setup.exe` 与全部 `XB-SVCB-Setup-*.bin` 必须共同发布。
+- 安装完成后校验应用组件、UVR 与 SeedVC 运行环境；数据目录说明包含持久化主题媒体。
+- SeedVC 环境会过滤仅供上游评测使用的 `resemblyzer` / `webrtcvad`，Windows + Python 3.10 无需现场编译该扩展。
+- 安装包预置 SeedVC 所需 RMVPE、CampPlus、Whisper Small 与 BigVGAN；构建时校验权重大小，避免 LFS 指针或残缺快照进入发布包。
+- 提供 `installer/build.ps1 -ValidateOnly`，无需压缩模型即可检查版本、PowerShell 与 Inno Setup/Pascal 脚本。
+- 安装目录包含 `README.md` 与 `release_notes_v018.md`，便于离线查看功能和升级说明。
 
 ## v0.0.17 安装器行为
 

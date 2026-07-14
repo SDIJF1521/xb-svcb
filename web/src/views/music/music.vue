@@ -43,10 +43,6 @@
           <el-icon><Close /></el-icon>
         </button>
       </div>
-      <div class="count-field">
-        <label>每页</label>
-        <input v-model.number="pageSize" type="number" min="1" max="30" />
-      </div>
       <el-button round class="cta-btn" :loading="searching" :disabled="!hasKey" @click="doSearch">
         <el-icon v-if="!searching" class="el-icon--left"><Search /></el-icon>搜索
       </el-button>
@@ -56,7 +52,7 @@
     <div v-if="results.length" class="block">
       <div class="block-head">
         <h2>搜索结果</h2>
-        <span class="muted">「{{ resultKeyword }}」· {{ results.length }} 首</span>
+        <span class="muted">{{ resultSourceName }} ·「{{ resultKeyword }}」· {{ results.length }} 首</span>
       </div>
       <div class="list glass">
         <div class="row" v-for="r in results" :key="r.n">
@@ -103,11 +99,6 @@
               去翻唱
             </el-button>
           </div>
-        </div>
-        <div v-if="hasMore" class="load-more">
-          <el-button round class="ghost-btn" :loading="loadingMore" @click="loadMore">
-            加载更多
-          </el-button>
         </div>
       </div>
     </div>
@@ -208,15 +199,10 @@ const router = useRouter()
 
 const hasKey = ref(false)
 const keyword = ref('')
-// 每页条数（妖狐 API 无 page，分页用「累计取 top-g」实现，见后端）
-const pageSize = ref(15)
 const searching = ref(false)
 const searched = ref(false)
 const results = ref<MusicSearchItem[]>([])
 const resultKeyword = ref('')
-const page = ref(1)
-const hasMore = ref(false)
-const loadingMore = ref(false)
 
 /* ----- 曲库（网易云 / QQ音乐）----- */
 const sources = ref<MusicSource[]>([{ id: 'wy', name: '网易云音乐', cookie: false }])
@@ -224,6 +210,9 @@ const source = ref('wy')
 // 当前结果对应的曲库（预览 / 下载必须与搜索时一致）
 const resultSource = ref('wy')
 const cookieSupported = computed(() => sources.value.find((s) => s.id === source.value)?.cookie ?? false)
+const resultSourceName = computed(() =>
+  sources.value.find((s) => s.id === resultSource.value)?.name ?? resultSource.value,
+)
 
 function payLabel(pay: string): string {
   return pay.replace(/[[\]]/g, '') || 'VIP'
@@ -235,8 +224,6 @@ async function onSourceChange(val: string) {
   results.value = []
   searched.value = false
   resultKeyword.value = ''
-  hasMore.value = false
-  page.value = 1
   unplayable.value = []
 }
 
@@ -263,9 +250,9 @@ function isUnplayableError(msg?: string): boolean {
   return /无法播放|VIP|版权|失效|有效音频|无可试听/.test(msg || '')
 }
 
-function audioUrlCandidates(song: { musicurl?: string; url?: string }): string[] {
+function audioUrlCandidates(song: { vipmusicurl?: string; musicurl?: string; url?: string }): string[] {
   const urls: string[] = []
-  for (const value of [song.musicurl, song.url]) {
+  for (const value of [song.vipmusicurl, song.musicurl, song.url]) {
     const url = String(value || '').trim()
     if (url && !urls.includes(url)) urls.push(url)
   }
@@ -331,51 +318,23 @@ async function doSearch() {
     return
   }
   searching.value = true
-  page.value = 1
   unplayable.value = []
   const usedSource = source.value
   try {
-    const res = await api.searchMusic(kw, 1, pageSize.value || 15, usedSource)
+    const res = await api.searchMusic(kw, usedSource)
     searched.value = true
     if (!res.ok) {
       results.value = []
-      hasMore.value = false
       resultKeyword.value = kw
       resultSource.value = usedSource
       ElMessage.error(res.error || '搜索失败')
       return
     }
     results.value = res.songs || []
-    hasMore.value = !!res.has_more
     resultKeyword.value = res.keyword || kw
     resultSource.value = res.source || usedSource
   } finally {
     searching.value = false
-  }
-}
-
-/* 加载更多：妖狐 API 无 page，按累计 top-g 取回完整列表，整体替换结果。
-   n 序号在同一关键词搜索内稳定，预览 / 下载仍按 (keyword, n) 定位。 */
-async function loadMore() {
-  if (loadingMore.value || !hasMore.value || searching.value) return
-  loadingMore.value = true
-  try {
-    const next = page.value + 1
-    const res = await api.searchMusic(
-      resultKeyword.value || keyword.value.trim(),
-      next,
-      pageSize.value || 15,
-      resultSource.value,
-    )
-    if (!res.ok) {
-      ElMessage.error(res.error || '加载失败')
-      return
-    }
-    results.value = res.songs || results.value
-    page.value = next
-    hasMore.value = !!res.has_more
-  } finally {
-    loadingMore.value = false
   }
 }
 
@@ -580,25 +539,6 @@ onMounted(async () => {
   padding: 0;
 }
 .search-clear:hover { color: var(--xb-accent); }
-.count-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--xb-muted);
-  font-size: 13px;
-}
-.count-field input {
-  width: 56px;
-  padding: 9px 10px;
-  border-radius: 9px;
-  border: 1px solid var(--xb-border);
-  background: rgba(var(--xb-fill-rgb), 0.04);
-  color: var(--xb-text);
-  outline: none;
-  text-align: center;
-}
-.count-field input:focus { border-color: var(--xb-primary); }
-
 /* 曲库选择 */
 .source-field { flex-shrink: 0; }
 .source-select { width: 130px; }
@@ -626,7 +566,6 @@ onMounted(async () => {
 
 /* 列表 */
 .list { border-radius: 6px; padding: 6px; }
-.load-more { display: flex; justify-content: center; padding: 12px 6px 6px; }
 .row {
   display: flex;
   align-items: center;

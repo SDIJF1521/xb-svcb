@@ -51,6 +51,7 @@ import type {
   DataMigrationStartResult,
   DataMigrationProgress,
   DataStorageStatus,
+  ThemeMediaPickResult,
 } from './types'
 
 export * from './types'
@@ -81,6 +82,12 @@ function migrationResultToProgress(
 export const api = {
   getSystemStatus: () =>
     invoke<SystemStatus>('get_system_status', [], () => mock.getSystemStatus()),
+
+  pickThemeMediaFile: () =>
+    invoke<ThemeMediaPickResult>('pick_theme_media_file', [], () => mock.pickThemeMediaFile()),
+
+  getThemeMediaData: (path: string) =>
+    invoke<string>('get_theme_media_data', [path], () => mock.getThemeMediaData(path)),
 
   getDataStorageStatus: () =>
     invoke<DataStorageStatus>('get_data_storage_status', [], () =>
@@ -244,9 +251,9 @@ export const api = {
   setMusicCookie: (cookie: string) =>
     invoke<boolean>('set_music_cookie', [cookie], () => mock.setMusicCookie(cookie)),
 
-  searchMusic: (msg: string, page = 1, pageSize = 15, source?: string) =>
-    invoke<MusicSearchResult>('search_music', [msg, page, pageSize, source], () =>
-      mock.searchMusic(msg, page, pageSize, source),
+  searchMusic: (msg: string, source?: string) =>
+    invoke<MusicSearchResult>('search_music', [msg, 1, 15, source], () =>
+      mock.searchMusic(msg, source),
     ),
 
   getMusicSong: (msg: string, n: number, source?: string) =>

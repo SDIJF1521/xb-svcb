@@ -288,13 +288,9 @@ class MusicService:
     ) -> dict[str, Any]:
         if not (msg or "").strip():
             return {"ok": False, "error": "请输入搜索关键词"}
-        # 妖狐 API 只有 g=结果条数（无 page/offset）。分页用「累计取 top-g」实现：
-        # 每页把 g 调大一档，返回完整 top-g 列表（n 序号在同一关键词搜索内稳定，
-        # 下载/试听仍按 (keyword, n) 定位），前端用返回列表整体替换即可。
-        page = max(1, int(page or 1))
-        page_size = max(1, min(30, int(page_size or 15)))
-        g = page * page_size
-        res = await self._request({"msg": msg, "g": g}, source)
+        # V2.1.3.8 起上游取消了 g 参数，传入未声明参数会直接返回 400。
+        # 搜索数量改由上游决定，本地保留分页入参只为兼容现有桥接协议。
+        res = await self._request({"msg": msg}, source)
         if not res["ok"]:
             return res
         data = res["data"]
@@ -309,18 +305,16 @@ class MusicService:
                 "pay": s.get("pay", ""),
             }
             for s in songs
-            if s.get("n") is not None
+            if isinstance(s, dict) and s.get("n") is not None
         ]
-        # 取回条数达到 g 上限 → 还可能有更多，允许继续「加载更多」
-        has_more = len(items) >= g
         return {
             "ok": True,
             "songs": items,
             "keyword": msg,
             "source": source,
-            "page": page,
-            "page_size": page_size,
-            "has_more": has_more,
+            "page": 1,
+            "page_size": len(items),
+            "has_more": False,
         }
 
     async def _get_song(self, msg: str, n: int, source: str) -> dict[str, Any]:
@@ -337,6 +331,7 @@ class MusicService:
             "picture": d.get("picture", ""),
             "url": d.get("url", ""),
             "musicurl": d.get("musicurl", ""),
+            "vipmusicurl": d.get("vipmusicurl", ""),
             "lrc": d.get("lrctxt") or "",
         }
         return {"ok": True, "song": song}
@@ -372,13 +367,19 @@ class MusicService:
         if not res["ok"]:
             return res
         d = res["data"]
-        # 优先取内联歌词字段；QQ音乐通常仅给 viplrc 地址，需再抓一次
+        # 歌词字段可能是内联 LRC，也可能直接是歌词地址。
         raw = ""
         for key in ("lrctxt", "lrc", "lyric"):
             val = d.get(key)
             if isinstance(val, str) and val.strip():
-                raw = val
-                break
+                candidate = val.strip()
+                raw = (
+                    await self._fetch_text(candidate)
+                    if candidate.startswith(("http://", "https://"))
+                    else candidate
+                )
+                if raw:
+                    break
         if not raw:
             viplrc = d.get("viplrc")
             if isinstance(viplrc, str) and viplrc.startswith("http"):
@@ -513,7 +514,7 @@ class MusicService:
     @staticmethod
     def _song_audio_urls(song: dict[str, Any]) -> list[str]:
         urls: list[str] = []
-        for key in ("musicurl", "url"):
+        for key in ("vipmusicurl", "musicurl", "url"):
             value = str(song.get(key) or "").strip()
             if value and value not in urls:
                 urls.append(value)

@@ -6,7 +6,7 @@
       ./install.ps1            # 全自动（检测显卡决定 CUDA/CPU）
       ./install.ps1 --cpu      # 强制 CPU
       ./install.ps1 --gpu      # 强制 CUDA
-      ./install.ps1 --only svc # 只跑某一步（app/web/uvr/svc/models）
+      ./install.ps1 --only seedvc # 只跑某一步（app/web/uvr/svc/rvc/seedvc/hub/models）
 
   前置要求（脚本会检测并提示）：Git、Node.js LTS（含 npm）、Python 3.10+、ffmpeg。
 #>

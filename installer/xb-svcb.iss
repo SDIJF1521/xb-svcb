@@ -21,7 +21,7 @@
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.17"
+#define MyAppVersion "0.0.18"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 
@@ -43,6 +43,11 @@ DisableProgramGroupPage=auto
 AllowNoIcons=yes
 OutputDir=..\dist
 OutputBaseFilename=XB-SVCB-Setup
+; 自带模型超过单个安装文件上限，显式输出 bootstrapper + 小于 2GB 的分卷数据文件。
+; 发布时 XB-SVCB-Setup.exe 与所有 XB-SVCB-Setup-*.bin 必须放在同一目录。
+DiskSpanning=yes
+DiskSliceSize=1900000000
+SlicesPerDisk=1
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -60,6 +65,7 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkablealone
 
+#ifndef XB_VALIDATE_ONLY
 [Files]
 ; 应用本体：PyInstaller 打包产物（XB-SVCB.exe + _internal，含前端与 worker 脚本）
 Source: "..\dist\XB-SVCB\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
@@ -74,6 +80,8 @@ Source: "..\assets\icon\xb-svcb.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; 排除可选的 fcpe.pt（默认 F0 用 rmvpe），让安装器体积压到 GitHub Release 单文件 2GiB 上限内
 Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression; Excludes: "fcpe.pt"
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
+Source: "..\release_notes_v018.md"; DestDir: "{app}"; Flags: ignoreversion
+#endif
 
 [Icons]
 Name: "{group}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\xb-svcb.ico"
@@ -91,6 +99,7 @@ Filename: "{app}\{#MyAppExe}"; Description: "立即启动 {#MyAppShort}"; \
 Type: filesandordirs; Name: "{app}\.venv-uvr"
 Type: filesandordirs; Name: "{app}\.venv-svc"
 Type: filesandordirs; Name: "{app}\.venv-rvc"
+Type: filesandordirs; Name: "{app}\.venv-seedvc"
 Type: filesandordirs; Name: "{app}\.venv-hub"
 Type: filesandordirs; Name: "{app}\engines"
 Type: filesandordirs; Name: "{app}\models"
@@ -594,7 +603,7 @@ begin
   DataDirPage := CreateInputDirPage(
     PrereqPathPage.ID,
     '选择用户数据存储位置',
-    '模型、作品、下载素材与编辑工程保存在哪里？',
+    '模型、作品、下载素材、编辑工程与主题媒体保存在哪里？',
     '建议选择空间充足的磁盘。该目录后续也可以在软件首页迁移。',
     False,
     ''
@@ -840,6 +849,53 @@ begin
   Result := Result + ' - ' + ItemLabel + ': ' + FilePath;
 end;
 
+function ValidateBundledRuntime(): Boolean;
+var
+  AppDir, InternalDir, Missing: String;
+begin
+  AppDir := ExpandConstant('{app}');
+  InternalDir := PathJoin(AppDir, '_internal');
+  Missing := '';
+
+  AppendInstallValidation('');
+  AppendInstallValidation('------------------------------------------------------------');
+  AppendInstallValidation('应用本体与内置组件校验');
+
+  if not FileExists(PathJoin(AppDir, '{#MyAppExe}')) then
+    Missing := AddMissingRuntimeFile(Missing, '应用本体', PathJoin(AppDir, '{#MyAppExe}'));
+  if not FileExists(PathJoin(InternalDir, 'web\dist\index.html')) then
+    Missing := AddMissingRuntimeFile(Missing, '前端入口', PathJoin(InternalDir, 'web\dist\index.html'));
+  if not FileExists(PathJoin(InternalDir, 'infrastructure\uvr_worker.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'UVR worker', PathJoin(InternalDir, 'infrastructure\uvr_worker.py'));
+  if not FileExists(PathJoin(InternalDir, 'infrastructure\svc_worker.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'SVC worker', PathJoin(InternalDir, 'infrastructure\svc_worker.py'));
+  if not FileExists(PathJoin(InternalDir, 'infrastructure\rvc_worker.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'RVC worker', PathJoin(InternalDir, 'infrastructure\rvc_worker.py'));
+  if not FileExists(PathJoin(InternalDir, 'infrastructure\seedvc_worker.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'SeedVC worker', PathJoin(InternalDir, 'infrastructure\seedvc_worker.py'));
+  if not FileExists(PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt')) then
+    Missing := AddMissingRuntimeFile(Missing, 'SeedVC RMVPE', PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt'));
+  if not FileExists(PathJoin(AppDir, 'assets\models\seedvc\campplus_cn_common.bin')) then
+    Missing := AddMissingRuntimeFile(Missing, 'SeedVC CampPlus', PathJoin(AppDir, 'assets\models\seedvc\campplus_cn_common.bin'));
+  if not FileExists(PathJoin(AppDir, 'assets\models\seedvc\whisper-small\model.safetensors')) then
+    Missing := AddMissingRuntimeFile(Missing, 'SeedVC Whisper Small', PathJoin(AppDir, 'assets\models\seedvc\whisper-small\model.safetensors'));
+  if not FileExists(PathJoin(AppDir, 'assets\models\seedvc\bigvgan_v2_44khz_128band_512x\bigvgan_generator.pt')) then
+    Missing := AddMissingRuntimeFile(Missing, 'SeedVC BigVGAN', PathJoin(AppDir, 'assets\models\seedvc\bigvgan_v2_44khz_128band_512x\bigvgan_generator.pt'));
+  if not FileExists(PathJoin(AppDir, 'engines\juce-vst3-host\xb-juce-vst3-host.exe')) then
+    Missing := AddMissingRuntimeFile(Missing, 'JUCE VST3 Host', PathJoin(AppDir, 'engines\juce-vst3-host\xb-juce-vst3-host.exe'));
+
+  Result := Missing = '';
+  if Result then
+    AppendInstallValidation('[ok] 应用本体、前端、AI workers、SeedVC 离线底模与 JUCE Host 完整。')
+  else
+  begin
+    AppendInstallValidation('[fail] 发布包缺少必要组件：');
+    AppendInstallValidation(Missing);
+    MsgBox('安装包缺少必要组件，部分功能将不可用：' + #13#10 + Missing + #13#10#13#10 +
+      '请重新下载安装器的完整分卷文件。', mbError, MB_OK);
+  end;
+end;
+
 function ValidateUvrRuntime(): Boolean;
 var
   AppDir, UvrPython, UvrWorker, UvrModel, Missing: String;
@@ -883,10 +939,51 @@ begin
     mbError, MB_OK);
 end;
 
+function ValidateSeedVcRuntime(): Boolean;
+var
+  AppDir, SeedPython, SeedWorker, SeedInference, Missing: String;
+begin
+  AppDir := ExpandConstant('{app}');
+  SeedPython := PathJoin(AppDir, '.venv-seedvc\Scripts\python.exe');
+  SeedWorker := PathJoin(AppDir, '_internal\infrastructure\seedvc_worker.py');
+  SeedInference := PathJoin(AppDir, 'engines\seed-vc\inference.py');
+  Missing := '';
+
+  AppendInstallValidation('');
+  AppendInstallValidation('------------------------------------------------------------');
+  AppendInstallValidation('SeedVC 运行环境最终校验');
+
+  if not FileExists(SeedPython) then
+    Missing := AddMissingRuntimeFile(Missing, '.venv-seedvc Python', SeedPython);
+  if not FileExists(SeedWorker) then
+    Missing := AddMissingRuntimeFile(Missing, 'SeedVC worker', SeedWorker);
+  if not FileExists(SeedInference) then
+    Missing := AddMissingRuntimeFile(Missing, 'Seed-VC inference.py', SeedInference);
+
+  Result := Missing = '';
+  if Result then
+  begin
+    AppendInstallValidation('[ok] SeedVC 运行环境可被软件识别。');
+    Exit;
+  end;
+
+  AppendInstallValidation('[fail] SeedVC 运行环境不完整，软件会显示“降级模式”。');
+  AppendInstallValidation('缺失项：');
+  AppendInstallValidation(Missing);
+  AppendInstallValidation('建议：从开始菜单运行“搭建/修复运行环境”，或执行 setup_env.bat --only seedvc。');
+
+  MsgBox('SeedVC 运行环境最终校验失败。' + #13#10 +
+    '缺失项：' + #13#10 + Missing + #13#10#13#10 +
+    '可稍后在安装目录执行：setup_env.bat --only seedvc' + #13#10#13#10 +
+    '详细日志：' + LastInstallLog,
+    mbError, MB_OK);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   DataDir, Payload: String;
   SetupProgressStart: Integer;
+  UvrReady, SeedVcReady: Boolean;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -898,6 +995,8 @@ begin
     SaveStringToFile(ExpandConstant('{app}\data_home.json'), Payload, False);
     ForceDirectories(ExpandConstant('{userappdata}\XB-SVCB'));
     SaveStringToFile(ExpandConstant('{userappdata}\XB-SVCB\data_home.json'), Payload, False);
+
+    ValidateBundledRuntime();
 
     if BuildEnvSelected() then
     begin
@@ -912,8 +1011,10 @@ begin
         SetupProgressStart := 0;
       if RunSetupBatch('setup_env.bat', GpuInstallArgs(), '正在搭建运行环境（创建子环境、复制模型、安装 Python 依赖）…', SetupProgressStart, 100) then
       begin
-        if not ValidateUvrRuntime() then
-          SetEnvProgress(100, 'UVR 运行环境校验失败，请查看安装详情日志');
+        UvrReady := ValidateUvrRuntime();
+        SeedVcReady := ValidateSeedVcRuntime();
+        if (not UvrReady) or (not SeedVcReady) then
+          SetEnvProgress(100, '部分运行环境校验失败，请查看安装详情日志');
       end;
     end;
   end;

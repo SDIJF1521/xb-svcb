@@ -6,8 +6,10 @@
   .venv-uvr/     —— 人声分离环境（audio-separator）
   .venv-svc/     —— so-vits-svc 4.1 推理环境（torch + fairseq 等）
   .venv-rvc/     —— RVC 推理环境（rvc-python；40 系及以下 cu121，50 系 cu128，CPU 版）
+  .venv-seedvc/  —— SeedVC 推理环境（官方 Seed-VC；推理时提供参考音频）
   .venv-hub/     —— 模型上传组件（modelscope）
   engines/so-vits-svc/         —— 自动克隆的 so-vits-svc 4.1 仓库
+  engines/seed-vc/              —— 自动克隆的 Seed-VC 仓库
   engines/so-vits-svc/pretrain —— 底模（contentvec / nsf_hifigan / rmvpe）
   models/uvr/    —— UVR 分离模型（5_HP-Karaoke / DeEcho-DeReverb）
   web/dist/      —— 前端构建产物
@@ -26,7 +28,8 @@
   python install/install.py --gpu          # 强制 CUDA
   python install/install.py --skip-svc     # 跳过 so-vits-svc（仅装壳+分离+前端）
   python install/install.py --only rvc     # 只装 RVC 推理环境（.venv-rvc）
-  python install/install.py --only models  # 只跑某一步：app/web/uvr/svc/rvc/hub/models
+  python install/install.py --only seedvc  # 只装 SeedVC 推理环境（.venv-seedvc）
+  python install/install.py --only models  # 只跑某一步：app/web/uvr/svc/rvc/seedvc/hub/models
 """
 
 from __future__ import annotations
@@ -82,11 +85,13 @@ APP_DIR = ROOT / "app"
 WEB_DIR = ROOT / "web"
 ENGINES_DIR = ROOT / "engines"
 SOVITS_DIR = ENGINES_DIR / "so-vits-svc"
+SEEDVC_DIR = ENGINES_DIR / "seed-vc"
 PRETRAIN_DIR = SOVITS_DIR / "pretrain"
 UVR_VENV = ROOT / ".venv-uvr"
 SVC_VENV = ROOT / ".venv-svc"
 HUB_VENV = ROOT / ".venv-hub"
 RVC_VENV = ROOT / ".venv-rvc"
+SEEDVC_VENV = ROOT / ".venv-seedvc"
 UVR_MODELS_DIR = ROOT / "models" / "uvr"
 
 # 随安装包一起分发的「自带模型」目录：安装时直接本地复制，免联网慢下载。
@@ -96,18 +101,20 @@ ASSETS_MODELS_DIR = Path(__file__).resolve().parent.parent / "assets" / "models"
 
 def _derive_paths(root: Path) -> None:
     """以 root 为基准重新计算所有产物路径（供 --root 覆盖）。"""
-    global ROOT, APP_DIR, WEB_DIR, ENGINES_DIR, SOVITS_DIR, PRETRAIN_DIR
-    global UVR_VENV, SVC_VENV, HUB_VENV, RVC_VENV, UVR_MODELS_DIR
+    global ROOT, APP_DIR, WEB_DIR, ENGINES_DIR, SOVITS_DIR, SEEDVC_DIR, PRETRAIN_DIR
+    global UVR_VENV, SVC_VENV, HUB_VENV, RVC_VENV, SEEDVC_VENV, UVR_MODELS_DIR
     ROOT = root
     APP_DIR = root / "app"
     WEB_DIR = root / "web"
     ENGINES_DIR = root / "engines"
     SOVITS_DIR = ENGINES_DIR / "so-vits-svc"
+    SEEDVC_DIR = ENGINES_DIR / "seed-vc"
     PRETRAIN_DIR = SOVITS_DIR / "pretrain"
     UVR_VENV = root / ".venv-uvr"
     SVC_VENV = root / ".venv-svc"
     HUB_VENV = root / ".venv-hub"
     RVC_VENV = root / ".venv-rvc"
+    SEEDVC_VENV = root / ".venv-seedvc"
     UVR_MODELS_DIR = root / "models" / "uvr"
 
 SOVITS_REPO_URL = "https://github.com/svc-develop-team/so-vits-svc.git"
@@ -116,6 +123,8 @@ SOVITS_BRANCH = "4.1-Stable"
 SOVITS_ZIP_URL = (
     "https://github.com/svc-develop-team/so-vits-svc/archive/refs/heads/4.1-Stable.zip"
 )
+SEEDVC_REPO_URL = "https://github.com/Plachtaa/seed-vc.git"
+SEEDVC_ZIP_URL = "https://github.com/Plachtaa/seed-vc/archive/refs/heads/main.zip"
 
 # CUDA wheel 源（cu121 兼容 40 系及以下 NVIDIA 显卡）；CPU 用官方默认源
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu121"
@@ -681,13 +690,13 @@ def seed_rvc_base_models(py: Path) -> None:
 
 # ---------- 各安装步骤 ----------
 def step_app(uv: str) -> None:
-    hr("1/7 主程序环境 app/.venv")
+    hr("1/8 主程序环境 app/.venv")
     uv_sync(uv, APP_DIR)
     print(c("g", "主程序环境就绪"))
 
 
 def step_web() -> None:
-    hr("2/7 前端构建 web/dist")
+    hr("2/8 前端构建 web/dist")
     if not have("npm"):
         raise RuntimeError("未检测到 npm，请先安装 Node.js LTS 后重试（或 --skip-web）")
     # 优先 npm ci（依赖 lock）；无 lock 时回退 npm install
@@ -700,7 +709,7 @@ def step_web() -> None:
 
 
 def step_uvr(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
-    hr("3/7 人声分离环境 .venv-uvr（audio-separator）")
+    hr("3/8 人声分离环境 .venv-uvr（audio-separator）")
     if not venv_python(UVR_VENV).exists():
         run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_ENGINES, str(UVR_VENV)))
     py = str(venv_python(UVR_VENV))
@@ -772,6 +781,76 @@ def fetch_sovits() -> None:
         shutil.move(str(repo_root), str(SOVITS_DIR))
 
 
+def fetch_seedvc() -> None:
+    """获取 Seed-VC 仓库：优先 git clone，无 git 时下载 main 分支 ZIP。"""
+    if (SEEDVC_DIR / "inference.py").exists():
+        print(c("g", "    Seed-VC 仓库已存在，跳过获取"))
+        return
+    ENGINES_DIR.mkdir(parents=True, exist_ok=True)
+    if SEEDVC_DIR.exists():
+        shutil.rmtree(SEEDVC_DIR, ignore_errors=True)
+
+    if have("git"):
+        run(["git", "clone", "--depth", "1", SEEDVC_REPO_URL, str(SEEDVC_DIR)])
+        return
+
+    print(c("y", "    未检测到 git，改用下载 ZIP 方式获取 Seed-VC 仓库 …"))
+    with tempfile.TemporaryDirectory() as td:
+        zp = Path(td) / "seed-vc.zip"
+        download(gh_urls(SEEDVC_ZIP_URL), zp)
+        extract_zip(zp, Path(td))
+        marker = next(Path(td).rglob("inference.py"), None)
+        if marker is None:
+            raise RuntimeError("下载的 Seed-VC 压缩包结构异常，未找到 inference.py")
+        repo_root = marker.parent
+        shutil.move(str(repo_root), str(SEEDVC_DIR))
+
+
+def seed_seedvc_base_models(py: Path) -> None:
+    """Prestage SeedVC checkpoints and verify the bundled offline snapshots."""
+    checkpoints = SEEDVC_DIR / "checkpoints"
+    checkpoints.mkdir(parents=True, exist_ok=True)
+    rmvpe_src = ASSETS_MODELS_DIR / "pretrain" / "rmvpe.pt"
+    rmvpe_dest = checkpoints / "rmvpe.pt"
+    rmvpe_marker = rmvpe_dest.with_name(rmvpe_dest.name + ".xb-normalized")
+    if not _is_large_model_file(rmvpe_src):
+        print(c("y", "    未找到完整的 SeedVC RMVPE 自带模型，运行时将尝试联网下载"))
+    elif _is_large_model_file(rmvpe_dest) and rmvpe_marker.is_file():
+        print(c("g", "    SeedVC RMVPE 已预置，跳过"))
+    elif _normalize_rvc_rmvpe_checkpoint(py, rmvpe_src, rmvpe_dest):
+        rmvpe_marker.write_text("xb-svcb seedvc rmvpe v1\n", encoding="ascii")
+        print(c("g", "    SeedVC RMVPE 已转换并预置"))
+
+    campplus_src = ASSETS_MODELS_DIR / "seedvc" / "campplus_cn_common.bin"
+    campplus_dest = checkpoints / "campplus_cn_common.bin"
+    if not campplus_src.is_file() or campplus_src.stat().st_size < 20 * 1024 * 1024:
+        print(c("y", "    未找到完整的 SeedVC CampPlus 自带模型，运行时将尝试联网下载"))
+    elif campplus_dest.is_file() and campplus_dest.stat().st_size == campplus_src.stat().st_size:
+        print(c("g", "    SeedVC CampPlus 已预置，跳过"))
+    else:
+        _link_or_copy_model(campplus_src, campplus_dest)
+        print(c("g", "    SeedVC CampPlus 已预置"))
+
+    snapshots = (
+        (
+            ASSETS_MODELS_DIR / "seedvc" / "whisper-small",
+            ("config.json", "preprocessor_config.json", "model.safetensors"),
+            "Whisper Small",
+        ),
+        (
+            ASSETS_MODELS_DIR / "seedvc" / "bigvgan_v2_44khz_128band_512x",
+            ("config.json", "bigvgan_generator.pt"),
+            "BigVGAN",
+        ),
+    )
+    for folder, required, label in snapshots:
+        missing = [name for name in required if not (folder / name).is_file()]
+        if missing:
+            print(c("y", f"    SeedVC {label} 本地快照不完整（缺少 {', '.join(missing)}），运行时将尝试联网下载"))
+        else:
+            print(c("g", f"    SeedVC {label} 本地快照就绪"))
+
+
 def _venv_pyver(py: Path) -> str | None:
     """返回 venv 内 Python 的 '主.次' 版本号（如 '3.9'）；失败返回 None。"""
     try:
@@ -785,7 +864,7 @@ def _venv_pyver(py: Path) -> str | None:
 
 
 def step_svc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
-    hr("4/7 推理引擎 so-vits-svc + .venv-svc")
+    hr("4/8 推理引擎 so-vits-svc + .venv-svc")
     fetch_sovits()
 
     # 目标 Python：Blackwell 用 3.10（cu128 轮子 + 3.10 兼容依赖），否则老栈 3.9。
@@ -1029,7 +1108,7 @@ def _patch_fairseq_weights_only(py: Path) -> None:
 
 
 def step_rvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
-    hr("5/7 RVC 推理环境 .venv-rvc（rvc-python）")
+    hr("5/8 RVC 推理环境 .venv-rvc（rvc-python）")
     # RVC 推理在独立环境运行（rvc-python），与 so-vits 栈隔离。
     # rvc-python 默认会在首次推理时下载 hubert / rmvpe；这里安装后立即预置，
     # 避免新用户运行 RVC 时因为 HuggingFace 连接失败而报 HTTPSConnectionPool。
@@ -1077,8 +1156,72 @@ def step_rvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
     print(c("g", "RVC 推理环境就绪"))
 
 
+SEEDVC_REQ_DENY = {
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "gradio",
+    "sounddevice",
+    "freesimplegui",
+    # resemblyzer is only imported by Seed-VC's eval.py. Its unmaintained
+    # webrtcvad dependency has no Windows cp310 wheel and otherwise forces a
+    # local MSVC build, which is unnecessary for XB-SVCB file inference.
+    "resemblyzer",
+    "webrtcvad",
+}
+
+
+def step_seedvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
+    hr("6/8 SeedVC 推理环境 engines/seed-vc + .venv-seedvc")
+    fetch_seedvc()
+
+    target_py = PYTHON_FOR_ENGINES
+    py_path = venv_python(SEEDVC_VENV)
+    if py_path.exists():
+        ver = _venv_pyver(py_path)
+        if ver != target_py:
+            print(c("y", f"    现有 .venv-seedvc 为 Python {ver or '未知'}，需要 {target_py}，重建中 …"))
+            shutil.rmtree(SEEDVC_VENV, ignore_errors=True)
+    if not venv_python(SEEDVC_VENV).exists():
+        run(uv_cmd(uv, "venv", "--python", target_py, str(SEEDVC_VENV)))
+    py = str(venv_python(SEEDVC_VENV))
+
+    def pip(*args: str, index: str | None = None) -> None:
+        uv_pip_install(uv, py, *args, index=index)
+
+    pip("setuptools<81", "wheel")
+    if use_blackwell:
+        torch_specs = [
+            f"torch=={TORCH_BLACKWELL_VER}",
+            f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
+        ]
+        torch_index = TORCH_BLACKWELL_INDEX
+    else:
+        torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
+        torch_index = TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX
+    pip(*torch_specs, index=torch_index)
+
+    req = SEEDVC_DIR / "requirements.txt"
+    if req.exists():
+        filtered = _filter_requirements(req, extra_deny=SEEDVC_REQ_DENY)
+        pip("-r", str(filtered))
+    else:
+        print(c("r", "    未找到 SeedVC requirements.txt，跳过依赖安装（请检查仓库）"))
+
+    seed_seedvc_base_models(venv_python(SEEDVC_VENV))
+
+    if use_blackwell:
+        _reaffirm_blackwell_torch(uv, py)
+        print(c("g", "SeedVC 推理环境就绪（Blackwell/cu128）"))
+    elif use_gpu:
+        _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, "cu121")
+        print(c("g", "SeedVC 推理环境就绪（cu121）"))
+    else:
+        print(c("g", "SeedVC 推理环境就绪（CPU）"))
+
+
 def step_hub(uv: str) -> None:
-    hr("6/7 模型上传组件 .venv-hub（modelscope）")
+    hr("7/8 模型上传组件 .venv-hub（modelscope）")
     # 仅「分享到模型站（上传）」需要 modelscope SDK；搜索 / 下载走纯 HTTP，不依赖本环境。
     # 用 3.10（与 UVR 一致），装 modelscope hub 能力即可（上传用 upload_folder，无需本地 git）。
     if not venv_python(HUB_VENV).exists():
@@ -1096,7 +1239,7 @@ def step_hub(uv: str) -> None:
 
 
 def step_models(uv: str) -> None:
-    hr("7/7 底模 + UVR 模型（自带优先，缺失才联网下载）")
+    hr("8/8 底模 + UVR 模型（自带优先，缺失才联网下载）")
     PRETRAIN_DIR.mkdir(parents=True, exist_ok=True)
     if ASSETS_MODELS_DIR.exists():
         print(c("g", f"  检测到自带模型目录：{ASSETS_MODELS_DIR}"))
@@ -1203,10 +1346,11 @@ STEPS = {
     "uvr": lambda uv, gpu, bw: step_uvr(uv, gpu, bw),
     "svc": lambda uv, gpu, bw: step_svc(uv, gpu, bw),
     "rvc": lambda uv, gpu, bw: step_rvc(uv, gpu, bw),
+    "seedvc": lambda uv, gpu, bw: step_seedvc(uv, gpu, bw),
     "hub": lambda uv, gpu, bw: step_hub(uv),
     "models": lambda uv, gpu, bw: step_models(uv),
 }
-ORDER = ["app", "web", "uvr", "svc", "rvc", "hub", "models"]
+ORDER = ["app", "web", "uvr", "svc", "rvc", "seedvc", "hub", "models"]
 
 
 def installer_progress(percent: int, message: str) -> None:
@@ -1241,7 +1385,7 @@ def main() -> int:
         "--only",
         choices=ORDER,
         nargs="+",
-        help="只执行指定步骤（可多选）：app web uvr svc rvc hub models",
+        help="只执行指定步骤（可多选）：app web uvr svc rvc seedvc hub models",
     )
     for s in ORDER:
         p.add_argument(f"--skip-{s}", action="store_true", help=f"跳过 {s} 步骤")

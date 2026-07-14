@@ -21,6 +21,7 @@ def ensure_dirs() -> None:
         config.MODELHUB_DIR,
         config.EDITOR_DIR,
         config.EDITOR_CACHE_DIR,
+        config.THEME_MEDIA_DIR,
     ):
         d.mkdir(parents=True, exist_ok=True)
     marker = config.DATA_DIR / config.DATA_MARKER_FILE

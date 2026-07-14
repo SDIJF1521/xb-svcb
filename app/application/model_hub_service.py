@@ -464,7 +464,7 @@ class ModelHubService:
             return None
 
     async def _list_files(self, repo_id: str) -> dict[str, int]:
-        """获取仓库文件列表及大小（文件名 -> 字节数），用于下载进度总量。失败返回 {}。"""
+        """获取仓库文件列表及大小（完整路径及唯一文件名 -> 字节数）。"""
         try:
             import httpx
         except ImportError:
@@ -493,15 +493,25 @@ class ModelHubService:
                 path = _first(f, "Path", "Name", "name", "path")
                 size = _first(f, "Size", "size") or 0
                 if path:
-                    name = str(path).split("/")[-1]
+                    full_path = str(path).replace("\\", "/").lstrip("./")
+                    name = full_path.split("/")[-1]
                     try:
-                        sizes[name] = int(size)
+                        value = int(size)
                     except (TypeError, ValueError):
-                        sizes[name] = 0
+                        value = 0
+                    sizes[full_path] = value
+                    sizes.setdefault(name, value)
         return sizes
 
-    async def _download_to(self, repo_id: str, file_path: str, dst: Path, cb: Any) -> bool:
-        """流式下载仓库内某个文件到本地，并通过 cb(增量字节数) 上报进度。"""
+    async def _download_to(
+        self,
+        repo_id: str,
+        file_path: str,
+        dst: Path,
+        cb: Any,
+        expected_size: int = 0,
+    ) -> bool:
+        """流式下载并断点续传；失败时保留 ``.part`` 供下次继续。"""
         try:
             import httpx
         except ImportError:
@@ -509,22 +519,60 @@ class ModelHubService:
         token = self.get_token()
         url = f"{config.MODELSCOPE_ENDPOINT}/api/v1/models/{repo_id}/repo"
         params = {"FilePath": file_path, "Revision": "master"}
-        await self._limiter.wait()
-        try:
-            async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
-                async with client.stream(
-                    "GET", url, params=params, headers=self._headers(token)
-                ) as resp:
-                    if resp.status_code != 200:
-                        return False
-                    with dst.open("wb") as f:
-                        async for chunk in resp.aiter_bytes(65536):
-                            f.write(chunk)
-                            if cb:
-                                cb(len(chunk))
-            return True
-        except Exception:  # noqa: BLE001
-            return False
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        partial = dst.with_name(dst.name + ".part")
+
+        if dst.is_file():
+            size = dst.stat().st_size
+            if expected_size > 0 and size == expected_size:
+                return True
+            if not partial.exists() or partial.stat().st_size < size:
+                partial.unlink(missing_ok=True)
+                dst.replace(partial)
+            else:
+                dst.unlink(missing_ok=True)
+        if partial.is_file() and expected_size > 0 and partial.stat().st_size > expected_size:
+            partial.unlink(missing_ok=True)
+
+        timeout = httpx.Timeout(connect=20, read=120, write=30, pool=30)
+        for attempt in range(3):
+            start = partial.stat().st_size if partial.is_file() else 0
+            headers = self._headers(token)
+            if start > 0:
+                headers["Range"] = f"bytes={start}-"
+            await self._limiter.wait()
+            try:
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                    async with client.stream(
+                        "GET", url, params=params, headers=headers
+                    ) as resp:
+                        if resp.status_code == 416 and start > 0:
+                            content_range = str(resp.headers.get("Content-Range") or "")
+                            match = re.search(r"/(\d+)\s*$", content_range)
+                            remote_size = int(match.group(1)) if match else expected_size
+                            if remote_size > 0 and start == remote_size:
+                                partial.replace(dst)
+                                return True
+                        if resp.status_code not in (200, 206):
+                            raise RuntimeError(f"HTTP {resp.status_code}")
+                        append = resp.status_code == 206 and start > 0
+                        mode = "ab" if append else "wb"
+                        with partial.open(mode) as output:
+                            async for chunk in resp.aiter_bytes(256 * 1024):
+                                output.write(chunk)
+                                if cb:
+                                    cb(len(chunk))
+                actual = partial.stat().st_size if partial.is_file() else 0
+                if expected_size > 0 and actual != expected_size:
+                    raise RuntimeError(
+                        f"文件大小不完整：{actual}/{expected_size} bytes"
+                    )
+                partial.replace(dst)
+                return True
+            except Exception:  # noqa: BLE001 - retry while preserving partial file
+                if attempt < 2:
+                    await asyncio.sleep(1 + attempt * 2)
+        return False
 
     async def _fetch_manifest(self, repo_id: str) -> dict[str, Any] | None:
         raw = await self._get_raw(repo_id, config.MODELHUB_MANIFEST)
@@ -541,7 +589,7 @@ class ModelHubService:
         files = data.get("files")
         if not isinstance(files, dict) or not files.get("main_model"):
             return None
-        # so-vits 需要主配置；RVC 无主配置（仅 .pth + 可选 .index）
+        # so-vits / SeedVC 需要主配置；RVC 无主配置（仅 .pth + 可选 .index）。
         fw = config.modelhub_normalize_framework(data.get("framework"))
         if fw != "rvc" and not files.get("main_config"):
             return None
@@ -572,13 +620,14 @@ class ModelHubService:
         to_dl = [(role, str(fn)) for role, fn in roles.items() if fn]
         paths.ensure_dirs()
         stage = config.MODELHUB_DIR / "download" / repo_id.replace("/", "__")
-        if stage.exists():
-            shutil.rmtree(stage, ignore_errors=True)
         stage.mkdir(parents=True, exist_ok=True)
 
         # 预取各文件大小作为进度总量（拿不到则退化为按文件个数计进度）
         sizes = await self._list_files(repo_id)
-        total_bytes = sum(int(sizes.get(Path(fn).name, 0)) for _, fn in to_dl)
+        total_bytes = sum(
+            int(sizes.get(fn.replace("\\", "/").lstrip("./"), sizes.get(Path(fn).name, 0)))
+            for _, fn in to_dl
+        )
         done_bytes = 0
         self._set_progress(key, "download", 2, "开始下载…", 0, total_bytes)
 
@@ -586,7 +635,14 @@ class ModelHubService:
         n = len(to_dl)
         for idx, (role, fname) in enumerate(to_dl):
             base = Path(fname).name
-            dst = stage / base
+            dst = stage / role / base
+            legacy = stage / base
+            if legacy.is_file() and not dst.exists() and not dst.with_name(dst.name + ".part").exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                legacy.replace(dst)
+            expected_size = int(
+                sizes.get(fname.replace("\\", "/").lstrip("./"), sizes.get(base, 0))
+            )
 
             def _cb(chunk: int) -> None:
                 nonlocal done_bytes
@@ -599,22 +655,25 @@ class ModelHubService:
                     key, "download", min(88.0, pct), f"下载 {base}", done_bytes, total_bytes
                 )
 
-            required_roles = ("main_model",) if is_rvc else ("main_model", "main_config")
-            ok = await self._download_to(repo_id, fname, dst, _cb)
+            ok = await self._download_to(
+                repo_id,
+                fname,
+                dst,
+                _cb,
+                expected_size,
+            )
             if not ok:
-                if role in required_roles:
-                    shutil.rmtree(stage, ignore_errors=True)
-                    self._set_progress(key, "error", 0, f"下载失败：{base}")
-                    return {"ok": False, "error": f"下载文件失败：{fname}"}
-                continue  # 扩散 / index 等可选文件缺失不致命
+                self._set_progress(key, "error", 0, f"下载失败：{base}")
+                return {
+                    "ok": False,
+                    "error": f"下载文件失败：{fname}；再次点击下载可从断点继续",
+                }
             local_paths[role] = str(dst)
 
         need_config = not is_rvc
         if "main_model" not in local_paths or (need_config and "main_config" not in local_paths):
-            shutil.rmtree(stage, ignore_errors=True)
             self._set_progress(key, "error", 0, "模型主文件缺失")
             return {"ok": False, "error": "模型主文件缺失，下载中止"}
-
         self._set_progress(key, "import", 92, "导入本地模型库…", done_bytes, total_bytes)
         payload = {
             "name": manifest.get("name") or repo_id.split("/", 1)[-1],
@@ -625,12 +684,13 @@ class ModelHubService:
             "diffusion_model": local_paths.get("diffusion_model"),
             "diffusion_config": local_paths.get("diffusion_config"),
             "index_file": local_paths.get("index_file"),
+            "source_repo_id": repo_id,
         }
         imported = self._models.import_model(payload)
-        shutil.rmtree(stage, ignore_errors=True)  # 导入会复制一份，暂存可清理
         if not imported:
             self._set_progress(key, "error", 0, "导入失败")
             return {"ok": False, "error": "导入到本地模型库失败"}
+        shutil.rmtree(stage, ignore_errors=True)  # 导入成功后才清理断点文件
         self._set_progress(key, "done", 100, "完成")
         return {"ok": True, "model": imported}
 
@@ -694,7 +754,7 @@ class ModelHubService:
             "diffusion_config": _copy_role("diffusion_config"),
             "index_file": _copy_role("index_file"),
         }
-        # 主模型必备；so-vits 还需主配置，RVC 则不需要
+        # 主模型必备；so-vits / SeedVC 还需主配置，RVC 则不需要。
         if not roles["main_model"] or (fw != "rvc" and not roles["main_config"]):
             shutil.rmtree(stage, ignore_errors=True)
             return {"ok": False, "error": "模型主文件缺失，无法上传"}
@@ -706,7 +766,7 @@ class ModelHubService:
             "marker": config.MODELSCOPE_MARKER,
             "name": display,
             "type": model.get("type", ""),
-            # 模型架构标签：用于将来兼容 RVC 等不同框架，并在模型站按类型筛选
+            # 模型架构标签：用于兼容不同框架，并在模型站按类型筛选
             "framework": fw,
             "framework_label": fw_label,
             "sample_rate": model.get("sample_rate", "44.1kHz"),

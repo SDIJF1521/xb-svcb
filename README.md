@@ -1,80 +1,26 @@
-
-
-<div align="center">
-
-# 🎤 XB-SVCB · AI 翻唱工具
-
-#### 开箱即用的桌面级 AI 翻唱工作站
-
-**🎵 导入歌曲 ｜ 🎚️ 人声分离 ｜ 🌫️ 去混响 ｜ 🗣️ AI 歌声转换 ｜ 🎼 合并伴奏 ｜ 🎤 成品翻唱**
-
-一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **在线曲库** · **模型站** · **音频编辑器**
-
-<br/>
-
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release&color=ff6b9d)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/SDIJF1521/xb-svcb/total?color=brightgreen&label=downloads)](https://github.com/SDIJF1521/xb-svcb/releases)
-[![Stars](https://img.shields.io/github/stars/SDIJF1521/xb-svcb?style=flat&color=yellow)](https://github.com/SDIJF1521/xb-svcb/stargazers)
-
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#)
-[![Python](https://img.shields.io/badge/python-3.9%20|%203.10-3776AB?logo=python&logoColor=white)](#)
-[![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
-[![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC-8a2be2)](#architecture)
-
-<br/>
-
-### ⬇️ [**点此下载安装器 · XB-SVCB-Setup.exe**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-
-<sub>Windows 一键安装 · 内置前端与底模 · 无需手动配置 Python / Node</sub>
-
-<sub>用户交流 / 反馈 QQ 群：**1038366109**</sub>
-
-</div>
-
----
-
-<div align="center">
-
-[✨ 特性](#features) ·
-[🏗️ 架构](#architecture) ·
-[🚀 快速开始](#quickstart) ·
-[🛠️ 源码搭建](#from-source) ·
-[🎬 使用流程](#usage) ·
-[🎛️ 音频编辑器](#audio-editor) ·
-[🧬 混合翻唱](#multi-model) ·
-[🌐 模型站](#model-hub) ·
-[❓ 常见问题](#faq) ·
-[🗺️ 规划](#roadmap) ·
-[🙏 致谢](#thanks)
-
-</div>
-
-
-
----
-
 <a id="features"></a>
 
 ## ✨ 特性
 
 - 🎚️ **全自动流水线** —— 一次点击走完「分离 → 去混响 → F0 → 推理 → 混音」。
 - 🗣️ **真实 so-vits-svc 4.1 推理** —— 支持主模型 + 浅扩散，可调变调、F0 预测器、扩散步数。
-- 🎛️ **多框架推理与统一管理（So-VITS-SVC / RVC）** —— 推理引擎按模型「框架」可插拔：内置 **RVC**（基于 `rvc-python`，自动识别 `.index` 检索特征），导入、模型管理与创建页按框架展示/筛选并切换专属参数（protect / filter_radius / 版本 v1·v2）；统一引擎接口为后续框架预留扩展点。
-- 🧬 **多模型混合翻唱（可跨框架 · 合唱 · 可编辑时间轴）** —— 按歌名自动获取带时间轴歌词、或**导入本地 `.lrc`**，做时长对齐校验；提供**可编辑可视化时间轴**：拖动边界调整起止（自动吸附歌词时间）、缩放精修、拆分 / 合并 / 删除片段，**片段独立指派模型**；**一段可同时指派多个模型实现「合唱」**（多路人声等响度叠加 + 软限幅防破音）；**同一首歌可混用 RVC 与 so-vits-svc 模型**；每个模型在完整人声上整轨推理，再「同源连唱合并、换人处交叉淡化」无缝拼成多人合唱。
+- 🎛️ **多框架推理与统一管理（So-VITS-SVC / RVC / SeedVC）** —— 推理引擎按模型「框架」可插拔：内置 **RVC**（基于 `rvc-python`，自动识别 `.index` 检索特征）与 **SeedVC**（官方 Seed-VC checkpoint + config，推理时选择参考音频），导入、模型管理与创建页按框架展示/筛选并切换专属参数（RVC protect / filter_radius / 版本 v1·v2，SeedVC 扩散步数）；统一引擎接口为后续框架预留扩展点。
+- 🧬 **多模型混合翻唱（可跨框架 · 合唱 · 可编辑时间轴）** —— 按歌名自动获取带时间轴歌词、或**导入本地 `.lrc`**，做时长对齐校验；提供**可编辑可视化时间轴**：拖动边界调整起止（自动吸附歌词时间）、缩放精修、拆分 / 合并 / 删除片段，**片段独立指派模型**；**一段可同时指派多个模型实现「合唱」**（多路人声等响度叠加 + 软限幅防破音）；**同一首歌可混用 So-VITS-SVC、RVC 与 SeedVC 模型**；每个模型在完整人声上整轨推理，再「同源连唱合并、换人处交叉淡化」无缝拼成多人合唱。
 - 🎛️ **Audio Editor Lite 音频编辑器** —— 从作品或本地音频创建编辑工程，支持工程选择页、多轨时间轴、真实波形、片段拖动/拉伸、播放头剪切、切口交叉淡化、片段声道分配（双声道 / L / R）、片段/音轨音频复制与剪贴板粘贴、音量包络、内置效果器、JUCE VST3 插件效果器、混音预览、时间轴拖动快进与 WAV / MP3 / FLAC 导出；可维护多角色并把片段分配给角色，内置独唱、对唱、主唱 + 和声、三角色剧情等时间轴模板。
 - 🧠 **高级创作工作流** —— 歌声转换工作台支持「自动混音合成」「自动人声合并」「手动人声合并」「自动 + 编辑器二次调整」「全手动编辑」；其中人声合并只在多模型模式开放，避免单模型流程误用。
-- 🎵 **在线资源获取（分页加载 · 可播放校验）** —— 内置 **网易云 / QQ音乐** 曲库的搜索、试听、下载（QQ 可填会员 Cookie 取高品质音频），搜索结果**分页「加载更多」**减少单次等待；**下载前校验资源可播放性**（魔数 / Content-Type / ffprobe），VIP / 无版权 / 失效链接不可下载，避免坑到后续推理；下载素材可一键进入翻唱。
-- 🌐 **模型站（魔搭社区 · 后台传输）** —— 基于 **ModelScope** 一键**上传/下载**声音模型：填自己的访问令牌即可发布到自有公开仓库，按关键词**模糊搜索**（**分页加载**）社区模型并直接导入；带**架构标签**（So-VITS-SVC / RVC 等）与**清单防污染**校验；上传/下载**挂后台执行、不阻塞操作**，顶栏「传输」面板随时查看实时进度。
+- 🎵 **在线资源获取（可播放校验）** —— 内置 **网易云 / QQ音乐** 曲库的搜索、试听、下载（QQ 可填会员 Cookie 取高品质音频），一次展示曲库接口返回的完整搜索列表；**下载前校验资源可播放性**（魔数 / Content-Type / ffprobe），VIP / 无版权 / 失效链接不可下载，避免坑到后续推理；下载素材可一键进入翻唱。
+- 🌐 **模型站（魔搭社区 · 后台传输）** —— 基于 **ModelScope** 一键**上传/下载**声音模型：填自己的访问令牌即可发布到自有公开仓库，按关键词**模糊搜索**（**分页加载**）社区模型并直接导入；带**架构标签**（So-VITS-SVC / RVC / SeedVC 等）与**清单防污染**校验；上传/下载**挂后台执行、不阻塞操作**，大模型支持断点续传和重试，下载完成后立即进入可选模型列表。
 - 🎼 **专业人声分离** —— `5_HP-Karaoke-UVR` 分离 + `UVR-DeEcho-DeReverb` 去混响，得到干净干声。
 - ⚡ **GPU / CPU 自由切换** —— 自动识别 NVIDIA 显卡（含 **50 系/Blackwell 自动走 cu128 + torch 2.7**），长音频自动分段避免显存溢出。
-- 🎨 **主题系统与自定义主题** —— 暗色 / 亮色 / 自定义主题一键切换并记忆，切换时从主题按钮触发圆形扩散动画；自定义主题支持调色、背景图片和动态粒子，默认提供亮色「晴空花园」示例，连 pywebview **原生窗口标题栏/边框**也随主题变色。
+- 🎨 **主题系统与自定义主题** —— 暗色 / 亮色 / 自定义主题一键切换并记忆，切换时从主题按钮触发圆形扩散动画；自定义主题支持调色、背景图片 / MP4 动态壁纸和动态粒子，默认提供亮色「晴空花园」示例，连 pywebview **原生窗口标题栏/边框**也随主题变色。
 - 👤 **个性化** —— 自定义头像与昵称、内置消息通知中心（实时汇总任务进度与失败原因）。
-- 📦 **开箱即用** —— 应用本体单文件 `XB-SVCB.exe`（自带应用图标），起界面无需 Python / Node。
-- 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-uvr`），互不污染。
+- 📦 **开箱即用** —— 安装后通过 `XB-SVCB.exe` 启动完整桌面应用（自带应用图标与前端资源），打开界面无需另装 Python / Node。
+- 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-seedvc` / `.venv-uvr`），互不污染。
 - 🎧 **作品库** —— 试听 / 导出成品，单独试听伴奏与干声，失败任务一键查日志；删除作品同步真实清理本地生成文件。
 
-> **最新版本 v0.0.17**：聚焦 **音频编辑器效果器与插件 Host**——编辑器新增片段/音轨音频复制到系统剪贴板、从剪贴板把音频粘贴回音轨、音量包络，以及混响、降噪、噪声门、压缩、EQ、高通/低通、延迟、合唱、限幅、增益等内置效果器；外部插件效果器改为 `Python -> C++ JUCE VST3 Host -> VST3 Plugin GUI` 架构，前端插件窗口已拆成独立组件，支持 VST3 插件检查、原生 GUI 打开和插件 state 回写；局部重推理会清理旧缓存并剥离插件效果，避免效果器污染模型生成的干声音频；安装器与应用版本同步到 `0.0.17`，发布构建会强制校验并携带 `xb-juce-vst3-host.exe`，避免生成装完后插件系统不可用的安装包。
+> **最新版本 v0.0.18**：新增 **SeedVC 完整推理链路**，支持导入 checkpoint + YAML 配置、选择目标音色参考音频、创建任务、模型站下载断点续传与跨框架混唱；下载完成后模型库和创建页会立即刷新；自定义主题背景升级为本地持久化的图片 / MP4 动态壁纸，修复浏览器开发模式预览丢失；在线曲库适配妖狐 API `V2.1.3.8`，移除已废弃的 `g` 参数并兼容会员音频与 URL 型歌词；安装器升级为显式分卷发布，构建时校验版本、前端、全部 worker、SeedVC 和 JUCE Host，安装后复核关键运行环境。详见 [v0.0.18 更新说明](release_notes_v018.md)。
+>
+> v0.0.17：聚焦 **音频编辑器效果器与插件 Host**——编辑器新增片段/音轨音频复制到系统剪贴板、从剪贴板把音频粘贴回音轨、音量包络，以及混响、降噪、噪声门、压缩、EQ、高通/低通、延迟、合唱、限幅、增益等内置效果器；外部插件效果器改为 `Python -> C++ JUCE VST3 Host -> VST3 Plugin GUI` 架构，前端插件窗口已拆成独立组件，支持 VST3 插件检查、原生 GUI 打开和插件 state 回写；局部重推理会清理旧缓存并剥离插件效果，避免效果器污染模型生成的干声音频；发布构建会强制校验并携带 `xb-juce-vst3-host.exe`，避免生成装完后插件系统不可用的安装包。
 >
 > v0.0.16：聚焦 **主题体验、音频编辑组织能力与安装稳定性**——前端主题切换改为接近 Element Plus 官网的圆形扩散过渡，并抽成 `ThemeSwitcher` / `CustomThemeEditor` / `ThemePresetList` / `ThemeBackground` 等组件；自定义主题支持亮色默认示例、色彩编辑、背景图片和动态粒子；音频编辑器新增多角色管理与时间轴模板，可为片段标注角色并快速生成独唱、对唱、和声、剧情分轨；安装器与应用版本同步到 `0.0.16`，UVR/RVC/SVC 环境搭建会保护 GPU torch 栈，避免有 NVIDIA GPU 的用户在部署 UVR 环境时被替换成 CPU 版 PyTorch。
 >
@@ -108,69 +54,92 @@
 
 ## 🏗️ 架构一览
 
-应用本体打包为单个 **`XB-SVCB.exe`**（PyInstaller 生成，内置前端与 worker 脚本）；只有「人声分离 / 模型推理（so-vits-svc · RVC）」这类重型 AI 能力需要在安装目录旁单独搭建隔离环境（由安装器完成，**全程无 PowerShell**）。音频编辑器的外部 VST3 效果器由随包携带的 **JUCE Host** 单独承载，避免 Python 进程直接加载插件。
+XB-SVCB 采用“**桌面应用负责交互与编排，重型引擎在独立进程运行**”的结构。安装版以 `XB-SVCB.exe` 为统一入口，PyInstaller 运行目录内同时携带 Vue 前端、Python 业务代码与 worker 脚本；So-VITS-SVC、RVC、SeedVC、UVR 和 VST3 插件则通过各自的隔离环境或原生 Host 执行，避免依赖与插件崩溃相互污染。
 
 ```mermaid
-flowchart LR
-    EXE[XB-SVCB.exe<br/>PyInstaller + pywebview<br/>单实例桌面窗口] --> UI[Vue 3 WebUI<br/>歌声转换工作台 / 音频编辑器]
-    UI --> API[Python 本地 API<br/>Bridge / Application Services]
-    API --> WF{高级工作流}
-    WF -->|自动混音合成| SRC[🎵 源歌曲]
-    WF -->|自动 + 编辑器二次调整| SRC
-    WF -->|多模型人声合并| SRC
-    WF -->|全手动编辑| ED[Audio Editor Lite<br/>编辑工程]
+flowchart TB
+    USER([用户])
 
-    API --> SRC
-    SRC --> UVR[人声分离<br/>5_HP-Karaoke-UVR<br/>.venv-uvr]
-    UVR --> DR[去混响<br/>UVR-DeEcho-DeReverb]
-    UVR --> INS[🎹 伴奏]
-    DR --> MODE{翻唱模式}
+    subgraph DESKTOP["桌面交互层 · XB-SVCB.exe"]
+        direction LR
+        SHELL["pywebview 桌面壳<br/>单实例 / 原生窗口 / 文件选择"]
+        WEB["Vue 3 + Element Plus<br/>创建 / 模型 / 曲库 / 作品 / 编辑器"]
+        BRIDGE["Bridge API<br/>前后端调用 / 任务状态 / 本地能力"]
+        SHELL --> WEB --> BRIDGE
+    end
 
-    MODE -->|单模型| INFER{模型推理<br/>EngineRegistry 路由}
-    MODE -->|多模型| TL[歌词时间轴<br/>逐句指派 / 合唱]
-    TL --> INFER
+    subgraph CORE["Python 业务核心"]
+        direction LR
+        APP["Application Services<br/>转换 / 作品 / 模型 / 系统编排"]
+        ROUTER["EngineRegistry<br/>按模型框架统一路由"]
+        EDITOR["AudioEditorService<br/>时间轴 / 效果链 / 渲染"]
+        CONNECT["Music / ModelHub / Theme Services<br/>在线资源与主题媒体"]
+        APP --> ROUTER
+        APP --> EDITOR
+        APP --> CONNECT
+    end
 
-    INFER --> SVC[So-VITS-SVC 4.1<br/>.venv-svc]
-    INFER --> RVC[RVC<br/>rvc-python · .index<br/>.venv-rvc]
-    SVC --> VOCAL[AI 人声]
-    RVC --> VOCAL
+    subgraph RUNTIME["隔离运行时与原生进程"]
+        direction LR
+        UVR["UVR worker<br/>.venv-uvr"]
+        SVC["So-VITS-SVC worker<br/>.venv-svc"]
+        RVC["RVC worker<br/>.venv-rvc"]
+        SEED["SeedVC worker + inference.py<br/>.venv-seedvc"]
+        FFMPEG["FFmpegEngine<br/>分段 / 混音 / 内置效果 / 导出"]
+        JUCE["C++ JUCE VST3 Host<br/>检查 / GUI / state / 离线渲染"]
+        VST["VST3 Plugin GUI"]
+        JUCE --> VST
+    end
 
-    VOCAL --> MERGE{需要人声合并?}
-    MERGE -->|多模型| VM[同源连唱合并<br/>换人处交叉淡化]
-    MERGE -->|单模型 / 默认| MIX[ffmpeg 混音 / 仅人声输出]
-    VM --> MIX
-    INS --> MIX
-    MIX --> WORKS[🎤 作品库]
+    subgraph STORAGE["本地数据与随包资产"]
+        direction LR
+        DATA[".sb-svcb 用户数据<br/>models / works / downloads / editor_projects<br/>cache / settings / theme/media"]
+        ASSETS["assets/models 离线资产<br/>UVR / RMVPE / CampPlus / Whisper / BigVGAN"]
+    end
 
-    WORKS -->|进入编辑器| ED
-    FILES[本地音频 / 系统剪贴板<br/>WAV / MP3 / FLAC / M4A] -->|导入 / 粘贴| ED
-    ED --> WAVE[多轨时间轴<br/>真实波形 / 剪切 / 淡化 / 声道]
-    WAVE --> ENV[片段自动化<br/>音量包络 / 淡入淡出 / 声道 routing]
-    ENV --> FX[效果链<br/>内置效果器 / VST3 插件]
-    FX --> BUILTIN[FFmpeg 内置效果<br/>混响 / 降噪 / 压缩 / EQ 等]
-    FX --> JUCE[C++ JUCE VST3 Host<br/>插件检查 / 原生 GUI / 离线渲染 / state 回写]
-    JUCE --> VST[VST3 Plugin GUI<br/>插件原生窗口]
-    BUILTIN --> RENDER[FFmpegEngine<br/>混音预览 / 导出渲染]
-    JUCE --> RENDER
-    WAVE -->|局部重推理<br/>原始片段输入 / 剥离插件效果| INFER
-    RENDER --> EXPORT[导出 WAV / MP3 / FLAC]
-    RENDER --> CLIP[复制片段 / 音轨音频<br/>系统剪贴板]
-    CLIP -->|粘贴回音轨| ED
+    subgraph ONLINE["外部服务"]
+        direction LR
+        MUSIC["妖狐音乐 API<br/>网易云 / QQ音乐 / 歌词"]
+        HUB["ModelScope<br/>模型搜索 / 断点下载 / 上传"]
+    end
+
+    USER --> SHELL
+    BRIDGE --> APP
+    APP --> UVR
+    APP --> FFMPEG
+    ROUTER --> SVC
+    ROUTER --> RVC
+    ROUTER --> SEED
+    EDITOR --> FFMPEG
+    EDITOR --> JUCE
+    EDITOR -. 局部重推理 .-> ROUTER
+    APP <--> DATA
+    CONNECT <--> DATA
+    CONNECT <--> MUSIC
+    CONNECT <--> HUB
+    ASSETS -. 本地优先 .-> UVR
+    ASSETS -. 本地优先 .-> SVC
+    ASSETS -. 本地优先 .-> RVC
+    ASSETS -. 本地优先 .-> SEED
 ```
 
+**关键边界**
 
+- **桌面进程只负责编排**：Vue 通过 pywebview Bridge 调用 Python 服务；耗时推理交给 worker 子进程，主界面可以持续显示任务与传输进度。
+- **模型按框架路由**：`EngineRegistry` 统一接收模型与推理参数，再分别调用 So-VITS-SVC、RVC 或 SeedVC；SeedVC 额外传入 checkpoint、YAML 配置和目标音色参考音频。
+- **编辑器与插件隔离**：内置效果、混音和导出走 FFmpeg；VST3 加载与原生窗口由 JUCE Host 承载，局部重推理再回到统一引擎路由。
+- **数据与程序分离**：模型、作品、下载素材、编辑工程、缓存、设置及 `theme/media` 都写入可迁移的 `.sb-svcb`，覆盖升级不会替换用户数据。
+- **离线资产优先**：安装包预置关键底模；worker 优先解析本地文件，仅在缺失时使用镜像或上游服务。
 
-
-| 层     | 技术                                                 | 职责                                                  |
-| ----- | -------------------------------------------------- | --------------------------------------------------- |
-| 前端    | Vue 3 + Vite + Element Plus                        | 歌声转换、资源获取、作品库、音频编辑器与组件化插件弹窗                         |
-| 桌面壳   | pywebview + PyInstaller                            | 把前端包成单实例桌面应用，二次启动时唤起已有窗口                              |
-| 业务    | Python 分层（api / application / infrastructure）      | 编排转换流水线、模型/作品/编辑工程服务、本地剪贴板和插件 Host 桥接                |
-| 推理引擎层 | `EngineRegistry` 统一接口                              | 按模型「框架」路由到对应引擎，为多框架预留扩展点                            |
-| 音频编辑层 | `AudioEditorService` + `FFmpegEngine` + `AudioEffectsProcessor` | 多轨时间轴、真实波形、音频复制/粘贴、音量包络、内置效果器、混音预览与导出 |
-| 插件 Host | C++ / JUCE VST3 Host                               | VST3 插件检查、离线渲染、原生插件 GUI、参数与 state 回写                    |
-| AI 引擎 | So-VITS-SVC 4.1 · RVC（rvc-python）· audio-separator | 子进程运行于隔离环境（`.venv-svc` / `.venv-rvc` / `.venv-uvr`） |
-
+| 层 / 进程    | 主要实现                                         | 职责与边界                                                     |
+| ------------ | ------------------------------------------------ | -------------------------------------------------------------- |
+| 桌面交互层   | pywebview + Vue 3 + Element Plus                 | 单实例窗口、页面交互、文件选择、任务状态和主题展示             |
+| API 与业务层 | `api` + `application` + `domain`           | 转换流程、模型/作品/曲库/编辑工程服务及业务状态编排            |
+| 基础设施层   | `infrastructure` + `EngineRegistry` + FFmpeg | 路径、仓储、下载、音频处理和多框架引擎适配                     |
+| AI 子进程    | SVC / RVC / SeedVC / UVR workers                 | 在四套`.venv-*` 环境中执行重型推理，隔离 Python 与 CUDA 依赖 |
+| 原生插件进程 | C++ / JUCE VST3 Host                             | 插件检查、原生 GUI、参数 state 回写与离线渲染                  |
+| 持久化层     | `.sb-svcb` + `assets/models`                 | 用户数据可迁移保存；发布资产本地优先供各 worker 使用           |
+| 在线集成     | 妖狐音乐 API + ModelScope                        | 曲库/歌词获取、候选地址校验、模型搜索、上传和断点下载          |
 
 ---
 
@@ -180,8 +149,8 @@ flowchart LR
 
 > 推荐直接用图形安装器，无需任何命令行操作。
 
-1. 在 [Releases](https://github.com/SDIJF1521/xb-svcb/releases/latest) 下载 **`XB-SVCB-Setup.exe`** 并双击运行。
-2. 在「选择安装位置」页**自定义安装路径**（默认 `%LOCALAPPDATA%\Programs\XB-SVCB`，无需管理员权限）。应用 exe 与全部依赖（`engines/`、`.venv-svc`、`.venv-uvr`、`models/`）都装进**这个目录**。
+1. 在 [Releases](https://github.com/SDIJF1521/xb-svcb/releases/latest) 下载 **`XB-SVCB-Setup.exe`** 和同版本的全部 **`XB-SVCB-Setup-*.bin`**，放在同一目录后双击 EXE。
+2. 在「选择安装位置」页**自定义安装路径**（默认 `%LOCALAPPDATA%\Programs\XB-SVCB`，无需管理员权限）。应用 exe 与全部依赖（`engines/`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-uvr`、`models/`）都装进**这个目录**。
 3. 在「选择用户数据存储位置」页选择 `.sb-svcb` 数据目录（默认 `{安装目录}\.sb-svcb`）。模型、作品、下载素材、编辑工程与缓存都会保存在这里，C 盘空间不足时建议选 D/E 盘。
 4. 勾选「安装后立即搭建运行环境」，联网创建 AI 子环境（由 `setup_env.bat` 调 `install.py`，无 PowerShell）。
 5. 通过桌面 / 开始菜单的 **XB-SVCB** 快捷方式启动。后续可在首页「数据存储位置」查看占用/剩余空间，并迁移到其它磁盘。
@@ -190,7 +159,7 @@ flowchart LR
 
 ### 💾 数据存储与迁移
 
-- 默认用户数据目录为 `.sb-svcb`，用于保存模型库、作品、在线下载素材、音频编辑工程、波形/渲染缓存和配置文件。
+- 默认用户数据目录为 `.sb-svcb`，用于保存模型库、作品、在线下载素材、音频编辑工程、波形/渲染缓存、配置文件和 `theme/media` 自定义背景媒体。
 - 安装时可在「选择用户数据存储位置」页把 `.sb-svcb` 放到空间充足的磁盘，避免占满 C 盘。
 - 软件首页提供「数据存储位置」卡片，可查看当前目录、已用空间和所在磁盘可用空间。
 - 点击「选择并迁移」会把现有数据复制到新目录；迁移前会检查目标目录可写、目标磁盘剩余空间是否足够、是否存在正在运行/排队的推理任务。
@@ -199,31 +168,29 @@ flowchart LR
 
 ### 📋 环境要求
 
-
-| 软件                     | 用途                | 说明                                                                                                               |
-| ---------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **Python 3.10.5+**     | 运行安装器与主程序         | 安装时勾选 *Add to PATH*                                                                                              |
-| **uv**                 | 虚拟环境管理工具         | 安装器使用 uv 管理虚拟环境（缺失会自动安装）                                                                                  |
-| **ffmpeg**             | 音频转码 / 混音         | 需在 PATH 中可用                                                                                                      |
-| **Git**（可选）          | 获取 so-vits-svc 仓库 | 没有也行，安装器会自动下载 ZIP                                                                                                |
-| **CUDA**（可选）    | GPU 加速            | 40 系及以下兼容 NVIDIA 自动装 cu121 版 PyTorch；**50 系（Blackwell）自动改装 cu128 + torch 2.7**；CPU 或不兼容显卡会跳过 CUDA 并使用 CPU torch                                                                          |
-| **Node.js LTS**（含 npm） | 构建前端              | 仅「从源码安装」需要                                                                                                       |
-| **C++ 生成工具**（可选）   | 编译依赖 / JUCE 插件 Host | 部分 Python 包需要 C++14 编译器；构建音频编辑器 VST3 插件 Host 需要 C++17 + CMake + JUCE；安装时勾选 **Desktop development with C++** |
-
+| 软件                            | 用途                      | 说明                                                                                                                                                 |
+| ------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Python 3.10.5+**        | 运行安装器与主程序        | 安装时勾选*Add to PATH*                                                                                                                            |
+| **uv**                    | 虚拟环境管理工具          | 安装器使用 uv 管理虚拟环境（缺失会自动安装）                                                                                                         |
+| **ffmpeg**                | 音频转码 / 混音           | 需在 PATH 中可用                                                                                                                                     |
+| **Git**（可选）           | 获取 so-vits-svc 仓库     | 没有也行，安装器会自动下载 ZIP                                                                                                                       |
+| **CUDA**（可选）          | GPU 加速                  | 40 系及以下兼容 NVIDIA 自动装 cu121 版 PyTorch；**50 系（Blackwell）自动改装 cu128 + torch 2.7**；CPU 或不兼容显卡会跳过 CUDA 并使用 CPU torch |
+| **Node.js LTS**（含 npm） | 构建前端                  | 仅「从源码安装」需要                                                                                                                                 |
+| **C++ 生成工具**（可选）  | 编译依赖 / JUCE 插件 Host | 部分 Python 包需要 C++14 编译器；构建音频编辑器 VST3 插件 Host 需要 C++17 + CMake + JUCE；安装时勾选**Desktop development with C++**           |
 
 #### 🔗 安装链接
 
-| 软件 | 下载链接 |
-|------|----------|
-| **Python 3.10.5** | [https://www.python.org/downloads/release/python-3105/](https://www.python.org/downloads/release/python-3105/) |
-| **uv** | [https://github.com/astral-sh/uv/releases](https://github.com/astral-sh/uv/releases) |
-| **Git** | [https://git-scm.com/downloads](https://git-scm.com/downloads) |
-| **CUDA Toolkit 12.1 / 12.8** | [https://developer.nvidia.com/cuda-toolkit-archive](https://developer.nvidia.com/cuda-toolkit-archive) |
-| **ffmpeg** | [https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip](https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip) |
-| **Node.js LTS** | [https://nodejs.org/](https://nodejs.org/) |
-| **C++ Build Tools** | [https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/) |
-| **CMake** | [https://cmake.org/download/](https://cmake.org/download/) |
-| **JUCE** | [https://github.com/juce-framework/JUCE](https://github.com/juce-framework/JUCE) |
+| 软件                               | 下载链接                                                                                                                                                                                                            |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Python 3.10.5**            | [https://www.python.org/downloads/release/python-3105/](https://www.python.org/downloads/release/python-3105/)                                                                                                       |
+| **uv**                       | [https://github.com/astral-sh/uv/releases](https://github.com/astral-sh/uv/releases)                                                                                                                                 |
+| **Git**                      | [https://git-scm.com/downloads](https://git-scm.com/downloads)                                                                                                                                                       |
+| **CUDA Toolkit 12.1 / 12.8** | [https://developer.nvidia.com/cuda-toolkit-archive](https://developer.nvidia.com/cuda-toolkit-archive)                                                                                                               |
+| **ffmpeg**                   | [https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip](https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip) |
+| **Node.js LTS**              | [https://nodejs.org/](https://nodejs.org/)                                                                                                                                                                           |
+| **C++ Build Tools**          | [https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/)                                                                             |
+| **CMake**                    | [https://cmake.org/download/](https://cmake.org/download/)                                                                                                                                                           |
+| **JUCE**                     | [https://github.com/juce-framework/JUCE](https://github.com/juce-framework/JUCE)                                                                                                                                     |
 
 > 💡 **关于 CUDA**：安装器会先复核实际显卡，40 系及以下兼容 NVIDIA 使用 **cu121**，50 系 Blackwell 使用 **cu128**；CPU 或不兼容显卡会跳过 CUDA 并安装 CPU 版 torch。PyTorch wheel 已内置对应 CUDA 运行库，通常只需匹配的新 NVIDIA 驱动，完整 CUDA Toolkit 仅用于本地编译/工具链。
 >
@@ -249,10 +216,10 @@ pip install uv
 
 ```bat
 rem 50 系显卡（cu128）
-python install\install.py --root "D:\XB-SVCB" --skip-app --skip-web --cu128 --only uvr svc rvc hub
+python install\install.py --root "D:\XB-SVCB" --skip-app --skip-web --cu128 --only uvr svc rvc seedvc hub models
 
 rem 40 系及以下 NVIDIA 显卡（cu121）
-python install\install.py --root "D:\XB-SVCB" --skip-app --skip-web --no-cu128 --only uvr svc rvc hub
+python install\install.py --root "D:\XB-SVCB" --skip-app --skip-web --no-cu128 --only uvr svc rvc seedvc hub models
 ```
 
 > 如果安装路径不是 `D:\XB-SVCB`，请把命令里的 `D:\XB-SVCB` 改成实际安装目录。等待命令运行完毕后，软件运行环境即安装完成。
@@ -271,25 +238,25 @@ setup_env.bat
 
 将自动完成（全部落在项目目录内，便于卸载）：
 
-
-| 步骤           | 产物                                        | 说明                                                               |
-| ------------ | ----------------------------------------- | ---------------------------------------------------------------- |
-| 1 (`app`)    | `app/.venv`                               | 主程序环境（pywebview）                                                 |
-| 2 (`web`)    | `web/dist`                                | 前端构建产物                                                           |
-| 3 (`uvr`)    | `.venv-uvr`                               | 人声分离环境（audio-separator）                                          |
-| 4 (`svc`)    | `engines/so-vits-svc` + `.venv-svc`       | so-vits-svc 4.1 仓库与推理环境（Python 3.9 / cu121；**50 系：Python 3.10 / cu128 + torch 2.7**）                      |
-| 5 (`rvc`)    | `.venv-rvc`                               | RVC 推理环境（`rvc-python`，Python 3.9 / cu121；**50 系：Python 3.10 / cu128 + torch 2.7**；安装时预置 hubert/rmvpe，缺失才镜像下载） |
-| 6 (`hub`)    | `.venv-hub`                               | 模型站上传组件（`modelscope` SDK；仅上传需要）                                  |
-| 7 (`models`) | `models/`、`engines/so-vits-svc/pretrain/` | UVR 模型与底模                                                        |
-
+| 步骤           | 产物                                                                      | 说明                                                                                                                                          |
+| -------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 (`app`)    | `app/.venv`                                                             | 主程序环境（pywebview）                                                                                                                       |
+| 2 (`web`)    | `web/dist`                                                              | 前端构建产物                                                                                                                                  |
+| 3 (`uvr`)    | `.venv-uvr`                                                             | 人声分离环境（audio-separator）                                                                                                               |
+| 4 (`svc`)    | `engines/so-vits-svc` + `.venv-svc`                                   | so-vits-svc 4.1 仓库与推理环境（Python 3.9 / cu121；**50 系：Python 3.10 / cu128 + torch 2.7**）                                        |
+| 5 (`rvc`)    | `.venv-rvc`                                                             | RVC 推理环境（`rvc-python`，Python 3.9 / cu121；**50 系：Python 3.10 / cu128 + torch 2.7**；安装时预置 hubert/rmvpe，缺失才镜像下载） |
+| 6 (`seedvc`) | `engines/seed-vc` + `.venv-seedvc`                                    | SeedVC 推理环境（官方 Seed-VC；模型导入 checkpoint + config，推理时选择目标音色参考音频）                                                     |
+| 7 (`hub`)    | `.venv-hub`                                                             | 模型站上传组件（`modelscope` SDK；仅上传需要）                                                                                              |
+| 8 (`models`) | `models/`、`engines/so-vits-svc/pretrain/`、`assets/models/seedvc/` | UVR、SVC/RVC 与 SeedVC 离线底模                                                                                                               |
 
 更细的控制可直接调用 `install.py`：
 
 ```bat
 python install\install.py --cpu          rem CPU 版
 python install\install.py --gpu          rem 请求 CUDA 版（会复核兼容 NVIDIA 显卡）
-python install\install.py --only svc     rem 只重跑某一步：app / web / uvr / svc / rvc / hub / models
+python install\install.py --only svc     rem 只重跑某一步：app / web / uvr / svc / rvc / seedvc / hub / models
 python install\install.py --only rvc     rem 只搭建 RVC 推理环境 .venv-rvc（rvc-python）
+python install\install.py --only seedvc  rem 只搭建 SeedVC 推理环境 .venv-seedvc
 python install\install.py --skip-svc     rem 跳过 so-vits-svc（仅装壳 + 分离 + 前端）
 ```
 
@@ -330,8 +297,10 @@ run.bat
 1. **模型管理** —— 导入训练好的 so-vits-svc 角色模型（主模型 `G_*.pth` + `config.json`，可选浅扩散 `model_*.pt` + `diffusion.yaml`）；也可在「模型站」搜索并下载社区模型，或把自己的模型分享上去（详见下文）。
 2. **资源获取（可选）** —— 在「资源获取」页填好妖狐 API Key（QQ 想要高音质再填会员 Cookie），切换曲库（网易云 / QQ音乐）搜索、试听并下载歌曲素材到本地。
 3. **新建翻唱** —— 上传或从已下载素材选歌，选择翻唱模式：
-  - **单模型** —— 选一个角色模型，设置变调 / F0 预测器 / 推理设备（GPU·CPU）等，整首歌统一演唱。
-  - **多模型混合** —— 勾选多个模型并分别设参；按歌名获取歌词、校验时长对齐（可整体偏移），再逐句指派模型。
+
+- **单模型** —— 选一个角色模型，设置变调 / F0 预测器 / 推理设备（GPU·CPU）等，整首歌统一演唱。
+- **多模型混合** —— 勾选多个模型并分别设参；按歌名获取歌词、校验时长对齐（可整体偏移），再逐句指派模型。
+
 4. **选择高级工作流（可选）** —— 默认走「自动混音合成」；多模型模式可选「自动人声合并」或「手动人声合并」；需要后期微调时选「自动 + 编辑器二次调整」，只想从素材开始剪辑时选「全手动编辑」。
 5. **自动处理** —— 单模型：分离 → 去混响 →（so-vits-svc 才需）F0 → 模型推理 → 混音；多模型：分离 → 歌词分割 → 整轨逐模型推理 → 人声合并（同源连唱合并 + 换人处交叉淡化）→ 混音。
 6. **作品库 / 音频编辑器** —— 试听 / 导出成品，单独试听**伴奏**与**干声**；失败任务一键打开日志；删除作品会真实清理其本地生成文件。需要微调时可从作品创建编辑工程，在音频编辑器中剪切、淡化、调声道、重推理片段并导出。
@@ -370,15 +339,13 @@ flowchart LR
     A[🎵 源歌曲] --> B[人声分离 + 去混响]
     B --> I[🎹 伴奏]
     L[按歌名获取歌词<br/>时长对齐校验] --> N[逐句指派模型]
-    B --> P[各模型整轨推理<br/>So-VITS-SVC / RVC 按框架路由]
+    B --> P[各模型整轨推理<br/>So-VITS-SVC / RVC / SeedVC 按框架路由]
     N --> Q[同源连唱合并<br/>换人处交叉淡化]
     P --> Q
     I --> F[ffmpeg 混音]
     Q --> F
     F --> G[🎤 多人合唱成品]
 ```
-
-
 
 **前台：选模型 → 取歌词 → 对齐 → 指派**
 
@@ -409,7 +376,7 @@ flowchart LR
 
 - **自有令牌**：在「ModelScope 设置」填入你自己的访问令牌（[个人中心 → 访问令牌](https://www.modelscope.cn/my/myaccesstoken)），仅保存在本地。上传只会发布到**你自己的命名空间**。
 - **防污染**：上传的仓库统一带 `xb-svcb-` 前缀，并写入带签名标记的清单文件 `xb-svcb-model.json`（含 `magic` / 架构 / 各文件角色）。搜索/下载时只保留「带前缀且清单校验通过」的条目，避免被无关模型干扰。
-- **架构标签**：上传时标注模型框架（**So-VITS-SVC** / RVC 等），便于他人按类型筛选；搜索结果可按架构过滤，为后续多框架兼容预留。
+- **架构标签**：上传时标注模型框架（**So-VITS-SVC** / RVC / SeedVC 等），便于他人按类型筛选；搜索结果可按架构过滤，为后续多框架兼容预留。
 
 **搜索 / 下载**
 
@@ -431,24 +398,29 @@ flowchart LR
 
 ```
 翻唱工具/
-├─ app/                  # 主程序（pywebview + 业务分层）
-│  ├─ api/               #   暴露给前端的桥接层
-│  ├─ application/       #   编排：转换流水线、作品/模型服务
-│  ├─ infrastructure/    #   ffmpeg / uvr / svc / f0 worker 等
-│  ├─ config.py          #   全部路径配置（项目相对 + 环境变量覆盖）
+├─ app/                         # 主程序（pywebview + Python 业务分层）
+│  ├─ api/                      #   暴露给 Vue 的 Bridge API
+│  ├─ application/              #   转换、模型、曲库、作品、编辑器服务
+│  ├─ domain/                   #   实体、枚举与核心业务模型
+│  ├─ infrastructure/           #   ffmpeg、仓储、引擎适配与全部 worker
+│  ├─ config.py                 #   路径配置（项目相对 + 环境变量覆盖）
 │  └─ main.py
-├─ web/                  # 前端（Vue 3 + Vite + Element Plus）
+├─ web/                         # 前端（Vue 3 + Vite + Element Plus）
+├─ assets/models/               # 随安装包分发的 UVR / SVC / RVC / SeedVC 底模
+├─ engines/                     # 外部引擎与原生 Host 的运行目录
+│  ├─ so-vits-svc/              #   So-VITS-SVC 4.1 上游仓库
+│  ├─ seed-vc/                  #   SeedVC 上游仓库与 inference.py
+│  └─ juce-vst3-host/           #   构建后的原生 VST3 Host
 ├─ installer/
-│  ├─ xb-svcb-app.spec   #   PyInstaller 规格（打 XB-SVCB.exe）
-│  ├─ xb-svcb.iss        #   Inno Setup 脚本（打 setup.exe）
-│  └─ build.ps1          #   一键构建（前端 + PyInstaller + ISCC，仅开发者用）
+│  ├─ xb-svcb-app.spec          #   PyInstaller 桌面应用规格
+│  ├─ xb-svcb.iss               #   Inno Setup 与分卷规则
+│  └─ build.ps1                 #   构建、完整性校验与发布打包
 ├─ native/
-│  └─ juce-vst3-host/    #   C++ / JUCE VST3 插件 Host（编辑器外部效果器）
-├─ install/install.py    # 在用户机搭建 AI 子环境 / 下载模型
-├─ setup_env.bat         # 搭建/修复运行环境入口（纯 batch 调 Python，无 PS）
-├─ run.bat               # 源码运行启动脚本（安装版用 XB-SVCB.exe）
-├─ engines/              # 安装器克隆的 so-vits-svc（git 忽略）
-└─ models/               # 安装器下载的 UVR 模型（git 忽略）
+│  └─ juce-vst3-host/           #   C++ / JUCE VST3 Host 源码
+├─ install/install.py           # 在用户机搭建隔离环境、部署底模
+├─ setup_env.bat                # 搭建/修复运行环境入口（纯 batch）
+├─ models/                      # 安装后使用的 UVR 模型目录
+└─ run.bat                      # 源码运行入口（安装版使用 XB-SVCB.exe）
 ```
 
 ---
@@ -457,17 +429,20 @@ flowchart LR
 
 无需改代码，用环境变量即可指向自有的引擎 / 模型（优先级高于项目内默认）：
 
-
-| 变量                      | 含义                                     |
-| ----------------------- | -------------------------------------- |
-| `XB_SOVITS_REPO`        | so-vits-svc 仓库根目录                      |
-| `XB_SVC_PYTHON`         | 运行 SVC 推理的 Python 解释器                  |
-| `XB_UVR_PYTHON`         | 运行 audio-separator 的 Python 解释器        |
-| `XB_UVR_MODEL_DIR`      | UVR 模型目录                               |
-| `XB_UVR_SEP_MODEL`      | 分离模型文件名（默认 `5_HP-Karaoke-UVR.pth`）     |
-| `XB_UVR_DEREVERB_MODEL` | 去混响模型文件名（默认 `UVR-DeEcho-DeReverb.pth`） |
-| `XB_JUCE_VST3_HOST`     | 音频编辑器 JUCE VST3 Host 可执行文件路径（默认 `engines/juce-vst3-host/xb-juce-vst3-host.exe`） |
-
+| 变量                      | 含义                                                                                                        |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `XB_DATA_DIR`           | `.sb-svcb` 用户数据目录；兼容旧变量 `XB_SVCB_DATA_DIR` / `XB_SB_SVCB_DATA_DIR` / `XB_XVCB_DATA_DIR` |
+| `XB_SOVITS_REPO`        | so-vits-svc 仓库根目录                                                                                      |
+| `XB_SVC_PYTHON`         | 运行 SVC 推理的 Python 解释器                                                                               |
+| `XB_RVC_PYTHON`         | 运行 RVC 推理的 Python 解释器                                                                               |
+| `XB_SEEDVC_REPO`        | Seed-VC 仓库根目录，目录内需包含`inference.py`                                                            |
+| `XB_SEEDVC_PYTHON`      | 运行 SeedVC 推理的 Python 解释器                                                                            |
+| `XB_UVR_PYTHON`         | 运行 audio-separator 的 Python 解释器                                                                       |
+| `XB_UVR_MODEL_DIR`      | UVR 模型目录                                                                                                |
+| `XB_UVR_SEP_MODEL`      | 分离模型文件名（默认`5_HP-Karaoke-UVR.pth`）                                                              |
+| `XB_UVR_DEREVERB_MODEL` | 去混响模型文件名（默认`UVR-DeEcho-DeReverb.pth`）                                                         |
+| `XB_HUB_PYTHON`         | 模型站上传 worker 使用的 Python 解释器                                                                      |
+| `XB_JUCE_VST3_HOST`     | JUCE VST3 Host 路径（默认`engines/juce-vst3-host/xb-juce-vst3-host.exe`）                                 |
 
 ---
 
@@ -475,17 +450,18 @@ flowchart LR
 
 模型获取采用 **「自带优先」** 策略：若 `assets/models/` 内已随安装包附带对应文件，安装时**直接本地复制**（瞬间完成、不联网）；只有缺失项才回退到镜像下载。
 
+| 模型                                                   | 用途                                    | 自带去向 / 下载来源                                                                                                                                          |
+| ------------------------------------------------------ | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `checkpoint_best_legacy_500.pt`                      | ContentVec / RVC hubert 语音编码器      | `assets/models/pretrain/` → `engines/so-vits-svc/pretrain/`，并硬链接或复制为 `.venv-rvc/.../base_model/hubert_base.pt`；缺失则使用 Hugging Face 镜像 |
+| `nsf_hifigan/`                                       | NSF-HiFiGAN 声码器 / 浅扩散             | 部署到 so-vits-svc 预训练模型目录；缺失则使用 openvpi/vocoders Releases                                                                                      |
+| `rmvpe.pt`                                           | SVC / RVC / SeedVC 共用的 RMVPE F0 模型 | 部署到 so-vits-svc、RVC base_model 与 SeedVC checkpoints；缺失则使用镜像下载                                                                                 |
+| `fcpe.pt`（可选）                                    | FCPE F0 预测器                          | 仅在自带目录存在时复制                                                                                                                                       |
+| `seedvc/campplus_cn_common.bin`                      | SeedVC 目标音色编码器                   | worker 优先读取随包文件，并部署到`engines/seed-vc/checkpoints/`                                                                                            |
+| `seedvc/whisper-small/`                              | SeedVC 语音内容编码器                   | worker 通过本地临时配置直接读取完整 Whisper Small 快照                                                                                                       |
+| `seedvc/bigvgan_v2_44khz_128band_512x/`              | SeedVC 44.1kHz 声码器                   | worker 通过本地临时配置直接读取 BigVGAN 快照                                                                                                                 |
+| `5_HP-Karaoke-UVR.pth` / `UVR-DeEcho-DeReverb.pth` | 人声分离 / 去混响                       | `assets/models/uvr/` → `models/uvr/`；缺失则由 audio-separator 下载                                                                                     |
 
-| 模型                                                 | 用途                               | 自带去向 / 下载来源                                                                 |
-| -------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------------- |
-| `checkpoint_best_legacy_500.pt`                    | ContentVec / RVC hubert 语音编码器       | `assets/models/pretrain/` → `engines/so-vits-svc/pretrain/`，并硬链接/复制为 `.venv-rvc/.../base_model/hubert_base.pt`；缺失则 HuggingFace |
-| `nsf_hifigan/`                                     | NSF-HiFiGAN 声码器 / 浅扩散            | 同上；缺失则 openvpi/vocoders Releases                                            |
-| `rmvpe.pt`                                         | RMVPE F0 预测器                     | 同上，并硬链接/复制到 `.venv-rvc/.../base_model/rmvpe.pt`；缺失则 yxlllc/RMVPE Releases / RVC 镜像 |
-| `fcpe.pt`（可选）                                      | FCPE F0 预测器                      | 仅在自带目录存在时复制                                                                 |
-| `5_HP-Karaoke-UVR.pth` / `UVR-DeEcho-DeReverb.pth` | 人声分离 / 去混响                       | `assets/models/uvr/` → `models/uvr/`；缺失则 audio-separator 下载                 |
-
-
-> 自带模型为二进制大文件（约 2 GB）。编译安装包时会被打进 `XB-SVCB-Setup.exe`，因体积通过 **GitHub Releases** 单独分发（详见 `assets/models/README.md`）。联网回退时底模走 **hf-mirror 镜像**、GitHub 资源带 **ghproxy 回退**并逐源重试。
+> 自带模型为 Git LFS 管理的二进制大文件。构建脚本会校验关键权重大小，拒绝把 LFS 指针或残缺快照打进发布包；安装数据会拆成小于 2GB 的 `XB-SVCB-Setup-*.bin` 分卷，与 `XB-SVCB-Setup.exe` 一起通过 **GitHub Releases** 分发（详见 `assets/models/README.md`）。联网回退时底模走 **hf-mirror 镜像**，GitHub 资源带 **ghproxy 回退**并逐源重试。
 
 ---
 
@@ -564,26 +540,27 @@ CPU 模式下 svc 模型较慢。装有兼容 NVIDIA 显卡时用 `python instal
 
 ### 🎯 1.0 版本目标（核心能力）
 
-- [x] So-VITS-SVC 推理
-- [x] 模型站
-- [x] 模型上传 / 下载
-- [x] 多模型混唱
-- [x] RVC 支持
-- [x] 可视化时间轴
-- [x] 音频编辑器
-- [x] 多框架统一管理
-- [x] 编辑工程系统
+- [X] So-VITS-SVC 推理
+- [X] 模型站
+- [X] 模型上传 / 下载
+- [X] 多模型混唱
+- [X] RVC 支持
+- [X] SeedVC 支持
+- [X] 可视化时间轴
+- [X] 音频编辑器
+- [X] 多框架统一管理
+- [X] 编辑工程系统
 
 ### ⭐ 当前最优先实现顺序
 
-考虑个人开发者精力，已完成 **RVC + 时间轴混唱 + 基础音频编辑** 三件套，下一步优先补自动化与工程化能力：
+考虑个人开发者精力，已完成 **RVC + SeedVC + 时间轴混唱 + 基础音频编辑**，下一步优先补自动化与工程化能力：
 
 1. 自动切句增强（静音检测切句已完成）
 2. 预设参数保存
 3. 模型元数据标准化与自动检测
 4. 工程导入导出
-5. Seed-VC 支持
-6. 更多框架接入与自动识别
+5. 更多框架接入与自动识别
+6. 模型兼容性与导入校验增强
 
 ### 📌 分阶段清单
 
@@ -592,16 +569,17 @@ CPU 模式下 svc 模型较慢。装有兼容 NVIDIA 显卡时用 `python instal
 
 <br/>
 
-- [x] RVC 支持
-- [x] RVC Index 自动识别
-- [x] 后端统一接口抽象
-- [x] 模型元数据标准化
-- [x] 模型自动检测与修复
-- [x] 推理任务队列
-- [x] 批量推理
-- [x] 推理历史记录
-- [x] 预设参数保存
-- [x] 模型收藏功能
+- [X] RVC 支持
+- [X] RVC Index 自动识别
+- [X] SeedVC 支持
+- [X] 后端统一接口抽象
+- [X] 模型元数据标准化
+- [X] 模型自动检测与修复
+- [X] 推理任务队列
+- [X] 批量推理
+- [X] 推理历史记录
+- [X] 预设参数保存
+- [X] 模型收藏功能
 
 </details>
 
@@ -610,22 +588,22 @@ CPU 模式下 svc 模型较慢。装有兼容 NVIDIA 显卡时用 `python instal
 
 <br/>
 
-- [x] 可视化时间轴
-- [x] 时间轴缩放
-- [x] 时间轴拖拽编辑（边界拖动 + 吸附歌词时间）
-- [x] 音频波形显示（音频编辑器真实波形）
+- [X] 可视化时间轴
+- [X] 时间轴缩放
+- [X] 时间轴拖拽编辑（边界拖动 + 吸附歌词时间）
+- [X] 音频波形显示（音频编辑器真实波形）
 - [ ] 自动切句
-- [x] 静音检测切句
-- [x] 片段模型分配（片段与歌词解耦，独立指派）
-- [x] 批量模型分配（一键全部指派）
-- [x] 句内合唱（一句多模型同唱）
-- [x] 片段拆分 / 合并 / 删除
+- [X] 静音检测切句
+- [X] 片段模型分配（片段与歌词解耦，独立指派）
+- [X] 批量模型分配（一键全部指派）
+- [X] 句内合唱（一句多模型同唱）
+- [X] 片段拆分 / 合并 / 删除
 - [ ] 多角色管理
 - [ ] 时间轴模板
-- [x] 歌词导入（LRC）
+- [X] 歌词导入（LRC）
 - [ ] 歌词导入（TXT）
-- [x] 歌词辅助显示
-- [x] 歌词时间轴编辑（拖动片段边界即调整）
+- [X] 歌词辅助显示
+- [X] 歌词时间轴编辑（拖动片段边界即调整）
 - [ ] 自动歌词识别
 - [ ] 自动时间轴生成
 
@@ -636,23 +614,23 @@ CPU 模式下 svc 模型较慢。装有兼容 NVIDIA 显卡时用 `python instal
 
 <br/>
 
-- [x] 音频裁剪
-- [x] 音频切片
-- [x] 音频拼接
-- [x] 淡入淡出
-- [x] 音量调节
-- [x] 片段/音轨音频复制到系统剪贴板
-- [x] 从剪贴板粘贴音频到音轨
-- [x] 音量包络
-- [x] 内置效果器与 JUCE VST3 插件 Host
-- [x] 多轨道编辑（人声 / 伴奏 / 和声轨道）
-- [x] 真实波形显示
-- [x] 片段声道分配（双声道 / L / R）
-- [x] 局部重推理替换片段
-- [x] 工程选择 / 删除 / 放弃工程
-- [x] 实时试听
-- [x] 音频格式转换
-- [x] 导出 WAV / FLAC / MP3
+- [X] 音频裁剪
+- [X] 音频切片
+- [X] 音频拼接
+- [X] 淡入淡出
+- [X] 音量调节
+- [X] 片段/音轨音频复制到系统剪贴板
+- [X] 从剪贴板粘贴音频到音轨
+- [X] 音量包络
+- [X] 内置效果器与 JUCE VST3 插件 Host
+- [X] 多轨道编辑（人声 / 伴奏 / 和声轨道）
+- [X] 真实波形显示
+- [X] 片段声道分配（双声道 / L / R）
+- [X] 局部重推理替换片段
+- [X] 工程选择 / 删除 / 放弃工程
+- [X] 实时试听
+- [X] 音频格式转换
+- [X] 导出 WAV / FLAC / MP3
 
 </details>
 
@@ -664,8 +642,8 @@ CPU 模式下 svc 模型较慢。装有兼容 NVIDIA 显卡时用 `python instal
 - [ ] 模型评分
 - [ ] 模型评论
 - [ ] 下载排行
-- [x] 模型标签系统（架构标签）
-- [x] 模型搜索优化（模糊搜索 + 分页加载）
+- [X] 模型标签系统（架构标签）
+- [X] 模型搜索优化（模糊搜索 + 分页加载）
 - [ ] 模型推荐
 - [ ] 模型版本管理
 - [ ] 模型更新提醒
@@ -681,13 +659,13 @@ CPU 模式下 svc 模型较慢。装有兼容 NVIDIA 显卡时用 `python instal
 
 <br/>
 
-- [ ] Seed-VC
+- [X] Seed-VC
 - [ ] Diffusion-SVC
 - [ ] OpenVoice
 - [ ] GPT-SoVITS 推理
 - [ ] CosyVoice
 - [ ] Fish Speech
-- [x] 多框架统一模型管理
+- [X] 多框架统一模型管理
 - [ ] 框架自动识别
 - [ ] 跨框架混合工程
 - [ ] 跨框架时间轴编排
@@ -699,10 +677,10 @@ CPU 模式下 svc 模型较慢。装有兼容 NVIDIA 显卡时用 `python instal
 
 <br/>
 
-- [x] 编辑工程系统
+- [X] 编辑工程系统
 - [ ] 自动保存
 - [ ] 工程导入导出
-- [x] 多工程管理（音频编辑工程列表）
+- [X] 多工程管理（音频编辑工程列表）
 - [ ] 作品库（封面管理 / 作品分类）
 - [ ] 一键导出视频
 - [ ] 字幕生成
@@ -726,41 +704,58 @@ CPU 模式下 svc 模型较慢。装有兼容 NVIDIA 显卡时用 `python instal
 
 </details>
 
-
-
 ---
 
-## 📦 构建 setup.exe（开发者）
+## 📦 构建发布安装包（开发者）
 
-最终用户用的图形安装器由 Inno Setup 生成：
+最终用户使用的图形安装器由 PyInstaller 与 Inno Setup 共同生成。发布前需准备 Node.js、应用虚拟环境、CMake、C++ Build Tools、JUCE 和 Inno Setup 6：
 
 1. 安装 [Inno Setup 6](https://jrsoftware.org/isdl.php)（提供 `ISCC.exe`）。
 2. 安装 CMake、C++ Build Tools 和 JUCE，并设置 `XB_JUCE_DIR` 指向 JUCE 源码目录。
-3. 在项目根目录运行构建脚本（先构建前端和 JUCE Host，再编译安装器）：
+3. 可先运行轻量校验，检查版本、worker、SeedVC 离线权重和 Inno Setup/Pascal 脚本，不压缩数 GB 模型：
+
+```powershell
+./installer/build.ps1 -ValidateOnly
+```
+
+4. 在项目根目录运行完整构建：
 
 ```powershell
 ./installer/build.ps1
 ```
 
-4. 产物输出在 `dist/XB-SVCB-Setup.exe`，上传到 GitHub Releases 分发。
+5. 将 `dist/XB-SVCB-Setup.exe` 与全部 `dist/XB-SVCB-Setup-*.bin` 一起上传到 GitHub Releases；用户下载后也必须把这些文件放在同一目录。
 
+```mermaid
+flowchart LR
+    CHECK["发布前校验<br/>版本一致 / worker / SeedVC 权重"] --> WEB["Vite 构建<br/>web/dist"]
+    WEB --> APP["PyInstaller<br/>dist/XB-SVCB"]
+    APP --> HOST["CMake + JUCE<br/>VST3 Host"]
+    HOST --> STAGE["运行目录完整性校验<br/>前端 / workers / Host / 安装脚本"]
+    ASSETS["assets/models<br/>UVR / SVC / RVC / SeedVC"] --> ISCC["Inno Setup 6<br/>DiskSpanning"]
+    STAGE --> ISCC
+    ISCC --> EXE["XB-SVCB-Setup.exe<br/>安装引导程序"]
+    ISCC --> BIN["XB-SVCB-Setup-*.bin<br/>每卷小于 2GB"]
+```
 
-| 文件                      | 作用                                    |
-| ----------------------- | ------------------------------------- |
-| `installer/xb-svcb.iss` | Inno Setup 脚本（打包内容、快捷方式、安装后搭建环境、卸载清理） |
-| `installer/build.ps1`   | 构建前端 + PyInstaller + JUCE VST3 Host + 调 ISCC 编译为 setup.exe（仅开发者用） |
-| `install/install.py`    | 安装器在用户机搭建环境/下载模型的核心逻辑                 |
-| `setup_env.bat`         | 用户机搭建/修复环境入口（纯 batch，无 PowerShell）    |
-| `run.bat`               | 启动器（快捷方式指向）                           |
-
+| 文件                           | 作用                                                                  |
+| ------------------------------ | --------------------------------------------------------------------- |
+| `installer/xb-svcb.iss`      | Inno Setup 脚本：分卷、快捷方式、安装后环境搭建、完整性检查与卸载清理 |
+| `installer/build.ps1`        | 构建前端、PyInstaller 应用和 JUCE Host，校验发布目录并调用 ISCC       |
+| `installer/xb-svcb-app.spec` | 定义 PyInstaller 运行目录、内置前端及所有 AI worker                   |
+| `install/install.py`         | 在用户机创建 SVC / RVC / SeedVC / UVR 隔离环境并部署底模              |
+| `setup_env.bat`              | 用户机搭建或修复运行环境入口（纯 batch，无 PowerShell）               |
+| `install_prereqs.bat`        | 图形安装器调用的前置依赖检查与安装入口                                |
 
 **设计说明**
 
-- 安装器**打包预构建的 `web/dist`**，最终用户无需安装 Node.js。
-- 安装器会随应用携带预构建的 `engines/juce-vst3-host/xb-juce-vst3-host.exe`，用于音频编辑器的 VST3 效果器插件加载、GUI 与离线渲染；开发者临时跳过可用 `./installer/build.ps1 -SkipJuceHostBuild`。
-- 安装器**自带 `assets/models/` 内的底模与 UVR 模型**，「搭建运行环境」时直接本地复制，免去缓慢联网下载；安装包因此较大（约 2 GB），换来近乎瞬时的模型部署。Python 环境与 so-vits-svc 仓库仍在该阶段联网获取。
-- 安装包超过 GitHub LFS / Release 之外的处理，统一通过 **GitHub Releases** 分发（单文件已控制在 2 GiB 上限内）。
-- 卸载时清理安装目录内生成的 `.venv-*`、`engines/`、`models/`；用户作品数据位于 `.sb-svcb`（可在安装时或软件首页选择/迁移），予以保留。
+- 构建会强制核对 `app/config.py`、`pyproject.toml`、Python 锁文件、前端包及 Inno Setup 的版本号，避免混装不同版本。
+- PyInstaller 运行目录内包含当前 `web/dist` 与 SVC / RVC / SeedVC / UVR / Hub workers，最终用户无需安装 Node.js。
+- 安装器携带预构建的 `xb-juce-vst3-host.exe`；开发者仅在确认已有正确产物时使用 `-SkipJuceHostBuild`。
+- `assets/models/` 包含 UVR、SVC/RVC 底模及 SeedVC 所需 RMVPE、CampPlus、Whisper Small、BigVGAN；缺少或疑似 LFS 指针时构建直接失败。
+- Inno Setup 使用 `DiskSpanning` 生成小于 2GB 的 `.bin` 分卷。EXE 不是完整离线包，发布和安装时都不能遗漏任何分卷。
+- 安装完成后会复核应用组件、UVR、SeedVC Python、SeedVC worker 与 `inference.py`；失败时给出修复命令和日志位置。
+- 卸载时清理安装目录内生成的 `.venv-*`、`engines/` 和 `models/`；可迁移的 `.sb-svcb` 用户数据默认保留。
 
 ---
 
@@ -770,7 +765,7 @@ CPU 模式下 svc 模型较慢。装有兼容 NVIDIA 显卡时用 `python instal
 
 - 🧁 **模型来源** —— 目前软件内可用 / 演示的**绝大部分声音模型，均由「白菜工厂1145号员工」提供**。在此特别致谢 🙏，正是这些模型让本工具能开箱即用地体验完整翻唱流程。
 - 📌 模型版权归原作者所有，请在其授权范围内使用；如有侵权或需要下架，请联系作者处理。
-- 🛠️ 同时感谢上游开源项目：[so-vits-svc](https://github.com/svc-develop-team/so-vits-svc)、[rvc-python](https://github.com/daswer123/rvc-python) / RVC、[Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)、[ModelScope 魔搭社区](https://www.modelscope.cn/) 等。
+- 🛠️ 同时感谢上游开源项目：[so-vits-svc](https://github.com/svc-develop-team/so-vits-svc)、[rvc-python](https://github.com/daswer123/rvc-python) / RVC、[Seed-VC](https://github.com/Plachtaa/seed-vc)、[Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)、[ModelScope 魔搭社区](https://www.modelscope.cn/) 等。
 - 🚀 后续会把更多模型逐一上传到「模型站」，方便在软件内直接搜索下载。
 
 ---

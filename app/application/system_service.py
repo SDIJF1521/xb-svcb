@@ -11,12 +11,18 @@ from infrastructure.uvr_tool import UvrTool
 
 class SystemService:
     def __init__(
-        self, ffmpeg: FfmpegTool, uvr: UvrTool, svc: SvcEngine, rvc: Any | None = None
+        self,
+        ffmpeg: FfmpegTool,
+        uvr: UvrTool,
+        svc: SvcEngine,
+        rvc: Any | None = None,
+        seedvc: Any | None = None,
     ) -> None:
         self._ffmpeg = ffmpeg
         self._uvr = uvr
         self._svc = svc
         self._rvc = rvc
+        self._seedvc = seedvc
 
     def status(self) -> dict[str, Any]:
         tools = [
@@ -54,6 +60,17 @@ class SystemService:
                     "version": self._rvc.version() or "未安装",
                     "status": self._rvc.device() if self._rvc.available else "降级模式",
                     "ok": self._rvc.available,
+                }
+            )
+        if self._seedvc is not None:
+            tools.append(
+                {
+                    "key": "seedvc",
+                    "name": "SeedVC 推理引擎",
+                    "desc": "加载 SeedVC checkpoint + 目标参考音频进行 zero-shot 歌声转换",
+                    "version": self._seedvc.version() or "未安装",
+                    "status": self._seedvc.device() if self._seedvc.available else "降级模式",
+                    "ok": self._seedvc.available,
                 }
             )
         return {
