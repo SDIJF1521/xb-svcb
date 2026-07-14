@@ -1,3 +1,22 @@
+<div align="center">
+
+# 🎤 XB-SVCB · AI 翻唱工具
+
+**导入歌曲 → 人声分离 → 去混响 → so-vits-svc 歌声转换 → 自动合并伴奏 → 成品翻唱**
+
+开箱即用的桌面 AI 翻唱应用，一条龙完成整首歌的 AI 翻唱。
+
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows)](#)
+[![Python](https://img.shields.io/badge/python-3.9%20|%203.10-3776AB?logo=python&logoColor=white)](#)
+[![Frontend](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
+
+### ⬇️ [**下载安装器 XB-SVCB-Setup.exe**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+
+</div>
+
+---
 <a id="features"></a>
 
 ## ✨ 特性
