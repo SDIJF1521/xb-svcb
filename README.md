@@ -1,18 +1,33 @@
+
 <div align="center">
 
 # 🎤 XB-SVCB · AI 翻唱工具
 
-**导入歌曲 → 人声分离 → 去混响 → so-vits-svc 歌声转换 → 自动合并伴奏 → 成品翻唱**
+#### 开箱即用的桌面级 AI 翻唱工作站
 
-开箱即用的桌面 AI 翻唱应用，一条龙完成整首歌的 AI 翻唱。
+**🎵 导入歌曲 ｜ 🎚️ 人声分离 ｜ 🌫️ 去混响 ｜ 🗣️ AI 歌声转换 ｜ 🎼 合并伴奏 ｜ 🎤 成品翻唱**
+
+一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **在线曲库** · **模型站** · **音频编辑器**
+
+<br/>
 
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows)](#)
-[![Python](https://img.shields.io/badge/python-3.9%20|%203.10-3776AB?logo=python&logoColor=white)](#)
-[![Frontend](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
+[![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release&color=ff6b9d)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/SDIJF1521/xb-svcb/total?color=brightgreen&label=downloads)](https://github.com/SDIJF1521/xb-svcb/releases)
+[![Stars](https://img.shields.io/github/stars/SDIJF1521/xb-svcb?style=flat&color=yellow)](https://github.com/SDIJF1521/xb-svcb/stargazers)
 
-### ⬇️ [**下载安装器 XB-SVCB-Setup.exe**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#)
+[![Python](https://img.shields.io/badge/python-3.9%20|%203.10-3776AB?logo=python&logoColor=white)](#)
+[![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
+[![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC-8a2be2)](#architecture)
+
+<br/>
+
+### ⬇️ [**点此下载安装器 · XB-SVCB-Setup.exe**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+
+<sub>Windows 一键安装 · 内置前端与底模 · 无需手动配置 Python / Node</sub>
+
+<sub>用户交流 / 反馈 QQ 群：**1038366109**</sub>
 
 </div>
 
