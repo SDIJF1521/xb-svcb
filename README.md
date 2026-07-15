@@ -1,10 +1,3 @@
-<<<<<<< HEAD
-<div align="center">
-
----
-
-=======
-
 <div align="center">
 
 # 🎤 XB-SVCB · AI 翻唱工具
@@ -38,7 +31,6 @@
 </div>
 
 ---
->>>>>>> 68819c1bddb42da4cd0718cb9fca40af389405e6
 <a id="features"></a>
 
 ## ✨ 特性
