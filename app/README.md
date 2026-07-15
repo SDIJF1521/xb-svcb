@@ -1,6 +1,6 @@
 # XB-SVCB 应用本体
 
-版本：`0.0.18`
+版本：`0.0.19`
 
 这里包含打包进 `XB-SVCB.exe` 的桌面应用壳、本地 API 桥接、领域服务和基础设施适配层。
 
@@ -9,6 +9,15 @@
 - `app/main.py` 启动 pywebview 桌面壳。
 - `app/config.py` 提供应用元信息、路径与运行环境位置。
 - 重型 AI 依赖不打进应用本体，由安装器放到 `.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-uvr`、`.venv-hub` 等隔离环境中。
+
+## v0.0.19 重点
+
+- 应用本体版本同步到 `0.0.19`，本地状态 API、前端与安装器使用同一版本号。
+- 音乐服务按妖狐当前官方响应读取 `data.lrctxt`、`data.lrc`、`data.music.lrcurl` 与 `data.music.lrc`，并继续尝试其他可解析候选。
+- 歌词 URL 支持返回纯 LRC、JSON 歌词字段或下一层 URL；无效的非空候选不会阻断后续字段。
+- QQ 免费详情没有歌词字段时，从官方 `data.html` 提取歌曲 `mid`，再请求 `/api/music/lrc` 聚合歌词接口。
+- 免费接口的 `songname` 与 QQ Plus 的 `singer` 统一映射为歌手名称；顶层 `lrcurl`、`viplrc` 和 `lyric` 仅作为历史兼容。
+- 音乐服务测试覆盖网易嵌套歌词地址、QQ `mid` 提取，以及聚合歌词的正式地址和 `key` / `mid` / `type` 参数。
 
 ## v0.0.18 重点
 

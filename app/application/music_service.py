@@ -18,6 +18,7 @@ import asyncio
 import re
 import threading
 from typing import Any
+from urllib.parse import urlparse
 
 import config
 from infrastructure import paths
@@ -134,6 +135,43 @@ def parse_lrc(text: str) -> list[dict[str, Any]]:
             lines.append({"time": round(t, 3), "text": content})
     lines.sort(key=lambda x: x["time"])
     return lines
+
+
+def _lyric_candidates(data: dict[str, Any]) -> list[str]:
+    """按妖狐音乐接口的正式响应结构提取歌词候选。"""
+    music = data.get("music")
+    nested = music if isinstance(music, dict) else {}
+    values = (
+        data.get("lrctxt"),
+        data.get("lrc"),
+        nested.get("lrcurl"),
+        nested.get("lrc"),
+        # 部分历史响应曾将 lrcurl 放在 data 顶层，保留兼容。
+        data.get("lrcurl"),
+        data.get("viplrc"),
+        data.get("lyric"),
+    )
+    return [value.strip() for value in values if isinstance(value, str) and value.strip()]
+
+
+def _song_mid(data: dict[str, Any]) -> str:
+    """从妖狐歌曲详情中提取聚合歌词接口所需的歌曲 ID。"""
+    music = data.get("music")
+    nested = music if isinstance(music, dict) else {}
+    for value in (data.get("mid"), data.get("songmid"), nested.get("mid")):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    html = data.get("html")
+    if isinstance(html, str) and html.strip():
+        parts = [part for part in urlparse(html.strip()).path.split("/") if part]
+        try:
+            index = parts.index("songDetail")
+        except ValueError:
+            index = -1
+        if index >= 0 and index + 1 < len(parts):
+            return parts[index + 1]
+    return ""
 
 
 class MusicService:
@@ -324,20 +362,20 @@ class MusicService:
         d = res["data"]
         song = {
             "name": d.get("name", ""),
-            # 单曲详情里歌手字段为 songname（接口约定）
-            "singer": d.get("songname", ""),
+            # 免费接口使用 songname，QQ Plus 使用 singer。
+            "singer": d.get("songname") or d.get("singer") or "",
             "album": d.get("album", ""),
             "title": d.get("songtitle", ""),
             "picture": d.get("picture", ""),
             "url": d.get("url", ""),
             "musicurl": d.get("musicurl", ""),
             "vipmusicurl": d.get("vipmusicurl", ""),
-            "lrc": d.get("lrctxt") or "",
+            "lrc": next(iter(_lyric_candidates(d)), ""),
         }
         return {"ok": True, "song": song}
 
     async def _fetch_text(self, url: str) -> str:
-        """抓取一个 URL 的文本内容（用于 QQ音乐 viplrc 歌词地址）。"""
+        """抓取歌词 URL 返回的文本或 JSON 内容。"""
         try:
             import httpx
         except ImportError:
@@ -352,14 +390,57 @@ class MusicService:
                     data = resp.json()
                     if isinstance(data, dict):
                         d = data.get("data") if isinstance(data.get("data"), dict) else data
-                        for key in ("lrc", "lyric", "lrctxt", "text"):
-                            val = d.get(key) if isinstance(d, dict) else None
-                            if isinstance(val, str) and val.strip():
-                                return val
+                        if isinstance(d, dict):
+                            candidates = _lyric_candidates(d)
+                            if candidates:
+                                return candidates[0]
+                            text = d.get("text")
+                            if isinstance(text, str) and text.strip():
+                                return text.strip()
                     return ""
                 return resp.text or ""
         except Exception:  # noqa: BLE001 - 歌词抓取失败不影响主流程
             return ""
+
+    async def _resolve_lyric_candidate(self, candidate: str) -> str:
+        """解析内联歌词或最多三次歌词 URL 跳转。"""
+        raw = candidate.strip()
+        visited: set[str] = set()
+        for _ in range(3):
+            if not raw.startswith(("http://", "https://")):
+                return raw
+            if raw in visited:
+                return ""
+            visited.add(raw)
+            raw = (await self._fetch_text(raw)).strip()
+        return "" if raw.startswith(("http://", "https://")) else raw
+
+    async def _fetch_aggregate_lyrics(self, mid: str, source: str) -> str:
+        """调用妖狐聚合歌词接口，供不直接返回歌词的曲库使用。"""
+        if not mid or source not in {"qq", "wy"}:
+            return ""
+        try:
+            import httpx
+        except ImportError:
+            return ""
+
+        await self._limiter.wait()
+        try:
+            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+                resp = await client.get(
+                    f"{config.MUSIC_API_BASE}/lrc",
+                    params={"key": self.get_api_key(), "mid": mid, "type": source},
+                )
+                payload = resp.json()
+        except Exception:  # noqa: BLE001 - 聚合歌词失败后仍可返回统一的无歌词提示
+            return ""
+        if not isinstance(payload, dict) or payload.get("code") != 200:
+            return ""
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return ""
+        candidates = _lyric_candidates(data)
+        return candidates[0] if candidates else ""
 
     async def _get_lyrics(self, msg: str, n: int, source: str) -> dict[str, Any]:
         """按歌名+索引获取带时间轴的歌词（解析为句子列表）。"""
@@ -367,31 +448,28 @@ class MusicService:
         if not res["ok"]:
             return res
         d = res["data"]
-        # 歌词字段可能是内联 LRC，也可能直接是歌词地址。
-        raw = ""
-        for key in ("lrctxt", "lrc", "lyric"):
-            val = d.get(key)
-            if isinstance(val, str) and val.strip():
-                candidate = val.strip()
-                raw = (
-                    await self._fetch_text(candidate)
-                    if candidate.startswith(("http://", "https://"))
-                    else candidate
-                )
-                if raw:
-                    break
-        if not raw:
-            viplrc = d.get("viplrc")
-            if isinstance(viplrc, str) and viplrc.startswith("http"):
-                raw = await self._fetch_text(viplrc)
-        lines = parse_lrc(raw)
+        # 网易响应提供 data.lrctxt/data.lrc，并可能在 data.music.lrcurl 放备用地址。
+        # QQ 免费接口不直接返回歌词，下面会再通过歌曲 mid 调用官方聚合歌词接口。
+        lines: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for candidate in _lyric_candidates(d):
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            lines = parse_lrc(await self._resolve_lyric_candidate(candidate))
+            if lines:
+                break
+        if not lines:
+            aggregate = await self._fetch_aggregate_lyrics(_song_mid(d), source)
+            if aggregate:
+                lines = parse_lrc(await self._resolve_lyric_candidate(aggregate))
         if not lines:
             return {"ok": False, "error": "未获取到带时间轴的歌词（可能为纯音乐或无歌词）"}
         return {
             "ok": True,
             "lines": lines,
             "name": d.get("name", ""),
-            "singer": d.get("songname", ""),
+            "singer": d.get("songname") or d.get("singer") or "",
         }
 
     async def _download(self, msg: str, n: int, source: str) -> dict[str, Any]:

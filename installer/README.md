@@ -1,6 +1,6 @@
 # XB-SVCB 安装器
 
-版本：`0.0.18`
+版本：`0.0.19`
 
 安装器由 Inno Setup 读取 `installer/xb-svcb.iss` 构建，负责打包桌面本体、环境搭建脚本、自带模型和文档。
 
@@ -37,6 +37,15 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 ```
 
 临时不打包插件 Host 时可运行 `installer/build.ps1 -SkipJuceHostBuild`。
+
+## v0.0.19 安装器行为
+
+- 应用、Python 项目、前端、锁文件和 Inno Setup 版本统一为 `0.0.19`。
+- PyInstaller 包含播放中效果热更新、精确时间轴定位和妖狐官方歌词响应适配后的当前前端与应用本体。
+- 安装器继续携带全部 SVC / RVC / UVR / SeedVC / Hub workers、SeedVC 离线权重和 JUCE VST3 Host。
+- 发布构建要求根目录存在 `release_notes_v019.md`，安装后将其与主 `README.md` 一起释放到应用目录。
+- 分卷安装方式保持不变：必须共同发布 `XB-SVCB-Setup.exe` 与全部 `XB-SVCB-Setup-*.bin`。
+- `installer/build.ps1 -ValidateOnly` 会在不重新压缩模型的情况下检查 v0.0.19 版本一致性、发布文档和 Inno Setup/Pascal 脚本。
 
 ## v0.0.18 安装器行为
 

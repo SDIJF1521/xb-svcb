@@ -194,7 +194,7 @@ Require-File $stagedHostExe "Staged JUCE VST3 host (build without -SkipJuceHostB
 Require-File (Join-Path $Root "setup_env.bat") "Runtime setup entry"
 Require-File (Join-Path $Root "install_prereqs.bat") "Prerequisite installer"
 Require-File (Join-Path $Root "install\install.py") "Runtime installer"
-Require-File (Join-Path $Root "release_notes_v018.md") "v0.0.18 release notes"
+Require-File (Join-Path $Root "release_notes_v019.md") "v0.0.19 release notes"
 Write-Host "Staged runtime bundle validated." -ForegroundColor Green
 
 # 5) Compile installer

@@ -646,7 +646,7 @@
         </div>
 
         <div ref="scrollEl" class="timeline-scroll" @pointerdown="onTimelinePointer">
-          <div class="ruler" :style="{ width: timelineWidth + 'px' }">
+          <div ref="rulerEl" class="ruler" :style="{ width: timelineWidth + 'px' }">
             <span
               v-for="tick in ticks"
               :key="tick"
@@ -884,18 +884,24 @@ const rerunModelId = ref('')
 const renderedPath = ref('')
 const audioEl = ref<HTMLAudioElement | null>(null)
 const scrollEl = ref<HTMLElement | null>(null)
+const rulerEl = ref<HTMLElement | null>(null)
 const history = ref<EditorProject[]>([])
 const future = ref<EditorProject[]>([])
 const drag = ref<DragState | null>(null)
 let clipStopTimer: ReturnType<typeof setTimeout> | null = null
 let lastPlayToggleAt = 0
 let mixPreviewRequestId = 0
+let activeMixSignature = ''
+let pendingMixSignature = ''
+let liveMixRefreshRevision = 0
+let liveMixRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let waveformZoomTimer: ReturnType<typeof setTimeout> | null = null
 const waveformLoading = new Set<string>()
 
 const fallbackPeaks = Array.from({ length: 56 }, (_, i) => 0.18 + Math.abs(Math.sin(i * 0.33)) * 0.5)
 const MIN_RERUN_CLIP_SECONDS = 1
 const PLAY_TOGGLE_DEBOUNCE_MS = 350
+const LIVE_MIX_REFRESH_DEBOUNCE_MS = 180
 const RERUN_PREFS_KEY = 'xb-editor-rerun-params'
 const f0Methods = ['rmvpe', 'crepe', 'harvest', 'pm']
 const deviceOptions = [
@@ -1254,6 +1260,7 @@ function applyProject(next: EditorProject | null) {
   selected.value = keepSelection(next)
   router.replace({ path: '/editor', query: { project: next.id } })
   nextTick(loadWaveforms)
+  requestLiveMixRefresh()
 }
 
 function ensureEditorProjectStructure(next: EditorProject) {
@@ -1661,8 +1668,13 @@ async function pasteAudioToTrack(trackId?: string | null) {
 async function saveProject() {
   if (!project.value) return
   project.value.duration = calcDuration(project.value)
+  const mixSignature = mixRenderSignature(project.value)
+  const liveRevision = prepareLiveMixRefresh(mixSignature)
+  const projectId = project.value.id
   const saved = await api.saveEditorProject(project.value)
-  if (saved) project.value = saved
+  if (saved && project.value?.id === projectId) project.value = saved
+  if (saved && liveRevision !== null) scheduleLiveMixRefresh(liveRevision, mixSignature)
+  else if (!saved && liveRevision === liveMixRefreshRevision) pendingMixSignature = ''
 }
 
 async function undo() {
@@ -1675,6 +1687,7 @@ async function undo() {
     waveformMap.value = {}
     await api.saveEditorProject(prev)
     nextTick(loadWaveforms)
+    requestLiveMixRefresh()
     return
   }
   applyProject(await api.undoEditorProject(project.value.id))
@@ -1690,6 +1703,7 @@ async function redo() {
     waveformMap.value = {}
     await api.saveEditorProject(next)
     nextTick(loadWaveforms)
+    requestLiveMixRefresh()
     return
   }
   applyProject(await api.redoEditorProject(project.value.id))
@@ -1794,9 +1808,10 @@ function stopTimelinePointer() {
 
 function setPlayheadFromPointer(e: PointerEvent) {
   const el = scrollEl.value
-  if (!el || !project.value) return
-  const rect = el.getBoundingClientRect()
-  const next = (e.clientX - rect.left + el.scrollLeft - 128) / zoom.value
+  const ruler = rulerEl.value
+  if (!el || !ruler || !project.value) return
+  // 标尺的左边界就是时间轴零点；它已包含轨道标题宽度和横向滚动偏移。
+  const next = (e.clientX - ruler.getBoundingClientRect().left) / zoom.value
   playhead.value = clamp(next, 0, project.value.duration)
   syncMixAudioToPlayhead()
 }
@@ -2646,8 +2661,136 @@ function claimPlayToggle() {
   return true
 }
 
-function stopPlayback() {
+function isMixPlaybackActive() {
+  return !!audioEl.value?.src && playing.value && playbackMode.value === 'mix'
+}
+
+function mixRenderSignature(value: EditorProject) {
+  return JSON.stringify({
+    duration: value.duration,
+    sampleRate: value.sample_rate,
+    tracks: value.tracks.map((track) => ({
+      volume: track.volume,
+      mute: track.mute,
+      clips: track.clips.map((clip) => ({
+        file: clip.file,
+        start: clip.start,
+        end: clip.end,
+        offset: clip.offset,
+        volume: clip.volume,
+        mute: clip.mute,
+        fadeIn: clip.fade_in,
+        fadeOut: clip.fade_out,
+        channel: clip.channel,
+        envelope: clip.volume_envelope,
+        effects: clip.effects,
+      })),
+    })),
+  })
+}
+
+function cancelScheduledLiveMixRefresh() {
+  liveMixRefreshRevision += 1
+  pendingMixSignature = ''
+  if (liveMixRefreshTimer) {
+    clearTimeout(liveMixRefreshTimer)
+    liveMixRefreshTimer = null
+  }
+}
+
+function invalidateLiveMixRefresh() {
+  cancelScheduledLiveMixRefresh()
   mixPreviewRequestId += 1
+  return liveMixRefreshRevision
+}
+
+function prepareLiveMixRefresh(mixSignature: string) {
+  if (!isMixPlaybackActive()) return null
+  if (mixSignature === activeMixSignature) {
+    if (pendingMixSignature && pendingMixSignature !== mixSignature) invalidateLiveMixRefresh()
+    return null
+  }
+  if (mixSignature === pendingMixSignature) return null
+  const revision = invalidateLiveMixRefresh()
+  pendingMixSignature = mixSignature
+  return revision
+}
+
+function scheduleLiveMixRefresh(revision: number, mixSignature: string) {
+  if (
+    revision !== liveMixRefreshRevision ||
+    mixSignature !== pendingMixSignature ||
+    !isMixPlaybackActive()
+  ) return
+  liveMixRefreshTimer = setTimeout(() => {
+    liveMixRefreshTimer = null
+    void refreshLiveMixPreview(revision, mixSignature)
+  }, LIVE_MIX_REFRESH_DEBOUNCE_MS)
+}
+
+function requestLiveMixRefresh() {
+  if (!project.value || !isMixPlaybackActive()) return
+  const mixSignature = mixRenderSignature(project.value)
+  const revision = prepareLiveMixRefresh(mixSignature)
+  if (revision !== null) scheduleLiveMixRefresh(revision, mixSignature)
+}
+
+async function refreshLiveMixPreview(revision: number, mixSignature: string) {
+  const el = audioEl.value
+  const currentProject = project.value
+  if (
+    revision !== liveMixRefreshRevision ||
+    !el ||
+    !currentProject ||
+    !isMixPlaybackActive()
+  ) {
+    if (revision === liveMixRefreshRevision) pendingMixSignature = ''
+    return
+  }
+
+  const requestId = ++mixPreviewRequestId
+  previewing.value = true
+  try {
+    // 渲染期间继续播放旧预览，只在新预览就绪后按当前时间点热切换。
+    const data = await api.renderEditorPreview(currentProject.id)
+    if (
+      requestId !== mixPreviewRequestId ||
+      revision !== liveMixRefreshRevision ||
+      !isMixPlaybackActive()
+    ) return
+    if (!data) throw new Error('后端没有返回预览音频')
+
+    const resumeAt = clamp(el.currentTime, 0, project.value?.duration || el.currentTime)
+    const previousSrc = el.src
+    try {
+      el.src = data
+      el.currentTime = resumeAt
+      await el.play()
+      activeMixSignature = mixSignature
+    } catch (err) {
+      if (previousSrc && requestId === mixPreviewRequestId && isMixPlaybackActive()) {
+        el.src = previousSrc
+        el.currentTime = resumeAt
+        await el.play().catch(() => undefined)
+      }
+      throw err
+    }
+  } catch (err) {
+    if (requestId === mixPreviewRequestId && isMixPlaybackActive()) {
+      ElMessage.warning(err instanceof Error ? `实时预览更新失败：${err.message}` : '实时预览更新失败')
+    }
+  } finally {
+    if (requestId === mixPreviewRequestId) {
+      pendingMixSignature = ''
+      previewing.value = false
+    }
+  }
+}
+
+function stopPlayback() {
+  cancelScheduledLiveMixRefresh()
+  mixPreviewRequestId += 1
+  activeMixSignature = ''
   previewing.value = false
   if (clipStopTimer) {
     clearTimeout(clipStopTimer)
@@ -2664,11 +2807,12 @@ function stopPlayback() {
 
 async function playMix() {
   if (!project.value || !audioEl.value) return
-  if (!claimPlayToggle() || previewing.value) return
+  if (!claimPlayToggle()) return
   if (playing.value) {
     stopPlayback()
     return
   }
+  if (previewing.value) return
   const requestId = ++mixPreviewRequestId
   previewing.value = true
   try {
@@ -2689,6 +2833,7 @@ async function playMix() {
     audioEl.value.currentTime = Math.max(0, playhead.value)
     await audioEl.value.play()
     playing.value = true
+    activeMixSignature = mixRenderSignature(project.value)
   } catch (err) {
     playbackMode.value = 'none'
     ElMessage.error(err instanceof Error ? err.message : '播放失败')
@@ -2806,6 +2951,10 @@ function onAudioPause() {
   if (audioEl.value?.ended) playing.value = false
 }
 function onAudioEnded() {
+  cancelScheduledLiveMixRefresh()
+  mixPreviewRequestId += 1
+  activeMixSignature = ''
+  previewing.value = false
   playing.value = false
   playbackMode.value = 'none'
   if (project.value) playhead.value = project.value.duration
@@ -2954,6 +3103,7 @@ onMounted(() => {
   loadInitial()
 })
 onUnmounted(() => {
+  cancelScheduledLiveMixRefresh()
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('pointermove', onDragMove)
   window.removeEventListener('pointermove', onTimelinePointerMove)
