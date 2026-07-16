@@ -23,7 +23,7 @@ wheels = [
 
 [[package]]
 name = "app"
-version = "0.0.20"
+version = "0.0.21"
 source = { virtual = "." }
 dependencies = [
     { name = "httpx", extra = ["http2"] },

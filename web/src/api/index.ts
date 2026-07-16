@@ -39,6 +39,9 @@ import type {
   EditorPluginInspectResult,
   EditorPluginWindowResult,
   EditorPluginCloseResult,
+  EditorPluginSyncResult,
+  EditorPluginTransport,
+  EditorClipMergeResult,
   EditorRerunResult,
   EditorSilenceSplitOptions,
   EditorSilenceSplitResult,
@@ -432,6 +435,11 @@ export const api = {
       mock.closeEditorEffectPlugin(sessionId),
     ),
 
+  syncEditorEffectPlugin: (sessionId: string, transport: EditorPluginTransport) =>
+    invoke<EditorPluginSyncResult>('sync_editor_effect_plugin', [sessionId, transport], () =>
+      mock.syncEditorEffectPlugin(sessionId, transport),
+    ),
+
   copyEditorClipAudio: (projectId: string, clipId: string, fmt = 'wav') =>
     invoke<EditorAudioCopyResult>('copy_editor_clip_audio', [projectId, clipId, fmt], () =>
       mock.copyEditorClipAudio(projectId, clipId, fmt),
@@ -440,6 +448,11 @@ export const api = {
   copyEditorTrackAudio: (projectId: string, trackId: string, fmt = 'wav') =>
     invoke<EditorAudioCopyResult>('copy_editor_track_audio', [projectId, trackId, fmt], () =>
       mock.copyEditorTrackAudio(projectId, trackId, fmt),
+    ),
+
+  mergeEditorClips: (projectId: string, trackId: string, clipIds: string[]) =>
+    invoke<EditorClipMergeResult>('merge_editor_clips', [projectId, trackId, clipIds], () =>
+      mock.mergeEditorClips(projectId, trackId, clipIds),
     ),
 
   renderEditorPreview: (projectId: string) =>

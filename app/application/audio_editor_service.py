@@ -934,6 +934,154 @@ class AudioEditorService:
         dst = self._render_track_file(project_id, track_id, fmt)
         return self._clipboard_payload(dst)
 
+    def merge_clips(
+        self,
+        project_id: str,
+        track_id: str,
+        clip_ids: list[str] | None,
+    ) -> dict[str, Any]:
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        track = next(
+            (item for item in project.get("tracks", []) or [] if item.get("id") == track_id),
+            None,
+        )
+        if not track:
+            return {"ok": False, "error": "音轨不存在"}
+        if track.get("locked"):
+            return {"ok": False, "error": "音轨已锁定，不能合并"}
+        if not self._audio.available:
+            return {"ok": False, "error": "未找到 ffmpeg，无法合并音频"}
+
+        requested = [str(value or "") for value in (clip_ids or []) if str(value or "")]
+        requested = list(dict.fromkeys(requested))
+        if len(requested) < 2:
+            return {"ok": False, "error": "至少选择两个片段才能合并"}
+        requested_set = set(requested)
+        timeline = sorted(
+            list(track.get("clips") or []),
+            key=lambda item: (float(item.get("start") or 0.0), str(item.get("id") or "")),
+        )
+        selected = [item for item in timeline if str(item.get("id") or "") in requested_set]
+        if len(selected) != len(requested):
+            return {"ok": False, "error": "待合并片段不存在或不在同一音轨"}
+        selected_indexes = [timeline.index(item) for item in selected]
+        if selected_indexes != list(range(selected_indexes[0], selected_indexes[-1] + 1)):
+            return {"ok": False, "error": "只能合并时间线上连续的片段"}
+        if any(item.get("locked") for item in selected):
+            return {"ok": False, "error": "锁定片段不能合并"}
+        if any(not Path(str(item.get("file") or "")).exists() for item in selected):
+            return {"ok": False, "error": "待合并片段的音频文件不存在"}
+
+        try:
+            merge_start = min(float(item.get("start") or 0.0) for item in selected)
+            merge_end = max(float(item.get("end") or 0.0) for item in selected)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "片段时间无效"}
+        duration = merge_end - merge_start
+        if duration < 0.05:
+            return {"ok": False, "error": "待合并片段太短"}
+
+        rendered_clips: list[dict[str, Any]] = []
+        for item in selected:
+            rendered = copy.deepcopy(item)
+            rendered["start"] = round(float(item.get("start") or 0.0) - merge_start, 3)
+            rendered["end"] = round(float(item.get("end") or 0.0) - merge_start, 3)
+            rendered_clips.append(rendered)
+        render_project = {
+            "id": project_id,
+            "duration": round(duration, 3),
+            "sample_rate": int(project.get("sample_rate") or 44100),
+            "tracks": [
+                {
+                    "id": track_id,
+                    "name": str(track.get("name") or ""),
+                    "type": str(track.get("type") or "audio"),
+                    # Track gain remains on the destination track, so it must not be baked twice.
+                    "volume": 1.0,
+                    "mute": False,
+                    "clips": rendered_clips,
+                }
+            ],
+        }
+        media_dir = self._project_dir(project_id) / "media"
+        media_dir.mkdir(parents=True, exist_ok=True)
+        base_name = " + ".join(str(item.get("name") or "片段") for item in selected)
+        dst = self._unique_path(media_dir / f"{self._safe_stem(base_name)}_merged.wav")
+        cache_dir = self._project_dir(project_id) / "cache"
+        if not self._audio.render_timeline(render_project, dst, cache_dir, "wav"):
+            return {"ok": False, "error": "音频合并渲染失败"}
+
+        source_metadata = [
+            {
+                "id": str(item.get("id") or ""),
+                "name": str(item.get("name") or ""),
+                "file": str(item.get("file") or ""),
+                "start": float(item.get("start") or 0.0),
+                "end": float(item.get("end") or 0.0),
+            }
+            for item in selected
+        ]
+        role_ids = [
+            str((item.get("metadata") or {}).get("role_id") or "") for item in selected
+        ]
+        metadata = dict(selected[0].get("metadata") or {})
+        if not role_ids[0] or any(role_id != role_ids[0] for role_id in role_ids[1:]):
+            metadata.pop("role_id", None)
+        metadata.update(
+            {
+                "source": "editor_merge",
+                "merged_at": self._now(),
+                "merged_clip_ids": requested,
+                "merged_sources": source_metadata,
+            }
+        )
+        merged_clip = EditorClip(
+            id=paths.new_id("clp_"),
+            name=(base_name or "合并片段")[:80],
+            start=round(merge_start, 3),
+            end=round(merge_end, 3),
+            offset=0.0,
+            volume=1.0,
+            mute=False,
+            file=str(dst),
+            effects=[],
+            locked=False,
+            fade_in=0.0,
+            fade_out=0.0,
+            channel="stereo",
+            volume_envelope=[],
+            metadata=metadata,
+        ).to_dict()
+
+        next_project = copy.deepcopy(project)
+        next_track = next(
+            (item for item in next_project.get("tracks", []) or [] if item.get("id") == track_id),
+            None,
+        )
+        if not next_track:
+            return {"ok": False, "error": "合并结果写入失败"}
+        remaining = [
+            item
+            for item in next_track.get("clips", []) or []
+            if str(item.get("id") or "") not in requested_set
+        ]
+        remaining.append(merged_clip)
+        next_track["clips"] = sorted(
+            remaining,
+            key=lambda item: (float(item.get("start") or 0.0), str(item.get("id") or "")),
+        )
+        next_project["waveform_cache"] = {}
+        saved = self.save(next_project, push_history=True)
+        return {
+            "ok": True,
+            "project": saved,
+            "clip": merged_clip,
+            "merged_clip_ids": requested,
+            "path": str(dst),
+        }
+
     def plugin_host_status(self) -> dict[str, Any]:
         return self._plugin_host.status()
 
@@ -957,12 +1105,14 @@ class AudioEditorService:
         effect = self._find_effect(clip, effect_id)
         if not effect:
             return {"ok": False, "error": "效果器不存在", **self._plugin_host.status()}
+        monitor = self._prepare_plugin_monitor(project, track, clip, effect_id)
         result = self._plugin_host.show_editor(
             effect,
             project_id=project_id,
             clip_id=clip_id,
             effect_id=effect_id,
             parent_window=parent_window,
+            monitor=monitor,
         )
         session_id = str(result.get("session_id") or "")
         if result.get("ok") and session_id:
@@ -982,6 +1132,173 @@ class AudioEditorService:
             if project:
                 result["project"] = project
         return result
+
+    def sync_effect_plugin_editor(
+        self,
+        session_id: str,
+        transport: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        ref = self._plugin_sessions.get(session_id or "")
+        monitor_transport = dict(transport) if isinstance(transport, dict) else {}
+        if ref:
+            current = self._repo.get(ref.get("project_id", ""))
+            track, _, clip = self._find_clip_ref(
+                current or {},
+                ref.get("track_id", ""),
+                ref.get("clip_id", ""),
+            )
+            if track and clip:
+                monitor_transport["timeline_start"] = float(clip.get("start") or 0.0)
+                monitor_transport["timeline_end"] = float(clip.get("end") or 0.0)
+                monitor_transport["audible"] = (
+                    monitor_transport.get("audible", True) is not False
+                )
+        result = self._plugin_host.sync_editor(session_id, monitor_transport)
+        if result.get("ok") and ref:
+            project = self._apply_plugin_state(ref, result.get("plugin"))
+            if project:
+                result["project"] = project
+        if result.get("closed"):
+            self._plugin_sessions.pop(session_id or "", None)
+        return result
+
+    def _prepare_plugin_monitor(
+        self,
+        project: dict[str, Any],
+        track: dict[str, Any],
+        clip: dict[str, Any],
+        effect_id: str,
+    ) -> dict[str, Any]:
+        src = Path(str(clip.get("file") or ""))
+        if not src.is_file() or not self._audio.available:
+            return {}
+        try:
+            start = max(0.0, float(clip.get("start") or 0.0))
+            end = max(start, float(clip.get("end") or start))
+        except (TypeError, ValueError):
+            return {}
+        if end - start < 0.01:
+            return {}
+        effects = [item for item in (clip.get("effects") or []) if isinstance(item, dict)]
+        target_index = next(
+            (idx for idx, item in enumerate(effects) if str(item.get("id") or "") == effect_id),
+            -1,
+        )
+        if target_index < 0:
+            return {}
+        prefix = copy.deepcopy(effects[:target_index])
+        sample_rate = int(project.get("sample_rate") or 44100)
+        try:
+            stat = src.stat()
+            source_signature = (str(src.resolve()), stat.st_size, int(stat.st_mtime_ns))
+        except OSError:
+            source_signature = (str(src), 0, 0)
+        key = FFmpegEngine.cache_key(
+            {
+                "version": "plugin-monitor-v1",
+                "source": source_signature,
+                "offset": clip.get("offset"),
+                "start": clip.get("start"),
+                "end": clip.get("end"),
+                "channel": clip.get("channel"),
+                "prefix_effects": prefix,
+                "sample_rate": sample_rate,
+            }
+        )
+        raw_dst = config.EDITOR_CACHE_DIR / f"plugin_monitor_raw_{key}.wav"
+        if not raw_dst.exists() and not self._audio.render_plugin_monitor_input(
+            src,
+            clip,
+            prefix,
+            raw_dst,
+            config.EDITOR_CACHE_DIR,
+            sample_rate,
+        ):
+            return {}
+
+        # Bake timeline-level gain, envelope and fades into the target signal. The
+        # selected VST3 itself remains unrendered and is processed by JUCE on the
+        # sound-card callback, so its GUI changes are audible on the next block.
+        length = end - start
+        target_project = {
+            "sample_rate": sample_rate,
+            "duration": length,
+            "tracks": [
+                {
+                    "id": "realtime-target-track",
+                    "volume": track.get("volume", 1.0),
+                    "mute": track.get("mute", False),
+                    "clips": [
+                        {
+                            **copy.deepcopy(clip),
+                            "id": "realtime-target-clip",
+                            "file": str(raw_dst),
+                            "start": 0.0,
+                            "end": length,
+                            "offset": 0.0,
+                            "channel": "stereo",
+                            "effects": [],
+                        }
+                    ],
+                }
+            ],
+        }
+        target_key = FFmpegEngine.cache_key(
+            {
+                "version": "plugin-realtime-target-v1",
+                "monitor": key,
+                "track_volume": track.get("volume"),
+                "clip_volume": clip.get("volume"),
+                "clip_mute": clip.get("mute"),
+                "track_mute": track.get("mute"),
+                "fade_in": clip.get("fade_in"),
+                "fade_out": clip.get("fade_out"),
+                "volume_envelope": clip.get("volume_envelope"),
+            }
+        )
+        target_dst = config.EDITOR_CACHE_DIR / f"plugin_target_{target_key}.wav"
+        render_timeline = getattr(self._audio, "render_timeline", None)
+        if callable(render_timeline) and not target_dst.exists():
+            render_timeline(
+                target_project,
+                target_dst,
+                config.EDITOR_CACHE_DIR,
+                "wav",
+            )
+        if not target_dst.exists():
+            target_dst = raw_dst
+
+        bed_project = copy.deepcopy(project)
+        for bed_track in bed_project.get("tracks", []) or []:
+            bed_track["clips"] = [
+                item
+                for item in (bed_track.get("clips") or [])
+                if str(item.get("id") or "") != str(clip.get("id") or "")
+            ]
+        bed_key = FFmpegEngine.cache_key(
+            {
+                "version": "plugin-realtime-bed-v2",
+                "project": bed_project,
+                "target_clip": clip.get("id"),
+            }
+        )
+        bed_dst = config.EDITOR_CACHE_DIR / f"plugin_bed_{bed_key}.wav"
+        if callable(render_timeline) and not bed_dst.exists():
+            render_timeline(
+                bed_project,
+                bed_dst,
+                config.EDITOR_CACHE_DIR,
+                "wav",
+            )
+        return {
+            "input": str(target_dst),
+            "bed_input": str(bed_dst) if bed_dst.exists() else "",
+            "timeline_start": start,
+            "timeline_end": end,
+            "project_duration": max(0.05, float(project.get("duration") or end)),
+            "sample_rate": sample_rate,
+            "block_size": 128,
+        }
 
     def _apply_plugin_state(
         self,
@@ -1004,7 +1321,8 @@ class AudioEditorService:
         if not effect:
             return None
 
-        params = dict(effect.get("params") or {})
+        previous_params = dict(effect.get("params") or {})
+        params = dict(previous_params)
         state = plugin.get("state")
         if isinstance(state, str) and state:
             params["state"] = state
@@ -1018,6 +1336,8 @@ class AudioEditorService:
         name = plugin.get("name")
         if isinstance(name, str) and name:
             params["plugin_name"] = name
+        if params == previous_params:
+            return None
         effect["params"] = params
         project["updated_at"] = self._now()
         project["duration"] = self._project_duration(project)

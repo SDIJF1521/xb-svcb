@@ -1,11 +1,18 @@
 <template>
   <div class="editor-page">
     <audio
-      ref="audioEl"
+      ref="audioPrimaryEl"
       hidden
-      @ended="onAudioEnded"
-      @pause="onAudioPause"
-      @timeupdate="onAudioTimeUpdate"
+      @ended="onAudioEnded($event)"
+      @pause="onAudioPause($event)"
+      @timeupdate="onAudioTimeUpdate($event)"
+    />
+    <audio
+      ref="audioSecondaryEl"
+      hidden
+      @ended="onAudioEnded($event)"
+      @pause="onAudioPause($event)"
+      @timeupdate="onAudioTimeUpdate($event)"
     />
 
     <EditorImportTrackDialog
@@ -230,15 +237,15 @@
           </div>
           <div class="slider-row">
             <span>音量</span>
-            <el-slider v-model="selectedClip.volume" :disabled="!selectedClipEditable" :min="0" :max="2" :step="0.01" @change="saveProject" />
+            <el-slider v-model="selectedClip.volume" :disabled="!selectedClipEditable" :min="0" :max="2" :step="0.01" @pointerdown="pushHistory" @input="queueLiveControlSave" @change="flushLiveControlSave" />
           </div>
           <div class="slider-row">
             <span>淡入</span>
-            <el-slider v-model="selectedClip.fade_in" :disabled="!selectedClipEditable" :min="0" :max="2" :step="0.01" @change="saveProject" />
+            <el-slider v-model="selectedClip.fade_in" :disabled="!selectedClipEditable" :min="0" :max="2" :step="0.01" @pointerdown="pushHistory" @input="queueLiveControlSave" @change="flushLiveControlSave" />
           </div>
           <div class="slider-row">
             <span>淡出</span>
-            <el-slider v-model="selectedClip.fade_out" :disabled="!selectedClipEditable" :min="0" :max="2" :step="0.01" @change="saveProject" />
+            <el-slider v-model="selectedClip.fade_out" :disabled="!selectedClipEditable" :min="0" :max="2" :step="0.01" @pointerdown="pushHistory" @input="queueLiveControlSave" @change="flushLiveControlSave" />
           </div>
           <div class="clip-actions">
             <button title="静音片段" :disabled="!selectedClipEditable" :class="{ active: selectedClip.mute }" @click="toggleClipMute">
@@ -255,6 +262,9 @@
             </button>
             <button title="复制片段音频" :disabled="copyingAudio" @click="copySelectedClipAudio">
               <el-icon><CopyDocument /></el-icon>
+            </button>
+            <button title="与时间线中的下一片段合并" :disabled="!canMergeNextClip || mergingAudio" @click="mergeSelectedClipWithNext">
+              <el-icon><Connection /></el-icon>
             </button>
             <button title="删除片段" class="danger" :disabled="!selectedClipEditable" @click="deleteSelectedClip">
               <el-icon><Delete /></el-icon>
@@ -293,7 +303,9 @@
                   step="0.01"
                   :value="point.volume"
                   :disabled="!selectedClipEditable"
-                  @change="setEnvelopePoint(index, 'volume', $event)"
+                  @pointerdown="pushHistory"
+                  @input="setEnvelopePointLive(index, 'volume', $event)"
+                  @change="flushLiveControlSave"
                 />
                 <b>{{ point.volume.toFixed(2) }}x</b>
                 <button
@@ -393,7 +405,9 @@
                     :step="control.step"
                     :value="effectParamNumber(effect, control)"
                     :disabled="!selectedClipEditable || !effect.enabled"
-                    @change="onEffectRangeChange(effect, control, $event)"
+                    @pointerdown="pushHistory"
+                    @input="onEffectRangeInput(effect, control, $event)"
+                    @change="flushLiveControlSave"
                   />
                 </div>
               </div>
@@ -630,6 +644,15 @@
               </button>
               <button
                 class="split-btn"
+                :disabled="!canMergeNextClip || mergingAudio"
+                title="将所选片段与后一片段渲染合并"
+                @click="mergeSelectedClipWithNext"
+              >
+                <el-icon><Connection /></el-icon>
+                <span>{{ mergingAudio ? '合并中' : '合并下一段' }}</span>
+              </button>
+              <button
+                class="split-btn"
                 :disabled="!selectedTrack || copyingAudio"
                 title="复制选中音轨音频"
                 @click="copySelectedTrackAudio"
@@ -759,6 +782,7 @@ import {
   Aim,
   Close,
   CopyDocument,
+  Connection,
   Cpu,
   DArrowLeft,
   Delete,
@@ -862,6 +886,7 @@ const playhead = ref(0)
 const playing = ref(false)
 const previewing = ref(false)
 const copyingAudio = ref(false)
+const mergingAudio = ref(false)
 const pastingAudio = ref(false)
 const rerunning = ref(false)
 const silenceSplitting = ref(false)
@@ -886,31 +911,52 @@ const pluginHostStatus = ref<EditorPluginHostStatus | null>(null)
 const pluginInspectResult = ref<EditorPluginInspectResult | null>(null)
 const pluginHostLoading = ref(false)
 const pluginWindowSessionId = ref('')
+const pluginMonitorClipId = ref('')
+const pluginMonitorTimelineStart = ref(0)
+const nativeSeekRevision = ref(0)
 const playbackMode = ref<PlaybackMode>('none')
 const timelineSeeking = ref(false)
 const activeInspectorPanel = ref<InspectorPanel>('clip')
 const rerunModelId = ref('')
 const renderedPath = ref('')
-const audioEl = ref<HTMLAudioElement | null>(null)
+const audioPrimaryEl = ref<HTMLAudioElement | null>(null)
+const audioSecondaryEl = ref<HTMLAudioElement | null>(null)
+const activeAudioSlot = ref<0 | 1>(0)
+const audioEl = computed(() => activeAudioSlot.value === 0 ? audioPrimaryEl.value : audioSecondaryEl.value)
+const nativeRealtimeReady = computed(() => {
+  const monitor = pluginHostStatus.value?.monitor
+  return !!pluginWindowSessionId.value
+    && !!pluginHostStatus.value?.realtime_ready
+    && !!monitor?.audio_output_ready
+})
 const scrollEl = ref<HTMLElement | null>(null)
 const rulerEl = ref<HTMLElement | null>(null)
 const history = ref<EditorProject[]>([])
 const future = ref<EditorProject[]>([])
 const drag = ref<DragState | null>(null)
 let clipStopTimer: ReturnType<typeof setTimeout> | null = null
+let clipPlaybackClipId = ''
 let lastPlayToggleAt = 0
 let mixPreviewRequestId = 0
 let activeMixSignature = ''
 let pendingMixSignature = ''
-let liveMixRefreshRevision = 0
 let liveMixRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let liveMixRenderInFlight = false
+let liveControlSaveTimer: ReturnType<typeof setTimeout> | null = null
+let projectSaveChain: Promise<void> = Promise.resolve()
+let pluginStateSyncTimer: ReturnType<typeof setInterval> | null = null
+let pluginStateSyncInFlight = false
+let pluginSafetyWarningShown = false
 let waveformZoomTimer: ReturnType<typeof setTimeout> | null = null
 const waveformLoading = new Set<string>()
 
 const fallbackPeaks = Array.from({ length: 56 }, (_, i) => 0.18 + Math.abs(Math.sin(i * 0.33)) * 0.5)
 const MIN_RERUN_CLIP_SECONDS = 1
 const PLAY_TOGGLE_DEBOUNCE_MS = 350
-const LIVE_MIX_REFRESH_DEBOUNCE_MS = 180
+const LIVE_MIX_REFRESH_DEBOUNCE_MS = 90
+const LIVE_CONTROL_SAVE_DEBOUNCE_MS = 120
+const MIX_CROSSFADE_MS = 90
+const PLUGIN_STATE_SYNC_INTERVAL_MS = 120
 const RERUN_PREFS_KEY = 'xb-editor-rerun-params'
 const f0Methods = ['rmvpe', 'crepe', 'harvest', 'pm']
 const deviceOptions = [
@@ -1169,6 +1215,18 @@ const canRerunSelectedClip = computed(() => {
     selectedClipDuration.value >= MIN_RERUN_CLIP_SECONDS &&
     (!isSeedVcRerunModel.value || !!rerunReferenceAudio.value)
   )
+})
+const nextMergeClip = computed(() => {
+  const track = selectedTrack.value
+  const clip = selectedClip.value
+  if (!track || !clip) return null
+  const ordered = [...track.clips].sort((a, b) => a.start - b.start || a.id.localeCompare(b.id))
+  const index = ordered.findIndex((item) => item.id === clip.id)
+  return index >= 0 ? ordered[index + 1] || null : null
+})
+const canMergeNextClip = computed(() => {
+  const next = nextMergeClip.value
+  return selectedClipEditable.value && !!next && !next.locked && !selectedTrack.value?.locked
 })
 const rerunFrameworkText = computed(() => modelFrameworkLabel(selectedRerunFramework.value))
 const signedRerunPitch = computed(() => rerunPitch.value > 0 ? `+${rerunPitch.value}` : String(rerunPitch.value))
@@ -1685,16 +1743,38 @@ async function pasteAudioToTrack(trackId?: string | null) {
   }
 }
 
-async function saveProject() {
-  if (!project.value) return
-  project.value.duration = calcDuration(project.value)
-  const mixSignature = mixRenderSignature(project.value)
-  const liveRevision = prepareLiveMixRefresh(mixSignature)
-  const projectId = project.value.id
-  const saved = await api.saveEditorProject(project.value)
-  if (saved && project.value?.id === projectId) project.value = saved
-  if (saved && liveRevision !== null) scheduleLiveMixRefresh(liveRevision, mixSignature)
-  else if (!saved && liveRevision === liveMixRefreshRevision) pendingMixSignature = ''
+function queueLiveControlSave() {
+  renderedPath.value = ''
+  if (liveControlSaveTimer) clearTimeout(liveControlSaveTimer)
+  liveControlSaveTimer = setTimeout(() => {
+    liveControlSaveTimer = null
+    void saveProject()
+  }, LIVE_CONTROL_SAVE_DEBOUNCE_MS)
+}
+
+async function flushLiveControlSave() {
+  if (liveControlSaveTimer) {
+    clearTimeout(liveControlSaveTimer)
+    liveControlSaveTimer = null
+  }
+  await saveProject()
+}
+
+function saveProject(): Promise<void> {
+  projectSaveChain = projectSaveChain
+    .catch(() => undefined)
+    .then(async () => {
+      const outgoing = snapshot()
+      if (!outgoing) return
+      outgoing.duration = calcDuration(outgoing)
+      const mixSignature = mixRenderSignature(outgoing)
+      const saved = await api.saveEditorProject(outgoing)
+      if (!saved || project.value?.id !== outgoing.id) return
+      project.value.duration = calcDuration(project.value)
+      project.value.updated_at = saved.updated_at
+      requestLiveMixRefresh(mixSignature)
+    })
+  return projectSaveChain
 }
 
 async function undo() {
@@ -1837,6 +1917,11 @@ function setPlayheadFromPointer(e: PointerEvent) {
 }
 
 function syncMixAudioToPlayhead() {
+  if (nativeRealtimeReady.value && playbackMode.value === 'mix') {
+    nativeSeekRevision.value += 1
+    void syncPluginNativeEditor()
+    return
+  }
   const el = audioEl.value
   if (!el || playbackMode.value !== 'mix' || !el.src) return
   const max = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : project.value?.duration || playhead.value
@@ -2071,14 +2156,12 @@ async function removeClipEffect(effectId: string) {
   await saveProject()
 }
 
-async function onEffectRangeChange(effect: EditorClipEffect, control: EffectControl, e: Event) {
+function onEffectRangeInput(effect: EditorClipEffect, control: EffectControl, e: Event) {
   if (!selectedClipEditable.value) return
   const value = Number((e.target as HTMLInputElement).value)
   if (!Number.isFinite(value)) return
-  pushHistory()
   effect.params = { ...(effect.params || {}), [control.key]: value }
-  renderedPath.value = ''
-  await saveProject()
+  queueLiveControlSave()
 }
 
 async function setPluginPath(effect: EditorClipEffect, e: Event) {
@@ -2173,7 +2256,7 @@ async function inspectActivePlugin() {
 }
 
 async function openPluginNativeEditor() {
-  if (!project.value || !selected.value || !activePluginEffect.value) return
+  if (!project.value || !selected.value || !activePluginEffect.value || pluginWindowSessionId.value) return
   pluginHostLoading.value = true
   try {
     const res = await api.openEditorEffectPlugin(
@@ -2189,16 +2272,146 @@ async function openPluginNativeEditor() {
       return
     }
     pluginWindowSessionId.value = res.session_id
-    ElMessage.success('插件 GUI 已打开')
+    pluginSafetyWarningShown = false
+    pluginMonitorClipId.value = selectedClip.value?.id || ''
+    pluginMonitorTimelineStart.value = selectedClip.value?.start || 0
+    if (res.realtime_ready && res.monitor?.audio_output_ready && playbackMode.value === 'mix') {
+      const current = audioEl.value
+      const continuePlaying = playing.value || htmlAudioOutputActive()
+      if (continuePlaying) {
+        playhead.value = clamp(current?.currentTime || playhead.value, 0, project.value.duration)
+      }
+      cancelScheduledLiveMixRefresh()
+      resetAudioPlayer(audioPrimaryEl.value)
+      resetAudioPlayer(audioSecondaryEl.value)
+      activeAudioSlot.value = 0
+      playing.value = continuePlaying
+      if (continuePlaying) nativeSeekRevision.value += 1
+    }
+    startPluginStateSync()
+    if (res.realtime_ready && res.monitor?.audio_output_ready) {
+      ElMessage.success(`插件 GUI 已打开，${res.monitor.block_size || 128} samples 实时播放已连接`)
+    } else if (res.realtime_reason) {
+      ElMessage.warning(res.realtime_reason)
+    } else if (res.monitor_ready) ElMessage.success('插件 GUI 已打开，实时监听已连接')
+    else ElMessage.warning('插件 GUI 已打开，但监听音频准备失败')
   } finally {
     pluginHostLoading.value = false
   }
 }
 
+function stopPluginStateSync() {
+  if (pluginStateSyncTimer) {
+    clearInterval(pluginStateSyncTimer)
+    pluginStateSyncTimer = null
+  }
+}
+
+function startPluginStateSync() {
+  stopPluginStateSync()
+  void syncPluginNativeEditor()
+  pluginStateSyncTimer = setInterval(() => void syncPluginNativeEditor(), PLUGIN_STATE_SYNC_INTERVAL_MS)
+}
+
+function currentPluginTransport() {
+  const el = audioEl.value
+  if (nativeRealtimeReady.value && playbackMode.value === 'mix') {
+    pauseHtmlAudioOutputs()
+    return {
+      playing: playing.value,
+      audible: true,
+      output_enabled: true,
+      position_seconds: playhead.value,
+      seek_revision: nativeSeekRevision.value,
+    }
+  }
+  const active = !!el && playing.value && !el.paused
+  if (playbackMode.value === 'mix') {
+    return {
+      playing: active,
+      audible: active,
+      output_enabled: false,
+      position_seconds: el?.currentTime || playhead.value,
+    }
+  }
+  if (playbackMode.value === 'clip') {
+    const audible = active && clipPlaybackClipId === pluginMonitorClipId.value
+    return {
+      playing: audible,
+      audible,
+      output_enabled: false,
+      position_seconds: pluginMonitorTimelineStart.value + (el?.currentTime || 0),
+    }
+  }
+  return {
+    playing: false,
+    audible: false,
+    output_enabled: false,
+    position_seconds: playhead.value,
+  }
+}
+
+async function syncPluginNativeEditor() {
+  const session = pluginWindowSessionId.value
+  if (!session || pluginStateSyncInFlight) return
+  pluginStateSyncInFlight = true
+  try {
+    const wasNativeRealtime = nativeRealtimeReady.value
+    const res = await api.syncEditorEffectPlugin(session, currentPluginTransport())
+    if (pluginWindowSessionId.value !== session) return
+    pluginHostStatus.value = res
+    if (wasNativeRealtime && !res.closed && res.monitor?.audio_output_ready === false) {
+      playing.value = false
+      playbackMode.value = 'none'
+      ElMessage.warning(res.monitor.error || '原生音频设备已断开，播放已暂停')
+    }
+    if (nativeRealtimeReady.value && playbackMode.value === 'mix' && res.monitor) {
+      const nextPosition = Number(res.monitor.position_seconds)
+      if (!timelineSeeking.value && Number.isFinite(nextPosition)) {
+        playhead.value = clamp(nextPosition, 0, project.value?.duration || nextPosition)
+      }
+      if (res.monitor.ended) {
+        playing.value = false
+        playbackMode.value = 'none'
+        if (project.value) playhead.value = project.value.duration
+      }
+      if (res.monitor.safety_bypassed && !pluginSafetyWarningShown) {
+        pluginSafetyWarningShown = true
+        ElMessage.warning('插件持续输出静音或非法采样，已自动旁通为干声保护')
+      } else if (!res.monitor.safety_bypassed) {
+        pluginSafetyWarningShown = false
+      }
+    }
+    if (res.project) {
+      renderedPath.value = ''
+      applyProject(res.project)
+    }
+    if (res.closed) {
+      if (wasNativeRealtime && playbackMode.value === 'mix') {
+        playing.value = false
+        playbackMode.value = 'none'
+      }
+      pluginWindowSessionId.value = ''
+      stopPluginStateSync()
+    }
+  } catch {
+    // A temporary state-file race must not interrupt playback or close the native editor.
+  } finally {
+    pluginStateSyncInFlight = false
+  }
+}
+
 async function closePluginNativeEditor() {
   if (!pluginWindowSessionId.value) return
+  if (nativeRealtimeReady.value && playbackMode.value === 'mix' && playing.value) {
+    stopPlayback()
+  }
   const session = pluginWindowSessionId.value
   pluginWindowSessionId.value = ''
+  pluginMonitorClipId.value = ''
+  pluginMonitorTimelineStart.value = 0
+  pluginSafetyWarningShown = false
+  stopPluginStateSync()
   const res = await api.closeEditorEffectPlugin(session)
   pluginHostStatus.value = res
   if (res.project) {
@@ -2270,6 +2483,24 @@ async function setEnvelopePoint(index: number, field: 'time' | 'volume', e: Even
   clip.volume_envelope = sanitizeVolumeEnvelope(points, clipDuration(clip))
   renderedPath.value = ''
   await saveProject()
+}
+
+function setEnvelopePointLive(index: number, field: 'time' | 'volume', e: Event) {
+  const clip = selectedClip.value
+  if (!clip || !selectedClipEditable.value) return
+  const points = [...(clip.volume_envelope || [])]
+  const current = points[index]
+  if (!current) return
+  const value = Number((e.target as HTMLInputElement).value)
+  if (!Number.isFinite(value)) return
+  points[index] = {
+    ...current,
+    [field]: field === 'time'
+      ? clamp(value, 0, clipDuration(clip))
+      : clamp(value, 0, 2.5),
+  }
+  clip.volume_envelope = sanitizeVolumeEnvelope(points, clipDuration(clip))
+  queueLiveControlSave()
 }
 
 async function removeEnvelopePoint(index: number) {
@@ -2344,6 +2575,37 @@ async function copySelectedTrackAudio() {
     handleCopyAudioResult(res, '音轨音频')
   } finally {
     copyingAudio.value = false
+  }
+}
+
+async function mergeSelectedClipWithNext() {
+  const currentProject = project.value
+  const track = selectedTrack.value
+  const clip = selectedClip.value
+  const next = nextMergeClip.value
+  if (!currentProject || !track || !clip || !next || !canMergeNextClip.value) {
+    ElMessage.info('请选择一个后面还有可编辑片段的音频片段')
+    return
+  }
+  await flushLiveControlSave()
+  stopPlayback()
+  mergingAudio.value = true
+  try {
+    const res = await api.mergeEditorClips(currentProject.id, track.id, [clip.id, next.id])
+    if (!res.ok || !res.project || !res.clip) {
+      ElMessage.error(res.error || '音频合并失败')
+      return
+    }
+    history.value = []
+    future.value = []
+    renderedPath.value = res.path || ''
+    applyProject(res.project)
+    selected.value = { trackId: track.id, clipId: res.clip.id }
+    ElMessage.success('已将两个片段渲染合并，可使用撤销恢复')
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '音频合并失败')
+  } finally {
+    mergingAudio.value = false
   }
 }
 
@@ -2693,6 +2955,7 @@ function claimPlayToggle() {
 }
 
 function isMixPlaybackActive() {
+  if (nativeRealtimeReady.value) return playing.value && playbackMode.value === 'mix'
   return !!audioEl.value?.src && playing.value && playbackMode.value === 'mix'
 }
 
@@ -2721,89 +2984,114 @@ function mixRenderSignature(value: EditorProject) {
 }
 
 function cancelScheduledLiveMixRefresh() {
-  liveMixRefreshRevision += 1
   pendingMixSignature = ''
   if (liveMixRefreshTimer) {
     clearTimeout(liveMixRefreshTimer)
     liveMixRefreshTimer = null
   }
-}
-
-function invalidateLiveMixRefresh() {
-  cancelScheduledLiveMixRefresh()
   mixPreviewRequestId += 1
-  return liveMixRefreshRevision
 }
 
-function prepareLiveMixRefresh(mixSignature: string) {
-  if (!isMixPlaybackActive()) return null
-  if (mixSignature === activeMixSignature) {
-    if (pendingMixSignature && pendingMixSignature !== mixSignature) invalidateLiveMixRefresh()
-    return null
-  }
-  if (mixSignature === pendingMixSignature) return null
-  const revision = invalidateLiveMixRefresh()
-  pendingMixSignature = mixSignature
-  return revision
+function standbyAudioEl() {
+  return activeAudioSlot.value === 0 ? audioSecondaryEl.value : audioPrimaryEl.value
 }
 
-function scheduleLiveMixRefresh(revision: number, mixSignature: string) {
-  if (
-    revision !== liveMixRefreshRevision ||
-    mixSignature !== pendingMixSignature ||
-    !isMixPlaybackActive()
-  ) return
+function resetAudioPlayer(el: HTMLAudioElement | null) {
+  if (!el) return
+  el.pause()
+  el.volume = 1
+  el.removeAttribute('src')
+  el.load()
+}
+
+function htmlAudioOutputActive() {
+  return [audioPrimaryEl.value, audioSecondaryEl.value]
+    .some((el) => !!el?.src && !el.paused)
+}
+
+function pauseHtmlAudioOutputs() {
+  audioPrimaryEl.value?.pause()
+  audioSecondaryEl.value?.pause()
+}
+
+function scheduleLiveMixRefresh(delay = LIVE_MIX_REFRESH_DEBOUNCE_MS) {
+  if (!pendingMixSignature || liveMixRenderInFlight || !isMixPlaybackActive()) return
+  if (liveMixRefreshTimer) clearTimeout(liveMixRefreshTimer)
   liveMixRefreshTimer = setTimeout(() => {
     liveMixRefreshTimer = null
-    void refreshLiveMixPreview(revision, mixSignature)
-  }, LIVE_MIX_REFRESH_DEBOUNCE_MS)
+    void refreshLiveMixPreview()
+  }, delay)
 }
 
-function requestLiveMixRefresh() {
-  if (!project.value || !isMixPlaybackActive()) return
-  const mixSignature = mixRenderSignature(project.value)
-  const revision = prepareLiveMixRefresh(mixSignature)
-  if (revision !== null) scheduleLiveMixRefresh(revision, mixSignature)
-}
-
-async function refreshLiveMixPreview(revision: number, mixSignature: string) {
-  const el = audioEl.value
-  const currentProject = project.value
-  if (
-    revision !== liveMixRefreshRevision ||
-    !el ||
-    !currentProject ||
-    !isMixPlaybackActive()
-  ) {
-    if (revision === liveMixRefreshRevision) pendingMixSignature = ''
+function requestLiveMixRefresh(signature?: string) {
+  if (!project.value || !isMixPlaybackActive() || nativeRealtimeReady.value) return
+  const mixSignature = signature || mixRenderSignature(project.value)
+  if (mixSignature === activeMixSignature && !liveMixRenderInFlight) {
+    pendingMixSignature = ''
     return
   }
+  pendingMixSignature = mixSignature
+  scheduleLiveMixRefresh()
+}
+
+function crossfadeAudioPlayers(
+  from: HTMLAudioElement,
+  to: HTMLAudioElement,
+  requestId: number,
+) {
+  return new Promise<boolean>((resolve) => {
+    const started = performance.now()
+    const step = (now: number) => {
+      if (requestId !== mixPreviewRequestId || !isMixPlaybackActive()) {
+        from.volume = 1
+        resetAudioPlayer(to)
+        resolve(false)
+        return
+      }
+      const ratio = clamp((now - started) / MIX_CROSSFADE_MS, 0, 1)
+      from.volume = 1 - ratio
+      to.volume = ratio
+      if (ratio < 1) {
+        requestAnimationFrame(step)
+        return
+      }
+      activeAudioSlot.value = to === audioPrimaryEl.value ? 0 : 1
+      to.volume = 1
+      resetAudioPlayer(from)
+      resolve(true)
+    }
+    requestAnimationFrame(step)
+  })
+}
+
+async function refreshLiveMixPreview() {
+  const from = audioEl.value
+  const currentProject = project.value
+  const mixSignature = pendingMixSignature
+  if (!from || !currentProject || !mixSignature || !isMixPlaybackActive()) return
 
   const requestId = ++mixPreviewRequestId
+  pendingMixSignature = ''
+  liveMixRenderInFlight = true
   previewing.value = true
   try {
-    // 渲染期间继续播放旧预览，只在新预览就绪后按当前时间点热切换。
     const data = await api.renderEditorPreview(currentProject.id)
-    if (
-      requestId !== mixPreviewRequestId ||
-      revision !== liveMixRefreshRevision ||
-      !isMixPlaybackActive()
-    ) return
+    if (requestId !== mixPreviewRequestId || !isMixPlaybackActive()) return
     if (!data) throw new Error('后端没有返回预览音频')
 
-    const resumeAt = clamp(el.currentTime, 0, project.value?.duration || el.currentTime)
-    const previousSrc = el.src
+    const to = standbyAudioEl()
+    if (!to) throw new Error('备用播放器未就绪')
+    const resumeAt = clamp(from.currentTime, 0, project.value?.duration || from.currentTime)
+    resetAudioPlayer(to)
     try {
-      el.src = data
-      el.currentTime = resumeAt
-      await el.play()
-      activeMixSignature = mixSignature
+      to.volume = 0
+      to.src = data
+      to.currentTime = resumeAt
+      await to.play()
+      if (await crossfadeAudioPlayers(from, to, requestId)) activeMixSignature = mixSignature
     } catch (err) {
-      if (previousSrc && requestId === mixPreviewRequestId && isMixPlaybackActive()) {
-        el.src = previousSrc
-        el.currentTime = resumeAt
-        await el.play().catch(() => undefined)
-      }
+      from.volume = 1
+      resetAudioPlayer(to)
       throw err
     }
   } catch (err) {
@@ -2812,8 +3100,11 @@ async function refreshLiveMixPreview(revision: number, mixSignature: string) {
     }
   } finally {
     if (requestId === mixPreviewRequestId) {
-      pendingMixSignature = ''
       previewing.value = false
+    }
+    liveMixRenderInFlight = false
+    if (pendingMixSignature && pendingMixSignature !== activeMixSignature) {
+      scheduleLiveMixRefresh(0)
     }
   }
 }
@@ -2822,18 +3113,18 @@ function stopPlayback() {
   cancelScheduledLiveMixRefresh()
   mixPreviewRequestId += 1
   activeMixSignature = ''
+  clipPlaybackClipId = ''
   previewing.value = false
   if (clipStopTimer) {
     clearTimeout(clipStopTimer)
     clipStopTimer = null
   }
-  if (audioEl.value) {
-    audioEl.value.pause()
-    audioEl.value.removeAttribute('src')
-    audioEl.value.load()
-  }
+  resetAudioPlayer(audioPrimaryEl.value)
+  resetAudioPlayer(audioSecondaryEl.value)
+  activeAudioSlot.value = 0
   playing.value = false
   playbackMode.value = 'none'
+  if (pluginWindowSessionId.value) void syncPluginNativeEditor()
 }
 
 async function playMix() {
@@ -2844,6 +3135,20 @@ async function playMix() {
     return
   }
   if (previewing.value) return
+  if (nativeRealtimeReady.value) {
+    await saveProject()
+    cancelScheduledLiveMixRefresh()
+    resetAudioPlayer(audioPrimaryEl.value)
+    resetAudioPlayer(audioSecondaryEl.value)
+    activeAudioSlot.value = 0
+    playbackMode.value = 'mix'
+    clipPlaybackClipId = ''
+    nativeSeekRevision.value += 1
+    playing.value = true
+    activeMixSignature = project.value ? mixRenderSignature(project.value) : ''
+    await syncPluginNativeEditor()
+    return
+  }
   const requestId = ++mixPreviewRequestId
   previewing.value = true
   try {
@@ -2860,9 +3165,14 @@ async function playMix() {
       clipStopTimer = null
     }
     playbackMode.value = 'mix'
-    audioEl.value.src = data
-    audioEl.value.currentTime = Math.max(0, playhead.value)
-    await audioEl.value.play()
+    clipPlaybackClipId = ''
+    const el = audioEl.value
+    if (!el) return
+    resetAudioPlayer(standbyAudioEl())
+    el.volume = 1
+    el.src = data
+    el.currentTime = Math.max(0, playhead.value)
+    await el.play()
     playing.value = true
     activeMixSignature = mixRenderSignature(project.value)
   } catch (err) {
@@ -2883,14 +3193,19 @@ async function playSelectedClip() {
     ElMessage.error('无法加载片段音频')
     return
   }
+  stopPlayback()
   if (clipStopTimer) clearTimeout(clipStopTimer)
+  const el = audioEl.value
+  if (!el) return
   playbackMode.value = 'clip'
-  audioEl.value.src = data
-  audioEl.value.currentTime = 0
-  await audioEl.value.play()
+  clipPlaybackClipId = clip.id
+  el.src = data
+  el.currentTime = 0
+  await el.play()
   playing.value = true
   clipStopTimer = setTimeout(() => {
-    audioEl.value?.pause()
+    el.pause()
+    clipPlaybackClipId = ''
     playing.value = false
     playbackMode.value = 'none'
   }, Math.max(80, (clip.end - clip.start) * 1000))
@@ -2910,6 +3225,7 @@ async function exportMix(fmt: string) {
 
 async function exitEditor() {
   stopPlayback()
+  await closePluginNativeEditor()
   if (project.value) await saveProject()
   await router.push('/editor/projects')
 }
@@ -2976,21 +3292,32 @@ async function rerunClip() {
 
 function seekStart() {
   playhead.value = 0
+  if (nativeRealtimeReady.value && playbackMode.value === 'mix') {
+    nativeSeekRevision.value += 1
+    void syncPluginNativeEditor()
+    return
+  }
   if (audioEl.value && playbackMode.value === 'mix') audioEl.value.currentTime = 0
 }
-function onAudioPause() {
+function isActiveAudioEvent(event: Event) {
+  return event.currentTarget === audioEl.value
+}
+function onAudioPause(event: Event) {
+  if (!isActiveAudioEvent(event)) return
   if (audioEl.value?.ended) playing.value = false
 }
-function onAudioEnded() {
+function onAudioEnded(event: Event) {
+  if (!isActiveAudioEvent(event)) return
   cancelScheduledLiveMixRefresh()
-  mixPreviewRequestId += 1
   activeMixSignature = ''
+  clipPlaybackClipId = ''
   previewing.value = false
   playing.value = false
   playbackMode.value = 'none'
   if (project.value) playhead.value = project.value.duration
 }
-function onAudioTimeUpdate() {
+function onAudioTimeUpdate(event: Event) {
+  if (!isActiveAudioEvent(event)) return
   const el = audioEl.value
   if (!el || playbackMode.value !== 'mix' || timelineSeeking.value) return
   playhead.value = clamp(el.currentTime, 0, project.value?.duration || el.currentTime)
@@ -3137,6 +3464,11 @@ onMounted(() => {
 })
 onUnmounted(() => {
   cancelScheduledLiveMixRefresh()
+  if (liveControlSaveTimer) clearTimeout(liveControlSaveTimer)
+  resetAudioPlayer(audioPrimaryEl.value)
+  resetAudioPlayer(audioSecondaryEl.value)
+  stopPluginStateSync()
+  void closePluginNativeEditor()
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('pointermove', onDragMove)
   window.removeEventListener('pointermove', onTimelinePointerMove)

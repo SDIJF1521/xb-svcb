@@ -32,12 +32,14 @@ import type {
   InferenceQueueStatus,
   CreateBatchWorkPayload,
   EditorClip,
+  EditorClipMergeResult,
   EditorAudioCopyResult,
   EditorAudioPasteResult,
   EditorPluginHostStatus,
   EditorPluginInspectResult,
   EditorPluginWindowResult,
   EditorPluginCloseResult,
+  EditorPluginTransport,
   EditorProject,
   EditorProjectSummary,
   EditorTrack,
@@ -1305,6 +1307,16 @@ export const mock = {
     return {
       ...this.getEditorPluginHostStatus(),
       session_id: rid('juce_'),
+      realtime_ready: true,
+      monitor: {
+        ready: true,
+        realtime_ready: true,
+        audio_output_ready: true,
+        device_name: 'Mock Audio Device',
+        sample_rate: 44100,
+        block_size: 128,
+        latency_ms: 5.8,
+      },
     }
   },
   closeEditorEffectPlugin(sessionId: string): EditorPluginCloseResult {
@@ -1314,6 +1326,26 @@ export const mock = {
       closed: true,
       plugin: {
         parameter_values: {},
+      },
+    }
+  },
+  syncEditorEffectPlugin(sessionId: string, transport: EditorPluginTransport): EditorPluginCloseResult {
+    console.info('[mock] syncEditorEffectPlugin', sessionId, transport)
+    return {
+      ...this.getEditorPluginHostStatus(),
+      closed: false,
+      monitor_ready: true,
+      realtime_ready: true,
+      monitor: {
+        ready: true,
+        realtime_ready: true,
+        audio_output_ready: true,
+        playing: transport.playing,
+        position_seconds: transport.position_seconds,
+        device_name: 'Mock Audio Device',
+        sample_rate: 44100,
+        block_size: 128,
+        latency_ms: 5.8,
       },
     }
   },
@@ -1329,6 +1361,55 @@ export const mock = {
       ok: true,
       path: `C:/exports/${projectId}_${trackId}.${editorFormat(fmt)}`,
       clipboard: true,
+    }
+  },
+  mergeEditorClips(projectId: string, trackId: string, clipIds: string[]): EditorClipMergeResult {
+    const project = mockEditorProjects.find((item) => item.id === projectId)
+    const track = project?.tracks.find((item) => item.id === trackId)
+    if (!project || !track) return { ok: false, error: '工程或音轨不存在' }
+    const requested = [...new Set(clipIds)]
+    const clips = track.clips
+      .filter((clip) => requested.includes(clip.id))
+      .sort((a, b) => a.start - b.start)
+    if (clips.length < 2 || clips.length !== requested.length) {
+      return { ok: false, error: '至少选择两个同轨片段' }
+    }
+    mockEditorHistory[projectId] = [...(mockEditorHistory[projectId] || []), cloneProject(project)]
+    mockEditorFuture[projectId] = []
+    const first = clips[0]!
+    const merged: EditorClip = {
+      ...first,
+      id: rid('clp_'),
+      name: clips.map((clip) => clip.name || '片段').join(' + ').slice(0, 80),
+      start: Math.min(...clips.map((clip) => clip.start)),
+      end: Math.max(...clips.map((clip) => clip.end)),
+      offset: 0,
+      volume: 1,
+      mute: false,
+      file: `C:/exports/${projectId}_${Date.now()}_merged.wav`,
+      effects: [],
+      fade_in: 0,
+      fade_out: 0,
+      channel: 'stereo',
+      volume_envelope: [],
+      metadata: {
+        ...(first.metadata || {}),
+        source: 'editor_merge',
+        merged_clip_ids: requested,
+      },
+    }
+    const requestedSet = new Set(requested)
+    track.clips = [...track.clips.filter((clip) => !requestedSet.has(clip.id)), merged]
+      .sort((a, b) => a.start - b.start)
+    project.duration = Math.max(0.05, ...project.tracks.flatMap((item) => item.clips.map((clip) => clip.end)))
+    project.waveform_cache = {}
+    project.updated_at = now()
+    return {
+      ok: true,
+      project: cloneProject(project),
+      clip: { ...merged, metadata: { ...merged.metadata } },
+      merged_clip_ids: requested,
+      path: merged.file,
     }
   },
   renderEditorPreview(projectId: string): string {

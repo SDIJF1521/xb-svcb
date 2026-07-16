@@ -570,6 +570,15 @@ export interface EditorAudioCopyResult {
   clipboard?: boolean
 }
 
+export interface EditorClipMergeResult {
+  ok: boolean
+  error?: string
+  project?: EditorProject
+  clip?: EditorClip
+  merged_clip_ids?: string[]
+  path?: string
+}
+
 export interface EditorPluginHostStatus {
   ok: boolean
   ready: boolean
@@ -577,6 +586,43 @@ export interface EditorPluginHostStatus {
   protocol: number
   schema: string
   message?: string
+  error?: string
+  monitor_ready?: boolean
+  realtime_ready?: boolean
+  realtime_reason?: string
+  monitor?: EditorPluginMonitorStatus
+}
+
+export interface EditorPluginTransport {
+  playing: boolean
+  audible?: boolean
+  output_enabled?: boolean
+  position_seconds: number
+  seek_revision?: number
+}
+
+export interface EditorPluginMonitorStatus {
+  ready?: boolean
+  realtime_ready?: boolean
+  audio_output_ready?: boolean
+  effect_capable?: boolean
+  playhead_ready?: boolean
+  output_enabled?: boolean
+  playing?: boolean
+  ended?: boolean
+  position_seconds?: number
+  duration_seconds?: number
+  blocks?: number
+  peak?: number
+  output_peak?: number
+  safety_bypassed?: boolean
+  silent_output_ms?: number
+  device_name?: string
+  sample_rate?: number
+  block_size?: number
+  latency_samples?: number
+  latency_ms?: number
+  xruns?: number
   error?: string
 }
 
@@ -595,6 +641,8 @@ export interface EditorPluginCloseResult extends EditorPluginHostStatus {
   plugin?: Record<string, unknown>
   project?: EditorProject
 }
+
+export interface EditorPluginSyncResult extends EditorPluginCloseResult {}
 
 export interface EditorRerunResult {
   ok: boolean

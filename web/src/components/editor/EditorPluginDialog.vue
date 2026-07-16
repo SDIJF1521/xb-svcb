@@ -4,6 +4,13 @@
     title="插件窗口"
     width="760px"
     class="plugin-dialog"
+    append-to-body
+    draggable
+    overflow
+    :modal="false"
+    modal-penetrable
+    :lock-scroll="false"
+    :close-on-click-modal="false"
     @close="emit('closed')"
   >
     <div class="plugin-dialog-body">
@@ -12,14 +19,23 @@
           <b>{{ effect?.name || 'VST3 插件' }}</b>
           <span>{{ hostStatus?.message || '等待 JUCE Host' }}</span>
         </div>
-        <el-button round class="ghost-btn mini-inline" :loading="loading" @click="emit('refresh')">
-          刷新
+        <el-button circle class="ghost-btn mini-inline" :loading="loading" title="刷新 Host 状态" @click="emit('refresh')">
+          <el-icon><Refresh /></el-icon>
         </el-button>
       </div>
       <div class="plugin-host-stage">
         <div class="plugin-host-placeholder">
-          <b>{{ sessionId ? 'JUCE Host 会话已打开' : 'JUCE VST3 Host' }}</b>
+          <b>{{ sessionId ? (hostStatus?.realtime_ready ? '块级实时播放已连接' : (hostStatus?.monitor_ready ? '实时监听已连接' : 'JUCE Host 会话已打开')) : 'JUCE VST3 Host' }}</b>
           <span>{{ activePath || hostStatus?.host_path || '未选择插件' }}</span>
+          <span v-if="hostStatus?.monitor?.audio_output_ready" class="realtime-device">
+            {{ hostStatus.monitor.device_name || '系统音频输出' }} · {{ hostStatus.monitor.block_size || 128 }} samples · {{ Number(hostStatus.monitor.latency_ms || 0).toFixed(1) }} ms
+          </span>
+          <span v-if="hostStatus?.realtime_reason" class="compatibility-note">
+            {{ hostStatus.realtime_reason }}
+          </span>
+          <span v-else-if="hostStatus?.monitor?.safety_bypassed" class="compatibility-note">
+            插件持续输出静音或非法采样，已自动旁通为干声保护。
+          </span>
         </div>
       </div>
       <div v-if="effect" class="plugin-dialog-fields">
@@ -53,10 +69,11 @@
         round
         class="cta-btn"
         :loading="loading"
-        :disabled="!effect || !activePath"
+        :disabled="!effect || !activePath || !!sessionId"
         @click="emit('openNative')"
       >
-        打开插件 GUI
+        <el-icon class="el-icon--left"><Monitor /></el-icon>
+        {{ sessionId ? '插件 GUI 已打开' : '打开插件 GUI' }}
       </el-button>
     </template>
   </el-dialog>
@@ -64,7 +81,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { FolderAdd } from '@element-plus/icons-vue'
+import { FolderAdd, Monitor, Refresh } from '@element-plus/icons-vue'
 import type { EditorClipEffect, EditorPluginHostStatus } from '@/api'
 
 const props = defineProps<{
@@ -152,8 +169,14 @@ function pluginParamJson(effect: EditorClipEffect) {
   color: var(--xb-muted);
   font-size: 12px;
 }
+.plugin-host-placeholder .compatibility-note {
+  color: var(--el-color-warning);
+  white-space: normal;
+}
 .mini-inline {
-  width: auto;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
 }
 .plugin-host-stage {
   min-height: 280px;

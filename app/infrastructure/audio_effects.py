@@ -84,6 +84,40 @@ class AudioEffectsProcessor:
                 return None
         return dst if dst.exists() else None
 
+    def render_monitor_input(
+        self,
+        src: Path,
+        clip: dict[str, Any],
+        effects: list[dict[str, Any]],
+        dst: Path,
+        cache_dir: Path,
+        sample_rate: int,
+    ) -> bool:
+        """Render the signal immediately before a selected plugin in the effect chain."""
+        if not self.ffmpeg or not src.exists():
+            return False
+        monitor_clip = dict(clip)
+        monitor_clip["effects"] = effects
+        enabled = self._enabled_effects(monitor_clip)
+        if enabled:
+            rendered = self.render_clip(src, monitor_clip, dst, cache_dir, sample_rate)
+            if rendered and rendered.exists():
+                return True
+        try:
+            start = max(0.0, float(clip.get("start") or 0.0))
+            end = max(start, float(clip.get("end") or start))
+            offset = max(0.0, float(clip.get("offset") or 0.0))
+        except (TypeError, ValueError):
+            return False
+        return self._extract_clip(
+            src,
+            dst,
+            offset,
+            max(0.01, end - start),
+            monitor_clip,
+            sample_rate,
+        )
+
     def cache_key(
         self,
         src: Path,
@@ -96,6 +130,7 @@ class AudioEffectsProcessor:
         except OSError:
             source = (str(src), 0, 0)
         payload = {
+            "effect_cache_version": 2,
             "source": source,
             "offset": clip.get("offset"),
             "start": clip.get("start"),

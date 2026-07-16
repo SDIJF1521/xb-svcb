@@ -884,6 +884,13 @@ class Api:
     def close_editor_effect_plugin(self, session_id: str) -> dict[str, Any]:
         return self._editor.close_effect_plugin_editor(session_id)
 
+    def sync_editor_effect_plugin(
+        self,
+        session_id: str,
+        transport: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._editor.sync_effect_plugin_editor(session_id, transport or {})
+
     def copy_editor_clip_audio(
         self,
         project_id: str,
@@ -899,6 +906,14 @@ class Api:
         fmt: str = "wav",
     ) -> dict[str, Any]:
         return self._editor.copy_track_audio(project_id, track_id, fmt)
+
+    def merge_editor_clips(
+        self,
+        project_id: str,
+        track_id: str,
+        clip_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return self._editor.merge_clips(project_id, track_id, clip_ids or [])
 
     def render_editor_preview(self, project_id: str) -> str:
         return self._editor.render_preview(project_id)

@@ -41,6 +41,24 @@ class FFmpegEngine:
     def concat(self, parts: list[Path], dst: Path, sample_rate: int = 44100) -> bool:
         return self._tool.concat(parts, dst, sample_rate=sample_rate)
 
+    def render_plugin_monitor_input(
+        self,
+        src: Path,
+        clip: dict[str, Any],
+        effects: list[dict[str, Any]],
+        dst: Path,
+        cache_dir: Path,
+        sample_rate: int = 44100,
+    ) -> bool:
+        return self._effects.render_monitor_input(
+            src,
+            clip,
+            effects,
+            dst,
+            cache_dir,
+            sample_rate,
+        )
+
     def volume(self, src: Path, gain: float, dst: Path, sample_rate: int = 44100) -> bool:
         if not self.ffmpeg:
             return False

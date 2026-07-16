@@ -1,6 +1,6 @@
 # XB-SVCB 安装器
 
-版本：`0.0.20`
+版本：`0.0.21`
 
 安装器由 Inno Setup 读取 `installer/xb-svcb.iss` 构建，负责打包桌面本体、环境搭建脚本、自带模型和文档。
 
@@ -37,6 +37,17 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 ```
 
 临时不打包插件 Host 时可运行 `installer/build.ps1 -SkipJuceHostBuild`。
+
+## v0.0.21 安装器行为
+
+- 应用、Python 项目、前端、两份锁文件和 Inno Setup 版本统一为 `0.0.21`。
+- PyInstaller 包含音频片段渲染合并、插件窗口并行交互、插件 state/播放位置同步、JUCE 块级实时播放和 HTML Audio 回退的当前本体与前端。
+- JUCE VST3 Host 使用非随主窗口失焦关闭的置顶原生插件窗口，继续随安装包离线释放到 `engines/juce-vst3-host`。
+- 随包 Host 当前仅支持 64 位 Windows VST3 音频效果器；VST2 `.dll`、32 位插件、CLAP、AAX、AU 和需要 MIDI 音符的 VST3i 乐器不受支持。
+- JUCE Host 通过 `AudioDeviceManager` 把目标插件处理结果与其余工程底轨混合后送入声卡；实际设备、缓冲大小和延迟由前端显示，安装器继续携带编译好的 Host。
+- 发布构建要求根目录存在 `release_notes_v021.md`，安装后将其与主 `README.md` 一起释放到应用目录。
+- 分卷安装方式保持不变：必须共同发布 `XB-SVCB-Setup.exe` 与全部 `XB-SVCB-Setup-*.bin`。
+- `installer/build.ps1 -ValidateOnly` 会检查 v0.0.21 版本一致性、发布文档、内置模型和 Inno Setup/Pascal 脚本。
 
 ## v0.0.20 安装器行为
 

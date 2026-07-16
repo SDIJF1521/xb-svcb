@@ -71,6 +71,7 @@ target_compile_definitions(xb-juce-vst3-host PRIVATE
 
 target_link_libraries(xb-juce-vst3-host PRIVATE
     juce::juce_audio_basics
+    juce::juce_audio_devices
     juce::juce_audio_formats
     juce::juce_audio_processors
     juce::juce_dsp
