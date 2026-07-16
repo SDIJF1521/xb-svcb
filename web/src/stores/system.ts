@@ -6,6 +6,8 @@ export const useSystemStore = defineStore('system', () => {
   const tools = ref<ToolStatus[]>([])
   const ready = ref(false)
   const loaded = ref(false)
+  let syncTimer: ReturnType<typeof setInterval> | null = null
+  let syncUsers = 0
 
   async function load() {
     const status = await api.getSystemStatus()
@@ -14,5 +16,19 @@ export const useSystemStore = defineStore('system', () => {
     loaded.value = true
   }
 
-  return { tools, ready, loaded, load }
+  function startSync() {
+    syncUsers += 1
+    if (syncUsers > 1) return
+    void load().catch(() => undefined)
+    syncTimer = setInterval(() => void load().catch(() => undefined), 30_000)
+  }
+
+  function stopSync() {
+    syncUsers = Math.max(0, syncUsers - 1)
+    if (syncUsers > 0 || !syncTimer) return
+    clearInterval(syncTimer)
+    syncTimer = null
+  }
+
+  return { tools, ready, loaded, load, startSync, stopSync }
 })

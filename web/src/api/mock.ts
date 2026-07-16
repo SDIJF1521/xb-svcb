@@ -244,7 +244,7 @@ function mockModelOverview(): ModelLibraryOverview {
     size: '0 B',
     default_model_id: null as string | null,
     default_model_name: '',
-    supported: ['so-vits-svc', 'rvc', 'seed-vc'].includes(f.id),
+    supported: ['so-vits-svc', 'rvc', 'seed-vc', 'ddsp-svc'].includes(f.id),
   }))
   const byId = new Map(rows.map((r) => [r.id, r]))
   for (const m of mockModels) {
@@ -335,6 +335,27 @@ function parseMockLyrics(lyrics: string | EditorLyricLine[]): EditorLyricLine[] 
     }
   }
   return lines.sort((a, b) => a.time - b.time)
+}
+
+function parseMockPlainLyrics(lyrics: string | EditorLyricLine[]): string[] {
+  const values = Array.isArray(lyrics)
+    ? lyrics.map((line) => String(line.text || ''))
+    : String(lyrics || '').split(/\r?\n/)
+  return values
+    .flatMap((value) => value.trim().split(/(?<=[。！？!?；;])\s*/))
+    .map((value) => value.trim())
+    .filter((value) => value && !/^\[(?:ar|ti|al|by|offset|length|re|ve):/i.test(value))
+}
+
+function autoTimeMockLyrics(texts: string[], duration: number): EditorLyricLine[] {
+  const weights = texts.map((text) => Math.max(1, text.replace(/[\s，。！？!?；;、,.]/g, '').length))
+  const total = Math.max(1, weights.reduce((sum, value) => sum + value, 0))
+  let cumulative = 0
+  return texts.map((text, index) => {
+    const time = duration * cumulative / total
+    cumulative += weights[index] || 1
+    return { time: Number(time.toFixed(3)), text }
+  })
 }
 
 function makeEditorProject(title: string, source = 'C:/music/demo.wav'): EditorProject {
@@ -430,6 +451,7 @@ export const mock = {
         { key: 'svc', name: 'So-VITS-SVC 推理引擎', desc: '加载用户 So-VITS-SVC 模型进行歌声转换推理', version: 'torch', status: 'cuda', ok: true },
         { key: 'rvc', name: 'RVC 推理引擎', desc: '加载用户 RVC 模型（.pth + 可选 .index）进行歌声转换推理', version: 'rvc-python', status: 'cuda', ok: true },
         { key: 'seedvc', name: 'SeedVC 推理引擎', desc: '加载 SeedVC checkpoint + 参考音频进行歌声转换推理', version: 'Seed-VC', status: 'cuda', ok: true },
+        { key: 'ddsp', name: 'DDSP-SVC 推理引擎', desc: '加载 DDSP-SVC Rectified Flow 模型进行歌声转换', version: 'DDSP-SVC', status: 'cuda', ok: true },
       ],
     }
   },
@@ -560,11 +582,12 @@ export const mock = {
     const framework = payload.framework || 'so-vits-svc'
     const isRvc = framework === 'rvc'
     const isSeedVc = framework === 'seed-vc'
+    const isDdsp = framework === 'ddsp-svc'
     if (!isRvc && !payload.main_config) return null
     const m: ModelDTO = {
       id: rid('mdl_'),
       name: payload.name || fileName(payload.main_model).replace(/\.[^.]+$/, ''),
-      type: isRvc ? 'RVC' : isSeedVc ? 'SeedVC' : 'So-VITS',
+      type: isRvc ? 'RVC' : isSeedVc ? 'SeedVC' : isDdsp ? 'DDSP-SVC' : 'So-VITS',
       framework,
       sample_rate: '44.1kHz',
       size: '400 MB',
@@ -1503,12 +1526,19 @@ export const mock = {
     const clip = idx >= 0 ? track?.clips[idx] : null
     if (!track || !clip) return { ok: false, error: '片段不存在' }
     if (track.locked || clip.locked) return { ok: false, error: '片段已锁定' }
-    const lines = parseMockLyrics(lyrics)
-    if (!lines.length) return { ok: false, error: '没有识别到带时间戳的歌词' }
     const padding = Math.max(0, Math.min(0.5, Number(options?.padding ?? 0.04)))
     const minClip = Math.max(0.05, Math.min(10, Number(options?.min_clip ?? 0.2)))
-    const timeMode = options?.time_mode || 'project'
     const duration = Math.max(0, Number(clip.end || 0) - Number(clip.start || 0))
+    let lines = parseMockLyrics(lyrics)
+    let timing: 'timestamp' | 'auto' = 'timestamp'
+    let timeMode = options?.time_mode || 'project'
+    if (!lines.length) {
+      const plainLines = parseMockPlainLyrics(lyrics)
+      if (plainLines.length < 2) return { ok: false, error: 'TXT 至少需要两句有效歌词才能自动切句' }
+      lines = autoTimeMockLyrics(plainLines, duration)
+      timing = 'auto'
+      timeMode = 'clip'
+    }
     const ranges = lines
       .map((line, i) => {
         const next = lines[i + 1]
@@ -1542,6 +1572,7 @@ export const mock = {
         lyric_text: item.line.text,
         lyric_time: item.line.time,
         lyric_time_mode: timeMode,
+        lyric_timing: timing,
       },
     }))
     track.clips.splice(idx, 1, ...newClips)
@@ -1549,7 +1580,7 @@ export const mock = {
     project.waveform_cache = {}
     project.duration = projectDuration(project)
     project.updated_at = now()
-    return { ok: true, project: cloneProject(project), clips: newClips, lines }
+    return { ok: true, project: cloneProject(project), clips: newClips, lines, timing }
   },
   rerunEditorClip(
     projectId: string,

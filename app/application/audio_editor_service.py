@@ -442,10 +442,6 @@ class AudioEditorService:
         if duration < 0.1:
             return {"ok": False, "error": "片段太短，无法按歌词切分"}
 
-        lines = self._parse_lyric_lines(lyrics)
-        if not lines:
-            return {"ok": False, "error": "没有识别到带时间戳的歌词"}
-
         def opt_float(name: str, default: float) -> float:
             try:
                 return float(opts.get(name, default))
@@ -457,6 +453,42 @@ class AudioEditorService:
             time_mode = "project"
         padding = max(0.0, min(0.5, opt_float("padding", 0.04)))
         min_clip = max(0.05, min(10.0, opt_float("min_clip", 0.2)))
+        lines = self._parse_lyric_lines(lyrics)
+        timing = "timestamp"
+        if not lines:
+            plain_lines = self._parse_plain_lyric_lines(lyrics)
+            if len(plain_lines) < 2:
+                return {"ok": False, "error": "TXT 至少需要两句有效歌词才能自动切句"}
+            silence_points: list[float] = []
+            src = Path(str(clip.get("file") or ""))
+            if (
+                opts.get("auto_silence", True) is not False
+                and src.exists()
+                and self._ffmpeg.available
+            ):
+                noise_db = min(-1.0, max(-90.0, opt_float("threshold_db", -40.0)))
+                min_silence = max(0.1, min(5.0, opt_float("min_silence", 0.3)))
+                silences = self._ffmpeg.detect_silences(
+                    src,
+                    start=offset,
+                    end=offset + duration,
+                    noise_db=noise_db,
+                    min_duration=min_silence,
+                )
+                silence_points = [
+                    (float(item.get("start") or 0.0) + float(item.get("end") or 0.0))
+                    / 2.0
+                    for item in silences
+                    if float(item.get("end") or 0.0) > float(item.get("start") or 0.0)
+                ]
+            lines = self._auto_time_lyric_lines(
+                plain_lines,
+                duration,
+                silence_points,
+                min_clip,
+            )
+            time_mode = "clip"
+            timing = "auto"
         ranges: list[dict[str, Any]] = []
         sorted_lines = sorted(lines, key=lambda x: float(x.get("time") or 0.0))
         for i, line in enumerate(sorted_lines):
@@ -518,6 +550,7 @@ class AudioEditorService:
                     "lyric_text": text,
                     "lyric_time": item_range.get("source_time"),
                     "lyric_time_mode": time_mode,
+                    "lyric_timing": timing,
                 }
             )
             item["metadata"] = meta
@@ -528,7 +561,13 @@ class AudioEditorService:
         next_track["clips"] = sorted(clips, key=lambda c: float(c.get("start") or 0.0))
         next_project["waveform_cache"] = {}
         saved = self.save(next_project, push_history=True)
-        return {"ok": True, "project": saved, "clips": new_clips, "lines": lines}
+        return {
+            "ok": True,
+            "project": saved,
+            "clips": new_clips,
+            "lines": lines,
+            "timing": timing,
+        }
 
     def create_from_work(self, work_id: str) -> dict[str, Any] | None:
         work = self._works_repo.get(work_id)
@@ -1528,6 +1567,69 @@ class AudioEditorService:
                     }
                 )
         return sorted(lines, key=lambda x: float(x["time"]))
+
+    @staticmethod
+    def _parse_plain_lyric_lines(lyrics: Any) -> list[str]:
+        """Parse ordinary TXT lyrics into sentences without inventing timestamps."""
+        if isinstance(lyrics, list):
+            values = [str(item.get("text") or "") for item in lyrics if isinstance(item, dict)]
+        else:
+            values = str(lyrics or "").splitlines()
+        metadata_re = re.compile(r"^\[(?:ar|ti|al|by|offset|length|re|ve):", re.IGNORECASE)
+        sentences: list[str] = []
+        for value in values:
+            value = value.strip().lstrip("\ufeff")
+            if not value or metadata_re.match(value):
+                continue
+            for sentence in re.split(r"(?<=[。！？!?；;])\s*", value):
+                sentence = sentence.strip()
+                if sentence:
+                    sentences.append(sentence[:500])
+        return sentences[:500]
+
+    @staticmethod
+    def _auto_time_lyric_lines(
+        texts: list[str],
+        duration: float,
+        silence_points: list[float],
+        min_clip: float,
+    ) -> list[dict[str, Any]]:
+        """Assign TXT sentences to the clip, snapping proportional cuts to nearby silences."""
+        if not texts or duration <= 0:
+            return []
+        weights = [
+            max(1, len(re.sub(r"[\s，。！？!?；;、,.]", "", text)))
+            for text in texts
+        ]
+        total_weight = max(1, sum(weights))
+        cumulative = 0
+        targets: list[float] = []
+        for weight in weights[:-1]:
+            cumulative += weight
+            targets.append(duration * cumulative / total_weight)
+
+        points = sorted(
+            {
+                max(0.0, min(duration, float(point)))
+                for point in silence_points
+                if 0.0 < float(point) < duration
+            }
+        )
+        boundaries = [0.0]
+        for index, target in enumerate(targets):
+            remaining = len(targets) - index
+            lower = boundaries[-1] + min_clip
+            upper = duration - remaining * min_clip
+            if upper < lower:
+                lower = upper = max(boundaries[-1], min(duration, target))
+            eligible = [point for point in points if lower <= point <= upper]
+            chosen = min(eligible, key=lambda point: abs(point - target)) if eligible else target
+            boundaries.append(max(lower, min(upper, chosen)))
+
+        return [
+            {"time": round(boundaries[index], 3), "text": text}
+            for index, text in enumerate(texts)
+        ]
 
     @staticmethod
     def _speech_ranges_from_silence(

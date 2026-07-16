@@ -33,6 +33,7 @@ from application import (
 )
 from infrastructure import paths
 from infrastructure.engine import EngineRegistry
+from infrastructure.ddsp_engine import DdspSvcEngine
 from infrastructure.ffmpeg_tool import FfmpegTool
 from infrastructure.rvc_engine import RvcEngine
 from infrastructure.seedvc_engine import SeedVcEngine
@@ -1366,8 +1367,9 @@ def build_api() -> Api:
     svc = SvcEngine()
     rvc = RvcEngine()
     seedvc = SeedVcEngine()
+    ddsp = DdspSvcEngine()
     # 引擎注册表：按模型 framework 路由推理引擎（缺省回退 so-vits-svc）
-    engines = EngineRegistry([svc, rvc, seedvc])
+    engines = EngineRegistry([svc, rvc, seedvc, ddsp])
 
     models_repo = ListRepository(config.MODELS_DB)
     works_repo = ListRepository(config.WORKS_DB)
@@ -1375,7 +1377,7 @@ def build_api() -> Api:
     settings = SettingsStore(config.SETTINGS_DB)
 
     # 应用服务
-    system_service = SystemService(ffmpeg, uvr, svc, rvc, seedvc)
+    system_service = SystemService(ffmpeg, uvr, svc, rvc, seedvc, ddsp)
     model_service = ModelService(models_repo, settings)
     conversion_service = ConversionService(works_repo, ffmpeg, uvr, engines)
     work_service = WorkService(works_repo, conversion_service, model_service, settings)

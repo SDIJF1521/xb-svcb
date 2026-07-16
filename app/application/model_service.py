@@ -28,7 +28,7 @@ class ModelService:
         default_id = self.default_id()
         summaries: dict[str, dict[str, Any]] = {}
         total_size = 0
-        supported = {"so-vits-svc", "rvc", "seed-vc"}
+        supported = {"so-vits-svc", "rvc", "seed-vc", "ddsp-svc"}
 
         for fw, name in config.MODELHUB_FRAMEWORKS.items():
             summaries[fw] = {
@@ -99,12 +99,14 @@ class ModelService:
             - so-vits-svc：main_model + main_config 必填，diffusion_model / diffusion_config 可选。
             - rvc：main_model(.pth) 必填，index_file(.index) 可选，无需 main_config。
             - seed-vc：main_model(.pth) + main_config(.yml/.yaml) 必填；参考音频在推理时选择。
+            - ddsp-svc：main_model(.pt) + main_config(config.yaml) 必填。
         必填文件缺失则返回 None。
         """
         paths.ensure_dirs()
         framework = config.modelhub_normalize_framework(payload.get("framework"))
         is_rvc = framework == "rvc"
         is_seedvc = framework == "seed-vc"
+        is_ddsp = framework == "ddsp-svc"
 
         main_model_src = payload.get("main_model")
         main_config_src = payload.get("main_config")
@@ -118,18 +120,18 @@ class ModelService:
         dst_dir = config.MODELS_DIR / model_id
         dst_dir.mkdir(parents=True, exist_ok=True)
 
-        def copy(raw: str | None) -> ModelFile | None:
+        def copy(raw: str | None, dest_name: str | None = None) -> ModelFile | None:
             if not raw:
                 return None
             src = Path(raw)
             if not src.exists():
                 return None
-            dst = dst_dir / src.name
+            dst = dst_dir / (dest_name or src.name)
             try:
                 shutil.copy2(src, dst)
             except OSError:
                 return None
-            return ModelFile(name=src.name, path=str(dst))
+            return ModelFile(name=dst.name, path=str(dst))
 
         main_model = copy(main_model_src)
         if main_model is None:
@@ -143,7 +145,7 @@ class ModelService:
         if is_rvc:
             index_file = copy(payload.get("index_file"))
         else:
-            main_config = copy(main_config_src)
+            main_config = copy(main_config_src, "config.yaml" if is_ddsp else None)
             if main_config is None:
                 shutil.rmtree(dst_dir, ignore_errors=True)
                 return None
@@ -173,6 +175,8 @@ class ModelService:
             model_type = ModelType.RVC.value
         elif is_seedvc:
             model_type = ModelType.SEEDVC.value
+        elif is_ddsp:
+            model_type = ModelType.DDSP.value
         else:
             model_type = ModelType.guess(main_model.name).value
         info = ModelInfo(
@@ -322,6 +326,8 @@ class ModelService:
                 normalized["type"] = ModelType.RVC.value
             elif framework == "seed-vc":
                 normalized["type"] = ModelType.SEEDVC.value
+            elif framework == "ddsp-svc":
+                normalized["type"] = ModelType.DDSP.value
             else:
                 normalized["type"] = "So-VITS"
         if not normalized.get("sample_rate"):

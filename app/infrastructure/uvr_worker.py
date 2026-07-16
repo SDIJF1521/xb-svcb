@@ -59,16 +59,28 @@ def main() -> int:
 
     inp = os.path.abspath(args.input)
     out_dir = os.path.abspath(args.out_dir)
+    requested_device = str(args.device or "auto").strip().lower()
     os.makedirs(out_dir, exist_ok=True)
     if not os.path.isfile(inp):
         print(f"UVR_ERR 输入不存在: {inp}")
         return 2
+    if requested_device not in {"auto", "cuda", "cpu"}:
+        print(f"UVR_ERR 不支持的分离设备: {requested_device}")
+        return 2
 
     # 强制 CPU：在导入 torch / audio_separator 之前隐藏 CUDA，使其自动回退到 CPU。
-    if args.device == "cpu":
+    if requested_device == "cpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
     try:
+        import torch
+
+        if requested_device == "cuda" and not torch.cuda.is_available():
+            print(
+                "UVR_ERR 已选择 CUDA，但 UVR 环境没有可用的 CUDA Torch；"
+                "请重新安装 GPU 版 UVR 环境"
+            )
+            return 6
         from audio_separator.separator import Separator
     except Exception as exc:  # noqa: BLE001
         print(f"UVR_ERR 依赖导入失败: {exc}")
@@ -81,6 +93,11 @@ def main() -> int:
             output_dir=out_dir,
             output_format="WAV",
         )
+        actual_device = str(separator.torch_device or "cpu").lower()
+        if requested_device == "cuda" and not actual_device.startswith("cuda"):
+            print(f"UVR_ERR 已选择 CUDA，但分离引擎实际设备为 {actual_device}")
+            return 6
+        print(f"UVR_DEVICE {actual_device}", flush=True)
         separator.load_model(model_filename=args.model)
         outputs = separator.separate(inp)
     except Exception as exc:  # noqa: BLE001
@@ -104,7 +121,14 @@ def main() -> int:
         with open(
             os.path.join(out_dir, "uvr_result.json"), "w", encoding="utf-8"
         ) as f:
-            json.dump({"vocals": vocals, "instrumental": instrumental}, f)
+            json.dump(
+                {
+                    "vocals": vocals,
+                    "instrumental": instrumental,
+                    "device": actual_device,
+                },
+                f,
+            )
     except OSError:
         pass
 

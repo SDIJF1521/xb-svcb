@@ -256,6 +256,7 @@ import { useWorksStore } from '@/stores/works'
 import { useModelsStore } from '@/stores/models'
 import { useProfileStore } from '@/stores/profile'
 import { useTransfersStore } from '@/stores/transfers'
+import { useNotificationsStore, type GlobalNotification } from '@/stores/notifications'
 
 defineOptions({ name: 'AppHeader' })
 
@@ -279,9 +280,10 @@ const libraryActive = computed(() =>
 )
 
 const systemStore = useSystemStore()
-const { tools, loaded } = storeToRefs(systemStore)
+const { tools } = storeToRefs(systemStore)
 
-const allReady = computed(() => loaded.value && tools.value.every((t) => t.ok))
+const notificationsStore = useNotificationsStore()
+const { notifications, hasUnread, allReady } = storeToRefs(notificationsStore)
 const envTitle = computed(() =>
   tools.value.map((t) => `${t.name}: ${t.status}`).join('  |  ') || '正在检测集成工具…',
 )
@@ -385,64 +387,14 @@ function onSearchEnter() {
   router.push({ path: first ? first.to : '/works', query: { q } })
 }
 
-/* ----- 消息通知（由作品与环境状态派生）----- */
-interface Notif {
-  id: string
-  title: string
-  text: string
-  time: string
-  tone: 'done' | 'failed' | 'running' | 'queue' | 'warn'
-  to: string
-}
-
 const worksStore = useWorksStore()
 const { works } = storeToRefs(worksStore)
 
-const notifications = computed<Notif[]>(() => {
-  const items: Notif[] = []
-  if (loaded.value && !allReady.value) {
-    items.push({
-      id: 'env',
-      title: '运行环境降级',
-      text: '部分集成工具不可用，点击查看',
-      time: '',
-      tone: 'warn',
-      to: '/',
-    })
-  }
-  for (const w of works.value.slice(0, 8)) {
-    let text = '排队中'
-    let tone: Notif['tone'] = 'queue'
-    if (w.status === 'done') {
-      text = '翻唱完成，可试听 / 导出'
-      tone = 'done'
-    } else if (w.status === 'failed') {
-      text = w.error ? `任务失败：${w.error}` : '任务失败，点击查看日志'
-      tone = 'failed'
-    } else if (w.status === 'running') {
-      text = `处理中 ${w.progress || 0}%`
-      tone = 'running'
-    }
-    items.push({ id: w.id, title: w.title, text, time: w.time || '', tone, to: '/works' })
-  }
-  return items
-})
-
-const NOTIF_KEY = 'xb-notif-seen'
-const seenSig = ref<string>(localStorage.getItem(NOTIF_KEY) || '')
-const currentSig = computed(() => notifications.value.map((n) => `${n.id}:${n.tone}`).join('|'))
-const hasUnread = computed(() => currentSig.value !== '' && currentSig.value !== seenSig.value)
-
 function markAllRead() {
-  seenSig.value = currentSig.value
-  try {
-    localStorage.setItem(NOTIF_KEY, seenSig.value)
-  } catch {
-    /* ignore */
-  }
+  notificationsStore.markAllRead()
 }
 
-function onNotifClick(n: Notif) {
+function onNotifClick(n: GlobalNotification) {
   openMenu.value = 'none'
   router.push(n.to)
 }
@@ -488,8 +440,6 @@ function onAvatarFile(e: Event) {
 }
 
 onMounted(() => {
-  if (!loaded.value) systemStore.load()
-  worksStore.ensureLoaded()
   modelsStore.ensureLoaded()
   transfers.start()
   document.addEventListener('click', onDocClick)

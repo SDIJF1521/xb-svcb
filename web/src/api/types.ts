@@ -135,7 +135,7 @@ export interface ModelLibraryOverview {
 
 export interface ImportModelPayload {
   name?: string
-  /** 模型框架：so-vits-svc（默认）/ rvc / seed-vc。 */
+  /** 模型框架：so-vits-svc（默认）/ rvc / seed-vc / ddsp-svc。 */
   framework?: string
   main_model: string
   /** so-vits 必填；RVC 不需要。 */
@@ -175,6 +175,12 @@ export interface InferenceParams {
   rvc_version?: string
   /** SeedVC：本次推理的目标音色参考音频。 */
   reference_audio?: string
+  /** DDSP-SVC：Rectified Flow 采样步数。 */
+  ddsp_infer_steps?: number
+  /** DDSP-SVC：共振峰偏移（-2~2 半音，仅 pitch augmentation 模型有效）。 */
+  ddsp_formant_shift?: number
+  /** So-VITS / DDSP-SVC：目标说话人名称或 id。 */
+  speaker?: string
 }
 
 export interface WorkDTO {
@@ -650,6 +656,9 @@ export interface EditorLyricSplitOptions {
   padding?: number
   min_clip?: number
   time_mode?: 'project' | 'clip'
+  auto_silence?: boolean
+  threshold_db?: number
+  min_silence?: number
 }
 
 export interface EditorLyricLine {
@@ -663,4 +672,5 @@ export interface EditorLyricSplitResult {
   project?: EditorProject
   clips?: EditorClip[]
   lines?: EditorLyricLine[]
+  timing?: 'timestamp' | 'auto'
 }

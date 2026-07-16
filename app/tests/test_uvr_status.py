@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import sys
@@ -8,6 +9,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import config
+from infrastructure.uvr_tool import UvrTool
 
 
 class UvrStatusTests(unittest.TestCase):
@@ -76,6 +78,61 @@ class UvrStatusTests(unittest.TestCase):
                 self.assertFalse(config.uvr_model_ready())
                 self.assertFalse(config.uvr_ready())
                 self.assertEqual(config.uvr_status(), "模型未就绪")
+
+    def test_cuda_selection_is_forwarded_and_actual_device_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "input.wav"
+            vocals = root / "vocals.wav"
+            instrumental = root / "instrumental.wav"
+            model_dir = root / "models"
+            src.write_bytes(b"input")
+            vocals.write_bytes(b"vocals")
+            instrumental.write_bytes(b"instrumental")
+            model_dir.mkdir()
+            (model_dir / "model.pth").write_bytes(b"model")
+            stdout = f"UVR_DEVICE cuda\nUVR_OK\t{vocals}\t{instrumental}\n"
+
+            with (
+                patch.object(config, "uvr_ready", return_value=True),
+                patch.object(config, "UVR_MODEL_DIR", model_dir),
+                patch.object(config, "UVR_MODEL", "model.pth"),
+                patch.object(config, "UVR_PYTHON", root / "python.exe"),
+                patch.object(config, "UVR_WORKER", root / "uvr_worker.py"),
+                patch("infrastructure.uvr_tool.subprocess.run") as run,
+            ):
+                run.return_value = SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+                result = UvrTool().separate(src, root / "out", "model.pth", "cuda")
+
+            command = run.call_args.args[0]
+            self.assertEqual(command[command.index("--device") + 1], "cuda")
+            self.assertEqual(result.device, "cuda")
+            self.assertFalse(result.simulated)
+
+    def test_explicit_cuda_failure_does_not_silently_fall_back_to_cpu(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "input.wav"
+            model_dir = root / "models"
+            src.write_bytes(b"input")
+            model_dir.mkdir()
+            (model_dir / "model.pth").write_bytes(b"model")
+
+            with (
+                patch.object(config, "uvr_ready", return_value=True),
+                patch.object(config, "UVR_MODEL_DIR", model_dir),
+                patch.object(config, "UVR_MODEL", "model.pth"),
+                patch.object(config, "UVR_PYTHON", root / "python.exe"),
+                patch.object(config, "UVR_WORKER", root / "uvr_worker.py"),
+                patch("infrastructure.uvr_tool.subprocess.run") as run,
+            ):
+                run.return_value = SimpleNamespace(
+                    returncode=6,
+                    stdout="UVR_ERR 已选择 CUDA，但 UVR 环境没有可用的 CUDA Torch\n",
+                    stderr="",
+                )
+                with self.assertRaisesRegex(RuntimeError, "没有可用的 CUDA Torch"):
+                    UvrTool().separate(src, root / "out", "model.pth", "cuda")
 
 
 if __name__ == "__main__":

@@ -185,9 +185,14 @@
                 </div>
                 <template v-if="frameworkOf(m.id) !== 'rvc'">
                   <div class="mp-row">
-                    <label v-if="frameworkOf(m.id) === 'seed-vc'">扩散步数 {{ seedVcSteps(mp(m.id).diffusionRatio) }}</label>
+                    <label v-if="frameworkOf(m.id) === 'seed-vc'">扩散步数 {{ qualitySteps(mp(m.id).diffusionRatio) }}</label>
+                    <label v-else-if="frameworkOf(m.id) === 'ddsp-svc'">采样步数 {{ qualitySteps(mp(m.id).diffusionRatio) }}</label>
                     <label v-else>扩散占比 {{ Math.round(mp(m.id).diffusionRatio * 100) }}%</label>
                     <input type="range" min="0" max="1" step="0.05" v-model.number="mp(m.id).diffusionRatio" />
+                  </div>
+                  <div v-if="frameworkOf(m.id) === 'ddsp-svc'" class="mp-row">
+                    <label>共振峰偏移 {{ signedFormantShift(mp(m.id).formantShift) }}</label>
+                    <input type="range" min="-2" max="2" step="0.05" v-model.number="mp(m.id).formantShift" />
                   </div>
                   <div v-if="frameworkOf(m.id) === 'seed-vc'" class="mp-ref">
                     <span>参考音频</span>
@@ -271,10 +276,10 @@
 
           <div v-if="selectedFramework !== 'rvc'" class="field">
             <div class="field-row">
-              <label>{{ selectedFramework === 'seed-vc' ? 'SeedVC 推理质量' : '主模型 / 扩散模型 比例' }}</label>
+              <label>{{ selectedFramework === 'seed-vc' ? 'SeedVC 推理质量' : selectedFramework === 'ddsp-svc' ? 'DDSP-SVC 推理质量' : '主模型 / 扩散模型 比例' }}</label>
               <span class="field-val">
-                <template v-if="selectedFramework === 'seed-vc'">
-                  <i class="ratio-diff">{{ seedVcSteps(diffusionRatio) }} 步</i>
+                <template v-if="selectedFramework === 'seed-vc' || selectedFramework === 'ddsp-svc'">
+                  <i class="ratio-diff">{{ qualitySteps(diffusionRatio) }} 步</i>
                 </template>
                 <template v-else>
                   <i class="ratio-main">主 {{ Math.round((1 - diffusionRatio) * 100) }}%</i>
@@ -285,8 +290,17 @@
             </div>
             <input class="ratio-range" type="range" min="0" max="1" step="0.05" v-model.number="diffusionRatio" />
             <div class="field-hint">
-              {{ selectedFramework === 'seed-vc' ? 'SeedVC 使用扩散步数控制质量与速度，向右质量更高但更慢' : '两个模型共同参与推理，向右扩散模型占比更高' }}
+              {{ selectedFramework === 'seed-vc' ? 'SeedVC 使用扩散步数控制质量与速度，向右质量更高但更慢' : selectedFramework === 'ddsp-svc' ? 'DDSP-SVC 使用 Rectified Flow 采样步数控制质量与速度' : '两个模型共同参与推理，向右扩散模型占比更高' }}
             </div>
+          </div>
+
+          <div v-if="selectedFramework === 'ddsp-svc'" class="field">
+            <div class="field-row">
+              <label>共振峰偏移（半音）</label>
+              <span class="field-val">{{ signedFormantShift(formantShift) }}</span>
+            </div>
+            <input type="range" min="-2" max="2" step="0.05" v-model.number="formantShift" />
+            <div class="field-hint">用于细调音色的厚薄与明暗，仅对使用 pitch augmentation 训练的模型有效</div>
           </div>
 
           <div class="field">
@@ -863,6 +877,7 @@ const f0Methods = ['rmvpe', 'crepe', 'harvest', 'pm']
 const f0Method = ref(str(prefs.f0Method, 'rmvpe'))
 
 const pitch = ref(num(prefs.pitch, 0))
+const formantShift = ref(Math.max(-2, Math.min(2, num(prefs.formantShift, 0))))
 const indexRate = ref(num(prefs.indexRate, 0.75))
 const rmsMix = ref(num(prefs.rmsMix, 0.25))
 const diffusionRatio = ref(num(prefs.diffusionRatio, 0.5))
@@ -891,8 +906,12 @@ function frameworkLabel(id: string): string {
   }
   return map[id] || id || 'So-VITS-SVC'
 }
-function seedVcSteps(ratio: number): number {
+function qualitySteps(ratio: number): number {
   return Math.max(1, Math.round(10 + Math.max(0, Math.min(1, ratio || 0)) * 40))
+}
+function signedFormantShift(value: number): string {
+  const normalized = Number(Math.max(-2, Math.min(2, value || 0)).toFixed(2))
+  return `${normalized > 0 ? '+' : ''}${normalized.toFixed(2)}`
 }
 function baseName(p: string): string {
   return p ? p.split(/[/\\]/).pop() || p : ''
@@ -924,6 +943,7 @@ const device = ref(str(prefs.device, 'cuda'))
 /* ===== 多模型混合翻唱 ===== */
 type MultiParams = {
   pitch: number
+  formantShift: number
   diffusionRatio: number
   f0Method: string
   device: string
@@ -953,6 +973,10 @@ function paramsForFramework(framework: string, values: ParamValues): InferencePa
     params.protect = values.protect
     params.filter_radius = Math.round(values.filterRadius)
     params.rvc_version = values.rvcVersion
+  } else if (framework === 'ddsp-svc') {
+    params.f0_method = values.f0Method
+    params.ddsp_infer_steps = qualitySteps(values.diffusionRatio)
+    params.ddsp_formant_shift = Number(Math.max(-2, Math.min(2, values.formantShift)).toFixed(2))
   } else {
     params.f0_method = values.f0Method
     params.diffusion_ratio = values.diffusionRatio
@@ -1033,6 +1057,7 @@ function timelineModelColor(index: number): string {
 function defaultParams(): MultiParams {
   return {
     pitch: pitch.value,
+    formantShift: formantShift.value,
     diffusionRatio: diffusionRatio.value,
     f0Method: f0Method.value,
     device: device.value,
@@ -1652,7 +1677,7 @@ const alignStatus = computed(() => {
 
 // 任一参数变化即写回 localStorage
 watch(
-  [uvrModel, f0Method, pitch, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion],
+  [uvrModel, f0Method, pitch, formantShift, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion],
   () => {
     try {
       localStorage.setItem(
@@ -1661,6 +1686,7 @@ watch(
           uvrModel: uvrModel.value,
           f0Method: f0Method.value,
           pitch: pitch.value,
+          formantShift: formantShift.value,
           indexRate: indexRate.value,
           rmsMix: rmsMix.value,
           diffusionRatio: diffusionRatio.value,
@@ -1776,6 +1802,7 @@ async function openLog() {
 function currentParams() {
   return paramsForFramework(selectedFramework.value, {
     pitch: pitch.value,
+    formantShift: formantShift.value,
     f0Method: f0Method.value,
     indexRate: indexRate.value,
     rmsMix: rmsMix.value,
@@ -1789,13 +1816,18 @@ function currentParams() {
 }
 
 function applyParams(raw: Record<string, unknown>) {
+  const ddspSteps = raw.ddsp_infer_steps
+  const savedQuality = typeof ddspSteps === 'number'
+    ? Math.max(0, Math.min(1, (ddspSteps - 10) / 40))
+    : num(raw.diffusion_ratio, diffusionRatio.value)
   const next = {
     pitch: num(raw.pitch, pitch.value),
+    formantShift: Math.max(-2, Math.min(2, num(raw.ddsp_formant_shift, formantShift.value))),
     f0Method: str(raw.f0_method, f0Method.value),
     indexRate: num(raw.index_rate, indexRate.value),
     rmsMix: num(raw.rms_mix, rmsMix.value),
     uvrModel: str(raw.uvr_model, uvrModel.value),
-    diffusionRatio: num(raw.diffusion_ratio, diffusionRatio.value),
+    diffusionRatio: savedQuality,
     device: str(raw.device, device.value),
     protect: num(raw.protect, protect.value),
     filterRadius: num(raw.filter_radius, filterRadius.value),
@@ -1803,6 +1835,7 @@ function applyParams(raw: Record<string, unknown>) {
     referenceAudio: str(raw.reference_audio, seedVcReferenceAudio.value),
   }
   pitch.value = next.pitch
+  formantShift.value = next.formantShift
   f0Method.value = next.f0Method
   indexRate.value = next.indexRate
   rmsMix.value = next.rmsMix
@@ -1816,6 +1849,7 @@ function applyParams(raw: Record<string, unknown>) {
   for (const id of selectedMulti.value) {
     const p = mp(id)
     p.pitch = next.pitch
+    p.formantShift = next.formantShift
     p.f0Method = next.f0Method
     p.indexRate = next.indexRate
     p.rmsMix = next.rmsMix
@@ -2009,6 +2043,7 @@ const generate = async () => {
         model_id: pm.id,
         params: paramsForFramework(framework, {
           pitch: p.pitch,
+          formantShift: p.formantShift,
           f0Method: p.f0Method,
           indexRate: p.indexRate,
           rmsMix: p.rmsMix,

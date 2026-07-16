@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.19"
+APP_VERSION = "0.0.20"
 APP_BG = "#05060d"
 
 
@@ -86,6 +86,7 @@ def _venv_python(venv_dir: Path) -> Path:
 ENGINES_DIR = ROOT_DIR / "engines"
 SOVITS_REPO_DIR = ENGINES_DIR / "so-vits-svc"
 SEEDVC_REPO_DIR = ENGINES_DIR / "seed-vc"
+DDSP_REPO_DIR = ENGINES_DIR / "ddsp-svc"
 SVC_VENV_DIR = ROOT_DIR / ".venv-svc"
 UVR_VENV_DIR = ROOT_DIR / ".venv-uvr"
 
@@ -191,6 +192,41 @@ def seedvc_engine_ready() -> bool:
         and SEEDVC_WORKER.exists()
         and SEEDVC_PYTHON
         and SEEDVC_PYTHON.exists()
+    )
+
+
+# ---- DDSP-SVC 推理引擎（yxlllc/DDSP-SVC）----
+DDSP_VENV_DIR = ROOT_DIR / ".venv-ddsp"
+
+
+def _detect_ddsp_repo() -> Path | None:
+    env = os.environ.get("XB_DDSP_REPO")
+    if env:
+        return Path(env)
+    return _first_existing([DDSP_REPO_DIR])
+
+
+def _detect_ddsp_python() -> Path | None:
+    env = os.environ.get("XB_DDSP_PYTHON")
+    if env:
+        return Path(env)
+    return _first_existing([_venv_python(DDSP_VENV_DIR)])
+
+
+DDSP_REPO = _detect_ddsp_repo()
+DDSP_PYTHON = _detect_ddsp_python()
+DDSP_WORKER = BUNDLE_DIR / "infrastructure" / "ddsp_worker.py"
+
+
+def ddsp_engine_ready() -> bool:
+    """DDSP-SVC 仓库、worker 与隔离环境是否齐备。"""
+    return bool(
+        DDSP_REPO
+        and DDSP_REPO.exists()
+        and (DDSP_REPO / "main_reflow.py").exists()
+        and DDSP_WORKER.exists()
+        and DDSP_PYTHON
+        and DDSP_PYTHON.exists()
     )
 
 

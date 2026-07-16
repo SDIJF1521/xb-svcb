@@ -17,12 +17,14 @@ class SystemService:
         svc: SvcEngine,
         rvc: Any | None = None,
         seedvc: Any | None = None,
+        ddsp: Any | None = None,
     ) -> None:
         self._ffmpeg = ffmpeg
         self._uvr = uvr
         self._svc = svc
         self._rvc = rvc
         self._seedvc = seedvc
+        self._ddsp = ddsp
 
     def status(self) -> dict[str, Any]:
         tools = [
@@ -71,6 +73,17 @@ class SystemService:
                     "version": self._seedvc.version() or "未安装",
                     "status": self._seedvc.device() if self._seedvc.available else "降级模式",
                     "ok": self._seedvc.available,
+                }
+            )
+        if self._ddsp is not None:
+            tools.append(
+                {
+                    "key": "ddsp",
+                    "name": "DDSP-SVC 推理引擎",
+                    "desc": "加载 DDSP-SVC Rectified Flow 模型进行歌声转换",
+                    "version": self._ddsp.version() or "未安装",
+                    "status": self._ddsp.device() if self._ddsp.available else "降级模式",
+                    "ok": self._ddsp.available,
                 }
             )
         return {

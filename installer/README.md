@@ -1,6 +1,6 @@
 # XB-SVCB 安装器
 
-版本：`0.0.19`
+版本：`0.0.20`
 
 安装器由 Inno Setup 读取 `installer/xb-svcb.iss` 构建，负责打包桌面本体、环境搭建脚本、自带模型和文档。
 
@@ -9,7 +9,7 @@
 1. 在 `web/` 执行 `npm run build` 构建前端。
 2. 执行 `pyinstaller installer/xb-svcb-app.spec` 构建桌面本体。
 3. 构建 `native/juce-vst3-host`，并把产物放入 `dist/XB-SVCB/engines/juce-vst3-host/`。
-4. 校验内置前端、全部 worker（含 SeedVC）与 JUCE Host。
+4. 校验内置前端、全部 worker（含 SeedVC / DDSP-SVC）与 JUCE Host。
 5. 使用 Inno Setup 6 的 `ISCC.exe` 编译 `installer/xb-svcb.iss`。
 
 本地发布构建建议使用 `installer/build.ps1` 作为一键入口。
@@ -37,6 +37,18 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 ```
 
 临时不打包插件 Host 时可运行 `installer/build.ps1 -SkipJuceHostBuild`。
+
+## v0.0.20 安装器行为
+
+- 应用、Python 项目、前端、两份锁文件和 Inno Setup 版本统一为 `0.0.20`。
+- 新增 DDSP-SVC 6.3 安装步骤，部署 `engines/ddsp-svc`、`.venv-ddsp`、ContentVec、RMVPE 和 PC-NSF-HiFiGAN；PC-NSF-HiFiGAN 2025.02 随安装器离线提供，不再依赖 GitHub Release 下载。
+- UVR 与 DDSP-SVC GPU 环境固定使用匹配的 CUDA Torch，并在各自安装结束后验证 `torch.cuda.is_available()`，避免 GPU 选择静默运行在 CPU。
+- PyInstaller 继续打包 `ddsp_worker.py`、`uvr_worker.py` 与当前编辑器/消息中心前端。
+- 安装器内置优化后的主题前端：WebView2 使用原生页面快照完成暗色/亮色过渡，并在动画结束后同步原生窗口外观。
+- 发布构建要求根目录存在 `release_notes_v020.md`，安装后将其与主 `README.md` 一起释放到应用目录。
+- 分卷安装方式保持不变：必须共同发布 `XB-SVCB-Setup.exe` 与全部 `XB-SVCB-Setup-*.bin`。
+- `installer/build.ps1 -ValidateOnly` 会检查 v0.0.20 版本一致性、发布文档和 Inno Setup/Pascal 脚本。
+- 发布构建会校验 DDSP 声码器权重至少 32 MiB 且 `config.json` 包含 `pc_aug=true`，防止普通 NSF-HiFiGAN 或 LFS 指针误入安装包。
 
 ## v0.0.19 安装器行为
 

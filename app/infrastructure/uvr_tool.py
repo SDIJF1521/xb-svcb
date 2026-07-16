@@ -26,6 +26,7 @@ class SeparationResult:
     vocals: Path
     instrumental: Optional[Path] = None
     simulated: bool = False
+    device: str = ""
 
 
 class UvrTool:
@@ -50,7 +51,12 @@ class UvrTool:
     ) -> SeparationResult:
         """分离人声/伴奏。环境就绪时调子进程真实分离；否则降级返回原音频。"""
         out_dir.mkdir(parents=True, exist_ok=True)
+        requested_device = str(device or "auto").strip().lower()
+        if requested_device not in {"auto", "cuda", "cpu"}:
+            raise ValueError(f"不支持的 UVR 分离设备: {requested_device}")
         if not self.available or not src or not Path(src).exists():
+            if requested_device == "cuda":
+                raise RuntimeError("已选择 CUDA，但 UVR 分离环境未就绪")
             return SeparationResult(vocals=Path(src), instrumental=None, simulated=True)
 
         model_name = model if model and (config.UVR_MODEL_DIR / model).exists() else config.UVR_MODEL
@@ -66,7 +72,7 @@ class UvrTool:
             "--out-dir",
             str(out_dir),
             "--device",
-            device or "auto",
+            requested_device,
         ]
         # 强制子进程以 UTF-8 读写，避免中文路径在管道里被 GBK/UTF-8 编码错位损坏
         env = os.environ.copy()
@@ -83,7 +89,9 @@ class UvrTool:
                 timeout=1800,
                 **config.subprocess_no_window(),
             )
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError) as exc:
+            if requested_device == "cuda":
+                raise RuntimeError(f"CUDA UVR 分离子进程启动失败: {exc}") from exc
             return SeparationResult(vocals=Path(src), instrumental=None, simulated=True)
 
         # 把分离子进程输出写入日志，便于排查
@@ -97,8 +105,12 @@ class UvrTool:
             pass
 
         # 优先读取 UTF-8 JSON 结果文件（不受 stdout 管道编码影响），回退到解析 stdout
+        if proc.returncode != 0 and requested_device == "cuda":
+            raise RuntimeError(f"CUDA UVR 分离失败: {self._error_tail(proc.stdout, proc.stderr)}")
         result = self._read_result_json(out_dir) or self._parse_output(proc.stdout)
         if result is None or not result.vocals.exists():
+            if requested_device == "cuda":
+                raise RuntimeError(f"CUDA UVR 未生成有效人声: {self._error_tail(proc.stdout, proc.stderr)}")
             # 分离失败时降级，保证后续推理仍可进行
             return SeparationResult(vocals=Path(src), instrumental=None, simulated=True)
         return result
@@ -119,15 +131,32 @@ class UvrTool:
         return SeparationResult(
             vocals=Path(vocals),
             instrumental=Path(inst) if inst else None,
+            device=str(data.get("device") or ""),
         )
 
     @staticmethod
     def _parse_output(stdout: str | None) -> Optional[SeparationResult]:
+        device = ""
         for line in (stdout or "").splitlines():
+            if line.startswith("UVR_DEVICE "):
+                device = line[len("UVR_DEVICE ") :].strip()
             if line.startswith("UVR_OK"):
                 parts = line.split("\t")
                 vocals = Path(parts[1]) if len(parts) > 1 and parts[1] else None
                 instrumental = Path(parts[2]) if len(parts) > 2 and parts[2] else None
                 if vocals:
-                    return SeparationResult(vocals=vocals, instrumental=instrumental)
+                    return SeparationResult(
+                        vocals=vocals,
+                        instrumental=instrumental,
+                        device=device,
+                    )
         return None
+
+    @staticmethod
+    def _error_tail(stdout: str | None, stderr: str | None) -> str:
+        text = ((stdout or "") + "\n" + (stderr or "")).strip()
+        for line in text.splitlines():
+            if line.startswith("UVR_ERR"):
+                return line[len("UVR_ERR") :].strip()
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        return " | ".join(lines[-3:]) if lines else "未知错误"

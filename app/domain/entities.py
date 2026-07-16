@@ -107,6 +107,8 @@ class InferenceParams:
     RVC：``index_rate``（检索特征占比）、``rms_mix``（音量包络混合）、
     ``protect``（清辅音保护）、``filter_radius``（中值滤波半径）、``rvc_version``（v1/v2）。
     SeedVC：``reference_audio``（本次推理使用的目标音色参考音频）。
+    DDSP-SVC：``ddsp_infer_steps``（Rectified Flow 采样步数）、
+    ``ddsp_formant_shift``（共振峰偏移，半音）、``speaker``（说话人 id）。
     """
 
     pitch: int = 0
@@ -122,6 +124,8 @@ class InferenceParams:
     filter_radius: int = 3  # F0 中值滤波半径 (0~7)
     rvc_version: str = "v2"  # RVC 模型版本 v1 / v2
     reference_audio: str = ""  # SeedVC 目标音色参考音频路径
+    ddsp_infer_steps: int = 30  # DDSP-SVC Rectified Flow 采样步数
+    ddsp_formant_shift: float = 0.0  # DDSP-SVC 共振峰偏移（-2~2 半音）
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -147,6 +151,22 @@ class InferenceParams:
                     data.get("referenceAudio", data.get("reference_audio_path", "")),
                 )
                 or ""
+            ),
+            ddsp_infer_steps=max(
+                1,
+                int(data.get("ddsp_infer_steps", data.get("ddspInferSteps", 30))),
+            ),
+            ddsp_formant_shift=max(
+                -2.0,
+                min(
+                    2.0,
+                    float(
+                        data.get(
+                            "ddsp_formant_shift",
+                            data.get("ddspFormantShift", data.get("formant_shift_key", 0.0)),
+                        )
+                    ),
+                ),
             ),
         )
 

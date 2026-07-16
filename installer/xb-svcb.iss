@@ -21,7 +21,7 @@
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.19"
+#define MyAppVersion "0.0.20"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 
@@ -80,7 +80,7 @@ Source: "..\assets\icon\xb-svcb.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; 排除可选的 fcpe.pt（默认 F0 用 rmvpe），让安装器体积压到 GitHub Release 单文件 2GiB 上限内
 Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression; Excludes: "fcpe.pt"
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
-Source: "..\release_notes_v019.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release_notes_v020.md"; DestDir: "{app}"; Flags: ignoreversion
 #endif
 
 [Icons]
@@ -100,6 +100,7 @@ Type: filesandordirs; Name: "{app}\.venv-uvr"
 Type: filesandordirs; Name: "{app}\.venv-svc"
 Type: filesandordirs; Name: "{app}\.venv-rvc"
 Type: filesandordirs; Name: "{app}\.venv-seedvc"
+Type: filesandordirs; Name: "{app}\.venv-ddsp"
 Type: filesandordirs; Name: "{app}\.venv-hub"
 Type: filesandordirs; Name: "{app}\engines"
 Type: filesandordirs; Name: "{app}\models"
@@ -873,6 +874,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'RVC worker', PathJoin(InternalDir, 'infrastructure\rvc_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\seedvc_worker.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC worker', PathJoin(InternalDir, 'infrastructure\seedvc_worker.py'));
+  if not FileExists(PathJoin(InternalDir, 'infrastructure\ddsp_worker.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC worker', PathJoin(InternalDir, 'infrastructure\ddsp_worker.py'));
   if not FileExists(PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt')) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC RMVPE', PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt'));
   if not FileExists(PathJoin(AppDir, 'assets\models\seedvc\campplus_cn_common.bin')) then
@@ -979,11 +982,45 @@ begin
     mbError, MB_OK);
 end;
 
+function ValidateDdspRuntime(): Boolean;
+var
+  AppDir, DdspPython, DdspWorker, DdspInference, Missing: String;
+begin
+  AppDir := ExpandConstant('{app}');
+  DdspPython := PathJoin(AppDir, '.venv-ddsp\Scripts\python.exe');
+  DdspWorker := PathJoin(AppDir, '_internal\infrastructure\ddsp_worker.py');
+  DdspInference := PathJoin(AppDir, 'engines\ddsp-svc\main_reflow.py');
+  Missing := '';
+
+  AppendInstallValidation('');
+  AppendInstallValidation('------------------------------------------------------------');
+  AppendInstallValidation('DDSP-SVC 运行环境最终校验');
+
+  if not FileExists(DdspPython) then
+    Missing := AddMissingRuntimeFile(Missing, '.venv-ddsp Python', DdspPython);
+  if not FileExists(DdspWorker) then
+    Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC worker', DdspWorker);
+  if not FileExists(DdspInference) then
+    Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC main_reflow.py', DdspInference);
+
+  Result := Missing = '';
+  if Result then
+  begin
+    AppendInstallValidation('[ok] DDSP-SVC 运行环境可被软件识别。');
+    Exit;
+  end;
+
+  AppendInstallValidation('[fail] DDSP-SVC 运行环境不完整，软件会显示“降级模式”。');
+  AppendInstallValidation('缺失项：');
+  AppendInstallValidation(Missing);
+  AppendInstallValidation('建议：从开始菜单运行“搭建/修复运行环境”，或执行 setup_env.bat --only ddsp。');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   DataDir, Payload: String;
   SetupProgressStart: Integer;
-  UvrReady, SeedVcReady: Boolean;
+  UvrReady, SeedVcReady, DdspReady: Boolean;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -1013,7 +1050,8 @@ begin
       begin
         UvrReady := ValidateUvrRuntime();
         SeedVcReady := ValidateSeedVcRuntime();
-        if (not UvrReady) or (not SeedVcReady) then
+        DdspReady := ValidateDdspRuntime();
+        if (not UvrReady) or (not SeedVcReady) or (not DdspReady) then
           SetEnvProgress(100, '部分运行环境校验失败，请查看安装详情日志');
       end;
     end;

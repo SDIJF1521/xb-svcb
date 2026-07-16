@@ -463,13 +463,13 @@
                 class="ghost-btn mini"
                 @click="importLyricsFile"
               >
-                导入歌词文件
+                导入 TXT / LRC
               </el-button>
               <span v-if="lyricFileName" class="lyric-file-name">{{ lyricFileName }}</span>
             </div>
-            <textarea v-model="lyricSplitText" class="lyric-input" rows="5" placeholder="[00:12.30] 歌词"></textarea>
+            <textarea v-model="lyricSplitText" class="lyric-input" rows="5" placeholder="普通 TXT 每行一句，或粘贴带时间戳的 LRC"></textarea>
             <div class="lyric-controls">
-              <select v-model="lyricTimeMode">
+              <select v-if="lyricHasTimestamps" v-model="lyricTimeMode">
                 <option value="project">工程时间</option>
                 <option value="clip">片段时间</option>
               </select>
@@ -480,7 +480,7 @@
                 class="ghost-btn mini"
                 @click="splitSelectedClipByLyrics"
               >
-                <el-icon class="el-icon--left"><Scissor /></el-icon>歌词切分
+                <el-icon class="el-icon--left"><Scissor /></el-icon>{{ lyricHasTimestamps ? '歌词切分' : '自动切句' }}
               </el-button>
             </div>
           </div>
@@ -510,10 +510,17 @@
               <template v-if="!isRvcRerunModel">
                 <div class="rerun-param">
                   <div class="rerun-param-label">
-                    <span>{{ isSeedVcRerunModel ? '扩散步数' : '扩散占比' }}</span>
-                    <b>{{ isSeedVcRerunModel ? seedVcSteps(rerunDiffusionRatio) : Math.round(rerunDiffusionRatio * 100) + '%' }}</b>
+                    <span>{{ isSeedVcRerunModel ? '扩散步数' : isDdspRerunModel ? '采样步数' : '扩散占比' }}</span>
+                    <b>{{ isSeedVcRerunModel || isDdspRerunModel ? qualitySteps(rerunDiffusionRatio) : Math.round(rerunDiffusionRatio * 100) + '%' }}</b>
                   </div>
                   <input v-model.number="rerunDiffusionRatio" type="range" min="0" max="1" step="0.05" />
+                </div>
+                <div v-if="isDdspRerunModel" class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>共振峰偏移</span>
+                    <b>{{ signedRerunFormantShift }}</b>
+                  </div>
+                  <input v-model.number="rerunFormantShift" type="range" min="-2" max="2" step="0.05" />
                 </div>
                 <div v-if="isSeedVcRerunModel" class="rerun-param">
                   <div class="rerun-param-label">
@@ -809,6 +816,7 @@ interface DragState {
 }
 interface RerunPrefs {
   pitch?: number
+  formantShift?: number
   f0Method?: string
   indexRate?: number
   rmsMix?: number
@@ -869,6 +877,7 @@ const lyricSources = ref<{ id: string; name: string }[]>([])
 const lyricFetching = ref(false)
 const lyricImporting = ref(false)
 const lyricFileName = ref('')
+const lyricHasTimestamps = computed(() => /\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?\]/.test(lyricSplitText.value))
 const importTrackDialogOpen = ref(false)
 const importTargetTrackId = ref('')
 const pluginDialogOpen = ref(false)
@@ -1105,6 +1114,7 @@ function prefStr(value: unknown, fallback: string, allowed?: string[]) {
 }
 const rerunPrefs = loadRerunPrefs()
 const rerunPitch = ref(prefNum(rerunPrefs.pitch, 0, -12, 12))
+const rerunFormantShift = ref(prefNum(rerunPrefs.formantShift, 0, -2, 2))
 const rerunF0Method = ref(prefStr(rerunPrefs.f0Method, 'rmvpe', f0Methods))
 const rerunIndexRate = ref(prefNum(rerunPrefs.indexRate, 0.75, 0, 1))
 const rerunRmsMix = ref(prefNum(rerunPrefs.rmsMix, 0.25, 0, 1))
@@ -1152,6 +1162,7 @@ const selectedRerunModel = computed(() => models.value.find((m) => m.id === reru
 const selectedRerunFramework = computed(() => selectedRerunModel.value?.framework || 'so-vits-svc')
 const isRvcRerunModel = computed(() => selectedRerunFramework.value === 'rvc')
 const isSeedVcRerunModel = computed(() => selectedRerunFramework.value === 'seed-vc')
+const isDdspRerunModel = computed(() => selectedRerunFramework.value === 'ddsp-svc')
 const canRerunSelectedClip = computed(() => {
   return (
     selectedClipEditable.value &&
@@ -1161,6 +1172,10 @@ const canRerunSelectedClip = computed(() => {
 })
 const rerunFrameworkText = computed(() => modelFrameworkLabel(selectedRerunFramework.value))
 const signedRerunPitch = computed(() => rerunPitch.value > 0 ? `+${rerunPitch.value}` : String(rerunPitch.value))
+const signedRerunFormantShift = computed(() => {
+  const value = Number(rerunFormantShift.value.toFixed(2))
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)}`
+})
 const canSplitBySilence = computed(() => {
   return selectedClipEditable.value && selectedClipDuration.value >= silenceMinClipSeconds.value * 2
 })
@@ -1194,7 +1209,7 @@ function modelFrameworkLabel(framework: string | undefined) {
   }
   return map[framework || 'so-vits-svc'] || framework || 'So-VITS-SVC'
 }
-function seedVcSteps(ratio: number): number {
+function qualitySteps(ratio: number): number {
   return Math.max(1, Math.round(10 + Math.max(0, Math.min(1, ratio || 0)) * 40))
 }
 function baseName(p: string): string {
@@ -1216,6 +1231,10 @@ function currentRerunParams(): InferenceParams {
     params.protect = Number(rerunProtect.value.toFixed(3))
     params.filter_radius = Math.round(rerunFilterRadius.value)
     params.rvc_version = rerunRvcVersion.value
+  } else if (isDdspRerunModel.value) {
+    params.f0_method = rerunF0Method.value
+    params.ddsp_infer_steps = qualitySteps(rerunDiffusionRatio.value)
+    params.ddsp_formant_shift = Number(rerunFormantShift.value.toFixed(2))
   } else {
     params.f0_method = rerunF0Method.value
     params.diffusion_ratio = Number(rerunDiffusionRatio.value.toFixed(3))
@@ -1225,6 +1244,7 @@ function currentRerunParams(): InferenceParams {
 
 function resetRerunParams() {
   rerunPitch.value = 0
+  rerunFormantShift.value = 0
   rerunF0Method.value = 'rmvpe'
   rerunIndexRate.value = 0.75
   rerunRmsMix.value = 0.25
@@ -2591,7 +2611,7 @@ async function importLyricsFile() {
     }
     lyricSplitText.value = res.text
     lyricFileName.value = res.name || ''
-    ElMessage.success('已导入歌词文件')
+    ElMessage.success(res.name?.toLowerCase().endsWith('.txt') ? '已导入 TXT 歌词' : '已导入歌词文件')
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '导入歌词文件失败')
   } finally {
@@ -2619,7 +2639,14 @@ async function splitSelectedClipByLyrics() {
       current.trackId,
       current.clipId,
       text,
-      { padding: 0.04, min_clip: 0.2, time_mode: lyricTimeMode.value },
+      {
+        padding: 0.04,
+        min_clip: 0.2,
+        time_mode: lyricTimeMode.value,
+        auto_silence: true,
+        threshold_db: silenceThresholdDb.value,
+        min_silence: minSilenceSeconds.value,
+      },
     )
     if (!res.ok || !res.project) {
       ElMessage.error(res.error || '歌词切分失败')
@@ -2631,7 +2658,11 @@ async function splitSelectedClipByLyrics() {
     applyProject(res.project)
     const first = res.clips?.[0]
     if (first) selected.value = { trackId: current.trackId, clipId: first.id }
-    ElMessage.success(`已按歌词切成 ${res.clips?.length || 0} 段`)
+    ElMessage.success(
+      res.timing === 'auto'
+        ? `已自动切成 ${res.clips?.length || 0} 句`
+        : `已按歌词切成 ${res.clips?.length || 0} 段`,
+    )
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '歌词切分失败')
   } finally {
@@ -3002,6 +3033,7 @@ watch(zoom, () => {
 watch(
   [
     rerunPitch,
+    rerunFormantShift,
     rerunF0Method,
     rerunIndexRate,
     rerunRmsMix,
@@ -3018,6 +3050,7 @@ watch(
         RERUN_PREFS_KEY,
         JSON.stringify({
           pitch: rerunPitch.value,
+          formantShift: rerunFormantShift.value,
           f0Method: rerunF0Method.value,
           indexRate: rerunIndexRate.value,
           rmsMix: rerunRmsMix.value,

@@ -7,9 +7,11 @@
   .venv-svc/     —— so-vits-svc 4.1 推理环境（torch + fairseq 等）
   .venv-rvc/     —— RVC 推理环境（rvc-python；40 系及以下 cu121，50 系 cu128，CPU 版）
   .venv-seedvc/  —— SeedVC 推理环境（官方 Seed-VC；推理时提供参考音频）
+  .venv-ddsp/    —— DDSP-SVC 推理环境（yxlllc/DDSP-SVC Rectified Flow）
   .venv-hub/     —— 模型上传组件（modelscope）
   engines/so-vits-svc/         —— 自动克隆的 so-vits-svc 4.1 仓库
   engines/seed-vc/              —— 自动克隆的 Seed-VC 仓库
+  engines/ddsp-svc/              —— 自动克隆的 DDSP-SVC 仓库
   engines/so-vits-svc/pretrain —— 底模（contentvec / nsf_hifigan / rmvpe）
   models/uvr/    —— UVR 分离模型（5_HP-Karaoke / DeEcho-DeReverb）
   web/dist/      —— 前端构建产物
@@ -29,12 +31,14 @@
   python install/install.py --skip-svc     # 跳过 so-vits-svc（仅装壳+分离+前端）
   python install/install.py --only rvc     # 只装 RVC 推理环境（.venv-rvc）
   python install/install.py --only seedvc  # 只装 SeedVC 推理环境（.venv-seedvc）
-  python install/install.py --only models  # 只跑某一步：app/web/uvr/svc/rvc/seedvc/hub/models
+  python install/install.py --only ddsp    # 只装 DDSP-SVC 推理环境（.venv-ddsp）
+  python install/install.py --only models  # 只跑某一步：app/web/uvr/svc/rvc/seedvc/ddsp/hub/models
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -86,12 +90,14 @@ WEB_DIR = ROOT / "web"
 ENGINES_DIR = ROOT / "engines"
 SOVITS_DIR = ENGINES_DIR / "so-vits-svc"
 SEEDVC_DIR = ENGINES_DIR / "seed-vc"
+DDSP_DIR = ENGINES_DIR / "ddsp-svc"
 PRETRAIN_DIR = SOVITS_DIR / "pretrain"
 UVR_VENV = ROOT / ".venv-uvr"
 SVC_VENV = ROOT / ".venv-svc"
 HUB_VENV = ROOT / ".venv-hub"
 RVC_VENV = ROOT / ".venv-rvc"
 SEEDVC_VENV = ROOT / ".venv-seedvc"
+DDSP_VENV = ROOT / ".venv-ddsp"
 UVR_MODELS_DIR = ROOT / "models" / "uvr"
 
 # 随安装包一起分发的「自带模型」目录：安装时直接本地复制，免联网慢下载。
@@ -101,20 +107,22 @@ ASSETS_MODELS_DIR = Path(__file__).resolve().parent.parent / "assets" / "models"
 
 def _derive_paths(root: Path) -> None:
     """以 root 为基准重新计算所有产物路径（供 --root 覆盖）。"""
-    global ROOT, APP_DIR, WEB_DIR, ENGINES_DIR, SOVITS_DIR, SEEDVC_DIR, PRETRAIN_DIR
-    global UVR_VENV, SVC_VENV, HUB_VENV, RVC_VENV, SEEDVC_VENV, UVR_MODELS_DIR
+    global ROOT, APP_DIR, WEB_DIR, ENGINES_DIR, SOVITS_DIR, SEEDVC_DIR, DDSP_DIR, PRETRAIN_DIR
+    global UVR_VENV, SVC_VENV, HUB_VENV, RVC_VENV, SEEDVC_VENV, DDSP_VENV, UVR_MODELS_DIR
     ROOT = root
     APP_DIR = root / "app"
     WEB_DIR = root / "web"
     ENGINES_DIR = root / "engines"
     SOVITS_DIR = ENGINES_DIR / "so-vits-svc"
     SEEDVC_DIR = ENGINES_DIR / "seed-vc"
+    DDSP_DIR = ENGINES_DIR / "ddsp-svc"
     PRETRAIN_DIR = SOVITS_DIR / "pretrain"
     UVR_VENV = root / ".venv-uvr"
     SVC_VENV = root / ".venv-svc"
     HUB_VENV = root / ".venv-hub"
     RVC_VENV = root / ".venv-rvc"
     SEEDVC_VENV = root / ".venv-seedvc"
+    DDSP_VENV = root / ".venv-ddsp"
     UVR_MODELS_DIR = root / "models" / "uvr"
 
 SOVITS_REPO_URL = "https://github.com/svc-develop-team/so-vits-svc.git"
@@ -125,6 +133,15 @@ SOVITS_ZIP_URL = (
 )
 SEEDVC_REPO_URL = "https://github.com/Plachtaa/seed-vc.git"
 SEEDVC_ZIP_URL = "https://github.com/Plachtaa/seed-vc/archive/refs/heads/main.zip"
+DDSP_REPO_URL = "https://github.com/yxlllc/DDSP-SVC.git"
+DDSP_BRANCH = "6.3"
+DDSP_ZIP_URL = "https://github.com/yxlllc/DDSP-SVC/archive/refs/heads/6.3.zip"
+DDSP_CONTENTVEC_HF = "/lengyue233/content-vec-best/resolve/main/pytorch_model.bin"
+DDSP_NSF_HIFIGAN_GH = (
+    "https://github.com/openvpi/vocoders/releases/download/"
+    "pc-nsf-hifigan-44.1k-hop512-128bin-2025.02/"
+    "pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.zip"
+)
 
 # CUDA wheel 源（cu121 兼容 40 系及以下 NVIDIA 显卡）；CPU 用官方默认源
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu121"
@@ -690,13 +707,13 @@ def seed_rvc_base_models(py: Path) -> None:
 
 # ---------- 各安装步骤 ----------
 def step_app(uv: str) -> None:
-    hr("1/8 主程序环境 app/.venv")
+    hr("1/9 主程序环境 app/.venv")
     uv_sync(uv, APP_DIR)
     print(c("g", "主程序环境就绪"))
 
 
 def step_web() -> None:
-    hr("2/8 前端构建 web/dist")
+    hr("2/9 前端构建 web/dist")
     if not have("npm"):
         raise RuntimeError("未检测到 npm，请先安装 Node.js LTS 后重试（或 --skip-web）")
     # 优先 npm ci（依赖 lock）；无 lock 时回退 npm install
@@ -709,7 +726,7 @@ def step_web() -> None:
 
 
 def step_uvr(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
-    hr("3/8 人声分离环境 .venv-uvr（audio-separator）")
+    hr("3/9 人声分离环境 .venv-uvr（audio-separator）")
     if not venv_python(UVR_VENV).exists():
         run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_ENGINES, str(UVR_VENV)))
     py = str(venv_python(UVR_VENV))
@@ -730,7 +747,7 @@ def step_uvr(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
         torch_label = "cu128"
         pip(*torch_specs, index=torch_index)
     elif use_gpu:
-        torch_specs = ["torch", "torchaudio"]
+        torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
         torch_index = TORCH_CUDA_INDEX
         torch_label = "cu121"
         pip(*torch_specs, index=torch_index)
@@ -744,6 +761,7 @@ def step_uvr(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
         # 安装 audio-separator 时也带上 PyTorch wheel 源，避免依赖解析把 CUDA torch 换成 PyPI CPU 版。
         pip("audio-separator[gpu]", index=torch_index)
         _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, torch_label)
+        _verify_cuda_torch(py, "UVR")
     else:
         pip("audio-separator[cpu]")
     print(c("g", "分离环境就绪"))
@@ -806,6 +824,118 @@ def fetch_seedvc() -> None:
         shutil.move(str(repo_root), str(SEEDVC_DIR))
 
 
+def fetch_ddsp() -> None:
+    """获取 DDSP-SVC 6.3 仓库：优先 git clone，无 git 时下载分支 ZIP。"""
+    if (DDSP_DIR / "main_reflow.py").exists():
+        print(c("g", "    DDSP-SVC 仓库已存在，跳过获取"))
+        return
+    ENGINES_DIR.mkdir(parents=True, exist_ok=True)
+    if DDSP_DIR.exists():
+        shutil.rmtree(DDSP_DIR, ignore_errors=True)
+    if have("git"):
+        try:
+            run(["git", "clone", "--depth", "1", "-b", DDSP_BRANCH, DDSP_REPO_URL, str(DDSP_DIR)])
+            return
+        except subprocess.CalledProcessError:
+            print(c("y", "    git clone 失败，改用分支 ZIP 下载 …"))
+            shutil.rmtree(DDSP_DIR, ignore_errors=True)
+
+    print(c("y", "    正在用 ZIP 方式获取 DDSP-SVC 仓库 …"))
+    with tempfile.TemporaryDirectory() as td:
+        archive = Path(td) / "ddsp-svc.zip"
+        download(gh_urls(DDSP_ZIP_URL), archive)
+        extract_zip(archive, Path(td))
+        marker = next(Path(td).rglob("main_reflow.py"), None)
+        if marker is None:
+            raise RuntimeError("下载的 DDSP-SVC 压缩包结构异常，未找到 main_reflow.py")
+        shutil.move(str(marker.parent), str(DDSP_DIR))
+
+
+def seed_ddsp_base_models() -> None:
+    """部署 DDSP-SVC 推理需要的 ContentVec、RMVPE 与 NSF-HiFiGAN。"""
+    contentvec = DDSP_DIR / "pretrain" / "contentvec" / "pytorch_model.bin"
+    if not _is_large_model_file(contentvec):
+        contentvec.unlink(missing_ok=True)
+        download(hf_urls(DDSP_CONTENTVEC_HF), contentvec)
+
+    rmvpe = DDSP_DIR / "pretrain" / "rmvpe" / "model.pt"
+    bundled_rmvpe = ASSETS_MODELS_DIR / "pretrain" / "rmvpe.pt"
+    if _is_large_model_file(bundled_rmvpe):
+        if not _is_large_model_file(rmvpe) or rmvpe.stat().st_size != bundled_rmvpe.stat().st_size:
+            _link_or_copy_model(bundled_rmvpe, rmvpe)
+            print(c("g", "    DDSP-SVC RMVPE 已预置"))
+    else:
+        print(c("y", "    未找到完整的 RMVPE 自带模型，请改用 harvest/dio 或手动部署"))
+
+    vocoder = DDSP_DIR / "pretrain" / "nsf_hifigan"
+
+    def pc_vocoder_ready(path: Path) -> bool:
+        try:
+            cfg = json.loads((path / "config.json").read_text(encoding="utf-8"))
+            return bool(cfg.get("pc_aug")) and _is_large_model_file(path / "model")
+        except (OSError, json.JSONDecodeError):
+            return False
+
+    if pc_vocoder_ready(vocoder):
+        print(c("g", "    DDSP-SVC PC-NSF-HiFiGAN 已预置"))
+        return
+
+    bundled_vocoder = ASSETS_MODELS_DIR / "pretrain" / "pc_nsf_hifigan"
+    bundled_vocoder_config = bundled_vocoder / "config.json"
+    bundled_vocoder_model = bundled_vocoder / "model.ckpt"
+    try:
+        bundled_config = json.loads(bundled_vocoder_config.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        bundled_config = {}
+    if bool(bundled_config.get("pc_aug")) and _is_large_model_file(bundled_vocoder_model):
+        vocoder.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(bundled_vocoder_config, vocoder / "config.json")
+        _link_or_copy_model(bundled_vocoder_model, vocoder / "model")
+        for notice_name in ("NOTICE.txt", "NOTICE.zh-CN.txt", "STATEMENTS.txt"):
+            notice = bundled_vocoder / notice_name
+            if notice.is_file():
+                shutil.copy2(notice, vocoder / notice_name)
+        print(c("g", "    DDSP-SVC PC-NSF-HiFiGAN 2025.02 已从安装包部署"))
+        return
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            archive = Path(td) / "pc-nsf-hifigan.zip"
+            unpacked = Path(td) / "unpacked"
+            download(gh_urls(DDSP_NSF_HIFIGAN_GH), archive)
+            extract_zip(archive, unpacked)
+            config_file = next(
+                (
+                    item
+                    for item in unpacked.rglob("config.json")
+                    if json.loads(item.read_text(encoding="utf-8")).get("pc_aug")
+                ),
+                None,
+            )
+            if config_file is None:
+                raise RuntimeError("PC-NSF-HiFiGAN 压缩包缺少有效 config.json")
+            weights = next(
+                (
+                    item
+                    for item in config_file.parent.iterdir()
+                    if item.is_file()
+                    and item.name != "config.json"
+                    and item.stat().st_size >= 32 * 1024 * 1024
+                ),
+                None,
+            )
+            if weights is None:
+                raise RuntimeError("PC-NSF-HiFiGAN 压缩包缺少模型权重")
+            vocoder.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(config_file, vocoder / "config.json")
+            _link_or_copy_model(weights, vocoder / "model")
+            print(c("g", "    DDSP-SVC PC-NSF-HiFiGAN 2025.02 已预置"))
+    except Exception as exc:  # noqa: BLE001 - offline installer keeps a compatible fallback
+        print(c("y", f"    PC-NSF-HiFiGAN 下载失败（{exc}），回退到自带 NSF-HiFiGAN"))
+        if not copy_bundled("pretrain/nsf_hifigan", vocoder):
+            raise RuntimeError("DDSP-SVC 缺少 NSF-HiFiGAN model/config.json") from exc
+
+
 def seed_seedvc_base_models(py: Path) -> None:
     """Prestage SeedVC checkpoints and verify the bundled offline snapshots."""
     checkpoints = SEEDVC_DIR / "checkpoints"
@@ -864,7 +994,7 @@ def _venv_pyver(py: Path) -> str | None:
 
 
 def step_svc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
-    hr("4/8 推理引擎 so-vits-svc + .venv-svc")
+    hr("4/9 推理引擎 so-vits-svc + .venv-svc")
     fetch_sovits()
 
     # 目标 Python：Blackwell 用 3.10（cu128 轮子 + 3.10 兼容依赖），否则老栈 3.9。
@@ -1043,6 +1173,22 @@ def _reaffirm_blackwell_torch(uv: str, py: str) -> None:
     )
 
 
+def _verify_cuda_torch(py: str, component: str) -> None:
+    """Fail installation instead of leaving a requested GPU runtime on CPU Torch."""
+    check = (
+        "import torch; "
+        "assert torch.cuda.is_available(), "
+        "f'CUDA unavailable in torch {torch.__version__}'; "
+        "print(torch.__version__, torch.cuda.get_device_name(0))"
+    )
+    try:
+        run([py, "-c", check])
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"{component} GPU 环境校验失败：CUDA Torch 不可用，请检查驱动或重新安装"
+        ) from exc
+
+
 def _install_fairseq_blackwell(pip) -> None:  # noqa: ANN001
     """在 Blackwell（py3.10）环境安装 fairseq。
 
@@ -1108,7 +1254,7 @@ def _patch_fairseq_weights_only(py: Path) -> None:
 
 
 def step_rvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
-    hr("5/8 RVC 推理环境 .venv-rvc（rvc-python）")
+    hr("5/9 RVC 推理环境 .venv-rvc（rvc-python）")
     # RVC 推理在独立环境运行（rvc-python），与 so-vits 栈隔离。
     # rvc-python 默认会在首次推理时下载 hubert / rmvpe；这里安装后立即预置，
     # 避免新用户运行 RVC 时因为 HuggingFace 连接失败而报 HTTPSConnectionPool。
@@ -1170,9 +1316,14 @@ SEEDVC_REQ_DENY = {
     "webrtcvad",
 }
 
+DDSP_REQ_DENY = {
+    "freesimplegui",
+    "sounddevice",
+}
+
 
 def step_seedvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
-    hr("6/8 SeedVC 推理环境 engines/seed-vc + .venv-seedvc")
+    hr("6/9 SeedVC 推理环境 engines/seed-vc + .venv-seedvc")
     fetch_seedvc()
 
     target_py = PYTHON_FOR_ENGINES
@@ -1220,8 +1371,58 @@ def step_seedvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
         print(c("g", "SeedVC 推理环境就绪（CPU）"))
 
 
+def step_ddsp(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
+    hr("7/9 DDSP-SVC 推理环境 engines/ddsp-svc + .venv-ddsp")
+    fetch_ddsp()
+
+    target_py = PYTHON_FOR_ENGINES
+    py_path = venv_python(DDSP_VENV)
+    if py_path.exists():
+        ver = _venv_pyver(py_path)
+        if ver != target_py:
+            print(c("y", f"    现有 .venv-ddsp 为 Python {ver or '未知'}，需要 {target_py}，重建中 …"))
+            shutil.rmtree(DDSP_VENV, ignore_errors=True)
+    if not venv_python(DDSP_VENV).exists():
+        run(uv_cmd(uv, "venv", "--python", target_py, str(DDSP_VENV)))
+    py = str(venv_python(DDSP_VENV))
+
+    def pip(*args: str, index: str | None = None) -> None:
+        uv_pip_install(uv, py, *args, index=index)
+
+    pip("setuptools<81", "wheel")
+    if use_blackwell:
+        torch_specs = [
+            f"torch=={TORCH_BLACKWELL_VER}",
+            f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
+        ]
+        torch_index = TORCH_BLACKWELL_INDEX
+    else:
+        torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
+        torch_index = TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX
+    pip(*torch_specs, index=torch_index)
+
+    requirements = DDSP_DIR / "requirements.txt"
+    if requirements.exists():
+        filtered = _filter_requirements(requirements, extra_deny=DDSP_REQ_DENY)
+        pip("-r", str(filtered))
+    else:
+        raise RuntimeError("未找到 DDSP-SVC requirements.txt")
+    seed_ddsp_base_models()
+
+    if use_blackwell:
+        _reaffirm_blackwell_torch(uv, py)
+        _verify_cuda_torch(py, "DDSP-SVC")
+        print(c("g", "DDSP-SVC 推理环境就绪（Blackwell/cu128）"))
+    elif use_gpu:
+        _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, "cu121")
+        _verify_cuda_torch(py, "DDSP-SVC")
+        print(c("g", "DDSP-SVC 推理环境就绪（cu121）"))
+    else:
+        print(c("g", "DDSP-SVC 推理环境就绪（CPU）"))
+
+
 def step_hub(uv: str) -> None:
-    hr("7/8 模型上传组件 .venv-hub（modelscope）")
+    hr("8/9 模型上传组件 .venv-hub（modelscope）")
     # 仅「分享到模型站（上传）」需要 modelscope SDK；搜索 / 下载走纯 HTTP，不依赖本环境。
     # 用 3.10（与 UVR 一致），装 modelscope hub 能力即可（上传用 upload_folder，无需本地 git）。
     if not venv_python(HUB_VENV).exists():
@@ -1239,7 +1440,7 @@ def step_hub(uv: str) -> None:
 
 
 def step_models(uv: str) -> None:
-    hr("8/8 底模 + UVR 模型（自带优先，缺失才联网下载）")
+    hr("9/9 底模 + UVR 模型（自带优先，缺失才联网下载）")
     PRETRAIN_DIR.mkdir(parents=True, exist_ok=True)
     if ASSETS_MODELS_DIR.exists():
         print(c("g", f"  检测到自带模型目录：{ASSETS_MODELS_DIR}"))
@@ -1347,10 +1548,11 @@ STEPS = {
     "svc": lambda uv, gpu, bw: step_svc(uv, gpu, bw),
     "rvc": lambda uv, gpu, bw: step_rvc(uv, gpu, bw),
     "seedvc": lambda uv, gpu, bw: step_seedvc(uv, gpu, bw),
+    "ddsp": lambda uv, gpu, bw: step_ddsp(uv, gpu, bw),
     "hub": lambda uv, gpu, bw: step_hub(uv),
     "models": lambda uv, gpu, bw: step_models(uv),
 }
-ORDER = ["app", "web", "uvr", "svc", "rvc", "seedvc", "hub", "models"]
+ORDER = ["app", "web", "uvr", "svc", "rvc", "seedvc", "ddsp", "hub", "models"]
 
 
 def installer_progress(percent: int, message: str) -> None:
@@ -1385,7 +1587,7 @@ def main() -> int:
         "--only",
         choices=ORDER,
         nargs="+",
-        help="只执行指定步骤（可多选）：app web uvr svc rvc seedvc hub models",
+        help="只执行指定步骤（可多选）：app web uvr svc rvc seedvc ddsp hub models",
     )
     for s in ORDER:
         p.add_argument(f"--skip-{s}", action="store_true", help=f"跳过 {s} 步骤")

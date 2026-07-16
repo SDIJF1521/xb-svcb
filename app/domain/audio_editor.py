@@ -54,6 +54,7 @@ class EditorProject:
     title: str
     tracks: list[dict[str, Any]]
     duration: float
+    roles: list[dict[str, Any]] = field(default_factory=list)
     sample_rate: int = 44100
     waveform_cache: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)

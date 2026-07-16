@@ -209,6 +209,7 @@ class ConversionService:
                     self._log(log_file, "  分离降级：直接使用源音频作为人声（无伴奏）")
                 else:
                     self._log(log_file, f"  分离模型: {sep_model}")
+                    self._log(log_file, f"  分离设备: {sep.device or params.device}")
                     self._log(log_file, f"  人声: {vocals}")
                     self._log(log_file, f"  伴奏: {instrumental}")
                     # 1b) 人声去混响/去回声：去掉混响后再送 SVC，缓解"电音/机械音"
@@ -225,6 +226,7 @@ class ConversionService:
                         )
                         if not dr.simulated and dr.vocals.exists():
                             vocals = dr.vocals
+                            self._log(log_file, f"  去混响设备: {dr.device or params.device}")
                             self._log(log_file, f"  去混响后人声: {vocals}")
                         else:
                             self._log(log_file, "  去混响降级：沿用原始人声")
@@ -482,6 +484,7 @@ class ConversionService:
                 if sep.simulated:
                     self._log(log_file, "  分离降级：直接使用源音频作为人声（无伴奏）")
                 else:
+                    self._log(log_file, f"  分离设备: {sep.device or base_params.device}")
                     self._log(log_file, f"  人声: {vocals} | 伴奏: {instrumental}")
                     if config.uvr_dereverb_ready():
                         dr = self._uvr.separate(
@@ -492,6 +495,10 @@ class ConversionService:
                         )
                         if not dr.simulated and dr.vocals.exists():
                             vocals = dr.vocals
+                            self._log(
+                                log_file,
+                                f"  去混响设备: {dr.device or base_params.device}",
+                            )
                             self._log(log_file, f"  去混响后人声: {vocals}")
             else:
                 vocals = work_dir / "placeholder.wav"

@@ -30,6 +30,7 @@ class ModelType(str, Enum):
     SOVITS = "So-VITS"
     RVC = "RVC"
     SEEDVC = "SeedVC"
+    DDSP = "DDSP-SVC"
     UNKNOWN = "Unknown"
 
     @classmethod
@@ -40,6 +41,8 @@ class ModelType(str, Enum):
             return cls.SEEDVC
         if "rvc" in name or name.endswith(".onnx"):
             return cls.RVC
+        if "ddsp" in name or "reflow" in name:
+            return cls.DDSP
         if "sovits" in name or "so-vits" in name or "so_vits" in name:
             return cls.SOVITS
         if name.endswith((".pth", ".pt", ".ckpt")):

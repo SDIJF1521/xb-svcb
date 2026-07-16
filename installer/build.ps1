@@ -90,14 +90,23 @@ $workerFiles = @(
   "uvr_worker.py",
   "hub_worker.py",
   "rvc_worker.py",
-  "seedvc_worker.py"
+  "seedvc_worker.py",
+  "ddsp_worker.py"
 )
 foreach ($worker in $workerFiles) {
   Require-File (Join-Path $Root "app\infrastructure\$worker") "Worker source $worker"
 }
+Require-File (Join-Path $Root "release_notes_v020.md") "v0.0.20 release notes"
 
-# Reject Git LFS pointers or partial SeedVC snapshots before producing a release.
+# Reject Git LFS pointers or partial DDSP/SeedVC snapshots before producing a release.
 Require-FileSize (Join-Path $Root "assets\models\pretrain\rmvpe.pt") 314572800 "Bundled SeedVC RMVPE"
+$pcVocoderConfigPath = Join-Path $Root "assets\models\pretrain\pc_nsf_hifigan\config.json"
+Require-File $pcVocoderConfigPath "Bundled DDSP PC-NSF-HiFiGAN config"
+Require-FileSize (Join-Path $Root "assets\models\pretrain\pc_nsf_hifigan\model.ckpt") 33554432 "Bundled DDSP PC-NSF-HiFiGAN weights"
+$pcVocoderConfig = Get-Content -LiteralPath $pcVocoderConfigPath -Raw | ConvertFrom-Json
+if ($pcVocoderConfig.pc_aug -ne $true) {
+  throw "Bundled DDSP vocoder is not pitch-controllable: $pcVocoderConfigPath"
+}
 Require-FileSize (Join-Path $Root "assets\models\seedvc\campplus_cn_common.bin") 20971520 "Bundled SeedVC CampPlus"
 Require-File (Join-Path $Root "assets\models\seedvc\whisper-small\config.json") "Bundled Whisper config"
 Require-File (Join-Path $Root "assets\models\seedvc\whisper-small\preprocessor_config.json") "Bundled Whisper preprocessor"
@@ -194,7 +203,6 @@ Require-File $stagedHostExe "Staged JUCE VST3 host (build without -SkipJuceHostB
 Require-File (Join-Path $Root "setup_env.bat") "Runtime setup entry"
 Require-File (Join-Path $Root "install_prereqs.bat") "Prerequisite installer"
 Require-File (Join-Path $Root "install\install.py") "Runtime installer"
-Require-File (Join-Path $Root "release_notes_v019.md") "v0.0.19 release notes"
 Write-Host "Staged runtime bundle validated." -ForegroundColor Green
 
 # 5) Compile installer

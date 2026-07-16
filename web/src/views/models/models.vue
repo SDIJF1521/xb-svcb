@@ -5,7 +5,7 @@
       <div>
         <p class="eyebrow">// 模型管理</p>
         <h1>声音模型</h1>
-        <p class="page-sub">统一管理 So-VITS-SVC / RVC / SeedVC 等声音模型，导入、筛选、分享与默认模型设置集中完成</p>
+        <p class="page-sub">统一管理 So-VITS-SVC / RVC / SeedVC / DDSP-SVC 等声音模型，导入、筛选、分享与默认模型设置集中完成</p>
       </div>
       <el-button size="large" round class="ghost-btn" @click="openSettings">
         <el-icon class="el-icon--left"><Setting /></el-icon>ModelScope 设置
@@ -129,6 +129,26 @@
               <button class="picker" @click="pick('mainConfig', 'config')">
                 <el-icon><Document /></el-icon>
                 <span class="picker-text">{{ baseName(imp.mainConfig) || '选择 config.yml / config.yaml' }}</span>
+                <el-icon class="picker-arrow"><Plus /></el-icon>
+              </button>
+            </div>
+          </div>
+
+          <!-- DDSP-SVC：Rectified Flow checkpoint + 同目录配置 -->
+          <div v-else-if="impFramework === 'ddsp-svc'" class="imp-grid">
+            <div class="imp-field" :class="{ filled: !!imp.mainModel }">
+              <label>DDSP-SVC checkpoint <i>*</i></label>
+              <button class="picker" @click="pick('mainModel', 'model')">
+                <el-icon><Document /></el-icon>
+                <span class="picker-text">{{ baseName(imp.mainModel) || '选择 model_xxx.pt' }}</span>
+                <el-icon class="picker-arrow"><Plus /></el-icon>
+              </button>
+            </div>
+            <div class="imp-field" :class="{ filled: !!imp.mainConfig }">
+              <label>DDSP-SVC 配置 <i>*</i></label>
+              <button class="picker" @click="pick('mainConfig', 'config')">
+                <el-icon><Document /></el-icon>
+                <span class="picker-text">{{ baseName(imp.mainConfig) || '选择 config.yaml' }}</span>
                 <el-icon class="picker-arrow"><Plus /></el-icon>
               </button>
             </div>
@@ -464,12 +484,13 @@ function toggleLocalFramework(id: string) {
 }
 
 /* ---------- 本地导入 ---------- */
-/* 导入仅支持已实现推理引擎的框架（so-vits-svc / rvc / seed-vc） */
-type ImportFw = 'so-vits-svc' | 'rvc' | 'seed-vc'
+/* 导入仅支持已实现推理引擎的框架。 */
+type ImportFw = 'so-vits-svc' | 'rvc' | 'seed-vc' | 'ddsp-svc'
 const importFrameworks: { id: ImportFw; name: string }[] = [
   { id: 'so-vits-svc', name: 'So-VITS-SVC' },
   { id: 'rvc', name: 'RVC' },
   { id: 'seed-vc', name: 'SeedVC' },
+  { id: 'ddsp-svc', name: 'DDSP-SVC' },
 ]
 const impFramework = ref<ImportFw>('so-vits-svc')
 const imp = ref({
@@ -490,6 +511,7 @@ const suggestedName = computed(() => baseName(imp.value.mainModel).replace(/\.[^
 const importHint = computed(() => {
   if (impFramework.value === 'rvc') return '主模型(.pth) 必填，检索文件(.index) 可选'
   if (impFramework.value === 'seed-vc') return 'checkpoint + 配置必填；参考音频在推理时选择'
+  if (impFramework.value === 'ddsp-svc') return 'Rectified Flow checkpoint + config.yaml 必填'
   return '主模型 + 配置为必填，扩散模型可选'
 })
 const canImport = computed(() =>
@@ -530,13 +552,14 @@ async function doImport() {
   try {
     const isRvc = impFramework.value === 'rvc'
     const isSeedVc = impFramework.value === 'seed-vc'
+    const isDdsp = impFramework.value === 'ddsp-svc'
     const created = await modelsStore.importModel({
       name: imp.value.name.trim() || undefined,
       framework: impFramework.value,
       main_model: imp.value.mainModel,
       main_config: isRvc ? undefined : imp.value.mainConfig,
-      diffusion_model: isRvc || isSeedVc ? null : imp.value.diffusionModel || null,
-      diffusion_config: isRvc || isSeedVc ? null : imp.value.diffusionConfig || null,
+      diffusion_model: isRvc || isSeedVc || isDdsp ? null : imp.value.diffusionModel || null,
+      diffusion_config: isRvc || isSeedVc || isDdsp ? null : imp.value.diffusionConfig || null,
       index_file: isRvc ? imp.value.indexFile || null : null,
     })
     if (created) {

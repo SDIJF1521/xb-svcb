@@ -48,6 +48,8 @@ type ViewTransitionDocument = Document & {
 
 const STORAGE_KEY = 'xb-theme'
 const CUSTOM_STORAGE_KEY = 'xb-custom-theme'
+const THEME_TRANSITION_DURATION = 480
+const THEME_TRANSITION_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)'
 
 const HEX_RE = /^#[0-9a-f]{6}$/i
 
@@ -359,117 +361,124 @@ function createThemeSnapshot() {
   captureThemeVars(overlay)
   overlay.appendChild(app.cloneNode(true))
   document.body.appendChild(overlay)
+  overlay.scrollTo(window.scrollX, window.scrollY)
   return overlay
 }
 
 function setSnapshotHole(overlay: HTMLElement, x: number, y: number, radius: number) {
   const r = Math.max(0, radius)
-  const mask = `radial-gradient(circle at ${x}px ${y}px, transparent ${r}px, #000 ${r + 1}px)`
+  const feather = Math.min(24, Math.max(1, r * 0.08))
+  const mask = `radial-gradient(circle at ${x}px ${y}px, transparent ${Math.max(0, r - feather)}px, #000 ${r}px)`
   overlay.style.maskImage = mask
   overlay.style.webkitMaskImage = mask
 }
 
-function animateSnapshotReveal(overlay: HTMLElement, x: number, y: number, radius: number) {
-  const duration = 420
-  const start = performance.now()
-  const easeIn = (t: number) => t * t
+function animateSnapshotReveal(overlay: HTMLElement, x: number, y: number, radius: number): Promise<void> {
+  return new Promise((resolve) => {
+    const start = performance.now()
+    const easeOutCubic = (t: number) => 1 - (1 - t) ** 3
 
-  function frame(now: number) {
-    const progress = Math.min(1, (now - start) / duration)
-    setSnapshotHole(overlay, x, y, radius * easeIn(progress))
-    if (progress < 1) {
-      window.requestAnimationFrame(frame)
-    } else {
-      overlay.remove()
+    function frame(now: number) {
+      const progress = Math.min(1, (now - start) / THEME_TRANSITION_DURATION)
+      setSnapshotHole(overlay, x, y, radius * easeOutCubic(progress))
+      if (progress < 1) {
+        window.requestAnimationFrame(frame)
+      } else {
+        overlay.remove()
+        resolve()
+      }
     }
-  }
 
-  setSnapshotHole(overlay, x, y, 0)
-  window.requestAnimationFrame(frame)
+    setSnapshotHole(overlay, x, y, 0)
+    window.requestAnimationFrame(frame)
+  })
 }
 
 function runThemeTransition(
   commit: () => void,
   event?: MouseEvent,
   direction: ThemeTransitionDirection = 'expand-new',
+  onFinished: () => void = () => {},
 ) {
   if (typeof document === 'undefined' || typeof window === 'undefined') {
     commit()
+    onFinished()
     return
   }
   if (shouldReduceMotion()) {
     commit()
+    onFinished()
     return
   }
 
   const { x, y, radius } = transitionOrigin(event)
-  if (direction === 'expand-new') {
-    const snapshot = createThemeSnapshot()
-    if (!snapshot) {
-      commit()
-      return
-    }
-    document.documentElement.classList.add('theme-transitioning')
-    commit()
-    nextTick()
-      .then(() => animateSnapshotReveal(snapshot, x, y, radius))
-      .finally(() => {
-        window.setTimeout(() => {
-          document.documentElement.classList.remove('theme-transitioning')
-        }, 440)
-      })
-    return
-  }
-
   const doc = document as ViewTransitionDocument
-  if (!doc.startViewTransition) {
-    commit()
-    return
+  if (doc.startViewTransition) {
+    const layerClass = direction === 'contract-old' ? 'theme-transition-contract' : 'theme-transition-expand'
+    const fromBg = window.getComputedStyle(document.documentElement).getPropertyValue('--xb-bg').trim()
+    document.documentElement.style.setProperty('--theme-transition-x', `${x}px`)
+    document.documentElement.style.setProperty('--theme-transition-y', `${y}px`)
+    document.documentElement.style.setProperty('--theme-transition-radius', `${radius}px`)
+    document.documentElement.style.setProperty('--theme-transition-from-bg', fromBg || window.getComputedStyle(document.body).backgroundColor)
+    document.documentElement.classList.add('theme-transitioning', layerClass)
+
+    const cleanup = () => {
+      document.documentElement.classList.remove('theme-transitioning', layerClass)
+      document.documentElement.style.removeProperty('--theme-transition-x')
+      document.documentElement.style.removeProperty('--theme-transition-y')
+      document.documentElement.style.removeProperty('--theme-transition-radius')
+      document.documentElement.style.removeProperty('--theme-transition-from-bg')
+      document.documentElement.style.removeProperty('--theme-transition-to-bg')
+      onFinished()
+    }
+
+    try {
+      const transition = doc.startViewTransition(async () => {
+        commit()
+        await nextTick()
+        const toBg = window.getComputedStyle(document.documentElement).getPropertyValue('--xb-bg').trim()
+        document.documentElement.style.setProperty('--theme-transition-to-bg', toBg || window.getComputedStyle(document.body).backgroundColor)
+      })
+
+      transition.ready
+        .then(() => {
+          const clipPath = [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`]
+          const pseudoElement = direction === 'contract-old' ? '::view-transition-old(root)' : '::view-transition-new(root)'
+          const options: KeyframeAnimationOptions & { pseudoElement?: string } = {
+            duration: THEME_TRANSITION_DURATION,
+            easing: THEME_TRANSITION_EASING,
+            fill: 'both',
+            pseudoElement,
+          }
+          document.documentElement.animate(
+            {
+              clipPath: direction === 'contract-old' ? [...clipPath].reverse() : clipPath,
+            },
+            options,
+          )
+        })
+        .catch(() => {})
+      transition.finished.then(() => window.requestAnimationFrame(cleanup), cleanup)
+      return
+    } catch {
+      document.documentElement.classList.remove('theme-transitioning', layerClass)
+    }
   }
 
-  const layerClass = direction === 'contract-old' ? 'theme-transition-contract' : 'theme-transition-expand'
-  const fromBg = window.getComputedStyle(document.documentElement).getPropertyValue('--xb-bg').trim()
-  document.documentElement.style.setProperty('--theme-transition-x', `${x}px`)
-  document.documentElement.style.setProperty('--theme-transition-y', `${y}px`)
-  document.documentElement.style.setProperty('--theme-transition-radius', `${radius}px`)
-  document.documentElement.style.setProperty('--theme-transition-from-bg', fromBg || window.getComputedStyle(document.body).backgroundColor)
-  document.documentElement.classList.add('theme-transitioning', layerClass)
-  const transition = doc.startViewTransition(async () => {
+  const snapshot = createThemeSnapshot()
+  if (!snapshot) {
     commit()
-    await nextTick()
-    const toBg = window.getComputedStyle(document.documentElement).getPropertyValue('--xb-bg').trim()
-    document.documentElement.style.setProperty('--theme-transition-to-bg', toBg || window.getComputedStyle(document.body).backgroundColor)
-  })
-
-  transition.ready
-    .then(() => {
-      const clipPath = [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`]
-      const pseudoElement = direction === 'contract-old' ? '::view-transition-old(root)' : '::view-transition-new(root)'
-      const options: KeyframeAnimationOptions & { pseudoElement?: string } = {
-        duration: 420,
-        easing: 'ease-in',
-        fill: 'both',
-        pseudoElement,
-      }
-      document.documentElement.animate(
-        {
-          clipPath: direction === 'contract-old' ? [...clipPath].reverse() : clipPath,
-        },
-        options,
-      )
-    })
-    .catch(() => {})
+    onFinished()
+    return
+  }
+  document.documentElement.classList.add('theme-transitioning')
+  commit()
+  nextTick()
+    .then(() => animateSnapshotReveal(snapshot, x, y, radius))
     .finally(() => {
-      transition.finished.finally(() => {
-        window.requestAnimationFrame(() => {
-          document.documentElement.classList.remove('theme-transitioning', layerClass)
-          document.documentElement.style.removeProperty('--theme-transition-x')
-          document.documentElement.style.removeProperty('--theme-transition-y')
-          document.documentElement.style.removeProperty('--theme-transition-radius')
-          document.documentElement.style.removeProperty('--theme-transition-from-bg')
-          document.documentElement.style.removeProperty('--theme-transition-to-bg')
-        })
-      })
+      snapshot.remove()
+      document.documentElement.classList.remove('theme-transitioning')
+      onFinished()
     })
 }
 
@@ -482,19 +491,25 @@ export const useThemeStore = defineStore('theme', () => {
   const customTheme = ref<CustomTheme>(readStoredCustomTheme())
   const themeLabel = computed(() => (theme.value === 'custom' ? customTheme.value.name : THEMES.find((t) => t.value === theme.value)?.label ?? '主题'))
 
-  function commitTheme(name: ThemeName, nextCustomTheme = customTheme.value, persist = true) {
+  function commitTheme(name: ThemeName, nextCustomTheme = customTheme.value, persist = true, syncChrome = true) {
     const cleanCustomTheme = sanitizeCustomTheme(nextCustomTheme)
     theme.value = name
     customTheme.value = cleanCustomTheme
     applyTheme(name, cleanCustomTheme)
-    syncWindowChrome(name, cleanCustomTheme)
+    if (syncChrome) syncWindowChrome(name, cleanCustomTheme)
     if (persist) persistTheme(name, name === 'custom' ? cleanCustomTheme : undefined)
   }
 
   function setTheme(name: ThemeName, options: ThemeTransitionOptions = {}) {
     if (name === theme.value && name !== 'custom') return
-    const direction: ThemeTransitionDirection = isDarkVisualTheme(name, customTheme.value) ? 'expand-new' : 'contract-old'
-    runThemeTransition(() => commitTheme(name), options.event, direction)
+    const nextCustomTheme = sanitizeCustomTheme(customTheme.value)
+    const direction: ThemeTransitionDirection = isDarkVisualTheme(name, nextCustomTheme) ? 'expand-new' : 'contract-old'
+    runThemeTransition(
+      () => commitTheme(name, nextCustomTheme, true, false),
+      options.event,
+      direction,
+      () => syncWindowChrome(name, nextCustomTheme),
+    )
   }
 
   function toggle(event?: MouseEvent) {
@@ -504,19 +519,34 @@ export const useThemeStore = defineStore('theme', () => {
   function previewCustomTheme(value: CustomTheme, options: ThemeTransitionOptions = {}) {
     const nextCustomTheme = sanitizeCustomTheme(value)
     const direction: ThemeTransitionDirection = isDarkVisualTheme('custom', nextCustomTheme) ? 'expand-new' : 'contract-old'
-    runThemeTransition(() => commitTheme('custom', nextCustomTheme, false), options.event, direction)
+    runThemeTransition(
+      () => commitTheme('custom', nextCustomTheme, false, false),
+      options.event,
+      direction,
+      () => syncWindowChrome('custom', nextCustomTheme),
+    )
   }
 
   function saveCustomTheme(value: CustomTheme, options: ThemeTransitionOptions = {}) {
     const nextCustomTheme = sanitizeCustomTheme(value)
     const direction: ThemeTransitionDirection = isDarkVisualTheme('custom', nextCustomTheme) ? 'expand-new' : 'contract-old'
-    runThemeTransition(() => commitTheme('custom', nextCustomTheme, true), options.event, direction)
+    runThemeTransition(
+      () => commitTheme('custom', nextCustomTheme, true, false),
+      options.event,
+      direction,
+      () => syncWindowChrome('custom', nextCustomTheme),
+    )
   }
 
   function resetCustomTheme(options: ThemeTransitionOptions = {}) {
     const nextCustomTheme = { ...DEFAULT_CUSTOM_THEME }
     const direction: ThemeTransitionDirection = isDarkVisualTheme('custom', nextCustomTheme) ? 'expand-new' : 'contract-old'
-    runThemeTransition(() => commitTheme('custom', nextCustomTheme, true), options.event, direction)
+    runThemeTransition(
+      () => commitTheme('custom', nextCustomTheme, true, false),
+      options.event,
+      direction,
+      () => syncWindowChrome('custom', nextCustomTheme),
+    )
   }
 
   // 确保初始 DOM 与状态一致

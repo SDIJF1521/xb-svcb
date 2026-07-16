@@ -11,11 +11,58 @@ function toVM(w: WorkDTO): WorkVM {
 export const useWorksStore = defineStore('works', () => {
   const works = ref<WorkVM[]>([])
   const loaded = ref(false)
+  let syncTimer: ReturnType<typeof setTimeout> | null = null
+  let syncUsers = 0
+  let syncing = false
 
   async function load() {
     const list = await api.listWorks()
     works.value = list.map(toVM)
     loaded.value = true
+  }
+
+  function hasActiveWork() {
+    return works.value.some((work) => work.status === 'queue' || work.status === 'running')
+  }
+
+  function scheduleSync() {
+    if (syncUsers <= 0) return
+    if (syncTimer) clearTimeout(syncTimer)
+    const delay = document.visibilityState === 'hidden' ? 5000 : hasActiveWork() ? 1000 : 3000
+    syncTimer = setTimeout(() => void syncNow(), delay)
+  }
+
+  async function syncNow() {
+    if (syncing || syncUsers <= 0) return
+    syncing = true
+    try {
+      await load()
+    } catch {
+      // A transient bridge failure must not stop later global refreshes.
+    } finally {
+      syncing = false
+      scheduleSync()
+    }
+  }
+
+  function onVisibilityChange() {
+    if (document.visibilityState === 'visible') void syncNow()
+    else scheduleSync()
+  }
+
+  function startSync() {
+    syncUsers += 1
+    if (syncUsers > 1) return
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    void syncNow()
+  }
+
+  function stopSync() {
+    syncUsers = Math.max(0, syncUsers - 1)
+    if (syncUsers > 0) return
+    if (syncTimer) clearTimeout(syncTimer)
+    syncTimer = null
+    document.removeEventListener('visibilitychange', onVisibilityChange)
   }
 
   async function ensureLoaded() {
@@ -59,5 +106,17 @@ export const useWorksStore = defineStore('works', () => {
     return ok
   }
 
-  return { works, loaded, load, ensureLoaded, create, refreshOne, retry, remove, rename }
+  return {
+    works,
+    loaded,
+    load,
+    ensureLoaded,
+    startSync,
+    stopSync,
+    create,
+    refreshOne,
+    retry,
+    remove,
+    rename,
+  }
 })
