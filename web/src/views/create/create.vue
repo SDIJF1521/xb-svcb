@@ -221,7 +221,7 @@
                   <div class="mp-mini">
                     <span>设备</span>
                     <select v-model="mp(m.id).device">
-                      <option v-for="d in deviceOptions" :key="d.v" :value="d.v">{{ d.label }}</option>
+                      <option v-for="d in deviceOptionsFor(frameworkOf(m.id))" :key="d.v" :value="d.v">{{ d.label }}</option>
                     </select>
                   </div>
                   <div v-if="frameworkOf(m.id) === 'rvc'" class="mp-mini">
@@ -336,7 +336,7 @@
                 @click="device = d.v"
               >{{ d.label }}</button>
             </div>
-            <div class="field-hint">同时作用于人声分离与模型推理；GPU 加速需 NVIDIA 显卡（CUDA），无显卡或显存不足时选 CPU</div>
+            <div class="field-hint">{{ deviceHint }}</div>
           </div>
 
           <!-- RVC 专属参数 -->
@@ -837,11 +837,13 @@ import {
   type InferenceQueueStatus,
 } from '@/api'
 import { useModelsStore } from '@/stores/models'
+import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
 
 defineOptions({ name: 'CreatePage' })
 
 const modelsStore = useModelsStore()
+const systemStore = useSystemStore()
 const worksStore = useWorksStore()
 const router = useRouter()
 const { models, defaultId } = storeToRefs(modelsStore)
@@ -934,11 +936,33 @@ const filteredModels = computed(() =>
     : models.value,
 )
 
-const deviceOptions = [
-  { v: 'cuda', label: 'GPU (CUDA)' },
-  { v: 'cpu', label: 'CPU' },
-]
-const device = ref(str(prefs.device, 'cuda'))
+function deviceOptionsFor(framework: string) {
+  return systemStore.optionsForFramework([framework, 'uvr']).map((item) => ({
+    v: item.value,
+    label: item.label,
+    name: item.name,
+  }))
+}
+const deviceOptions = computed(() => deviceOptionsFor(selectedFramework.value))
+const device = ref(str(prefs.device, 'auto'))
+const deviceHint = computed(() => {
+  const selected = deviceOptions.value.find((item) => item.v === device.value) || deviceOptions.value[0]
+  if (!selected) return '当前环境未报告可用推理设备'
+  const name = selected.name ? ` · ${selected.name}` : ''
+  return `当前环境：${selected.label}${name}`
+})
+
+function normalizeDeviceForFramework(value: string, framework: string): string {
+  const allowed = deviceOptionsFor(framework).map((item) => item.v)
+  return allowed.some((item) => item === value) ? value : 'auto'
+}
+
+function normalizeDeviceSelections() {
+  device.value = normalizeDeviceForFramework(device.value, selectedFramework.value)
+  for (const [id, params] of Object.entries(modelParams)) {
+    params.device = normalizeDeviceForFramework(params.device, frameworkOf(id))
+  }
+}
 
 /* ===== 多模型混合翻唱 ===== */
 type MultiParams = {
@@ -2159,6 +2183,11 @@ watch(trackEl, (el) => {
 
 onMounted(async () => {
   await modelsStore.load()
+  if (systemStore.loaded) {
+    normalizeDeviceSelections()
+  } else {
+    void systemStore.load().then(normalizeDeviceSelections).catch(() => undefined)
+  }
   presets.value = await api.listInferencePresets()
   queueStatus.value = await api.getInferenceQueue()
   selectedModel.value = defaultId.value || models.value[0]?.id || ''
@@ -2188,6 +2217,12 @@ onMounted(async () => {
     songQuery.value = name.replace(/\.[^.]+$/, '')
   }
 })
+
+watch(
+  [selectedFramework, () => systemStore.inferenceDevices],
+  normalizeDeviceSelections,
+  { deep: true },
+)
 onUnmounted(() => {
   stopPolling()
   trackRO?.disconnect()

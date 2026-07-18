@@ -52,11 +52,19 @@ class UvrTool:
         """分离人声/伴奏。环境就绪时调子进程真实分离；否则降级返回原音频。"""
         out_dir.mkdir(parents=True, exist_ok=True)
         requested_device = str(device or "auto").strip().lower()
-        if requested_device not in {"auto", "cuda", "cpu"}:
+        if requested_device not in {"auto", "cuda", "rocm", "directml", "dml", "cpu"}:
             raise ValueError(f"不支持的 UVR 分离设备: {requested_device}")
+        worker_device = "directml" if requested_device == "dml" else requested_device
+        strict_accelerator = worker_device in {"cuda", "rocm", "directml"}
+        device_labels = {
+            "cuda": "CUDA",
+            "rocm": "ROCm",
+            "directml": "DirectML",
+        }
+        accelerator_label = device_labels.get(worker_device, worker_device.upper())
         if not self.available or not src or not Path(src).exists():
-            if requested_device == "cuda":
-                raise RuntimeError("已选择 CUDA，但 UVR 分离环境未就绪")
+            if strict_accelerator:
+                raise RuntimeError(f"已选择 {accelerator_label}，但 UVR 分离环境未就绪")
             return SeparationResult(vocals=Path(src), instrumental=None, simulated=True)
 
         model_name = model if model and (config.UVR_MODEL_DIR / model).exists() else config.UVR_MODEL
@@ -72,7 +80,7 @@ class UvrTool:
             "--out-dir",
             str(out_dir),
             "--device",
-            requested_device,
+            worker_device,
         ]
         # 强制子进程以 UTF-8 读写，避免中文路径在管道里被 GBK/UTF-8 编码错位损坏
         env = os.environ.copy()
@@ -90,8 +98,10 @@ class UvrTool:
                 **config.subprocess_no_window(),
             )
         except (OSError, subprocess.SubprocessError) as exc:
-            if requested_device == "cuda":
-                raise RuntimeError(f"CUDA UVR 分离子进程启动失败: {exc}") from exc
+            if strict_accelerator:
+                raise RuntimeError(
+                    f"{accelerator_label} UVR 分离子进程启动失败: {exc}"
+                ) from exc
             return SeparationResult(vocals=Path(src), instrumental=None, simulated=True)
 
         # 把分离子进程输出写入日志，便于排查
@@ -105,12 +115,18 @@ class UvrTool:
             pass
 
         # 优先读取 UTF-8 JSON 结果文件（不受 stdout 管道编码影响），回退到解析 stdout
-        if proc.returncode != 0 and requested_device == "cuda":
-            raise RuntimeError(f"CUDA UVR 分离失败: {self._error_tail(proc.stdout, proc.stderr)}")
+        if proc.returncode != 0 and strict_accelerator:
+            raise RuntimeError(
+                f"{accelerator_label} UVR 分离失败: "
+                f"{self._error_tail(proc.stdout, proc.stderr)}"
+            )
         result = self._read_result_json(out_dir) or self._parse_output(proc.stdout)
         if result is None or not result.vocals.exists():
-            if requested_device == "cuda":
-                raise RuntimeError(f"CUDA UVR 未生成有效人声: {self._error_tail(proc.stdout, proc.stderr)}")
+            if strict_accelerator:
+                raise RuntimeError(
+                    f"{accelerator_label} UVR 未生成有效人声: "
+                    f"{self._error_tail(proc.stdout, proc.stderr)}"
+                )
             # 分离失败时降级，保证后续推理仍可进行
             return SeparationResult(vocals=Path(src), instrumental=None, simulated=True)
         return result

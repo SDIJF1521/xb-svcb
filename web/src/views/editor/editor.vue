@@ -807,6 +807,7 @@ import EditorRoleManager from '@/components/editor/EditorRoleManager.vue'
 import TimelineTemplatePanel from '@/components/editor/TimelineTemplatePanel.vue'
 import { api } from '@/api'
 import { useModelsStore } from '@/stores/models'
+import { useSystemStore } from '@/stores/system'
 import type {
   EditorClip,
   EditorClipChannel,
@@ -871,6 +872,7 @@ interface EffectDefinition {
 const router = useRouter()
 const route = useRoute()
 const modelsStore = useModelsStore()
+const systemStore = useSystemStore()
 const { models } = storeToRefs(modelsStore)
 
 const project = ref<EditorProject | null>(null)
@@ -959,11 +961,8 @@ const MIX_CROSSFADE_MS = 90
 const PLUGIN_STATE_SYNC_INTERVAL_MS = 120
 const RERUN_PREFS_KEY = 'xb-editor-rerun-params'
 const f0Methods = ['rmvpe', 'crepe', 'harvest', 'pm']
-const deviceOptions = [
-  { value: 'auto', label: '自动' },
-  { value: 'cuda', label: 'GPU' },
-  { value: 'cpu', label: 'CPU' },
-]
+const rerunFramework = () => models.value.find((m) => m.id === rerunModelId.value)?.framework || 'so-vits-svc'
+const deviceOptions = computed(() => systemStore.optionsForFramework(rerunFramework()))
 const rvcVersions = ['v2', 'v1']
 const channelOptions: { value: EditorClipChannel; label: string; title: string }[] = [
   { value: 'stereo', label: '双', title: '双声道' },
@@ -1165,7 +1164,7 @@ const rerunF0Method = ref(prefStr(rerunPrefs.f0Method, 'rmvpe', f0Methods))
 const rerunIndexRate = ref(prefNum(rerunPrefs.indexRate, 0.75, 0, 1))
 const rerunRmsMix = ref(prefNum(rerunPrefs.rmsMix, 0.25, 0, 1))
 const rerunDiffusionRatio = ref(prefNum(rerunPrefs.diffusionRatio, 0.5, 0, 1))
-const rerunDevice = ref(prefStr(rerunPrefs.device, 'auto', deviceOptions.map((d) => d.value)))
+const rerunDevice = ref(prefStr(rerunPrefs.device, 'auto', deviceOptions.value.map((d) => d.value)))
 const rerunProtect = ref(prefNum(rerunPrefs.protect, 0.33, 0, 0.5))
 const rerunFilterRadius = ref(prefNum(rerunPrefs.filterRadius, 3, 0, 7))
 const rerunRvcVersion = ref(prefStr(rerunPrefs.rvcVersion, 'v2', rvcVersions))
@@ -1613,6 +1612,9 @@ function keepSelection(next: EditorProject): Selection | null {
 
 async function loadInitial() {
   await modelsStore.load()
+  if (!systemStore.loaded) {
+    void systemStore.load().catch(() => undefined)
+  }
   const projectId = typeof route.query.project === 'string' ? route.query.project : ''
   const workId = typeof route.query.work === 'string' ? route.query.work : ''
   if (projectId) {
@@ -3394,6 +3396,12 @@ watch(
     }
   },
 )
+
+watch(deviceOptions, (options) => {
+  if (!options.some((item) => item.value === rerunDevice.value)) {
+    rerunDevice.value = 'auto'
+  }
+})
 
 function calcDuration(p: EditorProject) {
   return Math.max(0.05, ...p.tracks.flatMap((t) => t.clips.map((c) => c.end || 0)))

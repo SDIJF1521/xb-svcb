@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from infrastructure.ffmpeg_tool import FfmpegTool
+from infrastructure.inference_device import inference_device_capabilities
 from infrastructure.svc_engine import SvcEngine
 from infrastructure.uvr_tool import UvrTool
 
@@ -89,4 +90,5 @@ class SystemService:
         return {
             "ready": True,
             "tools": tools,
+            "inference_devices": inference_device_capabilities(),
         }

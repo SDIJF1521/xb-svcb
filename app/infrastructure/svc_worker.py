@@ -19,6 +19,11 @@ import os
 import sys
 import traceback
 
+try:
+    from inference_device import patch_directml_float32, resolve_torch_device
+except ImportError:  # package import used by tests/application tooling
+    from infrastructure.inference_device import patch_directml_float32, resolve_torch_device
+
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="XB-SVCB so-vits-svc 推理 worker")
@@ -28,7 +33,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--input", required=True, help="输入人声 wav 路径")
     p.add_argument("--output", required=True, help="输出转换后 wav 路径")
     p.add_argument("--tran", type=int, default=0, help="变调（半音）")
-    p.add_argument("--device", default="auto", help="推理设备：auto / cuda / cpu")
+    p.add_argument(
+        "--device",
+        default="auto",
+        help="推理设备：auto / cuda / rocm / directml / cpu",
+    )
     p.add_argument("--speaker", default="", help="目标说话人，留空取配置首个")
     p.add_argument("--f0", default="rmvpe", help="F0 预测器")
     p.add_argument("--k-step", type=int, default=100, help="浅扩散步数")
@@ -67,6 +76,10 @@ def main() -> int:
     try:
         import soundfile
         import torch
+
+        resolved_device = resolve_torch_device(args.device, torch)
+        if resolved_device.backend == "directml":
+            patch_directml_float32(torch)
 
         # PyTorch>=2.6 起 torch.load 默认 weights_only=True，会拒绝反序列化
         # so-vits-svc checkpoint 里的 argparse.Namespace / numpy 标量等非张量对象，
@@ -121,8 +134,7 @@ def main() -> int:
         traceback.print_exc()
         return 3
 
-    # device=None 时 so-vits 自动在 cuda/cpu 间选择；显式指定则强制使用
-    device = None if args.device in ("", "auto") else args.device
+    device = resolved_device.device
 
     try:
         svc = Svc(
@@ -185,6 +197,7 @@ def main() -> int:
         return 6
 
     svc.clear_empty()
+    print(f"SVC_DEVICE {resolved_device.backend} {resolved_device.name}", flush=True)
     print(f"SVC_OK {out_path}")
     return 0
 

@@ -21,7 +21,7 @@
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.21"
+#define MyAppVersion "0.0.22"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 
@@ -80,7 +80,7 @@ Source: "..\assets\icon\xb-svcb.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; 排除可选的 fcpe.pt（默认 F0 用 rmvpe），让安装器体积压到 GitHub Release 单文件 2GiB 上限内
 Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression; Excludes: "fcpe.pt"
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
-Source: "..\release_notes_v021.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release_notes_v022.md"; DestDir: "{app}"; Flags: ignoreversion
 #endif
 
 [Icons]
@@ -341,7 +341,12 @@ begin
   Result := 'cpu';
   Smi := NvidiaSmiCommand();
   if Smi = '' then
+  begin
+    Names := CommandOutput('powershell.exe -NoProfile -Command "(Get-CimInstance Win32_VideoController).Name"');
+    if ContainsText(Names, 'AMD') or ContainsText(Names, 'Radeon') then
+      Result := 'directml';
     Exit;
+  end;
 
   Caps := CommandOutput(CmdPath(Smi) + ' --query-gpu=compute_cap --format=csv,noheader');
   if Caps <> '' then
@@ -366,8 +371,10 @@ begin
     Result := 'NVIDIA 50 系 / Blackwell，使用 CUDA 12.8 与 cu128 torch'
   else if Stack = 'cu121' then
     Result := 'NVIDIA 40 系及以下兼容显卡，使用 CUDA 12.1 与 cu121 torch'
+  else if Stack = 'directml' then
+    Result := 'AMD Radeon，使用 DirectML 与 torch-directml'
   else
-    Result := 'CPU 或未检测到兼容 NVIDIA 显卡，跳过 CUDA 并安装 CPU 版 torch';
+    Result := 'CPU 或未检测到兼容 GPU，安装 CPU 版 torch';
 end;
 
 function ShowInstallDetails(): Boolean;
@@ -410,7 +417,7 @@ begin
     '  JUCE VST3 Host：随安装包内置，安装后检查' + #13#10 +
     '  GPU 推理栈：' + GpuStackLabel(DetectedGpuStackName()) + #13#10 +
     '  winget：' + StatusText(CmdAvailable('winget')) + #13#10 +
-    '已安装的依赖会自动跳过；自动模式会让 CUDA / torch 与显卡匹配，不兼容或纯 CPU 机器会跳过 CUDA。';
+    '已安装的依赖会自动跳过；自动模式会让 CUDA / DirectML / torch 与显卡匹配，没有兼容 GPU 时使用 CPU。';
 end;
 
 procedure SetEnvProgress(Position: Integer; const Detail: String);
@@ -575,9 +582,9 @@ begin
 
   GpuStackPage := CreateInputOptionPage(
     wpSelectDir,
-    'GPU 与 CUDA 栈',
+    'GPU 推理栈',
     '选择本机要使用的推理依赖栈',
-    '安装器会复核实际显卡：RTX 50 系使用 cu128 + torch 2.7，40 系及以下使用 cu121；CPU 或不兼容显卡会跳过 CUDA 并安装 CPU 版 torch。',
+    '安装器会复核实际显卡：NVIDIA 使用匹配的 CUDA 栈，AMD Radeon 使用 DirectML；没有兼容 GPU 时安装 CPU 版。',
     True,
     False
   );
@@ -585,6 +592,7 @@ begin
   GpuStackPage.Add('CPU 模式');
   GpuStackPage.Add('NVIDIA 40 系及以下：cu121');
   GpuStackPage.Add('NVIDIA 50 系 Blackwell：cu128');
+  GpuStackPage.Add('AMD Radeon：DirectML');
   GpuStackPage.Values[0] := True;
 
   PrereqPathPage := CreateInputDirPage(
@@ -643,7 +651,9 @@ begin
   else if GpuStackPage.Values[2] then
     Result := 'cu121'
   else if GpuStackPage.Values[3] then
-    Result := 'cu128';
+    Result := 'cu128'
+  else if GpuStackPage.Values[4] then
+    Result := 'directml';
 end;
 
 function GpuStackName(): String;
@@ -675,6 +685,8 @@ begin
     Result := '--gpu --cu128'
   else if Requested = 'cu121' then
     Result := '--gpu --no-cu128'
+  else if Requested = 'directml' then
+    Result := '--directml'
   else
   begin
     Stack := GpuStackName();
@@ -682,6 +694,8 @@ begin
       Result := '--gpu --cu128'
     else if Stack = 'cu121' then
       Result := '--gpu --no-cu128'
+    else if Stack = 'directml' then
+      Result := '--directml'
     else
       Result := '';
   end;
@@ -702,7 +716,8 @@ begin
       PrereqPathPage.Values[1] := ExpandConstant('{localappdata}\Programs\Git');
     if PrereqPathPage.Values[2] = '' then
       PrereqPathPage.Values[2] := ExpandConstant('{app}\tools\ffmpeg');
-    if PrereqPathPage.Values[3] = '' then
+    if (PrereqPathPage.Values[3] = '') and
+       (GpuStackName() <> 'cpu') and (GpuStackName() <> 'directml') then
     begin
       if GpuStackName() = 'cu128' then
         PrereqPathPage.Values[3] := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.8')

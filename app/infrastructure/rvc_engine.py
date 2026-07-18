@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 import config
 from domain import InferenceParams
+from infrastructure.inference_device import environment_device_label
 from infrastructure.svc_engine import SvcEngine
 
 
@@ -26,7 +27,11 @@ class RvcEngine:
         return config.rvc_engine_ready()
 
     def device(self) -> str:
-        return "cuda (rvc env)" if self.available else "cpu (simulated)"
+        return (
+            environment_device_label(config.RVC_PYTHON, "rvc env")
+            if self.available
+            else "CPU (simulated)"
+        )
 
     def version(self) -> Optional[str]:
         return "rvc-python" if self.available else None

@@ -44,14 +44,16 @@
 - 🎵 **在线资源获取（可播放校验）** —— 内置 **网易云 / QQ音乐** 曲库的搜索、试听、下载（QQ 可填会员 Cookie 取高品质音频），一次展示曲库接口返回的完整搜索列表；歌词读取对齐妖狐官方 `lrctxt` / `lrc` / `music.lrcurl` 响应，并为 QQ 免费曲库接入聚合歌词回退；**下载前校验资源可播放性**（魔数 / Content-Type / ffprobe），VIP / 无版权 / 失效链接不可下载，避免坑到后续推理；下载素材可一键进入翻唱。
 - 🌐 **模型站（魔搭社区 · 后台传输）** —— 基于 **ModelScope** 一键**上传/下载**声音模型：填自己的访问令牌即可发布到自有公开仓库，按关键词**模糊搜索**（**分页加载**）社区模型并直接导入；带**架构标签**（So-VITS-SVC / RVC / SeedVC / DDSP-SVC）与**清单防污染**校验；上传/下载**挂后台执行、不阻塞操作**，大模型支持断点续传和重试，下载完成后立即进入可选模型列表。
 - 🎼 **专业人声分离** —— `5_HP-Karaoke-UVR` 分离 + `UVR-DeEcho-DeReverb` 去混响，得到干净干声。
-- ⚡ **GPU / CPU 自由切换** —— 自动识别 NVIDIA 显卡（含 **50 系/Blackwell 自动走 cu128 + torch 2.7**），长音频自动分段避免显存溢出。
+- ⚡ **GPU / CPU 自由切换** —— 自动识别 NVIDIA CUDA 与 AMD Radeon DirectML（含 **50 系/Blackwell 自动走 cu128 + torch 2.7**），长音频自动分段避免显存溢出。
 - 🎨 **主题系统与自定义主题** —— 暗色 / 亮色 / 自定义主题一键切换并记忆，切换时从主题按钮触发基于原生页面快照的圆形扩散动画；自定义主题支持调色、背景图片 / MP4 动态壁纸和动态粒子，默认提供亮色「晴空花园」示例，连 pywebview **原生窗口标题栏/边框**也会在动画结束后自然同步。
 - 👤 **个性化** —— 自定义头像与昵称、内置全局消息通知中心；切换页面后仍持续同步任务进度与失败原因，已读状态可在多个前端窗口间同步。
 - 📦 **开箱即用** —— 安装后通过 `XB-SVCB.exe` 启动完整桌面应用（自带应用图标与前端资源），打开界面无需另装 Python / Node。
 - 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-seedvc` / `.venv-ddsp` / `.venv-uvr`），互不污染。
 - 🎧 **作品库** —— 试听 / 导出成品，单独试听伴奏与干声，失败任务一键查日志；删除作品同步真实清理本地生成文件。
 
-> **最新版本 v0.0.21**：音频编辑器的 VST3 插件 UI 改为非模态置顶窗口，可与主界面播放和时间轴操作并行；同一 GUI 插件实例通过 JUCE 声卡回调处理可听音频，参数在下一音频块生效，并显示设备实际块大小与延迟；新增相邻音频片段渲染合并，HTML Audio 继续作为无原生设备时的安全回退。详见 [v0.0.21 更新说明](release_notes_v021.md)。
+> **最新版本 v0.0.22**：新增 Windows AMD Radeon DirectML 支持，So-VITS-SVC、RVC、SeedVC、DDSP-SVC 与 UVR 均可使用 AMD GPU；设备 UI 根据各隔离环境实际能力显示 CUDA、ROCm、DirectML 或 CPU，显式选择加速器时不再静默回退。详见 [v0.0.22 更新说明](release_notes_v022.md)。
+
+> v0.0.21：音频编辑器的 VST3 插件 UI 改为非模态置顶窗口，可与主界面播放和时间轴操作并行；同一 GUI 插件实例通过 JUCE 声卡回调处理可听音频，参数在下一音频块生效，并显示设备实际块大小与延迟；新增相邻音频片段渲染合并。详见 [v0.0.21 更新说明](release_notes_v021.md)。
 >
 > v0.0.20：新增 DDSP-SVC 6.3 完整推理链路、共振峰偏移和独立安装环境；消息中心改为跨页面全局同步；UVR 严格遵循 GPU / CPU 选择；编辑器支持 TXT / LRC 歌词导入、静音辅助自动切句、多角色管理和时间轴模板；暗色主题切换改用 WebView2 原生页面快照与平滑减速动画。详见 [v0.0.20 更新说明](release_notes_v020.md)。
 >
@@ -214,7 +216,7 @@ flowchart TB
 | **uv**                    | 虚拟环境管理工具          | 安装器使用 uv 管理虚拟环境（缺失会自动安装）                                                                                                         |
 | **ffmpeg**                | 音频转码 / 混音           | 需在 PATH 中可用                                                                                                                                     |
 | **Git**（可选）           | 获取 so-vits-svc 仓库     | 没有也行，安装器会自动下载 ZIP                                                                                                                       |
-| **CUDA**（可选）          | GPU 加速                  | 40 系及以下兼容 NVIDIA 自动装 cu121 版 PyTorch；**50 系（Blackwell）自动改装 cu128 + torch 2.7**；CPU 或不兼容显卡会跳过 CUDA 并使用 CPU torch |
+| **GPU 运行时**（可选）    | GPU 加速                  | NVIDIA 自动安装 cu121/cu128 PyTorch；Windows AMD Radeon 自动安装 `torch-directml`；无兼容 GPU 时使用 CPU torch |
 | **Node.js LTS**（含 npm） | 构建前端                  | 仅「从源码安装」需要                                                                                                                                 |
 | **C++ 生成工具**（可选）  | 编译依赖 / JUCE 插件 Host | 部分 Python 包需要 C++14 编译器；构建音频编辑器 VST3 插件 Host 需要 C++17 + CMake + JUCE；安装时勾选**Desktop development with C++**           |
 
@@ -233,6 +235,8 @@ flowchart TB
 | **JUCE**                     | [https://github.com/juce-framework/JUCE](https://github.com/juce-framework/JUCE)                                                                                                                                     |
 
 > 💡 **关于 CUDA**：安装器会先复核实际显卡，40 系及以下兼容 NVIDIA 使用 **cu121**，50 系 Blackwell 使用 **cu128**；CPU 或不兼容显卡会跳过 CUDA 并安装 CPU 版 torch。PyTorch wheel 已内置对应 CUDA 运行库，通常只需匹配的新 NVIDIA 驱动，完整 CUDA Toolkit 仅用于本地编译/工具链。
+
+> 🔴 **关于 AMD**：Windows 下检测到 AMD Radeon 时自动安装 **DirectML + torch 2.4.1**。So-VITS-SVC、RVC、SeedVC、DDSP-SVC 四个歌声模型框架以及 UVR 都可使用 AMD GPU；UVR 的 VR `.pth` 模型走 `torch-directml`，MDX `.onnx` 模型走 `onnxruntime-directml`。显式选择 DirectML 时不会静默退回 CPU。旧安装可运行 `python install\install.py --directml --only uvr` 单独重建 UVR AMD 环境。
 >
 > 🟢 **50 系显卡（RTX 5060/5070/5080/5090，Blackwell, sm_120）**：cu121 无 sm_120 内核，仅升级 torch 还会出哑音，因此安装器**检测到 50 系会自动切换到 cu128 + torch 2.7 的专用栈**（SVC / RVC 改用 Python 3.10，torchaudio I/O 走 soundfile，fairseq 重装并打 `weights_only` 补丁）。需安装 **CUDA 12.8 级别的新版 NVIDIA 驱动**；若检测不到兼容 NVIDIA 显卡，会自动回退 CPU 版 torch，避免装错 CUDA 栈。
 
@@ -294,7 +298,8 @@ setup_env.bat
 
 ```bat
 python install\install.py --cpu          rem CPU 版
-python install\install.py --gpu          rem 请求 CUDA 版（会复核兼容 NVIDIA 显卡）
+python install\install.py --gpu          rem 自动选择 NVIDIA CUDA 或 AMD DirectML
+python install\install.py --directml     rem 强制安装 AMD/Windows DirectML 版
 python install\install.py --only svc     rem 只重跑某一步：app / web / uvr / svc / rvc / seedvc / ddsp / hub / models
 python install\install.py --only rvc     rem 只搭建 RVC 推理环境 .venv-rvc（rvc-python）
 python install\install.py --only seedvc  rem 只搭建 SeedVC 推理环境 .venv-seedvc
@@ -561,7 +566,7 @@ uv pip install --python <安装目录>\.venv-svc\Scripts\python.exe "setuptools<
 
 <br/>
 
-CPU 模式下 svc 模型较慢。装有兼容 NVIDIA 显卡时用 `python install\install.py --gpu` 重装分离环境即可走 GPU；脚本会复核实际显卡，40 系及以下使用 cu121，**50 系（Blackwell）自动改用 cu128 + torch 2.7 专用栈**，CPU 或不兼容显卡会继续使用 CPU torch。
+CPU 模式下模型较慢。使用 `python install\install.py --gpu` 会自动选择 NVIDIA CUDA 或 AMD DirectML；NVIDIA 40 系及以下使用 cu121，**50 系（Blackwell）自动改用 cu128 + torch 2.7 专用栈**，AMD Radeon 使用 DirectML，无兼容 GPU 时继续使用 CPU torch。
 
 </details>
 
@@ -742,9 +747,9 @@ CPU 模式下 svc 模型较慢。装有兼容 NVIDIA 显卡时用 `python instal
 
 <br/>
 
-- [ ] AMD GPU 支持
-- [ ] DirectML 支持
-- [ ] ONNX Runtime 推理
+- [x] AMD GPU 支持（Windows DirectML；四个歌声模型框架 + UVR）
+- [x] DirectML 支持
+- [x] UVR ONNX Runtime DirectML 推理
 - [ ] Intel GPU 支持
 - [ ] Ascend 昇腾支持
 - [ ] CPU 推理优化

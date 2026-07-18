@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 import config
 from domain import InferenceParams
+from infrastructure.inference_device import environment_device_label
 from infrastructure.svc_engine import SvcEngine
 
 
@@ -22,7 +23,11 @@ class SeedVcEngine:
         return config.seedvc_engine_ready()
 
     def device(self) -> str:
-        return "cuda (seed-vc env)" if self.available else "cpu (simulated)"
+        return (
+            environment_device_label(config.SEEDVC_PYTHON, "seed-vc env")
+            if self.available
+            else "CPU (simulated)"
+        )
 
     def version(self) -> Optional[str]:
         if not self.available:

@@ -1,13 +1,12 @@
 ﻿<#
-  Build the XB-SVCB installer (setup.exe) - developer side.
-
-  Steps:
-    1) Build the frontend into web/dist (unless -SkipWebBuild)
-    2) Build the app exe with PyInstaller into dist/XB-SVCB (unless -SkipAppBuild)
-    3) Build the native JUCE VST3 host into engines/juce-vst3-host (unless -SkipJuceHostBuild)
-    4) Validate the staged runtime bundle
-    5) Compile installer/xb-svcb.iss with Inno Setup's ISCC
-    6) Output: dist/XB-SVCB-Setup.exe + split .bin payloads
+  构建 XB-SVCB 安装程序（setup.exe）——开发方。
+  步骤：
+  1）将前端构建为 web/dist（除非使用 -SkipWebBuild）
+  2）使用 PyInstaller 将应用程序打包成 exe 文件，存入 dist/XB-SVCB（除非使用 -SkipAppBuild）
+  3）将原生 JUCE VST3 主机构建为 engines/juce-vst3-host（除非使用 -SkipJuceHostBuild）
+  4）验证生成的运行时捆绑包
+  5）使用 Inno Setup 的 ISCC 编译 installer/xb-svcb.iss
+  6）输出结果：dist/XB-SVCB-Setup.exe + 分割后的 .bin 数据包
 
   Prerequisites: Node.js (frontend build), app/.venv with pywebview + pyinstaller,
                  CMake + C++17 compiler + JUCE for the VST3 host,
@@ -85,6 +84,7 @@ if (($appVersion -ne $appProjectVersion) -or
 Write-Host ("Release version: {0}" -f $appVersion) -ForegroundColor Green
 
 $workerFiles = @(
+  "inference_device.py",
   "svc_worker.py",
   "f0_worker.py",
   "uvr_worker.py",
@@ -96,7 +96,7 @@ $workerFiles = @(
 foreach ($worker in $workerFiles) {
   Require-File (Join-Path $Root "app\infrastructure\$worker") "Worker source $worker"
 }
-Require-File (Join-Path $Root "release_notes_v021.md") "v0.0.21 release notes"
+Require-File (Join-Path $Root "release_notes_v022.md") "v0.0.22 release notes"
 
 # Reject Git LFS pointers or partial DDSP/SeedVC snapshots before producing a release.
 Require-FileSize (Join-Path $Root "assets\models\pretrain\rmvpe.pt") 314572800 "Bundled SeedVC RMVPE"

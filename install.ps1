@@ -3,9 +3,10 @@
 
   用法：
     右键“使用 PowerShell 运行”，或在项目根目录执行：
-      ./install.ps1            # 全自动（检测显卡决定 CUDA/CPU）
+      ./install.ps1            # 全自动（检测显卡决定 CUDA/DirectML/CPU）
       ./install.ps1 --cpu      # 强制 CPU
-      ./install.ps1 --gpu      # 强制 CUDA
+      ./install.ps1 --gpu      # 自动选择 NVIDIA CUDA 或 AMD DirectML
+      ./install.ps1 --directml # 强制 AMD DirectML
       ./install.ps1 --only seedvc # 只跑某一步（app/web/uvr/svc/rvc/seedvc/hub/models）
 
   前置要求（脚本会检测并提示）：Git、Node.js LTS（含 npm）、Python 3.10+、ffmpeg。

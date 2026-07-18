@@ -15,6 +15,11 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
+
+try:
+    from inference_device import patch_directml_float32, resolve_torch_device
+except ImportError:  # package import used by tests/application tooling
+    from infrastructure.inference_device import patch_directml_float32, resolve_torch_device
 from typing import Any
 
 
@@ -64,13 +69,17 @@ def _link_or_copy(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination)
 
 
-def _patch_torch_load() -> None:
+def _patch_torch_load(force_cpu_map: bool = False) -> None:
     import torch
 
     original = torch.load
 
     def compatible_load(*args: Any, **kwargs: Any):
         kwargs.setdefault("weights_only", False)
+        if force_cpu_map and str(kwargs.get("map_location", "")).startswith("privateuseone"):
+            # DirectML state dictionaries are loaded on CPU first, then the
+            # upstream loader moves the initialized module to the GPU.
+            kwargs["map_location"] = "cpu"
         try:
             return original(*args, **kwargs)
         except TypeError:
@@ -78,6 +87,91 @@ def _patch_torch_load() -> None:
             return original(*args, **kwargs)
 
     torch.load = compatible_load
+
+
+def _patch_ddsp_directml() -> None:
+    """Keep DDSP neural controls on DML and synthesize complex spectra on CPU."""
+    import numpy as np
+    import torch
+    from ddsp.vocoder import CombSubSuperFast
+
+    def directml_forward(
+        self,
+        units_frames,
+        f0_frames,
+        volume_frames,
+        spk_id=None,
+        spk_mix_dict=None,
+        aug_shift=None,
+        initial_phase=None,
+        infer=True,
+        **kwargs,
+    ):
+        del initial_phase, infer, kwargs
+        combtooth = self.fast_source_gen(f0_frames)
+        block_size = int(self.block_size.detach().cpu().item())
+        win_length = int(self.win_length.detach().cpu().item())
+        combtooth_frames = combtooth.unfold(1, block_size, block_size)
+        noise = torch.randn_like(combtooth)
+        noise_frames = noise.unfold(1, block_size, block_size)
+        ctrls, hidden = self.unit2ctrl(
+            units_frames,
+            combtooth_frames,
+            noise_frames,
+            volume_frames,
+            spk_id=spk_id,
+            spk_mix_dict=spk_mix_dict,
+            aug_shift=aug_shift,
+        )
+
+        harmonic_magnitude = ctrls["harmonic_magnitude"].float().cpu()
+        harmonic_phase = ctrls["harmonic_phase"].float().cpu() * np.pi
+        noise_magnitude = ctrls["noise_magnitude"].float().cpu()
+        noise_phase = ctrls["noise_phase"].float().cpu() * np.pi
+        src_filter = torch.polar(torch.exp(harmonic_magnitude), harmonic_phase)
+        noise_filter = torch.polar(torch.exp(noise_magnitude), noise_phase) / 128
+        src_filter = torch.cat((src_filter, src_filter[:, -1:, :]), 1)
+        noise_filter = torch.cat((noise_filter, noise_filter[:, -1:, :]), 1)
+
+        combtooth_cpu = combtooth.float().cpu()
+        noise_cpu = noise.float().cpu()
+        window = self.window.float().cpu()
+        pad_mode = "reflect" if combtooth_cpu.shape[-1] > win_length // 2 else "constant"
+        combtooth_stft = torch.stft(
+            combtooth_cpu,
+            n_fft=win_length,
+            win_length=win_length,
+            hop_length=block_size,
+            window=window,
+            center=True,
+            return_complex=True,
+            pad_mode=pad_mode,
+        )
+        noise_stft = torch.stft(
+            noise_cpu,
+            n_fft=win_length,
+            win_length=win_length,
+            hop_length=block_size,
+            window=window,
+            center=True,
+            return_complex=True,
+            pad_mode=pad_mode,
+        )
+        signal_stft = (
+            combtooth_stft * src_filter.permute(0, 2, 1)
+            + noise_stft * noise_filter.permute(0, 2, 1)
+        )
+        signal = torch.istft(
+            signal_stft,
+            n_fft=win_length,
+            win_length=win_length,
+            hop_length=block_size,
+            window=window,
+            center=True,
+        )
+        return signal.to(units_frames.device), hidden
+
+    CombSubSuperFast.forward = directml_forward
 
 
 def main() -> int:
@@ -123,6 +217,16 @@ def main() -> int:
     if str(args.device).lower() == "cpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
+    try:
+        import torch
+
+        resolved_device = resolve_torch_device(args.device, torch)
+        if resolved_device.backend == "directml":
+            patch_directml_float32(torch)
+    except Exception as exc:  # noqa: BLE001
+        print(f"DDSP_ERR 设备初始化失败: {exc}", flush=True)
+        return 2
+
     old_cwd = Path.cwd()
     old_argv = sys.argv[:]
     stage = Path(tempfile.mkdtemp(prefix="xb-ddsp-", dir=str(output.parent)))
@@ -131,9 +235,11 @@ def main() -> int:
         _link_or_copy(model, staged_model)
         localized_config = _localized_config(config, stage / "config.yaml", repo)
         data_config = localized_config.get("data") or {}
-        _patch_torch_load()
+        _patch_torch_load(resolved_device.backend == "directml")
         sys.path.insert(0, str(repo))
         os.chdir(repo)
+        if resolved_device.backend == "directml":
+            _patch_ddsp_directml()
         sys.argv = [
             str(upstream),
             "--model_ckpt",
@@ -157,16 +263,17 @@ def main() -> int:
             "--spk_id",
             str(args.speaker or "1"),
         ]
-        if str(args.device).lower() not in {"", "auto"}:
-            sys.argv.extend(["--device", str(args.device).lower()])
+        sys.argv.extend(["--device", str(resolved_device.device)])
         runpy.run_path(str(upstream), run_name="__main__")
         if not output.is_file() or output.stat().st_size <= 44:
             raise RuntimeError("上游脚本未生成有效 WAV")
+        print(f"DDSP_DEVICE {resolved_device.backend} {resolved_device.name}", flush=True)
         print(f"DDSP_OK {output}", flush=True)
         return 0
     except SystemExit as exc:
         code = int(exc.code or 0)
         if code == 0 and output.is_file():
+            print(f"DDSP_DEVICE {resolved_device.backend} {resolved_device.name}", flush=True)
             print(f"DDSP_OK {output}", flush=True)
             return 0
         print(f"DDSP_ERR 上游推理提前退出（code={code}）", flush=True)

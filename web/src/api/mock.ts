@@ -8,6 +8,7 @@ import type {
   ModelLibraryOverview,
   ModelDTO,
   SystemStatus,
+  InferenceDeviceRuntime,
   WorkDTO,
   PipelineStep,
   MusicSearchResult,
@@ -455,6 +456,23 @@ export const mock = {
         { key: 'seedvc', name: 'SeedVC 推理引擎', desc: '加载 SeedVC checkpoint + 参考音频进行歌声转换推理', version: 'Seed-VC', status: 'cuda', ok: true },
         { key: 'ddsp', name: 'DDSP-SVC 推理引擎', desc: '加载 DDSP-SVC Rectified Flow 模型进行歌声转换', version: 'DDSP-SVC', status: 'cuda', ok: true },
       ],
+      inference_devices: {
+        preferred: 'cuda',
+        options: [
+          { value: 'auto', label: '自动选择', backend: 'auto', frameworks: ['uvr', 'so-vits-svc', 'rvc', 'seed-vc', 'ddsp-svc'] },
+          { value: 'cuda', label: 'NVIDIA GPU (CUDA)', backend: 'cuda', name: 'Mock GPU', frameworks: ['uvr', 'so-vits-svc', 'rvc', 'seed-vc', 'ddsp-svc'] },
+          { value: 'cpu', label: 'CPU', backend: 'cpu', frameworks: ['uvr', 'so-vits-svc', 'rvc', 'seed-vc', 'ddsp-svc'] },
+        ],
+        frameworks: Object.fromEntries(
+          ['uvr', 'so-vits-svc', 'rvc', 'seed-vc', 'ddsp-svc'].map((framework): [string, InferenceDeviceRuntime] => [framework, {
+            ok: true,
+            torch_version: '2.5.1',
+            backends: ['cuda', 'cpu'],
+            devices: [{ backend: 'cuda', name: 'Mock GPU', index: 0 }],
+            preferred: 'cuda',
+          }]),
+        ),
+      },
     }
   },
   pickThemeMediaFile(): Promise<ThemeMediaPickResult> {

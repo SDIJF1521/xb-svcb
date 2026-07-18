@@ -19,6 +19,15 @@ import traceback
 import urllib.request
 from pathlib import Path
 
+try:
+    from inference_device import ResolvedDevice, patch_directml_float32, resolve_torch_device
+except ImportError:  # package import used by tests/application tooling
+    from infrastructure.inference_device import (
+        ResolvedDevice,
+        patch_directml_float32,
+        resolve_torch_device,
+    )
+
 
 # RVC 支持的 F0 算法；其余（如 so-vits 的 dio/fcpe）统一回退 rmvpe
 _RVC_F0_METHODS = {"harvest", "crepe", "rmvpe", "pm"}
@@ -272,21 +281,10 @@ def _prepare_rvc_base_models(lib_dir: str) -> None:
         )
 
 
-def _resolve_device(requested: str) -> str:
-    req = (requested or "auto").strip().lower()
-    if req in ("cpu", "cpu:0"):
-        return "cpu:0"
-    if req.startswith("cuda"):
-        return req if ":" in req else "cuda:0"
-    # auto：探测 CUDA
-    try:
-        import torch  # noqa: WPS433
+def _resolve_device(requested: str) -> ResolvedDevice:
+    import torch  # noqa: WPS433
 
-        if torch.cuda.is_available():
-            return "cuda:0"
-    except Exception:  # noqa: BLE001
-        pass
-    return "cpu:0"
+    return resolve_torch_device(requested, torch)
 
 
 def _infer_file_checked(rvc, input_path: str, output_path: str) -> str:  # noqa: ANN001
@@ -356,18 +354,32 @@ def main() -> int:
         except Exception:  # noqa: BLE001
             pass
 
+        resolved_device = _resolve_device(args.device)
+        if resolved_device.backend == "directml":
+            patch_directml_float32(torch)
+
         import rvc_python.download_model as rvc_download_model
         import rvc_python.infer as rvc_infer
 
         rvc_download_model.download_rvc_models = _prepare_rvc_base_models
         rvc_infer.download_rvc_models = _prepare_rvc_base_models
+        if resolved_device.backend == "directml":
+            import torch_directml  # type: ignore
+
+            torch_directml.default_device = lambda: resolved_device.index
+            original_config = rvc_infer.Config
+
+            def directml_config(lib_dir, _device):  # noqa: ANN001, ANN202
+                return original_config(lib_dir, "cpu", is_dml=True)
+
+            rvc_infer.Config = directml_config
         RVCInference = rvc_infer.RVCInference
     except Exception as exc:  # noqa: BLE001
         print(f"RVC_ERR rvc-python 未安装或导入失败: {exc}", flush=True)
         return 1
 
     try:
-        device = _resolve_device(args.device)
+        device = str(resolved_device.device)
         method = args.method if args.method in _RVC_F0_METHODS else "rmvpe"
         version = args.version if args.version in ("v1", "v2") else "v2"
         index_path = args.index if args.index else ""
@@ -375,6 +387,10 @@ def main() -> int:
         # 先不传 model_path 构造（避免在构造期就按默认 is_half=True 把模型转半精度），
         # 以便在加载模型前按需切换精度。
         rvc = RVCInference(device=device, version=version)
+        if resolved_device.backend == "directml":
+            rvc.device = resolved_device.device
+            rvc.config.device = resolved_device.device
+            rvc.vc.device = resolved_device.device
 
         # CPU 适配：PyTorch 不支持 CPU half batch_norm，RMVPE 在 is_half=True 时会报
         # "batch_norm not implemented for Half"。CPU 路径必须在加载模型前切 fp32。
@@ -387,7 +403,7 @@ def main() -> int:
 
             _tv = tuple(int(x) for x in torch.__version__.split("+")[0].split(".")[:2])
             _cuda_mem_gb = 0.0
-            if device.startswith("cuda") and torch.cuda.is_available():
+            if resolved_device.backend in {"cuda", "rocm"} and torch.cuda.is_available():
                 try:
                     _cuda_idx = int(device.split(":", 1)[1]) if ":" in device else 0
                 except (TypeError, ValueError):
@@ -396,7 +412,7 @@ def main() -> int:
         except Exception:  # noqa: BLE001
             _tv = (0, 0)
             _cuda_mem_gb = 0.0
-        force_fp32 = device.startswith("cpu") or _tv >= (2, 6)
+        force_fp32 = resolved_device.backend in {"cpu", "directml"} or _tv >= (2, 6)
         if force_fp32:
             try:
                 rvc.config.is_half = False
@@ -405,7 +421,12 @@ def main() -> int:
                 rvc.config.x_query = 6
                 rvc.config.x_center = 38
                 rvc.config.x_max = 41
-                reason = "CPU 推理" if device.startswith("cpu") else "新 torch"
+                if resolved_device.backend == "directml":
+                    reason = "AMD DirectML"
+                elif resolved_device.backend == "cpu":
+                    reason = "CPU 推理"
+                else:
+                    reason = "新 torch"
                 print(f"XB: {reason}检测到，RVC 强制 fp32", flush=True)
             except Exception as exc:  # noqa: BLE001
                 print(f"XB: 设置 fp32 失败（继续用默认精度）: {exc}", flush=True)
@@ -424,7 +445,7 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001
                 print(f"XB: 关闭 TF32 失败（继续）: {exc}", flush=True)
 
-        low_vram_cuda = device.startswith("cuda") and 0 < _cuda_mem_gb <= 8.0
+        low_vram_cuda = resolved_device.backend in {"cuda", "rocm"} and 0 < _cuda_mem_gb <= 8.0
         if low_vram_cuda:
             try:
                 rvc.config.x_pad = 1
@@ -445,6 +466,7 @@ def main() -> int:
             filter_radius=int(args.filter_radius),
         )
         _infer_file_checked(rvc, args.input, args.output)
+        print(f"RVC_DEVICE {resolved_device.backend} {resolved_device.name}", flush=True)
         print(f"RVC_OK {args.output}", flush=True)
         return 0
     except Exception as exc:  # noqa: BLE001

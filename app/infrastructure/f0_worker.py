@@ -23,6 +23,11 @@ import os
 import sys
 import traceback
 
+try:
+    from inference_device import resolve_torch_device
+except ImportError:  # package import used by tests/application tooling
+    from infrastructure.inference_device import resolve_torch_device
+
 _NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 
@@ -43,7 +48,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--input", required=True, help="输入人声 wav 路径")
     p.add_argument("--out-npy", required=True, help="F0 曲线输出 .npy 路径")
     p.add_argument("--f0", default="rmvpe", help="F0 预测器")
-    p.add_argument("--device", default="auto", help="设备：auto / cuda / cpu")
+    p.add_argument(
+        "--device",
+        default="auto",
+        help="设备：auto / cuda / rocm / directml / cpu",
+    )
     return p
 
 
@@ -85,10 +94,12 @@ def main() -> int:
         print(f"F0_ERR 读取配置失败: {exc}")
         return 4
 
-    if args.device in ("", "auto"):
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    else:
-        device = args.device
+    try:
+        resolved_device = resolve_torch_device(args.device, torch)
+        device = resolved_device.device
+    except RuntimeError as exc:
+        print(f"F0_ERR {exc}")
+        return 6
 
     try:
         wav, _ = librosa.load(args.input, sr=sampling_rate, mono=True)
@@ -124,6 +135,7 @@ def main() -> int:
     median_hz = float(np.median(f0[voiced])) if voiced.any() else 0.0
     note = _hz_to_note(median_hz)
 
+    print(f"F0_DEVICE {resolved_device.backend} {resolved_device.name}", flush=True)
     print(f"F0_OK\t{voiced_ratio:.4f}\t{median_hz:.2f}\t{note}\t{os.path.abspath(args.out_npy)}")
     return 0
 

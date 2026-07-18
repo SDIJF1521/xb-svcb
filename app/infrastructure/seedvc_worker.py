@@ -14,6 +14,11 @@ import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+
+try:
+    from inference_device import patch_directml_no_half, resolve_torch_device
+except ImportError:  # package import used by tests/application tooling
+    from infrastructure.inference_device import patch_directml_no_half, resolve_torch_device
 from typing import Any, Callable
 
 
@@ -208,7 +213,11 @@ def main() -> int:
     parser.add_argument("--reference", required=True, help="目标音色参考音频路径")
     parser.add_argument("--input", required=True, help="待转换人声 wav")
     parser.add_argument("--output", required=True, help="输出 wav 路径")
-    parser.add_argument("--device", default="auto", help="auto / cuda / cpu")
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help="auto / cuda / rocm / directml / cpu",
+    )
     parser.add_argument("--pitch", type=int, default=0, help="半音变调")
     parser.add_argument("--diffusion-steps", type=int, default=30)
     parser.add_argument("--length-adjust", type=float, default=1.0)
@@ -258,6 +267,16 @@ def main() -> int:
     sys.path.insert(0, str(repo))
     try:
         os.chdir(repo)
+        try:
+            import torch
+
+            resolved_device = resolve_torch_device(args.device, torch)
+            if resolved_device.backend == "directml":
+                patch_directml_no_half(torch)
+                fp16 = False
+        except Exception as exc:  # noqa: BLE001
+            print(f"SEEDVC_ERR 设备初始化失败: {exc}", flush=True)
+            return 3
         local_assets = _discover_local_assets(repo)
         if local_assets.get("rmvpe"):
             try:
@@ -275,6 +294,17 @@ def main() -> int:
                 seedvc_inference.load_custom_model_from_hf,
                 local_assets,
             )
+            seedvc_inference.device = resolved_device.device
+            if resolved_device.backend == "directml":
+                from transformers import WhisperModel
+
+                original_from_pretrained = WhisperModel.from_pretrained
+
+                def directml_from_pretrained(cls, *model_args, **model_kwargs):  # noqa: ANN001, ANN202
+                    model_kwargs["torch_dtype"] = torch.float32
+                    return original_from_pretrained(*model_args, **model_kwargs)
+
+                WhisperModel.from_pretrained = classmethod(directml_from_pretrained)
             seedvc_main = seedvc_inference.main
         except Exception as exc:  # noqa: BLE001
             print(f"SEEDVC_ERR SeedVC 依赖导入失败: {exc}", flush=True)
@@ -317,6 +347,7 @@ def main() -> int:
             os.chdir(old_cwd)
         except OSError:
             pass
+    print(f"SEEDVC_DEVICE {resolved_device.backend} {resolved_device.name}", flush=True)
     print(f"SEEDVC_OK {out_path}", flush=True)
     return 0
 

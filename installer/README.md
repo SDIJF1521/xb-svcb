@@ -1,6 +1,6 @@
 # XB-SVCB 安装器
 
-版本：`0.0.21`
+版本：`0.0.22`
 
 安装器由 Inno Setup 读取 `installer/xb-svcb.iss` 构建，负责打包桌面本体、环境搭建脚本、自带模型和文档。
 
@@ -37,6 +37,14 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 ```
 
 临时不打包插件 Host 时可运行 `installer/build.ps1 -SkipJuceHostBuild`。
+
+## v0.0.22 安装器行为
+
+- 应用、Python 项目、前端、两份锁文件和 Inno Setup 版本统一为 `0.0.22`。
+- GPU 栈自动识别 NVIDIA CUDA、AMD Radeon DirectML 和 CPU；DirectML 为 So-VITS-SVC、RVC、SeedVC、DDSP-SVC 与 UVR 分别部署锁定的 `torch-directml` 环境并做真实张量校验。
+- UVR 的 AMD 环境固定使用 `audio-separator[dml]` 与 `onnxruntime-directml`；VR `.pth` 与 MDX `.onnx` 模型分别校验 Torch DirectML 设备和 ONNX DirectML provider。
+- 发布构建要求根目录存在 `release_notes_v022.md`，安装后将其与主 `README.md` 一起释放到应用目录。
+- `installer/build.ps1 -ValidateOnly` 会检查 v0.0.22 版本一致性、发布文档、内置模型和 Inno Setup/Pascal 脚本。
 
 ## v0.0.21 安装器行为
 

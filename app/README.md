@@ -1,6 +1,6 @@
 # XB-SVCB 应用本体
 
-版本：`0.0.21`
+版本：`0.0.22`
 
 这里包含打包进 `XB-SVCB.exe` 的桌面应用壳、本地 API 桥接、领域服务和基础设施适配层。
 
@@ -9,6 +9,14 @@
 - `app/main.py` 启动 pywebview 桌面壳。
 - `app/config.py` 提供应用元信息、路径与运行环境位置。
 - 重型 AI 依赖不打进应用本体，由安装器放到 `.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-uvr`、`.venv-hub` 等隔离环境中。
+
+## v0.0.22 重点
+
+- 应用本体版本同步到 `0.0.22`，本地 API、前端、两份锁文件和安装器使用同一版本号。
+- 推理设备统一支持 `auto`、`cuda`、`rocm`、`directml` 与 `cpu`，并按每个隔离环境报告真实可用后端。
+- So-VITS-SVC、RVC、SeedVC、DDSP-SVC 与 F0 worker 增加 Windows AMD DirectML 路径；DirectML 不支持的复数 STFT 运算保留在 CPU，实数张量返回 GPU。
+- UVR worker 使用 `audio-separator` 的 DirectML 后端；VR `.pth` 模型走 `torch-directml`，MDX `.onnx` 模型走 `onnxruntime-directml`。
+- 显式选择 CUDA、ROCm 或 DirectML 时严格校验实际设备，失败会返回明确错误，不再静默回退 CPU。
 
 ## v0.0.21 重点
 

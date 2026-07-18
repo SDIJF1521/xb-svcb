@@ -12,6 +12,31 @@ export interface ToolStatus {
   ok: boolean
 }
 
+export type InferenceDeviceBackend = 'auto' | 'cuda' | 'rocm' | 'directml' | 'cpu'
+
+export interface InferenceDeviceOption {
+  value: InferenceDeviceBackend
+  label: string
+  backend: InferenceDeviceBackend
+  name?: string
+  frameworks: string[]
+}
+
+export interface InferenceDeviceRuntime {
+  ok: boolean
+  torch_version: string
+  backends: InferenceDeviceBackend[]
+  devices: { backend: InferenceDeviceBackend; name: string; index: number }[]
+  preferred: InferenceDeviceBackend
+  error?: string
+}
+
+export interface InferenceDeviceCapabilities {
+  preferred: InferenceDeviceBackend
+  options: InferenceDeviceOption[]
+  frameworks: Record<string, InferenceDeviceRuntime>
+}
+
 export interface ThemeMediaPickResult {
   ok: boolean
   cancelled?: boolean
@@ -25,6 +50,7 @@ export interface ThemeMediaPickResult {
 export interface SystemStatus {
   ready: boolean
   tools: ToolStatus[]
+  inference_devices?: InferenceDeviceCapabilities
 }
 
 export interface DataStorageStatus {

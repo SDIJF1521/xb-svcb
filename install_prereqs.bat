@@ -46,7 +46,7 @@ if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 40 正在检查 ffmpeg
 call :CHECK_FFMPEG
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 52 正在检查 C++ Build Tools
 call :CHECK_CPP_TOOLS
-if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 66 正在检查 CUDA Toolkit
+if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 66 正在检查 GPU 运行环境
 call :CHECK_CUDA
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 80 正在检查 uv
 call :CHECK_UV
@@ -113,10 +113,18 @@ if /I "%XB_GPU_STACK_REQUESTED%"=="cpu" (
   set "XB_CUDA_BIN="
   exit /b 0
 )
+if /I "%XB_GPU_STACK_REQUESTED%"=="directml" (
+  set "XB_RESOLVED_GPU_STACK=directml"
+  set "XB_GPU_STACK=directml"
+  set "XB_CUDA_VERSION="
+  set "XB_CUDA_DIR="
+  set "XB_CUDA_BIN="
+  exit /b 0
+)
 
 call :DETECT_GPU_STACK
 if "%DETECTED_GPU_STACK%"=="cpu" (
-  if /I not "%XB_GPU_STACK_REQUESTED%"=="auto" echo [gpu] No compatible NVIDIA GPU detected; CUDA will be skipped and CPU torch will be used.
+  if /I not "%XB_GPU_STACK_REQUESTED%"=="auto" echo [gpu] No compatible NVIDIA or AMD GPU detected; CPU torch will be used.
   set "XB_RESOLVED_GPU_STACK=cpu"
   set "XB_GPU_STACK=cpu"
   set "XB_CUDA_VERSION="
@@ -131,6 +139,12 @@ if /I not "%XB_GPU_STACK_REQUESTED%"=="auto" if /I not "%XB_GPU_STACK_REQUESTED%
 
 set "XB_RESOLVED_GPU_STACK=%DETECTED_GPU_STACK%"
 set "XB_GPU_STACK=%DETECTED_GPU_STACK%"
+if "%XB_RESOLVED_GPU_STACK%"=="directml" (
+  set "XB_CUDA_VERSION="
+  set "XB_CUDA_DIR="
+  set "XB_CUDA_BIN="
+  exit /b 0
+)
 if "%XB_RESOLVED_GPU_STACK%"=="cu128" (
   set "XB_CUDA_VERSION=12.8"
 ) else (
@@ -157,7 +171,7 @@ exit /b 0
 :DETECT_GPU_STACK
 set "DETECTED_GPU_STACK=cpu"
 call :FIND_NVIDIA_SMI
-if not defined XB_NVIDIA_SMI exit /b 0
+if not defined XB_NVIDIA_SMI goto DETECT_AMD_GPU
 for /f "tokens=1 delims=." %%A in ('"%XB_NVIDIA_SMI%" --query-gpu=compute_cap --format=csv,noheader 2^>nul') do (
   set "CAP_MAJOR=%%A"
   for /f "tokens=* delims= " %%B in ("!CAP_MAJOR!") do set "CAP_MAJOR=%%B"
@@ -170,6 +184,11 @@ if not "%DETECTED_GPU_STACK%"=="cpu" exit /b 0
 for /f "delims=" %%G in ('"%XB_NVIDIA_SMI%" --query-gpu=name --format=csv,noheader 2^>nul') do (
   echo %%G | findstr /I /R "RTX *50[0-9][0-9]" >nul && set "DETECTED_GPU_STACK=cu128"
   if "!DETECTED_GPU_STACK!"=="cpu" set "DETECTED_GPU_STACK=cu121"
+)
+if not "%DETECTED_GPU_STACK%"=="cpu" exit /b 0
+:DETECT_AMD_GPU
+for /f "delims=" %%G in ('powershell.exe -NoProfile -Command "Get-CimInstance Win32_VideoController ^| Select-Object -ExpandProperty Name" 2^>nul') do (
+  echo %%G | findstr /I /C:"AMD" /C:"Radeon" >nul && set "DETECTED_GPU_STACK=directml"
 )
 exit /b 0
 
@@ -268,6 +287,10 @@ exit /b 0
 call :RESOLVE_GPU_STACK
 if "%XB_RESOLVED_GPU_STACK%"=="cpu" (
   echo [skip] CUDA check skipped for CPU mode or incompatible GPU.
+  exit /b 0
+)
+if "%XB_RESOLVED_GPU_STACK%"=="directml" (
+  echo [skip] CUDA check skipped for AMD DirectML mode.
   exit /b 0
 )
 

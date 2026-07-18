@@ -19,6 +19,7 @@ from typing import Optional
 
 import config
 from domain import InferenceParams
+from infrastructure.inference_device import environment_device_label
 
 
 class SvcEngine:
@@ -31,7 +32,11 @@ class SvcEngine:
         return config.svc_engine_ready()
 
     def device(self) -> str:
-        return "cuda (so-vits-svc env)" if self.available else "cpu (simulated)"
+        return (
+            environment_device_label(config.SVC_PYTHON, "so-vits-svc env")
+            if self.available
+            else "CPU (simulated)"
+        )
 
     def version(self) -> Optional[str]:
         if not self.available:

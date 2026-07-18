@@ -157,6 +157,15 @@ TORCH_BLACKWELL_INDEX = "https://download.pytorch.org/whl/cu128"
 TORCH_BLACKWELL_VER = "2.7.1"  # cp39/cp310 均有 win 轮子；统一钉此版本以求确定性
 TORCHAUDIO_BLACKWELL_VER = "2.7.1"
 
+# ---- AMD / Windows DirectML stack ----
+# torch-directml 0.2.5 is the latest published Windows runtime and pins torch
+# 2.4.1. Keep all isolated DirectML inference environments on this exact pair so a
+# later dependency cannot silently replace the registered DirectML backend.
+TORCH_DIRECTML_VER = "0.2.5.dev240914"
+TORCH_DIRECTML_TORCH_VER = "2.4.1"
+TORCHAUDIO_DIRECTML_VER = "2.4.1"
+AUDIO_SEPARATOR_VER = "0.44.2"
+
 # 底模下载清单（见 README 与 so-vits-svc 官方说明）
 # HuggingFace 在国内常连不上，统一走「镜像优先 + 官方回退」。
 HF_PATH_CONTENTVEC = "/lj1995/VoiceConversionWebUI/resolve/main/hubert_base.pt"
@@ -309,51 +318,65 @@ def find_nvidia_smi() -> str | None:
 
 
 def detect_gpu_stack() -> str:
-    """返回 cpu、cu121 或 cu128，保证 torch/CUDA 栈和实际兼容显卡一致。"""
+    """Return cpu, directml, cu121 or cu128 for the local Windows adapter."""
     smi = find_nvidia_smi()
-    if not smi:
-        return "cpu"
-    try:
-        subprocess.run([smi], capture_output=True, check=True, timeout=15)
-    except (OSError, subprocess.SubprocessError):
-        return "cpu"
+    caps: list[float] = []
+    if smi:
+        try:
+            subprocess.run([smi], capture_output=True, check=True, timeout=15)
+            out = subprocess.run(
+                [smi, "--query-gpu=compute_cap", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            for line in out.stdout.splitlines():
+                try:
+                    caps.append(float(line.strip()))
+                except ValueError:
+                    continue
+            if any(cap >= 12.0 for cap in caps):
+                return "cu128"
+            if any(cap >= 5.0 for cap in caps):
+                return "cu121"
+        except (OSError, subprocess.SubprocessError):
+            pass
 
-    try:
-        out = subprocess.run(
-            [smi, "--query-gpu=compute_cap", "--format=csv,noheader"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        caps: list[float] = []
-        for line in out.stdout.splitlines():
+        if not caps:
             try:
-                caps.append(float(line.strip()))
-            except ValueError:
-                continue
-        if any(cap >= 12.0 for cap in caps):
-            return "cu128"
-        if any(cap >= 5.0 for cap in caps):
-            return "cu121"
-        if caps:
-            return "cpu"
-    except (OSError, subprocess.SubprocessError):
-        pass
+                out = subprocess.run(
+                    [smi, "--query-gpu=name", "--format=csv,noheader"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                names = out.stdout.strip()
+                if re.search(r"RTX\s*50\d0", names, flags=re.IGNORECASE):
+                    return "cu128"
+                if names:
+                    return "cu121"
+            except (OSError, subprocess.SubprocessError):
+                pass
 
-    try:
-        out = subprocess.run(
-            [smi, "--query-gpu=name", "--format=csv,noheader"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        names = out.stdout.strip()
-        if re.search(r"RTX\s*50\d0", names, flags=re.IGNORECASE):
-            return "cu128"
-        if names:
-            return "cu121"
-    except (OSError, subprocess.SubprocessError):
-        pass
+    if os.name == "nt":
+        try:
+            out = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=20,
+            )
+            if re.search(r"\bAMD\b|Radeon", out.stdout, flags=re.IGNORECASE):
+                return "directml"
+        except (OSError, subprocess.SubprocessError):
+            pass
     return "cpu"
 
 
@@ -725,8 +748,11 @@ def step_web() -> None:
     print(c("g", "前端构建完成"))
 
 
-def step_uvr(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
+def step_uvr(uv: str, gpu_stack: str) -> None:
     hr("3/9 人声分离环境 .venv-uvr（audio-separator）")
+    use_blackwell = gpu_stack == "cu128"
+    use_cuda = gpu_stack in {"cu121", "cu128"}
+    use_directml = gpu_stack == "directml"
     if not venv_python(UVR_VENV).exists():
         run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_ENGINES, str(UVR_VENV)))
     py = str(venv_python(UVR_VENV))
@@ -737,7 +763,12 @@ def step_uvr(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
     # uv venv 默认不含 setuptools，部分库运行时需要 pkg_resources，先补齐
     # （setuptools 81+ 已移除 pkg_resources，钉 <81）
     pip("setuptools<81", "wheel")
-    # UVR 也严格跟随全局 torch 栈：50 系 cu128；40 系及以下 NVIDIA cu121；CPU/非 NVIDIA 用 CPU torch。
+    if not use_directml:
+        # Switching an existing installation back to CUDA/CPU must also remove
+        # the old provider; otherwise auto detection would keep selecting DML.
+        run(uv_cmd(uv, "pip", "uninstall", "--python", py, "torch-directml"))
+    # UVR 严格跟随全局推理栈：NVIDIA 用 CUDA，Windows AMD 用
+    # torch-directml + ONNX Runtime DirectML，其余环境使用 CPU。
     if use_blackwell:
         torch_specs = [
             f"torch=={TORCH_BLACKWELL_VER}",
@@ -746,24 +777,43 @@ def step_uvr(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
         torch_index = TORCH_BLACKWELL_INDEX
         torch_label = "cu128"
         pip(*torch_specs, index=torch_index)
-    elif use_gpu:
+    elif use_cuda:
         torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
         torch_index = TORCH_CUDA_INDEX
         torch_label = "cu121"
         pip(*torch_specs, index=torch_index)
+    elif use_directml:
+        torch_specs = []
+        torch_index = None
+        torch_label = "DirectML"
+        _install_directml_runtime(pip)
     else:
         torch_specs = ["torch", "torchaudio"]
         torch_index = TORCH_CPU_INDEX
         torch_label = "CPU"
         pip(*torch_specs, index=torch_index)
-    # audio-separator：gpu 额外组件含 onnxruntime-gpu
-    if use_gpu:
+    # ORT 的不同发行包共享同一个 onnxruntime 命名空间。切换显卡栈时先移除
+    # 冲突发行包，避免旧 CUDA/CPU provider 覆盖 DirectML provider（反之亦然）。
+    if use_directml:
+        run(uv_cmd(uv, "pip", "uninstall", "--python", py, "onnxruntime", "onnxruntime-gpu"))
+    elif use_cuda:
+        run(uv_cmd(uv, "pip", "uninstall", "--python", py, "onnxruntime", "onnxruntime-directml"))
+    else:
+        run(uv_cmd(uv, "pip", "uninstall", "--python", py, "onnxruntime-gpu", "onnxruntime-directml"))
+
+    # audio-separator 的不同 extra 分别部署 CUDA / DirectML / CPU provider。
+    if use_cuda:
         # 安装 audio-separator 时也带上 PyTorch wheel 源，避免依赖解析把 CUDA torch 换成 PyPI CPU 版。
-        pip("audio-separator[gpu]", index=torch_index)
+        pip(f"audio-separator[gpu]=={AUDIO_SEPARATOR_VER}", index=torch_index)
         _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, torch_label)
         _verify_cuda_torch(py, "UVR")
+    elif use_directml:
+        pip(f"audio-separator[dml]=={AUDIO_SEPARATOR_VER}")
+        _reaffirm_directml_runtime(uv, py)
+        _verify_directml_torch(py, "UVR")
+        _verify_uvr_directml(py)
     else:
-        pip("audio-separator[cpu]")
+        pip(f"audio-separator[cpu]=={AUDIO_SEPARATOR_VER}")
     print(c("g", "分离环境就绪"))
 
 
@@ -993,9 +1043,13 @@ def _venv_pyver(py: Path) -> str | None:
         return None
 
 
-def step_svc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
+def step_svc(uv: str, gpu_stack: str) -> None:
     hr("4/9 推理引擎 so-vits-svc + .venv-svc")
     fetch_sovits()
+
+    use_blackwell = gpu_stack == "cu128"
+    use_gpu = gpu_stack in {"cu121", "cu128"}
+    use_directml = gpu_stack == "directml"
 
     # 目标 Python：Blackwell 用 3.10（cu128 轮子 + 3.10 兼容依赖），否则老栈 3.9。
     target_py = PYTHON_FOR_SVC_BLACKWELL if use_blackwell else PYTHON_FOR_SVC
@@ -1021,6 +1075,19 @@ def step_svc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
     req_win = SOVITS_DIR / "requirements_win.txt"
     req = SOVITS_DIR / "requirements.txt"
     req_file = req_win if req_win.exists() else req
+
+    if use_directml:
+        _install_directml_runtime(pip)
+        if req_file.exists():
+            filtered = _filter_requirements(req_file, extra_deny=DIRECTML_EXTRA_DENY)
+            pip("-r", str(filtered))
+            pip("matplotlib==3.7.5", "soundfile")
+        else:
+            print(c("r", "    未找到 requirements，跳过依赖安装（请检查仓库）"))
+        _reaffirm_directml_runtime(uv, py)
+        _verify_directml_torch(py, "So-VITS-SVC")
+        print(c("g", "推理环境就绪（AMD DirectML）"))
+        return
 
     if use_blackwell:
         # 50 系：cu128 + torch2.7.1。torch.load 的 weights_only 由 svc_worker 在导入前还原；
@@ -1132,6 +1199,60 @@ BLACKWELL_REQ_OVERRIDES = {
 }
 # Blackwell 下由我们自行装的包：不让 requirements 里的旧钉死把它们覆盖回去。
 BLACKWELL_EXTRA_DENY = {"torch", "torchaudio", "torchvision", "fairseq"}
+DIRECTML_EXTRA_DENY = {"torch", "torchaudio", "torchvision"}
+
+
+def _install_directml_runtime(pip) -> None:  # noqa: ANN001
+    pip(
+        f"torch-directml=={TORCH_DIRECTML_VER}",
+        f"torchaudio=={TORCHAUDIO_DIRECTML_VER}",
+    )
+
+
+def _reaffirm_directml_runtime(uv: str, py: str) -> None:
+    uv_pip_install(
+        uv,
+        py,
+        "--reinstall-package",
+        "torch-directml",
+        f"torch-directml=={TORCH_DIRECTML_VER}",
+        f"torchaudio=={TORCHAUDIO_DIRECTML_VER}",
+    )
+
+
+def _verify_directml_torch(py: str, component: str) -> None:
+    check = (
+        "import torch,torch_directml; "
+        "assert torch_directml.is_available(), 'DirectML unavailable'; "
+        "d=torch_directml.device(); "
+        "x=torch.ones(1,device=d); "
+        "print(torch.__version__,torch_directml.device_name(torch_directml.default_device()),x.cpu().item())"
+    )
+    try:
+        run([py, "-c", check])
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"{component} AMD 环境校验失败：DirectML 不可用，请更新 AMD 显卡驱动后重试"
+        ) from exc
+
+
+def _verify_uvr_directml(py: str) -> None:
+    check = (
+        "import onnxruntime as ort; "
+        "from audio_separator.separator import Separator; "
+        "assert 'DmlExecutionProvider' in ort.get_available_providers(), "
+        "'DmlExecutionProvider unavailable'; "
+        "s=Separator(info_only=True,use_directml=True); "
+        "assert str(s.torch_device).startswith('privateuseone'), "
+        "f'Unexpected UVR device: {s.torch_device}'; "
+        "print('UVR DirectML',s.torch_device,ort.get_available_providers())"
+    )
+    try:
+        run([py, "-c", check])
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "UVR AMD 环境校验失败：audio-separator 未启用 DirectML / DmlExecutionProvider"
+        ) from exc
 
 
 def _reaffirm_torch_wheels(
@@ -1253,8 +1374,11 @@ def _patch_fairseq_weights_only(py: Path) -> None:
         print(c("g", "    fairseq checkpoint_utils 无需修复（weights_only 由 worker 运行时处理）"))
 
 
-def step_rvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
+def step_rvc(uv: str, gpu_stack: str) -> None:
     hr("5/9 RVC 推理环境 .venv-rvc（rvc-python）")
+    use_blackwell = gpu_stack == "cu128"
+    use_gpu = gpu_stack in {"cu121", "cu128"}
+    use_directml = gpu_stack == "directml"
     # RVC 推理在独立环境运行（rvc-python），与 so-vits 栈隔离。
     # rvc-python 默认会在首次推理时下载 hubert / rmvpe；这里安装后立即预置，
     # 避免新用户运行 RVC 时因为 HuggingFace 连接失败而报 HTTPSConnectionPool。
@@ -1274,6 +1398,14 @@ def step_rvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
 
     # uv venv 默认不含 setuptools；fairseq/rvc 运行时可能用到 pkg_resources，先补齐
     pip("setuptools<81", "wheel")
+    if use_directml:
+        _install_directml_runtime(pip)
+        pip("rvc-python")
+        _reaffirm_directml_runtime(uv, py)
+        seed_rvc_base_models(venv_python(RVC_VENV))
+        _verify_directml_torch(py, "RVC")
+        print(c("g", "RVC 推理环境就绪（AMD DirectML）"))
+        return
     if use_blackwell:
         # 50 系：cu128 + torch2.7.1。rvc-python 会带回 fairseq，装完再就地打 weights_only 补丁，
         # 否则新 torch 加载 hubert/字典会报 "Weights only load failed"。
@@ -1322,9 +1454,13 @@ DDSP_REQ_DENY = {
 }
 
 
-def step_seedvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
+def step_seedvc(uv: str, gpu_stack: str) -> None:
     hr("6/9 SeedVC 推理环境 engines/seed-vc + .venv-seedvc")
     fetch_seedvc()
+
+    use_blackwell = gpu_stack == "cu128"
+    use_gpu = gpu_stack in {"cu121", "cu128"}
+    use_directml = gpu_stack == "directml"
 
     target_py = PYTHON_FOR_ENGINES
     py_path = venv_python(SEEDVC_VENV)
@@ -1341,7 +1477,11 @@ def step_seedvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
         uv_pip_install(uv, py, *args, index=index)
 
     pip("setuptools<81", "wheel")
-    if use_blackwell:
+    if use_directml:
+        torch_specs = []
+        torch_index = ""
+        _install_directml_runtime(pip)
+    elif use_blackwell:
         torch_specs = [
             f"torch=={TORCH_BLACKWELL_VER}",
             f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
@@ -1361,7 +1501,11 @@ def step_seedvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
 
     seed_seedvc_base_models(venv_python(SEEDVC_VENV))
 
-    if use_blackwell:
+    if use_directml:
+        _reaffirm_directml_runtime(uv, py)
+        _verify_directml_torch(py, "SeedVC")
+        print(c("g", "SeedVC 推理环境就绪（AMD DirectML）"))
+    elif use_blackwell:
         _reaffirm_blackwell_torch(uv, py)
         print(c("g", "SeedVC 推理环境就绪（Blackwell/cu128）"))
     elif use_gpu:
@@ -1371,9 +1515,13 @@ def step_seedvc(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
         print(c("g", "SeedVC 推理环境就绪（CPU）"))
 
 
-def step_ddsp(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
+def step_ddsp(uv: str, gpu_stack: str) -> None:
     hr("7/9 DDSP-SVC 推理环境 engines/ddsp-svc + .venv-ddsp")
     fetch_ddsp()
+
+    use_blackwell = gpu_stack == "cu128"
+    use_gpu = gpu_stack in {"cu121", "cu128"}
+    use_directml = gpu_stack == "directml"
 
     target_py = PYTHON_FOR_ENGINES
     py_path = venv_python(DDSP_VENV)
@@ -1390,7 +1538,11 @@ def step_ddsp(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
         uv_pip_install(uv, py, *args, index=index)
 
     pip("setuptools<81", "wheel")
-    if use_blackwell:
+    if use_directml:
+        torch_specs = []
+        torch_index = ""
+        _install_directml_runtime(pip)
+    elif use_blackwell:
         torch_specs = [
             f"torch=={TORCH_BLACKWELL_VER}",
             f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
@@ -1403,13 +1555,20 @@ def step_ddsp(uv: str, use_gpu: bool, use_blackwell: bool = False) -> None:
 
     requirements = DDSP_DIR / "requirements.txt"
     if requirements.exists():
-        filtered = _filter_requirements(requirements, extra_deny=DDSP_REQ_DENY)
+        filtered = _filter_requirements(
+            requirements,
+            extra_deny=DDSP_REQ_DENY | (DIRECTML_EXTRA_DENY if use_directml else set()),
+        )
         pip("-r", str(filtered))
     else:
         raise RuntimeError("未找到 DDSP-SVC requirements.txt")
     seed_ddsp_base_models()
 
-    if use_blackwell:
+    if use_directml:
+        _reaffirm_directml_runtime(uv, py)
+        _verify_directml_torch(py, "DDSP-SVC")
+        print(c("g", "DDSP-SVC 推理环境就绪（AMD DirectML）"))
+    elif use_blackwell:
         _reaffirm_blackwell_torch(uv, py)
         _verify_cuda_torch(py, "DDSP-SVC")
         print(c("g", "DDSP-SVC 推理环境就绪（Blackwell/cu128）"))
@@ -1542,15 +1701,15 @@ def step_models(uv: str) -> None:
 
 
 STEPS = {
-    "app": lambda uv, gpu, bw: step_app(uv),
-    "web": lambda uv, gpu, bw: step_web(),
-    "uvr": lambda uv, gpu, bw: step_uvr(uv, gpu, bw),
-    "svc": lambda uv, gpu, bw: step_svc(uv, gpu, bw),
-    "rvc": lambda uv, gpu, bw: step_rvc(uv, gpu, bw),
-    "seedvc": lambda uv, gpu, bw: step_seedvc(uv, gpu, bw),
-    "ddsp": lambda uv, gpu, bw: step_ddsp(uv, gpu, bw),
-    "hub": lambda uv, gpu, bw: step_hub(uv),
-    "models": lambda uv, gpu, bw: step_models(uv),
+    "app": lambda uv, stack: step_app(uv),
+    "web": lambda uv, stack: step_web(),
+    "uvr": lambda uv, stack: step_uvr(uv, stack),
+    "svc": lambda uv, stack: step_svc(uv, stack),
+    "rvc": lambda uv, stack: step_rvc(uv, stack),
+    "seedvc": lambda uv, stack: step_seedvc(uv, stack),
+    "ddsp": lambda uv, stack: step_ddsp(uv, stack),
+    "hub": lambda uv, stack: step_hub(uv),
+    "models": lambda uv, stack: step_models(uv),
 }
 ORDER = ["app", "web", "uvr", "svc", "rvc", "seedvc", "ddsp", "hub", "models"]
 
@@ -1571,7 +1730,8 @@ def main() -> int:
         help="安装根目录（引擎/虚拟环境/模型都装到此处）；默认取脚本上级目录",
     )
     p.add_argument("--cpu", action="store_true", help="安装 CPU 版")
-    p.add_argument("--gpu", action="store_true", help="请求安装 CUDA 版；会复核兼容 NVIDIA 显卡")
+    p.add_argument("--gpu", action="store_true", help="请求安装 GPU 版；自动选择 NVIDIA CUDA 或 AMD DirectML")
+    p.add_argument("--directml", action="store_true", help="强制安装 AMD/Windows DirectML 推理环境")
     p.add_argument(
         "--cu128",
         action="store_true",
@@ -1600,32 +1760,37 @@ def main() -> int:
     hr("XB-SVCB 安装器")
     print(f"安装根目录: {ROOT}")
 
-    if args.gpu and args.cpu:
-        print(c("r", "--gpu 与 --cpu 不能同时使用"))
+    if args.cpu and (args.gpu or args.directml):
+        print(c("r", "--cpu 不能与 --gpu/--directml 同时使用"))
+        return 2
+    if args.directml and (args.cu128 or args.no_cu128):
+        print(c("r", "--directml 不能与 CUDA 栈参数同时使用"))
         return 2
     if args.cu128 and args.no_cu128:
         print(c("r", "--cu128 与 --no-cu128 不能同时使用"))
         return 2
-    detected_stack = "cpu" if args.cpu else detect_gpu_stack()
+    detected_stack = "cpu" if args.cpu else "directml" if args.directml else detect_gpu_stack()
     if args.gpu and detected_stack == "cpu":
-        print(c("y", "未检测到兼容 NVIDIA 显卡，已改用 CPU 版 torch。"))
+        print(c("y", "未检测到兼容 NVIDIA/AMD 显卡，已改用 CPU 版 torch。"))
     if args.cu128 and detected_stack == "cu121":
         print(c("y", "当前显卡不是 50 系，忽略 cu128 请求，改用 cu121 栈。"))
     if args.no_cu128 and detected_stack == "cu128":
         print(c("y", "检测到 50 系/Blackwell，忽略老 CUDA 栈请求，改用 cu128。"))
-    use_gpu = detected_stack != "cpu"
-    use_blackwell = detected_stack == "cu128"
-    installer_progress(8, "Checking GPU and CUDA mode")
-    if use_blackwell:
+    installer_progress(8, "Checking GPU runtime")
+    if detected_stack == "cu128":
         mode = c("g", "CUDA · Blackwell/50系 (cu128 + torch" + TORCH_BLACKWELL_VER + ")")
-    elif use_gpu:
+    elif detected_stack == "cu121":
         mode = c("g", "CUDA · 40系及以下 (cu121)")
+    elif detected_stack == "directml":
+        mode = c("g", "AMD · DirectML (torch " + TORCH_DIRECTML_TORCH_VER + ")")
     else:
         mode = c("y", "CPU")
     print(f"安装模式: {mode}")
-    if use_gpu and not args.gpu:
+    if detected_stack == "directml" and not args.directml:
+        print("（检测到 AMD Radeon，自动选择 DirectML；如需 CPU 请加 --cpu）")
+    elif detected_stack in {"cu121", "cu128"} and not args.gpu:
         print("（检测到 NVIDIA 显卡，自动选择 CUDA；如需 CPU 请加 --cpu）")
-    if use_blackwell and not args.cu128:
+    if detected_stack == "cu128" and not args.cu128:
         print("（检测到 50 系/Blackwell，自动切换 cu128 栈）")
 
     installer_progress(12, "Preparing uv package manager")
@@ -1644,7 +1809,7 @@ def main() -> int:
             continue
         installer_progress(18 + (completed_count * 76) // selected_count, f"Running runtime step: {s}")
         try:
-            STEPS[s](uv, use_gpu, use_blackwell)
+            STEPS[s](uv, detected_stack)
             results.append((s, "ok"))
         except Exception as exc:  # noqa: BLE001 - 单步失败不阻断其余步骤
             print(c("r", f"[{s}] 失败: {exc}"))
