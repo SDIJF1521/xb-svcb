@@ -150,15 +150,15 @@
           </div>
           <div class="tool-info">
             <div class="tool-name">
-              {{ t.name }}
-              <span class="tool-ver">{{ t.version }}</span>
+              <span class="tool-name-text">{{ t.name }}</span>
+              <span class="tool-ver" :title="t.version">{{ t.version }}</span>
             </div>
             <div class="tool-desc">{{ t.desc }}</div>
+            <span class="tool-status" :class="t.ok ? 'ok' : 'warn'" :title="t.status">
+              <el-icon><component :is="t.ok ? CircleCheckFilled : WarningFilled" /></el-icon>
+              <span class="tool-status-text">{{ t.status }}</span>
+            </span>
           </div>
-          <span class="tool-status" :class="t.ok ? 'ok' : 'warn'">
-            <el-icon><component :is="t.ok ? CircleCheckFilled : WarningFilled" /></el-icon>
-            {{ t.status }}
-          </span>
         </div>
       </div>
     </section>
@@ -989,14 +989,18 @@ onUnmounted(() => {
 /* 集成工具 */
 .tool-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
   gap: 18px;
+  align-items: start;
 }
 .tool-card {
   border-radius: 6px;
   padding: 20px;
-  display: flex;
-  align-items: center;
+  min-width: 0;
+  min-height: 132px;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: start;
   gap: 14px;
 }
 .tool-icon {
@@ -1010,15 +1014,24 @@ onUnmounted(() => {
   background: color-mix(in srgb, var(--ic) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--ic) 38%, transparent);
 }
-.tool-info { flex: 1; min-width: 0; }
+.tool-info { min-width: 0; }
 .tool-name {
   font-size: 15px;
   font-weight: 700;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
+.tool-name-text { min-width: 0; }
 .tool-ver {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   font-weight: 600;
   color: var(--xb-muted);
@@ -1032,16 +1045,27 @@ onUnmounted(() => {
   color: var(--xb-muted);
   margin-top: 5px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 .tool-status {
-  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 4px;
   font-size: 12px;
   font-weight: 600;
   padding: 5px 10px;
   border-radius: 999px;
-  flex-shrink: 0;
+}
+.tool-status-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tool-status.ok { color: var(--xb-success); background: rgba(var(--xb-success-rgb), 0.12); }
 .tool-status.warn { color: var(--xb-warn); background: rgba(var(--xb-warn-rgb), 0.12); }

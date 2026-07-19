@@ -70,16 +70,18 @@ function Find-ISCC {
 $appVersion = Read-RegexValue (Join-Path $Root "app\config.py") 'APP_VERSION\s*=\s*["'']([^"'']+)["'']' "app version"
 $appProjectVersion = Read-RegexValue (Join-Path $Root "app\pyproject.toml") '(?m)^version\s*=\s*["'']([^"'']+)["'']' "app project version"
 $appLockVersion = Read-RegexValue (Join-Path $Root "app\uv.lock") '(?s)\[\[package\]\]\s*name\s*=\s*["'']app["'']\s*version\s*=\s*["'']([^"'']+)["'']' "app lock version"
+$appExeVersion = Read-RegexValue (Join-Path $Root "installer\xb-svcb-version.txt") 'StringStruct\(u["'']ProductVersion["''],\s*u["'']([^"'']+)["'']\)' "app executable version"
 $installerVersion = Read-RegexValue (Join-Path $Root "installer\xb-svcb.iss") '#define\s+MyAppVersion\s+["'']([^"'']+)["'']' "installer version"
 $webPackage = Get-Content -LiteralPath (Join-Path $Root "web\package.json") -Raw | ConvertFrom-Json
 $webVersion = [string]$webPackage.version
 $webLockVersion = Read-RegexValue (Join-Path $Root "web\package-lock.json") '\A\s*\{\s*["'']name["'']\s*:\s*["''][^"'']+["'']\s*,\s*["'']version["'']\s*:\s*["'']([^"'']+)["'']' "web lock version"
 if (($appVersion -ne $appProjectVersion) -or
     ($appVersion -ne $appLockVersion) -or
+    ($appVersion -ne $appExeVersion) -or
     ($appVersion -ne $installerVersion) -or
     ($appVersion -ne $webVersion) -or
     ($appVersion -ne $webLockVersion)) {
-  throw "Version mismatch: config=$appVersion, pyproject=$appProjectVersion, uv.lock=$appLockVersion, installer=$installerVersion, web=$webVersion, package-lock=$webLockVersion"
+  throw "Version mismatch: config=$appVersion, pyproject=$appProjectVersion, uv.lock=$appLockVersion, app-exe=$appExeVersion, installer=$installerVersion, web=$webVersion, package-lock=$webLockVersion"
 }
 Write-Host ("Release version: {0}" -f $appVersion) -ForegroundColor Green
 
@@ -97,6 +99,7 @@ foreach ($worker in $workerFiles) {
   Require-File (Join-Path $Root "app\infrastructure\$worker") "Worker source $worker"
 }
 Require-File (Join-Path $Root "release_notes_v022.md") "v0.0.22 release notes"
+Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
 
 # Reject Git LFS pointers or partial DDSP/SeedVC snapshots before producing a release.
 Require-FileSize (Join-Path $Root "assets\models\pretrain\rmvpe.pt") 314572800 "Bundled SeedVC RMVPE"
@@ -188,15 +191,15 @@ if (-not $SkipJuceHostBuild) {
   }
   & $hostBuild
   if ($LASTEXITCODE -ne 0) { throw "JUCE VST3 host build failed (exit code $LASTEXITCODE)" }
-
-  $hostSrc = Join-Path $Root "engines\juce-vst3-host"
-  $hostDest = Join-Path $Root "dist\XB-SVCB\engines\juce-vst3-host"
-  if (-not (Test-Path $hostSrc)) {
-    throw "JUCE host output not found: $hostSrc"
-  }
-  New-Item -ItemType Directory -Force -Path $hostDest | Out-Null
-  Copy-Item -Path (Join-Path $hostSrc "*") -Destination $hostDest -Recurse -Force
 }
+$hostSrc = Join-Path $Root "engines\juce-vst3-host"
+$hostDest = Join-Path $Root "dist\XB-SVCB\engines\juce-vst3-host"
+if (-not (Test-Path $hostSrc)) {
+  throw "JUCE host output not found: $hostSrc"
+}
+# A PyInstaller rebuild replaces dist/XB-SVCB, so even a cached Host must be staged again.
+New-Item -ItemType Directory -Force -Path $hostDest | Out-Null
+Copy-Item -Path (Join-Path $hostSrc "*") -Destination $hostDest -Recurse -Force
 $stagedHostExe = Join-Path $Root "dist\XB-SVCB\engines\juce-vst3-host\xb-juce-vst3-host.exe"
 Require-File $stagedHostExe "Staged JUCE VST3 host (build without -SkipJuceHostBuild)"
 

@@ -17,9 +17,9 @@ import traceback
 from pathlib import Path
 
 try:
-    from inference_device import patch_directml_float32, resolve_torch_device
+    from inference_device import ResolvedDevice, resolve_torch_device
 except ImportError:  # package import used by tests/application tooling
-    from infrastructure.inference_device import patch_directml_float32, resolve_torch_device
+    from infrastructure.inference_device import ResolvedDevice, resolve_torch_device
 from typing import Any
 
 
@@ -62,6 +62,17 @@ def _localized_config(source: Path, destination: Path, repo: Path) -> dict[str, 
     return data
 
 
+def _effective_ddsp_infer_steps(config: dict[str, Any], requested: int) -> tuple[int, int]:
+    """Never run below the model author's recommended Flow step count."""
+    infer = config.get("infer") if isinstance(config, dict) else None
+    try:
+        recommended = int((infer or {}).get("infer_step", 50))
+    except (TypeError, ValueError, AttributeError):
+        recommended = 50
+    recommended = max(1, recommended)
+    return max(recommended, max(1, int(requested))), recommended
+
+
 def _link_or_copy(source: Path, destination: Path) -> None:
     try:
         os.link(source, destination)
@@ -69,31 +80,200 @@ def _link_or_copy(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination)
 
 
-def _patch_torch_load(force_cpu_map: bool = False) -> None:
-    import torch
+def _patch_torch_load(force_cpu_map: bool = False, torch_module: Any = None) -> None:
+    if torch_module is None:
+        import torch as torch_module
 
-    original = torch.load
+    original = torch_module.load
 
     def compatible_load(*args: Any, **kwargs: Any):
+        positional = list(args)
         kwargs.setdefault("weights_only", False)
-        if force_cpu_map and str(kwargs.get("map_location", "")).startswith("privateuseone"):
-            # DirectML state dictionaries are loaded on CPU first, then the
-            # upstream loader moves the initialized module to the GPU.
-            kwargs["map_location"] = "cpu"
+        if force_cpu_map:
+            # DDSP/RMVPE checkpoints may have been saved from CUDA and some
+            # upstream loaders omit map_location entirely. Always deserialize
+            # storage on CPU for DirectML; every inference loader subsequently
+            # moves the initialized module to the selected AMD device.
+            if len(positional) >= 2:
+                positional[1] = "cpu"
+                kwargs.pop("map_location", None)
+            else:
+                kwargs["map_location"] = "cpu"
         try:
-            return original(*args, **kwargs)
+            return original(*positional, **kwargs)
         except TypeError:
             kwargs.pop("weights_only", None)
-            return original(*args, **kwargs)
+            return original(*positional, **kwargs)
 
-    torch.load = compatible_load
+    torch_module.load = compatible_load
+
+
+def _patch_directml_ddsp_rmvpe_cpu(rmvpe_class: Any) -> None:
+    """Run DDSP's unsupported RMVPE GRU wholly on CPU for DirectML."""
+    if getattr(rmvpe_class, "_xb_directml_cpu_patch", False):
+        return
+    original_rmvpe_infer = rmvpe_class.infer_from_audio
+
+    def cpu_rmvpe_infer(self, audio, sample_rate=16000, device=None, *args, **kwargs):
+        del device
+        return original_rmvpe_infer(
+            self,
+            audio,
+            sample_rate,
+            "cpu",
+            *args,
+            **kwargs,
+        )
+
+    rmvpe_class.infer_from_audio = cpu_rmvpe_infer
+    rmvpe_class._xb_directml_cpu_patch = True
+
+
+def _patch_directml_ddsp_sinusoidal_cpu(embedding_class: Any) -> None:
+    """Compute DDSP Flow's tiny sin/cos timestep embedding on CPU."""
+    if getattr(embedding_class, "_xb_directml_cpu_patch", False):
+        return
+    original_forward = embedding_class.forward
+
+    def cpu_sinusoidal_forward(self, x):
+        if not str(getattr(x, "device", "")).startswith("privateuseone"):
+            return original_forward(self, x)
+        target_device = x.device
+        return original_forward(self, x.float().cpu()).to(target_device)
+
+    embedding_class.forward = cpu_sinusoidal_forward
+    embedding_class._xb_directml_cpu_patch = True
+
+
+def _patch_directml_ddsp_vocoder_cpu(vocoder_class: Any) -> None:
+    """Decode the final DDSP mel with NSF-HiFiGAN on the stable CPU path."""
+    if getattr(vocoder_class, "_xb_directml_cpu_patch", False):
+        return
+    original_infer = vocoder_class.infer
+
+    def cpu_vocoder_infer(self, mel, f0):
+        if not str(getattr(mel, "device", "")).startswith("privateuseone"):
+            return original_infer(self, mel, f0)
+        target_device = mel.device
+        decoder = self.vocoder
+        decoder.device = "cpu"
+        if getattr(decoder, "model", None) is not None:
+            decoder.model = decoder.model.float().cpu()
+        audio = original_infer(self, mel.float().cpu(), f0.float().cpu())
+        return audio.to(target_device)
+
+    vocoder_class.infer = cpu_vocoder_infer
+    vocoder_class._xb_directml_cpu_patch = True
+
+
+def _patch_ddsp_float_wav(soundfile_module: Any) -> None:
+    """Preserve quiet DDSP samples until post-inference level validation."""
+    if getattr(soundfile_module, "_xb_ddsp_float_wav_patch", False):
+        return
+    original_write = soundfile_module.write
+
+    def float_wav_write(file, data, samplerate, *args, **kwargs):
+        if (
+            str(file).lower().endswith(".wav")
+            and not args
+            and kwargs.get("subtype") is None
+        ):
+            kwargs["subtype"] = "FLOAT"
+        return original_write(file, data, samplerate, *args, **kwargs)
+
+    soundfile_module.write = float_wav_write
+    soundfile_module._xb_ddsp_float_wav_patch = True
+
+
+def _ddsp_output_levels(rendered: Any, reference: Any) -> tuple[Any, dict[str, float]]:
+    import numpy as np
+
+    if rendered.size == 0:
+        raise RuntimeError("DDSP 输出为空")
+    finite = np.isfinite(rendered)
+    finite_ratio = float(finite.mean())
+    if finite_ratio < 1.0:
+        raise RuntimeError(
+            f"DDSP 输出包含 NaN/Inf（有效采样 {finite_ratio:.2%}），已拒绝写入作品"
+        )
+
+    rendered_rms = float(np.sqrt(np.mean(np.square(rendered, dtype=np.float64))))
+    rendered_peak = float(np.max(np.abs(rendered)))
+    reference_rms = (
+        float(np.sqrt(np.mean(np.square(reference, dtype=np.float64))))
+        if reference.size
+        else 0.0
+    )
+    if rendered_peak < 1e-4 or rendered_rms < 1e-5:
+        raise RuntimeError(
+            f"DDSP 输出近似静音（peak={rendered_peak:.6f}, rms={rendered_rms:.6f}）"
+        )
+
+    gain = 1.0
+    if reference_rms > 1e-5 and rendered_rms < reference_rms * 0.7:
+        gain = min(reference_rms / rendered_rms, 8.0, 0.98 / rendered_peak)
+        if gain > 1.05:
+            rendered = np.clip(rendered * gain, -0.98, 0.98)
+            rendered_rms = float(
+                np.sqrt(np.mean(np.square(rendered, dtype=np.float64)))
+            )
+            rendered_peak = float(np.max(np.abs(rendered)))
+        else:
+            gain = 1.0
+
+    return rendered, {
+        "peak": rendered_peak,
+        "rms": rendered_rms,
+        "reference_rms": reference_rms,
+        "gain": float(gain),
+        "finite_ratio": finite_ratio,
+    }
+
+
+def _finalize_ddsp_output(source: Path, output: Path) -> dict[str, float]:
+    """Reject invalid/near-silent output and safely restore a low vocal level."""
+    import numpy as np
+    import soundfile as sf
+
+    rendered, sample_rate = sf.read(
+        str(output),
+        dtype="float32",
+        always_2d=True,
+    )
+    reference, _ = sf.read(
+        str(source),
+        dtype="float32",
+        always_2d=True,
+    )
+    rendered, stats = _ddsp_output_levels(rendered, reference)
+    if stats["gain"] > 1.0:
+        info = sf.info(str(output))
+        subtype = info.subtype if info.subtype and info.subtype != "UNKNOWN" else "FLOAT"
+        sf.write(str(output), rendered, sample_rate, subtype=subtype)
+    return stats
 
 
 def _patch_ddsp_directml() -> None:
     """Keep DDSP neural controls on DML and synthesize complex spectra on CPU."""
     import numpy as np
     import torch
-    from ddsp.vocoder import CombSubSuperFast
+    try:
+        from ddsp.vocoder import CombSubSuperFast
+        from reflow.vocoder import Vocoder
+    except ImportError as exc:
+        if "DTensor" in str(exc) and "torch.distributed.tensor" in str(exc):
+            raise RuntimeError(
+                "DDSP 依赖版本不兼容：当前 Transformers 要求新版 Torch DTensor，"
+                "请运行“搭建/修复运行环境”的 DDSP-SVC 修复，将 Transformers "
+                "恢复为 4.46.3"
+            ) from exc
+        raise
+    from encoder.rmvpe.inference import RMVPE
+    from reflow.lynxnet2 import SinusoidalPosEmb
+
+    _patch_directml_ddsp_rmvpe_cpu(RMVPE)
+    _patch_directml_ddsp_sinusoidal_cpu(SinusoidalPosEmb)
+    _patch_directml_ddsp_vocoder_cpu(Vocoder)
 
     def directml_forward(
         self,
@@ -184,7 +364,7 @@ def main() -> int:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--pitch", type=int, default=0)
     parser.add_argument("--f0", default="rmvpe")
-    parser.add_argument("--infer-steps", type=int, default=30)
+    parser.add_argument("--infer-steps", type=int, default=50)
     parser.add_argument("--formant-shift", type=float, default=0.0)
     parser.add_argument("--speaker", default="1")
     args = parser.parse_args()
@@ -219,10 +399,29 @@ def main() -> int:
 
     try:
         import torch
+        import soundfile
 
-        resolved_device = resolve_torch_device(args.device, torch)
-        if resolved_device.backend == "directml":
-            patch_directml_float32(torch)
+        detected_device = resolve_torch_device(args.device, torch)
+        _patch_ddsp_float_wav(soundfile)
+        if detected_device.backend == "directml":
+            # The full DDSP/Rectified-Flow graph can finish on DirectML while
+            # silently producing low-level electrical noise. A successful
+            # return code is therefore not a sufficient correctness signal.
+            # Prefer deterministic CPU inference until the upstream graph is
+            # numerically validated on DirectML end-to-end. UVR and the other
+            # model families remain free to use the AMD adapter.
+            resolved_device = ResolvedDevice(
+                torch.device("cpu"),
+                "cpu",
+                f"CPU 稳定路径（检测到 {detected_device.name}）",
+            )
+            print(
+                "XB: DDSP-SVC DirectML 实机会产生小声/静音/电流杂音，"
+                "已切换完整 CPU 稳定推理；UVR 与其他模型的 AMD 加速不受影响",
+                flush=True,
+            )
+        else:
+            resolved_device = detected_device
     except Exception as exc:  # noqa: BLE001
         print(f"DDSP_ERR 设备初始化失败: {exc}", flush=True)
         return 2
@@ -235,11 +434,19 @@ def main() -> int:
         _link_or_copy(model, staged_model)
         localized_config = _localized_config(config, stage / "config.yaml", repo)
         data_config = localized_config.get("data") or {}
-        _patch_torch_load(resolved_device.backend == "directml")
+        infer_steps, recommended_steps = _effective_ddsp_infer_steps(
+            localized_config,
+            args.infer_steps,
+        )
+        if infer_steps != int(args.infer_steps):
+            print(
+                f"XB: DDSP-SVC 请求 {int(args.infer_steps)} 步低于模型推荐 "
+                f"{recommended_steps} 步，已自动提升到 {infer_steps} 步以保证质量",
+                flush=True,
+            )
+        _patch_torch_load(resolved_device.backend == "cpu")
         sys.path.insert(0, str(repo))
         os.chdir(repo)
-        if resolved_device.backend == "directml":
-            _patch_ddsp_directml()
         sys.argv = [
             str(upstream),
             "--model_ckpt",
@@ -257,7 +464,7 @@ def main() -> int:
             "--f0_max",
             str(float(data_config.get("f0_max", 1100))),
             "--infer_step",
-            str(max(1, int(args.infer_steps))),
+            str(infer_steps),
             "--formant_shift_key",
             str(max(-2.0, min(2.0, float(args.formant_shift)))),
             "--spk_id",
@@ -267,6 +474,14 @@ def main() -> int:
         runpy.run_path(str(upstream), run_name="__main__")
         if not output.is_file() or output.stat().st_size <= 44:
             raise RuntimeError("上游脚本未生成有效 WAV")
+        audio_stats = _finalize_ddsp_output(source, output)
+        print(
+            "DDSP_AUDIO "
+            f"peak={audio_stats['peak']:.6f} rms={audio_stats['rms']:.6f} "
+            f"input_rms={audio_stats['reference_rms']:.6f} "
+            f"gain={audio_stats['gain']:.3f} finite={audio_stats['finite_ratio']:.2%}",
+            flush=True,
+        )
         print(f"DDSP_DEVICE {resolved_device.backend} {resolved_device.name}", flush=True)
         print(f"DDSP_OK {output}", flush=True)
         return 0

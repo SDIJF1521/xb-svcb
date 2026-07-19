@@ -20,11 +20,17 @@ import urllib.request
 from pathlib import Path
 
 try:
-    from inference_device import ResolvedDevice, patch_directml_float32, resolve_torch_device
+    from inference_device import (
+        ResolvedDevice,
+        patch_directml_float32,
+        patch_directml_rmvpe_cpu,
+        resolve_torch_device,
+    )
 except ImportError:  # package import used by tests/application tooling
     from infrastructure.inference_device import (
         ResolvedDevice,
         patch_directml_float32,
+        patch_directml_rmvpe_cpu,
         resolve_torch_device,
     )
 
@@ -45,6 +51,10 @@ _RVC_BASE_DOWNLOADS = {
     "rmvpe.pt": [
         f"{_HF_MIRROR}/Daswer123/RVC_Base/resolve/main/rmvpe.pt",
         "https://huggingface.co/Daswer123/RVC_Base/resolve/main/rmvpe.pt",
+    ],
+    "rmvpe.onnx": [
+        f"{_HF_MIRROR}/Daswer123/RVC_Base/resolve/main/rmvpe.onnx",
+        "https://huggingface.co/Daswer123/RVC_Base/resolve/main/rmvpe.onnx",
     ],
 }
 _RVC_BASE_SOURCES = {
@@ -267,16 +277,15 @@ def _prepare_rvc_base_models(lib_dir: str) -> None:
             continue
         missing.append(name)
 
-    # rvc-python downloads rmvpe.onnx unconditionally, but this worker uses the
-    # PyTorch RMVPE path. Copy it when bundled, without making it a hard runtime
-    # dependency.
+    # rvc-python checks for this file in its generic downloader, but XB uses
+    # PyTorch RMVPE for CUDA/CPU and the stable CPU RMVPE path for DirectML.
     _copy_bundled_base_model("rmvpe.onnx", base_dir / "rmvpe.onnx", required=False)
 
     if missing:
         raise RuntimeError(
             "RVC 底模缺失，且本地自带模型/镜像下载都不可用："
             + ", ".join(missing)
-            + "。请重新运行“搭建/修复运行环境”，或把 hubert_base.pt / rmvpe.pt 放到 "
+            + "。请重新运行“搭建/修复运行环境”，或把这些文件放到 "
             + str(base_dir)
         )
 
@@ -360,10 +369,13 @@ def main() -> int:
 
         import rvc_python.download_model as rvc_download_model
         import rvc_python.infer as rvc_infer
+        import rvc_python.lib.rmvpe as rvc_rmvpe
 
         rvc_download_model.download_rvc_models = _prepare_rvc_base_models
         rvc_infer.download_rvc_models = _prepare_rvc_base_models
         if resolved_device.backend == "directml":
+            patch_directml_rmvpe_cpu(rvc_rmvpe)
+            print("XB: RVC RMVPE 使用 CPU 稳定路径，主模型继续使用 AMD DirectML", flush=True)
             import torch_directml  # type: ignore
 
             torch_directml.default_device = lambda: resolved_device.index

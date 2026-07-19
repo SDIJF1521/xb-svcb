@@ -12,13 +12,26 @@ import os
 import shutil
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
+
 try:
-    from inference_device import patch_directml_no_half, resolve_torch_device
+    from inference_device import (
+        patch_directml_no_half,
+        patch_directml_rmvpe_cpu,
+        patch_directml_seedvc_f0_coarse,
+        resolve_torch_device,
+    )
 except ImportError:  # package import used by tests/application tooling
-    from infrastructure.inference_device import patch_directml_no_half, resolve_torch_device
+    from infrastructure.inference_device import (
+        patch_directml_no_half,
+        patch_directml_rmvpe_cpu,
+        patch_directml_seedvc_f0_coarse,
+        resolve_torch_device,
+    )
 from typing import Any, Callable
 
 
@@ -26,6 +39,140 @@ def _parse_bool(value: str | bool) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _patch_whisper_sampling_rate(feature_extractor_class: Any) -> None:
+    """Tell SeedVC's Whisper extractor that its resampled input is 16 kHz.
+
+    Upstream already resamples every waveform to 16 kHz, but omits the explicit
+    argument when calling WhisperFeatureExtractor. Recent Transformers versions
+    warn once per chunk and may apply an incorrect frontend for custom configs.
+    """
+    if getattr(feature_extractor_class, "_xb_seedvc_sampling_rate_patch", False):
+        return
+    original_call = feature_extractor_class.__call__
+
+    def call_with_sampling_rate(self: Any, *args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("sampling_rate", 16000)
+        return original_call(self, *args, **kwargs)
+
+    feature_extractor_class.__call__ = call_with_sampling_rate
+    feature_extractor_class._xb_seedvc_sampling_rate_patch = True
+
+
+def _patch_seedvc_directml_audio_preprocessing(
+    audio_module: Any,
+    kaldi_module: Any,
+) -> None:
+    """Keep SeedVC's real-valued Mel/FBank features stable on DirectML.
+
+    DirectML's audio FFT and reflect-padding paths can raise an empty
+    ``RuntimeError`` or terminate while constructing ComplexFloat tensors.
+    Mel and Kaldi FBank are deterministic preprocessing stages, so calculate
+    each complete feature on CPU and immediately return its small real-valued
+    result to the original DirectML device. The neural models remain on GPU.
+    """
+    if not getattr(audio_module, "_xb_seedvc_cpu_mel", False):
+        original_mel_spectrogram = audio_module.mel_spectrogram
+
+        def directml_safe_mel(y: Any, *args: Any, **kwargs: Any) -> Any:
+            if not str(getattr(y, "device", "")).startswith("privateuseone"):
+                return original_mel_spectrogram(y, *args, **kwargs)
+            target_device = y.device
+            return original_mel_spectrogram(y.cpu(), *args, **kwargs).to(target_device)
+
+        audio_module.mel_spectrogram = directml_safe_mel
+        audio_module._xb_seedvc_cpu_mel = True
+
+    if not getattr(kaldi_module, "_xb_seedvc_cpu_fbank", False):
+        original_fbank = kaldi_module.fbank
+
+        def directml_safe_fbank(waveform: Any, *args: Any, **kwargs: Any) -> Any:
+            if not str(getattr(waveform, "device", "")).startswith("privateuseone"):
+                return original_fbank(waveform, *args, **kwargs)
+            target_device = waveform.device
+            return original_fbank(waveform.cpu(), *args, **kwargs).to(target_device)
+
+        kaldi_module.fbank = directml_safe_fbank
+        kaldi_module._xb_seedvc_cpu_fbank = True
+
+
+def _patch_seedvc_directml_f0_postprocessing(torch: Any, rmvpe_module: Any) -> None:
+    """Keep RMVPE's small F0 statistics on CPU until embedding lookup.
+
+    SeedVC converts RMVPE's NumPy result to the global model device before
+    applying log/median/exp. Several Radeon DirectML drivers raise an empty
+    ``RuntimeError`` for that elementwise chain. Mark only arrays returned by
+    RMVPE and defer their requested DirectML transfer; the length regulator's
+    patched coarse quantizer moves the final real-valued bins to the GPU.
+    """
+    if getattr(rmvpe_module, "_xb_seedvc_cpu_f0_postprocessing", False):
+        return
+
+    class SeedVCF0Array(np.ndarray):
+        pass
+
+    class DeferredF0Tensor:
+        def __init__(self, tensor: Any) -> None:
+            self.tensor = tensor
+
+        def to(self, device: Any, *args: Any, **kwargs: Any) -> Any:
+            if str(device).startswith("privateuseone"):
+                return self.tensor.cpu()
+            return self.tensor.to(device, *args, **kwargs)
+
+    original_rmvpe = rmvpe_module.RMVPE
+    original_from_numpy = torch.from_numpy
+
+    def seedvc_rmvpe(*args: Any, **kwargs: Any) -> Any:
+        instance = original_rmvpe(*args, **kwargs)
+        if getattr(instance, "_xb_seedvc_cpu_f0_output", False):
+            return instance
+        original_infer = instance.infer_from_audio
+
+        def infer_from_audio(*infer_args: Any, **infer_kwargs: Any) -> Any:
+            result = original_infer(*infer_args, **infer_kwargs)
+            return np.asarray(result).view(SeedVCF0Array)
+
+        instance.infer_from_audio = infer_from_audio
+        instance._xb_seedvc_cpu_f0_output = True
+        return instance
+
+    def from_numpy(array: Any) -> Any:
+        tensor = original_from_numpy(array)
+        if isinstance(array, SeedVCF0Array):
+            return DeferredF0Tensor(tensor)
+        return tensor
+
+    rmvpe_module.RMVPE = seedvc_rmvpe
+    rmvpe_module._xb_seedvc_cpu_f0_postprocessing = True
+    torch.from_numpy = from_numpy
+
+
+def _run_seedvc_with_cpu_fallback(
+    seedvc_main: Callable[[Any], Any],
+    namespace: Any,
+    resolved_device: Any,
+    seedvc_inference: Any,
+    torch: Any,
+) -> Any:
+    """Retry a caught DirectML inference failure on the stable CPU path."""
+    try:
+        seedvc_main(namespace)
+        return resolved_device
+    except Exception:  # noqa: BLE001 - only DirectML gets the controlled retry
+        if resolved_device.backend != "directml":
+            raise
+        print(
+            "SEEDVC_INFO AMD DirectML 推理遇到不兼容算子，自动切换 CPU 稳定路径重试",
+            flush=True,
+        )
+        traceback.print_exc()
+        cpu_device = resolve_torch_device("cpu", torch)
+        seedvc_inference.device = cpu_device.device
+        namespace.fp16 = False
+        seedvc_main(namespace)
+        return cpu_device
 
 
 def _latest_wav(folder: Path) -> Path | None:
@@ -296,8 +443,26 @@ def main() -> int:
             )
             seedvc_inference.device = resolved_device.device
             if resolved_device.backend == "directml":
-                from transformers import WhisperModel
+                import modules.audio as seedvc_audio  # type: ignore
+                import modules.length_regulator as seedvc_length_regulator  # type: ignore
+                import modules.rmvpe as seedvc_rmvpe  # type: ignore
+                import torchaudio.compliance.kaldi as seedvc_kaldi
+                from transformers import WhisperFeatureExtractor, WhisperModel
 
+                _patch_seedvc_directml_audio_preprocessing(seedvc_audio, seedvc_kaldi)
+                patch_directml_rmvpe_cpu(seedvc_rmvpe)
+                _patch_seedvc_directml_f0_postprocessing(torch, seedvc_rmvpe)
+                patch_directml_seedvc_f0_coarse(
+                    seedvc_length_regulator,
+                    resolved_device.device,
+                )
+                _patch_whisper_sampling_rate(WhisperFeatureExtractor)
+                print(
+                    "XB: SeedVC Mel/FBank/F0 后处理使用 DirectML 安全路径；"
+                    "RMVPE 使用 CPU 稳定路径，"
+                    "主模型继续使用 AMD DirectML",
+                    flush=True,
+                )
                 original_from_pretrained = WhisperModel.from_pretrained
 
                 def directml_from_pretrained(cls, *model_args, **model_kwargs):  # noqa: ANN001, ANN202
@@ -329,9 +494,17 @@ def main() -> int:
                 fp16=fp16,
             )
             try:
-                seedvc_main(ns)
+                resolved_device = _run_seedvc_with_cpu_fallback(
+                    seedvc_main,
+                    ns,
+                    resolved_device,
+                    seedvc_inference,
+                    torch,
+                )
             except Exception as exc:  # noqa: BLE001
-                print(f"SEEDVC_ERR SeedVC 推理失败: {exc}", flush=True)
+                message = str(exc).strip() or type(exc).__name__
+                print(f"SEEDVC_ERR SeedVC 推理失败: {message}", flush=True)
+                traceback.print_exc()
                 return 4
             generated = _latest_wav(out_dir)
             if not generated or not generated.exists():

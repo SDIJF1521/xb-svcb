@@ -1205,7 +1205,7 @@ class Api:
     ) -> tuple[Path | None, str | None]:
         """把用户选择的目录规范成真正的数据目录。
 
-        用户可能选择磁盘根目录或一个普通文件夹；这时在其中创建 .sb-svcb
+        用户可能选择磁盘根目录或一个普通文件夹；这时在其中创建 .xb_svcb
         子目录作为实际数据目录。若选择的是已有 XB-SVCB 数据目录，则直接使用。
         """
         if not str(raw_target or "").strip():
@@ -1267,7 +1267,7 @@ class Api:
     def _test_writable(path: Path) -> bool:
         try:
             path.mkdir(parents=True, exist_ok=True)
-            probe = path / ".sb-svcb_write_test"
+            probe = path / ".xb_svcb_write_test"
             probe.write_text("ok", encoding="utf-8")
             probe.unlink(missing_ok=True)
             return True

@@ -138,12 +138,13 @@ class RvcEngine:
                     f.write((proc.stdout or "") + "\n")
                     if proc.stderr:
                         f.write("----- stderr -----\n" + proc.stderr + "\n")
+                    f.write(f"----- 子进程退出码 -----\n{proc.returncode}\n")
             except OSError:
                 pass
 
         if proc.returncode != 0 or not out_path.exists():
             tail = self._error_tail(proc.stdout, proc.stderr)
-            raise RuntimeError(f"RVC 推理失败: {tail}")
+            raise RuntimeError(f"RVC 推理失败（子进程退出码 {proc.returncode}）: {tail}")
 
     @staticmethod
     def _error_tail(stdout: str | None, stderr: str | None) -> str:

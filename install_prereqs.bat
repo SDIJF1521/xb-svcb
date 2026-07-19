@@ -56,6 +56,7 @@ if "%XB_ENV_CONFIGURE%"=="1" (
   echo.
   echo [XB-SVCB] Writing user environment variables...
   call :CONFIGURE_ENV
+  if errorlevel 1 exit /b 1
 )
 
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 100 前置依赖检查完成
@@ -85,7 +86,7 @@ call :FIND_NVIDIA_SMI
 if not defined XB_JUCE_HOST_EXE set "XB_JUCE_HOST_EXE=%~dp0engines\juce-vst3-host\xb-juce-vst3-host.exe"
 
 if defined XB_VSBT_DIR (
-  if exist "%XB_VSBT_DIR%\VC\Auxiliary\Build\vcvars64.bat" set "XB_VSINSTALLDIR=%XB_VSBT_DIR%\"
+  if exist "!XB_VSBT_DIR!\VC\Auxiliary\Build\vcvars64.bat" set "XB_VSINSTALLDIR=!XB_VSBT_DIR!\"
 )
 
 if defined XB_PYTHON_EXE set "PATH=%~dp0;%XB_PYTHON_DIR%;%XB_PYTHON_DIR%\Scripts;%PATH%"
@@ -105,6 +106,11 @@ echo        VST3 plugin effects will be unavailable. Rebuild the installer with 
 exit /b 0
 
 :RESOLVE_GPU_STACK
+set "DETECTED_GPU_STACK="
+if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="cpu" set "DETECTED_GPU_STACK=cpu"
+if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="directml" set "DETECTED_GPU_STACK=directml"
+if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="cu121" set "DETECTED_GPU_STACK=cu121"
+if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="cu128" set "DETECTED_GPU_STACK=cu128"
 if /I "%XB_GPU_STACK_REQUESTED%"=="cpu" (
   set "XB_RESOLVED_GPU_STACK=cpu"
   set "XB_GPU_STACK=cpu"
@@ -122,7 +128,7 @@ if /I "%XB_GPU_STACK_REQUESTED%"=="directml" (
   exit /b 0
 )
 
-call :DETECT_GPU_STACK
+if not defined DETECTED_GPU_STACK call :DETECT_GPU_STACK
 if "%DETECTED_GPU_STACK%"=="cpu" (
   if /I not "%XB_GPU_STACK_REQUESTED%"=="auto" echo [gpu] No compatible NVIDIA or AMD GPU detected; CPU torch will be used.
   set "XB_RESOLVED_GPU_STACK=cpu"
@@ -171,7 +177,7 @@ exit /b 0
 :DETECT_GPU_STACK
 set "DETECTED_GPU_STACK=cpu"
 call :FIND_NVIDIA_SMI
-if not defined XB_NVIDIA_SMI goto DETECT_AMD_GPU
+if not defined XB_NVIDIA_SMI goto DETECT_ADAPTER_GPU
 for /f "tokens=1 delims=." %%A in ('"%XB_NVIDIA_SMI%" --query-gpu=compute_cap --format=csv,noheader 2^>nul') do (
   set "CAP_MAJOR=%%A"
   for /f "tokens=* delims= " %%B in ("!CAP_MAJOR!") do set "CAP_MAJOR=%%B"
@@ -186,7 +192,14 @@ for /f "delims=" %%G in ('"%XB_NVIDIA_SMI%" --query-gpu=name --format=csv,nohead
   if "!DETECTED_GPU_STACK!"=="cpu" set "DETECTED_GPU_STACK=cu121"
 )
 if not "%DETECTED_GPU_STACK%"=="cpu" exit /b 0
-:DETECT_AMD_GPU
+:DETECT_ADAPTER_GPU
+for /f "delims=" %%G in ('powershell.exe -NoProfile -Command "Get-CimInstance Win32_VideoController ^| Select-Object -ExpandProperty Name" 2^>nul') do (
+  echo %%G | findstr /I /C:"NVIDIA" /C:"GeForce" >nul && (
+    echo %%G | findstr /I /R "RTX *50[0-9][0-9]" >nul && set "DETECTED_GPU_STACK=cu128"
+    if "!DETECTED_GPU_STACK!"=="cpu" set "DETECTED_GPU_STACK=cu121"
+  )
+)
+if not "%DETECTED_GPU_STACK%"=="cpu" exit /b 0
 for /f "delims=" %%G in ('powershell.exe -NoProfile -Command "Get-CimInstance Win32_VideoController ^| Select-Object -ExpandProperty Name" 2^>nul') do (
   echo %%G | findstr /I /C:"AMD" /C:"Radeon" >nul && set "DETECTED_GPU_STACK=directml"
 )
@@ -208,6 +221,7 @@ exit /b 0
 
 :CHECK_PYTHON
 where python >nul 2>&1 && (
+  for /f "delims=" %%P in ('where python 2^>nul') do if not defined XB_PYTHON_EXE set "XB_PYTHON_EXE=%%P"
   echo [ok] Python found in PATH
   exit /b 0
 )
@@ -252,21 +266,22 @@ call :RESOLVE_PATHS
 exit /b 0
 
 :CHECK_CPP_TOOLS
+set "VSWHERE_EXE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 where cl >nul 2>&1 && (
   echo [ok] C++ compiler found in PATH
   exit /b 0
 )
-if defined XB_VSINSTALLDIR if exist "%XB_VSINSTALLDIR%VC\Auxiliary\Build\vcvars64.bat" (
-  echo [ok] C++ Build Tools found: %XB_VSINSTALLDIR%
+if defined XB_VSINSTALLDIR if exist "!XB_VSINSTALLDIR!VC\Auxiliary\Build\vcvars64.bat" (
+  echo [ok] C++ Build Tools found: !XB_VSINSTALLDIR!
   exit /b 0
 )
-if exist "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" (
-  "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath > "%TEMP%\xb_vs_path.txt" 2>nul
+if exist "!VSWHERE_EXE!" (
+  "!VSWHERE_EXE!" -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath > "%TEMP%\xb_vs_path.txt" 2>nul
   set /p XB_VSINSTALLDIR=<"%TEMP%\xb_vs_path.txt"
   del "%TEMP%\xb_vs_path.txt" >nul 2>&1
-  if defined XB_VSINSTALLDIR if exist "%XB_VSINSTALLDIR%\VC\Auxiliary\Build\vcvars64.bat" (
-    set "XB_VSINSTALLDIR=%XB_VSINSTALLDIR%\"
-    echo [ok] C++ Build Tools found: %XB_VSINSTALLDIR%
+  if defined XB_VSINSTALLDIR if exist "!XB_VSINSTALLDIR!\VC\Auxiliary\Build\vcvars64.bat" (
+    set "XB_VSINSTALLDIR=!XB_VSINSTALLDIR!\"
+    echo [ok] C++ Build Tools found: !XB_VSINSTALLDIR!
     exit /b 0
   )
   set "XB_VSINSTALLDIR="
@@ -414,38 +429,37 @@ if defined LOCATION (
 exit /b 0
 
 :CONFIGURE_ENV
-if defined XB_PYTHON_DIR call :ADD_USER_PATH "%XB_PYTHON_DIR%"
-if defined XB_PYTHON_DIR call :ADD_USER_PATH "%XB_PYTHON_DIR%\Scripts"
-if defined XB_GIT_BIN call :ADD_USER_PATH "%XB_GIT_BIN%"
-if defined XB_FFMPEG_BIN call :ADD_USER_PATH "%XB_FFMPEG_BIN%"
-if defined XB_CUDA_BIN call :ADD_USER_PATH "%XB_CUDA_BIN%"
-if defined XB_CUDA_DIR reg add HKCU\Environment /v CUDA_PATH /t REG_EXPAND_SZ /d "%XB_CUDA_DIR%" /f >nul
-if defined XB_VSINSTALLDIR reg add HKCU\Environment /v VSINSTALLDIR /t REG_EXPAND_SZ /d "%XB_VSINSTALLDIR%" /f >nul
-if defined XB_HF_MIRROR reg add HKCU\Environment /v XB_HF_MIRROR /t REG_SZ /d "%XB_HF_MIRROR%" /f >nul
-if defined HF_ENDPOINT reg add HKCU\Environment /v HF_ENDPOINT /t REG_SZ /d "%HF_ENDPOINT%" /f >nul
-if defined HUGGINGFACE_HUB_ENDPOINT reg add HKCU\Environment /v HUGGINGFACE_HUB_ENDPOINT /t REG_SZ /d "%HUGGINGFACE_HUB_ENDPOINT%" /f >nul
-if defined XB_PYPI_MIRROR reg add HKCU\Environment /v XB_PYPI_MIRROR /t REG_SZ /d "%XB_PYPI_MIRROR%" /f >nul
-if defined PIP_INDEX_URL reg add HKCU\Environment /v PIP_INDEX_URL /t REG_SZ /d "%PIP_INDEX_URL%" /f >nul
-if defined UV_DEFAULT_INDEX reg add HKCU\Environment /v UV_DEFAULT_INDEX /t REG_SZ /d "%UV_DEFAULT_INDEX%" /f >nul
-if defined PIP_DISABLE_PIP_VERSION_CHECK reg add HKCU\Environment /v PIP_DISABLE_PIP_VERSION_CHECK /t REG_SZ /d "%PIP_DISABLE_PIP_VERSION_CHECK%" /f >nul
-exit /b 0
+set "ENV_CONFIG_HELPER=%~dp0install\configure_user_env.py"
+if not exist "!ENV_CONFIG_HELPER!" (
+  echo [fail] Environment configuration helper not found: !ENV_CONFIG_HELPER!
+  exit /b 1
+)
+if defined XB_PYTHON_DIR set "XB_PYTHON_SCRIPTS=%XB_PYTHON_DIR%\Scripts"
+if not defined XB_PYTHON_EXE (
+  for /f "delims=" %%P in ('where python 2^>nul') do if not defined XB_PYTHON_EXE set "XB_PYTHON_EXE=%%P"
+)
+if not defined XB_PYTHON_EXE (
+  echo [fail] Python executable unavailable for environment configuration.
+  exit /b 1
+)
+set "ENV_CONFIG_DRY_RUN="
+if "%XB_ENV_DRY_RUN%"=="1" set "ENV_CONFIG_DRY_RUN=--dry-run"
 
-:ADD_USER_PATH
-set "ADD_PATH=%~1"
-if not defined ADD_PATH exit /b 0
-if not exist "%ADD_PATH%" exit /b 0
-set "USER_PATH="
-for /f "tokens=2,*" %%A in ('reg query HKCU\Environment /v Path 2^>nul') do set "USER_PATH=%%B"
-echo ;%USER_PATH%; | find /I ";%ADD_PATH%;" >nul && (
-  echo [env] PATH already contains %ADD_PATH%
-  set "PATH=%ADD_PATH%;%PATH%"
-  exit /b 0
-)
-if defined USER_PATH (
-  reg add HKCU\Environment /v Path /t REG_EXPAND_SZ /d "%USER_PATH%;%ADD_PATH%" /f >nul
-) else (
-  reg add HKCU\Environment /v Path /t REG_EXPAND_SZ /d "%ADD_PATH%" /f >nul
-)
-set "PATH=%ADD_PATH%;%PATH%"
-echo [env] PATH += %ADD_PATH%
-exit /b 0
+"!XB_PYTHON_EXE!" -X utf8 "!ENV_CONFIG_HELPER!" !ENV_CONFIG_DRY_RUN! ^
+  --path-env XB_PYTHON_DIR ^
+  --path-env XB_PYTHON_SCRIPTS ^
+  --path-env XB_GIT_BIN ^
+  --path-env XB_FFMPEG_BIN ^
+  --path-env XB_CUDA_BIN ^
+  --expand-value-env CUDA_PATH=XB_CUDA_DIR ^
+  --expand-value-env VSINSTALLDIR=XB_VSINSTALLDIR ^
+  --value-env XB_HF_MIRROR=XB_HF_MIRROR ^
+  --value-env HF_ENDPOINT=HF_ENDPOINT ^
+  --value-env HUGGINGFACE_HUB_ENDPOINT=HUGGINGFACE_HUB_ENDPOINT ^
+  --value-env XB_PYPI_MIRROR=XB_PYPI_MIRROR ^
+  --value-env PIP_INDEX_URL=PIP_INDEX_URL ^
+  --value-env UV_DEFAULT_INDEX=UV_DEFAULT_INDEX ^
+  --value-env PIP_DISABLE_PIP_VERSION_CHECK=PIP_DISABLE_PIP_VERSION_CHECK
+set "ENV_CONFIG_RC=!ERRORLEVEL!"
+if not "!ENV_CONFIG_RC!"=="0" echo [fail] User environment configuration failed with exit code !ENV_CONFIG_RC!.
+exit /b !ENV_CONFIG_RC!

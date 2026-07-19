@@ -186,7 +186,7 @@
                 <template v-if="frameworkOf(m.id) !== 'rvc'">
                   <div class="mp-row">
                     <label v-if="frameworkOf(m.id) === 'seed-vc'">扩散步数 {{ qualitySteps(mp(m.id).diffusionRatio) }}</label>
-                    <label v-else-if="frameworkOf(m.id) === 'ddsp-svc'">采样步数 {{ qualitySteps(mp(m.id).diffusionRatio) }}</label>
+                    <label v-else-if="frameworkOf(m.id) === 'ddsp-svc'">采样步数 {{ ddspQualitySteps(mp(m.id).diffusionRatio) }}</label>
                     <label v-else>扩散占比 {{ Math.round(mp(m.id).diffusionRatio * 100) }}%</label>
                     <input type="range" min="0" max="1" step="0.05" v-model.number="mp(m.id).diffusionRatio" />
                   </div>
@@ -279,7 +279,7 @@
               <label>{{ selectedFramework === 'seed-vc' ? 'SeedVC 推理质量' : selectedFramework === 'ddsp-svc' ? 'DDSP-SVC 推理质量' : '主模型 / 扩散模型 比例' }}</label>
               <span class="field-val">
                 <template v-if="selectedFramework === 'seed-vc' || selectedFramework === 'ddsp-svc'">
-                  <i class="ratio-diff">{{ qualitySteps(diffusionRatio) }} 步</i>
+                  <i class="ratio-diff">{{ selectedFramework === 'ddsp-svc' ? ddspQualitySteps(diffusionRatio) : qualitySteps(diffusionRatio) }} 步</i>
                 </template>
                 <template v-else>
                   <i class="ratio-main">主 {{ Math.round((1 - diffusionRatio) * 100) }}%</i>
@@ -911,6 +911,9 @@ function frameworkLabel(id: string): string {
 function qualitySteps(ratio: number): number {
   return Math.max(1, Math.round(10 + Math.max(0, Math.min(1, ratio || 0)) * 40))
 }
+function ddspQualitySteps(ratio: number): number {
+  return Math.round(50 + Math.max(0, Math.min(1, ratio || 0)) * 50)
+}
 function signedFormantShift(value: number): string {
   const normalized = Number(Math.max(-2, Math.min(2, value || 0)).toFixed(2))
   return `${normalized > 0 ? '+' : ''}${normalized.toFixed(2)}`
@@ -999,7 +1002,7 @@ function paramsForFramework(framework: string, values: ParamValues): InferencePa
     params.rvc_version = values.rvcVersion
   } else if (framework === 'ddsp-svc') {
     params.f0_method = values.f0Method
-    params.ddsp_infer_steps = qualitySteps(values.diffusionRatio)
+    params.ddsp_infer_steps = ddspQualitySteps(values.diffusionRatio)
     params.ddsp_formant_shift = Number(Math.max(-2, Math.min(2, values.formantShift)).toFixed(2))
   } else {
     params.f0_method = values.f0Method

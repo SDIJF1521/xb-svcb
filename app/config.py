@@ -365,10 +365,11 @@ def modelhub_upload_ready() -> bool:
 # 优先级：
 # 1. 环境变量 XB_DATA_DIR / XB_SVCB_DATA_DIR / XB_SB_SVCB_DATA_DIR / XB_XVCB_DATA_DIR（可用于自定义存储盘）
 # 2. 安装器 / 应用内迁移写入的 data_home.json
-# 3. 默认目录 .sb-svcb；旧版本 .xb_xvcb / .sv-xvcb / .xb-svcb / .xb_svcb 仅用于兼容升级
+# 3. 默认目录 .xb_svcb；旧版本目录仅用于兼容升级
 # 4. 新安装时默认落在安装目录下，避免把数据写到系统盘 C 盘
 
-DATA_DIR_NAME = ".sb-svcb"
+DATA_DIR_NAME = ".xb_svcb"
+PREVIOUS_DATA_DIR_NAME = ".sb-svcb"
 DATA_HOME_FILE = BASE_DIR / "data_home.json"
 USER_DATA_HOME_FILE = (
     Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
@@ -376,14 +377,23 @@ USER_DATA_HOME_FILE = (
     / "data_home.json"
 )
 DATA_HOME_FILES = (USER_DATA_HOME_FILE, DATA_HOME_FILE)
-DATA_MARKER_FILE = ".sb-svcb_data"
-DATA_MIGRATION_MARKER = ".sb-svcb_migration_source"
-LEGACY_DATA_MARKER_FILES = (".xb_xvcb_data", ".sv-xvcb_data", ".xb_svcb_data")
-LEGACY_DATA_DIR_NAMES = (".xb_xvcb", ".sv-xvcb", ".xb-svcb", ".xb_svcb")
+DATA_MARKER_FILE = ".xb_svcb_data"
+DATA_MIGRATION_MARKER = ".xb_svcb_migration_source"
+LEGACY_DATA_MARKER_FILES = (
+    ".sb-svcb_data",
+    ".xb_xvcb_data",
+    ".sv-xvcb_data",
+)
+LEGACY_DATA_DIR_NAMES = (
+    PREVIOUS_DATA_DIR_NAME,
+    ".xb_xvcb",
+    ".sv-xvcb",
+    ".xb-svcb",
+)
 LEGACY_DATA_MIGRATION_MARKERS = (
+    ".sb-svcb_migration_source",
     ".xb_xvcb_migration_source",
     ".sv-xvcb_migration_source",
-    ".xb_svcb_migration_source",
 )
 
 
@@ -490,6 +500,36 @@ def write_data_home(data_dir: Path, pending_delete: Path | None = None) -> bool:
     return ok and _read_data_home() == target
 
 
+def _upgrade_previous_default_data_dir(data_dir: Path) -> Path:
+    """Rename the mistaken ``.sb-svcb`` default to ``.xb_svcb`` safely.
+
+    This only runs when no explicit environment override is active. The rename
+    stays on the same volume and is rolled back if the persistent data-home
+    pointer cannot be updated. If both directories already exist, keep the
+    configured one rather than merging or hiding either user's data.
+    """
+    try:
+        source = data_dir.expanduser().resolve()
+        if source.name.lower() != PREVIOUS_DATA_DIR_NAME.lower():
+            return source
+        target = source.with_name(DATA_DIR_NAME)
+        if target.exists():
+            if not source.exists():
+                write_data_home(target)
+                return target
+            return source
+        if not source.exists():
+            return source
+        source.replace(target)
+        if write_data_home(target):
+            return target
+        target.replace(source)
+        write_data_home(source)
+        return source
+    except OSError:
+        return data_dir
+
+
 def refresh_data_dir_from_home() -> bool:
     """从最新有效指针重新同步当前进程的数据目录。"""
     configured = _read_data_home()
@@ -577,7 +617,10 @@ def switch_data_dir(data_dir: Path) -> None:
     _apply_data_dir(data_dir)
 
 
-_apply_data_dir(_resolve_data_dir())
+_initial_data_dir = _resolve_data_dir()
+if not data_dir_env_override():
+    _initial_data_dir = _upgrade_previous_default_data_dir(_initial_data_dir)
+_apply_data_dir(_initial_data_dir)
 
 # ---- 在线音乐资源 API（妖狐 API）----
 # 用户需在「资源获取」页填写自己的 API Key（控制台->密钥管理）。

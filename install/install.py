@@ -207,18 +207,31 @@ UVR_DATA_RAW_PREFIX = "https://raw.githubusercontent.com/TRvlvr/application_data
 
 # UVR（audio-separator）是现代库，用 3.10。
 PYTHON_FOR_ENGINES = "3.10"
-# so-vits-svc 4.1 的依赖（numpy 1.19.5 / scipy 1.7.3 / pyworld 0.3.0 等）是为
-# Python 3.8~3.9 钉的版本，这些版本只在 3.9 及更低有预编译 wheel；在 3.10 上会回退到
-# 源码现场编译并失败（numpy 用到 3.10 改签名的 _Py_HashDouble；pyworld 的构建依赖又拉
-# 旧 numpy）。因此 SVC 引擎固定用 Python 3.9，整套依赖直接装 wheel、零编译。
+# so-vits-svc 4.1 的 CUDA/CPU 依赖以 Python 3.9 为稳定栈；DirectML 必须使用
+# Python 3.10，避免 torch-directml 0.2.5 在 3.9 导入时触发 staticmethod 错误。
 PYTHON_FOR_SVC = "3.9"
-# RVC（rvc-python）依赖 fairseq==0.12.2 + numpy<=1.23.5，与 so-vits 同属老栈，
-# 同样固定 Python 3.9 以最大化预编译 wheel 命中、规避 fairseq 现场编译失败。
+# RVC 的 CUDA/CPU 老栈继续使用 Python 3.9；DirectML 与 Blackwell 使用 3.10。
 PYTHON_FOR_RVC = "3.9"
 # Blackwell（50 系）下改用 3.10：cu128 的 torch2.7.1 有 cp310 轮子，且 numpy 1.23.5 /
 # pyworld 等在 3.10 也有可用 wheel；3.9 老栈在新 torch 上易出哑音。
 PYTHON_FOR_SVC_BLACKWELL = "3.10"
 PYTHON_FOR_RVC_BLACKWELL = "3.10"
+
+
+def _svc_python_for_stack(gpu_stack: str) -> str:
+    if gpu_stack == "directml":
+        return PYTHON_FOR_ENGINES
+    if gpu_stack == "cu128":
+        return PYTHON_FOR_SVC_BLACKWELL
+    return PYTHON_FOR_SVC
+
+
+def _rvc_python_for_stack(gpu_stack: str) -> str:
+    if gpu_stack == "directml":
+        return PYTHON_FOR_ENGINES
+    if gpu_stack == "cu128":
+        return PYTHON_FOR_RVC_BLACKWELL
+    return PYTHON_FOR_RVC
 
 # so-vits-svc requirements 里只服务 WebUI / 实时变声 / ONNX 导出、推理用不到，
 # 且在 Windows 上常因缺少预编译包而现场编译失败的包，安装时一并剔除：
@@ -1051,8 +1064,9 @@ def step_svc(uv: str, gpu_stack: str) -> None:
     use_gpu = gpu_stack in {"cu121", "cu128"}
     use_directml = gpu_stack == "directml"
 
-    # 目标 Python：Blackwell 用 3.10（cu128 轮子 + 3.10 兼容依赖），否则老栈 3.9。
-    target_py = PYTHON_FOR_SVC_BLACKWELL if use_blackwell else PYTHON_FOR_SVC
+    # torch-directml 0.2.5 imports only on Python 3.10+; CUDA/CPU keep their
+    # established versions to avoid changing already-validated dependency sets.
+    target_py = _svc_python_for_stack(gpu_stack)
     # 创建环境。若已存在但版本不符（含老卡/新卡切换），则重建，避免依赖错配。
     py_path = venv_python(SVC_VENV)
     if py_path.exists():
@@ -1079,14 +1093,23 @@ def step_svc(uv: str, gpu_stack: str) -> None:
     if use_directml:
         _install_directml_runtime(pip)
         if req_file.exists():
-            filtered = _filter_requirements(req_file, extra_deny=DIRECTML_EXTRA_DENY)
+            filtered = _filter_requirements(
+                req_file,
+                extra_deny=DIRECTML_EXTRA_DENY,
+                overrides=PYTHON310_REQ_OVERRIDES,
+            )
             pip("-r", str(filtered))
             pip("matplotlib==3.7.5", "soundfile")
         else:
             print(c("r", "    未找到 requirements，跳过依赖安装（请检查仓库）"))
         _reaffirm_directml_runtime(uv, py)
         _verify_directml_torch(py, "So-VITS-SVC")
-        print(c("g", "推理环境就绪（AMD DirectML）"))
+        print(
+            c(
+                "g",
+                "推理环境就绪（AMD DirectML；checkpoint 先在 CPU 加载，RMVPE 使用 CPU 稳定路径）",
+            )
+        )
         return
 
     if use_blackwell:
@@ -1102,7 +1125,7 @@ def step_svc(uv: str, gpu_stack: str) -> None:
             filtered = _filter_requirements(
                 req_file,
                 extra_deny=BLACKWELL_EXTRA_DENY,
-                overrides=BLACKWELL_REQ_OVERRIDES,
+                overrides=PYTHON310_REQ_OVERRIDES,
             )
             pip("-r", str(filtered))
             # 显式确保读写音频用的 soundfile 在位（svc_worker 的 torchaudio 垫片依赖它）
@@ -1187,14 +1210,14 @@ def _filter_requirements(
     return out
 
 
-# Blackwell（py3.10）下 so-vits / RVC 需要的、对新 torch 友好的依赖覆盖。
+# Python 3.10 下 so-vits / RVC 需要的、对新 torch 友好的依赖覆盖。
 # numpy 1.23.5 仍有 cp310 轮子且兼容 so-vits 代码（未用 1.24 移除的 np.float 等别名）；
-# pyworld 0.3.4 提供 cp310 轮子，避免 0.3.0 在 3.10 现场编译失败；
+# pyworld 0.3.5 提供 cp310 轮子，避免 0.3.0 在 3.10 拉取 numpy 1.19.5 并现场编译失败；
 # scipy 1.10.1 提供 cp310 轮子且兼容 numpy 1.23.5（so-vits 原钉的旧 scipy 在 3.10
 # 无轮子会现场编译失败 / 与 numpy 1.23 不匹配）。
-BLACKWELL_REQ_OVERRIDES = {
+PYTHON310_REQ_OVERRIDES = {
     "numpy": "numpy==1.23.5",
-    "pyworld": "pyworld==0.3.4",
+    "pyworld": "pyworld==0.3.5",
     "scipy": "scipy==1.10.1",
 }
 # Blackwell 下由我们自行装的包：不让 requirements 里的旧钉死把它们覆盖回去。
@@ -1207,6 +1230,21 @@ def _install_directml_runtime(pip) -> None:  # noqa: ANN001
         f"torch-directml=={TORCH_DIRECTML_VER}",
         f"torchaudio=={TORCHAUDIO_DIRECTML_VER}",
     )
+
+
+def _install_selected_torch_runtime(
+    pip,  # noqa: ANN001
+    *,
+    use_directml: bool,
+    torch_specs: list[str],
+    torch_index: str,
+) -> None:
+    if use_directml:
+        _install_directml_runtime(pip)
+        return
+    if not torch_specs:
+        raise RuntimeError("Torch package list is empty for the selected runtime")
+    pip(*torch_specs, index=torch_index)
 
 
 def _reaffirm_directml_runtime(uv: str, py: str) -> None:
@@ -1232,26 +1270,48 @@ def _verify_directml_torch(py: str, component: str) -> None:
         run([py, "-c", check])
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
-            f"{component} AMD 环境校验失败：DirectML 不可用，请更新 AMD 显卡驱动后重试"
+            f"{component} AMD 环境校验失败：DirectML 导入、设备初始化或张量执行失败；"
+            "请查看上方原始错误并检查 Python 3.10、Torch/DirectML 版本与 AMD 驱动"
         ) from exc
 
 
 def _verify_uvr_directml(py: str) -> None:
     check = (
-        "import onnxruntime as ort; "
+        "import tempfile,onnxruntime as ort; "
         "from audio_separator.separator import Separator; "
         "assert 'DmlExecutionProvider' in ort.get_available_providers(), "
         "'DmlExecutionProvider unavailable'; "
-        "s=Separator(info_only=True,use_directml=True); "
+        "td=tempfile.TemporaryDirectory(prefix='xb-uvr-dml-'); "
+        "s=Separator(model_file_dir=td.name,use_directml=True); "
         "assert str(s.torch_device).startswith('privateuseone'), "
         "f'Unexpected UVR device: {s.torch_device}'; "
-        "print('UVR DirectML',s.torch_device,ort.get_available_providers())"
+        "assert 'DmlExecutionProvider' in (s.onnx_execution_provider or []), "
+        "f'Unexpected UVR provider: {s.onnx_execution_provider}'; "
+        "print('UVR DirectML',s.torch_device,s.onnx_execution_provider); "
+        "td.cleanup()"
     )
     try:
         run([py, "-c", check])
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
-            "UVR AMD 环境校验失败：audio-separator 未启用 DirectML / DmlExecutionProvider"
+            "UVR AMD 环境校验失败：audio-separator 无法初始化 DirectML 设备或 DmlExecutionProvider"
+        ) from exc
+
+
+def _verify_ddsp_hubert(py: str) -> None:
+    """Verify the exact Transformers entry point used by DDSP inference."""
+    check = (
+        "import transformers; "
+        "from transformers import HubertModel,HubertConfig,Wav2Vec2FeatureExtractor; "
+        "print('DDSP Transformers',transformers.__version__,"
+        "HubertModel.__name__,HubertConfig.__name__,Wav2Vec2FeatureExtractor.__name__)"
+    )
+    try:
+        run([py, "-c", check])
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "DDSP-SVC 依赖校验失败：Transformers/HuBERT 无法与当前 Torch 一起导入；"
+            "请确认已安装 transformers==4.46.3"
         ) from exc
 
 
@@ -1382,7 +1442,7 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
     # RVC 推理在独立环境运行（rvc-python），与 so-vits 栈隔离。
     # rvc-python 默认会在首次推理时下载 hubert / rmvpe；这里安装后立即预置，
     # 避免新用户运行 RVC 时因为 HuggingFace 连接失败而报 HTTPSConnectionPool。
-    target_py = PYTHON_FOR_RVC_BLACKWELL if use_blackwell else PYTHON_FOR_RVC
+    target_py = _rvc_python_for_stack(gpu_stack)
     py_path = venv_python(RVC_VENV)
     if py_path.exists():
         ver = _venv_pyver(py_path)
@@ -1404,7 +1464,7 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
         _reaffirm_directml_runtime(uv, py)
         seed_rvc_base_models(venv_python(RVC_VENV))
         _verify_directml_torch(py, "RVC")
-        print(c("g", "RVC 推理环境就绪（AMD DirectML）"))
+        print(c("g", "RVC 推理环境就绪（AMD DirectML；RMVPE 使用 CPU 稳定路径）"))
         return
     if use_blackwell:
         # 50 系：cu128 + torch2.7.1。rvc-python 会带回 fairseq，装完再就地打 weights_only 补丁，
@@ -1453,6 +1513,15 @@ DDSP_REQ_DENY = {
     "sounddevice",
 }
 
+# DDSP 6.3 leaves Transformers unpinned. Transformers 5.x imports the public
+# torch.distributed.tensor.DTensor API during every HuBERT import, but the
+# torch 2.4.1 runtime required by torch-directml does not export that API.
+# SeedVC already validates 4.46.3 with the same HuBERT/Whisper generation, so
+# keep DDSP on that compatible 4.x release across all accelerator stacks.
+DDSP_REQ_OVERRIDES = {
+    "transformers": "transformers==4.46.3",
+}
+
 
 def step_seedvc(uv: str, gpu_stack: str) -> None:
     hr("6/9 SeedVC 推理环境 engines/seed-vc + .venv-seedvc")
@@ -1478,9 +1547,8 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
 
     pip("setuptools<81", "wheel")
     if use_directml:
-        torch_specs = []
+        torch_specs: list[str] = []
         torch_index = ""
-        _install_directml_runtime(pip)
     elif use_blackwell:
         torch_specs = [
             f"torch=={TORCH_BLACKWELL_VER}",
@@ -1490,7 +1558,12 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
     else:
         torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
         torch_index = TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX
-    pip(*torch_specs, index=torch_index)
+    _install_selected_torch_runtime(
+        pip,
+        use_directml=use_directml,
+        torch_specs=torch_specs,
+        torch_index=torch_index,
+    )
 
     req = SEEDVC_DIR / "requirements.txt"
     if req.exists():
@@ -1504,7 +1577,7 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
     if use_directml:
         _reaffirm_directml_runtime(uv, py)
         _verify_directml_torch(py, "SeedVC")
-        print(c("g", "SeedVC 推理环境就绪（AMD DirectML）"))
+        print(c("g", "SeedVC 推理环境就绪（AMD DirectML；RMVPE 使用 CPU 稳定路径）"))
     elif use_blackwell:
         _reaffirm_blackwell_torch(uv, py)
         print(c("g", "SeedVC 推理环境就绪（Blackwell/cu128）"))
@@ -1521,7 +1594,11 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
 
     use_blackwell = gpu_stack == "cu128"
     use_gpu = gpu_stack in {"cu121", "cu128"}
-    use_directml = gpu_stack == "directml"
+    # The DDSP/Rectified-Flow graph can finish on DirectML while silently
+    # producing electrical noise or near-silence. AMD installations therefore
+    # use a CPU Torch runtime for DDSP only; UVR and other model environments
+    # keep their DirectML acceleration.
+    amd_cpu_stable = gpu_stack == "directml"
 
     target_py = PYTHON_FOR_ENGINES
     py_path = venv_python(DDSP_VENV)
@@ -1538,11 +1615,7 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
         uv_pip_install(uv, py, *args, index=index)
 
     pip("setuptools<81", "wheel")
-    if use_directml:
-        torch_specs = []
-        torch_index = ""
-        _install_directml_runtime(pip)
-    elif use_blackwell:
+    if use_blackwell:
         torch_specs = [
             f"torch=={TORCH_BLACKWELL_VER}",
             f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
@@ -1551,32 +1624,45 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
     else:
         torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
         torch_index = TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX
-    pip(*torch_specs, index=torch_index)
+    _install_selected_torch_runtime(
+        pip,
+        use_directml=False,
+        torch_specs=torch_specs,
+        torch_index=torch_index,
+    )
+    if amd_cpu_stable:
+        try:
+            run(uv_cmd(uv, "pip", "uninstall", "--python", py, "torch-directml"))
+        except subprocess.CalledProcessError:
+            pass
 
     requirements = DDSP_DIR / "requirements.txt"
     if requirements.exists():
         filtered = _filter_requirements(
             requirements,
-            extra_deny=DDSP_REQ_DENY | (DIRECTML_EXTRA_DENY if use_directml else set()),
+            extra_deny=DDSP_REQ_DENY | (DIRECTML_EXTRA_DENY if amd_cpu_stable else set()),
+            overrides=DDSP_REQ_OVERRIDES,
         )
         pip("-r", str(filtered))
     else:
         raise RuntimeError("未找到 DDSP-SVC requirements.txt")
     seed_ddsp_base_models()
 
-    if use_directml:
-        _reaffirm_directml_runtime(uv, py)
-        _verify_directml_torch(py, "DDSP-SVC")
-        print(c("g", "DDSP-SVC 推理环境就绪（AMD DirectML）"))
+    if amd_cpu_stable:
+        _verify_ddsp_hubert(py)
+        print(c("g", "DDSP-SVC 推理环境就绪（AMD 机器使用 CPU 稳定路径，避免 DirectML 电流杂音）"))
     elif use_blackwell:
         _reaffirm_blackwell_torch(uv, py)
         _verify_cuda_torch(py, "DDSP-SVC")
+        _verify_ddsp_hubert(py)
         print(c("g", "DDSP-SVC 推理环境就绪（Blackwell/cu128）"))
     elif use_gpu:
         _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, "cu121")
         _verify_cuda_torch(py, "DDSP-SVC")
+        _verify_ddsp_hubert(py)
         print(c("g", "DDSP-SVC 推理环境就绪（cu121）"))
     else:
+        _verify_ddsp_hubert(py)
         print(c("g", "DDSP-SVC 推理环境就绪（CPU）"))
 
 

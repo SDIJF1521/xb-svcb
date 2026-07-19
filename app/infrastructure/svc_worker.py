@@ -20,9 +20,21 @@ import sys
 import traceback
 
 try:
-    from inference_device import patch_directml_float32, resolve_torch_device
+    from inference_device import (
+        patch_directml_checkpoint_load,
+        patch_directml_float32,
+        patch_directml_sovits_f0_coarse,
+        patch_directml_sovits_rmvpe_cpu,
+        resolve_torch_device,
+    )
 except ImportError:  # package import used by tests/application tooling
-    from infrastructure.inference_device import patch_directml_float32, resolve_torch_device
+    from infrastructure.inference_device import (
+        patch_directml_checkpoint_load,
+        patch_directml_float32,
+        patch_directml_sovits_f0_coarse,
+        patch_directml_sovits_rmvpe_cpu,
+        resolve_torch_device,
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -80,6 +92,7 @@ def main() -> int:
         resolved_device = resolve_torch_device(args.device, torch)
         if resolved_device.backend == "directml":
             patch_directml_float32(torch)
+            patch_directml_checkpoint_load(torch)
 
         # PyTorch>=2.6 起 torch.load 默认 weights_only=True，会拒绝反序列化
         # so-vits-svc checkpoint 里的 argparse.Namespace / numpy 标量等非张量对象，
@@ -127,6 +140,18 @@ def main() -> int:
                 torchaudio.save = _ta_save  # type: ignore[assignment]
             except Exception as _ta_exc:  # noqa: BLE001
                 print(f"SVC_WARN torchaudio->soundfile 垫片未生效: {_ta_exc}")
+
+        import utils as sovits_utils
+
+        if resolved_device.backend == "directml":
+            patch_directml_sovits_f0_coarse(sovits_utils)
+            patch_directml_sovits_rmvpe_cpu(sovits_utils)
+            print(
+                "XB: So-VITS-SVC checkpoint/F0 粗化使用 DirectML 安全路径；"
+                "RMVPE 使用 CPU 稳定路径，"
+                "主模型/扩散/声码器继续使用 AMD DirectML",
+                flush=True,
+            )
 
         from inference.infer_tool import Svc
     except Exception as exc:  # noqa: BLE001

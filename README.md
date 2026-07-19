@@ -51,7 +51,7 @@
 - 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-seedvc` / `.venv-ddsp` / `.venv-uvr`），互不污染。
 - 🎧 **作品库** —— 试听 / 导出成品，单独试听伴奏与干声，失败任务一键查日志；删除作品同步真实清理本地生成文件。
 
-> **最新版本 v0.0.22**：新增 Windows AMD Radeon DirectML 支持，So-VITS-SVC、RVC、SeedVC、DDSP-SVC 与 UVR 均可使用 AMD GPU；设备 UI 根据各隔离环境实际能力显示 CUDA、ROCm、DirectML 或 CPU，显式选择加速器时不再静默回退。详见 [v0.0.22 更新说明](release_notes_v022.md)。
+> **最新版本 v0.0.22**：新增 Windows AMD Radeon DirectML 支持，UVR、So-VITS-SVC、RVC 与 SeedVC 可使用 AMD GPU；DDSP-SVC 实机发现完整 DirectML 图会静默产生小声/静音/电流杂音，因此 AMD 机器暂用 CPU 稳定推理。设备 UI 根据各隔离环境实际能力显示 CUDA、ROCm、DirectML 或 CPU；启动设备探测已隐藏命令行窗口，并通过五环境并行探测和环境签名缓存缩短重复启动时间。详见 [v0.0.22 更新说明](release_notes_v022.md)。
 
 > v0.0.21：音频编辑器的 VST3 插件 UI 改为非模态置顶窗口，可与主界面播放和时间轴操作并行；同一 GUI 插件实例通过 JUCE 声卡回调处理可听音频，参数在下一音频块生效，并显示设备实际块大小与延迟；新增相邻音频片段渲染合并。详见 [v0.0.21 更新说明](release_notes_v021.md)。
 >
@@ -133,7 +133,7 @@ flowchart TB
 
     subgraph STORAGE["本地数据与随包资产"]
         direction LR
-        DATA[".sb-svcb 用户数据<br/>models / works / downloads / editor_projects<br/>cache / settings / theme/media"]
+        DATA[".xb_svcb 用户数据<br/>models / works / downloads / editor_projects<br/>cache / settings / theme/media"]
         ASSETS["assets/models 离线资产<br/>UVR / RMVPE / ContentVec / CampPlus / Whisper / BigVGAN"]
     end
 
@@ -170,7 +170,7 @@ flowchart TB
 - **桌面进程只负责编排**：Vue 通过 pywebview Bridge 调用 Python 服务；耗时推理交给 worker 子进程，主界面可以持续显示任务与传输进度。
 - **模型按框架路由**：`EngineRegistry` 统一接收模型与推理参数，再分别调用 So-VITS-SVC、RVC、SeedVC 或 DDSP-SVC；SeedVC 额外传入参考音频，DDSP-SVC 使用 Rectified Flow checkpoint 与 YAML 配置。
 - **编辑器与插件隔离**：内置效果、混音和导出走 FFmpeg；VST3 加载与原生窗口由 JUCE Host 承载，局部重推理再回到统一引擎路由。
-- **数据与程序分离**：模型、作品、下载素材、编辑工程、缓存、设置及 `theme/media` 都写入可迁移的 `.sb-svcb`，覆盖升级不会替换用户数据。
+- **数据与程序分离**：模型、作品、下载素材、编辑工程、缓存、设置及 `theme/media` 都写入可迁移的 `.xb_svcb`，覆盖升级不会替换用户数据。
 - **离线资产优先**：安装包预置关键底模；worker 优先解析本地文件，仅在缺失时使用镜像或上游服务。
 
 | 层 / 进程    | 主要实现                                         | 职责与边界                                                     |
@@ -180,7 +180,7 @@ flowchart TB
 | 基础设施层   | `infrastructure` + `EngineRegistry` + FFmpeg | 路径、仓储、下载、音频处理和多框架引擎适配                     |
 | AI 子进程    | SVC / RVC / SeedVC / DDSP-SVC / UVR workers      | 在独立`.venv-*` 环境中执行重型推理，隔离 Python 与 CUDA 依赖 |
 | 原生插件进程 | C++ / JUCE VST3 Host                             | 插件检查、原生 GUI、参数 state 回写与离线渲染                  |
-| 持久化层     | `.sb-svcb` + `assets/models`                 | 用户数据可迁移保存；发布资产本地优先供各 worker 使用           |
+| 持久化层     | `.xb_svcb` + `assets/models`                 | 用户数据可迁移保存；发布资产本地优先供各 worker 使用           |
 | 在线集成     | 妖狐音乐 API + ModelScope                        | 曲库/歌词获取、候选地址校验、模型搜索、上传和断点下载          |
 
 ---
@@ -193,7 +193,7 @@ flowchart TB
 
 1. 在 [Releases](https://github.com/SDIJF1521/xb-svcb/releases/latest) 下载 **`XB-SVCB-Setup.exe`** 和同版本的全部 **`XB-SVCB-Setup-*.bin`**，放在同一目录后双击 EXE。
 2. 在「选择安装位置」页**自定义安装路径**（默认 `%LOCALAPPDATA%\Programs\XB-SVCB`，无需管理员权限）。应用 exe 与全部依赖（`engines/`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-uvr`、`models/`）都装进**这个目录**。
-3. 在「选择用户数据存储位置」页选择 `.sb-svcb` 数据目录（默认 `{安装目录}\.sb-svcb`）。模型、作品、下载素材、编辑工程与缓存都会保存在这里，C 盘空间不足时建议选 D/E 盘。
+3. 在「选择用户数据存储位置」页选择 `.xb_svcb` 数据目录（默认 `{安装目录}\.xb_svcb`）。模型、作品、下载素材、编辑工程与缓存都会保存在这里，C 盘空间不足时建议选 D/E 盘。
 4. 勾选「安装后立即搭建运行环境」，联网创建 AI 子环境（由 `setup_env.bat` 调 `install.py`，无 PowerShell）。
 5. 通过桌面 / 开始菜单的 **XB-SVCB** 快捷方式启动。后续可在首页「数据存储位置」查看占用/剩余空间，并迁移到其它磁盘。
 
@@ -201,12 +201,12 @@ flowchart TB
 
 ### 💾 数据存储与迁移
 
-- 默认用户数据目录为 `.sb-svcb`，用于保存模型库、作品、在线下载素材、音频编辑工程、波形/渲染缓存、配置文件和 `theme/media` 自定义背景媒体。
-- 安装时可在「选择用户数据存储位置」页把 `.sb-svcb` 放到空间充足的磁盘，避免占满 C 盘。
+- 默认用户数据目录为 `.xb_svcb`，用于保存模型库、作品、在线下载素材、音频编辑工程、波形/渲染缓存、配置文件和 `theme/media` 自定义背景媒体。
+- 安装时可在「选择用户数据存储位置」页把 `.xb_svcb` 放到空间充足的磁盘，避免占满 C 盘。
 - 软件首页提供「数据存储位置」卡片，可查看当前目录、已用空间和所在磁盘可用空间。
 - 点击「选择并迁移」会把现有数据复制到新目录；迁移前会检查目标目录可写、目标磁盘剩余空间是否足够、是否存在正在运行/排队的推理任务。
 - 迁移完成后需要重启软件；重启后所有后续生成文件都会写入新目录，旧目录会在确认迁移标记后自动清理。
-- 旧版本目录 `.xb_xvcb` / `.sv-xvcb` / `.xb-svcb` / `.xb_svcb` 仍会被兼容识别，升级时不会丢失已有数据。
+- 旧版本目录 `.sb-svcb` / `.xb_xvcb` / `.sv-xvcb` / `.xb-svcb` 仍会被兼容识别，升级时不会丢失已有数据。
 
 ### 📋 环境要求
 
@@ -236,7 +236,9 @@ flowchart TB
 
 > 💡 **关于 CUDA**：安装器会先复核实际显卡，40 系及以下兼容 NVIDIA 使用 **cu121**，50 系 Blackwell 使用 **cu128**；CPU 或不兼容显卡会跳过 CUDA 并安装 CPU 版 torch。PyTorch wheel 已内置对应 CUDA 运行库，通常只需匹配的新 NVIDIA 驱动，完整 CUDA Toolkit 仅用于本地编译/工具链。
 
-> 🔴 **关于 AMD**：Windows 下检测到 AMD Radeon 时自动安装 **DirectML + torch 2.4.1**。So-VITS-SVC、RVC、SeedVC、DDSP-SVC 四个歌声模型框架以及 UVR 都可使用 AMD GPU；UVR 的 VR `.pth` 模型走 `torch-directml`，MDX `.onnx` 模型走 `onnxruntime-directml`。显式选择 DirectML 时不会静默退回 CPU。旧安装可运行 `python install\install.py --directml --only uvr` 单独重建 UVR AMD 环境。
+> 图形安装器会同时使用 `nvidia-smi` 与 `Win32_VideoController` 检测 NVIDIA：RTX 4060 应显示为 **cu121**，CUDA Toolkit 默认目录为 `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1`；RTX 50 系显示为 **cu128**，默认目录为 `...\CUDA\v12.8`。CPU / AMD DirectML 会明确跳过 CUDA，不会在后续安装阶段重新改成 CUDA。
+
+> 🔴 **关于 AMD**：Windows 下检测到 AMD Radeon 时，UVR、So-VITS-SVC、RVC 与 SeedVC 安装 **DirectML + torch 2.4.1**；DDSP-SVC 暂时使用 CPU Torch，因为实机确认其完整 DirectML 图可能无异常返回却产生小声、静音或电流杂音。RVC/SeedVC 的 RMVPE 使用 CPU 稳定路径，其他受支持的神经网络仍由 AMD GPU 加速。
 >
 > 🟢 **50 系显卡（RTX 5060/5070/5080/5090，Blackwell, sm_120）**：cu121 无 sm_120 内核，仅升级 torch 还会出哑音，因此安装器**检测到 50 系会自动切换到 cu128 + torch 2.7 的专用栈**（SVC / RVC 改用 Python 3.10，torchaudio I/O 走 soundfile，fairseq 重装并打 `weights_only` 补丁）。需安装 **CUDA 12.8 级别的新版 NVIDIA 驱动**；若检测不到兼容 NVIDIA 显卡，会自动回退 CPU 版 torch，避免装错 CUDA 栈。
 
@@ -480,7 +482,7 @@ flowchart LR
 
 | 变量                      | 含义                                                                                                        |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `XB_DATA_DIR`           | `.sb-svcb` 用户数据目录；兼容旧变量 `XB_SVCB_DATA_DIR` / `XB_SB_SVCB_DATA_DIR` / `XB_XVCB_DATA_DIR` |
+| `XB_DATA_DIR`           | `.xb_svcb` 用户数据目录；兼容旧变量 `XB_SVCB_DATA_DIR` / `XB_SB_SVCB_DATA_DIR` / `XB_XVCB_DATA_DIR` |
 | `XB_SOVITS_REPO`        | so-vits-svc 仓库根目录                                                                                      |
 | `XB_SVC_PYTHON`         | 运行 SVC 推理的 Python 解释器                                                                               |
 | `XB_RVC_PYTHON`         | 运行 RVC 推理的 Python 解释器                                                                               |
@@ -808,7 +810,7 @@ flowchart LR
 - `assets/models/` 包含 UVR、SVC/RVC 底模及 SeedVC 所需 RMVPE、CampPlus、Whisper Small、BigVGAN；缺少或疑似 LFS 指针时构建直接失败。
 - Inno Setup 使用 `DiskSpanning` 生成小于 2GB 的 `.bin` 分卷。EXE 不是完整离线包，发布和安装时都不能遗漏任何分卷。
 - 安装完成后会复核应用组件、UVR、SeedVC 与 DDSP-SVC 的 Python、worker 和上游推理入口；失败时给出修复命令和日志位置。
-- 卸载时清理安装目录内生成的 `.venv-*`、`engines/` 和 `models/`；可迁移的 `.sb-svcb` 用户数据默认保留。
+- 卸载时清理安装目录内生成的 `.venv-*`、`engines/` 和 `models/`；可迁移的 `.xb_svcb` 用户数据默认保留。
 
 ---
 

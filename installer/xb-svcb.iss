@@ -95,7 +95,7 @@ Filename: "{app}\{#MyAppExe}"; Description: "立即启动 {#MyAppShort}"; \
   WorkingDir: "{app}"; Flags: postinstall shellexec skipifsilent unchecked
 
 [UninstallDelete]
-; 卸载时清理安装目录内生成的环境与下载物（用户数据在 .sb-svcb，保留）
+; 卸载时清理安装目录内生成的环境与下载物（用户数据在 .xb_svcb，保留）
 Type: filesandordirs; Name: "{app}\.venv-uvr"
 Type: filesandordirs; Name: "{app}\.venv-svc"
 Type: filesandordirs; Name: "{app}\.venv-rvc"
@@ -111,6 +111,7 @@ var
   PrereqPage: TInputOptionWizardPage;
   GpuStackPage: TInputOptionWizardPage;
   PrereqPathPage: TInputDirWizardPage;
+  CudaPathPage: TInputDirWizardPage;
   DetailsPage: TWizardPage;
   DetailsInfoLabel: TNewStaticText;
   DetailsMemo: TNewMemo;
@@ -123,6 +124,7 @@ var
   EnvProgressCurrent: Integer;
   EnvProgressTicks: Integer;
   EnvProgressMarkerSeen: Boolean;
+  DetectedGpuStackCache: String;
 
 function JsonEscape(const S: String): String;
 var
@@ -174,6 +176,7 @@ end;
 function IsXbDataDir(const Dir: String): Boolean;
 begin
   Result :=
+    FileExists(PathJoin(Dir, '.xb_svcb_data')) or
     FileExists(PathJoin(Dir, '.sb-svcb_data')) or
     FileExists(PathJoin(Dir, '.xb_xvcb_data')) or
     FileExists(PathJoin(Dir, '.sv-xvcb_data')) or
@@ -188,12 +191,12 @@ var
 begin
   Selected := RemoveBackslashUnlessRoot(ExpandConstant(Raw));
   if Selected = '' then
-    Selected := ExpandConstant('{app}\.sb-svcb');
+    Selected := ExpandConstant('{app}\.xb_svcb');
 
   if IsDriveRootPath(Selected) then
-    Result := PathJoin(Selected, '.sb-svcb')
+    Result := PathJoin(Selected, '.xb_svcb')
   else if DirExists(Selected) and DirectoryHasEntries(Selected) and (not IsXbDataDir(Selected)) then
-    Result := PathJoin(Selected, '.sb-svcb')
+    Result := PathJoin(Selected, '.xb_svcb')
   else
     Result := Selected;
 end;
@@ -334,35 +337,55 @@ begin
   end;
 end;
 
+function GpuStackFromAdapterNames(const Names: String): String;
+begin
+  Result := 'cpu';
+  if ContainsText(Names, 'RTX 50') or ContainsText(Names, 'RTX50') then
+    Result := 'cu128'
+  else if ContainsText(Names, 'NVIDIA') or ContainsText(Names, 'GeForce') then
+    Result := 'cu121'
+  else if ContainsText(Names, 'AMD') or ContainsText(Names, 'Radeon') then
+    Result := 'directml';
+end;
+
 function DetectedGpuStackName(): String;
 var
   Caps, Names, Smi: String;
 begin
+  if DetectedGpuStackCache <> '' then
+  begin
+    Result := DetectedGpuStackCache;
+    Exit;
+  end;
+
   Result := 'cpu';
   Smi := NvidiaSmiCommand();
-  if Smi = '' then
+  if Smi <> '' then
   begin
-    Names := CommandOutput('powershell.exe -NoProfile -Command "(Get-CimInstance Win32_VideoController).Name"');
-    if ContainsText(Names, 'AMD') or ContainsText(Names, 'Radeon') then
-      Result := 'directml';
-    Exit;
+    Caps := CommandOutput(CmdPath(Smi) + ' --query-gpu=compute_cap --format=csv,noheader');
+    if Caps <> '' then
+    begin
+      if HasComputeMajorAtLeast(Caps, 12) then
+        Result := 'cu128'
+      else if HasComputeMajorAtLeast(Caps, 5) then
+        Result := 'cu121';
+    end;
+
+    if Result = 'cpu' then
+    begin
+      Names := CommandOutput(CmdPath(Smi) + ' --query-gpu=name --format=csv,noheader');
+      Result := GpuStackFromAdapterNames(Names);
+    end;
   end;
 
-  Caps := CommandOutput(CmdPath(Smi) + ' --query-gpu=compute_cap --format=csv,noheader');
-  if Caps <> '' then
+  if Result = 'cpu' then
   begin
-    if HasComputeMajorAtLeast(Caps, 12) then
-      Result := 'cu128'
-    else if HasComputeMajorAtLeast(Caps, 5) then
-      Result := 'cu121';
-    Exit;
+    Names := CommandOutput(
+      'powershell.exe -NoProfile -Command "(Get-CimInstance Win32_VideoController).Name"');
+    Result := GpuStackFromAdapterNames(Names);
   end;
 
-  Names := CommandOutput(CmdPath(Smi) + ' --query-gpu=name --format=csv,noheader');
-  if ContainsText(Names, 'RTX 50') or ContainsText(Names, 'RTX50') then
-    Result := 'cu128'
-  else if Names <> '' then
-    Result := 'cu121';
+  DetectedGpuStackCache := Result;
 end;
 
 function GpuStackLabel(const Stack: String): String;
@@ -599,18 +622,27 @@ begin
     GpuStackPage.ID,
     '前置依赖安装/查找路径',
     '选择依赖安装位置或已有路径',
-    '自动安装时会尽量使用这些位置；如果你已经装好了，也可以指向已有目录。留空则只按 PATH / 默认位置检测。',
+    '自动安装时会尽量使用这些位置；如果已经安装，也可以指向已有目录。',
     False,
     ''
   );
   PrereqPathPage.Add('Python 3.10 目录：');
   PrereqPathPage.Add('Git 目录：');
   PrereqPathPage.Add('ffmpeg 目录：');
-  PrereqPathPage.Add('CUDA Toolkit 目录：');
   PrereqPathPage.Add('C++ Build Tools 目录：');
 
-  DataDirPage := CreateInputDirPage(
+  CudaPathPage := CreateInputDirPage(
     PrereqPathPage.ID,
+    'NVIDIA CUDA Toolkit',
+    '选择 CUDA Toolkit 安装位置或已有目录',
+    '此页面只对 NVIDIA cu121 / cu128 显示；PyTorch wheel 已包含推理运行库，Toolkit 用于配套工具链。',
+    False,
+    ''
+  );
+  CudaPathPage.Add('CUDA Toolkit 目录：');
+
+  DataDirPage := CreateInputDirPage(
+    CudaPathPage.ID,
     '选择用户数据存储位置',
     '模型、作品、下载素材、编辑工程与主题媒体保存在哪里？',
     '建议选择空间充足的磁盘。该目录后续也可以在软件首页迁移。',
@@ -697,7 +729,7 @@ begin
     else if Stack = 'directml' then
       Result := '--directml'
     else
-      Result := '';
+      Result := '--cpu';
   end;
 end;
 
@@ -706,7 +738,7 @@ begin
   if CurPageID = DataDirPage.ID then
   begin
     if DataDirPage.Values[0] = '' then
-      DataDirPage.Values[0] := ExpandConstant('{app}\.sb-svcb');
+      DataDirPage.Values[0] := ExpandConstant('{app}\.xb_svcb');
   end;
   if CurPageID = PrereqPathPage.ID then
   begin
@@ -716,16 +748,19 @@ begin
       PrereqPathPage.Values[1] := ExpandConstant('{localappdata}\Programs\Git');
     if PrereqPathPage.Values[2] = '' then
       PrereqPathPage.Values[2] := ExpandConstant('{app}\tools\ffmpeg');
-    if (PrereqPathPage.Values[3] = '') and
-       (GpuStackName() <> 'cpu') and (GpuStackName() <> 'directml') then
+    if PrereqPathPage.Values[3] = '' then
+      PrereqPathPage.Values[3] := ExpandConstant('{pf32}\Microsoft Visual Studio\2022\BuildTools');
+  end;
+  if CurPageID = CudaPathPage.ID then
+  begin
+    if (CudaPathPage.Values[0] = '') or
+       ContainsText(CudaPathPage.Values[0], '\NVIDIA GPU Computing Toolkit\CUDA\v12.') then
     begin
       if GpuStackName() = 'cu128' then
-        PrereqPathPage.Values[3] := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.8')
+        CudaPathPage.Values[0] := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.8')
       else
-        PrereqPathPage.Values[3] := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.1');
+        CudaPathPage.Values[0] := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.1');
     end;
-    if PrereqPathPage.Values[4] = '' then
-      PrereqPathPage.Values[4] := ExpandConstant('{pf32}\Microsoft Visual Studio\2022\BuildTools');
   end;
   if CurPageID = wpFinished then
   begin
@@ -746,6 +781,9 @@ begin
   Result := False;
   if (PageID = GpuStackPage.ID) or (PageID = PrereqPathPage.ID) then
     Result := not BuildEnvSelected();
+  if PageID = CudaPathPage.ID then
+    Result := (not BuildEnvSelected()) or (GpuStackName() = 'cpu') or
+      (GpuStackName() = 'directml');
   if PageID = DetailsPage.ID then
     Result := not ShowInstallDetails();
 end;
@@ -784,8 +822,8 @@ begin
     'set "XB_PYTHON_DIR=' + BatchEscape(PrereqPathPage.Values[0]) + '"' + #13#10 +
     'set "XB_GIT_DIR=' + BatchEscape(PrereqPathPage.Values[1]) + '"' + #13#10 +
     'set "XB_FFMPEG_DIR=' + BatchEscape(PrereqPathPage.Values[2]) + '"' + #13#10 +
-    'set "XB_CUDA_DIR=' + BatchEscape(PrereqPathPage.Values[3]) + '"' + #13#10 +
-    'set "XB_VSBT_DIR=' + BatchEscape(PrereqPathPage.Values[4]) + '"' + #13#10 +
+    'set "XB_CUDA_DIR=' + BatchEscape(CudaPathPage.Values[0]) + '"' + #13#10 +
+    'set "XB_VSBT_DIR=' + BatchEscape(PrereqPathPage.Values[3]) + '"' + #13#10 +
     'set "XB_HF_MIRROR=https://hf-mirror.com"' + #13#10 +
     'set "HF_ENDPOINT=https://hf-mirror.com"' + #13#10 +
     'set "HUGGINGFACE_HUB_ENDPOINT=https://hf-mirror.com"' + #13#10 +
@@ -891,6 +929,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC worker', PathJoin(InternalDir, 'infrastructure\seedvc_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\ddsp_worker.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC worker', PathJoin(InternalDir, 'infrastructure\ddsp_worker.py'));
+  if not FileExists(PathJoin(AppDir, 'install\configure_user_env.py')) then
+    Missing := AddMissingRuntimeFile(Missing, '用户环境配置工具', PathJoin(AppDir, 'install\configure_user_env.py'));
   if not FileExists(PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt')) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC RMVPE', PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt'));
   if not FileExists(PathJoin(AppDir, 'assets\models\seedvc\campplus_cn_common.bin')) then
@@ -904,7 +944,7 @@ begin
 
   Result := Missing = '';
   if Result then
-    AppendInstallValidation('[ok] 应用本体、前端、AI workers、SeedVC 离线底模与 JUCE Host 完整。')
+    AppendInstallValidation('[ok] 应用本体、前端、AI workers、环境配置工具、SeedVC 离线底模与 JUCE Host 完整。')
   else
   begin
     AppendInstallValidation('[fail] 发布包缺少必要组件：');
@@ -1031,11 +1071,67 @@ begin
   AppendInstallValidation('建议：从开始菜单运行“搭建/修复运行环境”，或执行 setup_env.bat --only ddsp。');
 end;
 
+function ValidateTorchRuntime(const PythonPath, RuntimeLabel: String): Boolean;
+var
+  ResultCode: Integer;
+  CheckCode: String;
+begin
+  Result := False;
+  if not FileExists(PythonPath) then
+  begin
+    AppendInstallValidation('[fail] ' + RuntimeLabel + ' 缺少 Python：' + PythonPath);
+    Exit;
+  end;
+
+  if GpuStackName() = 'directml' then
+    CheckCode := 'import torch,torch_directml; assert hasattr(torch,''__version__''); assert torch_directml.is_available()'
+  else if (GpuStackName() = 'cu121') or (GpuStackName() = 'cu128') then
+    CheckCode := 'import torch; assert hasattr(torch,''__version__''); assert torch.cuda.is_available()'
+  else
+    CheckCode := 'import torch; assert hasattr(torch,''__version__'')';
+
+  Result := Exec(PythonPath, '-c "' + CheckCode + '"', ExpandConstant('{app}'),
+    SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+  if Result then
+    AppendInstallValidation('[ok] ' + RuntimeLabel + ' Torch 可导入且设备栈匹配。')
+  else
+    AppendInstallValidation('[fail] ' + RuntimeLabel + ' Torch 损坏、未完成或与所选 GPU 栈不匹配。');
+end;
+
+function ValidateAllInferenceRuntimes(): Boolean;
+var
+  AppDir: String;
+  CurrentReady: Boolean;
+begin
+  AppDir := ExpandConstant('{app}');
+  Result := True;
+  AppendInstallValidation('');
+  AppendInstallValidation('------------------------------------------------------------');
+  AppendInstallValidation('五个 AI 隔离环境真实 Torch 校验');
+
+  CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-uvr\Scripts\python.exe'), 'UVR');
+  Result := Result and CurrentReady;
+  CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-svc\Scripts\python.exe'), 'So-VITS-SVC');
+  Result := Result and CurrentReady;
+  CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-rvc\Scripts\python.exe'), 'RVC');
+  Result := Result and CurrentReady;
+  CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-seedvc\Scripts\python.exe'), 'SeedVC');
+  Result := Result and CurrentReady;
+  CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-ddsp\Scripts\python.exe'), 'DDSP-SVC');
+  Result := Result and CurrentReady;
+
+  if not Result then
+    MsgBox('一个或多个 AI 环境没有完整安装，软件会显示降级模式。' + #13#10 +
+      '请不要直接启动软件；先从开始菜单运行“搭建/修复运行环境”，' + #13#10 +
+      '或在安装目录重新执行 setup_env.bat。' + #13#10#13#10 +
+      '详细日志：' + LastInstallLog, mbError, MB_OK);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   DataDir, Payload: String;
   SetupProgressStart: Integer;
-  UvrReady, SeedVcReady, DdspReady: Boolean;
+  PrereqsReady, UvrReady, SeedVcReady, DdspReady, InferenceReady: Boolean;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -1054,19 +1150,22 @@ begin
     begin
       SetEnvProgress(0, '准备搭建运行环境…');
       WriteInstallerEnv();
+      PrereqsReady := True;
       if EnvAutoInstallSelected() or EnvConfigureSelected() then
       begin
-        RunSetupBatch('install_prereqs.bat', '', '正在检测/安装前置依赖并配置环境变量…', 0, 35);
+        PrereqsReady := RunSetupBatch('install_prereqs.bat', '', '正在检测/安装前置依赖并配置环境变量…', 0, 35);
         SetupProgressStart := 35;
       end
       else
         SetupProgressStart := 0;
-      if RunSetupBatch('setup_env.bat', GpuInstallArgs(), '正在搭建运行环境（创建子环境、复制模型、安装 Python 依赖）…', SetupProgressStart, 100) then
+      if PrereqsReady and RunSetupBatch('setup_env.bat', GpuInstallArgs(), '正在搭建运行环境（创建子环境、复制模型、安装 Python 依赖）…', SetupProgressStart, 100) then
       begin
         UvrReady := ValidateUvrRuntime();
         SeedVcReady := ValidateSeedVcRuntime();
         DdspReady := ValidateDdspRuntime();
-        if (not UvrReady) or (not SeedVcReady) or (not DdspReady) then
+        InferenceReady := ValidateAllInferenceRuntimes();
+        if (not UvrReady) or (not SeedVcReady) or (not DdspReady) or
+           (not InferenceReady) then
           SetEnvProgress(100, '部分运行环境校验失败，请查看安装详情日志');
       end;
     end;

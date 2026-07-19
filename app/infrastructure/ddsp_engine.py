@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 import config
 from domain import InferenceParams
-from infrastructure.inference_device import environment_device_label
+from infrastructure.inference_device import probe_python_environment, runtime_device_label
 from infrastructure.svc_engine import SvcEngine
 
 
@@ -21,11 +21,12 @@ class DdspSvcEngine:
         return config.ddsp_engine_ready()
 
     def device(self) -> str:
-        return (
-            environment_device_label(config.DDSP_PYTHON, "ddsp-svc env")
-            if self.available
-            else "CPU (simulated)"
-        )
+        if not self.available:
+            return "CPU (simulated)"
+        runtime = probe_python_environment(config.DDSP_PYTHON)
+        if runtime.get("preferred") == "directml":
+            return "CPU 稳定路径（AMD DDSP）"
+        return runtime_device_label(runtime, "ddsp-svc env")
 
     def version(self) -> Optional[str]:
         if not self.available:

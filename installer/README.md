@@ -40,9 +40,20 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 
 ## v0.0.22 安装器行为
 
-- 应用、Python 项目、前端、两份锁文件和 Inno Setup 版本统一为 `0.0.22`。
+- 应用、Windows EXE 版本资源、Python 项目、前端、两份锁文件和 Inno Setup 版本统一为 `0.0.22`。
 - GPU 栈自动识别 NVIDIA CUDA、AMD Radeon DirectML 和 CPU；DirectML 为 So-VITS-SVC、RVC、SeedVC、DDSP-SVC 与 UVR 分别部署锁定的 `torch-directml` 环境并做真实张量校验。
+- RVC 与 So-VITS-SVC 的 DirectML 环境使用 Python 3.10，避免 Python 3.9 无法导入当前 `torch-directml`；SeedVC/DDSP-SVC 不再在 DirectML Torch 安装后执行空 pip 命令。
+- So-VITS-SVC DirectML 在 Python 3.10 下覆盖旧 NumPy/PyWorld/SciPy 钉版本，使用可安装的 cp310 兼容组合，不再现场编译 `numpy 1.19.5`。
 - UVR 的 AMD 环境固定使用 `audio-separator[dml]` 与 `onnxruntime-directml`；VR `.pth` 与 MDX `.onnx` 模型分别校验 Torch DirectML 设备和 ONNX DirectML provider。
+- UVR DirectML 安装校验会正常初始化临时 Separator；不再使用会跳过设备初始化的 `info_only=True`，避免把已可用的 Radeon 环境误报为失败。
+- GPU 检测同时使用 `nvidia-smi` 与 `Win32_VideoController` 回退；RTX 4060 等 NVIDIA 显卡不会再因安装器进程的 System32/PATH 视图差异被显示为 CPU。
+- 自动模式把界面确认的 CPU、CUDA 或 DirectML 结果明确传给后续步骤，避免界面显示 CPU、Python 安装阶段却重新检测并改装 CUDA。NVIDIA 模式会填写 CUDA Toolkit `v12.1` / `v12.8` 默认目录。
+- CUDA Toolkit 已拆为独立的 NVIDIA 专用目录页；CPU 与 AMD DirectML 会完全跳过该页，不再因为空 CUDA 路径无法进入下一步。
+- 修复 `Program Files (x86)` 中括号被批处理块误解析导致前置步骤中断；安装结束会真实导入五个隔离环境的 Torch 并校验 CUDA / DirectML，不再仅凭 `python.exe` 存在就误报完成。
+- 用户 PATH 与镜像/CUDA 变量改用 Python `winreg` 一次性写入，避免 `reg.exe` 在 94% 持续占用 CPU；长 PATH、`%变量%` 和括号会保持原样，失败会中止前置步骤并写入日志。
+- 应用启动时的环境探测统一使用 Windows `CREATE_NO_WINDOW`，不会再为 UVR/SVC/RVC/SeedVC/DDSP 探测闪出黑色 CMD 窗口。
+- 五个隔离环境改为并行探测并按环境签名缓存 24 小时；重启应用可直接恢复检测结果，更新环境后自动重新探测。
+- 首页“集成工具”改用自适应网格，长版本号、显卡名称和异常状态不会再把工具名称挤成竖排或溢出卡片。
 - 发布构建要求根目录存在 `release_notes_v022.md`，安装后将其与主 `README.md` 一起释放到应用目录。
 - `installer/build.ps1 -ValidateOnly` 会检查 v0.0.22 版本一致性、发布文档、内置模型和 Inno Setup/Pascal 脚本。
 
@@ -108,12 +119,12 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 - 用户机安装时不会下载 JUCE SDK 或现场编译 Host；`install_prereqs.bat` 只检查随包释放的 Host 是否存在，缺失时在安装日志中告警。
 - UVR/RVC/SVC 环境部署会复核并保护 GPU torch 栈；检测到兼容 NVIDIA GPU 时不再在 UVR 安装阶段把 GPU 版 PyTorch 替换成 CPU 版。
 - CUDA 策略保持一致：40 系及以下兼容 NVIDIA 使用 cu121，50 系 Blackwell 使用 cu128；CPU 或不兼容显卡才回退 CPU torch。
-- 继续沿用 `.sb-svcb` 用户数据目录、镜像源配置、安装日志和隐藏命令行窗口的安装流程。
+- 使用 `.xb_svcb` 用户数据目录，并继续沿用镜像源配置、安装日志和隐藏命令行窗口的安装流程。
 
 ## v0.0.15 安装器行为
 
 - 应用版本为 `0.0.15`。
-- 用户数据目录默认使用 `.sb-svcb`；选择磁盘根目录或普通非空目录时，会自动在其中创建 `.sb-svcb` 子目录。
+- 用户数据目录默认使用 `.xb_svcb`；选择磁盘根目录或普通非空目录时，会自动在其中创建 `.xb_svcb` 子目录。
 - 安装器同时写入安装目录和用户 AppData 下的数据目录指针，升级/迁移后更稳。
 - 安装流程默认配置 HuggingFace 镜像与清华 PyPI 镜像，并写入修复环境时可复用的环境变量。
 - 可检测并按用户选择安装/配置 Python 3.10、Git、ffmpeg、uv、CUDA Toolkit 和 Microsoft C++ Build Tools。

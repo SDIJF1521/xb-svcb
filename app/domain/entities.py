@@ -124,7 +124,7 @@ class InferenceParams:
     filter_radius: int = 3  # F0 中值滤波半径 (0~7)
     rvc_version: str = "v2"  # RVC 模型版本 v1 / v2
     reference_audio: str = ""  # SeedVC 目标音色参考音频路径
-    ddsp_infer_steps: int = 30  # DDSP-SVC Rectified Flow 采样步数
+    ddsp_infer_steps: int = 50  # DDSP-SVC Rectified Flow 采样步数（官方默认质量）
     ddsp_formant_shift: float = 0.0  # DDSP-SVC 共振峰偏移（-2~2 半音）
 
     def to_dict(self) -> dict[str, Any]:
@@ -154,7 +154,7 @@ class InferenceParams:
             ),
             ddsp_infer_steps=max(
                 1,
-                int(data.get("ddsp_infer_steps", data.get("ddspInferSteps", 30))),
+                int(data.get("ddsp_infer_steps", data.get("ddspInferSteps", 50))),
             ),
             ddsp_formant_shift=max(
                 -2.0,

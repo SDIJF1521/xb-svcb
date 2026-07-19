@@ -24,9 +24,19 @@ import sys
 import traceback
 
 try:
-    from inference_device import resolve_torch_device
+    from inference_device import (
+        patch_directml_checkpoint_load,
+        patch_directml_float32,
+        patch_directml_sovits_rmvpe_cpu,
+        resolve_torch_device,
+    )
 except ImportError:  # package import used by tests/application tooling
-    from infrastructure.inference_device import resolve_torch_device
+    from infrastructure.inference_device import (
+        patch_directml_checkpoint_load,
+        patch_directml_float32,
+        patch_directml_sovits_rmvpe_cpu,
+        resolve_torch_device,
+    )
 
 _NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
@@ -97,6 +107,15 @@ def main() -> int:
     try:
         resolved_device = resolve_torch_device(args.device, torch)
         device = resolved_device.device
+        if resolved_device.backend == "directml":
+            patch_directml_float32(torch)
+            patch_directml_checkpoint_load(torch)
+            patch_directml_sovits_rmvpe_cpu(utils)
+            if str(args.f0).lower() == "rmvpe":
+                print(
+                    "XB: DirectML 主推理环境下，F0 探针的 RMVPE 使用 CPU 稳定路径",
+                    flush=True,
+                )
     except RuntimeError as exc:
         print(f"F0_ERR {exc}")
         return 6

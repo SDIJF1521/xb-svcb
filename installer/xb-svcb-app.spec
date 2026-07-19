@@ -21,6 +21,7 @@ APP = ROOT / "app"
 # 应用图标（嵌入 exe；快捷方式会继承）
 ICON = ROOT / "assets" / "icon" / "xb-svcb.ico"
 ICON_PATH = str(ICON) if ICON.exists() else None
+VERSION_INFO = str(ROOT / "installer" / "xb-svcb-version.txt")
 
 # 调试开关：设环境变量 XB_BUILD_CONSOLE=1 时构建带控制台版本以便看报错。
 XB_CONSOLE = os.environ.get("XB_BUILD_CONSOLE") == "1"
@@ -89,6 +90,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=ICON_PATH,
+    version=VERSION_INFO,
 )
 
 coll = COLLECT(

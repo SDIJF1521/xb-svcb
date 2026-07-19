@@ -525,7 +525,7 @@
                 <div class="rerun-param">
                   <div class="rerun-param-label">
                     <span>{{ isSeedVcRerunModel ? '扩散步数' : isDdspRerunModel ? '采样步数' : '扩散占比' }}</span>
-                    <b>{{ isSeedVcRerunModel || isDdspRerunModel ? qualitySteps(rerunDiffusionRatio) : Math.round(rerunDiffusionRatio * 100) + '%' }}</b>
+                    <b>{{ isDdspRerunModel ? ddspQualitySteps(rerunDiffusionRatio) : isSeedVcRerunModel ? qualitySteps(rerunDiffusionRatio) : Math.round(rerunDiffusionRatio * 100) + '%' }}</b>
                   </div>
                   <input v-model.number="rerunDiffusionRatio" type="range" min="0" max="1" step="0.05" />
                 </div>
@@ -1269,6 +1269,9 @@ function modelFrameworkLabel(framework: string | undefined) {
 function qualitySteps(ratio: number): number {
   return Math.max(1, Math.round(10 + Math.max(0, Math.min(1, ratio || 0)) * 40))
 }
+function ddspQualitySteps(ratio: number): number {
+  return Math.round(50 + Math.max(0, Math.min(1, ratio || 0)) * 50)
+}
 function baseName(p: string): string {
   return p ? p.split(/[/\\]/).pop() || p : ''
 }
@@ -1290,7 +1293,7 @@ function currentRerunParams(): InferenceParams {
     params.rvc_version = rerunRvcVersion.value
   } else if (isDdspRerunModel.value) {
     params.f0_method = rerunF0Method.value
-    params.ddsp_infer_steps = qualitySteps(rerunDiffusionRatio.value)
+    params.ddsp_infer_steps = ddspQualitySteps(rerunDiffusionRatio.value)
     params.ddsp_formant_shift = Number(rerunFormantShift.value.toFixed(2))
   } else {
     params.f0_method = rerunF0Method.value
