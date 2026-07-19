@@ -14,7 +14,7 @@
 
 - 应用本体版本同步到 `0.0.22`，本地 API、前端、两份锁文件和安装器使用同一版本号。
 - 推理设备统一支持 `auto`、`cuda`、`rocm`、`directml` 与 `cpu`，并按每个隔离环境报告真实可用后端。
-- So-VITS-SVC、RVC、SeedVC、DDSP-SVC 与 F0 worker 增加 Windows AMD DirectML 路径；DirectML 不支持的复数 STFT 运算保留在 CPU，实数张量返回 GPU。
+- So-VITS-SVC、RVC、SeedVC、DDSP-SVC 与 F0 worker 增加 Windows AMD DirectML 路径；DirectML 不支持的复数 STFT 运算保留在 CPU，实数张量返回 GPU。SeedVC 的 DirectML/CPU 路径用于兼容和排障，非 NVIDIA 用户不建议把 SeedVC 作为首选模型。
 - UVR worker 使用 `audio-separator` 的 DirectML 后端；VR `.pth` 模型走 `torch-directml`，MDX `.onnx` 模型走 `onnxruntime-directml`。
 - 显式选择 CUDA、ROCm 或 DirectML 时严格校验实际设备，失败会返回明确错误，不再静默回退 CPU。
 
@@ -55,7 +55,7 @@
 ## v0.0.18 重点
 
 - 应用本体版本同步到 `0.0.18`，本地状态 API、前端与安装器使用同一版本号。
-- 新增 SeedVC 引擎、worker 与运行环境探测，支持 checkpoint + YAML 配置和推理时目标音色参考音频。
+- 新增 SeedVC 引擎、worker 与运行环境探测，支持 checkpoint + YAML 配置和推理时目标音色参考音频；SeedVC 推荐 NVIDIA CUDA 环境使用，AMD/CPU 用户建议优先选择 So-VITS-SVC 或 RVC。
 - 模型导入、模型站清单、任务参数和跨框架引擎路由均识别 `seed-vc`。
 - 模型站下载支持 `.part` 断点续传、HTTP Range 与自动重试；清单声明的主模型、配置、扩散模型和 index 全部完整后才导入本地模型库。
 - 主题媒体桥接支持选择图片或 MP4，将文件复制到用户数据目录并按需返回 data URI。

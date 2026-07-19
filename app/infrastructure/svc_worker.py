@@ -65,6 +65,15 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _upstream_svc_device(requested: str, resolved_device):  # noqa: ANN001, ANN202
+    """Preserve v0.0.21 auto behavior except for explicit DirectML."""
+    return (
+        resolved_device.device
+        if resolved_device.backend == "directml" or requested not in ("", "auto")
+        else None
+    )
+
+
 def main() -> int:
     args = _build_parser().parse_args()
 
@@ -159,7 +168,10 @@ def main() -> int:
         traceback.print_exc()
         return 3
 
-    device = resolved_device.device
+    # Keep v0.0.21's native CUDA/CPU auto-selection exactly unchanged. Only
+    # DirectML needs an explicit privateuseone device object; ROCm also follows
+    # PyTorch's CUDA-compatible auto path.
+    device = _upstream_svc_device(args.device, resolved_device)
 
     try:
         svc = Svc(

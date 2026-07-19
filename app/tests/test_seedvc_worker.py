@@ -1,8 +1,6 @@
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
 
 import numpy as np
 
@@ -16,57 +14,10 @@ from infrastructure.seedvc_worker import (
     _patch_seedvc_directml_audio_preprocessing,
     _patch_seedvc_directml_f0_postprocessing,
     _patch_whisper_sampling_rate,
-    _run_seedvc_with_cpu_fallback,
 )
 
 
 class SeedVcWorkerLocalAssetTests(unittest.TestCase):
-    def test_directml_failure_retries_seedvc_once_on_cpu(self) -> None:
-        calls: list[tuple] = []
-        namespace = SimpleNamespace(fp16=True)
-        inference = SimpleNamespace(device="privateuseone:0")
-        directml = SimpleNamespace(
-            backend="directml",
-            device="privateuseone:0",
-            name="AMD Radeon",
-        )
-        cpu = SimpleNamespace(backend="cpu", device="cpu", name="CPU")
-
-        def seedvc_main(args):
-            calls.append((inference.device, args.fp16))
-            if len(calls) == 1:
-                raise RuntimeError("unsupported DirectML operator")
-
-        with patch(
-            "infrastructure.seedvc_worker.resolve_torch_device",
-            return_value=cpu,
-        ) as resolve:
-            result = _run_seedvc_with_cpu_fallback(
-                seedvc_main, namespace, directml, inference, SimpleNamespace()
-            )
-
-        self.assertIs(result, cpu)
-        self.assertEqual(calls, [("privateuseone:0", True), ("cpu", False)])
-        resolve.assert_called_once_with("cpu", unittest.mock.ANY)
-
-    def test_non_directml_failure_is_not_retried(self) -> None:
-        calls: list[str] = []
-
-        def seedvc_main(_args):
-            calls.append("run")
-            raise RuntimeError("cpu failed")
-
-        cpu = SimpleNamespace(backend="cpu", device="cpu", name="CPU")
-        with self.assertRaisesRegex(RuntimeError, "cpu failed"):
-            _run_seedvc_with_cpu_fallback(
-                seedvc_main,
-                SimpleNamespace(fp16=False),
-                cpu,
-                SimpleNamespace(device="cpu"),
-                SimpleNamespace(),
-            )
-        self.assertEqual(calls, ["run"])
-
     def test_directml_rmvpe_f0_transfer_is_deferred_for_cpu_statistics(self) -> None:
         calls: list[tuple] = []
 

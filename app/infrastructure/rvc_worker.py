@@ -75,6 +75,65 @@ _RVC_BASE_SOURCES = {
         "rmvpe.onnx",
     ),
 }
+_RVC_DIRECTML_DEFAULT_THREADS = 1
+_RVC_DIRECTML_DEFAULT_WINDOWS = {
+    "x_pad": 1,
+    "x_query": 3,
+    "x_center": 12,
+    "x_max": 14,
+}
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(str(os.environ.get(name, default)).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+def _apply_rvc_directml_thread_limits(torch_module=None) -> int:  # noqa: ANN001
+    threads = _env_int(
+        "XB_RVC_DIRECTML_THREADS",
+        _RVC_DIRECTML_DEFAULT_THREADS,
+    )
+    for name in (
+        "OPENBLAS_NUM_THREADS",
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    ):
+        os.environ.setdefault(name, str(threads))
+    if torch_module is not None:
+        try:
+            torch_module.set_num_threads(threads)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            torch_module.set_num_interop_threads(1)
+        except Exception:  # noqa: BLE001
+            pass
+    return threads
+
+
+def _apply_rvc_directml_memory_profile(rvc) -> tuple[int, int, int, int]:  # noqa: ANN001
+    x_pad = _env_int("XB_RVC_DIRECTML_X_PAD", _RVC_DIRECTML_DEFAULT_WINDOWS["x_pad"])
+    x_query = _env_int(
+        "XB_RVC_DIRECTML_X_QUERY",
+        _RVC_DIRECTML_DEFAULT_WINDOWS["x_query"],
+    )
+    x_center = _env_int(
+        "XB_RVC_DIRECTML_X_CENTER",
+        _RVC_DIRECTML_DEFAULT_WINDOWS["x_center"],
+    )
+    x_max = _env_int("XB_RVC_DIRECTML_X_MAX", _RVC_DIRECTML_DEFAULT_WINDOWS["x_max"])
+    x_query = min(x_query, max(1, x_center - 1))
+    x_max = max(x_max, x_center + 1)
+    rvc.config.x_pad = x_pad
+    rvc.config.x_query = x_query
+    rvc.config.x_center = x_center
+    rvc.config.x_max = x_max
+    return x_pad, x_query, x_center, x_max
 
 
 def _usable_file(path: Path, min_bytes: int = _MIN_BASE_MODEL_BYTES) -> bool:
@@ -365,6 +424,7 @@ def main() -> int:
 
         resolved_device = _resolve_device(args.device)
         if resolved_device.backend == "directml":
+            _apply_rvc_directml_thread_limits(torch)
             patch_directml_float32(torch)
 
         import rvc_python.download_model as rvc_download_model
@@ -403,6 +463,13 @@ def main() -> int:
             rvc.device = resolved_device.device
             rvc.config.device = resolved_device.device
             rvc.vc.device = resolved_device.device
+            x_pad, x_query, x_center, x_max = _apply_rvc_directml_memory_profile(rvc)
+            print(
+                "XB: RVC DirectML 低显存切片 "
+                f"x_pad={x_pad}, x_query={x_query}, "
+                f"x_center={x_center}, x_max={x_max}",
+                flush=True,
+            )
 
         # CPU 适配：PyTorch 不支持 CPU half batch_norm，RMVPE 在 is_half=True 时会报
         # "batch_norm not implemented for Half"。CPU 路径必须在加载模型前切 fp32。
@@ -430,9 +497,12 @@ def main() -> int:
                 rvc.config.is_half = False
                 # fp32 切片窗口（对应 config.device_config 里 is_half=False 分支）
                 rvc.config.x_pad = 1
-                rvc.config.x_query = 6
-                rvc.config.x_center = 38
-                rvc.config.x_max = 41
+                if resolved_device.backend == "directml":
+                    _apply_rvc_directml_memory_profile(rvc)
+                else:
+                    rvc.config.x_query = 6
+                    rvc.config.x_center = 38
+                    rvc.config.x_max = 41
                 if resolved_device.backend == "directml":
                     reason = "AMD DirectML"
                 elif resolved_device.backend == "cpu":

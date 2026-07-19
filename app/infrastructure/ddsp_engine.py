@@ -10,7 +10,6 @@ from typing import Any, Optional
 import config
 from domain import InferenceParams
 from infrastructure.inference_device import probe_python_environment, runtime_device_label
-from infrastructure.svc_engine import SvcEngine
 
 
 class DdspSvcEngine:
@@ -57,8 +56,16 @@ class DdspSvcEngine:
             and Path(vocals).is_file()
         )
         if not ready:
-            SvcEngine._write_tone_wav(out_path, max(duration, 1.0), params.pitch, 0.0)
-            return out_path
+            missing = []
+            if not self.available:
+                missing.append("DDSP-SVC 推理环境未就绪")
+            if not main_model or not Path(main_model).is_file():
+                missing.append(f"DDSP-SVC 模型不存在: {main_model or '未配置'}")
+            if not main_config or not Path(main_config).is_file():
+                missing.append(f"DDSP-SVC 配置不存在: {main_config or '未配置'}")
+            if not Path(vocals).is_file():
+                missing.append(f"输入人声不存在: {vocals}")
+            raise RuntimeError("；".join(missing) or "DDSP-SVC 推理条件不完整")
 
         self._run_worker(main_model, main_config, vocals, out_path, params, log_file)
         return out_path

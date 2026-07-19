@@ -1,7 +1,7 @@
 """RVC 推理引擎封装：在独立 ``.venv-rvc`` 中通过 ``rvc_worker`` 调用 rvc-python 转换歌声。
 
-与 ``SvcEngine`` 同构：环境就绪时子进程跑真实推理，否则降级为占位音频，
-保证未配置 RVC 环境时整条链路仍可演示。由 ``EngineRegistry`` 按模型 ``framework`` 选择。
+与 So-VITS 引擎同构：环境就绪时子进程跑真实推理，条件缺失时明确失败。
+由 ``EngineRegistry`` 按模型 ``framework`` 选择。
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from typing import Any, Optional
 import config
 from domain import InferenceParams
 from infrastructure.inference_device import environment_device_label
-from infrastructure.svc_engine import SvcEngine
 
 
 class RvcEngine:
@@ -45,7 +44,7 @@ class RvcEngine:
         duration: float,
         log_file: Optional[Path] = None,
     ) -> Path:
-        """执行 RVC 歌声转换；环境/模型缺失时降级为占位音频。"""
+        """执行 RVC 歌声转换；环境或模型缺失时明确失败。"""
         out_path.parent.mkdir(parents=True, exist_ok=True)
         self._clear_output(out_path)
         main_model = (model or {}).get("main_model_path", "") or ""
@@ -58,9 +57,14 @@ class RvcEngine:
             and Path(vocals).exists()
         )
         if not ready:
-            # 复用 so-vits 引擎的占位音频生成（RVC 无扩散，占比传 0）
-            SvcEngine._write_tone_wav(out_path, max(duration, 1.0), params.pitch, 0.0)
-            return out_path
+            missing = []
+            if not self.available:
+                missing.append("RVC 推理环境未就绪")
+            if not main_model or not Path(main_model).is_file():
+                missing.append(f"RVC 模型不存在: {main_model or '未配置'}")
+            if not Path(vocals).is_file():
+                missing.append(f"输入人声不存在: {vocals}")
+            raise RuntimeError("；".join(missing) or "RVC 推理条件不完整")
 
         self._run_worker(main_model, index_path, Path(vocals), out_path, params, log_file)
         return out_path

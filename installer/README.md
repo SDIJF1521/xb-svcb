@@ -41,7 +41,7 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 ## v0.0.22 安装器行为
 
 - 应用、Windows EXE 版本资源、Python 项目、前端、两份锁文件和 Inno Setup 版本统一为 `0.0.22`。
-- GPU 栈自动识别 NVIDIA CUDA、AMD Radeon DirectML 和 CPU；DirectML 为 So-VITS-SVC、RVC、SeedVC、DDSP-SVC 与 UVR 分别部署锁定的 `torch-directml` 环境并做真实张量校验。
+- GPU 栈自动识别 NVIDIA CUDA、AMD Radeon DirectML 和 CPU；DirectML 为 So-VITS-SVC、RVC、SeedVC、DDSP-SVC 与 UVR 分别部署锁定的 `torch-directml` 环境并做真实张量校验。SeedVC 在非 NVIDIA 环境仅作为兼容路径保留，不建议 AMD/CPU 用户优先选择。
 - RVC 与 So-VITS-SVC 的 DirectML 环境使用 Python 3.10，避免 Python 3.9 无法导入当前 `torch-directml`；SeedVC/DDSP-SVC 不再在 DirectML Torch 安装后执行空 pip 命令。
 - So-VITS-SVC DirectML 在 Python 3.10 下覆盖旧 NumPy/PyWorld/SciPy 钉版本，使用可安装的 cp310 兼容组合，不再现场编译 `numpy 1.19.5`。
 - UVR 的 AMD 环境固定使用 `audio-separator[dml]` 与 `onnxruntime-directml`；VR `.pth` 与 MDX `.onnx` 模型分别校验 Torch DirectML 设备和 ONNX DirectML provider。

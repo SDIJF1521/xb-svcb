@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -22,6 +23,10 @@ def test_previous_default_directory_is_renamed_without_copying(tmp_path: Path) -
     model = source / "models" / "voice.pth"
     model.parent.mkdir(parents=True)
     model.write_bytes(b"model-data")
+    (source / "models.json").write_text(
+        '{"path": "' + str(model).replace("\\", "\\\\") + '"}',
+        encoding="utf-8",
+    )
 
     with patch.object(config, "write_data_home", return_value=True) as write_home:
         result = config._upgrade_previous_default_data_dir(source)
@@ -30,6 +35,8 @@ def test_previous_default_directory_is_renamed_without_copying(tmp_path: Path) -
     assert result == target
     assert not source.exists()
     assert (target / "models" / "voice.pth").read_bytes() == b"model-data"
+    models_json = json.loads((target / "models.json").read_text(encoding="utf-8"))
+    assert models_json["path"] == str(target / "models" / "voice.pth")
     write_home.assert_called_once_with(target)
 
 
@@ -63,3 +70,45 @@ def test_existing_old_and_new_directories_are_never_merged(tmp_path: Path) -> No
     assert (source / "old.txt").read_text(encoding="utf-8") == "old"
     assert (target / "new.txt").read_text(encoding="utf-8") == "new"
     write_home.assert_not_called()
+
+
+def test_existing_xb_svcb_repairs_stale_absolute_json_paths(tmp_path: Path) -> None:
+    source = tmp_path / ".sb-svcb"
+    target = tmp_path / ".xb_svcb"
+    target.mkdir()
+    stale = source / "models" / "voice.pth"
+    current = target / "models" / "voice.pth"
+    current.parent.mkdir()
+    current.write_bytes(b"model")
+    (target / "models.json").write_text(
+        '{"main_model": {"path": "'
+        + str(stale).replace("\\", "\\\\")
+        + '"}}',
+        encoding="utf-8",
+    )
+
+    result = config._upgrade_previous_default_data_dir(target)
+
+    assert result == target
+    payload = json.loads((target / "models.json").read_text(encoding="utf-8"))
+    assert payload["main_model"]["path"] == str(current)
+
+
+def test_xb_svcb_path_repair_handles_forward_slashes(tmp_path: Path) -> None:
+    source = tmp_path / ".sb-svcb"
+    target = tmp_path / ".xb_svcb"
+    target.mkdir()
+    stale = str(source / "models" / "voice.pth").replace("\\", "/")
+    current = target / "models" / "voice.pth"
+    current.parent.mkdir()
+    current.write_bytes(b"model")
+    (target / "models.json").write_text(
+        json.dumps({"main_model_path": stale}),
+        encoding="utf-8",
+    )
+
+    result = config._upgrade_previous_default_data_dir(target)
+
+    assert result == target
+    payload = json.loads((target / "models.json").read_text(encoding="utf-8"))
+    assert payload["main_model_path"] == str(current)

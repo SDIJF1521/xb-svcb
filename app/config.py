@@ -500,6 +500,64 @@ def write_data_home(data_dir: Path, pending_delete: Path | None = None) -> bool:
     return ok and _read_data_home() == target
 
 
+def _rewrite_persisted_data_paths(data_dir: Path, old_root: Path, new_root: Path) -> bool:
+    """Rewrite absolute paths stored in root-level JSON after a directory rename."""
+    try:
+        old_text = str(old_root.expanduser().resolve())
+        new_text = str(new_root.expanduser().resolve())
+    except OSError:
+        return False
+    if old_text.lower() == new_text.lower():
+        return True
+
+    old_lower = old_text.lower()
+    old_key = old_lower.replace("/", "\\")
+
+    def rewrite(value):  # noqa: ANN001, ANN202 - recursive JSON value
+        if isinstance(value, str):
+            lower = value.lower()
+            key = lower.replace("/", "\\")
+            if key == old_key:
+                return new_text
+            if key.startswith(old_key + "\\"):
+                return str(Path(new_text + value[len(old_text) :]))
+            return value
+        if isinstance(value, list):
+            return [rewrite(item) for item in value]
+        if isinstance(value, dict):
+            return {key: rewrite(item) for key, item in value.items()}
+        return value
+
+    originals: dict[Path, str] = {}
+    updates: dict[Path, str] = {}
+    try:
+        for path in data_dir.glob("*.json"):
+            original = path.read_text(encoding="utf-8")
+            payload = json.loads(original)
+            rewritten = rewrite(payload)
+            if rewritten != payload:
+                originals[path] = original
+                updates[path] = json.dumps(rewritten, ensure_ascii=False, indent=2)
+        for path, text in updates.items():
+            temporary = path.with_suffix(path.suffix + ".path-migration.tmp")
+            temporary.write_text(text, encoding="utf-8")
+            temporary.replace(path)
+        return True
+    except (OSError, json.JSONDecodeError):
+        for path, original in originals.items():
+            try:
+                path.write_text(original, encoding="utf-8")
+            except OSError:
+                pass
+        return False
+    finally:
+        for path in updates:
+            try:
+                path.with_suffix(path.suffix + ".path-migration.tmp").unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def _upgrade_previous_default_data_dir(data_dir: Path) -> Path:
     """Rename the mistaken ``.sb-svcb`` default to ``.xb_svcb`` safely.
 
@@ -510,19 +568,26 @@ def _upgrade_previous_default_data_dir(data_dir: Path) -> Path:
     """
     try:
         source = data_dir.expanduser().resolve()
+        if source.name.lower() == DATA_DIR_NAME.lower():
+            previous = source.with_name(PREVIOUS_DATA_DIR_NAME)
+            if source.exists():
+                _rewrite_persisted_data_paths(source, previous, source)
+            return source
         if source.name.lower() != PREVIOUS_DATA_DIR_NAME.lower():
             return source
         target = source.with_name(DATA_DIR_NAME)
         if target.exists():
             if not source.exists():
+                _rewrite_persisted_data_paths(target, source, target)
                 write_data_home(target)
                 return target
             return source
         if not source.exists():
             return source
         source.replace(target)
-        if write_data_home(target):
+        if _rewrite_persisted_data_paths(target, source, target) and write_data_home(target):
             return target
+        _rewrite_persisted_data_paths(target, target, source)
         target.replace(source)
         write_data_home(source)
         return source

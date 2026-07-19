@@ -149,32 +149,6 @@ def _patch_seedvc_directml_f0_postprocessing(torch: Any, rmvpe_module: Any) -> N
     torch.from_numpy = from_numpy
 
 
-def _run_seedvc_with_cpu_fallback(
-    seedvc_main: Callable[[Any], Any],
-    namespace: Any,
-    resolved_device: Any,
-    seedvc_inference: Any,
-    torch: Any,
-) -> Any:
-    """Retry a caught DirectML inference failure on the stable CPU path."""
-    try:
-        seedvc_main(namespace)
-        return resolved_device
-    except Exception:  # noqa: BLE001 - only DirectML gets the controlled retry
-        if resolved_device.backend != "directml":
-            raise
-        print(
-            "SEEDVC_INFO AMD DirectML 推理遇到不兼容算子，自动切换 CPU 稳定路径重试",
-            flush=True,
-        )
-        traceback.print_exc()
-        cpu_device = resolve_torch_device("cpu", torch)
-        seedvc_inference.device = cpu_device.device
-        namespace.fp16 = False
-        seedvc_main(namespace)
-        return cpu_device
-
-
 def _latest_wav(folder: Path) -> Path | None:
     wavs = [p for p in folder.glob("*.wav") if p.is_file()]
     if not wavs:
@@ -494,13 +468,7 @@ def main() -> int:
                 fp16=fp16,
             )
             try:
-                resolved_device = _run_seedvc_with_cpu_fallback(
-                    seedvc_main,
-                    ns,
-                    resolved_device,
-                    seedvc_inference,
-                    torch,
-                )
+                seedvc_main(ns)
             except Exception as exc:  # noqa: BLE001
                 message = str(exc).strip() or type(exc).__name__
                 print(f"SEEDVC_ERR SeedVC 推理失败: {message}", flush=True)

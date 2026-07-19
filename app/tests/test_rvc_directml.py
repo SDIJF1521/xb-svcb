@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -57,6 +58,52 @@ def test_rmvpe_cpu_patch_keeps_cuda_unchanged() -> None:
     module.RMVPE("model.pt", False, device="cuda:0")
 
     assert calls[-1][1]["device"] == "cuda:0"
+
+
+def test_directml_rvc_uses_shorter_windows_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "XB_RVC_DIRECTML_X_PAD",
+        "XB_RVC_DIRECTML_X_QUERY",
+        "XB_RVC_DIRECTML_X_CENTER",
+        "XB_RVC_DIRECTML_X_MAX",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    rvc = SimpleNamespace(config=SimpleNamespace())
+
+    result = rvc_worker._apply_rvc_directml_memory_profile(rvc)
+
+    assert result == (1, 3, 12, 14)
+    assert rvc.config.x_pad == 1
+    assert rvc.config.x_query == 3
+    assert rvc.config.x_center == 12
+    assert rvc.config.x_max == 14
+
+
+def test_directml_rvc_thread_limits_default_to_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "XB_RVC_DIRECTML_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    calls: list[tuple[str, int]] = []
+    torch_module = SimpleNamespace(
+        set_num_threads=lambda value: calls.append(("threads", value)),
+        set_num_interop_threads=lambda value: calls.append(("interop", value)),
+    )
+
+    threads = rvc_worker._apply_rvc_directml_thread_limits(torch_module)
+
+    assert threads == 1
+    assert calls == [("threads", 1), ("interop", 1)]
+    assert os.environ["OPENBLAS_NUM_THREADS"] == "1"
 
 
 def test_rvc_native_failure_reports_and_logs_exit_code(

@@ -10,7 +10,6 @@ from typing import Any, Optional
 import config
 from domain import InferenceParams
 from infrastructure.inference_device import environment_device_label
-from infrastructure.svc_engine import SvcEngine
 
 
 class SeedVcEngine:
@@ -50,7 +49,7 @@ class SeedVcEngine:
         duration: float,
         log_file: Optional[Path] = None,
     ) -> Path:
-        """执行 SeedVC 歌声转换；环境/模型/参考音频缺失时降级为占位音频。"""
+        """执行 SeedVC 歌声转换；条件不完整时明确失败。"""
         out_path.parent.mkdir(parents=True, exist_ok=True)
         self._clear_output(out_path)
         main_model = (model or {}).get("main_model_path", "") or ""
@@ -68,8 +67,18 @@ class SeedVcEngine:
             and Path(vocals).exists()
         )
         if not ready:
-            SvcEngine._write_tone_wav(out_path, max(duration, 1.0), params.pitch, 0.0)
-            return out_path
+            missing = []
+            if not self.available:
+                missing.append("SeedVC 推理环境未就绪")
+            if not main_model or not Path(main_model).is_file():
+                missing.append(f"SeedVC 模型不存在: {main_model or '未配置'}")
+            if not main_config or not Path(main_config).is_file():
+                missing.append(f"SeedVC 配置不存在: {main_config or '未配置'}")
+            if not reference_audio or not Path(reference_audio).is_file():
+                missing.append(f"参考音频不存在: {reference_audio or '未配置'}")
+            if not Path(vocals).is_file():
+                missing.append(f"输入人声不存在: {vocals}")
+            raise RuntimeError("；".join(missing) or "SeedVC 推理条件不完整")
 
         self._run_worker(
             main_model,

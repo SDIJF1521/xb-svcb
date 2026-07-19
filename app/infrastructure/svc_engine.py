@@ -3,17 +3,13 @@
 真实推理通过子进程在 ``config.SVC_PYTHON``（用户的 so-vits-svc conda 环境）中运行
 ``svc_worker.py``，加载主模型 + 浅扩散模型完成转换。
 
-当推理环境不可用（仓库/解释器缺失）时，降级为标准库 ``wave`` 生成占位音频，
-保证未配置推理环境时整条链路仍可演示。
+推理环境、模型或输入缺失时明确失败，绝不生成占位音冒充转换结果。
 """
 
 from __future__ import annotations
 
-import math
 import os
-import struct
 import subprocess
-import wave
 from pathlib import Path
 from typing import Optional
 
@@ -85,11 +81,16 @@ class SvcEngine:
             and Path(vocals).exists()
         )
         if not ready:
-            # 降级：环境/模型缺失时生成占位音频，保证链路可跑通
-            self._write_tone_wav(
-                out_path, max(duration, 1.0), params.pitch, max(0.0, min(1.0, params.diffusion_ratio))
-            )
-            return out_path
+            missing = []
+            if not self.available:
+                missing.append("So-VITS-SVC 推理环境未就绪")
+            if not main_model or not Path(main_model).is_file():
+                missing.append(f"主模型不存在: {main_model or '未配置'}")
+            if not main_config or not Path(main_config).is_file():
+                missing.append(f"主配置不存在: {main_config or '未配置'}")
+            if not Path(vocals).is_file():
+                missing.append(f"输入人声不存在: {vocals}")
+            raise RuntimeError("；".join(missing) or "So-VITS-SVC 推理条件不完整")
 
         self._run_worker(
             main_model=main_model,
@@ -281,36 +282,6 @@ class SvcEngine:
                 return line[len("SVC_ERR") :].strip()
         lines = [ln for ln in text.splitlines() if ln.strip()]
         return " | ".join(lines[-3:]) if lines else "未知错误"
-
-    # ---- 降级占位音频 ----
-    # 最长生成秒数（避免为长歌曲逐样本生成造成卡顿）
-    _PREVIEW_MAX_SECONDS = 15.0
-
-    @classmethod
-    def _write_tone_wav(
-        cls, out_path: Path, seconds: float, pitch: int, diffusion_ratio: float
-    ) -> None:
-        """生成占位正弦波（仅在推理环境缺失时使用，用于演示链路）。"""
-        sample_rate = 44100
-        base_freq = 220.0 * (2 ** (pitch / 12.0))
-        n_samples = int(min(seconds, cls._PREVIEW_MAX_SECONDS) * sample_rate)
-        amplitude = 8000
-        fade = 2000  # 缓入缓出样本数，避免爆音
-        main_w = 1.0 - diffusion_ratio
-        diff_w = diffusion_ratio
-        step = 2 * math.pi * base_freq / sample_rate
-        values = []
-        for i in range(n_samples):
-            env = min(1.0, i / fade, (n_samples - i) / fade)
-            main_tone = math.sin(step * i)
-            diff_tone = math.sin(step * 1.5 * i)
-            mixed = main_w * main_tone + diff_w * diff_tone
-            values.append(int(amplitude * env * mixed))
-        with wave.open(str(out_path), "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            wf.writeframes(struct.pack("<%dh" % n_samples, *values))
 
     @staticmethod
     def _clear_output(out_path: Path) -> None:
