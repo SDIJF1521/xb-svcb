@@ -18,6 +18,7 @@ import argparse
 import os
 import sys
 import traceback
+from typing import Optional, Tuple
 
 try:
     from inference_device import (
@@ -54,6 +55,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--f0", default="rmvpe", help="F0 预测器")
     p.add_argument("--k-step", type=int, default=100, help="浅扩散步数")
     p.add_argument(
+        "--diffusion-ratio",
+        type=float,
+        default=None,
+        help="扩散强度 0~1；非零 k_step_max 模型按其训练上限换算步数",
+    )
+    p.add_argument(
         "--clip",
         type=float,
         default=30.0,
@@ -72,6 +79,85 @@ def _upstream_svc_device(requested: str, resolved_device):  # noqa: ANN001, ANN2
         if resolved_device.backend == "directml" or requested not in ("", "auto")
         else None
     )
+
+
+def _diffusion_k_step_limit(svc) -> Optional[int]:  # noqa: ANN001
+    """Return the loaded diffusion model's usable shallow-diffusion limit.
+
+    In so-vits-svc 4.1, ``model.k_step_max: 0`` means that all
+    ``timesteps`` were trained.  ``Unit2Mel`` normalizes that special value to
+    the real limit while it is constructed, so the loaded model is the most
+    reliable source.  The configuration fallback also keeps this worker
+    compatible with nearby 4.1 forks that do not expose ``k_step_max`` on the
+    model object.
+    """
+    diffusion_model = getattr(svc, "diffusion_model", None)
+    limit = getattr(diffusion_model, "k_step_max", None)
+    if limit is None:
+        limit = getattr(getattr(diffusion_model, "decoder", None), "k_step", None)
+
+    diffusion_args = getattr(svc, "diffusion_args", None)
+    model_args = getattr(diffusion_args, "model", None)
+    timesteps = getattr(model_args, "timesteps", None)
+    configured_limit = getattr(model_args, "k_step_max", None)
+    if configured_limit is None:
+        configured_limit = getattr(model_args, "k_step", None)
+
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 0
+    try:
+        timesteps = int(timesteps)
+    except (TypeError, ValueError):
+        timesteps = 0
+    try:
+        configured_limit = int(configured_limit)
+    except (TypeError, ValueError):
+        configured_limit = 0
+
+    if limit <= 0:
+        limit = configured_limit if configured_limit > 0 else timesteps
+    if timesteps > 0:
+        limit = min(limit, timesteps) if limit > 0 else timesteps
+    return limit if limit > 0 else None
+
+
+def _resolve_diffusion_k_step(
+    svc, requested: int, diffusion_ratio: Optional[float] = None  # noqa: ANN001
+) -> Tuple[int, Optional[int]]:
+    """Resolve ``k_step`` without exceeding the checkpoint's trained range.
+
+    A positive configured ``k_step_max`` identifies a shallow-only checkpoint.
+    For those checkpoints the UI ratio is relative to that model-specific
+    range, rather than the old hard-coded 200-step range.  Full-step models
+    (configured as zero) keep the existing 1..200 mapping for compatibility.
+    """
+    try:
+        effective = max(1, int(requested))
+    except (TypeError, ValueError):
+        effective = 1
+    limit = _diffusion_k_step_limit(svc)
+
+    diffusion_args = getattr(svc, "diffusion_args", None)
+    model_args = getattr(diffusion_args, "model", None)
+    configured_limit = getattr(model_args, "k_step_max", None)
+    if configured_limit is None:
+        configured_limit = getattr(model_args, "k_step", None)
+    try:
+        configured_limit = int(configured_limit)
+    except (TypeError, ValueError):
+        configured_limit = 0
+
+    if configured_limit > 0 and diffusion_ratio is not None and limit is not None:
+        try:
+            ratio = max(0.0, min(1.0, float(diffusion_ratio)))
+        except (TypeError, ValueError):
+            ratio = 0.0
+        effective = max(1, round(ratio * limit))
+    if limit is not None:
+        effective = min(effective, limit)
+    return effective, limit
 
 
 def main() -> int:
@@ -198,6 +284,23 @@ def main() -> int:
         spk_ids[0] if spk_ids else args.speaker
     )
 
+    effective_k_step = args.k_step
+    if use_diffusion:
+        effective_k_step, k_step_limit = _resolve_diffusion_k_step(
+            svc, args.k_step, args.diffusion_ratio
+        )
+        if effective_k_step != args.k_step:
+            print(
+                f"SVC_WARN 浅扩散 k_step 已根据模型训练范围从 "
+                f"{args.k_step} 自动调整为 {effective_k_step}",
+                flush=True,
+            )
+        print(
+            f"SVC_DIFFUSION k_step={effective_k_step} "
+            f"k_step_max={k_step_limit if k_step_limit is not None else 'unknown'}",
+            flush=True,
+        )
+
     try:
         audio = svc.slice_inference(
             raw_audio_path=args.input,
@@ -214,7 +317,7 @@ def main() -> int:
             f0_predictor=args.f0,
             enhancer_adaptive_key=0,
             cr_threshold=0.05,
-            k_step=args.k_step,
+            k_step=effective_k_step,
             use_spk_mix=False,
             second_encoding=False,
             loudness_envelope_adjustment=1,

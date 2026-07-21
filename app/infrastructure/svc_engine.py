@@ -215,6 +215,8 @@ class SvcEngine:
             params.f0_method or "rmvpe",
             "--k-step",
             str(self._ratio_to_kstep(params.diffusion_ratio)),
+            "--diffusion-ratio",
+            str(max(0.0, min(1.0, float(params.diffusion_ratio)))),
             "--clip",
             str(self._CLIP_SECONDS),
         ]
