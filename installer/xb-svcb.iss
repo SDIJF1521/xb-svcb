@@ -21,7 +21,7 @@
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.22"
+#define MyAppVersion "0.0.23"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 
@@ -29,6 +29,7 @@
 AppId={{B9C2F4E7-1A3D-4E6B-9C8A-2F5D7E1B3A40}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppVersion}.0
 AppPublisher={#MyAppPublisher}
 ; 默认装到用户可写目录，避免在 Program Files 内建 venv / 下模型需要管理员权限
 DefaultDirName={localappdata}\Programs\{#MyAppShort}
@@ -80,7 +81,8 @@ Source: "..\assets\icon\xb-svcb.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; 排除可选的 fcpe.pt（默认 F0 用 rmvpe），让安装器体积压到 GitHub Release 单文件 2GiB 上限内
 Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression; Excludes: "fcpe.pt"
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
-Source: "..\release_notes_v022.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release_notes_v023.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\docs\api.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 #endif
 
 [Icons]

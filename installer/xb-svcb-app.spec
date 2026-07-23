@@ -41,11 +41,37 @@ hiddenimports = [
     "sniffio",
     "idna",
     "certifi",
+    # FastAPI 服务在函数/后台线程内启动，Uvicorn 的协议与 lifespan 模块均为动态加载。
+    "fastapi",
+    "starlette",
+    "pydantic",
+    "multipart",
+    "uvicorn",
+    "uvicorn.logging",
+    "uvicorn.loops.auto",
+    "uvicorn.loops.asyncio",
+    "uvicorn.protocols.http.auto",
+    "uvicorn.protocols.http.h11_impl",
+    "uvicorn.protocols.websockets.auto",
+    "uvicorn.lifespan.on",
 ]
 
 # pywebview（Windows EdgeChromium 后端）+ 其 http server 依赖一并收集；
 # httpx / certifi 一并 collect_all，确保模块与 certifi 的 CA 证书数据都打进 exe。
-for pkg in ("webview", "clr_loader", "pythonnet", "bottle", "proxy_tools", "httpx", "certifi"):
+for pkg in (
+    "webview",
+    "clr_loader",
+    "pythonnet",
+    "bottle",
+    "proxy_tools",
+    "httpx",
+    "certifi",
+    "fastapi",
+    "starlette",
+    "pydantic",
+    "multipart",
+    "uvicorn",
+):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b

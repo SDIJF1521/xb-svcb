@@ -53,6 +53,31 @@ export interface SystemStatus {
   inference_devices?: InferenceDeviceCapabilities
 }
 
+export type HttpApiScope = 'local' | 'lan'
+
+export interface HttpApiStatus {
+  running: boolean
+  scope: HttpApiScope
+  host: string
+  port: number
+  api_key: string
+  base_urls: string[]
+  docs_url: string
+  redoc_url: string
+  last_error?: string
+  ok?: boolean
+  message?: string
+  error?: string
+}
+
+export interface HttpApiTestResult {
+  ok: boolean
+  latency_ms?: number
+  model_count?: number
+  message?: string
+  error?: string
+}
+
 export interface DataStorageStatus {
   data_dir: string
   used_bytes: number
@@ -298,7 +323,7 @@ export interface CreateBatchWorkPayload extends CreateWorkPayload {
 
 // ---- 音乐资源获取（妖狐 API）----
 
-/** 可选曲库（网易云 / QQ音乐 …）。 */
+/** 可选曲库（网易云 / QQ音乐 / 酷我音乐 …）。 */
 export interface MusicSource {
   id: string
   name: string
@@ -314,6 +339,9 @@ export interface MusicSearchItem {
   album: string
   /** 收费标记，如「[收费]」（仅部分曲库返回）。 */
   pay?: string
+  /** 酷我返回的歌曲 RID，可用于聚合歌词接口。 */
+  rid?: string
+  subtitle?: string
 }
 
 export interface MusicSearchResult {
@@ -334,6 +362,12 @@ export interface MusicSongDetail {
   url: string
   musicurl: string
   vipmusicurl?: string
+  /** 酷我 vipmusic 返回的实际音频格式。 */
+  format?: string
+  /** 酷我 vipmusic 返回的音质描述。 */
+  quality?: string
+  /** 酷我歌曲 RID。 */
+  rid?: string
   lrc: string
 }
 
@@ -350,6 +384,13 @@ export interface MusicDownloadResult {
   path?: string
   name?: string
   size?: string
+}
+
+/** 在线试听结果（酷我返回 data URI，其它曲库返回直链）。 */
+export interface MusicPreviewResult {
+  ok: boolean
+  error?: string
+  src?: string
 }
 
 /** 已下载到本地的歌曲。 */

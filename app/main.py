@@ -67,6 +67,7 @@ def main() -> None:
         return
 
     dev = is_dev()
+    api = None
     try:
         url = resolve_url()
         api = build_api()
@@ -119,6 +120,8 @@ def main() -> None:
             storage_path=str(config.WEBVIEW_DIR),
         )
     finally:
+        if api is not None:
+            api.shutdown()
         single.close()
 
 

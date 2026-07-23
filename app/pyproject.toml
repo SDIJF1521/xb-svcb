@@ -1,10 +1,13 @@
 [project]
 name = "app"
-version = "0.0.22"
+version = "0.0.23"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "fastapi>=0.116.1",
     "httpx[http2]>=0.28.1",
+    "python-multipart>=0.0.20",
     "pywebview>=6.2.1",
+    "uvicorn>=0.35.0",
 ]

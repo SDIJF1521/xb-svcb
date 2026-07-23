@@ -14,10 +14,14 @@ import type {
   ModelInspectResult,
   ModelDTO,
   SystemStatus,
+  HttpApiScope,
+  HttpApiStatus,
+  HttpApiTestResult,
   WorkDTO,
   MusicSearchResult,
   MusicSongResult,
   MusicDownloadResult,
+  MusicPreviewResult,
   DownloadedMusic,
   MusicSource,
   LyricsResult,
@@ -85,6 +89,31 @@ function migrationResultToProgress(
 export const api = {
   getSystemStatus: () =>
     invoke<SystemStatus>('get_system_status', [], () => mock.getSystemStatus()),
+
+  getHttpApiStatus: () =>
+    invoke<HttpApiStatus>('get_http_api_status', [], () => mock.getHttpApiStatus()),
+
+  configureHttpApi: (payload: { scope: HttpApiScope; port: number }) =>
+    invoke<HttpApiStatus>('configure_http_api', [payload], () =>
+      mock.configureHttpApi(payload),
+    ),
+
+  regenerateHttpApiKey: () =>
+    invoke<HttpApiStatus>('regenerate_http_api_key', [], () =>
+      mock.regenerateHttpApiKey(),
+    ),
+
+  startHttpApi: (payload: { scope: HttpApiScope; port: number }) =>
+    invoke<HttpApiStatus>('start_http_api', [payload], () => mock.startHttpApi(payload)),
+
+  stopHttpApi: () =>
+    invoke<HttpApiStatus>('stop_http_api', [], () => mock.stopHttpApi()),
+
+  testHttpApi: () =>
+    invoke<HttpApiTestResult>('test_http_api', [], () => mock.testHttpApi()),
+
+  openHttpApiDocs: (kind: 'docs' | 'redoc' = 'docs') =>
+    invoke<boolean>('open_http_api_docs', [kind], () => mock.openHttpApiDocs(kind)),
 
   pickThemeMediaFile: () =>
     invoke<ThemeMediaPickResult>('pick_theme_media_file', [], () => mock.pickThemeMediaFile()),
@@ -259,14 +288,25 @@ export const api = {
       mock.searchMusic(msg, source),
     ),
 
-  getMusicSong: (msg: string, n: number, source?: string) =>
-    invoke<MusicSongResult>('get_music_song', [msg, n, source], () => mock.getMusicSong(msg, n, source)),
+  getMusicSong: (msg: string, n: number, source?: string, songId?: string) =>
+    invoke<MusicSongResult>('get_music_song', [msg, n, source, songId], () =>
+      mock.getMusicSong(msg, n, source, songId),
+    ),
 
-  downloadMusic: (msg: string, n: number, source?: string) =>
-    invoke<MusicDownloadResult>('download_music', [msg, n, source], () => mock.downloadMusic(msg, n, source)),
+  downloadMusic: (msg: string, n: number, source?: string, songId?: string) =>
+    invoke<MusicDownloadResult>('download_music', [msg, n, source, songId], () =>
+      mock.downloadMusic(msg, n, source, songId),
+    ),
 
-  getMusicLyrics: (msg: string, n: number, source?: string) =>
-    invoke<LyricsResult>('get_music_lyrics', [msg, n, source], () => mock.getMusicLyrics(msg, n, source)),
+  previewMusic: (msg: string, n: number, source?: string, songId?: string) =>
+    invoke<MusicPreviewResult>('preview_music', [msg, n, source, songId], () =>
+      mock.previewMusic(msg, n, source, songId),
+    ),
+
+  getMusicLyrics: (msg: string, n: number, source?: string, songId?: string) =>
+    invoke<LyricsResult>('get_music_lyrics', [msg, n, source, songId], () =>
+      mock.getMusicLyrics(msg, n, source, songId),
+    ),
 
   listMusic: () =>
     invoke<DownloadedMusic[]>('list_music', [], () => mock.listMusic()),

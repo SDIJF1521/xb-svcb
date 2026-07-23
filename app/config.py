@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.22"
+APP_VERSION = "0.0.23"
 APP_BG = "#05060d"
 
 
@@ -652,7 +652,7 @@ def _apply_data_dir(data_dir: Path) -> None:
     """更新当前进程内的数据目录派生路径。"""
     global DATA_DIR, MODELS_DIR, WORKS_DIR, TEMP_DIR, MUSIC_DIR, WEBVIEW_DIR
     global MODELS_DB, WORKS_DB, SETTINGS_DB, MODELHUB_DIR, EDITOR_DIR
-    global EDITOR_CACHE_DIR, EDITOR_PROJECTS_DB, THEME_MEDIA_DIR
+    global EDITOR_CACHE_DIR, EDITOR_PROJECTS_DB, THEME_MEDIA_DIR, API_UPLOADS_DIR
 
     DATA_DIR = data_dir.expanduser().resolve()
     MODELS_DIR = DATA_DIR / "models"
@@ -675,6 +675,8 @@ def _apply_data_dir(data_dir: Path) -> None:
     EDITOR_PROJECTS_DB = DATA_DIR / "editor_projects.json"
     # 自定义主题背景媒体（图片 / MP4 动态壁纸）持久化目录
     THEME_MEDIA_DIR = DATA_DIR / "theme" / "media"
+    # FastAPI 外部接入上传的源音频。服务默认关闭，仅在用户手动启动后写入。
+    API_UPLOADS_DIR = DATA_DIR / "api" / "uploads"
 
 
 def switch_data_dir(data_dir: Path) -> None:
@@ -691,10 +693,11 @@ _apply_data_dir(_initial_data_dir)
 # 用户需在「资源获取」页填写自己的 API Key（控制台->密钥管理）。
 # 接口形如 https://api.yaohud.cn/api/music/{source}，source 支持多个曲库。
 MUSIC_API_BASE = "https://api.yaohud.cn/api/music"
-# 可选曲库（source -> 显示名）。wy=网易云，qq=QQ音乐。
+# 可选曲库（source -> 显示名）。wy=网易云，qq=QQ音乐，kuwo=酷我音乐。
 MUSIC_SOURCES: dict[str, str] = {
     "wy": "网易云音乐",
     "qq": "QQ音乐",
+    "kuwo": "酷我音乐",
 }
 # 默认曲库
 MUSIC_API_DEFAULT_SOURCE = "wy"

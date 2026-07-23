@@ -1139,6 +1139,9 @@ const pickedModels = computed(() =>
 const songQuery = ref('')
 const songIndex = ref(1)
 const lyricSrc = ref('wy')
+const lyricSongId = ref('')
+const lyricSongIdQuery = ref('')
+const lyricSongIdIndex = ref(1)
 const lyricSources = ref<MusicSource[]>([{ id: 'wy', name: '网易云音乐', cookie: false }])
 const lyrics = ref<LyricLine[]>([])
 const offset = ref(0)
@@ -1196,7 +1199,14 @@ async function fetchLyrics() {
   lyricLoading.value = true
   lyricTried.value = true
   try {
-    const res = await api.getMusicLyrics(q, songIndex.value || 1, lyricSrc.value)
+    const songId =
+      lyricSrc.value === 'kuwo' &&
+      lyricSongId.value &&
+      q === lyricSongIdQuery.value &&
+      Number(songIndex.value || 1) === lyricSongIdIndex.value
+        ? lyricSongId.value
+        : undefined
+    const res = await api.getMusicLyrics(q, songIndex.value || 1, lyricSrc.value, songId)
     if (!res.ok || !res.lines?.length) {
       lyrics.value = []
       segments.value = []
@@ -1209,6 +1219,10 @@ async function fetchLyrics() {
     }
     buildSegmentsFromLyrics()
     clearHistory()
+  } catch (err) {
+    lyrics.value = []
+    segments.value = []
+    ElMessage.error(err instanceof Error ? err.message : '获取歌词失败')
   } finally {
     lyricLoading.value = false
   }
@@ -2218,6 +2232,11 @@ onMounted(async () => {
       : src.split(/[/\\]/).pop() || src
     song.value = { name, path: src, hint: '来自资源获取' }
     songQuery.value = name.replace(/\.[^.]+$/, '')
+    const routeMusicSource = typeof route.query.musicSource === 'string' ? route.query.musicSource : ''
+    if (lyricSources.value.some((s) => s.id === routeMusicSource)) lyricSrc.value = routeMusicSource
+    lyricSongId.value = typeof route.query.songId === 'string' ? route.query.songId : ''
+    lyricSongIdQuery.value = songQuery.value.trim()
+    lyricSongIdIndex.value = Number(songIndex.value || 1)
   }
 })
 

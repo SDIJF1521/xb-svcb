@@ -204,7 +204,7 @@ const searched = ref(false)
 const results = ref<MusicSearchItem[]>([])
 const resultKeyword = ref('')
 
-/* ----- 曲库（网易云 / QQ音乐）----- */
+/* ----- 曲库（网易云 / QQ音乐 / 酷我音乐）----- */
 const sources = ref<MusicSource[]>([{ id: 'wy', name: '网易云音乐', cookie: false }])
 const source = ref('wy')
 // 当前结果对应的曲库（预览 / 下载必须与搜索时一致）
@@ -250,6 +250,17 @@ function isUnplayableError(msg?: string): boolean {
   return /无法播放|VIP|版权|失效|有效音频|无可试听/.test(msg || '')
 }
 
+function songIdOf(item: MusicSearchItem): string | undefined {
+  const rid = String(item.rid || '').trim()
+  return rid || undefined
+}
+
+/** 酷我音频必须用 msg+n 取 vipmusic.url；rid 仅用于歌词等场景。 */
+function songIdForAudio(item: MusicSearchItem): string | undefined {
+  if (resultSource.value === 'kuwo') return undefined
+  return songIdOf(item)
+}
+
 function audioUrlCandidates(song: { vipmusicurl?: string; musicurl?: string; url?: string }): string[] {
   const urls: string[] = []
   for (const value of [song.vipmusicurl, song.musicurl, song.url]) {
@@ -273,7 +284,12 @@ async function togglePreview(item: MusicSearchItem) {
   }
   previewLoadingN.value = item.n
   try {
-    const res = await api.getMusicSong(resultKeyword.value, item.n, resultSource.value)
+    const res = await api.getMusicSong(
+      resultKeyword.value,
+      item.n,
+      resultSource.value,
+      songIdForAudio(item),
+    )
     if (!res.ok || !res.song) {
       if (isUnplayableError(res.error)) markUnplayable(item.n)
       ElMessage.error(res.error || '获取歌曲信息失败')
@@ -283,6 +299,28 @@ async function togglePreview(item: MusicSearchItem) {
     if (!candidates.length) {
       markUnplayable(item.n)
       ElMessage.warning('该歌曲不可播放，无法下载（可能为 VIP / 无版权）')
+      return
+    }
+    if (resultSource.value === 'kuwo') {
+      const preview = await api.previewMusic(
+        resultKeyword.value,
+        item.n,
+        resultSource.value,
+        songIdForAudio(item),
+      )
+      if (!preview.ok || !preview.src) {
+        if (isUnplayableError(preview.error)) markUnplayable(item.n)
+        ElMessage.error(preview.error || '试听失败')
+        return
+      }
+      try {
+        el.src = preview.src
+        el.load()
+        await el.play()
+        playingN.value = item.n
+      } catch {
+        ElMessage.error('试听播放失败')
+      }
       return
     }
     for (const src of candidates) {
@@ -346,7 +384,15 @@ async function doDownload(item: MusicSearchItem): Promise<DownloadedMusic | null
   }
   downloadingN.value = item.n
   try {
-    const res = await api.downloadMusic(resultKeyword.value, item.n, resultSource.value)
+    if (resultSource.value === 'kuwo') {
+      ElMessage.info('正在下载酷我音频，较大的无损文件可能需要十几秒，请稍等')
+    }
+    const res = await api.downloadMusic(
+      resultKeyword.value,
+      item.n,
+      resultSource.value,
+      songIdForAudio(item),
+    )
     if (!res.ok || !res.path) {
       if (isUnplayableError(res.error)) markUnplayable(item.n)
       ElMessage.error(res.error || '下载失败')
@@ -355,6 +401,11 @@ async function doDownload(item: MusicSearchItem): Promise<DownloadedMusic | null
     ElMessage.success('已下载：' + res.name)
     await refreshDownloaded()
     return { name: res.name || item.name, path: res.path, size: res.size || '' }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err || '')
+    if (isUnplayableError(message)) markUnplayable(item.n)
+    ElMessage.error(message || '下载失败')
+    return null
   } finally {
     downloadingN.value = null
   }
@@ -364,7 +415,7 @@ async function downloadAndCreate(item: MusicSearchItem) {
   toCreateN.value = item.n
   try {
     const got = await doDownload(item)
-    if (got) gotoCreate(got)
+    if (got) gotoCreate(got, item)
   } finally {
     toCreateN.value = null
   }
@@ -375,8 +426,14 @@ async function refreshDownloaded() {
   downloaded.value = await api.listMusic()
 }
 
-function gotoCreate(d: DownloadedMusic) {
-  router.push({ path: '/create', query: { source: d.path, name: d.name } })
+function gotoCreate(d: DownloadedMusic, item?: MusicSearchItem) {
+  const query: Record<string, string> = { source: d.path, name: d.name }
+  if (item) {
+    query.musicSource = resultSource.value
+    const rid = songIdOf(item)
+    if (rid) query.songId = rid
+  }
+  router.push({ path: '/create', query })
 }
 
 function useForCreate(d: DownloadedMusic) {
@@ -541,7 +598,7 @@ onMounted(async () => {
 .search-clear:hover { color: var(--xb-accent); }
 /* 曲库选择 */
 .source-field { flex-shrink: 0; }
-.source-select { width: 130px; }
+.source-select { width: 142px; }
 .source-select :deep(.el-select__wrapper) {
   background: rgba(var(--xb-fill-rgb), 0.04);
   border: 1px solid var(--xb-border);

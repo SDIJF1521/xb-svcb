@@ -45,13 +45,16 @@
 - 🌐 **模型站（魔搭社区 · 后台传输）** —— 基于 **ModelScope** 一键**上传/下载**声音模型：填自己的访问令牌即可发布到自有公开仓库，按关键词**模糊搜索**（**分页加载**）社区模型并直接导入；带**架构标签**（So-VITS-SVC / RVC / SeedVC / DDSP-SVC）与**清单防污染**校验；上传/下载**挂后台执行、不阻塞操作**，大模型支持断点续传和重试，下载完成后立即进入可选模型列表。
 - 🎼 **专业人声分离** —— `5_HP-Karaoke-UVR` 分离 + `UVR-DeEcho-DeReverb` 去混响，得到干净干声。
 - ⚡ **GPU / CPU 自由切换** —— 自动识别 NVIDIA CUDA 与 AMD Radeon DirectML（含 **50 系/Blackwell 自动走 cu128 + torch 2.7**），长音频自动分段避免显存溢出。
+- 🔌 **FastAPI 外部接入** —— 软件内手动启停本机或局域网 API，支持 API Key、流式上传大音频、模型列表、创建/查询/重试任务和成品下载；内置连通性测试、Swagger/ReDoc、Python 与 PowerShell 示例。
 - 🎨 **主题系统与自定义主题** —— 暗色 / 亮色 / 自定义主题一键切换并记忆，切换时从主题按钮触发基于原生页面快照的圆形扩散动画；自定义主题支持调色、背景图片 / MP4 动态壁纸和动态粒子，默认提供亮色「晴空花园」示例，连 pywebview **原生窗口标题栏/边框**也会在动画结束后自然同步。
 - 👤 **个性化** —— 自定义头像与昵称、内置全局消息通知中心；切换页面后仍持续同步任务进度与失败原因，已读状态可在多个前端窗口间同步。
 - 📦 **开箱即用** —— 安装后通过 `XB-SVCB.exe` 启动完整桌面应用（自带应用图标与前端资源），打开界面无需另装 Python / Node。
 - 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-seedvc` / `.venv-ddsp` / `.venv-uvr`），互不污染。
 - 🎧 **作品库** —— 试听 / 导出成品，单独试听伴奏与干声，失败任务一键查日志；删除作品同步真实清理本地生成文件。
 
-> **最新版本 v0.0.22**：新增 Windows AMD Radeon DirectML 支持，UVR、So-VITS-SVC、RVC 与 SeedVC 可使用 AMD GPU；DDSP-SVC 实机发现完整 DirectML 图会静默产生小声/静音/电流杂音，因此 AMD 机器暂用 CPU 稳定推理。**SeedVC 建议 NVIDIA CUDA 用户优先使用，AMD/CPU 用户不建议把 SeedVC 作为首选模型**，更推荐 So-VITS-SVC 或 RVC。设备 UI 根据各隔离环境实际能力显示 CUDA、ROCm、DirectML 或 CPU；启动设备探测已隐藏命令行窗口，并通过五环境并行探测和环境签名缓存缩短重复启动时间。详见 [v0.0.22 更新说明](release_notes_v022.md)。
+> **最新版本 v0.0.23**：新增由用户手动启停的 FastAPI 外部接入服务，提供 API Key 鉴权、无限制大小的流式音频上传、模型读取、任务创建/查询/重试和成品下载；软件内置连通性测试、Swagger/ReDoc 入口以及 Python/PowerShell 完整示例。服务默认关闭，退出软件即释放端口，不会弹出命令行窗口，也不改变 v0.0.22 的 NVIDIA CUDA、AMD DirectML 或 CPU 推理环境。详见 [v0.0.23 更新说明](release_notes_v023.md) 与 [API 接入文档](docs/api.md)。
+
+> v0.0.22：新增 Windows AMD Radeon DirectML 支持，UVR、So-VITS-SVC、RVC 与 SeedVC 可使用 AMD GPU；DDSP-SVC 在 AMD 机器暂用 CPU 稳定推理。设备 UI 根据各隔离环境实际能力显示 CUDA、ROCm、DirectML 或 CPU；启动探测使用并行缓存且不弹出 CMD。详见 [v0.0.22 更新说明](release_notes_v022.md)。
 
 > v0.0.21：音频编辑器的 VST3 插件 UI 改为非模态置顶窗口，可与主界面播放和时间轴操作并行；同一 GUI 插件实例通过 JUCE 声卡回调处理可听音频，参数在下一音频块生效，并显示设备实际块大小与延迟；新增相邻音频片段渲染合并。详见 [v0.0.21 更新说明](release_notes_v021.md)。
 >
@@ -336,6 +339,24 @@ run.bat
 ```
 
 或手动：`app\.venv\Scripts\python.exe app\main.py`
+
+---
+
+<a id="fastapi"></a>
+
+## 🔌 FastAPI 外部接入
+
+v0.0.23 起可在软件的“资料库 -> API 接入”页手动启动 FastAPI 服务。默认只监听 `127.0.0.1:8765`；需要同一局域网内的其他设备调用时，可切换为局域网监听。软件不会自动开放端口，关闭软件后服务也会停止。
+
+标准调用顺序为：
+
+1. `POST /api/v1/uploads` 流式上传源音频，取得 `upload_id`。上传不设置文件大小上限，只受数据盘剩余空间限制。
+2. `GET /api/v1/models` 获取模型和默认模型 ID。
+3. `POST /api/v1/jobs` 创建任务；接口返回 `202`，任务进入与桌面端共用的推理队列。
+4. 轮询 `GET /api/v1/jobs/{job_id}`，直到状态为 `done` 或 `failed`。
+5. 成功后请求响应中的 `result_url` 下载成品。
+
+除 `/health` 与接口文档外，请求必须携带软件页面显示的 `X-API-Key`。服务启动后可访问 `/docs`、`/redoc` 和 `/openapi.json`；软件内也提供真实鉴权测试和可复制的完整调用示例。详细字段、SeedVC 参考音频和错误码见 [API 接入文档](docs/api.md)。
 
 ---
 

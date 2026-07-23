@@ -45,6 +45,11 @@ const router = createRouter({
           name: 'Works',
           component: () => import('@/views/works/works.vue'),
         },
+        {
+          path: 'api',
+          name: 'ApiAccess',
+          component: () => import('@/views/api/api.vue'),
+        },
       ],
     },
   ],

@@ -249,7 +249,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Picture, Close, Right, Download, Loading, Scissor, ArrowDown } from '@element-plus/icons-vue'
+import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Picture, Close, Right, Download, Loading, Scissor, ArrowDown, Connection } from '@element-plus/icons-vue'
 import ThemeSwitcher from '@/components/theme/ThemeSwitcher.vue'
 import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
@@ -273,6 +273,7 @@ const libraryNavItems = [
   { label: '资源获取', desc: '找歌与伴奏素材', to: '/music', icon: Download },
   { label: '我的模型', desc: '管理声音模型', to: '/models', icon: FolderOpened },
   { label: '我的作品', desc: '查看生成任务', to: '/works', icon: Files },
+  { label: 'API 接入', desc: '外部程序调用与测试', to: '/api', icon: Connection },
 ]
 
 const libraryActive = computed(() =>

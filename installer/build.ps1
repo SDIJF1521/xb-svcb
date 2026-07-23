@@ -98,7 +98,8 @@ $workerFiles = @(
 foreach ($worker in $workerFiles) {
   Require-File (Join-Path $Root "app\infrastructure\$worker") "Worker source $worker"
 }
-Require-File (Join-Path $Root "release_notes_v022.md") "v0.0.22 release notes"
+Require-File (Join-Path $Root "release_notes_v023.md") "v0.0.23 release notes"
+Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
 
 # Reject Git LFS pointers or partial DDSP/SeedVC snapshots before producing a release.

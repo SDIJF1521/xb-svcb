@@ -1,6 +1,6 @@
 # XB-SVCB 安装器
 
-版本：`0.0.22`
+版本：`0.0.23`
 
 安装器由 Inno Setup 读取 `installer/xb-svcb.iss` 构建，负责打包桌面本体、环境搭建脚本、自带模型和文档。
 
@@ -37,6 +37,14 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 ```
 
 临时不打包插件 Host 时可运行 `installer/build.ps1 -SkipJuceHostBuild`。
+
+## v0.0.23 安装器行为
+
+- 应用、Windows EXE 版本资源、Python 项目、前端、两份锁文件和 Inno Setup 版本统一为 `0.0.23`。
+- PyInstaller 明确收集 FastAPI、Starlette、Pydantic、python-multipart、Uvicorn 及动态加载的 HTTP/lifespan 模块，确保安装版可在软件内手动启动 API 服务。
+- 安装包新增 `docs/api.md`，包含安全配置、完整调用流程、Python 示例、SeedVC 参考音频用法、接口清单和状态码。
+- FastAPI 与桌面本体运行在同一 GUI 进程，不新增控制台程序或自动启动项；安装后默认不开放端口。
+- 发布构建要求根目录存在 `release_notes_v023.md` 与 `docs/api.md`，缺失时不会生成安装器。
 
 ## v0.0.22 安装器行为
 

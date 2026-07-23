@@ -8,12 +8,16 @@ import type {
   ModelLibraryOverview,
   ModelDTO,
   SystemStatus,
+  HttpApiScope,
+  HttpApiStatus,
+  HttpApiTestResult,
   InferenceDeviceRuntime,
   WorkDTO,
   PipelineStep,
   MusicSearchResult,
   MusicSongResult,
   MusicDownloadResult,
+  MusicPreviewResult,
   DownloadedMusic,
   MusicSource,
   LyricsResult,
@@ -67,6 +71,31 @@ const fileName = (p: string) => p.split(/[/\\]/).pop() || p
 const editorFormat = (fmt = 'wav') => {
   const value = fmt.trim().toLowerCase().replace(/^\./, '')
   return ['wav', 'mp3', 'flac'].includes(value) ? value : 'wav'
+}
+
+let mockHttpApi: HttpApiStatus = {
+  running: false,
+  scope: 'local',
+  host: '127.0.0.1',
+  port: 8765,
+  api_key: 'xb_mock_api_key_0123456789abcdef',
+  base_urls: ['http://127.0.0.1:8765'],
+  docs_url: 'http://127.0.0.1:8765/docs',
+  redoc_url: 'http://127.0.0.1:8765/redoc',
+}
+
+function updateMockHttpApi(scope: HttpApiScope, port: number): HttpApiStatus {
+  const local = `http://127.0.0.1:${port}`
+  mockHttpApi = {
+    ...mockHttpApi,
+    scope,
+    host: scope === 'lan' ? '0.0.0.0' : '127.0.0.1',
+    port,
+    base_urls: scope === 'lan' ? [local, `http://192.168.1.20:${port}`] : [local],
+    docs_url: `${local}/docs`,
+    redoc_url: `${local}/redoc`,
+  }
+  return { ...mockHttpApi }
 }
 
 // 浏览器环境下用真实的系统文件选择框（无法拿到完整本地路径，仅用于开发预览）。
@@ -199,6 +228,7 @@ let mockMusicCookie = ''
 const mockMusicSources: MusicSource[] = [
   { id: 'wy', name: '网易云音乐', cookie: false },
   { id: 'qq', name: 'QQ音乐', cookie: true },
+  { id: 'kuwo', name: '酷我音乐', cookie: false },
 ]
 const mockDownloaded: DownloadedMusic[] = []
 
@@ -474,6 +504,33 @@ export const mock = {
         ),
       },
     }
+  },
+  getHttpApiStatus(): HttpApiStatus {
+    return { ...mockHttpApi, base_urls: [...mockHttpApi.base_urls] }
+  },
+  configureHttpApi(payload: { scope: HttpApiScope; port: number }): HttpApiStatus {
+    return { ...updateMockHttpApi(payload.scope, payload.port), ok: true }
+  },
+  regenerateHttpApiKey(): HttpApiStatus {
+    mockHttpApi.api_key = `xb_mock_${Math.random().toString(36).slice(2)}_${Date.now()}`
+    return { ...mockHttpApi, ok: true }
+  },
+  startHttpApi(payload: { scope: HttpApiScope; port: number }): HttpApiStatus {
+    updateMockHttpApi(payload.scope, payload.port)
+    mockHttpApi.running = true
+    return { ...mockHttpApi, ok: true, message: 'API 服务已启动' }
+  },
+  stopHttpApi(): HttpApiStatus {
+    mockHttpApi.running = false
+    return { ...mockHttpApi, ok: true, message: 'API 服务已停止' }
+  },
+  testHttpApi(): HttpApiTestResult {
+    return mockHttpApi.running
+      ? { ok: true, latency_ms: 8.4, model_count: mockModels.length, message: 'API 鉴权与模型接口调用正常' }
+      : { ok: false, error: '请先启动 API 服务' }
+  },
+  openHttpApiDocs(_kind: 'docs' | 'redoc'): boolean {
+    return mockHttpApi.running
   },
   pickThemeMediaFile(): Promise<ThemeMediaPickResult> {
     return browserPickThemeMedia()
@@ -823,18 +880,21 @@ export const mock = {
   searchMusic(msg: string, source = mockMusicSource): MusicSearchResult {
     if (!mockMusicKey) return { ok: false, error: '未配置 API Key，请先在「API 设置」中填写' }
     if (!msg.trim()) return { ok: false, error: '请输入搜索关键词' }
-    const total = source === 'qq' ? 10 : 13
+    const total = source === 'qq' ? 10 : source === 'kuwo' ? 15 : 13
     const songs = Array.from({ length: total }, (_, i) => ({
       n: i + 1,
       name: `${msg}${i === 0 ? '' : `（版本 ${i + 1}）`}`,
       singer: ['洛天依', '国风堂', '云梦', 'Reze'][i % 4] as string,
       album: msg,
       pay: source === 'qq' && i % 3 === 0 ? '[收费]' : '',
+      rid: source === 'kuwo' ? String(100000 + i) : '',
+      subtitle: source === 'kuwo' ? '酷我模拟数据' : '',
     }))
     return { ok: true, keyword: msg, source, songs }
   },
-  getMusicSong(msg: string, n: number, _source = mockMusicSource): MusicSongResult {
+  getMusicSong(msg: string, n: number, _source = mockMusicSource, _songId?: string): MusicSongResult {
     void _source
+    void _songId
     if (!mockMusicKey) return { ok: false, error: '未配置 API Key' }
     return {
       ok: true,
@@ -846,17 +906,30 @@ export const mock = {
         picture: '',
         url: '',
         musicurl: '',
+        vipmusicurl: _source === 'kuwo' ? 'https://example.com/demo.mp3' : '',
+        rid: _source === 'kuwo' ? String(100000 + n - 1) : '',
+        quality: _source === 'kuwo' ? '无损音质' : '',
+        format: _source === 'kuwo' ? 'mp3' : '',
         lrc: `[00:00.00]${msg}（第 ${n} 首）\n[00:03.00]浏览器开发环境为模拟数据`,
       },
     }
   },
-  downloadMusic(msg: string, n: number, _source = mockMusicSource): MusicDownloadResult {
+  downloadMusic(msg: string, n: number, _source = mockMusicSource, _songId?: string): MusicDownloadResult {
     void _source
+    void _songId
     if (!mockMusicKey) return { ok: false, error: '未配置 API Key' }
     const name = `${msg} - 示例歌手${n > 1 ? ` (${n})` : ''}`
     const item: DownloadedMusic = { name, path: `C:/music/${name}.mp3`, size: '8.2 MB' }
     mockDownloaded.unshift(item)
     return { ok: true, path: item.path, name: item.name, size: item.size }
+  },
+  previewMusic(msg: string, n: number, _source = mockMusicSource, _songId?: string): MusicPreviewResult {
+    void _source
+    void _songId
+    void msg
+    void n
+    if (!mockMusicKey) return { ok: false, error: '未配置 API Key' }
+    return { ok: true, src: '' }
   },
   listMusic(): DownloadedMusic[] {
     return [...mockDownloaded]
@@ -869,9 +942,10 @@ export const mock = {
     }
     return false
   },
-  getMusicLyrics(msg: string, n: number, _source = mockMusicSource): LyricsResult {
+  getMusicLyrics(msg: string, n: number, _source = mockMusicSource, _songId?: string): LyricsResult {
     void n
     void _source
+    void _songId
     if (!mockMusicKey) return { ok: false, error: '未配置 API Key' }
     const lines = Array.from({ length: 12 }, (_, i) => ({
       time: 8 + i * 12.5,

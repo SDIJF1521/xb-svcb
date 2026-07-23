@@ -75,6 +75,10 @@ class Api:
         self._window = None
         self._migration_lock = threading.Lock()
         self._migration = self._empty_migration_status()
+        # FastAPI 默认关闭。这里只创建控制器，不监听端口；必须由用户在界面手动启动。
+        from .http_server import HttpApiServer
+
+        self._http_api = HttpApiServer(self, settings)
 
     def set_window(self, window) -> None:  # noqa: ANN001
         """由入口在创建窗口后注入，用于打开原生文件对话框。"""
@@ -83,6 +87,31 @@ class Api:
     # ---- 系统 ----
     def get_system_status(self) -> dict[str, Any]:
         return self._system.status()
+
+    def get_http_api_status(self) -> dict[str, Any]:
+        return self._http_api.status()
+
+    def configure_http_api(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._http_api.configure(payload or {})
+
+    def regenerate_http_api_key(self) -> dict[str, Any]:
+        return self._http_api.regenerate_key()
+
+    def start_http_api(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._http_api.start(payload or {})
+
+    def stop_http_api(self) -> dict[str, Any]:
+        return self._http_api.stop()
+
+    def test_http_api(self) -> dict[str, Any]:
+        return self._http_api.test()
+
+    def open_http_api_docs(self, kind: str = "docs") -> bool:
+        return self._http_api.open_docs(kind)
+
+    def shutdown(self) -> None:
+        """释放桌面进程内的后台服务。"""
+        self._http_api.shutdown()
 
     def apply_window_theme(self, theme: str) -> bool:
         """让原生窗口标题栏/边框跟随前端主题（cyber / anime）。
@@ -740,15 +769,43 @@ class Api:
     ) -> dict[str, Any]:
         return self._music.search(msg, int(page or 1), int(page_size or 15), source)
 
-    def get_music_song(self, msg: str, n: int, source: str | None = None) -> dict[str, Any]:
-        return self._music.get_song(msg, n, source)
+    def get_music_song(
+        self,
+        msg: str,
+        n: int,
+        source: str | None = None,
+        song_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self._music.get_song(msg, n, source, song_id)
 
-    def download_music(self, msg: str, n: int, source: str | None = None) -> dict[str, Any]:
-        return self._music.download(msg, n, source)
+    def download_music(
+        self,
+        msg: str,
+        n: int,
+        source: str | None = None,
+        song_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self._music.download(msg, n, source, song_id)
 
-    def get_music_lyrics(self, msg: str, n: int, source: str | None = None) -> dict[str, Any]:
+    def preview_music(
+        self,
+        msg: str,
+        n: int,
+        source: str | None = None,
+        song_id: str | None = None,
+    ) -> dict[str, Any]:
+        """获取在线试听地址；酷我经后端代理为 data URI。"""
+        return self._music.preview(msg, n, source, song_id)
+
+    def get_music_lyrics(
+        self,
+        msg: str,
+        n: int,
+        source: str | None = None,
+        song_id: str | None = None,
+    ) -> dict[str, Any]:
         """按歌名+索引获取带时间轴的歌词（多模型混合翻唱用）。"""
-        return self._music.get_lyrics(msg, n, source)
+        return self._music.get_lyrics(msg, n, source, song_id)
 
     def get_audio_duration(self, path: str) -> float:
         """探测本地音频时长（秒），失败返回 0。用于歌词/文件时长匹配校验。"""
@@ -1040,6 +1097,8 @@ class Api:
         queue = self._works.queue_status()
         if queue.get("running") or queue.get("size"):
             return "当前有推理任务正在运行或排队，请等待任务结束后再更改数据目录。"
+        if self._http_api.status().get("running"):
+            return "API 服务正在运行，请先在 API 接入页停止服务再更改数据目录。"
         return None
 
     def _switch_active_data_dir(self, target: Path) -> None:
@@ -1064,6 +1123,7 @@ class Api:
             config.EDITOR_DIR,
             config.EDITOR_CACHE_DIR,
             config.THEME_MEDIA_DIR,
+            config.API_UPLOADS_DIR,
         ):
             directory.mkdir(parents=True, exist_ok=True)
         self._models_repo.set_path(config.MODELS_DB)
