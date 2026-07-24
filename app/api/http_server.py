@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import secrets
 import socket
 import threading
@@ -453,7 +454,7 @@ JOB_LIST_API_DOC = _api_operation_description(
 )
 
 JOB_CREATE_API_DOC = _api_operation_description(
-    "使用已上传文件或运行软件电脑上的绝对路径创建单模型 AI 翻唱任务。",
+    "使用已上传文件或运行软件电脑上的绝对路径创建单模型或多模型 AI 翻唱任务。",
     "POST",
     "/api/v1/jobs",
     [
@@ -461,8 +462,11 @@ JOB_CREATE_API_DOC = _api_operation_description(
         ("source_path", "string|null", "条件必填", "null", "运行 XB-SVCB 电脑上的绝对路径；与 source_upload_id 二选一"),
         ("model_id", "string|null", "否", "null", "模型 ID；省略时使用 default_id"),
         ("title", "string|null", "否", "源文件名", "作品标题，最长 120 个字符"),
-        ("workflow", "string", "否", "auto_mix", "auto_mix、auto_then_editor 或 full_manual_editor"),
+        ("mode", "string", "否", "single", "single 或 multi"),
+        ("workflow", "string", "否", "auto_mix", "自动混音、人声合并或编辑器工作流"),
         ("reference_upload_id", "string|null", "SeedVC 必填", "null", "SeedVC 目标音色参考音频的上传 ID"),
+        ("models", "array", "multi 必填", "[]", "多模型及各自 params/reference_upload_id"),
+        ("segments", "array", "multi 必填", "[]", "时间区间和 model_ids；多个 ID 表示合唱"),
         ("params.pitch", "integer", "否", "0", "四种框架；半音偏移，范围 -12~12"),
         ("params.f0_method", "string", "否", "rmvpe", "SVC/RVC/DDSP；基频算法，SeedVC 忽略"),
         ("params.device", "string", "否", "auto", "auto、cuda、rocm、directml 或 cpu"),
@@ -741,7 +745,7 @@ class InferenceParamsRequest(BaseModel):
 
 
 class JobCreateRequest(BaseModel):
-    """创建单模型翻唱任务。上传 ID 与本机路径必须且只能提供一个。"""
+    """创建单模型或多模型翻唱任务。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -773,14 +777,22 @@ class JobCreateRequest(BaseModel):
         max_length=120,
         description="作品标题，最长 120 个字符。省略时使用源文件名，软件会追加“(AI 翻唱)”。",
     )
+    mode: Literal["single", "multi"] = Field(
+        default="single",
+        description="翻唱模式。single 使用 model_id；multi 使用 models 和 segments。",
+    )
     workflow: Literal[
-        "auto_mix", "auto_then_editor", "full_manual_editor"
+        "auto_mix",
+        "auto_vocal_merge",
+        "manual_vocal_merge",
+        "auto_then_editor",
+        "full_manual_editor",
     ] = Field(
         default="auto_mix",
         description=(
             "生成后处理流程：auto_mix 完成分离、转换和伴奏混音；auto_then_editor "
-            "完成自动生成后可进入编辑器；full_manual_editor 创建全手动编辑流程。"
-            "HTTP API 当前创建单模型任务，不提供多模型人声合并工作流。"
+            "完成自动生成后可进入编辑器；full_manual_editor 创建全手动编辑流程；"
+            "auto_vocal_merge 和 manual_vocal_merge 仅用于 multi。"
         ),
     )
     reference_upload_id: str | None = Field(
@@ -794,6 +806,173 @@ class JobCreateRequest(BaseModel):
         default_factory=InferenceParamsRequest,
         description="推理参数。展开此对象可查看每个字段的作用、范围、默认值和适用框架。",
     )
+    models: list["BlendModelRequest"] = Field(
+        default_factory=list,
+        description="多模型模式使用的模型及各自推理参数。",
+    )
+    segments: list["BlendSegmentRequest"] = Field(
+        default_factory=list,
+        description="多模型模式的时间轴分配；同一片段可传多个 model_ids 组成合唱。",
+    )
+
+
+class BlendModelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: str = Field(description="声音模型 ID")
+    params: InferenceParamsRequest = Field(
+        default_factory=InferenceParamsRequest,
+        description="该模型独立使用的推理参数",
+    )
+    reference_upload_id: str | None = Field(
+        default=None,
+        description="该模型为 SeedVC 时使用的目标音色参考音频上传 ID",
+    )
+
+
+class BlendSegmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start: float = Field(ge=0, description="片段在整首歌中的开始秒数")
+    end: float = Field(gt=0, description="片段在整首歌中的结束秒数")
+    model_id: str | None = Field(default=None, description="单人演唱时的模型 ID")
+    model_ids: list[str] = Field(
+        default_factory=list,
+        description="参与该片段演唱的模型 ID；多个 ID 表示合唱",
+    )
+
+
+class JobBatchCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    jobs: list[JobCreateRequest] = Field(
+        min_length=1,
+        max_length=50,
+        description="需要批量创建的任务，最多 50 个",
+    )
+
+
+class RenameJobRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=120, description="新的作品标题")
+
+
+class PresetCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=80, description="预设名称")
+    params: InferenceParamsRequest = Field(
+        default_factory=InferenceParamsRequest,
+        description="需要保存的推理参数",
+    )
+
+
+class ModelDefaultRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: str = Field(description="设为默认项的声音模型 ID")
+
+
+class EditorProjectCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_upload_id: str | None = Field(
+        default=None,
+        description="通过上传接口取得的音频 ID；与 work_id 必须且只能提供一个",
+    )
+    work_id: str | None = Field(
+        default=None,
+        description="已有翻唱任务 ID；与 source_upload_id 必须且只能提供一个",
+    )
+    title: str | None = Field(default=None, max_length=120, description="新工程标题")
+
+
+class EditorProjectSaveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project: dict[str, Any] = Field(
+        description="完整工程数据；片段 file 等服务端字段会被忽略并从现有工程恢复"
+    )
+
+
+class EditorTrackCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, max_length=80, description="音轨名称")
+    kind: Literal["source", "vocal", "bgm", "ai", "effect", "audio"] = Field(
+        default="audio",
+        description="音轨类型",
+    )
+
+
+class EditorClipImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    upload_id: str = Field(description="需要导入的音频上传 ID")
+    start: float = Field(default=0.0, ge=0, description="片段在时间轴上的开始秒数")
+
+
+class EditorSilenceSplitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    threshold_db: float = Field(default=-42.0, ge=-100, le=0, description="静音阈值 dB")
+    noise_db: float = Field(default=-60.0, ge=-120, le=0, description="噪声参考值 dB")
+    min_silence: float = Field(default=0.3, ge=0.05, le=10, description="最短静音秒数")
+    min_clip: float = Field(default=0.45, ge=0.05, le=30, description="最短片段秒数")
+    crossfade: float = Field(default=0.04, ge=0, le=2, description="切口交叉淡化秒数")
+    padding: float = Field(default=0.03, ge=0, le=2, description="切分边界留白秒数")
+    adaptive: bool = Field(default=True, description="是否自适应静音阈值")
+
+
+class EditorLyricLineRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    time: float = Field(ge=0, description="歌词时间戳，单位秒")
+    text: str = Field(description="歌词正文")
+
+
+class EditorLyricsSplitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lyrics: str | list[EditorLyricLineRequest] = Field(description="TXT/LRC 文本或歌词行数组")
+    padding: float = Field(default=0.0, ge=0, le=2, description="切分边界留白秒数")
+    min_clip: float = Field(default=0.2, ge=0.05, le=10, description="最短片段秒数")
+    time_mode: Literal["project", "clip"] = Field(default="project", description="时间戳基准")
+    auto_silence: bool = Field(default=True, description="无时间戳时是否吸附附近静音")
+    threshold_db: float = Field(default=-42.0, ge=-100, le=0, description="静音阈值 dB")
+    min_silence: float = Field(default=0.3, ge=0.05, le=10, description="最短静音秒数")
+
+
+class EditorSeparationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: str | None = Field(default=None, description="UVR 分离模型文件名；省略时使用默认值")
+    mute_source: bool = Field(default=True, description="分离成功后是否静音原片段")
+    device: Literal["auto", "cuda", "rocm", "directml", "cpu"] = Field(
+        default="auto",
+        description="UVR 推理设备",
+    )
+
+
+class EditorRerunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: str = Field(description="用于局部重推理的声音模型 ID")
+    reference_upload_id: str | None = Field(
+        default=None,
+        description="SeedVC 局部重推理所需的参考音频上传 ID",
+    )
+    params: InferenceParamsRequest = Field(
+        default_factory=InferenceParamsRequest,
+        description="局部重推理参数",
+    )
+
+
+class EditorMergeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    clip_ids: list[str] = Field(min_length=2, description="按时间顺序合并的片段 ID")
 
 
 class RetryResponse(BaseModel):
@@ -876,6 +1055,92 @@ class JobListResponse(BaseModel):
     total: int = Field(description="本次响应包含的任务数量")
 
 
+class JobBatchResponse(BaseModel):
+    items: list[JobResponse] = Field(description="本次批量创建的任务")
+    total: int = Field(description="成功创建的任务数量")
+
+
+class ActionResponse(BaseModel):
+    ok: bool = Field(description="操作是否成功")
+    id: str | None = Field(default=None, description="被操作的资源 ID")
+
+
+class InferenceHistoryResponse(BaseModel):
+    items: list[dict[str, Any]] = Field(description="按完成时间倒序排列的推理历史")
+    total: int = Field(description="本次响应包含的历史数量")
+
+
+class InferencePresetResponse(BaseModel):
+    id: str = Field(description="参数预设 ID")
+    name: str = Field(description="参数预设名称")
+    params: dict[str, Any] = Field(description="推理参数")
+    updated_at: str = Field(description="最后更新时间")
+
+
+class InferencePresetListResponse(BaseModel):
+    items: list[InferencePresetResponse] = Field(description="参数预设列表")
+    total: int = Field(description="预设数量")
+
+
+class ModelInspectResponse(BaseModel):
+    ok: bool = Field(description="模型文件是否通过检查")
+    model: ModelResponse | None = Field(default=None, description="检查后的公开模型信息")
+    issues: list[dict[str, Any]] = Field(default_factory=list, description="发现的问题")
+    fixed: list[str] = Field(default_factory=list, description="已自动修复的字段")
+
+
+class EditorProjectSummaryResponse(BaseModel):
+    id: str = Field(description="编辑工程 ID")
+    title: str = Field(description="编辑工程标题")
+    duration: float = Field(description="工程时长，单位秒")
+    tracks: int = Field(description="音轨数量")
+    updated_at: str = Field(description="最后更新时间")
+
+
+class EditorProjectListResponse(BaseModel):
+    items: list[EditorProjectSummaryResponse] = Field(description="编辑工程列表")
+    total: int = Field(description="编辑工程数量")
+
+
+class EditorProjectResponse(BaseModel):
+    id: str = Field(description="编辑工程 ID")
+    title: str = Field(description="编辑工程标题")
+    tracks: list[dict[str, Any]] = Field(description="音轨和片段；片段使用 audio_url 访问音频")
+    roles: list[dict[str, Any]] = Field(default_factory=list, description="工程角色列表")
+    duration: float = Field(description="工程时长，单位秒")
+    sample_rate: int = Field(description="工程采样率")
+    waveform_cache: dict[str, Any] = Field(default_factory=dict, description="波形缓存")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="不含本机路径的工程元数据")
+    created_at: str = Field(description="创建时间")
+    updated_at: str = Field(description="最后更新时间")
+    render_url: str = Field(description="当前工程混音的下载路径")
+
+
+class EditorOperationResponse(BaseModel):
+    ok: bool = Field(description="操作是否成功")
+    error: str | None = Field(default=None, description="失败原因")
+    project: EditorProjectResponse | None = Field(default=None, description="操作后的工程")
+    track: dict[str, Any] | None = Field(default=None, description="受影响的音轨")
+    clip: dict[str, Any] | None = Field(default=None, description="受影响的片段")
+    tracks: list[dict[str, Any]] | None = Field(default=None, description="新建或受影响的音轨")
+    clips: list[dict[str, Any]] | None = Field(default=None, description="新建或受影响的片段")
+    cuts: list[float] | None = Field(default=None, description="切分点")
+    relative_cuts: list[float] | None = Field(default=None, description="片段内相对切分点")
+    silences: list[dict[str, Any]] | None = Field(default=None, description="检测到的静音区间")
+    lines: list[dict[str, Any]] | None = Field(default=None, description="解析后的歌词行")
+    timing: str | None = Field(default=None, description="歌词切分方式")
+    simulated: bool | None = Field(default=None, description="是否使用了模拟结果")
+    removed_track_id: str | None = Field(default=None, description="被删除的音轨 ID")
+    merged_clip_ids: list[str] | None = Field(default=None, description="被合并的片段 ID")
+
+
+class EditorWaveformResponse(BaseModel):
+    ok: bool = Field(description="是否成功读取波形")
+    clip_id: str | None = Field(default=None, description="片段 ID")
+    bins: int | None = Field(default=None, description="波形采样点数量")
+    peaks: list[float] = Field(default_factory=list, description="归一化波形峰值")
+
+
 class QueueResponse(BaseModel):
     running: bool = Field(description="当前是否有任务正在执行")
     pending: list[str] = Field(description="等待执行的任务 ID 列表")
@@ -952,6 +1217,32 @@ class ErrorResponse(BaseModel):
     )
 
 
+def _resource_api_doc(
+    summary: str,
+    method: str,
+    path: str,
+    parameters: list[tuple[str, str, str, str, str]] | None = None,
+    *,
+    note: str = "",
+) -> str:
+    """为资源类接口生成统一且可扫描的 OpenAPI 说明。"""
+
+    return _api_operation_description(
+        summary,
+        method,
+        path,
+        parameters or NO_PARAMETERS,
+        [
+            ("ok", "boolean", "操作类响应表示是否成功；资源响应通常省略"),
+            ("id", "string|null", "相关资源 ID"),
+            ("items", "array|null", "列表类响应的数据项"),
+            ("error", "string|null", "业务失败原因"),
+        ],
+        '{"ok": true}',
+        note=note,
+    )
+
+
 def _public_model(item: dict[str, Any]) -> dict[str, Any]:
     """移除本机模型文件路径，仅保留外部调用需要的模型信息。"""
     return {
@@ -998,6 +1289,176 @@ def _public_work(item: dict[str, Any], base_path: str = "/api/v1") -> dict[str, 
     return result
 
 
+_LOCAL_PATH_KEYS = {
+    "file",
+    "path",
+    "source_path",
+    "output_path",
+    "log_path",
+    "host_path",
+    "state_path",
+    "rerun_input",
+    "rerun_source_file",
+    "paths",
+}
+_PUBLIC_DERIVED_KEYS = {"audio_url", "waveform_url", "render_url"}
+
+
+def _is_local_path_key(key: str) -> bool:
+    normalized = str(key or "").strip().lower()
+    return normalized in _LOCAL_PATH_KEYS or normalized.endswith("_path")
+
+
+def _strip_local_paths(value: Any) -> Any:
+    """递归移除对外 DTO 中的本机路径和编辑器服务端文件引用。"""
+
+    if isinstance(value, dict):
+        return {
+            str(key): _strip_local_paths(item)
+            for key, item in value.items()
+            if not _is_local_path_key(str(key))
+        }
+    if isinstance(value, list):
+        return [_strip_local_paths(item) for item in value]
+    return value
+
+
+def _public_editor_clip(
+    clip: dict[str, Any], project_id: str, base_path: str = "/api/v1"
+) -> dict[str, Any]:
+    public = _strip_local_paths(copy.deepcopy(clip))
+    clip_id = str(clip.get("id") or "")
+    public["audio_url"] = f"{base_path}/editor/projects/{project_id}/clips/{clip_id}/audio"
+    public["waveform_url"] = (
+        f"{base_path}/editor/projects/{project_id}/clips/{clip_id}/waveform"
+    )
+    return public
+
+
+def _public_editor_track(
+    track: dict[str, Any], project_id: str, base_path: str = "/api/v1"
+) -> dict[str, Any]:
+    public = _strip_local_paths(copy.deepcopy(track))
+    public["clips"] = [
+        _public_editor_clip(clip, project_id, base_path)
+        for clip in (track.get("clips") or [])
+        if isinstance(clip, dict)
+    ]
+    track_id = str(track.get("id") or "")
+    public["audio_url"] = f"{base_path}/editor/projects/{project_id}/tracks/{track_id}/audio"
+    return public
+
+
+def _public_editor_project(
+    project: dict[str, Any], base_path: str = "/api/v1"
+) -> dict[str, Any]:
+    project_id = str(project.get("id") or "")
+    public = _strip_local_paths(copy.deepcopy(project))
+    public.pop("history", None)
+    public.pop("future", None)
+    public["tracks"] = [
+        _public_editor_track(track, project_id, base_path)
+        for track in (project.get("tracks") or [])
+        if isinstance(track, dict)
+    ]
+    public.setdefault("roles", [])
+    public.setdefault("waveform_cache", {})
+    public.setdefault("metadata", {})
+    public["render_url"] = f"{base_path}/editor/projects/{project_id}/audio"
+    return public
+
+
+def _public_editor_operation(
+    result: dict[str, Any], project_id: str, base_path: str = "/api/v1"
+) -> dict[str, Any]:
+    public = _strip_local_paths(copy.deepcopy(result))
+    if isinstance(result.get("project"), dict):
+        public["project"] = _public_editor_project(result["project"], base_path)
+    if isinstance(result.get("track"), dict):
+        public["track"] = _public_editor_track(result["track"], project_id, base_path)
+    if isinstance(result.get("clip"), dict):
+        public["clip"] = _public_editor_clip(result["clip"], project_id, base_path)
+    if isinstance(result.get("tracks"), list):
+        public["tracks"] = [
+            _public_editor_track(item, project_id, base_path)
+            for item in result["tracks"]
+            if isinstance(item, dict)
+        ]
+    if isinstance(result.get("clips"), list):
+        public["clips"] = [
+            _public_editor_clip(item, project_id, base_path)
+            for item in result["clips"]
+            if isinstance(item, dict)
+        ]
+    return public
+
+
+def _restore_server_fields(incoming: Any, stored: Any) -> Any:
+    """恢复编辑器工程中只能由服务端持有的路径字段。"""
+
+    if isinstance(incoming, dict):
+        stored_dict = stored if isinstance(stored, dict) else {}
+        restored: dict[str, Any] = {}
+        for key, value in incoming.items():
+            if str(key) in _PUBLIC_DERIVED_KEYS:
+                continue
+            if _is_local_path_key(str(key)):
+                if key in stored_dict:
+                    restored[key] = copy.deepcopy(stored_dict[key])
+                continue
+            restored[key] = _restore_server_fields(value, stored_dict.get(key))
+        for key, value in stored_dict.items():
+            if _is_local_path_key(str(key)) and key not in restored:
+                restored[key] = copy.deepcopy(value)
+        return restored
+    if isinstance(incoming, list):
+        stored_list = stored if isinstance(stored, list) else []
+        stored_by_id = {
+            str(item.get("id")): item
+            for item in stored_list
+            if isinstance(item, dict) and item.get("id")
+        }
+        restored_list = []
+        for index, item in enumerate(incoming):
+            match: Any = None
+            if isinstance(item, dict) and item.get("id"):
+                match = stored_by_id.get(str(item.get("id")))
+            elif index < len(stored_list):
+                match = stored_list[index]
+            restored_list.append(_restore_server_fields(item, match))
+        return restored_list
+    return incoming
+
+
+def _hydrate_editor_project(
+    incoming: dict[str, Any], stored: dict[str, Any], project_id: str
+) -> dict[str, Any]:
+    if str(incoming.get("id") or "") != project_id:
+        raise HTTPException(status_code=422, detail="project.id 必须与路径中的 project_id 一致")
+    owned_clip_ids = {
+        str(clip.get("id"))
+        for track in (stored.get("tracks") or [])
+        for clip in (track.get("clips") or [])
+        if isinstance(clip, dict) and clip.get("id")
+    }
+    for track in incoming.get("tracks") or []:
+        if not isinstance(track, dict):
+            raise HTTPException(status_code=422, detail="tracks 中包含无效音轨")
+        for clip in track.get("clips") or []:
+            clip_id = str(clip.get("id") or "") if isinstance(clip, dict) else ""
+            if not clip_id or clip_id not in owned_clip_ids:
+                raise HTTPException(
+                    status_code=422,
+                    detail="工程保存不能新增未知片段；请先调用片段导入或切分接口",
+                )
+    hydrated = _restore_server_fields(copy.deepcopy(incoming), stored)
+    hydrated["id"] = project_id
+    hydrated["created_at"] = stored.get("created_at")
+    hydrated.pop("history", None)
+    hydrated.pop("future", None)
+    return hydrated
+
+
 def _content_type(path: Path) -> str:
     return {
         ".flac": "audio/flac",
@@ -1028,12 +1489,13 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
         version=config.APP_VERSION,
         openapi_tags=[
             {"name": "服务", "description": "健康检查、集成工具状态和当前 GPU 推理环境。"},
-            {"name": "模型", "description": "读取 XB-SVCB 中已经导入的声音模型。"},
+            {"name": "模型", "description": "读取、检查和管理 XB-SVCB 中的声音模型。"},
             {
                 "name": "音频",
                 "description": "上传源歌曲或参考音频，以及下载任务生成的音频。上传不限制文件大小。",
             },
-            {"name": "任务", "description": "创建、查询和重试单模型 AI 翻唱任务。"},
+            {"name": "任务", "description": "创建和管理单模型、多模型及批量 AI 翻唱任务。"},
+            {"name": "编辑器", "description": "Audio Editor Lite 工程、音轨、片段和渲染接口。"},
         ],
         docs_url="/docs",
         redoc_url="/redoc",
@@ -1100,6 +1562,24 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
         items = [_public_model(item) for item in facade.list_models()]
         return {"items": items, "total": len(items), "default_id": facade.get_default_model()}
 
+    @router.post(
+        "/models/default",
+        response_model=ActionResponse,
+        tags=["模型"],
+        summary="设置默认声音模型",
+        description=_resource_api_doc(
+            "设置创建单模型任务时默认使用的声音模型。",
+            "POST",
+            "/api/v1/models/default",
+            [("model_id", "string", "是", "-", "声音模型 ID")],
+        ),
+        responses={404: {"model": ErrorResponse, "description": "模型不存在"}},
+    )
+    def set_default_model(request: ModelDefaultRequest) -> dict[str, Any]:
+        if not facade.set_default_model(request.model_id):
+            raise HTTPException(status_code=404, detail="模型不存在")
+        return {"ok": True, "id": request.model_id}
+
     @router.get(
         "/models/{model_id}",
         response_model=ModelResponse,
@@ -1119,6 +1599,74 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
         if not item:
             raise HTTPException(status_code=404, detail="模型不存在")
         return _public_model(item)
+
+    @router.post(
+        "/models/{model_id}/favorite",
+        response_model=ModelResponse,
+        tags=["模型"],
+        summary="切换模型收藏状态",
+        description=_resource_api_doc(
+            "切换指定声音模型的收藏状态。",
+            "POST",
+            "/api/v1/models/{model_id}/favorite",
+            [("model_id", "string", "是", "-", "声音模型 ID")],
+        ),
+        responses={404: {"model": ErrorResponse, "description": "模型不存在"}},
+    )
+    def toggle_model_favorite(model_id: str = ApiPath(..., description="声音模型 ID")) -> dict[str, Any]:
+        item = facade.toggle_model_favorite(model_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="模型不存在")
+        return _public_model(item)
+
+    @router.post(
+        "/models/{model_id}/inspect",
+        response_model=ModelInspectResponse,
+        tags=["模型"],
+        summary="检查声音模型",
+        description=_resource_api_doc(
+            "检查模型文件、配置和可修复的 RVC Index 绑定。",
+            "POST",
+            "/api/v1/models/{model_id}/inspect",
+            [
+                ("model_id", "string", "是", "-", "声音模型 ID"),
+                ("repair", "boolean", "否", "false", "是否执行可用的自动修复"),
+            ],
+        ),
+        responses={404: {"model": ErrorResponse, "description": "模型不存在"}},
+    )
+    def inspect_model(
+        model_id: str = ApiPath(..., description="声音模型 ID"),
+        repair: bool = Query(default=False, description="是否执行可用的自动修复"),
+    ) -> dict[str, Any]:
+        if not facade._models.get(model_id):
+            raise HTTPException(status_code=404, detail="模型不存在")
+        result = facade.inspect_model(model_id, repair)
+        return {
+            "ok": bool(result.get("ok")),
+            "model": _public_model(result.get("model") or {}) if result.get("model") else None,
+            "issues": _strip_local_paths(result.get("issues") or []),
+            "fixed": list(result.get("fixed") or []),
+        }
+
+    @router.delete(
+        "/models/{model_id}",
+        response_model=ActionResponse,
+        tags=["模型"],
+        summary="删除声音模型",
+        description=_resource_api_doc(
+            "删除模型记录及其由 XB-SVCB 管理的本地模型目录。",
+            "DELETE",
+            "/api/v1/models/{model_id}",
+            [("model_id", "string", "是", "-", "声音模型 ID")],
+            note="此操作会删除模型文件，无法通过 API 撤销。",
+        ),
+        responses={404: {"model": ErrorResponse, "description": "模型不存在"}},
+    )
+    def delete_model(model_id: str = ApiPath(..., description="声音模型 ID")) -> dict[str, Any]:
+        if not facade.delete_model(model_id):
+            raise HTTPException(status_code=404, detail="模型不存在")
+        return {"ok": True, "id": model_id}
 
     @router.post(
         "/uploads",
@@ -1208,25 +1756,7 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
         items = [_public_work(item) for item in facade.list_works()[:limit]]
         return {"items": items, "total": len(items)}
 
-    @router.post(
-        "/jobs",
-        response_model=JobResponse,
-        status_code=202,
-        tags=["任务"],
-        summary="创建 AI 翻唱任务",
-        description=JOB_CREATE_API_DOC,
-        responses={
-            404: {"model": ErrorResponse, "description": "源文件或模型不存在"},
-        },
-    )
-    def create_job(
-        request: JobCreateRequest = Body(
-            ...,
-            description=(
-                "任务来源、模型、工作流与推理参数。source_upload_id 和 source_path 必须且只能提供一个。"
-            ),
-        )
-    ) -> dict[str, Any]:
+    def _prepare_job_request(request: JobCreateRequest) -> dict[str, Any]:
         if bool(request.source_upload_id) == bool(request.source_path):
             raise HTTPException(
                 status_code=422,
@@ -1242,6 +1772,61 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
             if not source.is_file():
                 raise HTTPException(status_code=404, detail="source_path 指向的文件不存在")
 
+        if request.mode == "multi":
+            if not request.models or not request.segments:
+                raise HTTPException(status_code=422, detail="multi 模式需要 models 和 segments")
+            models: list[dict[str, Any]] = []
+            selected_ids: set[str] = set()
+            for entry in request.models:
+                if entry.model_id in selected_ids:
+                    raise HTTPException(status_code=422, detail=f"models 中模型重复：{entry.model_id}")
+                model = facade._models.get(entry.model_id)
+                if not model:
+                    raise HTTPException(status_code=404, detail=f"模型不存在：{entry.model_id}")
+                params = entry.params.model_dump()
+                if entry.reference_upload_id:
+                    params["reference_audio"] = str(_resolve_upload(entry.reference_upload_id))
+                if str(model.get("framework") or "") == "seed-vc" and not params.get(
+                    "reference_audio"
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"SeedVC 模型 {entry.model_id} 需要 reference_upload_id",
+                    )
+                selected_ids.add(entry.model_id)
+                models.append({"model_id": entry.model_id, "params": params})
+
+            segments: list[dict[str, Any]] = []
+            for segment in request.segments:
+                if segment.end <= segment.start:
+                    raise HTTPException(status_code=422, detail="segments.end 必须大于 start")
+                raw_ids = segment.model_ids or ([segment.model_id] if segment.model_id else [])
+                model_ids = list(dict.fromkeys(raw_ids))
+                if not model_ids or any(model_id not in selected_ids for model_id in model_ids):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="segments 中的 model_ids 必须来自 models 且不能为空",
+                    )
+                segments.append(
+                    {
+                        "start": segment.start,
+                        "end": segment.end,
+                        "model_id": model_ids[0],
+                        "model_ids": model_ids,
+                    }
+                )
+            payload = {
+                "source_path": str(source),
+                "title": request.title or source.stem,
+                "workflow": request.workflow,
+                "mode": "multi",
+                "models": models,
+                "segments": segments,
+            }
+            return payload
+
+        if request.workflow in {"auto_vocal_merge", "manual_vocal_merge"}:
+            raise HTTPException(status_code=422, detail="人声合并工作流只支持 multi 模式")
         model_id = request.model_id or facade.get_default_model()
         if not model_id or not facade._models.get(model_id):
             raise HTTPException(status_code=404, detail="未找到可用模型，请提供有效 model_id")
@@ -1263,7 +1848,49 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
             "workflow": request.workflow,
             "params": params,
         }
-        return _public_work(facade.create_work(payload))
+        return payload
+
+    def _create_job_from_request(request: JobCreateRequest) -> dict[str, Any]:
+        return _public_work(facade.create_work(_prepare_job_request(request)))
+
+    @router.post(
+        "/jobs",
+        response_model=JobResponse,
+        status_code=202,
+        tags=["任务"],
+        summary="创建 AI 翻唱任务",
+        description=JOB_CREATE_API_DOC,
+        responses={
+            404: {"model": ErrorResponse, "description": "源文件或模型不存在"},
+        },
+    )
+    def create_job(
+        request: JobCreateRequest = Body(
+            ...,
+            description=(
+                "任务来源、模型、工作流与推理参数。source_upload_id 和 source_path 必须且只能提供一个。"
+            ),
+        )
+    ) -> dict[str, Any]:
+        return _create_job_from_request(request)
+
+    @router.post(
+        "/jobs/batch",
+        response_model=JobBatchResponse,
+        status_code=202,
+        tags=["任务"],
+        summary="批量创建翻唱任务",
+        description=_resource_api_doc(
+            "一次提交最多 50 个单模型或多模型翻唱任务，任务进入同一串行队列。",
+            "POST",
+            "/api/v1/jobs/batch",
+            [("jobs", "array", "是", "-", "完整任务请求数组，最多 50 项")],
+        ),
+    )
+    def create_batch_jobs(request: JobBatchCreateRequest) -> dict[str, Any]:
+        payloads = [_prepare_job_request(job) for job in request.jobs]
+        items = [_public_work(facade.create_work(payload)) for payload in payloads]
+        return {"items": items, "total": len(items)}
 
     @router.get(
         "/jobs/queue",
@@ -1274,6 +1901,76 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
     )
     def queue_status() -> dict[str, Any]:
         return facade.get_inference_queue()
+
+    @router.get(
+        "/jobs/history",
+        response_model=InferenceHistoryResponse,
+        tags=["任务"],
+        summary="读取推理历史",
+        description=_resource_api_doc(
+            "读取任务最近的成功或失败执行记录。",
+            "GET",
+            "/api/v1/jobs/history",
+            [("limit", "integer", "否", "50", "返回数量，范围 1~200")],
+        ),
+    )
+    def inference_history(
+        limit: int = Query(default=50, ge=1, le=200, description="返回历史数量")
+    ) -> dict[str, Any]:
+        items = [_strip_local_paths(item) for item in facade.list_inference_history(limit)]
+        return {"items": items, "total": len(items)}
+
+    @router.get(
+        "/jobs/presets",
+        response_model=InferencePresetListResponse,
+        tags=["任务"],
+        summary="列出推理参数预设",
+        description=_resource_api_doc(
+            "列出软件内保存的推理参数预设。", "GET", "/api/v1/jobs/presets"
+        ),
+    )
+    def list_inference_presets() -> dict[str, Any]:
+        items = facade.list_inference_presets()
+        return {"items": items, "total": len(items)}
+
+    @router.post(
+        "/jobs/presets",
+        response_model=InferencePresetResponse,
+        status_code=201,
+        tags=["任务"],
+        summary="保存推理参数预设",
+        description=_resource_api_doc(
+            "按名称保存推理参数预设；同名预设会被替换。",
+            "POST",
+            "/api/v1/jobs/presets",
+            [
+                ("name", "string", "是", "-", "预设名称"),
+                ("params", "object", "是", "-", "推理参数"),
+            ],
+        ),
+    )
+    def save_inference_preset(request: PresetCreateRequest) -> dict[str, Any]:
+        return facade.save_inference_preset(request.name, request.params.model_dump())
+
+    @router.delete(
+        "/jobs/presets/{preset_id}",
+        response_model=ActionResponse,
+        tags=["任务"],
+        summary="删除推理参数预设",
+        description=_resource_api_doc(
+            "删除指定推理参数预设。",
+            "DELETE",
+            "/api/v1/jobs/presets/{preset_id}",
+            [("preset_id", "string", "是", "-", "参数预设 ID")],
+        ),
+        responses={404: {"model": ErrorResponse, "description": "预设不存在"}},
+    )
+    def delete_inference_preset(
+        preset_id: str = ApiPath(..., description="参数预设 ID")
+    ) -> dict[str, Any]:
+        if not facade.delete_inference_preset(preset_id):
+            raise HTTPException(status_code=404, detail="参数预设不存在")
+        return {"ok": True, "id": preset_id}
 
     @router.get(
         "/jobs/{job_id}",
@@ -1319,6 +2016,49 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
             raise HTTPException(status_code=409, detail="任务无法重试")
         return RetryResponse(ok=True, job_id=job_id)
 
+    @router.patch(
+        "/jobs/{job_id}",
+        response_model=JobResponse,
+        tags=["任务"],
+        summary="重命名翻唱任务",
+        description=_resource_api_doc(
+            "修改作品标题。",
+            "PATCH",
+            "/api/v1/jobs/{job_id}",
+            [
+                ("job_id", "string", "是", "-", "任务 ID"),
+                ("title", "string", "是", "-", "新标题"),
+            ],
+        ),
+        responses={404: {"model": ErrorResponse, "description": "任务不存在"}},
+    )
+    def rename_job(
+        request: RenameJobRequest,
+        job_id: str = ApiPath(..., description="翻唱任务 ID"),
+    ) -> dict[str, Any]:
+        if not facade.rename_work(job_id, request.title):
+            raise HTTPException(status_code=404, detail="任务不存在")
+        return _public_work(facade.get_work(job_id) or {})
+
+    @router.delete(
+        "/jobs/{job_id}",
+        response_model=ActionResponse,
+        tags=["任务"],
+        summary="删除翻唱任务",
+        description=_resource_api_doc(
+            "删除任务记录和 XB-SVCB 管理的该任务全部生成文件。",
+            "DELETE",
+            "/api/v1/jobs/{job_id}",
+            [("job_id", "string", "是", "-", "任务 ID")],
+            note="不会删除用户最初提供的源歌曲，但会删除分离、转换、混音和日志文件。",
+        ),
+        responses={404: {"model": ErrorResponse, "description": "任务不存在"}},
+    )
+    def delete_job(job_id: str = ApiPath(..., description="翻唱任务 ID")) -> dict[str, Any]:
+        if not facade.delete_work(job_id):
+            raise HTTPException(status_code=404, detail="任务不存在")
+        return {"ok": True, "id": job_id}
+
     @router.get(
         "/jobs/{job_id}/audio",
         response_class=FileResponse,
@@ -1360,6 +2100,496 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
             raise HTTPException(status_code=409, detail="请求的音频尚未生成")
         filename = f"{job_id}_{stem}{path.suffix.lower()}"
         return FileResponse(path, media_type=_content_type(path), filename=filename)
+
+    def _editor_result(result: dict[str, Any], project_id: str) -> dict[str, Any]:
+        if not result.get("ok"):
+            error = str(result.get("error") or "编辑器操作失败")
+            status = 404 if "不存在" in error else 409
+            raise HTTPException(status_code=status, detail=error)
+        return _public_editor_operation(result, project_id)
+
+    def _editor_audio_response(path: Path | None, filename: str) -> FileResponse:
+        if path is None or not path.is_file():
+            raise HTTPException(status_code=409, detail="音频渲染失败或资源不存在")
+        return FileResponse(path, media_type=_content_type(path), filename=filename)
+
+    @router.get(
+        "/editor/projects",
+        response_model=EditorProjectListResponse,
+        tags=["编辑器"],
+        summary="列出编辑工程",
+        description=_resource_api_doc(
+            "列出 Audio Editor Lite 的全部工程。", "GET", "/api/v1/editor/projects"
+        ),
+    )
+    def list_editor_projects() -> dict[str, Any]:
+        items = facade.list_editor_projects()
+        return {"items": items, "total": len(items)}
+
+    @router.post(
+        "/editor/projects",
+        response_model=EditorProjectResponse,
+        status_code=201,
+        tags=["编辑器"],
+        summary="创建编辑工程",
+        description=_resource_api_doc(
+            "从上传音频或已有翻唱作品创建编辑工程。",
+            "POST",
+            "/api/v1/editor/projects",
+            [
+                ("source_upload_id", "string|null", "条件必填", "null", "上传音频 ID"),
+                ("work_id", "string|null", "条件必填", "null", "已有翻唱任务 ID"),
+                ("title", "string|null", "否", "null", "工程标题"),
+            ],
+        ),
+    )
+    def create_editor_project(request: EditorProjectCreateRequest) -> dict[str, Any]:
+        if bool(request.source_upload_id) == bool(request.work_id):
+            raise HTTPException(
+                status_code=422,
+                detail="source_upload_id 与 work_id 必须且只能提供一个",
+            )
+        if request.source_upload_id:
+            project = facade.create_editor_project_from_audio(
+                str(_resolve_upload(request.source_upload_id)), request.title
+            )
+        else:
+            if not facade.get_work(str(request.work_id)):
+                raise HTTPException(status_code=404, detail="翻唱任务不存在")
+            project = facade.create_editor_project_from_work(str(request.work_id))
+        if not project:
+            raise HTTPException(status_code=409, detail="无法创建编辑工程")
+        return _public_editor_project(project)
+
+    @router.get(
+        "/editor/projects/{project_id}",
+        response_model=EditorProjectResponse,
+        tags=["编辑器"],
+        summary="读取编辑工程",
+        description=_resource_api_doc(
+            "读取完整时间轴；响应不包含本机文件路径。",
+            "GET",
+            "/api/v1/editor/projects/{project_id}",
+            [("project_id", "string", "是", "-", "编辑工程 ID")],
+        ),
+        responses={404: {"model": ErrorResponse, "description": "工程不存在"}},
+    )
+    def get_editor_project(
+        project_id: str = ApiPath(..., description="编辑工程 ID")
+    ) -> dict[str, Any]:
+        project = facade.get_editor_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="编辑工程不存在")
+        return _public_editor_project(project)
+
+    @router.put(
+        "/editor/projects/{project_id}",
+        response_model=EditorProjectResponse,
+        tags=["编辑器"],
+        summary="保存编辑工程",
+        description=_resource_api_doc(
+            "保存时间轴、音量、淡化、效果器、角色和工程设置。",
+            "PUT",
+            "/api/v1/editor/projects/{project_id}",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("project", "object", "是", "-", "修改后的完整工程"),
+            ],
+            note="file、source_path 等本机字段由服务端恢复；未知片段必须先通过导入或切分接口创建。",
+        ),
+        responses={404: {"model": ErrorResponse, "description": "工程不存在"}},
+    )
+    def save_editor_project(
+        request: EditorProjectSaveRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+    ) -> dict[str, Any]:
+        stored = facade.get_editor_project(project_id)
+        if not stored:
+            raise HTTPException(status_code=404, detail="编辑工程不存在")
+        hydrated = _hydrate_editor_project(request.project, stored, project_id)
+        saved = facade.save_editor_project(hydrated)
+        if not saved:
+            raise HTTPException(status_code=409, detail="编辑工程保存失败")
+        return _public_editor_project(saved)
+
+    @router.delete(
+        "/editor/projects/{project_id}",
+        response_model=ActionResponse,
+        tags=["编辑器"],
+        summary="删除编辑工程",
+        description=_resource_api_doc(
+            "删除工程记录及导入到该工程的编辑素材。",
+            "DELETE",
+            "/api/v1/editor/projects/{project_id}",
+            [("project_id", "string", "是", "-", "编辑工程 ID")],
+            note="原始歌曲和翻唱作品不会被删除。",
+        ),
+        responses={404: {"model": ErrorResponse, "description": "工程不存在"}},
+    )
+    def delete_editor_project(
+        project_id: str = ApiPath(..., description="编辑工程 ID")
+    ) -> dict[str, Any]:
+        if not facade.delete_editor_project(project_id):
+            raise HTTPException(status_code=404, detail="编辑工程不存在")
+        return {"ok": True, "id": project_id}
+
+    @router.post(
+        "/editor/projects/{project_id}/undo",
+        response_model=EditorProjectResponse,
+        tags=["编辑器"],
+        summary="撤销编辑",
+        description=_resource_api_doc(
+            "撤销工程最近一次保存操作。",
+            "POST",
+            "/api/v1/editor/projects/{project_id}/undo",
+            [("project_id", "string", "是", "-", "编辑工程 ID")],
+        ),
+    )
+    def undo_editor_project(
+        project_id: str = ApiPath(..., description="编辑工程 ID")
+    ) -> dict[str, Any]:
+        project = facade.undo_editor_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="编辑工程不存在")
+        return _public_editor_project(project)
+
+    @router.post(
+        "/editor/projects/{project_id}/redo",
+        response_model=EditorProjectResponse,
+        tags=["编辑器"],
+        summary="重做编辑",
+        description=_resource_api_doc(
+            "重做工程最近一次撤销操作。",
+            "POST",
+            "/api/v1/editor/projects/{project_id}/redo",
+            [("project_id", "string", "是", "-", "编辑工程 ID")],
+        ),
+    )
+    def redo_editor_project(
+        project_id: str = ApiPath(..., description="编辑工程 ID")
+    ) -> dict[str, Any]:
+        project = facade.redo_editor_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="编辑工程不存在")
+        return _public_editor_project(project)
+
+    @router.post(
+        "/editor/projects/{project_id}/tracks",
+        response_model=EditorOperationResponse,
+        status_code=201,
+        tags=["编辑器"],
+        summary="添加编辑器音轨",
+        description=_resource_api_doc(
+            "向工程添加空音轨。",
+            "POST",
+            "/api/v1/editor/projects/{project_id}/tracks",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("name", "string|null", "否", "null", "音轨名称"),
+                ("kind", "string", "否", "audio", "音轨类型"),
+            ],
+        ),
+    )
+    def add_editor_track(
+        request: EditorTrackCreateRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+    ) -> dict[str, Any]:
+        return _editor_result(
+            facade.add_editor_track(project_id, request.name, request.kind), project_id
+        )
+
+    @router.delete(
+        "/editor/projects/{project_id}/tracks/{track_id}",
+        response_model=EditorOperationResponse,
+        tags=["编辑器"],
+        summary="删除编辑器音轨",
+        description=_resource_api_doc(
+            "删除指定音轨及其片段引用。",
+            "DELETE",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+            ],
+        ),
+    )
+    def delete_editor_track(
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+    ) -> dict[str, Any]:
+        return _editor_result(facade.delete_editor_track(project_id, track_id), project_id)
+
+    @router.post(
+        "/editor/projects/{project_id}/tracks/{track_id}/clips",
+        response_model=EditorOperationResponse,
+        status_code=201,
+        tags=["编辑器"],
+        summary="导入音频片段",
+        description=_resource_api_doc(
+            "把上传音频复制到工程并放入指定音轨。",
+            "POST",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "目标音轨 ID"),
+                ("upload_id", "string", "是", "-", "音频上传 ID"),
+                ("start", "number", "否", "0", "时间轴开始秒数"),
+            ],
+        ),
+    )
+    def import_editor_clip(
+        request: EditorClipImportRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="目标音轨 ID"),
+    ) -> dict[str, Any]:
+        source = _resolve_upload(request.upload_id)
+        result = facade.import_audio_to_editor_track(
+            project_id, str(source), track_id, request.start
+        )
+        return _editor_result(result, project_id)
+
+    @router.get(
+        "/editor/projects/{project_id}/audio",
+        response_class=FileResponse,
+        tags=["编辑器", "音频"],
+        summary="下载编辑器工程混音",
+        description=_resource_api_doc(
+            "渲染并下载当前编辑工程。",
+            "GET",
+            "/api/v1/editor/projects/{project_id}/audio",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("format", "string", "否", "wav", "wav、mp3 或 flac"),
+            ],
+        ),
+    )
+    def download_editor_project_audio(
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        format: Literal["wav", "mp3", "flac"] = Query(default="wav", description="输出格式"),
+    ) -> FileResponse:
+        path = facade._editor.render(project_id, format)
+        return _editor_audio_response(path, f"{project_id}.{format}")
+
+    @router.get(
+        "/editor/projects/{project_id}/tracks/{track_id}/audio",
+        response_class=FileResponse,
+        tags=["编辑器", "音频"],
+        summary="下载编辑器音轨",
+        description=_resource_api_doc(
+            "单独渲染并下载指定音轨。",
+            "GET",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/audio",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+                ("format", "string", "否", "wav", "wav、mp3 或 flac"),
+            ],
+        ),
+    )
+    def download_editor_track_audio(
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+        format: Literal["wav", "mp3", "flac"] = Query(default="wav", description="输出格式"),
+    ) -> FileResponse:
+        path = facade._editor._render_track_file(project_id, track_id, format)
+        return _editor_audio_response(path, f"{project_id}_{track_id}.{format}")
+
+    @router.get(
+        "/editor/projects/{project_id}/clips/{clip_id}/audio",
+        response_class=FileResponse,
+        tags=["编辑器", "音频"],
+        summary="下载编辑器片段",
+        description=_resource_api_doc(
+            "按片段边界、声道、淡化、包络和效果链渲染下载。",
+            "GET",
+            "/api/v1/editor/projects/{project_id}/clips/{clip_id}/audio",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("clip_id", "string", "是", "-", "片段 ID"),
+                ("format", "string", "否", "flac", "wav、mp3 或 flac"),
+            ],
+        ),
+    )
+    def download_editor_clip_audio(
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        clip_id: str = ApiPath(..., description="片段 ID"),
+        format: Literal["wav", "mp3", "flac"] = Query(default="flac", description="输出格式"),
+    ) -> FileResponse:
+        path = facade._editor._render_clip_file(project_id, clip_id, format, cache=True)
+        return _editor_audio_response(path, f"{project_id}_{clip_id}.{format}")
+
+    @router.get(
+        "/editor/projects/{project_id}/clips/{clip_id}/waveform",
+        response_model=EditorWaveformResponse,
+        tags=["编辑器"],
+        summary="读取片段波形",
+        description=_resource_api_doc(
+            "读取指定密度的归一化波形峰值。",
+            "GET",
+            "/api/v1/editor/projects/{project_id}/clips/{clip_id}/waveform",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("clip_id", "string", "是", "-", "片段 ID"),
+                ("bins", "integer", "否", "160", "波形采样点，范围 16~4000"),
+            ],
+        ),
+    )
+    def get_editor_waveform(
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        clip_id: str = ApiPath(..., description="片段 ID"),
+        bins: int = Query(default=160, ge=16, le=4000, description="波形采样点数量"),
+    ) -> dict[str, Any]:
+        result = facade.get_editor_waveform(project_id, clip_id, bins)
+        if not result.get("ok"):
+            raise HTTPException(status_code=404, detail="工程或片段不存在")
+        return result
+
+    @router.post(
+        "/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/split/silence",
+        response_model=EditorOperationResponse,
+        tags=["编辑器"],
+        summary="按静音切分片段",
+        description=_resource_api_doc(
+            "检测片段静音并自动切句。",
+            "POST",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/split/silence",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+                ("clip_id", "string", "是", "-", "片段 ID"),
+                ("threshold_db", "number", "否", "-42", "静音阈值"),
+            ],
+        ),
+    )
+    def split_editor_clip_by_silence(
+        request: EditorSilenceSplitRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+        clip_id: str = ApiPath(..., description="片段 ID"),
+    ) -> dict[str, Any]:
+        result = facade.split_editor_clip_by_silence(
+            project_id, track_id, clip_id, request.model_dump()
+        )
+        return _editor_result(result, project_id)
+
+    @router.post(
+        "/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/split/lyrics",
+        response_model=EditorOperationResponse,
+        tags=["编辑器"],
+        summary="按歌词切分片段",
+        description=_resource_api_doc(
+            "按 LRC 时间戳或 TXT 句子切分片段。",
+            "POST",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/split/lyrics",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+                ("clip_id", "string", "是", "-", "片段 ID"),
+                ("lyrics", "string|array", "是", "-", "TXT/LRC 或歌词行数组"),
+            ],
+        ),
+    )
+    def split_editor_clip_by_lyrics(
+        request: EditorLyricsSplitRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+        clip_id: str = ApiPath(..., description="片段 ID"),
+    ) -> dict[str, Any]:
+        payload = request.model_dump()
+        lyrics = payload.pop("lyrics")
+        result = facade.split_editor_clip_by_lyrics(
+            project_id, track_id, clip_id, lyrics, payload
+        )
+        return _editor_result(result, project_id)
+
+    @router.post(
+        "/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/separate",
+        response_model=EditorOperationResponse,
+        tags=["编辑器"],
+        summary="分离片段人声与伴奏",
+        description=_resource_api_doc(
+            "对选中片段执行 UVR，并创建人声和伴奏音轨。",
+            "POST",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/separate",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+                ("clip_id", "string", "是", "-", "片段 ID"),
+                ("device", "string", "否", "auto", "UVR 推理设备"),
+            ],
+        ),
+    )
+    def separate_editor_clip(
+        request: EditorSeparationRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+        clip_id: str = ApiPath(..., description="片段 ID"),
+    ) -> dict[str, Any]:
+        result = facade.separate_editor_clip_vocals(
+            project_id, track_id, clip_id, request.model_dump(exclude_none=True)
+        )
+        return _editor_result(result, project_id)
+
+    @router.post(
+        "/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/rerun",
+        response_model=EditorOperationResponse,
+        tags=["编辑器"],
+        summary="局部重推理片段",
+        description=_resource_api_doc(
+            "用声音模型重新推理选中片段并替换片段音频。",
+            "POST",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/rerun",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+                ("clip_id", "string", "是", "-", "片段 ID"),
+                ("model_id", "string", "是", "-", "声音模型 ID"),
+                ("reference_upload_id", "string|null", "SeedVC 必填", "null", "参考音频上传 ID"),
+            ],
+        ),
+    )
+    def rerun_editor_clip(
+        request: EditorRerunRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+        clip_id: str = ApiPath(..., description="片段 ID"),
+    ) -> dict[str, Any]:
+        model = facade._models.get(request.model_id)
+        if not model:
+            raise HTTPException(status_code=404, detail="声音模型不存在")
+        params = request.params.model_dump()
+        if request.reference_upload_id:
+            params["reference_audio"] = str(_resolve_upload(request.reference_upload_id))
+        if str(model.get("framework") or "") == "seed-vc" and not params.get("reference_audio"):
+            raise HTTPException(status_code=422, detail="SeedVC 局部重推理需要 reference_upload_id")
+        result = facade.rerun_editor_clip(
+            project_id, track_id, clip_id, request.model_id, params
+        )
+        return _editor_result(result, project_id)
+
+    @router.post(
+        "/editor/projects/{project_id}/tracks/{track_id}/clips/merge",
+        response_model=EditorOperationResponse,
+        tags=["编辑器"],
+        summary="合并编辑器片段",
+        description=_resource_api_doc(
+            "渲染并合并同一音轨上的多个片段。",
+            "POST",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/merge",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+                ("clip_ids", "array", "是", "-", "至少两个片段 ID"),
+            ],
+        ),
+    )
+    def merge_editor_clips(
+        request: EditorMergeRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+    ) -> dict[str, Any]:
+        result = facade.merge_editor_clips(project_id, track_id, request.clip_ids)
+        return _editor_result(result, project_id)
 
     app.include_router(router)
     return app

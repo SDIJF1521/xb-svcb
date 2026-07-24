@@ -10,7 +10,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
 import config
-from api.http_server import HttpApiServer, create_http_app
+from api.http_server import (
+    HttpApiServer,
+    _hydrate_editor_project,
+    _public_editor_project,
+    create_http_app,
+)
 from infrastructure.storage import SettingsStore
 
 
@@ -176,6 +181,138 @@ class HttpApiContractTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertIn("reference_upload_id", response.json()["detail"])
 
+    def test_multi_model_job_supports_chorus_and_uploaded_seedvc_reference(self) -> None:
+        source = self.client.post(
+            "/api/v1/uploads",
+            headers=self.headers,
+            files={"file": ("song.wav", b"RIFF-song", "audio/wav")},
+        ).json()
+        reference = self.client.post(
+            "/api/v1/uploads",
+            headers=self.headers,
+            files={"file": ("reference.wav", b"RIFF-reference", "audio/wav")},
+        ).json()
+
+        response = self.client.post(
+            "/api/v1/jobs",
+            headers=self.headers,
+            json={
+                "source_upload_id": source["upload_id"],
+                "mode": "multi",
+                "workflow": "auto_vocal_merge",
+                "models": [
+                    {"model_id": "model_svc", "params": {"pitch": 1}},
+                    {
+                        "model_id": "model_seed",
+                        "reference_upload_id": reference["upload_id"],
+                    },
+                ],
+                "segments": [
+                    {
+                        "start": 0,
+                        "end": 8.5,
+                        "model_ids": ["model_svc", "model_seed"],
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 202, response.text)
+        payload = self.facade.created_payload
+        self.assertEqual(payload["mode"], "multi")
+        self.assertEqual(payload["workflow"], "auto_vocal_merge")
+        self.assertEqual(payload["segments"][0]["model_ids"], ["model_svc", "model_seed"])
+        self.assertTrue(Path(payload["models"][1]["params"]["reference_audio"]).is_file())
+        self.assertNotIn("source_path", response.json())
+
+    def test_batch_jobs_rejects_more_than_fifty_requests(self) -> None:
+        response = self.client.post(
+            "/api/v1/jobs/batch",
+            headers=self.headers,
+            json={"jobs": [{} for _ in range(51)]},
+        )
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_batch_jobs_validate_all_items_before_creating_any_task(self) -> None:
+        source = Path(self.temp.name) / "source.wav"
+        source.write_bytes(b"RIFF")
+
+        response = self.client.post(
+            "/api/v1/jobs/batch",
+            headers=self.headers,
+            json={
+                "jobs": [
+                    {"source_path": str(source), "model_id": "model_svc"},
+                    {"source_path": str(source), "model_id": "missing_model"},
+                ]
+            },
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIsNone(self.facade.created_payload)
+
+    def test_editor_public_dto_hides_paths_and_save_restores_server_fields(self) -> None:
+        stored = {
+            "id": "edt_test",
+            "title": "Editor",
+            "tracks": [
+                {
+                    "id": "trk_test",
+                    "name": "Voice",
+                    "type": "vocal",
+                    "clips": [
+                        {
+                            "id": "clp_test",
+                            "name": "Clip",
+                            "file": r"D:\secret\voice.wav",
+                            "start": 0.0,
+                            "end": 2.0,
+                            "offset": 0.0,
+                            "volume": 1.0,
+                            "mute": False,
+                            "locked": False,
+                            "fade_in": 0.0,
+                            "fade_out": 0.0,
+                            "effects": [
+                                {
+                                    "id": "fx_test",
+                                    "type": "plugin",
+                                    "enabled": True,
+                                    "params": {"path": r"D:\secret\effect.vst3", "mix": 0.5},
+                                }
+                            ],
+                            "metadata": {"source_path": r"D:\secret\source.wav"},
+                        }
+                    ],
+                }
+            ],
+            "roles": [],
+            "duration": 2.0,
+            "sample_rate": 44100,
+            "waveform_cache": {},
+            "metadata": {"source_path": r"D:\secret\source.wav"},
+            "created_at": "2026-01-01T00:00:00",
+            "updated_at": "2026-01-01T00:00:00",
+        }
+
+        public = _public_editor_project(stored)
+        self.assertNotIn("D:\\secret", str(public))
+        clip = public["tracks"][0]["clips"][0]
+        self.assertEqual(
+            clip["audio_url"],
+            "/api/v1/editor/projects/edt_test/clips/clp_test/audio",
+        )
+        clip["volume"] = 0.75
+
+        hydrated = _hydrate_editor_project(public, stored, "edt_test")
+        restored_clip = hydrated["tracks"][0]["clips"][0]
+        self.assertEqual(restored_clip["file"], r"D:\secret\voice.wav")
+        self.assertEqual(restored_clip["effects"][0]["params"]["path"], r"D:\secret\effect.vst3")
+        self.assertEqual(restored_clip["volume"], 0.75)
+        self.assertNotIn("audio_url", restored_clip)
+        self.assertNotIn("render_url", hydrated)
+
     def test_generated_audio_can_be_downloaded_with_key(self) -> None:
         audio = Path(self.temp.name) / "output.wav"
         audio.write_bytes(b"RIFF-output")
@@ -264,6 +401,10 @@ class HttpApiContractTests(unittest.TestCase):
             ("/api/v1/jobs/queue", "get"): "QueueResponse",
             ("/api/v1/jobs/{job_id}", "get"): "JobResponse",
             ("/api/v1/jobs/{job_id}/retry", "post"): "RetryResponse",
+            ("/api/v1/jobs/batch", "post"): "JobBatchResponse",
+            ("/api/v1/editor/projects", "get"): "EditorProjectListResponse",
+            ("/api/v1/editor/projects", "post"): "EditorProjectResponse",
+            ("/api/v1/editor/projects/{project_id}", "get"): "EditorProjectResponse",
         }
         for (path, method), model_name in expected_responses.items():
             operation = schema["paths"][path][method]
@@ -304,6 +445,16 @@ class HttpApiContractTests(unittest.TestCase):
                 self.assertIn("返回:", description, path)
                 self.assertIn("响应数据:", description, path)
                 self.assertIn("| 字段名 | 类型 | 说明 |", description, path)
+
+        for path in (
+            "/api/v1/jobs/batch",
+            "/api/v1/jobs/history",
+            "/api/v1/jobs/presets",
+            "/api/v1/editor/projects",
+            "/api/v1/editor/projects/{project_id}/audio",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/rerun",
+        ):
+            self.assertIn(path, schema["paths"])
 
         create_job_doc = schema["paths"]["/api/v1/jobs"]["post"]["description"]
         for parameter in (
