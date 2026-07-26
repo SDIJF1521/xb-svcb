@@ -8,6 +8,7 @@
   .venv-rvc/     —— RVC 推理环境（rvc-python；40 系及以下 cu121，50 系 cu128，CPU 版）
   .venv-seedvc/  —— SeedVC 推理环境（官方 Seed-VC；推理时提供参考音频）
   .venv-ddsp/    —— DDSP-SVC 推理环境（yxlllc/DDSP-SVC Rectified Flow）
+  .venv-vocal/   —— AI 歌声增强环境（DeepFilterNet + Pedalboard）
   .venv-hub/     —— 模型上传组件（modelscope）
   engines/so-vits-svc/         —— 自动克隆的 so-vits-svc 4.1 仓库
   engines/seed-vc/              —— 自动克隆的 Seed-VC 仓库
@@ -32,7 +33,8 @@
   python install/install.py --only rvc     # 只装 RVC 推理环境（.venv-rvc）
   python install/install.py --only seedvc  # 只装 SeedVC 推理环境（.venv-seedvc）
   python install/install.py --only ddsp    # 只装 DDSP-SVC 推理环境（.venv-ddsp）
-  python install/install.py --only models  # 只跑某一步：app/web/uvr/svc/rvc/seedvc/ddsp/hub/models
+  python install/install.py --only vocal   # 只装 AI 歌声增强环境（.venv-vocal）
+  python install/install.py --only models  # 只跑某一步：app/web/uvr/svc/rvc/seedvc/ddsp/vocal/hub/models
 """
 
 from __future__ import annotations
@@ -98,7 +100,9 @@ HUB_VENV = ROOT / ".venv-hub"
 RVC_VENV = ROOT / ".venv-rvc"
 SEEDVC_VENV = ROOT / ".venv-seedvc"
 DDSP_VENV = ROOT / ".venv-ddsp"
+VOCAL_VENV = ROOT / ".venv-vocal"
 UVR_MODELS_DIR = ROOT / "models" / "uvr"
+VOCAL_MODELS_DIR = ROOT / "models" / "vocal-enhancement"
 
 # 随安装包一起分发的「自带模型」目录：安装时直接本地复制，免联网慢下载。
 # 始终相对本脚本位置（assets/models 与 install/ 同级），不随 --root 改变。
@@ -108,7 +112,8 @@ ASSETS_MODELS_DIR = Path(__file__).resolve().parent.parent / "assets" / "models"
 def _derive_paths(root: Path) -> None:
     """以 root 为基准重新计算所有产物路径（供 --root 覆盖）。"""
     global ROOT, APP_DIR, WEB_DIR, ENGINES_DIR, SOVITS_DIR, SEEDVC_DIR, DDSP_DIR, PRETRAIN_DIR
-    global UVR_VENV, SVC_VENV, HUB_VENV, RVC_VENV, SEEDVC_VENV, DDSP_VENV, UVR_MODELS_DIR
+    global UVR_VENV, SVC_VENV, HUB_VENV, RVC_VENV, SEEDVC_VENV, DDSP_VENV, VOCAL_VENV
+    global UVR_MODELS_DIR, VOCAL_MODELS_DIR
     ROOT = root
     APP_DIR = root / "app"
     WEB_DIR = root / "web"
@@ -123,7 +128,9 @@ def _derive_paths(root: Path) -> None:
     RVC_VENV = root / ".venv-rvc"
     SEEDVC_VENV = root / ".venv-seedvc"
     DDSP_VENV = root / ".venv-ddsp"
+    VOCAL_VENV = root / ".venv-vocal"
     UVR_MODELS_DIR = root / "models" / "uvr"
+    VOCAL_MODELS_DIR = root / "models" / "vocal-enhancement"
 
 SOVITS_REPO_URL = "https://github.com/svc-develop-team/so-vits-svc.git"
 SOVITS_BRANCH = "4.1-Stable"
@@ -743,13 +750,13 @@ def seed_rvc_base_models(py: Path) -> None:
 
 # ---------- 各安装步骤 ----------
 def step_app(uv: str) -> None:
-    hr("1/9 主程序环境 app/.venv")
+    hr("1/10 主程序环境 app/.venv")
     uv_sync(uv, APP_DIR)
     print(c("g", "主程序环境就绪"))
 
 
 def step_web() -> None:
-    hr("2/9 前端构建 web/dist")
+    hr("2/10 前端构建 web/dist")
     if not have("npm"):
         raise RuntimeError("未检测到 npm，请先安装 Node.js LTS 后重试（或 --skip-web）")
     # 优先 npm ci（依赖 lock）；无 lock 时回退 npm install
@@ -762,7 +769,7 @@ def step_web() -> None:
 
 
 def step_uvr(uv: str, gpu_stack: str) -> None:
-    hr("3/9 人声分离环境 .venv-uvr（audio-separator）")
+    hr("3/10 人声分离环境 .venv-uvr（audio-separator）")
     use_blackwell = gpu_stack == "cu128"
     use_cuda = gpu_stack in {"cu121", "cu128"}
     use_directml = gpu_stack == "directml"
@@ -1057,7 +1064,7 @@ def _venv_pyver(py: Path) -> str | None:
 
 
 def step_svc(uv: str, gpu_stack: str) -> None:
-    hr("4/9 推理引擎 so-vits-svc + .venv-svc")
+    hr("4/10 推理引擎 so-vits-svc + .venv-svc")
     fetch_sovits()
 
     use_blackwell = gpu_stack == "cu128"
@@ -1435,7 +1442,7 @@ def _patch_fairseq_weights_only(py: Path) -> None:
 
 
 def step_rvc(uv: str, gpu_stack: str) -> None:
-    hr("5/9 RVC 推理环境 .venv-rvc（rvc-python）")
+    hr("5/10 RVC 推理环境 .venv-rvc（rvc-python）")
     use_blackwell = gpu_stack == "cu128"
     use_gpu = gpu_stack in {"cu121", "cu128"}
     use_directml = gpu_stack == "directml"
@@ -1524,7 +1531,7 @@ DDSP_REQ_OVERRIDES = {
 
 
 def step_seedvc(uv: str, gpu_stack: str) -> None:
-    hr("6/9 SeedVC 推理环境 engines/seed-vc + .venv-seedvc")
+    hr("6/10 SeedVC 推理环境 engines/seed-vc + .venv-seedvc")
     fetch_seedvc()
 
     use_blackwell = gpu_stack == "cu128"
@@ -1589,7 +1596,7 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
 
 
 def step_ddsp(uv: str, gpu_stack: str) -> None:
-    hr("7/9 DDSP-SVC 推理环境 engines/ddsp-svc + .venv-ddsp")
+    hr("7/10 DDSP-SVC 推理环境 engines/ddsp-svc + .venv-ddsp")
     fetch_ddsp()
 
     use_blackwell = gpu_stack == "cu128"
@@ -1666,8 +1673,68 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
         print(c("g", "DDSP-SVC 推理环境就绪（CPU）"))
 
 
+def step_vocal(uv: str, gpu_stack: str) -> None:
+    hr("8/10 AI 歌声增强环境 .venv-vocal")
+    if not venv_python(VOCAL_VENV).exists():
+        run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_ENGINES, str(VOCAL_VENV)))
+    py = str(venv_python(VOCAL_VENV))
+
+    def pip(*args: str, index: str | None = None) -> None:
+        uv_pip_install(uv, py, *args, index=index)
+
+    pip("setuptools<81", "wheel")
+    if gpu_stack == "cu128":
+        torch_specs = [
+            f"torch=={TORCH_BLACKWELL_VER}",
+            f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
+        ]
+        torch_index = TORCH_BLACKWELL_INDEX
+    elif gpu_stack == "cu121":
+        torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
+        torch_index = TORCH_CUDA_INDEX
+    else:
+        # AMD 与无独显机器使用稳定的 CPU Torch。
+        torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
+        torch_index = TORCH_CPU_INDEX
+    pip(*torch_specs, index=torch_index)
+    pip(
+        "numpy==1.23.5",
+        "scipy<1.15",
+        "librosa==0.9.2",
+        "matplotlib<3.9",
+        "torchlibrosa==0.1.0",
+        "PyYAML",
+        "deepfilternet[soundfile]==0.5.6",
+        "pedalboard==0.9.24",
+    )
+    if gpu_stack in {"cu121", "cu128"}:
+        _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, gpu_stack)
+
+    VOCAL_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    cache_env = {
+        "HOME": str(VOCAL_MODELS_DIR),
+        "USERPROFILE": str(VOCAL_MODELS_DIR),
+        "XDG_CACHE_HOME": str(VOCAL_MODELS_DIR / ".cache"),
+        "LOCALAPPDATA": str(VOCAL_MODELS_DIR / ".local"),
+    }
+    # 自带 DeepFilterNet 模型优先复制到缓存目录，命中则 init_df() 跳过联网下载。
+    # appdirs.user_cache_dir("DeepFilterNet") 在 LOCALAPPDATA 下解析为
+    # <LOCALAPPDATA>/DeepFilterNet/DeepFilterNet/Cache/
+    copy_bundled(
+        "vocal-enhancement/DeepFilterNet",
+        VOCAL_MODELS_DIR / ".local" / "DeepFilterNet",
+    )
+    # 安装阶段预取权重（若自带模型已命中则跳过下载），避免用户首次生成时才等待。
+    run([py, "-c", "from df.enhance import init_df; init_df()"], env=cache_env)
+    (VOCAL_MODELS_DIR / "runtime.ready").write_text(
+        "deepfilternet=0.5.6\npedalboard=0.9.24\n",
+        encoding="ascii",
+    )
+    print(c("g", "AI 歌声增强环境与模型就绪"))
+
+
 def step_hub(uv: str) -> None:
-    hr("8/9 模型上传组件 .venv-hub（modelscope）")
+    hr("9/10 模型上传组件 .venv-hub（modelscope）")
     # 仅「分享到模型站（上传）」需要 modelscope SDK；搜索 / 下载走纯 HTTP，不依赖本环境。
     # 用 3.10（与 UVR 一致），装 modelscope hub 能力即可（上传用 upload_folder，无需本地 git）。
     if not venv_python(HUB_VENV).exists():
@@ -1685,7 +1752,7 @@ def step_hub(uv: str) -> None:
 
 
 def step_models(uv: str) -> None:
-    hr("9/9 底模 + UVR 模型（自带优先，缺失才联网下载）")
+    hr("10/10 底模 + UVR 模型（自带优先，缺失才联网下载）")
     PRETRAIN_DIR.mkdir(parents=True, exist_ok=True)
     if ASSETS_MODELS_DIR.exists():
         print(c("g", f"  检测到自带模型目录：{ASSETS_MODELS_DIR}"))
@@ -1794,10 +1861,11 @@ STEPS = {
     "rvc": lambda uv, stack: step_rvc(uv, stack),
     "seedvc": lambda uv, stack: step_seedvc(uv, stack),
     "ddsp": lambda uv, stack: step_ddsp(uv, stack),
+    "vocal": lambda uv, stack: step_vocal(uv, stack),
     "hub": lambda uv, stack: step_hub(uv),
     "models": lambda uv, stack: step_models(uv),
 }
-ORDER = ["app", "web", "uvr", "svc", "rvc", "seedvc", "ddsp", "hub", "models"]
+ORDER = ["app", "web", "uvr", "svc", "rvc", "seedvc", "ddsp", "vocal", "hub", "models"]
 
 
 def installer_progress(percent: int, message: str) -> None:
@@ -1833,7 +1901,7 @@ def main() -> int:
         "--only",
         choices=ORDER,
         nargs="+",
-        help="只执行指定步骤（可多选）：app web uvr svc rvc seedvc ddsp hub models",
+        help="只执行指定步骤（可多选）：app web uvr svc rvc seedvc ddsp vocal hub models",
     )
     for s in ORDER:
         p.add_argument(f"--skip-{s}", action="store_true", help=f"跳过 {s} 步骤")

@@ -1,4 +1,4 @@
-﻿<#
+<#
   构建 XB-SVCB 安装程序（setup.exe）——开发方。
   步骤：
   1）将前端构建为 web/dist（除非使用 -SkipWebBuild）
@@ -93,12 +93,13 @@ $workerFiles = @(
   "hub_worker.py",
   "rvc_worker.py",
   "seedvc_worker.py",
-  "ddsp_worker.py"
+  "ddsp_worker.py",
+  "vocal_enhancement_worker.py"
 )
 foreach ($worker in $workerFiles) {
   Require-File (Join-Path $Root "app\infrastructure\$worker") "Worker source $worker"
 }
-Require-File (Join-Path $Root "release_notes_v023.md") "v0.0.23 release notes"
+Require-File (Join-Path $Root "release_notes_v024.md") "v0.0.24 release notes"
 Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
 
@@ -117,6 +118,7 @@ Require-File (Join-Path $Root "assets\models\seedvc\whisper-small\preprocessor_c
 Require-FileSize (Join-Path $Root "assets\models\seedvc\whisper-small\model.safetensors") 943718400 "Bundled Whisper weights"
 Require-File (Join-Path $Root "assets\models\seedvc\bigvgan_v2_44khz_128band_512x\config.json") "Bundled BigVGAN config"
 Require-FileSize (Join-Path $Root "assets\models\seedvc\bigvgan_v2_44khz_128band_512x\bigvgan_generator.pt") 419430400 "Bundled BigVGAN weights"
+Require-FileSize (Join-Path $Root "assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\checkpoints\model_120.ckpt.best") 8388608 "Bundled DeepFilterNet3 weights"
 
 if ($ValidateOnly) {
   $iscc = Find-ISCC

@@ -561,9 +561,10 @@ export const api = {
     clipId: string,
     modelId: string,
     params?: InferenceParams,
+    enhance?: { enabled?: boolean; level?: 'basic' | 'advanced'; device?: string },
   ) =>
-    invoke<EditorRerunResult>('rerun_editor_clip', [projectId, trackId, clipId, modelId, params], () =>
-      mock.rerunEditorClip(projectId, trackId, clipId, modelId, params),
+    invoke<EditorRerunResult>('rerun_editor_clip', [projectId, trackId, clipId, modelId, params, enhance], () =>
+      mock.rerunEditorClip(projectId, trackId, clipId, modelId, params, enhance),
     ),
 }
 

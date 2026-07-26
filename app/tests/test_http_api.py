@@ -168,6 +168,26 @@ class HttpApiContractTests(unittest.TestCase):
         self.assertEqual(len(stored), 1)
         self.assertEqual(stored[0].stat().st_size, len(content))
 
+    def test_job_accepts_advanced_vocal_enhancement(self) -> None:
+        source = Path(self.temp.name) / "source.wav"
+        source.write_bytes(b"RIFF")
+
+        response = self.client.post(
+            "/api/v1/jobs",
+            headers=self.headers,
+            json={
+                "source_path": str(source),
+                "model_id": "model_svc",
+                "vocal_enhancement": {"enabled": True, "level": "advanced"},
+            },
+        )
+
+        self.assertEqual(response.status_code, 202, response.text)
+        self.assertEqual(
+            self.facade.created_payload["vocal_enhancement"],
+            {"enabled": True, "level": "advanced"},
+        )
+
     def test_seedvc_job_requires_reference_audio(self) -> None:
         source = Path(self.temp.name) / "source.wav"
         source.write_bytes(b"RIFF")

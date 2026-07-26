@@ -18,6 +18,7 @@ from infrastructure.engine import EngineRegistry
 from infrastructure.ffmpeg_tool import FfmpegTool
 from infrastructure.storage import ListRepository
 from infrastructure.uvr_tool import UvrTool
+from infrastructure.vocal_enhancement import VocalEnhancementProcessor
 
 _VOCAL_OUTPUT_WORKFLOWS = {"auto_vocal_merge", "manual_vocal_merge"}
 
@@ -29,24 +30,38 @@ def _wants_vocal_output(work: dict[str, Any]) -> bool:
     )
 
 
-def default_steps() -> list[dict[str, Any]]:
-    return [
+def default_steps(enhancement: bool = False) -> list[dict[str, Any]]:
+    steps = [
         {"key": "separate", "label": "人声分离", "status": StepStatus.WAIT.value},
         {"key": "f0", "label": "F0 提取", "status": StepStatus.WAIT.value},
         {"key": "infer", "label": "模型推理", "status": StepStatus.WAIT.value},
-        {"key": "mix", "label": "混音合成", "status": StepStatus.WAIT.value},
     ]
+    if enhancement:
+        steps.append(
+            {"key": "enhance", "label": "AI 歌声增强", "status": StepStatus.WAIT.value}
+        )
+    steps.append(
+        {"key": "mix", "label": "混音合成", "status": StepStatus.WAIT.value}
+    )
+    return steps
 
 
-def default_steps_multi() -> list[dict[str, Any]]:
+def default_steps_multi(enhancement: bool = False) -> list[dict[str, Any]]:
     """多模型混合翻唱的流水线步骤。"""
-    return [
+    steps = [
         {"key": "separate", "label": "人声分离", "status": StepStatus.WAIT.value},
         {"key": "split", "label": "歌词分割", "status": StepStatus.WAIT.value},
         {"key": "infer", "label": "逐段推理", "status": StepStatus.WAIT.value},
         {"key": "merge", "label": "人声合并", "status": StepStatus.WAIT.value},
-        {"key": "mix", "label": "混音合成", "status": StepStatus.WAIT.value},
     ]
+    if enhancement:
+        steps.append(
+            {"key": "enhance", "label": "AI 歌声增强", "status": StepStatus.WAIT.value}
+        )
+    steps.append(
+        {"key": "mix", "label": "混音合成", "status": StepStatus.WAIT.value}
+    )
+    return steps
 
 
 class ConversionService:
@@ -56,11 +71,13 @@ class ConversionService:
         ffmpeg: FfmpegTool,
         uvr: UvrTool,
         engines: EngineRegistry,
+        vocal_enhancement: VocalEnhancementProcessor | None = None,
     ) -> None:
         self._repo = repo
         self._ffmpeg = ffmpeg
         self._uvr = uvr
         self._engines = engines
+        self._vocal_enhancement = vocal_enhancement or VocalEnhancementProcessor()
         # so-vits 引擎引用：供 F0 探针（仅 so-vits 有意义）使用
         self._svc = engines.sovits
         # 串行任务队列：单 GPU 上一次只跑一个任务，避免并发推理叠加导致显存 OOM
@@ -100,6 +117,58 @@ class ConversionService:
             if step["key"] == key:
                 step["status"] = status
                 break
+
+    @staticmethod
+    def _enhancement_settings(work: dict[str, Any]) -> tuple[bool, str]:
+        raw = work.get("vocal_enhancement") or {}
+        if not isinstance(raw, dict):
+            return False, "basic"
+        level = str(raw.get("level") or "basic").strip().lower()
+        if level not in VocalEnhancementProcessor.LEVELS:
+            level = VocalEnhancementProcessor.LEVEL_BASIC
+        return bool(raw.get("enabled")), level
+
+    def _enhance_vocal(
+        self,
+        work: dict[str, Any],
+        source: Path,
+        output: Path,
+        device: str,
+        log_file: Path,
+        *,
+        progress: int,
+        reference: Path | None = None,
+    ) -> Path:
+        enabled, level = self._enhancement_settings(work)
+        if not enabled:
+            return source
+        self._set_step(work, "enhance", StepStatus.ACTIVE.value)
+        self._save(work)
+        layer = "高级层 Vocal AI Model" if level == "advanced" else "基础层 Vocal Beauty Engine"
+        chain = (
+            "vocalfloor 软衰减 → 频谱匹配 → DeepFilterNet → Pedalboard 母带 DSP"
+            if level == "advanced"
+            else "vocalfloor 软衰减 → DeepFilterNet → Pedalboard DSP"
+        )
+        self._log(log_file, f"AI 歌声增强开始：{layer}（{chain}）")
+        enhanced = self._vocal_enhancement.enhance(
+            source,
+            output,
+            level=level,
+            device=device,
+            log_file=log_file,
+            reference=reference,
+        )
+        self._set_step(work, "enhance", StepStatus.DONE.value)
+        work["progress"] = progress
+        work["vocal_enhancement_result"] = {
+            "level": level,
+            "input_path": str(source),
+            "output_path": str(enhanced),
+        }
+        self._save(work)
+        self._log(log_file, f"  AI 歌声增强完成: {enhanced}")
+        return enhanced
 
     @staticmethod
     def _record_history(work: dict[str, Any]) -> None:
@@ -177,6 +246,8 @@ class ConversionService:
 
         try:
             params = InferenceParams.from_dict(work.get("params", {}))
+            enhancement_enabled, _ = self._enhancement_settings(work)
+            pipeline_total = 5 if enhancement_enabled else 4
             framework = config.modelhub_normalize_framework(work.get("framework"))
             is_sovits = framework == "so-vits-svc"
             engine = self._engines.for_framework(framework)
@@ -193,7 +264,7 @@ class ConversionService:
             self._save(work)
             self._log(
                 log_file,
-                f"[1/4] 人声分离开始（UVR {'可用' if self._uvr.available else '降级模式'}）",
+                f"[1/{pipeline_total}] 人声分离开始（UVR {'可用' if self._uvr.available else '降级模式'}）",
             )
             instrumental: Path | None = None
             if source and source.exists():
@@ -251,7 +322,7 @@ class ConversionService:
                 wav_input = work_dir / "infer_input.wav"
                 if self._ffmpeg.convert(infer_input, wav_input):
                     infer_input = wav_input
-            self._log(log_file, f"[2/4] 推理输入已准备: {infer_input}")
+            self._log(log_file, f"[2/{pipeline_total}] 推理输入已准备: {infer_input}")
             # 真实 F0 提取（rmvpe 等），保存曲线并校验是否检测到人声。
             # F0 探针为 so-vits 专属；其它框架（如 RVC 内部自行处理 F0）跳过该步。
             f0_stats = None
@@ -295,9 +366,11 @@ class ConversionService:
             fw_label = config.MODELHUB_FRAMEWORKS.get(framework, framework)
             self._log(
                 log_file,
-                f"[3/4] {fw_label} 推理开始（引擎 {'可用' if getattr(engine, 'available', False) else '降级模式'}）",
+                f"[3/{pipeline_total}] {fw_label} 推理开始（引擎 {'可用' if getattr(engine, 'available', False) else '降级模式'}）",
             )
-            converted = work_dir / "converted.wav"
+            raw_converted = work_dir / (
+                "converted_raw.wav" if enhancement_enabled else "converted.wav"
+            )
             engine.infer(
                 model={
                     "framework": framework,
@@ -308,17 +381,29 @@ class ConversionService:
                     "index_path": work.get("index_path", ""),
                 },
                 vocals=infer_input,
-                out_path=converted,
+                out_path=raw_converted,
                 params=params,
                 duration=duration,
                 log_file=log_file,
             )
             self._set_step(work, "infer", StepStatus.DONE.value)
-            work["progress"] = 75
+            work["progress"] = 68 if enhancement_enabled else 75
             self._save(work)
             self._log(log_file, "  模型推理完成")
 
-            # 4) 混音合成：转换后人声 + 原伴奏 → 完整翻唱；无伴奏则仅输出干声
+            converted = self._enhance_vocal(
+                work,
+                raw_converted,
+                work_dir / "converted.wav",
+                params.device,
+                log_file,
+                progress=84,
+                reference=Path(work["vocals_path"]) if work.get("vocals_path") else None,
+            )
+            if enhancement_enabled:
+                work["raw_converted_path"] = str(raw_converted)
+
+            # 最后混音：转换/增强后人声 + 原伴奏 → 完整翻唱；无伴奏则仅输出干声
             self._set_step(work, "mix", StepStatus.ACTIVE.value)
             self._save(work)
             output = work_dir / "output.wav"
@@ -346,7 +431,7 @@ class ConversionService:
             self._set_step(work, "mix", StepStatus.DONE.value)
             self._log(
                 log_file,
-                f"[4/4] 混音合成完成（{'人声+伴奏' if mixed else '仅干声'}）: {output}",
+                f"[{pipeline_total}/{pipeline_total}] 混音合成完成（{'人声+伴奏' if mixed else '仅干声'}）: {output}",
             )
 
             work["progress"] = 100
@@ -452,6 +537,8 @@ class ConversionService:
 
         try:
             base_params = InferenceParams.from_dict(work.get("params", {}))
+            enhancement_enabled, _ = self._enhancement_settings(work)
+            pipeline_total = 6 if enhancement_enabled else 5
             source = Path(work["source_path"]) if work.get("source_path") else None
             duration = (
                 self._ffmpeg.probe_duration(source)
@@ -471,7 +558,7 @@ class ConversionService:
             self._save(work)
             self._log(
                 log_file,
-                f"[1/5] 人声分离（UVR {'可用' if self._uvr.available else '降级模式'}）",
+                f"[1/{pipeline_total}] 人声分离（UVR {'可用' if self._uvr.available else '降级模式'}）",
             )
             instrumental: Path | None = None
             if source and source.exists():
@@ -527,7 +614,7 @@ class ConversionService:
             sung = sum(1 for s in timeline if s.get("model_ids"))
             self._log(
                 log_file,
-                f"[2/5] 歌词分割完成：共 {len(timeline)} 段"
+                f"[2/{pipeline_total}] 歌词分割完成：共 {len(timeline)} 段"
                 f"（演唱 {sung} 段，间奏 {len(timeline) - sung} 段），"
                 f"参与模型 {len(used_models)} 个",
             )
@@ -540,7 +627,10 @@ class ConversionService:
             #    电流声、咔哒声并拼出卡顿。整轨推理保证上下文连续、无边界伪声。
             self._set_step(work, "infer", StepStatus.ACTIVE.value)
             self._save(work)
-            self._log(log_file, "[3/5] 整轨逐模型推理（按各模型框架路由引擎）")
+            self._log(
+                log_file,
+                f"[3/{pipeline_total}] 整轨逐模型推理（按各模型框架路由引擎）",
+            )
             full_renders: dict[str, Path] = {}
             for n, mid in enumerate(used_models):
                 model = seg_models.get(mid) or {}
@@ -756,7 +846,9 @@ class ConversionService:
                 if ok:
                     pieces.append(piece)
 
-            full_vocal = work_dir / "converted.wav"
+            full_vocal = work_dir / (
+                "converted_raw.wav" if enhancement_enabled else "converted.wav"
+            )
             merged = (
                 self._ffmpeg.concat_crossfade(pieces, full_vocal, xf=xf)
                 if self._ffmpeg.available and pieces
@@ -775,16 +867,30 @@ class ConversionService:
             else:
                 self._log(
                     log_file,
-                    f"[4/5] 人声合并完成（{len(timeline)} 句合并为 {len(pieces)} 段）：{full_vocal}",
+                    f"[4/{pipeline_total}] 人声合并完成（{len(timeline)} 句合并为 {len(pieces)} 段）：{full_vocal}",
                 )
+            self._set_step(work, "merge", StepStatus.DONE.value)
+            work["progress"] = 80 if enhancement_enabled else 88
+            self._save(work)
+
+            raw_full_vocal = Path(full_vocal)
+            full_vocal = self._enhance_vocal(
+                work,
+                raw_full_vocal,
+                work_dir / "converted.wav",
+                base_params.device,
+                log_file,
+                progress=90,
+                reference=Path(work["vocals_path"]) if work.get("vocals_path") else None,
+            )
+            if enhancement_enabled:
+                work["raw_converted_path"] = str(raw_full_vocal)
             work["converted_path"] = str(full_vocal)
             work["ai_vocal_paths"] = [str(p) for p in full_renders.values()]
             work["ai_merged_vocal_path"] = str(full_vocal)
-            self._set_step(work, "merge", StepStatus.DONE.value)
-            work["progress"] = 88
             self._save(work)
 
-            # 5) 混音合成：完整人声 + 原伴奏
+            # 最后混音：完整人声 + 原伴奏
             self._set_step(work, "mix", StepStatus.ACTIVE.value)
             self._save(work)
             output = work_dir / "output.wav"
@@ -808,7 +914,7 @@ class ConversionService:
             self._set_step(work, "mix", StepStatus.DONE.value)
             self._log(
                 log_file,
-                f"[5/5] 混音合成完成（{'人声+伴奏' if mixed else '仅人声'}）: {output}",
+                f"[{pipeline_total}/{pipeline_total}] 混音合成完成（{'人声+伴奏' if mixed else '仅人声'}）: {output}",
             )
 
             work["progress"] = 100

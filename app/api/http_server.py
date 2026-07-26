@@ -744,6 +744,20 @@ class InferenceParamsRequest(BaseModel):
     )
 
 
+class VocalEnhancementRequest(BaseModel):
+    """模型推理完成后的可选 AI 歌声增强设置。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=False, description="是否执行 AI 歌声增强流程")
+    level: Literal["basic", "advanced"] = Field(
+        default="basic",
+        description=(
+            "basic：DeepFilterNet 降噪 + 基础美声 EQ；advanced：额外做频谱参考匹配与专业母带 DSP"
+        ),
+    )
+
+
 class JobCreateRequest(BaseModel):
     """创建单模型或多模型翻唱任务。"""
 
@@ -805,6 +819,10 @@ class JobCreateRequest(BaseModel):
     params: InferenceParamsRequest = Field(
         default_factory=InferenceParamsRequest,
         description="推理参数。展开此对象可查看每个字段的作用、范围、默认值和适用框架。",
+    )
+    vocal_enhancement: VocalEnhancementRequest = Field(
+        default_factory=VocalEnhancementRequest,
+        description="可选 AI 美声自动后期与神经网络增强设置。",
     )
     models: list["BlendModelRequest"] = Field(
         default_factory=list,
@@ -1043,6 +1061,10 @@ class JobResponse(BaseModel):
     error: str | None = Field(default=None, description="失败原因，非失败任务通常为 null")
     steps: list[PipelineStepResponse] = Field(description="各处理步骤及状态")
     workflow: str | None = Field(default=None, description="任务后处理流程")
+    vocal_enhancement: VocalEnhancementRequest | None = Field(
+        default=None,
+        description="本任务使用的 AI 歌声增强设置",
+    )
     queue_position: int | None = Field(default=None, description="排队位置；未排队时可能为 null")
     result_url: str | None = Field(
         default=None,
@@ -1280,6 +1302,7 @@ def _public_work(item: dict[str, Any], base_path: str = "/api/v1") -> dict[str, 
             "error",
             "steps",
             "workflow",
+            "vocal_enhancement",
             "queue_position",
         )
     }
@@ -1819,6 +1842,7 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
                 "source_path": str(source),
                 "title": request.title or source.stem,
                 "workflow": request.workflow,
+                "vocal_enhancement": request.vocal_enhancement.model_dump(),
                 "mode": "multi",
                 "models": models,
                 "segments": segments,
@@ -1846,6 +1870,7 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
             "model_id": model_id,
             "title": request.title or source.stem,
             "workflow": request.workflow,
+            "vocal_enhancement": request.vocal_enhancement.model_dump(),
             "params": params,
         }
         return payload

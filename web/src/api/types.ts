@@ -210,6 +210,13 @@ export type CreateWorkflow =
   | 'auto_then_editor'
   | 'full_manual_editor'
 
+export type VocalEnhancementLevel = 'basic' | 'advanced'
+
+export interface VocalEnhancementOptions {
+  enabled: boolean
+  level: VocalEnhancementLevel
+}
+
 export interface InferenceParams {
   pitch?: number
   f0_method?: string
@@ -257,6 +264,7 @@ export interface WorkDTO {
   steps: PipelineStep[]
   mode?: 'single' | 'multi'
   workflow?: CreateWorkflow
+  vocal_enhancement?: VocalEnhancementOptions
   segments?: BlendSegment[]
   queue_position?: number
   history?: InferenceHistoryItem[]
@@ -309,6 +317,8 @@ export interface CreateWorkPayload {
   source_path?: string | null
   params?: InferenceParams
   workflow?: CreateWorkflow
+  /** 模型推理后的可选 AI 美声/歌声增强流程。 */
+  vocal_enhancement?: VocalEnhancementOptions
   /** 翻唱模式：single=单模型（默认）；multi=多模型混合。 */
   mode?: 'single' | 'multi'
   /** 多模型混合时参与的模型与参数。 */

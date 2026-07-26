@@ -22,6 +22,7 @@ class SystemService:
         rvc: Any | None = None,
         seedvc: Any | None = None,
         ddsp: Any | None = None,
+        vocal_enhancement: Any | None = None,
     ) -> None:
         self._ffmpeg = ffmpeg
         self._uvr = uvr
@@ -29,6 +30,7 @@ class SystemService:
         self._rvc = rvc
         self._seedvc = seedvc
         self._ddsp = ddsp
+        self._vocal_enhancement = vocal_enhancement
 
     def status(self) -> dict[str, Any]:
         inference_devices = inference_device_capabilities()
@@ -105,6 +107,18 @@ class SystemService:
                     "version": self._ddsp.version() or "未安装",
                     "status": ddsp_status,
                     "ok": ddsp_ok,
+                }
+            )
+        if self._vocal_enhancement is not None:
+            enhancement_ok = bool(self._vocal_enhancement.available)
+            tools.append(
+                {
+                    "key": "vocal-enhancement",
+                    "name": "AI Vocal Enhancement",
+                    "desc": "DeepFilterNet 降噪、频谱参考匹配与 Pedalboard 自动美声后期",
+                    "version": self._vocal_enhancement.version() or "未安装",
+                    "status": "已就绪" if enhancement_ok else "未安装 · 请修复 vocal 环境",
+                    "ok": enhancement_ok,
                 }
             )
         return {

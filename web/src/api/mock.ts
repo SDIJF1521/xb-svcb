@@ -300,18 +300,20 @@ function mockModelOverview(): ModelLibraryOverview {
   }
 }
 
-const baseSteps = (): PipelineStep[] => [
+const baseSteps = (enhancement = false): PipelineStep[] => [
   { key: 'separate', label: '人声分离', status: 'wait' },
   { key: 'f0', label: 'F0 提取', status: 'wait' },
   { key: 'infer', label: '模型推理', status: 'wait' },
+  ...(enhancement ? [{ key: 'enhance', label: 'AI 歌声增强', status: 'wait' as const }] : []),
   { key: 'mix', label: '混音合成', status: 'wait' },
 ]
 
-const multiSteps = (): PipelineStep[] => [
+const multiSteps = (enhancement = false): PipelineStep[] => [
   { key: 'separate', label: '人声分离', status: 'wait' },
   { key: 'split', label: '歌词分割', status: 'wait' },
   { key: 'infer', label: '逐段推理', status: 'wait' },
   { key: 'merge', label: '人声合并', status: 'wait' },
+  ...(enhancement ? [{ key: 'enhance', label: 'AI 歌声增强', status: 'wait' as const }] : []),
   { key: 'mix', label: '混音合成', status: 'wait' },
 ]
 
@@ -745,6 +747,9 @@ export const mock = {
   createWork(payload: CreateWorkPayload): WorkDTO {
     const isMulti = payload.mode === 'multi'
     const workflow = normalizeMockWorkflow(payload.workflow, isMulti)
+    const enhancement = Boolean(
+      payload.vocal_enhancement?.enabled && workflow !== 'manual_vocal_merge',
+    )
     const model = mockModels.find((m) => m.id === (payload.model_id || defaultModelId))
     const rawTitle = payload.title || (payload.source_path ? payload.source_path.split(/[/\\]/).pop()?.replace(/\.[^.]+$/, '') : '') || '未命名翻唱'
     const work: WorkDTO = {
@@ -762,9 +767,13 @@ export const mock = {
       source_path: payload.source_path,
       params: payload.params,
       workflow,
+      vocal_enhancement: {
+        enabled: enhancement,
+        level: payload.vocal_enhancement?.level === 'advanced' ? 'advanced' : 'basic',
+      },
       mode: isMulti ? 'multi' : 'single',
       segments: payload.segments,
-      steps: isMulti ? multiSteps() : baseSteps(),
+      steps: isMulti ? multiSteps(enhancement) : baseSteps(enhancement),
     }
     mockWorks.unshift(work)
     advance(work)
@@ -1761,6 +1770,7 @@ export const mock = {
     clipId: string,
     modelId: string,
     params?: InferenceParams,
+    enhance?: { enabled?: boolean; level?: 'basic' | 'advanced'; device?: string },
   ): EditorRerunResult {
     const project = mockEditorProjects.find((p) => p.id === projectId)
     if (!project) return { ok: false, error: '工程不存在' }
@@ -1771,7 +1781,13 @@ export const mock = {
       return { ok: false, error: `片段过短：至少 ${mockMinRerunClipSeconds.toFixed(2)} 秒才能重推理` }
     }
     clip.name = `${clip.name} · ${modelId}`
-    clip.metadata = { ...(clip.metadata || {}), rerun_model_id: modelId, rerun_params: { ...(params || {}) } }
+    clip.metadata = {
+      ...(clip.metadata || {}),
+      rerun_model_id: modelId,
+      rerun_params: { ...(params || {}) },
+      rerun_enhanced: Boolean(enhance?.enabled),
+      rerun_enhance_level: enhance?.enabled ? (enhance.level || 'basic') : '',
+    }
     project.updated_at = now()
     return { ok: true, project: cloneProject(project), clip: { ...clip } }
   },

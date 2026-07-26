@@ -72,6 +72,8 @@ desktop.ini
 # ===== 安装器生成的引擎与模型（开箱即用，由 install.ps1 重建）=====
 engines/
 models/
+# DeepFilterNet 在未重定向 LOCALAPPDATA 时会在 cwd 生成缓存目录（开发测试产物）
+/DeepFilterNet/
 
 # ===== 本地用户数据（默认在 ~/.xb-svcb，仅在被移入仓库时生效）=====
 .xb-svcb/
@@ -80,7 +82,7 @@ models/
 .vscode
 
 # ===== 例外：已有自带模型继续纳入版本库 =====
-# 保留安装器要附带的 SVC / RVC 底模与 UVR 模型；大文件通过 Git LFS 管理。
+# 保留安装器要附带的 SVC / RVC 底模、UVR 模型与 DeepFilterNet 权重；大文件通过 Git LFS 管理。
 # 这些例外要放在最后，覆盖前面的 dist/*、*.pt、*.pth 等忽略规则。
 #
 # 注意：单文件体积很大（安装器约 2GB、ContentVec 1.27GB），GitHub 单文件上限 100MB，

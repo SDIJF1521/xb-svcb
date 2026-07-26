@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.23"
+APP_VERSION = "0.0.24"
 APP_BG = "#05060d"
 
 
@@ -227,6 +227,33 @@ def ddsp_engine_ready() -> bool:
         and DDSP_WORKER.exists()
         and DDSP_PYTHON
         and DDSP_PYTHON.exists()
+    )
+
+
+# ---- AI 歌声增强（DeepFilterNet + Pedalboard）----
+# 与各 SVC 引擎一样使用隔离环境，避免 DeepFilterNet 的 Torch 依赖污染主程序。
+VOCAL_ENHANCEMENT_VENV_DIR = ROOT_DIR / ".venv-vocal"
+
+
+def _detect_vocal_enhancement_python() -> Path | None:
+    env = os.environ.get("XB_VOCAL_ENHANCEMENT_PYTHON")
+    if env:
+        return Path(env)
+    return _first_existing([_venv_python(VOCAL_ENHANCEMENT_VENV_DIR)])
+
+
+VOCAL_ENHANCEMENT_PYTHON = _detect_vocal_enhancement_python()
+VOCAL_ENHANCEMENT_WORKER = BUNDLE_DIR / "infrastructure" / "vocal_enhancement_worker.py"
+VOCAL_ENHANCEMENT_MODEL_DIR = ROOT_DIR / "models" / "vocal-enhancement"
+VOCAL_ENHANCEMENT_MARKER = VOCAL_ENHANCEMENT_MODEL_DIR / "runtime.ready"
+
+
+def vocal_enhancement_ready() -> bool:
+    return bool(
+        VOCAL_ENHANCEMENT_PYTHON
+        and VOCAL_ENHANCEMENT_PYTHON.exists()
+        and VOCAL_ENHANCEMENT_WORKER.exists()
+        and VOCAL_ENHANCEMENT_MARKER.exists()
     )
 
 

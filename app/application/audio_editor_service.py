@@ -23,6 +23,7 @@ from infrastructure.ffmpeg_tool import FfmpegTool
 from infrastructure.juce_vst3_host import JuceVst3Host
 from infrastructure.storage import ListRepository
 from infrastructure.uvr_tool import UvrTool
+from infrastructure.vocal_enhancement import VocalEnhancementProcessor
 
 from .model_service import ModelService
 
@@ -42,6 +43,7 @@ class AudioEditorService:
         ffmpeg: FfmpegTool,
         uvr: UvrTool,
         engines: Any,
+        vocal_enhancement: VocalEnhancementProcessor | None = None,
     ) -> None:
         self._repo = repo
         self._works_repo = works_repo
@@ -52,6 +54,7 @@ class AudioEditorService:
         self._plugin_host = JuceVst3Host()
         self._plugin_sessions: dict[str, dict[str, str]] = {}
         self._engines = engines
+        self._vocal_enhancement = vocal_enhancement or VocalEnhancementProcessor()
 
     def list(self) -> list[dict[str, Any]]:
         projects = []
@@ -1744,6 +1747,7 @@ class AudioEditorService:
         clip_id: str,
         model_id: str,
         params: dict[str, Any] | None = None,
+        enhance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         project = self._repo.get(project_id)
         model = self._models.get(model_id) if model_id else None
@@ -1789,6 +1793,34 @@ class AudioEditorService:
             engine.infer(model_payload, dry, out, infer_params, duration)
         except Exception as exc:  # noqa: BLE001 - 需要把推理错误回传给前端
             return {"ok": False, "error": str(exc)}
+
+        # 可选美声工程：对重推理产物做与主流程一致的高级层处理
+        # 以裁剪出的干声（dry）作为 reference，让频谱匹配回归自然
+        enhance_used = False
+        enhance_level = ""
+        enhance_error = ""
+        enhance_cfg = enhance or {}
+        if enhance_cfg.get("enabled") and self._vocal_enhancement.available:
+            enhance_level = "advanced" if str(enhance_cfg.get("level") or "basic").lower() == "advanced" else "basic"
+            enhanced_out = out_dir / f"{clip_id}_{model_id}_{rerun_key}_enhanced.wav"
+            try:
+                enhanced_out.unlink(missing_ok=True)
+            except OSError:
+                enhanced_out = out
+            try:
+                self._vocal_enhancement.enhance(
+                    out,
+                    enhanced_out,
+                    level=enhance_level,
+                    device=str(enhance_cfg.get("device") or "auto"),
+                    reference=dry,
+                )
+                if enhanced_out.is_file():
+                    out = enhanced_out
+                    enhance_used = True
+            except Exception as exc:  # noqa: BLE001 - 美声失败不应阻塞重推理
+                enhance_error = str(exc)
+
         next_project = copy.deepcopy(project)
         next_track, next_idx, next_clip = self._find_clip_ref(next_project, track_id, clip_id)
         if not next_track or next_idx < 0 or not next_clip:
@@ -1811,8 +1843,12 @@ class AudioEditorService:
                 "rerun_input": str(dry),
                 "rerun_source_file": str(src),
                 "rerun_dry_effects": True,
+                "rerun_enhanced": enhance_used,
+                "rerun_enhance_level": enhance_level if enhance_used else "",
             }
         )
+        if enhance_error:
+            meta["rerun_enhance_error"] = enhance_error
         if plugin_effects:
             meta["rerun_removed_plugin_effects"] = plugin_effects
         next_clip["metadata"] = meta

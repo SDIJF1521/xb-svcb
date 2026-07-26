@@ -40,6 +40,7 @@ from infrastructure.seedvc_engine import SeedVcEngine
 from infrastructure.storage import ListRepository, SettingsStore
 from infrastructure.svc_engine import SvcEngine
 from infrastructure.uvr_tool import UvrTool
+from infrastructure.vocal_enhancement import VocalEnhancementProcessor
 
 
 def _safe_filename(name: str) -> str:
@@ -1052,8 +1053,9 @@ class Api:
         clip_id: str,
         model_id: str,
         params: dict[str, Any] | None = None,
+        enhance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return self._editor.rerun_clip(project_id, track_id, clip_id, model_id, params or {})
+        return self._editor.rerun_clip(project_id, track_id, clip_id, model_id, params or {}, enhance or {})
 
     @staticmethod
     def _empty_migration_status() -> dict[str, Any]:
@@ -1443,6 +1445,7 @@ def build_api() -> Api:
     rvc = RvcEngine()
     seedvc = SeedVcEngine()
     ddsp = DdspSvcEngine()
+    vocal_enhancement = VocalEnhancementProcessor()
     # 引擎注册表：按模型 framework 路由推理引擎（缺省回退 so-vits-svc）
     engines = EngineRegistry([svc, rvc, seedvc, ddsp])
 
@@ -1452,14 +1455,18 @@ def build_api() -> Api:
     settings = SettingsStore(config.SETTINGS_DB)
 
     # 应用服务
-    system_service = SystemService(ffmpeg, uvr, svc, rvc, seedvc, ddsp)
+    system_service = SystemService(
+        ffmpeg, uvr, svc, rvc, seedvc, ddsp, vocal_enhancement
+    )
     model_service = ModelService(models_repo, settings)
-    conversion_service = ConversionService(works_repo, ffmpeg, uvr, engines)
+    conversion_service = ConversionService(
+        works_repo, ffmpeg, uvr, engines, vocal_enhancement
+    )
     work_service = WorkService(works_repo, conversion_service, model_service, settings)
     music_service = MusicService(settings)
     hub_service = ModelHubService(settings, model_service)
     editor_service = AudioEditorService(
-        editor_repo, works_repo, model_service, ffmpeg, uvr, engines
+        editor_repo, works_repo, model_service, ffmpeg, uvr, engines, vocal_enhancement
     )
 
     # 启动时回收上次会话残留的"处理中"任务（其后台线程已随进程退出而终止）

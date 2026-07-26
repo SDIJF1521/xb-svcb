@@ -112,6 +112,7 @@ class WorkService:
         model = self._models.get(model_id) if model_id else None
         source_path = payload.get("source_path")
         workflow = self._workflow(payload, mode="single")
+        vocal_enhancement = self._vocal_enhancement(payload, workflow)
 
         title = payload.get("title")
         if not title:
@@ -133,8 +134,9 @@ class WorkService:
             created_at=datetime.now().isoformat(timespec="seconds"),
             source_path=source_path,
             params=payload.get("params", {}) or {},
-            steps=default_steps(),
+            steps=default_steps(vocal_enhancement["enabled"]),
             workflow=workflow,
+            vocal_enhancement=vocal_enhancement,
         )
         record = work.to_dict()
         record.update(self._resolve_model_paths(model))
@@ -151,6 +153,7 @@ class WorkService:
 
         # 收集本次用到的模型及其各自参数（解析为可推理的本地路径）
         workflow = self._workflow(payload, mode="multi")
+        vocal_enhancement = self._vocal_enhancement(payload, workflow)
         seg_models: dict[str, Any] = {}
         for entry in payload.get("models", []) or []:
             mid = entry.get("model_id")
@@ -211,8 +214,9 @@ class WorkService:
             created_at=datetime.now().isoformat(timespec="seconds"),
             source_path=source_path,
             params=base_params,
-            steps=default_steps_multi(),
+            steps=default_steps_multi(vocal_enhancement["enabled"]),
             workflow=workflow,
+            vocal_enhancement=vocal_enhancement,
             mode="multi",
             segments=segments,
         )
@@ -230,6 +234,20 @@ class WorkService:
         if mode != "multi" and value in cls._VOCAL_MERGE_WORKFLOWS:
             return "auto_mix"
         return value
+
+    @staticmethod
+    def _vocal_enhancement(
+        payload: dict[str, Any], workflow: str
+    ) -> dict[str, Any]:
+        raw = (payload or {}).get("vocal_enhancement") or {}
+        if not isinstance(raw, dict):
+            raw = {}
+        level = str(raw.get("level") or "basic").strip().lower()
+        if level not in {"basic", "advanced"}:
+            level = "basic"
+        # 手动人声合并没有自动生成的整轨 AI 人声，增强应在编辑器导出后进行。
+        enabled = bool(raw.get("enabled")) and workflow != "manual_vocal_merge"
+        return {"enabled": enabled, "level": level}
 
     @staticmethod
     def _resolve_model_paths(model: dict[str, Any] | None) -> dict[str, str]:
@@ -266,8 +284,13 @@ class WorkService:
         work["status"] = JobStatus.QUEUE.value
         work["progress"] = 0
         work["error"] = None
+        enhancement_enabled = bool(
+            (work.get("vocal_enhancement") or {}).get("enabled")
+        )
         work["steps"] = (
-            default_steps_multi() if work.get("mode") == "multi" else default_steps()
+            default_steps_multi(enhancement_enabled)
+            if work.get("mode") == "multi"
+            else default_steps(enhancement_enabled)
         )
         self._repo.update(work_id, work)
         self._conversion.start(work_id)

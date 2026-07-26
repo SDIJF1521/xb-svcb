@@ -1,4 +1,4 @@
-﻿; ============================================================
+; ============================================================
 ;  XB-SVCB · AI 翻唱工具  安装脚本（Inno Setup 6+）
 ;
 ;  编译方式（开发者侧）：
@@ -21,7 +21,7 @@
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.23"
+#define MyAppVersion "0.0.24"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 
@@ -81,7 +81,7 @@ Source: "..\assets\icon\xb-svcb.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; 排除可选的 fcpe.pt（默认 F0 用 rmvpe），让安装器体积压到 GitHub Release 单文件 2GiB 上限内
 Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression; Excludes: "fcpe.pt"
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
-Source: "..\release_notes_v023.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release_notes_v024.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docs\api.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 #endif
 
@@ -931,6 +931,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC worker', PathJoin(InternalDir, 'infrastructure\seedvc_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\ddsp_worker.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC worker', PathJoin(InternalDir, 'infrastructure\ddsp_worker.py'));
+  if not FileExists(PathJoin(InternalDir, 'infrastructure\vocal_enhancement_worker.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'AI 歌声增强 worker', PathJoin(InternalDir, 'infrastructure\vocal_enhancement_worker.py'));
   if not FileExists(PathJoin(AppDir, 'install\configure_user_env.py')) then
     Missing := AddMissingRuntimeFile(Missing, '用户环境配置工具', PathJoin(AppDir, 'install\configure_user_env.py'));
   if not FileExists(PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt')) then
@@ -941,12 +943,14 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC Whisper Small', PathJoin(AppDir, 'assets\models\seedvc\whisper-small\model.safetensors'));
   if not FileExists(PathJoin(AppDir, 'assets\models\seedvc\bigvgan_v2_44khz_128band_512x\bigvgan_generator.pt')) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC BigVGAN', PathJoin(AppDir, 'assets\models\seedvc\bigvgan_v2_44khz_128band_512x\bigvgan_generator.pt'));
+  if not FileExists(PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\checkpoints\model_120.ckpt.best')) then
+    Missing := AddMissingRuntimeFile(Missing, 'DeepFilterNet 权重', PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\checkpoints\model_120.ckpt.best'));
   if not FileExists(PathJoin(AppDir, 'engines\juce-vst3-host\xb-juce-vst3-host.exe')) then
     Missing := AddMissingRuntimeFile(Missing, 'JUCE VST3 Host', PathJoin(AppDir, 'engines\juce-vst3-host\xb-juce-vst3-host.exe'));
 
   Result := Missing = '';
   if Result then
-    AppendInstallValidation('[ok] 应用本体、前端、AI workers、环境配置工具、SeedVC 离线底模与 JUCE Host 完整。')
+    AppendInstallValidation('[ok] 应用本体、前端、AI workers、环境配置工具、SeedVC / DeepFilterNet 离线底模与 JUCE Host 完整。')
   else
   begin
     AppendInstallValidation('[fail] 发布包缺少必要组件：');
@@ -1073,6 +1077,40 @@ begin
   AppendInstallValidation('建议：从开始菜单运行“搭建/修复运行环境”，或执行 setup_env.bat --only ddsp。');
 end;
 
+function ValidateVocalRuntime(): Boolean;
+var
+  AppDir, VocalPython, VocalWorker, VocalReady, Missing: String;
+begin
+  AppDir := ExpandConstant('{app}');
+  VocalPython := PathJoin(AppDir, '.venv-vocal\Scripts\python.exe');
+  VocalWorker := PathJoin(AppDir, '_internal\infrastructure\vocal_enhancement_worker.py');
+  VocalReady := PathJoin(AppDir, 'models\vocal-enhancement\runtime.ready');
+  Missing := '';
+
+  AppendInstallValidation('');
+  AppendInstallValidation('------------------------------------------------------------');
+  AppendInstallValidation('AI 歌声增强运行环境最终校验');
+
+  if not FileExists(VocalPython) then
+    Missing := AddMissingRuntimeFile(Missing, '.venv-vocal Python', VocalPython);
+  if not FileExists(VocalWorker) then
+    Missing := AddMissingRuntimeFile(Missing, 'AI 歌声增强 worker', VocalWorker);
+  if not FileExists(VocalReady) then
+    Missing := AddMissingRuntimeFile(Missing, 'runtime.ready 标记', VocalReady);
+
+  Result := Missing = '';
+  if Result then
+  begin
+    AppendInstallValidation('[ok] AI 歌声增强运行环境可被软件识别。');
+    Exit;
+  end;
+
+  AppendInstallValidation('[fail] AI 歌声增强运行环境不完整，软件会显示“降级模式”。');
+  AppendInstallValidation('缺失项：');
+  AppendInstallValidation(Missing);
+  AppendInstallValidation('建议：从开始菜单运行“搭建/修复运行环境”，或执行 setup_env.bat --only vocal。');
+end;
+
 function ValidateTorchRuntime(const PythonPath, RuntimeLabel: String): Boolean;
 var
   ResultCode: Integer;
@@ -1109,7 +1147,7 @@ begin
   Result := True;
   AppendInstallValidation('');
   AppendInstallValidation('------------------------------------------------------------');
-  AppendInstallValidation('五个 AI 隔离环境真实 Torch 校验');
+  AppendInstallValidation('六个 AI 隔离环境真实 Torch 校验');
 
   CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-uvr\Scripts\python.exe'), 'UVR');
   Result := Result and CurrentReady;
@@ -1120,6 +1158,8 @@ begin
   CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-seedvc\Scripts\python.exe'), 'SeedVC');
   Result := Result and CurrentReady;
   CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-ddsp\Scripts\python.exe'), 'DDSP-SVC');
+  Result := Result and CurrentReady;
+  CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-vocal\Scripts\python.exe'), 'AI 歌声增强');
   Result := Result and CurrentReady;
 
   if not Result then
@@ -1133,7 +1173,7 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   DataDir, Payload: String;
   SetupProgressStart: Integer;
-  PrereqsReady, UvrReady, SeedVcReady, DdspReady, InferenceReady: Boolean;
+  PrereqsReady, UvrReady, SeedVcReady, DdspReady, VocalReady, InferenceReady: Boolean;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -1165,8 +1205,9 @@ begin
         UvrReady := ValidateUvrRuntime();
         SeedVcReady := ValidateSeedVcRuntime();
         DdspReady := ValidateDdspRuntime();
+        VocalReady := ValidateVocalRuntime();
         InferenceReady := ValidateAllInferenceRuntimes();
-        if (not UvrReady) or (not SeedVcReady) or (not DdspReady) or
+        if (not UvrReady) or (not SeedVcReady) or (not DdspReady) or (not VocalReady) or
            (not InferenceReady) then
           SetEnvProgress(100, '部分运行环境校验失败，请查看安装详情日志');
       end;

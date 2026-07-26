@@ -595,6 +595,28 @@
                   </select>
                 </div>
               </div>
+              <label class="rerun-enhance-toggle">
+                <input v-model="rerunEnhanceEnabled" type="checkbox" />
+                <span>重推理后自动美声</span>
+              </label>
+              <div v-if="rerunEnhanceEnabled" class="rerun-enhance-level">
+                <button
+                  type="button"
+                  class="enhance-level"
+                  :class="{ active: rerunEnhanceLevel === 'basic' }"
+                  @click="rerunEnhanceLevel = 'basic'"
+                >
+                  基础层
+                </button>
+                <button
+                  type="button"
+                  class="enhance-level"
+                  :class="{ active: rerunEnhanceLevel === 'advanced' }"
+                  @click="rerunEnhanceLevel = 'advanced'"
+                >
+                  高级层
+                </button>
+              </div>
             </div>
             <span v-if="rerunGuardText" class="rerun-hint">{{ rerunGuardText }}</span>
             <el-button
@@ -851,6 +873,8 @@ interface RerunPrefs {
   filterRadius?: number
   rvcVersion?: string
   referenceAudio?: string
+  enhanceEnabled?: boolean
+  enhanceLevel?: 'basic' | 'advanced'
 }
 interface EffectControl {
   key: string
@@ -1169,6 +1193,10 @@ const rerunProtect = ref(prefNum(rerunPrefs.protect, 0.33, 0, 0.5))
 const rerunFilterRadius = ref(prefNum(rerunPrefs.filterRadius, 3, 0, 7))
 const rerunRvcVersion = ref(prefStr(rerunPrefs.rvcVersion, 'v2', rvcVersions))
 const rerunReferenceAudio = ref(prefStr(rerunPrefs.referenceAudio, ''))
+const rerunEnhanceEnabled = ref(Boolean(rerunPrefs.enhanceEnabled))
+const rerunEnhanceLevel = ref<'basic' | 'advanced'>(
+  rerunPrefs.enhanceLevel === 'advanced' ? 'advanced' : 'basic',
+)
 
 const selectedTrack = computed(() => {
   if (!project.value || !selected.value) return null
@@ -3279,6 +3307,9 @@ async function rerunClip() {
     selected.value.clipId,
     rerunModelId.value,
     currentRerunParams(),
+    rerunEnhanceEnabled.value
+      ? { enabled: true, level: rerunEnhanceLevel.value, device: rerunDevice.value }
+      : { enabled: false },
   )
   rerunning.value = false
   if (!res.ok || !res.project) {
@@ -3288,11 +3319,13 @@ async function rerunClip() {
   applyProject(res.project)
   const removed = res.clip?.metadata?.rerun_removed_plugin_effects
   const removedCount = Array.isArray(removed) ? removed.length : 0
-  ElMessage.success(
-    removedCount > 0
-      ? `片段已替换，已移除 ${removedCount} 个插件效果避免污染干声`
-      : '片段已替换',
-  )
+  const enhanced = res.clip?.metadata?.rerun_enhanced
+  const enhanceErr = res.clip?.metadata?.rerun_enhance_error
+  let msg = '片段已替换'
+  if (enhanced) msg = `片段已替换，已应用 ${res.clip?.metadata?.rerun_enhance_level || 'basic'} 美声`
+  if (enhanceErr) msg += `（美声失败：${enhanceErr}）`
+  if (removedCount > 0 && !enhanced) msg = `片段已替换，已移除 ${removedCount} 个插件效果避免污染干声`
+  ElMessage.success(msg)
 }
 
 function seekStart() {
@@ -3392,6 +3425,8 @@ watch(
           filterRadius: rerunFilterRadius.value,
           rvcVersion: rerunRvcVersion.value,
           referenceAudio: rerunReferenceAudio.value,
+          enhanceEnabled: rerunEnhanceEnabled.value,
+          enhanceLevel: rerunEnhanceLevel.value,
         }),
       )
     } catch {
@@ -4054,6 +4089,43 @@ onUnmounted(() => {
 }
 .rerun-mini select {
   height: 32px;
+}
+.rerun-enhance-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--xb-text);
+  user-select: none;
+}
+.rerun-enhance-toggle input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--xb-accent, #00f0ff);
+}
+.rerun-enhance-level {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+.rerun-enhance-level .enhance-level {
+  height: 32px;
+  border: 1px solid var(--xb-border, rgba(255, 255, 255, 0.12));
+  background: transparent;
+  color: var(--xb-muted);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s ease;
+}
+.rerun-enhance-level .enhance-level.active {
+  border-color: var(--xb-accent, #00f0ff);
+  color: var(--xb-accent, #00f0ff);
+  background: rgba(0, 240, 255, 0.08);
 }
 .rerun-hint {
   color: var(--xb-warn);

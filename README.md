@@ -4,9 +4,9 @@
 
 #### 开箱即用的桌面级 AI 翻唱工作站
 
-**🎵 导入歌曲 ｜ 🎚️ 人声分离 ｜ 🌫️ 去混响 ｜ 🗣️ AI 歌声转换 ｜ 🎼 合并伴奏 ｜ 🎤 成品翻唱**
+**🎵 导入歌曲 ｜ 🎚️ 人声分离 ｜ 🌫️ 去混响 ｜ 🗣️ AI 歌声转换 ｜ 🎧 AI 歌声增强 ｜ 🎼 合并伴奏 ｜ 🎤 成品翻唱**
 
-一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **在线曲库** · **模型站** · **音频编辑器**
+一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **AI 歌声增强工程** · **在线曲库** · **模型站** · **音频编辑器**
 
 <br/>
 
@@ -44,15 +44,18 @@
 - 🎵 **在线资源获取（可播放校验）** —— 内置 **网易云 / QQ音乐 / 酷我音乐** 曲库的搜索、试听、下载（QQ 可填会员 Cookie 取高品质音频）；酷我支持无损音质候选回退、后端代理试听、Range 分段下载及内联歌词。下载前统一校验资源可播放性（魔数 / Content-Type / ffprobe），VIP / 无版权 / 失效链接不可下载；下载素材可一键进入翻唱。
 - 🌐 **模型站（魔搭社区 · 后台传输）** —— 基于 **ModelScope** 一键**上传/下载**声音模型：填自己的访问令牌即可发布到自有公开仓库，按关键词**模糊搜索**（**分页加载**）社区模型并直接导入；带**架构标签**（So-VITS-SVC / RVC / SeedVC / DDSP-SVC）与**清单防污染**校验；上传/下载**挂后台执行、不阻塞操作**，大模型支持断点续传和重试，下载完成后立即进入可选模型列表。
 - 🎼 **专业人声分离** —— `5_HP-Karaoke-UVR` 分离 + `UVR-DeEcho-DeReverb` 去混响，得到干净干声。
+- 🎧 **AI 歌声增强工程** —— 针对 AI vocoder 留下的电子噪声与机械感设计两级增强：basic 层做 DeepFilterNet 神经降噪 + 基础美声 EQ；advanced 层叠加 vocalfloor 软衰减（150 ms 指数衰减到 -75 dB，保留呼吸与混响）、原始人声频谱参考匹配（按频段对齐 80-600 Hz / 2.5k-16k 缺陷）与 Pedalboard 专业母带 DSP（去齿音 / 谐波饱和 / 微调制 / 胶水压缩 / 柔和高频 / 微空间）。完整流水线：UVR 分离 → AI 翻唱推理 → 增强 → DeepFilterNet → Pedalboard 母带。DeepFilterNet 权重随安装包分发，全新机器离线开箱即用。
 - ⚡ **GPU / CPU 自由切换** —— 自动识别 NVIDIA CUDA 与 AMD Radeon DirectML（含 **50 系/Blackwell 自动走 cu128 + torch 2.7**），长音频自动分段避免显存溢出。
 - 🔌 **FastAPI 外部接入** —— 软件内手动启停本机或局域网 API，支持 API Key、流式上传大音频、模型管理、单模型/多模型/批量任务、推理历史与预设、作品管理和成品下载；Audio Editor Lite 也开放工程、音轨、片段、切分、分离、局部重推理与渲染接口。内置连通性测试、Swagger/ReDoc、Python 与 PowerShell 示例。
 - 🎨 **主题系统与自定义主题** —— 暗色 / 亮色 / 自定义主题一键切换并记忆，切换时从主题按钮触发基于原生页面快照的圆形扩散动画；自定义主题支持调色、背景图片 / MP4 动态壁纸和动态粒子，默认提供亮色「晴空花园」示例，连 pywebview **原生窗口标题栏/边框**也会在动画结束后自然同步。
 - 👤 **个性化** —— 自定义头像与昵称、内置全局消息通知中心；切换页面后仍持续同步任务进度与失败原因，已读状态可在多个前端窗口间同步。
 - 📦 **开箱即用** —— 安装后通过 `XB-SVCB.exe` 启动完整桌面应用（自带应用图标与前端资源），打开界面无需另装 Python / Node。
-- 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-seedvc` / `.venv-ddsp` / `.venv-uvr`），互不污染。
+- 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-seedvc` / `.venv-ddsp` / `.venv-uvr` / `.venv-vocal`），互不污染。
 - 🎧 **作品库** —— 试听 / 导出成品，单独试听伴奏与干声，失败任务一键查日志；删除作品同步真实清理本地生成文件。
 
-> **最新版本 v0.0.23**：FastAPI 外部接入扩展为模型管理、单模型/多模型/批量任务、历史与预设、作品管理以及 Audio Editor Lite 主要工作流；在线资源获取新增酷我音乐搜索、试听、无损下载和歌词解析。API 服务默认关闭，退出软件即释放端口，不会改变 v0.0.22 的 NVIDIA CUDA、AMD DirectML 或 CPU 推理环境。详见 [v0.0.23 更新说明](release_notes_v023.md) 与 [API 接入文档](docs/api.md)。
+> **最新版本 v0.0.24**：全新引入 AI 歌声增强工程（basic / advanced 两级，vocalfloor 软衰减 + 原始人声频谱参考匹配 + Pedalboard 专业母带 DSP），DeepFilterNet 权重随安装包分发实现离线开箱即用；编辑器局部重推理支持自动增强。不改变 v0.0.23 的 NVIDIA CUDA、AMD DirectML、CPU 推理策略、外部 FastAPI 接入与酷我音乐曲库。详见 [v0.0.24 更新说明](release_notes_v024.md) 与 [API 接入文档](docs/api.md)。
+
+> v0.0.23：FastAPI 外部接入扩展为模型管理、单模型/多模型/批量任务、历史与预设、作品管理以及 Audio Editor Lite 主要工作流；在线资源获取新增酷我音乐搜索、试听、无损下载和歌词解析。API 服务默认关闭，退出软件即释放端口。详见 [v0.0.23 更新说明](release_notes_v023.md)。
 
 > v0.0.22：新增 Windows AMD Radeon DirectML 支持，UVR、So-VITS-SVC、RVC 与 SeedVC 可使用 AMD GPU；DDSP-SVC 在 AMD 机器暂用 CPU 稳定推理。设备 UI 根据各隔离环境实际能力显示 CUDA、ROCm、DirectML 或 CPU；启动探测使用并行缓存且不弹出 CMD。详见 [v0.0.22 更新说明](release_notes_v022.md)。
 
@@ -133,6 +136,7 @@ flowchart TB
         RVC["RVC worker<br/>.venv-rvc"]
         SEED["SeedVC worker + inference.py<br/>.venv-seedvc"]
         DDSP["DDSP-SVC 6.3 worker<br/>.venv-ddsp"]
+        VOCAL["AI 歌声增强 worker<br/>.venv-vocal"]
         HUBWORKER["ModelScope worker<br/>.venv-hub"]
         FFMPEG["FFmpegEngine<br/>分离后处理 / 混音 / 酷我试听 / 导出"]
         JUCE["C++ JUCE VST3 Host<br/>检查 / GUI / state / 实时与离线处理"]
@@ -143,7 +147,7 @@ flowchart TB
     subgraph STORAGE["本地数据与随包资产"]
         direction LR
         DATA[".xb_svcb 用户数据<br/>models / works / downloads / editor_projects<br/>api/uploads / cache / settings / theme/media"]
-        ASSETS["assets/models 离线资产<br/>UVR / RMVPE / ContentVec / CampPlus / Whisper / BigVGAN"]
+        ASSETS["assets/models 离线资产<br/>UVR / RMVPE / ContentVec / CampPlus / Whisper / BigVGAN / DeepFilterNet"]
     end
 
     subgraph ONLINE["外部服务"]
@@ -165,6 +169,8 @@ flowchart TB
     EDITOR --> FFMPEG
     EDITOR --> JUCE
     EDITOR -. 局部重推理 .-> ROUTER
+    APP -. 歌声增强 .-> VOCAL
+    EDITOR -. 重推理后增强 .-> VOCAL
     CONNECT --> HUBWORKER
     HUBWORKER <--> HUB
     CONNECT <--> MUSIC
@@ -178,13 +184,14 @@ flowchart TB
     ASSETS -. 本地优先 .-> RVC
     ASSETS -. 本地优先 .-> SEED
     ASSETS -. 本地优先 .-> DDSP
+    ASSETS -. 本地优先 .-> VOCAL
 ```
 
 **关键边界**
 
 - **桌面与 HTTP 共用核心**：Vue 通过 pywebview Bridge、外部程序通过手动启用的 FastAPI 进入同一个 `Api` Facade，共用模型、作品、编辑工程和串行推理队列；HTTP 层只负责鉴权、DTO、上传与下载。
 - **模型按框架路由**：`EngineRegistry` 统一接收模型与推理参数，再分别调用 So-VITS-SVC、RVC、SeedVC 或 DDSP-SVC；SeedVC 额外传入参考音频，DDSP-SVC 使用 Rectified Flow checkpoint 与 YAML 配置。
-- **编辑器与插件隔离**：内置效果、混音和导出走 FFmpeg；VST3 加载与原生窗口由 JUCE Host 承载，局部重推理再回到统一引擎路由。
+- **编辑器与插件隔离**：内置效果、混音和导出走 FFmpeg；VST3 加载与原生窗口由 JUCE Host 承载，局部重推理再回到统一引擎路由，重推理后可选自动调用 AI 歌声增强流水线。
 - **在线服务可替换且受控**：网易云、QQ音乐和酷我音乐统一经过音乐服务适配；酷我试听由本地 FFmpeg 代理，模型站的重型依赖由 `.venv-hub` worker 隔离。
 - **数据与程序分离**：模型、作品、下载素材、编辑工程、API 上传、缓存、设置及 `theme/media` 都写入可迁移的 `.xb_svcb`，覆盖升级不会替换用户数据。
 - **离线资产优先**：安装包预置关键底模；worker 优先解析本地文件，仅在缺失时使用镜像或上游服务。
@@ -194,7 +201,7 @@ flowchart TB
 | 交互与接入层     | pywebview + Vue 3 + FastAPI                         | 桌面交互、API Key 鉴权、OpenAPI、流式上传及受控文件下载          |
 | API 与业务层     | `api` + `application` + `domain`                    | 桌面/HTTP 共用契约、任务队列、模型/作品/曲库/编辑工程业务编排    |
 | 基础设施层       | `infrastructure` + `EngineRegistry` + FFmpeg        | 路径、仓储、下载、音频处理和多框架引擎适配                       |
-| AI 与模型站子进程 | SVC / RVC / SeedVC / DDSP-SVC / UVR / Hub workers   | 在独立 `.venv-*` 中执行重型任务，隔离 Python、CUDA 与平台依赖    |
+| AI 与模型站子进程 | SVC / RVC / SeedVC / DDSP-SVC / UVR / Vocal / Hub workers   | 在独立 `.venv-*` 中执行重型任务，隔离 Python、CUDA 与平台依赖    |
 | 原生插件进程     | C++ / JUCE VST3 Host                                | 插件检查、原生 GUI、实时播放、参数 state 回写与离线渲染          |
 | 持久化层         | `.xb_svcb` + `assets/models`                        | 用户数据与 API 上传可迁移保存；随包资产优先供各 worker 使用      |
 | 在线集成         | 妖狐音乐 API + 酷我 CDN + ModelScope                | 三曲库/歌词、酷我代理试听与分段下载、模型搜索、上传和断点下载    |
@@ -208,7 +215,7 @@ flowchart TB
 > 推荐直接用图形安装器，无需任何命令行操作。
 
 1. 在 [Releases](https://github.com/SDIJF1521/xb-svcb/releases/latest) 下载 **`XB-SVCB-Setup.exe`** 和同版本的全部 **`XB-SVCB-Setup-*.bin`**，放在同一目录后双击 EXE。
-2. 在「选择安装位置」页**自定义安装路径**（默认 `%LOCALAPPDATA%\Programs\XB-SVCB`，无需管理员权限）。应用 exe 与全部依赖（`engines/`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-uvr`、`models/`）都装进**这个目录**。
+2. 在「选择安装位置」页**自定义安装路径**（默认 `%LOCALAPPDATA%\Programs\XB-SVCB`，无需管理员权限）。应用 exe 与全部依赖（`engines/`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-uvr`、`.venv-vocal`、`models/`）都装进**这个目录**。
 3. 在「选择用户数据存储位置」页选择 `.xb_svcb` 数据目录（默认 `{安装目录}\.xb_svcb`）。模型、作品、下载素材、编辑工程与缓存都会保存在这里，C 盘空间不足时建议选 D/E 盘。
 4. 勾选「安装后立即搭建运行环境」，联网创建 AI 子环境（由 `setup_env.bat` 调 `install.py`，无 PowerShell）。
 5. 通过桌面 / 开始菜单的 **XB-SVCB** 快捷方式启动。后续可在首页「数据存储位置」查看占用/剩余空间，并迁移到其它磁盘。
@@ -278,10 +285,10 @@ pip install uv
 
 ```bat
 rem 50 系显卡（cu128）
-python install\install.py --root "D:\XB-SVCB" --skip-app --skip-web --cu128 --only uvr svc rvc seedvc ddsp hub models
+python install\install.py --root "D:\XB-SVCB" --skip-app --skip-web --cu128 --only uvr svc rvc seedvc ddsp vocal hub models
 
 rem 40 系及以下 NVIDIA 显卡（cu121）
-python install\install.py --root "D:\XB-SVCB" --skip-app --skip-web --no-cu128 --only uvr svc rvc seedvc ddsp hub models
+python install\install.py --root "D:\XB-SVCB" --skip-app --skip-web --no-cu128 --only uvr svc rvc seedvc ddsp vocal hub models
 ```
 
 > 如果安装路径不是 `D:\XB-SVCB`，请把命令里的 `D:\XB-SVCB` 改成实际安装目录。等待命令运行完毕后，软件运行环境即安装完成。
@@ -309,8 +316,9 @@ setup_env.bat
 | 5 (`rvc`)    | `.venv-rvc`                                                             | RVC 推理环境（`rvc-python`，Python 3.9 / cu121；**50 系：Python 3.10 / cu128 + torch 2.7**；安装时预置 hubert/rmvpe，缺失才镜像下载） |
 | 6 (`seedvc`) | `engines/seed-vc` + `.venv-seedvc`                                    | SeedVC 推理环境（官方 Seed-VC；模型导入 checkpoint + config，推理时选择目标音色参考音频；建议 NVIDIA CUDA 用户使用，AMD/CPU 不建议首选）                                                     |
 | 7 (`ddsp`)   | `engines/ddsp-svc` + `.venv-ddsp`                                     | DDSP-SVC 6.3、ContentVec、RMVPE 与 PC-NSF-HiFiGAN 推理环境                                                                                    |
-| 8 (`hub`)    | `.venv-hub`                                                             | 模型站上传组件（`modelscope` SDK；仅上传需要）                                                                                              |
-| 9 (`models`) | `models/`、`engines/so-vits-svc/pretrain/`、`assets/models/seedvc/` | UVR、SVC/RVC、SeedVC 与 DDSP-SVC 离线资产                                                                                                     |
+| 8 (`vocal`)  | `.venv-vocal`                                                             | AI 歌声增强环境（DeepFilterNet + Pedalboard；安装时复制随包 DeepFilterNet 权重到缓存目录，命中后跳过联网下载）                                  |
+| 9 (`hub`)    | `.venv-hub`                                                             | 模型站上传组件（`modelscope` SDK；仅上传需要）                                                                                              |
+| 10 (`models`) | `models/`、`engines/so-vits-svc/pretrain/`、`assets/models/seedvc/` | UVR、SVC/RVC、SeedVC、DDSP-SVC 与 DeepFilterNet 离线资产                                                                                          |
 
 更细的控制可直接调用 `install.py`：
 
@@ -318,10 +326,11 @@ setup_env.bat
 python install\install.py --cpu          rem CPU 版
 python install\install.py --gpu          rem 自动选择 NVIDIA CUDA 或 AMD DirectML
 python install\install.py --directml     rem 强制安装 AMD/Windows DirectML 版
-python install\install.py --only svc     rem 只重跑某一步：app / web / uvr / svc / rvc / seedvc / ddsp / hub / models
+python install\install.py --only svc     rem 只重跑某一步：app / web / uvr / svc / rvc / seedvc / ddsp / vocal / hub / models
 python install\install.py --only rvc     rem 只搭建 RVC 推理环境 .venv-rvc（rvc-python）
 python install\install.py --only seedvc  rem 只搭建 SeedVC 推理环境 .venv-seedvc
 python install\install.py --only ddsp    rem 只搭建 DDSP-SVC 6.3 推理环境 .venv-ddsp
+python install\install.py --only vocal   rem 只搭建 AI 歌声增强环境 .venv-vocal（DeepFilterNet + Pedalboard）
 python install\install.py --skip-svc     rem 跳过 so-vits-svc（仅装壳 + 分离 + 前端）
 ```
 
@@ -385,8 +394,8 @@ v0.0.23 起可在软件的“资料库 -> API 接入”页手动启动 FastAPI �
 - **多模型混合** —— 勾选多个模型并分别设参；按歌名获取歌词、校验时长对齐（可整体偏移），再逐句指派模型。
 
 4. **选择高级工作流（可选）** —— 默认走「自动混音合成」；多模型模式可选「自动人声合并」或「手动人声合并」；需要后期微调时选「自动 + 编辑器二次调整」，只想从素材开始剪辑时选「全手动编辑」。
-5. **自动处理** —— 单模型：分离 → 去混响 →（so-vits-svc 才需）F0 → 模型推理 → 混音；多模型：分离 → 歌词分割 → 整轨逐模型推理 → 人声合并（同源连唱合并 + 换人处交叉淡化）→ 混音。
-6. **作品库 / 音频编辑器** —— 试听 / 导出成品，单独试听**伴奏**与**干声**；失败任务一键打开日志；删除作品会真实清理其本地生成文件。需要微调时可从作品创建编辑工程，在音频编辑器中剪切、淡化、调声道、重推理片段并导出。
+5. **自动处理** —— 单模型：分离 → 去混响 →（so-vits-svc 才需）F0 → 模型推理 → 混音；多模型：分离 → 歌词分割 → 整轨逐模型推理 → 人声合并（同源连唱合并 + 换人处交叉淡化）→ 混音。可在创建任务时勾选「AI 歌声增强」并选择 basic / advanced 等级，自动走 vocalfloor 软衰减 + 频谱参考匹配 + DeepFilterNet + Pedalboard 母带流水线。
+6. **作品库 / 音频编辑器** —— 试听 / 导出成品，单独试听**伴奏**与**干声**；失败任务一键打开日志；删除作品会真实清理其本地生成文件。需要微调时可从作品创建编辑工程，在音频编辑器中剪切、淡化、调声道、重推理片段并导出；局部重推理可勾选「重推理后自动增强」，以裁切出的干声作为参考进行频谱匹配。
 
 ---
 
@@ -407,7 +416,7 @@ Audio Editor Lite 是内置的轻量多轨编辑工作台，用来完成自动�
 - **外部插件兼容范围**：当前只支持 **64 位 Windows VST3 音频效果器**（通常为 `.vst3`），插件可以位于用户选择的任意目录，不限制在系统默认 VST3 目录。暂不支持 VST2 `.dll`、32 位插件、CLAP、AAX、AU，也不把需要 MIDI 音符的 VST3i 乐器作为人声音频效果器处理；外部侧链、特殊多总线和依赖额外采样库的插件仍取决于插件自身实现与资源完整性。
 - **音量包络**：片段可启用多点音量包络，渲染时按时间线插值，适合做局部压低、渐强和句尾修整。
 - **手动人声合并工程**：多模型「手动人声合并」不会先自动拼成完整人声，而是生成逐段可编辑素材；每个参与 AI 独立成轨，轨内只包含该 AI 负责的分段音频，导出默认为人声文件。
-- **局部重推理**：可选中片段并指定模型重新推理替换；重推理会使用原始片段裁剪作为模型输入，清理旧推理缓存，替换后移除插件类效果并记录到片段 metadata，避免 VST3 插件效果污染新的模型干声；短于 **1 秒** 的片段会被前后端同时拦截，避免过短音频导致模型推理不稳定。
+- **局部重推理**：可选中片段并指定模型重新推理替换；重推理会使用原始片段裁剪作为模型输入，清理旧推理缓存，替换后移除插件类效果并记录到片段 metadata，避免 VST3 插件效果污染新的模型干声；短于 **1 秒** 的片段会被前后端同时拦截，避免过短音频导致模型推理不稳定。可勾选「重推理后自动增强」复用 AI 歌声增强流水线，以裁切出的干声作为参考进行频谱匹配；增强失败不阻塞重推理，开关状态记忆到 `localStorage`。
 - **导出格式**：编辑工程可导出 WAV / MP3 / FLAC。
 
 ---
@@ -500,7 +509,7 @@ flowchart LR
 │  ├─ config.py                 #   路径配置（项目相对 + 环境变量覆盖）
 │  └─ main.py
 ├─ web/                         # 前端（Vue 3 + Vite + Element Plus）
-├─ assets/models/               # 随安装包分发的 UVR / SVC / RVC / SeedVC / DDSP 共用底模
+├─ assets/models/               # 随安装包分发的 UVR / SVC / RVC / SeedVC / DDSP / DeepFilterNet 共用底模
 ├─ engines/                     # 外部引擎与原生 Host 的运行目录
 │  ├─ so-vits-svc/              #   So-VITS-SVC 4.1 上游仓库
 │  ├─ seed-vc/                  #   SeedVC 上游仓库与 inference.py
@@ -524,22 +533,23 @@ flowchart LR
 
 无需改代码，用环境变量即可指向自有的引擎 / 模型（优先级高于项目内默认）：
 
-| 变量                      | 含义                                                                                                        |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `XB_DATA_DIR`           | `.xb_svcb` 用户数据目录；兼容旧变量 `XB_SVCB_DATA_DIR` / `XB_SB_SVCB_DATA_DIR` / `XB_XVCB_DATA_DIR` |
-| `XB_SOVITS_REPO`        | so-vits-svc 仓库根目录                                                                                      |
-| `XB_SVC_PYTHON`         | 运行 SVC 推理的 Python 解释器                                                                               |
-| `XB_RVC_PYTHON`         | 运行 RVC 推理的 Python 解释器                                                                               |
-| `XB_SEEDVC_REPO`        | Seed-VC 仓库根目录，目录内需包含`inference.py`                                                            |
-| `XB_SEEDVC_PYTHON`      | 运行 SeedVC 推理的 Python 解释器                                                                            |
-| `XB_DDSP_REPO`          | DDSP-SVC 仓库根目录，目录内需包含`main_reflow.py`                                                         |
-| `XB_DDSP_PYTHON`        | 运行 DDSP-SVC 推理的 Python 解释器                                                                          |
-| `XB_UVR_PYTHON`         | 运行 audio-separator 的 Python 解释器                                                                       |
-| `XB_UVR_MODEL_DIR`      | UVR 模型目录                                                                                                |
-| `XB_UVR_SEP_MODEL`      | 分离模型文件名（默认`5_HP-Karaoke-UVR.pth`）                                                              |
-| `XB_UVR_DEREVERB_MODEL` | 去混响模型文件名（默认`UVR-DeEcho-DeReverb.pth`）                                                         |
-| `XB_HUB_PYTHON`         | 模型站上传 worker 使用的 Python 解释器                                                                      |
-| `XB_JUCE_VST3_HOST`     | JUCE VST3 Host 路径（默认`engines/juce-vst3-host/xb-juce-vst3-host.exe`）                                 |
+| 变量                            | 含义                                                                                                        |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `XB_DATA_DIR`                 | `.xb_svcb` 用户数据目录；兼容旧变量 `XB_SVCB_DATA_DIR` / `XB_SB_SVCB_DATA_DIR` / `XB_XVCB_DATA_DIR` |
+| `XB_SOVITS_REPO`              | so-vits-svc 仓库根目录                                                                                      |
+| `XB_SVC_PYTHON`               | 运行 SVC 推理的 Python 解释器                                                                               |
+| `XB_RVC_PYTHON`               | 运行 RVC 推理的 Python 解释器                                                                               |
+| `XB_SEEDVC_REPO`              | Seed-VC 仓库根目录，目录内需包含`inference.py`                                                            |
+| `XB_SEEDVC_PYTHON`            | 运行 SeedVC 推理的 Python 解释器                                                                            |
+| `XB_DDSP_REPO`                | DDSP-SVC 仓库根目录，目录内需包含`main_reflow.py`                                                         |
+| `XB_DDSP_PYTHON`              | 运行 DDSP-SVC 推理的 Python 解释器                                                                          |
+| `XB_UVR_PYTHON`               | 运行 audio-separator 的 Python 解释器                                                                       |
+| `XB_VOCAL_ENHANCEMENT_PYTHON` | 运行 AI 歌声增强 worker（DeepFilterNet + Pedalboard）的 Python 解释器                                       |
+| `XB_UVR_MODEL_DIR`            | UVR 模型目录                                                                                                |
+| `XB_UVR_SEP_MODEL`            | 分离模型文件名（默认`5_HP-Karaoke-UVR.pth`）                                                              |
+| `XB_UVR_DEREVERB_MODEL`       | 去混响模型文件名（默认`UVR-DeEcho-DeReverb.pth`）                                                         |
+| `XB_HUB_PYTHON`               | 模型站上传 worker 使用的 Python 解释器                                                                      |
+| `XB_JUCE_VST3_HOST`           | JUCE VST3 Host 路径（默认`engines/juce-vst3-host/xb-juce-vst3-host.exe`）                                 |
 
 ---
 
@@ -558,6 +568,7 @@ flowchart LR
 | `seedvc/whisper-small/`                              | SeedVC 语音内容编码器                | worker 通过本地临时配置直接读取完整 Whisper Small 快照                                                                                                       |
 | `seedvc/bigvgan_v2_44khz_128band_512x/`              | SeedVC 44.1kHz 声码器                | worker 通过本地临时配置直接读取 BigVGAN 快照                                                                                                                 |
 | `5_HP-Karaoke-UVR.pth` / `UVR-DeEcho-DeReverb.pth` | 人声分离 / 去混响                    | `assets/models/uvr/` → `models/uvr/`；缺失则由 audio-separator 下载                                                                                     |
+| `vocal-enhancement/DeepFilterNet/.../model_120.ckpt.best` | AI 歌声增强神经降噪权重        | `assets/models/vocal-enhancement/DeepFilterNet/` → `models/vocal-enhancement/.local/DeepFilterNet/`（`init_df()` 命中后跳过联网下载）；缺失则由 DeepFilterNet 走官方缓存下载 |
 
 > 自带模型为 Git LFS 管理的二进制大文件。构建脚本会校验关键权重大小，拒绝把 LFS 指针或残缺快照打进发布包；安装数据会拆成小于 2GB 的 `XB-SVCB-Setup-*.bin` 分卷，与 `XB-SVCB-Setup.exe` 一起通过 **GitHub Releases** 分发（详见 `assets/models/README.md`）。联网回退时底模走 **hf-mirror 镜像**，GitHub 资源带 **ghproxy 回退**并逐源重试。
 
@@ -832,7 +843,7 @@ flowchart LR
     APP --> HOST["CMake + JUCE<br/>VST3 Host"]
     HOST --> STAGE["发布目录完整性校验<br/>应用 / 前端 / workers / Host / 安装脚本"]
 
-    ASSETS["assets/models 离线资产<br/>UVR / SVC / RVC / SeedVC / DDSP"] --> ISCC["Inno Setup 6<br/>分卷打包"]
+    ASSETS["assets/models 离线资产<br/>UVR / SVC / RVC / SeedVC / DDSP / DeepFilterNet"] --> ISCC["Inno Setup 6<br/>分卷打包"]
     STAGE --> ISCC
 
     ISCC --> EXE["XB-SVCB-Setup.exe<br/>安装引导程序"]
@@ -847,18 +858,18 @@ flowchart LR
 | `installer/xb-svcb.iss`      | Inno Setup 脚本：分卷、快捷方式、安装后环境搭建、完整性检查与卸载清理 |
 | `installer/build.ps1`        | 构建前端、PyInstaller 应用和 JUCE Host，校验发布目录并调用 ISCC       |
 | `installer/xb-svcb-app.spec` | 定义 PyInstaller 运行目录、内置前端及所有 AI worker                   |
-| `install/install.py`         | 创建 SVC / RVC / SeedVC / DDSP-SVC / UVR / Hub 隔离环境并部署底模      |
+| `install/install.py`         | 创建 SVC / RVC / SeedVC / DDSP-SVC / UVR / Vocal / Hub 隔离环境并部署底模      |
 | `setup_env.bat`              | 用户机搭建或修复运行环境入口（纯 batch，无 PowerShell）               |
 | `install_prereqs.bat`        | 图形安装器调用的前置依赖检查与安装入口                                |
 
 **设计说明**
 
 - 构建会强制核对 `app/config.py`、`pyproject.toml`、Python 锁文件、前端包及 Inno Setup 的版本号，避免混装不同版本。
-- PyInstaller 运行目录内包含当前 `web/dist` 与 SVC / RVC / SeedVC / DDSP-SVC / UVR / Hub workers，最终用户无需安装 Node.js。
+- PyInstaller 运行目录内包含当前 `web/dist` 与 SVC / RVC / SeedVC / DDSP-SVC / UVR / Vocal / Hub workers，最终用户无需安装 Node.js。
 - 安装器携带预构建的 `xb-juce-vst3-host.exe`；开发者仅在确认已有正确产物时使用 `-SkipJuceHostBuild`。
-- `assets/models/` 包含 UVR、SVC/RVC 底模及 SeedVC 所需 RMVPE、CampPlus、Whisper Small、BigVGAN；缺少或疑似 LFS 指针时构建直接失败。
+- `assets/models/` 包含 UVR、SVC/RVC 底模、SeedVC 所需 RMVPE、CampPlus、Whisper Small、BigVGAN，以及 AI 歌声增强所需的 DeepFilterNet3 权重；缺少或疑似 LFS 指针时构建直接失败（DeepFilterNet 权重校验阈值 8 MB）。
 - Inno Setup 使用 `DiskSpanning` 生成小于 2GB 的 `.bin` 分卷。EXE 不是完整离线包，发布和安装时都不能遗漏任何分卷。
-- 安装完成后会复核应用组件、UVR、SeedVC 与 DDSP-SVC 的 Python、worker 和上游推理入口；失败时给出修复命令和日志位置。
+- 安装完成后会复核应用组件、UVR、SeedVC、DDSP-SVC 与 AI 歌声增强的 Python、worker 和上游推理入口；失败时给出修复命令和日志位置。
 - 卸载时清理安装目录内生成的 `.venv-*`、`engines/` 和 `models/`；可迁移的 `.xb_svcb` 用户数据默认保留。
 
 ---
@@ -869,7 +880,7 @@ flowchart LR
 
 - 🧁 **模型来源** —— 目前软件内可用 / 演示的**绝大部分声音模型，均由「白菜工厂1145号员工」提供**。在此特别致谢 🙏，正是这些模型让本工具能开箱即用地体验完整翻唱流程。
 - 📌 模型版权归原作者所有，请在其授权范围内使用；如有侵权或需要下架，请联系作者处理。
-- 🛠️ 同时感谢上游开源项目：[so-vits-svc](https://github.com/svc-develop-team/so-vits-svc)、[rvc-python](https://github.com/daswer123/rvc-python) / RVC、[Seed-VC](https://github.com/Plachtaa/seed-vc)、[DDSP-SVC](https://github.com/yxlllc/DDSP-SVC)、[Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)、[ModelScope 魔搭社区](https://www.modelscope.cn/) 等。
+- 🛠️ 同时感谢上游开源项目：[so-vits-svc](https://github.com/svc-develop-team/so-vits-svc)、[rvc-python](https://github.com/daswer123/rvc-python) / RVC、[Seed-VC](https://github.com/Plachtaa/seed-vc)、[DDSP-SVC](https://github.com/yxlllc/DDSP-SVC)、[Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)、[DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)、[Pedalboard](https://github.com/spotify/pedalboard)、[ModelScope 魔搭社区](https://www.modelscope.cn/) 等。
 - 🚀 后续会把更多模型逐一上传到「模型站」，方便在软件内直接搜索下载。
 
 ---

@@ -665,6 +665,53 @@
           </div>
         </section>
 
+        <section class="card glass enhancement-card">
+          <div class="card-head enhancement-head">
+            <span class="step-no">05</span>
+            <div class="enhancement-title">
+              <h2>AI Vocal Enhancement</h2>
+              <span
+                class="enhancement-status"
+                :class="vocalEnhancementReady ? 'ready' : 'missing'"
+              >{{ vocalEnhancementReady ? '引擎就绪' : '环境未安装' }}</span>
+            </div>
+            <el-switch
+              v-model="vocalEnhancementEnabled"
+              :disabled="!vocalEnhancementReady || !enhancementWorkflowAllowed"
+              aria-label="启用 AI 歌声增强"
+            />
+          </div>
+          <div v-if="vocalEnhancementEnabled && enhancementWorkflowAllowed" class="enhancement-levels">
+            <button
+              type="button"
+              class="enhancement-level"
+              :class="{ active: vocalEnhancementLevel === 'basic' }"
+              @click="vocalEnhancementLevel = 'basic'"
+            >
+              <el-icon><Brush /></el-icon>
+              <span class="enhancement-level-copy">
+                <b>基础层 · Vocal Beauty Engine</b>
+                <span class="engine-list"><i>DeepFilterNet</i><i>Pedalboard DSP</i></span>
+              </span>
+              <el-icon v-if="vocalEnhancementLevel === 'basic'" class="level-check"><Select /></el-icon>
+            </button>
+            <button
+              type="button"
+              class="enhancement-level"
+              :class="{ active: vocalEnhancementLevel === 'advanced' }"
+              @click="vocalEnhancementLevel = 'advanced'"
+            >
+              <el-icon><Cpu /></el-icon>
+              <span class="enhancement-level-copy">
+                <b>高级层 · Vocal AI Model</b>
+                <span class="engine-list"><i>频谱参考匹配</i><i>DeepFilterNet</i><i>Pedalboard 母带</i></span>
+              </span>
+              <el-icon v-if="vocalEnhancementLevel === 'advanced'" class="level-check"><Select /></el-icon>
+            </button>
+          </div>
+          <p v-else-if="!enhancementWorkflowAllowed" class="enhancement-note">手动人声合并将在编辑器导出后处理</p>
+        </section>
+
         <section class="card glass infer-tools">
           <div class="card-head">
             <span class="step-no">ECO</span>
@@ -820,6 +867,8 @@ import {
   Delete,
   FullScreen,
   RefreshLeft,
+  Brush,
+  Cpu,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -835,6 +884,7 @@ import {
   type InferenceParams,
   type InferencePreset,
   type InferenceQueueStatus,
+  type VocalEnhancementLevel,
 } from '@/api'
 import { useModelsStore } from '@/stores/models'
 import { useSystemStore } from '@/stores/system'
@@ -887,6 +937,10 @@ const seedVcReferenceAudio = ref(str(prefs.seedVcReferenceAudio, ''))
 const presets = ref<InferencePreset[]>([])
 const selectedPresetId = ref('')
 const queueStatus = ref<InferenceQueueStatus>({ running: false, pending: [], size: 0 })
+const vocalEnhancementEnabled = ref(Boolean(prefs.vocalEnhancementEnabled))
+const vocalEnhancementLevel = ref<VocalEnhancementLevel>(
+  prefs.vocalEnhancementLevel === 'advanced' ? 'advanced' : 'basic',
+)
 
 /* RVC 专属参数 */
 const rvcVersions = ['v2', 'v1']
@@ -1029,6 +1083,12 @@ function normalizeWorkflowForMode(value: CreateWorkflow, targetMode = mode.value
 }
 const workflow = ref<CreateWorkflow>(
   normalizeWorkflowForMode(isWorkflow(prefs.workflow) ? prefs.workflow : 'auto_mix', mode.value),
+)
+const enhancementWorkflowAllowed = computed(
+  () => workflow.value !== 'manual_vocal_merge' && workflow.value !== 'full_manual_editor',
+)
+const vocalEnhancementReady = computed(
+  () => Boolean(systemStore.tools.find((tool) => tool.key === 'vocal-enhancement')?.ok),
 )
 const workflowOptions: {
   key: CreateWorkflow
@@ -1718,7 +1778,7 @@ const alignStatus = computed(() => {
 
 // 任一参数变化即写回 localStorage
 watch(
-  [uvrModel, f0Method, pitch, formantShift, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion],
+  [uvrModel, f0Method, pitch, formantShift, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion, vocalEnhancementEnabled, vocalEnhancementLevel],
   () => {
     try {
       localStorage.setItem(
@@ -1738,6 +1798,8 @@ watch(
           protect: protect.value,
           filterRadius: filterRadius.value,
           rvcVersion: rvcVersion.value,
+          vocalEnhancementEnabled: vocalEnhancementEnabled.value,
+          vocalEnhancementLevel: vocalEnhancementLevel.value,
         }),
       )
     } catch {
@@ -1755,6 +1817,7 @@ const stepMeta: Record<string, string> = {
   infer: '加载模型进行歌声转换',
   split: '按歌词时间轴切分人声',
   merge: '按顺序拼接各模型片段',
+  enhance: '频谱匹配 · DeepFilterNet · 母带',
   mix: 'ffmpeg 合成与重采样',
 }
 const singlePipeline: PipelineStep[] = [
@@ -1771,9 +1834,14 @@ const multiPipeline: PipelineStep[] = [
   { key: 'mix', label: '混音合成', status: 'wait' },
 ]
 
-const pipeline = computed<PipelineStep[]>(
-  () => currentWork.value?.steps ?? (mode.value === 'multi' ? multiPipeline : singlePipeline),
-)
+const pipeline = computed<PipelineStep[]>(() => {
+  if (currentWork.value?.steps) return currentWork.value.steps
+  const steps = (mode.value === 'multi' ? multiPipeline : singlePipeline).map((step) => ({ ...step }))
+  if (vocalEnhancementEnabled.value && enhancementWorkflowAllowed.value) {
+    steps.splice(-1, 0, { key: 'enhance', label: 'AI 歌声增强', status: 'wait' })
+  }
+  return steps
+})
 const stepDesc = (key: string) => stepMeta[key] ?? ''
 
 const isGenerating = computed(
@@ -1854,6 +1922,17 @@ function currentParams() {
     rvcVersion: rvcVersion.value,
     referenceAudio: selectedFramework.value === 'seed-vc' ? seedVcReferenceAudio.value : '',
   })
+}
+
+function currentVocalEnhancement() {
+  return {
+    enabled: Boolean(
+      vocalEnhancementEnabled.value &&
+      enhancementWorkflowAllowed.value &&
+      vocalEnhancementReady.value
+    ),
+    level: vocalEnhancementLevel.value,
+  }
 }
 
 function applyParams(raw: Record<string, unknown>) {
@@ -2105,6 +2184,7 @@ const generate = async () => {
       models: blendModels,
       segments: outSegments,
       params: blendModels[0]?.params,
+      vocal_enhancement: currentVocalEnhancement(),
     })
     currentWork.value = work
     editorOpenedFor.value = null
@@ -2122,6 +2202,7 @@ const generate = async () => {
     workflow: currentWorkflow,
     source_path: song.value.path,
     params: currentParams(),
+    vocal_enhancement: currentVocalEnhancement(),
   })
   currentWork.value = work
   editorOpenedFor.value = null
@@ -2141,6 +2222,7 @@ async function batchGenerate() {
     model_id: selectedModel.value,
     workflow: normalizeWorkflowForMode(workflow.value, 'single'),
     params: currentParams(),
+    vocal_enhancement: currentVocalEnhancement(),
   })
   queueStatus.value = await api.getInferenceQueue()
   ElMessage.success(`已加入推理队列：${created.length} 个任务`)
@@ -2590,6 +2672,92 @@ onUnmounted(() => {
   font-size: 12.5px;
   line-height: 1.45;
 }
+
+/* AI 歌声增强 */
+.enhancement-card { padding-top: 18px; }
+.enhancement-head { align-items: center; }
+.enhancement-title {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.enhancement-title h2 { min-width: 0; }
+.enhancement-status {
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.enhancement-status.ready {
+  color: var(--xb-success);
+  background: rgba(var(--xb-success-rgb), 0.11);
+}
+.enhancement-status.missing {
+  color: var(--xb-warn);
+  background: rgba(var(--xb-warn-rgb), 0.11);
+}
+.enhancement-levels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 1px solid var(--xb-border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.enhancement-level {
+  min-width: 0;
+  min-height: 78px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 0;
+  border-right: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.02);
+  color: var(--xb-text);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.18s ease, box-shadow 0.18s ease;
+}
+.enhancement-level:last-child { border-right: 0; }
+.enhancement-level:hover { background: rgba(var(--xb-primary-rgb), 0.05); }
+.enhancement-level.active {
+  background: rgba(var(--xb-primary-rgb), 0.1);
+  box-shadow: inset 0 -2px 0 var(--xb-primary);
+}
+.enhancement-level > .el-icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  font-size: 19px;
+  color: var(--xb-muted);
+}
+.enhancement-level.active > .el-icon { color: var(--xb-primary); }
+.enhancement-level-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.enhancement-level-copy b {
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.engine-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.engine-list i {
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--xb-border);
+  color: var(--xb-muted);
+  font-size: 10.5px;
+  font-style: normal;
+  line-height: 1.35;
+}
+.enhancement-level .level-check { font-size: 16px; }
+.enhancement-note { margin: 0; color: var(--xb-muted); font-size: 12.5px; }
 
 /* 多模型：每个模型 + 参数 */
 .multi-model { display: flex; flex-direction: column; }
@@ -3377,6 +3545,9 @@ input[type='range'] {
   .layout { grid-template-columns: 1fr; }
   .preview { position: static; }
   .workflow-grid { grid-template-columns: 1fr; }
+  .enhancement-levels { grid-template-columns: 1fr; }
+  .enhancement-level { border-right: 0; border-bottom: 1px solid var(--xb-border); }
+  .enhancement-level:last-child { border-bottom: 0; }
 }
 </style>
 
