@@ -21,7 +21,7 @@ class VocalEnhancementProcessor:
         return config.vocal_enhancement_ready()
 
     def version(self) -> str | None:
-        return "DeepFilterNet + Pedalboard（参考匹配）" if self.available else None
+        return "DeepFilterNet + Pedalboard（精细母带）" if self.available else None
 
     def enhance(
         self,

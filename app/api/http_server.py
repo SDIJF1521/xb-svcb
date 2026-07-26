@@ -753,7 +753,7 @@ class VocalEnhancementRequest(BaseModel):
     level: Literal["basic", "advanced"] = Field(
         default="basic",
         description=(
-            "basic：DeepFilterNet 降噪 + 基础美声 EQ；advanced：额外做频谱参考匹配与专业母带 DSP"
+            "basic：DeepFilterNet 降噪 + 基础美声 EQ；advanced：额外做频谱参考匹配与精细母带 EQ + 胶水压缩"
         ),
     )
 

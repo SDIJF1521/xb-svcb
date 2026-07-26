@@ -7,10 +7,10 @@
 
 ### 🎤 全新 AI 歌声增强工程
 
-- 🎙️ **两层增强等级**：新增 `basic` 与 `advanced` 两个层级。basic 层做 DeepFilterNet 神经降噪 + 基础美声 EQ；advanced 层在 basic 之上叠加频谱参考匹配与专业母带 DSP。等级可在创建翻唱任务或编辑器重推理时选择，默认关闭。
+- 🎙️ **两层增强等级**：新增 `basic` 与 `advanced` 两个层级。basic 层做 DeepFilterNet 神经降噪 + 基础美声 EQ；advanced 层在 basic 之上叠加频谱参考匹配与精细母带 EQ + 胶水压缩。等级可在创建翻唱任务或编辑器重推理时选择，默认关闭。
 - 🔻 **vocalfloor 软衰减**：SVC 推理在静音段会留下 -35~-45 dB 的电子噪声（vocalfloor）。采用 150 ms 指数衰减到 -75 dB 的软衰减策略，在抑制电子噪声的同时保留呼吸声与空间混响，避免硬性静音带来的突兀感。
 - 🎚️ **频谱参考匹配**：AI vocoder 典型地在 80-600 Hz 中低频与 2.5k-16k 高频出现能量缺陷。advanced 层以原始人声（或编辑器裁切出的干声）作为参考，按频段对齐 AI 翻唱频谱，比盲目 EQ 更精准，避免破坏音色平衡。
-- 🎛️ **Pedalboard 专业母带 DSP**：advanced 层包含去齿音、谐波饱和、微调制、胶水压缩、柔和高频与微空间处理，针对 AI 翻唱机械感/AI 感的成因设计，输出更自然。
+- 🎛️ **Pedalboard 精细母带 DSP**：advanced 层包含去齿音、温暖中低频、低频厚度、presence、高频空气感与胶水压缩，针对 AI 翻唱频谱缺陷做精细整形。不叠加 Distortion/Chorus/Reverb 等会"合成器化"的效果，避免加重 AI 感。
 - 🔄 **完整流水线**：UVR 分离 → AI 翻唱推理 → 增强（vocalfloor 软衰减 + 频谱参考匹配）→ DeepFilterNet → Pedalboard 母带。
 - 🧹 **不采用 VoiceFixer 方案**：VoiceFixer 是为修复损坏语音录音设计的神经修复模型，对高质量 AI 翻唱会破坏原始音色与伴奏细节，效果反而变差。本次全新设计的增强工程不引入 VoiceFixer，并清理了安装器中遗留的 VoiceFixer 预装。
 

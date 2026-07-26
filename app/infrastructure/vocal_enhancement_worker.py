@@ -1,21 +1,24 @@
 """独立歌声增强 worker：DeepFilterNet -> Pedalboard（基础层/高级层）。
 
 基础层 Vocal Beauty Engine：DeepFilterNet 温和降噪 + 基础美声 EQ
-高级层 Vocal AI Model：DeepFilterNet 温和降噪 + AI 感修复母带 DSP
-（vocalfloor 软衰减 + 去齿音 + 谐波饱和 + 微调制 + 胶水压缩 + 柔和高频 + 微空间）
+高级层 Vocal AI Model：DeepFilterNet 温和降噪 + 精细母带 EQ + 胶水压缩
+（vocalfloor 软衰减 + 去齿音 + 温暖中低频 + presence + 空气感 + 胶水压缩）
 
 VoiceFixer 已移除——它为修复损坏语音录音设计，对高质量 AI 翻唱会破坏
 原始音色与伴奏细节，效果反而变差。
 
-高级层针对 AI 翻唱机械感/AI 感的成因设计：
+高级层设计原则：advanced 应该是"更精细的 basic"，不是"加更多效果"。
+AI 翻唱的"AI 感"主要来自频谱细节平滑化与共振峰偏移，应通过精细 EQ
+与温和动态控制来缓解，而不是叠加 Distortion/Chorus/Reverb 等效果——
+这些效果会让声音"合成器化"，反而加重 AI 感（v3/v9 失败教训）。
+
 - vocalfloor 软衰减：把停顿段的 vocoder 电子底噪压低到 -75dB，但保留
   150ms 指数渐变过渡，避免硬静音的"切断"感，模拟自然声音的渐弱渐强
 - 去齿音：缓解 SVC/RVC 在 5–9kHz 的齿音突刺
-- 偶次谐波饱和：注入模拟温度，缓解数字冷感
-- 微调制 Chorus：缓解 F0 阶梯化造成的机械颤音
-- 柔和高频滚降：缓解高频过度延伸的金属感
-- 微 Reverb：补偿过度干燥的相位失真
 - 温暖中低频：补偿 AI 翻唱偏薄的音色
+- 人声 Presence：提升 3.5kHz 让声音靠前
+- 高频空气感：逆转 AI 翻唱的高频衰减（不削高频）
+- 胶水压缩：温和动态控制，保留瞬态
 """
 
 from __future__ import annotations
@@ -300,55 +303,42 @@ def _silence_vocalfloor(audio: "np.ndarray", sample_rate: int) -> "np.ndarray":
 
 
 def _pedalboard_mastering(source: Path, output: Path) -> None:
-    """高级层 AI 感修复母带 DSP：克制路线，避免过度处理暴露加工痕迹。
+    """高级层母带 DSP：在基础层之上做更精细的频谱整形与动态控制。
 
-    v3 失败教训：Chorus mix 0.45、Distortion 12dB、Reverb wet 0.12、PitchShift
-    恒定偏移等处理过重，反而让声音"合成器化""变声器化"，AI 感更强。
+    设计原则：advanced 应该是"更精细的 basic"，不是"加更多效果"。
+    AI 翻唱的"AI 感"主要来自频谱细节平滑化与共振峰偏移，应通过
+    精细 EQ 与温和动态控制来缓解，而不是叠加 Distortion/Chorus/Reverb
+    等效果——这些效果会让声音"合成器化"，反而加重 AI 感。
 
-    v5 失败教训：单纯依赖 NoiseGate 静音 vocalfloor 不可靠——阈值低了漏底噪，
-    高了吃人声尾音；且 DeepFilterNet 反而在静音段注入更多底噪。
-    v6 改为在 DSP 链之前先做基于 RMS 包络的硬静音（_silence_vocalfloor），
-    从信号源头清除 vocalfloor，再送入温和 DSP 链。
+    v3/v9 失败教训：Chorus/Distortion/Reverb 即使参数压到"勉强可察觉"
+    阈值，仍会让声音"散开""发糊""变脏"，用户反馈"高级不如基础"。
 
-    诊断依据："停顿处 AI 感强"的根因是 SVC 推理在静音段未真正归零，残留
-    -38dB 的电子底噪（vocalfloor），实测停顿段 RMS 0.007-0.012
-    （正常录音应 < 0.0005），超 15-20 倍。
+    与 basic 的差异：
+    - 更精细的 EQ 分段（加去齿音 + 温暖中低频 + presence + 空气感）
+    - 更深度的动态控制（胶水压缩 + 限制器）
+    - 不加 Distortion/Chorus/Reverb，不削高频
 
     处理流程：
-    A. 预处理：基于 RMS 包络硬静音 vocalfloor（_silence_vocalfloor）
-    B. Pedalboard DSP 链（每个效果器压到"勉强可察觉"阈值以下）：
       1. 高通去次低频
-      2. 单点温和去齿音（5kHz -2dB）
+      2. 温和去齿音（5kHz -1dB）
       3. 温暖中低频（200Hz +1.5dB）
-      4. 极轻谐波饱和（Distortion drive=6dB）
-      5. 极轻 Chorus（depth=0.06, mix=0.18）
-      6. 胶水压缩（slow attack 保留瞬态）
-      7. Presence 提升（3.5kHz +1dB）
-      8. 柔和高频滚降（10kHz -1.5dB）
-      9. 极轻 Reverb（wet=0.05）
-      10. 真峰限制器
-
-    关键取舍：
-    - 硬静音用 -45dB 阈值（远低于人声，远高于 vocalfloor 的 -38dB）
-    - 20ms 线性渐变避免咔哒声
-    - 移除 PitchShift：恒定音高偏移像变声器，反而暴露加工
-    - Chorus/Distortion/Reverb 全部压到"勉强可察觉"阈值以下
+      4. 低频厚度（120Hz +0.8dB）
+      5. 胶水压缩（温和，保留瞬态）
+      6. 人声 Presence（3.5kHz +1dB）
+      7. 高频空气感（8kHz +0.8dB，逆转 AI 翻唱高频衰减）
+      8. 真峰限制器
     """
     try:
         from pedalboard import (
-            Chorus,
             Compressor,
-            Distortion,
             HighpassFilter,
             HighShelfFilter,
             Limiter,
             LowShelfFilter,
             PeakFilter,
             Pedalboard,
-            Reverb,
         )
         from pedalboard.io import AudioFile
-        import numpy as np
     except ImportError as exc:
         raise RuntimeError("Pedalboard 未安装，请修复 vocal 增强环境") from exc
 
@@ -357,33 +347,28 @@ def _pedalboard_mastering(source: Path, output: Path) -> None:
         channels = audio_file.num_channels
         audio = audio_file.read(audio_file.frames)
 
-    # === B. Pedalboard DSP 链 ===
     board = Pedalboard(
         [
-            # === 1. 去次低频 ===
-            HighpassFilter(cutoff_frequency_hz=30.0),
-            # === 2. 单点温和去齿音（5kHz -2dB）===
-            PeakFilter(cutoff_frequency_hz=5000.0, gain_db=-2.0, q=1.8),
-            # === 3. 温暖中低频（200Hz +1.5dB）===
+            # === 1. 高通去次低频 ===
+            HighpassFilter(cutoff_frequency_hz=40.0),
+            # === 2. 温和去齿音（5kHz -1dB，比 basic 更克制）===
+            PeakFilter(cutoff_frequency_hz=5000.0, gain_db=-1.0, q=1.5),
+            # === 3. 温暖中低频（200Hz +1.5dB，补偿 AI 翻唱偏薄）===
             PeakFilter(cutoff_frequency_hz=200.0, gain_db=1.5, q=0.8),
-            # === 4. 极轻谐波饱和 ===
-            Distortion(drive_db=6.0),
-            # === 5. 极轻 Chorus ===
-            Chorus(rate_hz=0.3, depth=0.06, centre_delay_ms=7.0, feedback=0.0, mix=0.18),
-            # === 6. 胶水压缩 ===
+            # === 4. 低频厚度（120Hz +0.8dB）===
+            LowShelfFilter(cutoff_frequency_hz=120.0, gain_db=0.8),
+            # === 5. 胶水压缩（温和，保留瞬态）===
             Compressor(
-                threshold_db=-18.0,
+                threshold_db=-15.0,
                 ratio=1.5,
-                attack_ms=40.0,
-                release_ms=250.0,
+                attack_ms=30.0,
+                release_ms=200.0,
             ),
-            # === 7. 人声 Presence（3.5kHz +1dB）===
+            # === 6. 人声 Presence（3.5kHz +1dB，让声音靠前）===
             PeakFilter(cutoff_frequency_hz=3500.0, gain_db=1.0, q=0.7),
-            # === 8. 柔和高频滚降（10kHz -1.5dB）===
-            HighShelfFilter(cutoff_frequency_hz=10000.0, gain_db=-1.5, q=0.7),
-            # === 9. 极轻 Reverb（wet=0.05）===
-            Reverb(room_size=0.3, damping=0.7, wet_level=0.05, dry_level=0.95),
-            # === 10. 真峰限制器（仅防削波）===
+            # === 7. 高频空气感（8kHz +0.8dB，逆转 AI 翻唱高频衰减）===
+            HighShelfFilter(cutoff_frequency_hz=8000.0, gain_db=0.8, q=0.7),
+            # === 8. 真峰限制器（仅防削波）===
             Limiter(threshold_db=-1.0, release_ms=100.0),
         ]
     )
@@ -427,7 +412,7 @@ def run(source: Path, output: Path, level: str, device: str, reference: Path | N
 
         # 步骤 3：Pedalboard DSP
         if level == "advanced":
-            print("[3/3] Pedalboard AI 感修复母带 DSP（去齿音 + 谐波饱和 + 微调制 + 微空间）", flush=True)
+            print("[3/3] Pedalboard 精细母带 DSP（去齿音 + 温暖中低频 + presence + 空气感 + 胶水压缩）", flush=True)
             dsp_output = temp / "03_mastering.wav"
             _pedalboard_mastering(current, dsp_output)
         else:

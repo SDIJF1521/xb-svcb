@@ -44,7 +44,7 @@
 - 🎵 **在线资源获取（可播放校验）** —— 内置 **网易云 / QQ音乐 / 酷我音乐** 曲库的搜索、试听、下载（QQ 可填会员 Cookie 取高品质音频）；酷我支持无损音质候选回退、后端代理试听、Range 分段下载及内联歌词。下载前统一校验资源可播放性（魔数 / Content-Type / ffprobe），VIP / 无版权 / 失效链接不可下载；下载素材可一键进入翻唱。
 - 🌐 **模型站（魔搭社区 · 后台传输）** —— 基于 **ModelScope** 一键**上传/下载**声音模型：填自己的访问令牌即可发布到自有公开仓库，按关键词**模糊搜索**（**分页加载**）社区模型并直接导入；带**架构标签**（So-VITS-SVC / RVC / SeedVC / DDSP-SVC）与**清单防污染**校验；上传/下载**挂后台执行、不阻塞操作**，大模型支持断点续传和重试，下载完成后立即进入可选模型列表。
 - 🎼 **专业人声分离** —— `5_HP-Karaoke-UVR` 分离 + `UVR-DeEcho-DeReverb` 去混响，得到干净干声。
-- 🎧 **AI 歌声增强工程** —— 针对 AI vocoder 留下的电子噪声与机械感设计两级增强：basic 层做 DeepFilterNet 神经降噪 + 基础美声 EQ；advanced 层叠加 vocalfloor 软衰减（150 ms 指数衰减到 -75 dB，保留呼吸与混响）、原始人声频谱参考匹配（按频段对齐 80-600 Hz / 2.5k-16k 缺陷）与 Pedalboard 专业母带 DSP（去齿音 / 谐波饱和 / 微调制 / 胶水压缩 / 柔和高频 / 微空间）。完整流水线：UVR 分离 → AI 翻唱推理 → 增强 → DeepFilterNet → Pedalboard 母带。DeepFilterNet 权重随安装包分发，全新机器离线开箱即用。
+- 🎧 **AI 歌声增强工程** —— 针对 AI vocoder 留下的电子噪声与机械感设计两级增强：basic 层做 DeepFilterNet 神经降噪 + 基础美声 EQ；advanced 层叠加 vocalfloor 软衰减（150 ms 指数衰减到 -75 dB，保留呼吸与混响）、原始人声频谱参考匹配（按频段对齐 80-600 Hz / 2.5k-16k 缺陷）与 Pedalboard 精细母带 EQ + 胶水压缩（去齿音 / 温暖中低频 / presence / 高频空气感，不叠加 Distortion/Chorus/Reverb 等会加重 AI 感的效果）。完整流水线：UVR 分离 → AI 翻唱推理 → 增强 → DeepFilterNet → Pedalboard 母带。DeepFilterNet 权重随安装包分发，全新机器离线开箱即用。
 - ⚡ **GPU / CPU 自由切换** —— 自动识别 NVIDIA CUDA 与 AMD Radeon DirectML（含 **50 系/Blackwell 自动走 cu128 + torch 2.7**），长音频自动分段避免显存溢出。
 - 🔌 **FastAPI 外部接入** —— 软件内手动启停本机或局域网 API，支持 API Key、流式上传大音频、模型管理、单模型/多模型/批量任务、推理历史与预设、作品管理和成品下载；Audio Editor Lite 也开放工程、音轨、片段、切分、分离、局部重推理与渲染接口。内置连通性测试、Swagger/ReDoc、Python 与 PowerShell 示例。
 - 🎨 **主题系统与自定义主题** —— 暗色 / 亮色 / 自定义主题一键切换并记忆，切换时从主题按钮触发基于原生页面快照的圆形扩散动画；自定义主题支持调色、背景图片 / MP4 动态壁纸和动态粒子，默认提供亮色「晴空花园」示例，连 pywebview **原生窗口标题栏/边框**也会在动画结束后自然同步。
