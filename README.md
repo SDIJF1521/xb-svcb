@@ -1,36 +1,7 @@
 <div align="center">
 
-# 🎤 XB-SVCB · AI 翻唱工具
-
-#### 开箱即用的桌面级 AI 翻唱工作站
-
-**🎵 导入歌曲 ｜ 🎚️ 人声分离 ｜ 🌫️ 去混响 ｜ 🗣️ AI 歌声转换 ｜ 🎧 AI 歌声增强 ｜ 🎼 合并伴奏 ｜ 🎤 成品翻唱**
-
-一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **AI 歌声增强工程** · **在线曲库** · **模型站** · **音频编辑器**
-
-<br/>
-
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release&color=ff6b9d)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/SDIJF1521/xb-svcb/total?color=brightgreen&label=downloads)](https://github.com/SDIJF1521/xb-svcb/releases)
-[![Stars](https://img.shields.io/github/stars/SDIJF1521/xb-svcb?style=flat&color=yellow)](https://github.com/SDIJF1521/xb-svcb/stargazers)
-
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#)
-[![Python](https://img.shields.io/badge/python-3.9%20|%203.10-3776AB?logo=python&logoColor=white)](#)
-[![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
-[![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC-8a2be2)](#architecture)
-
-<br/>
-
-### ⬇️ [**点此下载安装器 · XB-SVCB-Setup.exe**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-
-<sub>Windows 一键安装 · 内置前端与底模 · 无需手动配置 Python / Node</sub>
-
-<sub>用户交流 / 反馈 QQ 群：**1038366109**</sub>
-
-</div>
-
 ---
+
 <a id="features"></a>
 
 ## ✨ 特性
@@ -94,7 +65,9 @@
 > v0.0.5：重做 **多模型混合翻唱** 合成——每个模型在完整人声上**整轨推理**，再「同一歌手连唱合并、仅在换人处交叉淡化」拼接，彻底消除逐句碎片推理带来的电流声 / 咔哒声 / 卡顿。
 >
 > v0.0.4：资源获取新增 **QQ音乐** 曲库（支持会员 Cookie 获取高品质音频）；新增 **多模型混合翻唱**（按歌词逐句指派不同模型）；删除作品时同步真实清理本地生成文件。
+
 ---
+
 <a id="architecture"></a>
 
 ## 🏗️ 架构一览
@@ -196,15 +169,15 @@ flowchart TB
 - **数据与程序分离**：模型、作品、下载素材、编辑工程、API 上传、缓存、设置及 `theme/media` 都写入可迁移的 `.xb_svcb`，覆盖升级不会替换用户数据。
 - **离线资产优先**：安装包预置关键底模；worker 优先解析本地文件，仅在缺失时使用镜像或上游服务。
 
-| 层 / 进程        | 主要实现                                            | 职责与边界                                                       |
-| ---------------- | --------------------------------------------------- | ---------------------------------------------------------------- |
-| 交互与接入层     | pywebview + Vue 3 + FastAPI                         | 桌面交互、API Key 鉴权、OpenAPI、流式上传及受控文件下载          |
-| API 与业务层     | `api` + `application` + `domain`                    | 桌面/HTTP 共用契约、任务队列、模型/作品/曲库/编辑工程业务编排    |
-| 基础设施层       | `infrastructure` + `EngineRegistry` + FFmpeg        | 路径、仓储、下载、音频处理和多框架引擎适配                       |
-| AI 与模型站子进程 | SVC / RVC / SeedVC / DDSP-SVC / UVR / Vocal / Hub workers   | 在独立 `.venv-*` 中执行重型任务，隔离 Python、CUDA 与平台依赖    |
-| 原生插件进程     | C++ / JUCE VST3 Host                                | 插件检查、原生 GUI、实时播放、参数 state 回写与离线渲染          |
-| 持久化层         | `.xb_svcb` + `assets/models`                        | 用户数据与 API 上传可迁移保存；随包资产优先供各 worker 使用      |
-| 在线集成         | 妖狐音乐 API + 酷我 CDN + ModelScope                | 三曲库/歌词、酷我代理试听与分段下载、模型搜索、上传和断点下载    |
+| 层 / 进程         | 主要实现                                                  | 职责与边界                                                     |
+| ----------------- | --------------------------------------------------------- | -------------------------------------------------------------- |
+| 交互与接入层      | pywebview + Vue 3 + FastAPI                               | 桌面交互、API Key 鉴权、OpenAPI、流式上传及受控文件下载        |
+| API 与业务层      | `api` + `application` + `domain`                    | 桌面/HTTP 共用契约、任务队列、模型/作品/曲库/编辑工程业务编排  |
+| 基础设施层        | `infrastructure` + `EngineRegistry` + FFmpeg          | 路径、仓储、下载、音频处理和多框架引擎适配                     |
+| AI 与模型站子进程 | SVC / RVC / SeedVC / DDSP-SVC / UVR / Vocal / Hub workers | 在独立`.venv-*` 中执行重型任务，隔离 Python、CUDA 与平台依赖 |
+| 原生插件进程      | C++ / JUCE VST3 Host                                      | 插件检查、原生 GUI、实时播放、参数 state 回写与离线渲染        |
+| 持久化层          | `.xb_svcb` + `assets/models`                          | 用户数据与 API 上传可迁移保存；随包资产优先供各 worker 使用    |
+| 在线集成          | 妖狐音乐 API + 酷我 CDN + ModelScope                      | 三曲库/歌词、酷我代理试听与分段下载、模型搜索、上传和断点下载  |
 
 ---
 
@@ -233,15 +206,15 @@ flowchart TB
 
 ### 📋 环境要求
 
-| 软件                            | 用途                      | 说明                                                                                                                                                 |
-| ------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Python 3.10.5+**        | 运行安装器与主程序        | 安装时勾选*Add to PATH*                                                                                                                            |
-| **uv**                    | 虚拟环境管理工具          | 安装器使用 uv 管理虚拟环境（缺失会自动安装）                                                                                                         |
-| **ffmpeg**                | 音频转码 / 混音           | 需在 PATH 中可用                                                                                                                                     |
-| **Git**（可选）           | 获取 so-vits-svc 仓库     | 没有也行，安装器会自动下载 ZIP                                                                                                                       |
-| **GPU 运行时**（可选）    | GPU 加速                  | NVIDIA 自动安装 cu121/cu128 PyTorch；Windows AMD Radeon 自动安装 `torch-directml`；无兼容 GPU 时使用 CPU torch |
-| **Node.js LTS**（含 npm） | 构建前端                  | 仅「从源码安装」需要                                                                                                                                 |
-| **C++ 生成工具**（可选）  | 编译依赖 / JUCE 插件 Host | 部分 Python 包需要 C++14 编译器；构建音频编辑器 VST3 插件 Host 需要 C++17 + CMake + JUCE；安装时勾选**Desktop development with C++**           |
+| 软件                            | 用途                      | 说明                                                                                                                                       |
+| ------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Python 3.10.5+**        | 运行安装器与主程序        | 安装时勾选*Add to PATH*                                                                                                                  |
+| **uv**                    | 虚拟环境管理工具          | 安装器使用 uv 管理虚拟环境（缺失会自动安装）                                                                                               |
+| **ffmpeg**                | 音频转码 / 混音           | 需在 PATH 中可用                                                                                                                           |
+| **Git**（可选）           | 获取 so-vits-svc 仓库     | 没有也行，安装器会自动下载 ZIP                                                                                                             |
+| **GPU 运行时**（可选）    | GPU 加速                  | NVIDIA 自动安装 cu121/cu128 PyTorch；Windows AMD Radeon 自动安装`torch-directml`；无兼容 GPU 时使用 CPU torch                            |
+| **Node.js LTS**（含 npm） | 构建前端                  | 仅「从源码安装」需要                                                                                                                       |
+| **C++ 生成工具**（可选）  | 编译依赖 / JUCE 插件 Host | 部分 Python 包需要 C++14 编译器；构建音频编辑器 VST3 插件 Host 需要 C++17 + CMake + JUCE；安装时勾选**Desktop development with C++** |
 
 #### 🔗 安装链接
 
@@ -307,18 +280,18 @@ setup_env.bat
 
 将自动完成（全部落在项目目录内，便于卸载）：
 
-| 步骤           | 产物                                                                      | 说明                                                                                                                                          |
-| -------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1 (`app`)    | `app/.venv`                                                             | 主程序环境（pywebview）                                                                                                                       |
-| 2 (`web`)    | `web/dist`                                                              | 前端构建产物                                                                                                                                  |
-| 3 (`uvr`)    | `.venv-uvr`                                                             | 人声分离环境（audio-separator）                                                                                                               |
-| 4 (`svc`)    | `engines/so-vits-svc` + `.venv-svc`                                   | so-vits-svc 4.1 仓库与推理环境（Python 3.9 / cu121；**50 系：Python 3.10 / cu128 + torch 2.7**）                                        |
-| 5 (`rvc`)    | `.venv-rvc`                                                             | RVC 推理环境（`rvc-python`，Python 3.9 / cu121；**50 系：Python 3.10 / cu128 + torch 2.7**；安装时预置 hubert/rmvpe，缺失才镜像下载） |
-| 6 (`seedvc`) | `engines/seed-vc` + `.venv-seedvc`                                    | SeedVC 推理环境（官方 Seed-VC；模型导入 checkpoint + config，推理时选择目标音色参考音频；建议 NVIDIA CUDA 用户使用，AMD/CPU 不建议首选）                                                     |
-| 7 (`ddsp`)   | `engines/ddsp-svc` + `.venv-ddsp`                                     | DDSP-SVC 6.3、ContentVec、RMVPE 与 PC-NSF-HiFiGAN 推理环境                                                                                    |
-| 8 (`vocal`)  | `.venv-vocal`                                                             | AI 歌声增强环境（DeepFilterNet + Pedalboard；安装时复制随包 DeepFilterNet 权重到缓存目录，命中后跳过联网下载）                                  |
-| 9 (`hub`)    | `.venv-hub`                                                             | 模型站上传组件（`modelscope` SDK；仅上传需要）                                                                                              |
-| 10 (`models`) | `models/`、`engines/so-vits-svc/pretrain/`、`assets/models/seedvc/` | UVR、SVC/RVC、SeedVC、DDSP-SVC 与 DeepFilterNet 离线资产                                                                                          |
+| 步骤            | 产物                                                                      | 说明                                                                                                                                          |
+| --------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 (`app`)     | `app/.venv`                                                             | 主程序环境（pywebview）                                                                                                                       |
+| 2 (`web`)     | `web/dist`                                                              | 前端构建产物                                                                                                                                  |
+| 3 (`uvr`)     | `.venv-uvr`                                                             | 人声分离环境（audio-separator）                                                                                                               |
+| 4 (`svc`)     | `engines/so-vits-svc` + `.venv-svc`                                   | so-vits-svc 4.1 仓库与推理环境（Python 3.9 / cu121；**50 系：Python 3.10 / cu128 + torch 2.7**）                                        |
+| 5 (`rvc`)     | `.venv-rvc`                                                             | RVC 推理环境（`rvc-python`，Python 3.9 / cu121；**50 系：Python 3.10 / cu128 + torch 2.7**；安装时预置 hubert/rmvpe，缺失才镜像下载） |
+| 6 (`seedvc`)  | `engines/seed-vc` + `.venv-seedvc`                                    | SeedVC 推理环境（官方 Seed-VC；模型导入 checkpoint + config，推理时选择目标音色参考音频；建议 NVIDIA CUDA 用户使用，AMD/CPU 不建议首选）      |
+| 7 (`ddsp`)    | `engines/ddsp-svc` + `.venv-ddsp`                                     | DDSP-SVC 6.3、ContentVec、RMVPE 与 PC-NSF-HiFiGAN 推理环境                                                                                    |
+| 8 (`vocal`)   | `.venv-vocal`                                                           | AI 歌声增强环境（DeepFilterNet + Pedalboard；安装时复制随包 DeepFilterNet 权重到缓存目录，命中后跳过联网下载）                                |
+| 9 (`hub`)     | `.venv-hub`                                                             | 模型站上传组件（`modelscope` SDK；仅上传需要）                                                                                              |
+| 10 (`models`) | `models/`、`engines/so-vits-svc/pretrain/`、`assets/models/seedvc/` | UVR、SVC/RVC、SeedVC、DDSP-SVC 与 DeepFilterNet 离线资产                                                                                      |
 
 更细的控制可直接调用 `install.py`：
 
@@ -557,18 +530,18 @@ flowchart LR
 
 模型获取采用 **「自带优先」** 策略：若 `assets/models/` 内已随安装包附带对应文件，安装时**直接本地复制**（瞬间完成、不联网）；只有缺失项才回退到镜像下载。
 
-| 模型                                                   | 用途                                 | 自带去向 / 下载来源                                                                                                                                          |
-| ------------------------------------------------------ | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `checkpoint_best_legacy_500.pt`                      | ContentVec / RVC hubert 语音编码器   | `assets/models/pretrain/` → `engines/so-vits-svc/pretrain/`，并硬链接或复制为 `.venv-rvc/.../base_model/hubert_base.pt`；缺失则使用 Hugging Face 镜像 |
-| `nsf_hifigan/`                                       | NSF-HiFiGAN 声码器 / 浅扩散          | 部署到 so-vits-svc 与 DDSP-SVC 预训练模型目录；缺失则使用 openvpi/vocoders Releases                                                                          |
-| `rmvpe.pt`                                           | SVC / RVC / SeedVC / DDSP 共用 RMVPE | 部署到 so-vits-svc、RVC base_model、SeedVC checkpoints 与 DDSP-SVC`pretrain/rmvpe/model.pt`；缺失则使用镜像下载                                            |
-| DDSP ContentVec`pytorch_model.bin`                   | DDSP-SVC 内容编码器                  | 安装 DDSP-SVC 环境时下载到`engines/ddsp-svc/pretrain/contentvec/`（Hugging Face 镜像优先）                                                                 |
-| `fcpe.pt`（可选）                                    | FCPE F0 预测器                       | 仅在自带目录存在时复制                                                                                                                                       |
-| `seedvc/campplus_cn_common.bin`                      | SeedVC 目标音色编码器                | worker 优先读取随包文件，并部署到`engines/seed-vc/checkpoints/`                                                                                            |
-| `seedvc/whisper-small/`                              | SeedVC 语音内容编码器                | worker 通过本地临时配置直接读取完整 Whisper Small 快照                                                                                                       |
-| `seedvc/bigvgan_v2_44khz_128band_512x/`              | SeedVC 44.1kHz 声码器                | worker 通过本地临时配置直接读取 BigVGAN 快照                                                                                                                 |
-| `5_HP-Karaoke-UVR.pth` / `UVR-DeEcho-DeReverb.pth` | 人声分离 / 去混响                    | `assets/models/uvr/` → `models/uvr/`；缺失则由 audio-separator 下载                                                                                     |
-| `vocal-enhancement/DeepFilterNet/.../model_120.ckpt.best` | AI 歌声增强神经降噪权重        | `assets/models/vocal-enhancement/DeepFilterNet/` → `models/vocal-enhancement/.local/DeepFilterNet/`（`init_df()` 命中后跳过联网下载）；缺失则由 DeepFilterNet 走官方缓存下载 |
+| 模型                                                        | 用途                                 | 自带去向 / 下载来源                                                                                                                                                                 |
+| ----------------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `checkpoint_best_legacy_500.pt`                           | ContentVec / RVC hubert 语音编码器   | `assets/models/pretrain/` → `engines/so-vits-svc/pretrain/`，并硬链接或复制为 `.venv-rvc/.../base_model/hubert_base.pt`；缺失则使用 Hugging Face 镜像                        |
+| `nsf_hifigan/`                                            | NSF-HiFiGAN 声码器 / 浅扩散          | 部署到 so-vits-svc 与 DDSP-SVC 预训练模型目录；缺失则使用 openvpi/vocoders Releases                                                                                                 |
+| `rmvpe.pt`                                                | SVC / RVC / SeedVC / DDSP 共用 RMVPE | 部署到 so-vits-svc、RVC base_model、SeedVC checkpoints 与 DDSP-SVC`pretrain/rmvpe/model.pt`；缺失则使用镜像下载                                                                   |
+| DDSP ContentVec`pytorch_model.bin`                        | DDSP-SVC 内容编码器                  | 安装 DDSP-SVC 环境时下载到`engines/ddsp-svc/pretrain/contentvec/`（Hugging Face 镜像优先）                                                                                        |
+| `fcpe.pt`（可选）                                         | FCPE F0 预测器                       | 仅在自带目录存在时复制                                                                                                                                                              |
+| `seedvc/campplus_cn_common.bin`                           | SeedVC 目标音色编码器                | worker 优先读取随包文件，并部署到`engines/seed-vc/checkpoints/`                                                                                                                   |
+| `seedvc/whisper-small/`                                   | SeedVC 语音内容编码器                | worker 通过本地临时配置直接读取完整 Whisper Small 快照                                                                                                                              |
+| `seedvc/bigvgan_v2_44khz_128band_512x/`                   | SeedVC 44.1kHz 声码器                | worker 通过本地临时配置直接读取 BigVGAN 快照                                                                                                                                        |
+| `5_HP-Karaoke-UVR.pth` / `UVR-DeEcho-DeReverb.pth`      | 人声分离 / 去混响                    | `assets/models/uvr/` → `models/uvr/`；缺失则由 audio-separator 下载                                                                                                            |
+| `vocal-enhancement/DeepFilterNet/.../model_120.ckpt.best` | AI 歌声增强神经降噪权重              | `assets/models/vocal-enhancement/DeepFilterNet/` → `models/vocal-enhancement/.local/DeepFilterNet/`（`init_df()` 命中后跳过联网下载）；缺失则由 DeepFilterNet 走官方缓存下载 |
 
 > 自带模型为 Git LFS 管理的二进制大文件。构建脚本会校验关键权重大小，拒绝把 LFS 指针或残缺快照打进发布包；安装数据会拆成小于 2GB 的 `XB-SVCB-Setup-*.bin` 分卷，与 `XB-SVCB-Setup.exe` 一起通过 **GitHub Releases** 分发（详见 `assets/models/README.md`）。联网回退时底模走 **hf-mirror 镜像**，GitHub 资源带 **ghproxy 回退**并逐源重试。
 
@@ -804,9 +777,9 @@ CPU 模式下模型较慢。使用 `python install\install.py --gpu` 会自动�
 
 <br/>
 
-- [x] AMD GPU 支持（Windows DirectML；四个歌声模型框架 + UVR）
-- [x] DirectML 支持
-- [x] UVR ONNX Runtime DirectML 推理
+- [X] AMD GPU 支持（Windows DirectML；四个歌声模型框架 + UVR）
+- [X] DirectML 支持
+- [X] UVR ONNX Runtime DirectML 推理
 - [ ] Intel GPU 支持
 - [ ] Ascend 昇腾支持
 - [ ] CPU 推理优化
@@ -853,14 +826,14 @@ flowchart LR
     INSTALL --> READY["组件校验<br/>完成或稍后单步修复"]
 ```
 
-| 文件                           | 作用                                                                  |
-| ------------------------------ | --------------------------------------------------------------------- |
-| `installer/xb-svcb.iss`      | Inno Setup 脚本：分卷、快捷方式、安装后环境搭建、完整性检查与卸载清理 |
-| `installer/build.ps1`        | 构建前端、PyInstaller 应用和 JUCE Host，校验发布目录并调用 ISCC       |
-| `installer/xb-svcb-app.spec` | 定义 PyInstaller 运行目录、内置前端及所有 AI worker                   |
-| `install/install.py`         | 创建 SVC / RVC / SeedVC / DDSP-SVC / UVR / Vocal / Hub 隔离环境并部署底模      |
-| `setup_env.bat`              | 用户机搭建或修复运行环境入口（纯 batch，无 PowerShell）               |
-| `install_prereqs.bat`        | 图形安装器调用的前置依赖检查与安装入口                                |
+| 文件                           | 作用                                                                      |
+| ------------------------------ | ------------------------------------------------------------------------- |
+| `installer/xb-svcb.iss`      | Inno Setup 脚本：分卷、快捷方式、安装后环境搭建、完整性检查与卸载清理     |
+| `installer/build.ps1`        | 构建前端、PyInstaller 应用和 JUCE Host，校验发布目录并调用 ISCC           |
+| `installer/xb-svcb-app.spec` | 定义 PyInstaller 运行目录、内置前端及所有 AI worker                       |
+| `install/install.py`         | 创建 SVC / RVC / SeedVC / DDSP-SVC / UVR / Vocal / Hub 隔离环境并部署底模 |
+| `setup_env.bat`              | 用户机搭建或修复运行环境入口（纯 batch，无 PowerShell）                   |
+| `install_prereqs.bat`        | 图形安装器调用的前置依赖检查与安装入口                                    |
 
 **设计说明**
 
