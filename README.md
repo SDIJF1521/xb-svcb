@@ -58,6 +58,7 @@
 
 > **最新版本 v0.0.25**：安装器前置依赖改为用户辅助检测与跳转下载，用户安装好 Python 后会自动安装 uv；FFmpeg、So-VITS-SVC、SeedVC、DDSP-SVC 改为随分卷自带，系统已有 FFmpeg 时自动跳过释放；作品播放页补齐歌词搜索多结果手动选择、QQ / 网易 / 酷我 API 来源选择、MV 画面导入与更细致的播放体验。详见 [v0.0.25 更新说明](release_notes_v025.md) 与 [API 接入文档](docs/api.md)。
 
+> v0.0.24：引入 AI 歌声增强工程（basic / advanced 两级，vocalfloor 软衰减 + 原始人声频谱参考匹配 + Pedalboard 专业母带 DSP），DeepFilterNet 权重随安装包分发实现离线开箱即用；编辑器局部重推理支持自动增强。不改变 v0.0.23 的 NVIDIA CUDA、AMD DirectML、CPU 推理策略、外部 FastAPI 接入与酷我音乐曲库。详见 [v0.0.24 更新说明](release_notes_v024.md) 与 [API 接入文档](docs/api.md)。
 > v0.0.23：FastAPI 外部接入扩展为模型管理、单模型/多模型/批量任务、历史与预设、作品管理以及 Audio Editor Lite 主要工作流；在线资源获取新增酷我音乐搜索、试听、无损下载和歌词解析。API 服务默认关闭，退出软件即释放端口。详见 [v0.0.23 更新说明](release_notes_v023.md)。
 
 > v0.0.22：新增 Windows AMD Radeon DirectML 支持，UVR、So-VITS-SVC、RVC 与 SeedVC 可使用 AMD GPU；DDSP-SVC 在 AMD 机器暂用 CPU 稳定推理。设备 UI 根据各隔离环境实际能力显示 CUDA、ROCm、DirectML 或 CPU；启动探测使用并行缓存且不弹出 CMD。详见 [v0.0.22 更新说明](release_notes_v022.md)。
