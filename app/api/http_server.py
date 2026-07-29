@@ -358,7 +358,7 @@ MUSIC_SEARCH_API_DOC = _api_operation_description(
         ("songs[].name", "string", "歌曲名"),
         ("songs[].singer", "string", "歌手"),
         ("songs[].album", "string", "专辑"),
-        ("songs[].rid", "string|null", "歌曲 ID；返回时应传入 song_id"),
+        ("songs[].rid", "string|null", "歌曲 ID；酷我歌词仍以同次搜索的 query+n 定位"),
     ],
     """
 {
@@ -371,7 +371,7 @@ MUSIC_SEARCH_API_DOC = _api_operation_description(
   ]
 }
 """,
-    note="搜索只返回候选列表。用户选择后，请把同一次搜索的 query、source、songs[].n 和 songs[].rid 传给歌词接口。",
+    note="搜索只返回候选列表。用户选择后，请把同一次搜索的 query、source 和 songs[].n 传给歌词接口；酷我不要用 RID 替代 query+n。",
 )
 
 MUSIC_LYRICS_API_DOC = _api_operation_description(
@@ -382,7 +382,7 @@ MUSIC_LYRICS_API_DOC = _api_operation_description(
         ("query", "string", "是", "-", "搜索接口使用的原始关键词"),
         ("n", "integer", "是", "-", "用户选中的 songs[].n，最小为 1"),
         ("source", "string", "否", "wy", "用户搜索时选择的曲库"),
-        ("song_id", "string|null", "否", "null", "选中结果的 rid；有值时原样传入"),
+        ("song_id", "string|null", "否", "null", "可选歌曲 ID；酷我来源会忽略此值并使用 query+n"),
     ],
     [
         ("ok", "boolean", "歌词获取是否成功"),

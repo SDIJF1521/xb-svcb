@@ -349,7 +349,7 @@ export interface MusicSearchItem {
   album: string
   /** 收费标记，如「[收费]」（仅部分曲库返回）。 */
   pay?: string
-  /** 酷我返回的歌曲 RID，可用于聚合歌词接口。 */
+  /** 酷我返回的歌曲 RID，用于标识搜索结果；歌词按同一次搜索的 query+n 获取。 */
   rid?: string
   subtitle?: string
 }

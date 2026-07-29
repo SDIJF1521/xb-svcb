@@ -301,7 +301,7 @@ class MusicServiceApiCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.service._request.assert_awaited_once_with(
-            {"action": "song", "id": "123456", "size": "lossless"}, "kuwo"
+            {"msg": "雨爱", "n": 1, "size": "lossless"}, "kuwo"
         )
         self.service._fetch_aggregate_lyrics.assert_not_awaited()
         self.assertTrue(result["ok"])
@@ -394,55 +394,56 @@ class MusicServiceApiCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["lines"], [{"time": 5.0, "text": "酷我单曲响应里的歌词"}])
 
-    async def test_kuwo_lyrics_can_lookup_rid_then_read_inline_lyric(self) -> None:
+    async def test_kuwo_lyrics_ignores_rid_and_uses_search_query_index(self) -> None:
         self.service._request = AsyncMock(
-            side_effect=[
-                {
-                    "ok": True,
-                    "data": {
-                        "name": "Song",
-                        "songname": "Singer",
-                    },
+            return_value={
+                "ok": True,
+                "data": {
+                    "name": "Song",
+                    "songname": "Singer",
+                    "lyric": {"lrc": "[00:05.00]Kuwo inline line"},
                 },
-                {
-                    "ok": True,
-                    "data": {
-                        "songs": [
-                            {"n": 1, "name": "Song", "rid": "123456"},
-                        ]
-                    },
-                },
-                {
-                    "ok": True,
-                    "data": {
-                        "name": "Song",
-                        "songname": "Singer",
-                        "lyric": {"lrc": "[00:05.00]Kuwo inline line"},
-                    },
-                },
-            ]
+            }
         )
         self.service._fetch_aggregate_lyrics = AsyncMock(return_value="")
         self.service._fetch_text = AsyncMock(return_value="")
 
-        result = await self.service._get_lyrics("keyword", 1, "kuwo")
+        result = await self.service._get_lyrics(
+            "keyword", 1, "kuwo", song_id="123456"
+        )
 
-        self.assertEqual(
-            self.service._request.await_args_list,
-            [
-                unittest.mock.call(
-                    {"msg": "keyword", "n": 1, "size": "lossless"}, "kuwo"
-                ),
-                unittest.mock.call({"msg": "keyword", "g": 13}, "kuwo"),
-                unittest.mock.call(
-                    {"action": "song", "id": "123456", "size": "lossless"}, "kuwo"
-                ),
-            ],
+        self.service._request.assert_awaited_once_with(
+            {"msg": "keyword", "n": 1, "size": "lossless"}, "kuwo"
         )
         self.service._fetch_aggregate_lyrics.assert_not_awaited()
         self.service._fetch_text.assert_not_awaited()
         self.assertTrue(result["ok"])
         self.assertEqual(result["lines"], [{"time": 5.0, "text": "Kuwo inline line"}])
+
+    async def test_kuwo_lyrics_retries_transient_invalid_response(self) -> None:
+        self.service._request = AsyncMock(
+            side_effect=[
+                {"ok": False, "error": "请求失败：invalid JSON"},
+                {
+                    "ok": True,
+                    "data": {
+                        "name": "Song",
+                        "songname": "Singer",
+                        "lyric": {"lrc": "[00:05.00]Recovered Kuwo line"},
+                    },
+                },
+            ]
+        )
+
+        with patch("application.music_service.asyncio.sleep", new_callable=AsyncMock) as sleep:
+            result = await self.service._get_lyrics("keyword", 1, "kuwo")
+
+        self.assertEqual(self.service._request.await_count, 2)
+        sleep.assert_awaited_once_with(0.15)
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["lines"], [{"time": 5.0, "text": "Recovered Kuwo line"}]
+        )
 
     async def test_aggregate_lyrics_uses_official_endpoint_and_parameters(self) -> None:
         self.service._limiter = MagicMock()

@@ -285,7 +285,8 @@ async function fetchLyrics() {
   try {
     const item = selectedLyricSong.value
     const query = (item ? lyricSearchKeyword.value : lyricQuery.value.trim()) || work.value.title
-    const res = await api.getMusicLyrics(query, item?.n || 1, lyricSource.value, item?.rid || undefined)
+    const songId = lyricSource.value === 'kuwo' ? undefined : item?.rid || undefined
+    const res = await api.getMusicLyrics(query, item?.n || 1, lyricSource.value, songId)
     if (!res.ok || !res.lines?.length) {
       lyricsError.value = true
       lyricsMessage.value = res.error || '没有找到时间轴歌词，请尝试导入 LRC 文件。'

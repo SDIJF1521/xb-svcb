@@ -32,6 +32,7 @@ _SOURCE_SETTING = "music_source"
 # settings.json 中保存 QQ音乐会员 Cookie 的键名
 _QQ_COOKIE_SETTING = "music_qq_cookie"
 _KUWO_DEFAULT_SIZE = "lossless"
+_KUWO_LYRIC_ATTEMPTS = 3
 _KUWO_DOWNLOAD_SIZES = ("lossless", "exhigh", "SQ", "standard", "Standard")
 _KUWO_RANGE_PROBE_BYTES = 4096
 _KUWO_RANGE_CHUNK_BYTES = 2 * 1024 * 1024
@@ -443,7 +444,7 @@ class MusicService:
                 "album": s.get("album", ""),
                 # QQ音乐返回 pay 字段标记收费曲目（如 "[收费]"），其它曲库为空
                 "pay": s.get("pay", ""),
-                # 酷我返回 rid，可用于聚合歌词接口（type=kw）。
+                # 酷我返回 rid 用于标识搜索结果；歌词接口仍按同一次搜索的 msg+n 获取。
                 "rid": s.get("rid", ""),
                 "subtitle": s.get("subtitle", ""),
             }
@@ -635,39 +636,20 @@ class MusicService:
         n: int,
         song_id: str | None = None,
     ) -> dict[str, Any]:
-        """酷我歌词直接来自单曲响应 data.lyric，不走 /lrc 聚合歌词接口。"""
-        rid = str(song_id or "").strip()
+        """按多人合唱已验证的 ``msg+n`` 路径读取酷我内联歌词。
 
-        if rid:
-            res = await self._request(
-                {"action": "song", "id": rid, "size": _KUWO_DEFAULT_SIZE},
-                "kuwo",
-            )
-            if not res["ok"]:
-                return res
-            data = res["data"]
-            lines = await self._parse_lyric_lines_from_data(data, resolve_urls=False)
-            if lines:
-                return self._lyrics_result(data, lines)
-            return {"ok": False, "error": "酷我接口未返回可用的 lyric.lrc / lyric.lrclist 歌词"}
-
-        res = await self._request(
-            {"msg": msg, "n": int(n), "size": _KUWO_DEFAULT_SIZE},
-            "kuwo",
-        )
-        if not res["ok"]:
-            return res
-        data = res["data"]
-        lines = await self._parse_lyric_lines_from_data(data, resolve_urls=False)
-        if lines:
-            return self._lyrics_result(data, lines)
-
-        rid = _song_mid(data) or await self._resolve_kuwo_rid_from_search(msg, n)
-        if rid:
-            res = await self._request(
-                {"action": "song", "id": rid, "size": _KUWO_DEFAULT_SIZE},
-                "kuwo",
-            )
+        酷我搜索结果虽然包含 RID，但妖狐酷我端点的 ``action=song&id`` 路径会要求
+        额外的 ``msg``，部分响应还不是 JSON。RID 因此只作为搜索结果标识保留，歌词
+        获取统一使用原搜索词与候选序号，确保播放页和多人合唱行为一致。
+        """
+        _ = song_id
+        params = {"msg": msg, "n": int(n), "size": _KUWO_DEFAULT_SIZE}
+        last_result: dict[str, Any] = {
+            "ok": False,
+            "error": "酷我接口未返回可用的 lyric.lrc / lyric.lrclist 歌词",
+        }
+        for attempt in range(_KUWO_LYRIC_ATTEMPTS):
+            res = await self._request(params, "kuwo")
             if res["ok"]:
                 data = res["data"]
                 lines = await self._parse_lyric_lines_from_data(
@@ -675,8 +657,15 @@ class MusicService:
                 )
                 if lines:
                     return self._lyrics_result(data, lines)
-
-        return {"ok": False, "error": "酷我接口未返回可用的 lyric.lrc / lyric.lrclist 歌词"}
+                last_result = {
+                    "ok": False,
+                    "error": "酷我接口未返回可用的 lyric.lrc / lyric.lrclist 歌词",
+                }
+            else:
+                last_result = res
+            if attempt + 1 < _KUWO_LYRIC_ATTEMPTS:
+                await asyncio.sleep(0.15 * (attempt + 1))
+        return last_result
 
     async def _get_lyrics(
         self,
