@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.24"
+APP_VERSION = "0.0.25"
 APP_BG = "#05060d"
 
 
@@ -46,6 +46,27 @@ else:
 
 # 项目根目录（外部引擎/环境的定位基准）
 ROOT_DIR = BASE_DIR
+
+
+def _activate_bundled_ffmpeg() -> Path | None:
+    """Expose the packaged FFmpeg to this process when no system copy exists."""
+    if shutil.which("ffmpeg"):
+        return None
+    candidates = [
+        ROOT_DIR / "tools" / "ffmpeg" / "bin",
+        ROOT_DIR / "tools" / "ffmpeg",
+    ]
+    for bin_dir in candidates:
+        if (bin_dir / "ffmpeg.exe").exists():
+            current_path = os.environ.get("PATH", "")
+            os.environ["PATH"] = str(bin_dir) + (os.pathsep + current_path if current_path else "")
+            os.environ.setdefault("XB_FFMPEG_DIR", str(bin_dir.parent if bin_dir.name == "bin" else bin_dir))
+            os.environ.setdefault("FFMPEG_HOME", os.environ["XB_FFMPEG_DIR"])
+            return bin_dir
+    return None
+
+
+BUNDLED_FFMPEG_BIN_DIR = _activate_bundled_ffmpeg()
 
 # 前端构建产物：打包时内置于 exe 资源目录；源码运行取项目根 web/dist。
 DIST_INDEX = (

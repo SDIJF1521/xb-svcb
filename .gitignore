@@ -72,6 +72,8 @@ desktop.ini
 # ===== 安装器生成的引擎与模型（开箱即用，由 install.ps1 重建）=====
 engines/
 models/
+# 发布构建会下载并分卷携带 Windows FFmpeg，本地二进制不提交源码仓库。
+assets/tools/ffmpeg/bin/*.exe
 # DeepFilterNet 在未重定向 LOCALAPPDATA 时会在 cwd 生成缓存目录（开发测试产物）
 /DeepFilterNet/
 

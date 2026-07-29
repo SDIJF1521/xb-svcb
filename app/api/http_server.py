@@ -313,6 +313,100 @@ SYSTEM_API_DOC = _api_operation_description(
 """,
 )
 
+MUSIC_SOURCE_API_DOC = _api_operation_description(
+    "列出歌词搜索可使用的曲库，以及软件当前默认曲库。",
+    "GET",
+    "/api/v1/music/sources",
+    NO_PARAMETERS,
+    [
+        ("items", "array", "可选曲库列表"),
+        ("items[].id", "string", "曲库标识：wy、qq 或 kuwo"),
+        ("items[].name", "string", "曲库显示名称"),
+        ("items[].cookie", "boolean", "该曲库是否支持配置会员 Cookie"),
+        ("total", "integer", "曲库数量"),
+        ("default_id", "string", "软件当前默认曲库标识"),
+    ],
+    """
+{
+  "items": [
+    {"id": "wy", "name": "网易云音乐", "cookie": false},
+    {"id": "qq", "name": "QQ音乐", "cookie": true},
+    {"id": "kuwo", "name": "酷我音乐", "cookie": false}
+  ],
+  "total": 3,
+  "default_id": "wy"
+}
+""",
+)
+
+MUSIC_SEARCH_API_DOC = _api_operation_description(
+    "按关键词搜索歌词候选歌曲；返回多条结果，由调用方按 n 选择具体版本。",
+    "GET",
+    "/api/v1/music/search",
+    [
+        ("query", "string", "是", "-", "歌名、歌手或两者组合"),
+        ("source", "string", "否", "wy", "曲库：wy、qq 或 kuwo"),
+        ("limit", "integer", "否", "15", "返回数量，范围 1~50"),
+    ],
+    [
+        ("ok", "boolean", "搜索是否成功"),
+        ("error", "string|null", "失败原因"),
+        ("keyword", "string|null", "本次搜索关键词；取歌词时应原样传回 query"),
+        ("source", "string|null", "实际使用的曲库"),
+        ("songs", "array", "候选歌曲列表，不会自动选择第一条"),
+        ("songs[].n", "integer", "候选序号；取歌词时传入 n"),
+        ("songs[].name", "string", "歌曲名"),
+        ("songs[].singer", "string", "歌手"),
+        ("songs[].album", "string", "专辑"),
+        ("songs[].rid", "string|null", "歌曲 ID；返回时应传入 song_id"),
+    ],
+    """
+{
+  "ok": true,
+  "keyword": "雨爱 杨丞琳",
+  "source": "kuwo",
+  "songs": [
+    {"n": 1, "name": "雨爱", "singer": "杨丞琳", "album": "雨爱", "rid": "123456"},
+    {"n": 2, "name": "雨爱 (Live)", "singer": "杨丞琳", "album": "演唱会", "rid": "654321"}
+  ]
+}
+""",
+    note="搜索只返回候选列表。用户选择后，请把同一次搜索的 query、source、songs[].n 和 songs[].rid 传给歌词接口。",
+)
+
+MUSIC_LYRICS_API_DOC = _api_operation_description(
+    "获取用户从搜索结果中选定歌曲的时间轴歌词。",
+    "GET",
+    "/api/v1/music/lyrics",
+    [
+        ("query", "string", "是", "-", "搜索接口使用的原始关键词"),
+        ("n", "integer", "是", "-", "用户选中的 songs[].n，最小为 1"),
+        ("source", "string", "否", "wy", "用户搜索时选择的曲库"),
+        ("song_id", "string|null", "否", "null", "选中结果的 rid；有值时原样传入"),
+    ],
+    [
+        ("ok", "boolean", "歌词获取是否成功"),
+        ("error", "string|null", "失败原因"),
+        ("name", "string|null", "匹配到的歌曲名"),
+        ("singer", "string|null", "匹配到的歌手"),
+        ("lines", "array", "按时间排序的歌词句子"),
+        ("lines[].time", "number", "歌词时间，单位秒"),
+        ("lines[].text", "string", "歌词文本"),
+    ],
+    """
+{
+  "ok": true,
+  "name": "雨爱",
+  "singer": "杨丞琳",
+  "lines": [
+    {"time": 16.64, "text": "窗外的天气"},
+    {"time": 20.18, "text": "就像是你多变的表情"}
+  ]
+}
+""",
+    note="不要把选择后的歌名重新作为 query 搜索；query 必须与产生该序号的搜索请求一致。",
+)
+
 MODEL_LIST_API_DOC = _api_operation_description(
     "列出软件内已经导入的声音模型；不会返回模型文件的本机路径。",
     "GET",

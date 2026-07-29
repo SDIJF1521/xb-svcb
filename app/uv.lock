@@ -41,7 +41,7 @@ wheels = [
 
 [[package]]
 name = "app"
-version = "0.0.24"
+version = "0.0.25"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },

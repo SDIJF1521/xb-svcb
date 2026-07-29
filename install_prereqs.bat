@@ -1,6 +1,6 @@
 @echo off
 rem ============================================================
-rem  XB-SVCB - prerequisite bootstrapper used by the Inno setup.
+rem  XB-SVCB - prerequisite checker used by the Inno setup.
 rem
 rem  It is intentionally plain batch: no PowerShell dependency.
 rem  The installer writes installer_env.cmd before calling this file.
@@ -11,7 +11,6 @@ chcp 65001 >nul
 
 if exist "%~dp0installer_env.cmd" call "%~dp0installer_env.cmd"
 
-if not defined XB_PREREQ_AUTO set "XB_PREREQ_AUTO=0"
 if not defined XB_ENV_CONFIGURE set "XB_ENV_CONFIGURE=1"
 if not defined XB_GPU_STACK set "XB_GPU_STACK=auto"
 if not defined XB_GPU_STACK_REQUESTED set "XB_GPU_STACK_REQUESTED=%XB_GPU_STACK%"
@@ -22,9 +21,10 @@ if not defined XB_PYPI_MIRROR set "XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu
 if not defined PIP_INDEX_URL set "PIP_INDEX_URL=%XB_PYPI_MIRROR%"
 if not defined UV_DEFAULT_INDEX set "UV_DEFAULT_INDEX=%XB_PYPI_MIRROR%"
 if not defined PIP_DISABLE_PIP_VERSION_CHECK set "PIP_DISABLE_PIP_VERSION_CHECK=1"
+if not defined XB_FFMPEG_DIR if exist "%~dp0tools\ffmpeg\bin\ffmpeg.exe" set "XB_FFMPEG_DIR=%~dp0tools\ffmpeg"
 
 echo [XB-SVCB] Checking prerequisites...
-echo           auto install : %XB_PREREQ_AUTO%
+echo           install mode : user-assisted (no automatic system installs)
 echo           gpu request  : %XB_GPU_STACK_REQUESTED%
 echo           HF mirror    : %HF_ENDPOINT%
 echo           PyPI mirror  : %PIP_INDEX_URL%
@@ -44,6 +44,7 @@ if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 28 正在检查 Git
 call :CHECK_GIT
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 40 正在检查 ffmpeg
 call :CHECK_FFMPEG
+if errorlevel 1 exit /b 1
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 52 正在检查 C++ Build Tools
 call :CHECK_CPP_TOOLS
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 66 正在检查 GPU 运行环境
@@ -61,7 +62,7 @@ if "%XB_ENV_CONFIGURE%"=="1" (
 
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 100 前置依赖检查完成
 echo.
-echo [XB-SVCB] Prerequisite bootstrap finished.
+echo [XB-SVCB] Prerequisite check finished.
 endlocal
 exit /b 0
 
@@ -222,16 +223,34 @@ exit /b 0
 :CHECK_PYTHON
 where python >nul 2>&1 && (
   for /f "delims=" %%P in ('where python 2^>nul') do if not defined XB_PYTHON_EXE set "XB_PYTHON_EXE=%%P"
+  for %%D in ("!XB_PYTHON_EXE!") do set "XB_PYTHON_DIR=%%~dpD"
+  if "!XB_PYTHON_DIR:~-1!"=="\" set "XB_PYTHON_DIR=!XB_PYTHON_DIR:~0,-1!"
   echo [ok] Python found in PATH
   exit /b 0
 )
 if defined XB_PYTHON_EXE if exist "%XB_PYTHON_EXE%" (
+  if not defined XB_PYTHON_DIR for %%D in ("%XB_PYTHON_EXE%") do set "XB_PYTHON_DIR=%%~dpD"
+  if "!XB_PYTHON_DIR:~-1!"=="\" set "XB_PYTHON_DIR=!XB_PYTHON_DIR:~0,-1!"
   echo [ok] Python found: %XB_PYTHON_EXE%
   exit /b 0
 )
+if exist "%LocalAppData%\Programs\Python\Python310\python.exe" (
+  set "XB_PYTHON_EXE=%LocalAppData%\Programs\Python\Python310\python.exe"
+  set "XB_PYTHON_DIR=%LocalAppData%\Programs\Python\Python310"
+  echo [ok] Python found: !XB_PYTHON_EXE!
+  exit /b 0
+)
+where py >nul 2>&1 && (
+  for /f "delims=" %%P in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do if not defined XB_PYTHON_EXE set "XB_PYTHON_EXE=%%P"
+  if defined XB_PYTHON_EXE if exist "!XB_PYTHON_EXE!" (
+    for %%D in ("!XB_PYTHON_EXE!") do set "XB_PYTHON_DIR=%%~dpD"
+    if "!XB_PYTHON_DIR:~-1!"=="\" set "XB_PYTHON_DIR=!XB_PYTHON_DIR:~0,-1!"
+    echo [ok] Python found through py launcher: !XB_PYTHON_EXE!
+    exit /b 0
+  )
+)
 echo [miss] Python 3.10 not found.
-if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 18 正在安装 Python 3.10
-call :WINGET_INSTALL "Python.Python.3.10" "%XB_PYTHON_DIR%" "Python 3.10"
+call :MANUAL_GUIDANCE "Python 3.10" "https://www.python.org/downloads/windows/"
 call :RESOLVE_PATHS
 exit /b 0
 
@@ -245,25 +264,37 @@ if defined XB_GIT_BIN if exist "%XB_GIT_BIN%\git.exe" (
   exit /b 0
 )
 echo [miss] Git not found.
-if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 32 正在安装 Git
-call :WINGET_INSTALL "Git.Git" "%XB_GIT_DIR%" "Git"
+call :MANUAL_GUIDANCE "Git" "https://git-scm.com/download/win"
 call :RESOLVE_PATHS
 exit /b 0
 
 :CHECK_FFMPEG
 where ffmpeg >nul 2>&1 && (
-  echo [ok] ffmpeg found in PATH
+  set "XB_FFMPEG_BIN="
+  for /f "delims=" %%P in ('where ffmpeg 2^>nul') do if not defined XB_FFMPEG_BIN set "XB_FFMPEG_BIN=%%~dpP"
+  if defined XB_FFMPEG_BIN set "XB_FFMPEG_BIN=!XB_FFMPEG_BIN:~0,-1!"
+  if defined XB_FFMPEG_BIN (
+    for %%D in ("!XB_FFMPEG_BIN!") do set "FFMPEG_BIN_NAME=%%~nxD"
+    if /I "!FFMPEG_BIN_NAME!"=="bin" (
+      for %%D in ("!XB_FFMPEG_BIN!\..") do set "XB_FFMPEG_DIR=%%~fD"
+    ) else (
+      set "XB_FFMPEG_DIR=!XB_FFMPEG_BIN!"
+    )
+  )
+  if /I "!XB_FFMPEG_BIN!"=="%~dp0tools\ffmpeg\bin" (
+    echo [ok] bundled ffmpeg found: !XB_FFMPEG_BIN!\ffmpeg.exe
+  ) else (
+    echo [ok] system ffmpeg found; bundled deployment skipped: !XB_FFMPEG_BIN!\ffmpeg.exe
+  )
   exit /b 0
 )
 if defined XB_FFMPEG_BIN if exist "%XB_FFMPEG_BIN%\ffmpeg.exe" (
-  echo [ok] ffmpeg found: %XB_FFMPEG_BIN%\ffmpeg.exe
+  echo [ok] bundled ffmpeg found: %XB_FFMPEG_BIN%\ffmpeg.exe
   exit /b 0
 )
-echo [miss] ffmpeg not found.
-if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 44 正在安装 ffmpeg
-call :WINGET_INSTALL "Gyan.FFmpeg" "%XB_FFMPEG_DIR%" "ffmpeg"
-call :RESOLVE_PATHS
-exit /b 0
+echo [fail] ffmpeg was not found in PATH and the bundled payload is missing.
+echo        Expected: %~dp0tools\ffmpeg\bin\ffmpeg.exe
+exit /b 1
 
 :CHECK_CPP_TOOLS
 set "VSWHERE_EXE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -287,15 +318,7 @@ if exist "!VSWHERE_EXE!" (
   set "XB_VSINSTALLDIR="
 )
 echo [miss] Microsoft C++ Build Tools not found.
-if "%XB_PREREQ_AUTO%"=="1" (
-  where winget >nul 2>&1 && (
-    if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 58 正在安装 C++ Build Tools
-    echo      Installing C++ Build Tools through winget. This can take a long time...
-    winget install -e --id Microsoft.VisualStudio.2022.BuildTools --silent --accept-package-agreements --accept-source-agreements --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-  )
-) else (
-  echo      Auto install disabled; install "Desktop development with C++" if fairseq needs compilation.
-)
+call :MANUAL_GUIDANCE "Microsoft C++ Build Tools" "https://visualstudio.microsoft.com/visual-cpp-build-tools/"
 exit /b 0
 
 :CHECK_CUDA
@@ -316,14 +339,10 @@ call :USE_NVCC_FROM_PATH_IF_VERSION && exit /b 0
 
 echo [miss] CUDA Toolkit %XB_CUDA_VERSION% not found for %XB_RESOLVED_GPU_STACK%.
 echo        PyTorch wheels include CUDA runtime, but Toolkit tools will be installed only when they match the GPU stack.
-if "%XB_PREREQ_AUTO%"=="1" (
-  if "%XB_RESOLVED_GPU_STACK%"=="cu128" (
-    if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 72 正在安装 CUDA Toolkit 12.8
-    call :WINGET_INSTALL_VERSION "Nvidia.CUDA" "12.8" "%XB_CUDA_DIR%" "CUDA Toolkit 12.8"
-  ) else (
-    if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 72 正在安装 CUDA Toolkit 12.1
-    call :WINGET_INSTALL_VERSION "Nvidia.CUDA" "12.1" "%XB_CUDA_DIR%" "CUDA Toolkit 12.1"
-  )
+if "%XB_RESOLVED_GPU_STACK%"=="cu128" (
+  call :MANUAL_GUIDANCE "CUDA Toolkit 12.8" "https://developer.nvidia.com/cuda-downloads"
+) else (
+  call :MANUAL_GUIDANCE "CUDA Toolkit 12.1" "https://developer.nvidia.com/cuda-downloads"
 )
 call :RESOLVE_PATHS
 call :USE_CUDA_DIR_IF_VERSION "%XB_CUDA_DIR%" "selected path" >nul 2>&1
@@ -361,71 +380,66 @@ where uv >nul 2>&1 && (
   echo [ok] uv found in PATH
   exit /b 0
 )
-if not "%XB_PREREQ_AUTO%"=="1" (
-  echo [miss] uv not found. Auto install disabled; install.py can still try to install it when building env.
+call :FIND_LOCAL_UV && exit /b 0
+if not defined XB_PYTHON_EXE call :CHECK_PYTHON
+if not defined XB_PYTHON_EXE (
+  echo [skip] uv will be installed automatically after Python is available.
   exit /b 0
 )
-if defined XB_PYTHON_EXE if exist "%XB_PYTHON_EXE%" (
-  echo [miss] uv not found; installing with Python pip...
-  if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 86 正在安装 uv
-  "%XB_PYTHON_EXE%" -m pip install -U uv -i "%PIP_INDEX_URL%" --extra-index-url https://pypi.org/simple
-  if errorlevel 1 (
-    echo [warn] PyPI mirror failed; retrying uv install with official PyPI...
-    "%XB_PYTHON_EXE%" -m pip install -U uv -i https://pypi.org/simple
-  )
+echo [auto] uv not found. Installing uv with the detected Python...
+"%XB_PYTHON_EXE%" -m ensurepip --upgrade
+if errorlevel 1 echo [warn] ensurepip did not complete; trying existing pip anyway.
+call :PIP_INSTALL_UV "%PIP_INDEX_URL%"
+if errorlevel 1 (
+  echo [warn] uv install from mirror failed; retrying official PyPI.
+  call :PIP_INSTALL_UV "https://pypi.org/simple"
+)
+if errorlevel 1 (
+  echo [fail] uv automatic installation failed.
+  exit /b 1
+)
+call :FIND_LOCAL_UV && exit /b 0
+where uv >nul 2>&1 && (
+  echo [ok] uv installed and found in PATH
   exit /b 0
 )
-where python >nul 2>&1 && (
-  echo [miss] uv not found; installing with Python pip...
-  if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 86 正在安装 uv
-  python -m pip install -U uv -i "%PIP_INDEX_URL%" --extra-index-url https://pypi.org/simple
-  if errorlevel 1 (
-    echo [warn] PyPI mirror failed; retrying uv install with official PyPI...
-    python -m pip install -U uv -i https://pypi.org/simple
-  )
-  exit /b 0
-)
-echo [miss] uv not installed and Python is unavailable.
-exit /b 0
+echo [fail] uv was installed, but uv.exe was not found in the Python Scripts directory.
+exit /b 1
 
-:WINGET_INSTALL
-set "PKG=%~1"
-set "LOCATION=%~2"
-set "LABEL=%~3"
-if not "%XB_PREREQ_AUTO%"=="1" (
-  echo      Auto install disabled for %LABEL%.
-  exit /b 0
-)
-where winget >nul 2>&1 || (
-  echo      winget is not available; please install %LABEL% manually.
-  exit /b 0
-)
-if defined LOCATION (
-  echo      Installing %LABEL% to %LOCATION% ...
-  winget install -e --id "%PKG%" --silent --accept-package-agreements --accept-source-agreements --location "%LOCATION%"
+:PIP_INSTALL_UV
+set "UV_INDEX_URL=%~1"
+if defined UV_INDEX_URL (
+  "%XB_PYTHON_EXE%" -m pip install --user --upgrade uv --disable-pip-version-check --index-url "%UV_INDEX_URL%"
 ) else (
-  echo      Installing %LABEL% ...
-  winget install -e --id "%PKG%" --silent --accept-package-agreements --accept-source-agreements
+  "%XB_PYTHON_EXE%" -m pip install --user --upgrade uv --disable-pip-version-check
 )
-exit /b 0
+exit /b %ERRORLEVEL%
 
-:WINGET_INSTALL_VERSION
-set "PKG=%~1"
-set "VER=%~2"
-set "LOCATION=%~3"
-set "LABEL=%~4"
-if not "%XB_PREREQ_AUTO%"=="1" exit /b 0
-where winget >nul 2>&1 || (
-  echo      winget is not available; please install %LABEL% manually.
+:FIND_LOCAL_UV
+if not defined XB_PYTHON_EXE exit /b 1
+set "XB_UV_BIN="
+for /f "delims=" %%P in ('"%XB_PYTHON_EXE%" -c "import sysconfig; print(sysconfig.get_path('scripts') or '')" 2^>nul') do if not defined XB_UV_BIN set "XB_UV_BIN=%%P"
+if defined XB_UV_BIN if exist "!XB_UV_BIN!\uv.exe" (
+  set "XB_PYTHON_SCRIPTS=!XB_UV_BIN!"
+  set "PATH=!XB_UV_BIN!;!PATH!"
+  echo [ok] uv found in Python Scripts: !XB_UV_BIN!\uv.exe
   exit /b 0
 )
-if defined LOCATION (
-  echo      Installing %LABEL% to %LOCATION% ...
-  winget install -e --id "%PKG%" --version "%VER%" --silent --accept-package-agreements --accept-source-agreements --location "%LOCATION%"
-) else (
-  echo      Installing %LABEL% ...
-  winget install -e --id "%PKG%" --version "%VER%" --silent --accept-package-agreements --accept-source-agreements
+set "XB_UV_BIN="
+for /f "delims=" %%P in ('"%XB_PYTHON_EXE%" -c "import sysconfig; print(sysconfig.get_path('scripts', scheme='nt_user') or '')" 2^>nul') do if not defined XB_UV_BIN set "XB_UV_BIN=%%P"
+if defined XB_UV_BIN if exist "!XB_UV_BIN!\uv.exe" (
+  set "XB_PYTHON_SCRIPTS=!XB_UV_BIN!"
+  set "PATH=!XB_UV_BIN!;!PATH!"
+  echo [ok] uv found in user Scripts: !XB_UV_BIN!\uv.exe
+  exit /b 0
 )
+exit /b 1
+
+:MANUAL_GUIDANCE
+set "GUIDANCE_LABEL=%~1"
+set "GUIDANCE_URL=%~2"
+echo      Please install %GUIDANCE_LABEL% manually, then run the check again.
+echo      Download: %GUIDANCE_URL%
 exit /b 0
 
 :CONFIGURE_ENV
@@ -451,6 +465,8 @@ if "%XB_ENV_DRY_RUN%"=="1" set "ENV_CONFIG_DRY_RUN=--dry-run"
   --path-env XB_GIT_BIN ^
   --path-env XB_FFMPEG_BIN ^
   --path-env XB_CUDA_BIN ^
+  --value-env XB_FFMPEG_DIR=XB_FFMPEG_DIR ^
+  --expand-value-env FFMPEG_HOME=XB_FFMPEG_DIR ^
   --expand-value-env CUDA_PATH=XB_CUDA_DIR ^
   --expand-value-env VSINSTALLDIR=XB_VSINSTALLDIR ^
   --value-env XB_HF_MIRROR=XB_HF_MIRROR ^

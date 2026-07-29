@@ -10,7 +10,7 @@
 
 <br/>
 
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release&color=ff6b9d)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/SDIJF1521/xb-svcb/total?color=brightgreen&label=downloads)](https://github.com/SDIJF1521/xb-svcb/releases)
 [![Stars](https://img.shields.io/github/stars/SDIJF1521/xb-svcb?style=flat&color=yellow)](https://github.com/SDIJF1521/xb-svcb/stargazers)
@@ -18,7 +18,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#)
 [![Python](https://img.shields.io/badge/python-3.9%20|%203.10-3776AB?logo=python&logoColor=white)](#)
 [![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
-[![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC-8a2be2)](#architecture)
+[![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
 
 <br/>
 
@@ -44,6 +44,7 @@
 - 🎛️ **Audio Editor Lite 音频编辑器** —— 从作品或本地音频创建编辑工程，支持工程选择页、多轨时间轴、真实波形、片段拖动/拉伸、精确播放头定位与剪切、切口交叉淡化、相邻片段渲染合并、片段声道分配（双声道 / L / R）、片段/音轨音频复制与剪贴板粘贴、音量包络、内置效果器、非模态 JUCE VST3 插件窗口、声卡回调块级实时插件处理、设备延迟状态、混音预览、时间轴拖动快进及 WAV / MP3 / FLAC 导出；支持 TXT / LRC 歌词导入与自动切句，可维护多角色并把片段分配给角色，内置独唱、对唱、主唱 + 和声、三角色剧情等时间轴模板。
 - 🧠 **高级创作工作流** —— 歌声转换工作台支持「自动混音合成」「自动人声合并」「手动人声合并」「自动 + 编辑器二次调整」「全手动编辑」；其中人声合并只在多模型模式开放，避免单模型流程误用。
 - 🎵 **在线资源获取（可播放校验）** —— 内置 **网易云 / QQ音乐 / 酷我音乐** 曲库的搜索、试听、下载（QQ 可填会员 Cookie 取高品质音频）；酷我支持无损音质候选回退、后端代理试听、Range 分段下载及内联歌词。下载前统一校验资源可播放性（魔数 / Content-Type / ffprobe），VIP / 无版权 / 失效链接不可下载；下载素材可一键进入翻唱。
+- 🎬 **作品音乐播放页** —— 从作品库进入带过渡动画的独立播放器，支持进度 / 音量控制、歌词逐句跟随和点击跳转；歌词可导入 LRC，或选择网易云、QQ、酷我曲库并从多个搜索结果中指定歌曲序号通过 API 获取；每首作品还可关联图片或 MP4 MV 画面并持久化恢复。
 - 🌐 **模型站（魔搭社区 · 后台传输）** —— 基于 **ModelScope** 一键**上传/下载**声音模型：填自己的访问令牌即可发布到自有公开仓库，按关键词**模糊搜索**（**分页加载**）社区模型并直接导入；带**架构标签**（So-VITS-SVC / RVC / SeedVC / DDSP-SVC）与**清单防污染**校验；上传/下载**挂后台执行、不阻塞操作**，大模型支持断点续传和重试，下载完成后立即进入可选模型列表。
 - 🎼 **专业人声分离** —— `5_HP-Karaoke-UVR` 分离 + `UVR-DeEcho-DeReverb` 去混响，得到干净干声。
 - 🎧 **AI 歌声增强工程** —— 针对 AI vocoder 留下的电子噪声与机械感设计两级增强：basic 层做 DeepFilterNet 神经降噪 + 基础美声 EQ；advanced 层叠加 vocalfloor 软衰减（150 ms 指数衰减到 -75 dB，保留呼吸与混响）、原始人声频谱参考匹配（按频段对齐 80-600 Hz / 2.5k-16k 缺陷）与 Pedalboard 精细母带 EQ + 胶水压缩（去齿音 / 温暖中低频 / presence / 高频空气感，不叠加 Distortion/Chorus/Reverb 等会加重 AI 感的效果）。完整流水线：UVR 分离 → AI 翻唱推理 → 增强 → DeepFilterNet → Pedalboard 母带。DeepFilterNet 权重随安装包分发，全新机器离线开箱即用。
@@ -55,7 +56,7 @@
 - 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-seedvc` / `.venv-ddsp` / `.venv-uvr` / `.venv-vocal`），互不污染。
 - 🎧 **作品库** —— 试听 / 导出成品，单独试听伴奏与干声，失败任务一键查日志；删除作品同步真实清理本地生成文件。
 
-> **最新版本 v0.0.24**：全新引入 AI 歌声增强工程（basic / advanced 两级，vocalfloor 软衰减 + 原始人声频谱参考匹配 + Pedalboard 专业母带 DSP），DeepFilterNet 权重随安装包分发实现离线开箱即用；编辑器局部重推理支持自动增强。不改变 v0.0.23 的 NVIDIA CUDA、AMD DirectML、CPU 推理策略、外部 FastAPI 接入与酷我音乐曲库。详见 [v0.0.24 更新说明](release_notes_v024.md) 与 [API 接入文档](docs/api.md)。
+> **最新版本 v0.0.25**：安装器前置依赖改为用户辅助检测与跳转下载，用户安装好 Python 后会自动安装 uv；FFmpeg、So-VITS-SVC、SeedVC、DDSP-SVC 改为随分卷自带，系统已有 FFmpeg 时自动跳过释放；作品播放页补齐歌词搜索多结果手动选择、QQ / 网易 / 酷我 API 来源选择、MV 画面导入与更细致的播放体验。详见 [v0.0.25 更新说明](release_notes_v025.md) 与 [API 接入文档](docs/api.md)。
 
 > v0.0.23：FastAPI 外部接入扩展为模型管理、单模型/多模型/批量任务、历史与预设、作品管理以及 Audio Editor Lite 主要工作流；在线资源获取新增酷我音乐搜索、试听、无损下载和歌词解析。API 服务默认关闭，退出软件即释放端口。详见 [v0.0.23 更新说明](release_notes_v023.md)。
 
@@ -224,7 +225,7 @@ flowchart TB
 4. 勾选「安装后立即搭建运行环境」，联网创建 AI 子环境（由 `setup_env.bat` 调 `install.py`，无 PowerShell）。
 5. 通过桌面 / 开始菜单的 **XB-SVCB** 快捷方式启动。后续可在首页「数据存储位置」查看占用/剩余空间，并迁移到其它磁盘。
 
-> 💡 **应用界面本身无需任何依赖即可打开**；只有「搭建运行环境」这一步需要 **Python 3.10+** 与 **ffmpeg**（Git 可选，缺失会自动改用下载 ZIP）。安装器会检测并提示缺失项；若某步失败，可从开始菜单「搭建/修复运行环境」重试。
+> 💡 **应用界面本身无需任何依赖即可打开**；FFmpeg、So-VITS-SVC、SeedVC、DDSP-SVC 源码和离线模型由安装分卷携带。只有「搭建运行环境」需要 **Python 3.10+** 来创建匹配本机 GPU 的隔离环境；uv 会在 Python 可用后自动安装。若某步失败，可从开始菜单「搭建/修复运行环境」重试。
 
 ### 💾 数据存储与迁移
 
@@ -240,9 +241,9 @@ flowchart TB
 | 软件                            | 用途                      | 说明                                                                                                                                       |
 | ------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Python 3.10.5+**        | 运行安装器与主程序        | 安装时勾选*Add to PATH*                                                                                                                  |
-| **uv**                    | 虚拟环境管理工具          | 安装器使用 uv 管理虚拟环境（缺失会自动安装）                                                                                               |
-| **ffmpeg**                | 音频转码 / 混音           | 需在 PATH 中可用                                                                                                                           |
-| **Git**（可选）           | 获取 so-vits-svc 仓库     | 没有也行，安装器会自动下载 ZIP                                                                                                             |
+| **uv**                    | 虚拟环境管理工具          | 安装器使用 uv 管理虚拟环境；用户安装好 Python 后会自动通过 pip 安装到用户目录                                                              |
+| **ffmpeg**                | 音频转码 / 混音           | 安装分卷自带；系统 PATH 已有时优先使用系统版本并跳过随包释放                                                                                |
+| **Git**（可选）           | 开发机获取引擎源码        | 图形安装包已自带 SVC/DDSP/SeedVC 源码；仅源码开发或重新准备发布载荷时需要                                                                  |
 | **GPU 运行时**（可选）    | GPU 加速                  | NVIDIA 自动安装 cu121/cu128 PyTorch；Windows AMD Radeon 自动安装`torch-directml`；无兼容 GPU 时使用 CPU torch                            |
 | **Node.js LTS**（含 npm） | 构建前端                  | 仅「从源码安装」需要                                                                                                                       |
 | **C++ 生成工具**（可选）  | 编译依赖 / JUCE 插件 Host | 部分 Python 包需要 C++14 编译器；构建音频编辑器 VST3 插件 Host 需要 C++17 + CMake + JUCE；安装时勾选**Desktop development with C++** |
@@ -252,10 +253,9 @@ flowchart TB
 | 软件                               | 下载链接                                                                                                                                                                                                            |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Python 3.10.5**            | [https://www.python.org/downloads/release/python-3105/](https://www.python.org/downloads/release/python-3105/)                                                                                                       |
-| **uv**                       | [https://github.com/astral-sh/uv/releases](https://github.com/astral-sh/uv/releases)                                                                                                                                 |
 | **Git**                      | [https://git-scm.com/downloads](https://git-scm.com/downloads)                                                                                                                                                       |
 | **CUDA Toolkit 12.1 / 12.8** | [https://developer.nvidia.com/cuda-toolkit-archive](https://developer.nvidia.com/cuda-toolkit-archive)                                                                                                               |
-| **ffmpeg**                   | [https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip](https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip) |
+| **ffmpeg**（仅源码安装）     | [https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip](https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip)                                                                       |
 | **Node.js LTS**              | [https://nodejs.org/](https://nodejs.org/)                                                                                                                                                                           |
 | **C++ Build Tools**          | [https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/)                                                                             |
 | **CMake**                    | [https://cmake.org/download/](https://cmake.org/download/)                                                                                                                                                           |
@@ -276,14 +276,14 @@ flowchart TB
 如果图形安装器搭建运行环境失败，可按下面步骤手动补齐依赖后重跑环境安装：
 
 1. 安装 [Python 3.10.5](https://www.python.org/downloads/release/python-3105/)，安装时勾选 **Add Python to PATH**。
-2. 打开终端，输入：
+2. 重新运行安装器或开始菜单里的「搭建/修复运行环境」；脚本会自动安装 uv。若需要手动排障，也可以打开终端输入：
 
 ```bat
-pip install uv
+python -m pip install --user --upgrade uv
 ```
 
 3. 按显卡型号安装 CUDA：RTX 50 系显卡安装 [CUDA Toolkit 12.8](https://developer.nvidia.com/cuda-toolkit-archive)，RTX 40 系及以下安装 [CUDA Toolkit 12.1](https://developer.nvidia.com/cuda-toolkit-archive)；CPU 用户可跳过 CUDA。
-4. 安装 [ffmpeg](https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip)，将压缩包解压，打开解压后文件夹里的 `bin` 目录，复制该路径并粘贴到系统环境变量 `Path` 中。
+4. 确认安装目录下存在 `tools\ffmpeg\bin\ffmpeg.exe`；图形安装器会自动把该目录加入用户 `PATH`，无需另行下载。系统已有 ffmpeg 时此步骤会自动跳过。
 5. 安装 [C++ Build Tools](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/)，使用这个安装器安装 C++ 环境，建议勾选 **Desktop development with C++**。
 6. 打开 XB-SVCB 软件安装路径文件夹，按住 `Shift` 右键，选择「在此处打开终端」，然后按显卡类型运行：
 
@@ -566,7 +566,7 @@ flowchart LR
 | `checkpoint_best_legacy_500.pt`                           | ContentVec / RVC hubert 语音编码器   | `assets/models/pretrain/` → `engines/so-vits-svc/pretrain/`，并硬链接或复制为 `.venv-rvc/.../base_model/hubert_base.pt`；缺失则使用 Hugging Face 镜像                        |
 | `nsf_hifigan/`                                            | NSF-HiFiGAN 声码器 / 浅扩散          | 部署到 so-vits-svc 与 DDSP-SVC 预训练模型目录；缺失则使用 openvpi/vocoders Releases                                                                                                 |
 | `rmvpe.pt`                                                | SVC / RVC / SeedVC / DDSP 共用 RMVPE | 部署到 so-vits-svc、RVC base_model、SeedVC checkpoints 与 DDSP-SVC`pretrain/rmvpe/model.pt`；缺失则使用镜像下载                                                                   |
-| DDSP ContentVec`pytorch_model.bin`                        | DDSP-SVC 内容编码器                  | 安装 DDSP-SVC 环境时下载到`engines/ddsp-svc/pretrain/contentvec/`（Hugging Face 镜像优先）                                                                                        |
+| DDSP ContentVec`pytorch_model.bin`                        | DDSP-SVC 内容编码器                  | 安装分卷离线携带并释放到`engines/ddsp-svc/pretrain/contentvec/`，无需目标机器另行下载                                                                                           |
 | `fcpe.pt`（可选）                                         | FCPE F0 预测器                       | 仅在自带目录存在时复制                                                                                                                                                              |
 | `seedvc/campplus_cn_common.bin`                           | SeedVC 目标音色编码器                | worker 优先读取随包文件，并部署到`engines/seed-vc/checkpoints/`                                                                                                                   |
 | `seedvc/whisper-small/`                                   | SeedVC 语音内容编码器                | worker 通过本地临时配置直接读取完整 Whisper Small 快照                                                                                                                              |
@@ -891,13 +891,13 @@ flowchart LR
 
 ## 📄 许可
 
-本项目自身代码采用 **[MIT License](LICENSE)**。Copyright © 2026 SDIJF1521。
+本项目自身代码采用 **[GNU General Public License v3.0 only（GPL-3.0-only）](LICENSE)**。Copyright © 2026 SDIJF1521。
 
 > ⚠️ 本项目依赖/附带的第三方组件各自遵循其原始协议，使用与再分发时请遵守：
 >
-> - **so-vits-svc 4.1**（`svc-develop-team/so-vits-svc`）：安装时联网获取，遵循上游 **AGPL-3.0**。
-> - **DDSP-SVC 6.3**（`yxlllc/DDSP-SVC`）：安装时联网获取，遵循上游 **MIT License**。
+> - **so-vits-svc 4.1**（`svc-develop-team/so-vits-svc`）：源码随安装分卷携带，遵循上游 **AGPL-3.0**。
+> - **DDSP-SVC 6.3**（`yxlllc/DDSP-SVC`）：源码随安装分卷携带，遵循上游 **MIT License**。
 > - **底模**：ContentVec、NSF-HiFiGAN、RMVPE、FCPE 等各有其许可。
 > - **UVR 模型**：`5_HP-Karaoke-UVR`、`UVR-DeEcho-DeReverb` 等遵循 Ultimate Vocal Remover 项目相应许可。
 >
-> MIT 仅覆盖本仓库自有代码，不改变上述第三方组件的授权条款。
+> GPL-3.0-only 仅覆盖本仓库自有代码，不改变上述第三方组件、模型和资源的原始授权条款。

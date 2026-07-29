@@ -4,7 +4,11 @@
     <AppHeader />
 
     <main class="layout-main">
-      <router-view />
+      <router-view v-slot="{ Component, route }">
+        <Transition name="page-slide" mode="out-in">
+          <component :is="Component" :key="route.fullPath" />
+        </Transition>
+      </router-view>
     </main>
   </div>
 </template>
@@ -31,5 +35,13 @@ onUnmounted(() => notifications.stop())
 .layout-main {
   position: relative;
   z-index: 1;
+}
+.page-slide-enter-active,
+.page-slide-leave-active { transition: opacity .22s ease, transform .22s ease; }
+.page-slide-enter-from { opacity: 0; transform: translateY(12px); }
+.page-slide-leave-to { opacity: 0; transform: translateY(-8px); }
+@media (prefers-reduced-motion: reduce) {
+  .page-slide-enter-active,
+  .page-slide-leave-active { transition: none; }
 }
 </style>

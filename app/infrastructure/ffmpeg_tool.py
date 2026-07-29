@@ -1,6 +1,7 @@
 """ffmpeg / ffprobe 封装：音频时长探测与格式转换。
 
-若系统未安装 ffmpeg，相关方法将降级（返回 None 或回退到标准库实现）。
+优先使用系统 PATH 中的 ffmpeg；没有时由 config 激活安装分卷内置版本。
+两者都不可用时才降级（返回 None 或回退到标准库实现）。
 """
 
 from __future__ import annotations

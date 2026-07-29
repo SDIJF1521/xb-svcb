@@ -10,15 +10,15 @@
   .venv-ddsp/    —— DDSP-SVC 推理环境（yxlllc/DDSP-SVC Rectified Flow）
   .venv-vocal/   —— AI 歌声增强环境（DeepFilterNet + Pedalboard）
   .venv-hub/     —— 模型上传组件（modelscope）
-  engines/so-vits-svc/         —— 自动克隆的 so-vits-svc 4.1 仓库
-  engines/seed-vc/              —— 自动克隆的 Seed-VC 仓库
-  engines/ddsp-svc/              —— 自动克隆的 DDSP-SVC 仓库
+  engines/so-vits-svc/          —— 安装分卷自带的 so-vits-svc 4.1 仓库
+  engines/seed-vc/              —— 安装分卷自带的 Seed-VC 仓库
+  engines/ddsp-svc/             —— 安装分卷自带的 DDSP-SVC 仓库
   engines/so-vits-svc/pretrain —— 底模（contentvec / nsf_hifigan / rmvpe）
   models/uvr/    —— UVR 分离模型（5_HP-Karaoke / DeEcho-DeReverb）
   web/dist/      —— 前端构建产物
 
-底模与 UVR 模型「自带优先」：若 assets/models/ 内存在对应文件（随安装包分发），
-直接本地复制到上述目录，免去缓慢的联网下载；缺失项才回退镜像下载。
+图形安装包会自带三个歌声引擎源码、底模与 UVR 模型：检测到 engines/ 中的完整
+源码时跳过仓库获取，assets/models/ 中的模型直接本地复制；仅源码安装缺失时才回退联网。
 
 设计原则：
   - 幂等：每步都会先检测已完成的产物，可重复运行、可单步重试；
@@ -46,6 +46,7 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import urllib.request
 import zipfile
@@ -408,49 +409,85 @@ def detect_blackwell() -> bool:
     return detect_gpu_stack() == "cu128"
 
 
+def _uv_exe_name() -> str:
+    return "uv.exe" if os.name == "nt" else "uv"
+
+
+def _python_script_dirs() -> list[Path]:
+    """Return likely script dirs for the Python running this installer."""
+    dirs: list[Path] = []
+    candidates = [
+        Path(sys.executable).parent,
+        Path(sys.executable).parent / "Scripts",
+    ]
+    for scheme in ("nt_user", "posix_user", None):
+        try:
+            value = sysconfig.get_path("scripts", scheme=scheme) if scheme else sysconfig.get_path("scripts")
+        except (KeyError, ValueError):
+            continue
+        if value:
+            candidates.append(Path(value))
+    for path in candidates:
+        if path not in dirs:
+            dirs.append(path)
+    return dirs
+
+
+def _find_local_uv() -> Path | None:
+    for scripts in _python_script_dirs():
+        exe = scripts / _uv_exe_name()
+        if exe.exists():
+            return exe
+    return None
+
+
+def _pip_install_uv(use_mirror: bool = True) -> None:
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--user",
+        "--upgrade",
+        "uv",
+        "--disable-pip-version-check",
+    ]
+    if use_mirror and PYPI_MIRROR:
+        cmd += ["--index-url", PYPI_MIRROR]
+    elif not use_mirror:
+        cmd += ["--index-url", PYPI_FALLBACK_INDEX]
+    run(cmd)
+
+
 def ensure_uv() -> str:
-    """确保 uv 可用；缺失时尝试用当前 Python 的 pip 安装并定位其可执行文件。"""
-    if have("uv"):
-        return "uv"
-    print(c("y", "未检测到 uv，尝试通过 pip 安装 …"))
+    """确保 uv 可用；Python 已安装时自动把 uv 装到用户 Scripts 目录。"""
+    found = shutil.which("uv")
+    if found:
+        return found
+    local = _find_local_uv()
+    if local:
+        os.environ["PATH"] = str(local.parent) + os.pathsep + os.environ.get("PATH", "")
+        return str(local)
+
+    print(c("y", "    未检测到 uv，正在通过当前 Python 自动安装到用户目录 …"))
     try:
-        run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "-U",
-                "uv",
-                "-i",
-                PYPI_MIRROR,
-                "--extra-index-url",
-                PYPI_FALLBACK_INDEX,
-            ]
-        )
+        run([sys.executable, "-m", "ensurepip", "--upgrade"])
     except subprocess.CalledProcessError:
-        if PYPI_MIRROR == PYPI_FALLBACK_INDEX:
-            raise
+        print(c("y", "    ensurepip 未完成，继续尝试使用现有 pip 安装 uv …"))
+    try:
+        _pip_install_uv(use_mirror=True)
+    except subprocess.CalledProcessError:
         warn_pypi_fallback()
-        run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "-U",
-                "uv",
-                "-i",
-                PYPI_FALLBACK_INDEX,
-            ]
-        )
-    if have("uv"):
-        return "uv"
-    # pip 装到 Scripts 目录但未加入 PATH 时，直接用绝对路径
-    exe = Path(sys.executable).parent / ("uv.exe" if os.name == "nt" else "uv")
-    if exe.exists():
-        return str(exe)
-    raise RuntimeError("uv 安装后仍不可用，请手动安装 uv 后重试：pip install uv")
+        _pip_install_uv(use_mirror=False)
+
+    local = _find_local_uv()
+    if local:
+        os.environ["PATH"] = str(local.parent) + os.pathsep + os.environ.get("PATH", "")
+        return str(local)
+    found = shutil.which("uv")
+    if found:
+        return found
+    raise RuntimeError("uv 已尝试自动安装，但没有找到 uv 可执行文件。请查看上方 pip 输出并重试。")
 
 
 def uv_cmd(uv: str, *args: str) -> list[str]:

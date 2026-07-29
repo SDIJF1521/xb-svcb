@@ -170,16 +170,14 @@
         <router-link class="more" to="/works">我的作品 <el-icon><Right /></el-icon></router-link>
       </div>
       <div v-if="recentWorks.length" class="works glass">
-        <audio ref="audioEl" style="display: none" @ended="playingId = null" @pause="onAudioPause" />
         <div class="work-row" v-for="w in recentWorks" :key="w.id">
           <button
             class="work-play"
             :disabled="w.status !== 'done'"
             :title="w.status === 'done' ? '试听' : '尚未完成'"
-            @click="togglePlay(w.id)"
+            @click="openPlayer(w.id)"
           >
-            <el-icon v-if="playingId === w.id"><VideoPause /></el-icon>
-            <el-icon v-else><VideoPlay /></el-icon>
+            <el-icon><VideoPlay /></el-icon>
           </button>
           <div class="work-cover" :style="{ '--wc': w.color }">
             <el-icon><Headset /></el-icon>
@@ -237,7 +235,6 @@ import {
   FolderAdd,
   Right,
   VideoPlay,
-  VideoPause,
   Headset,
   Download,
   MoreFilled,
@@ -319,35 +316,8 @@ const toolColor = (key: string): string => toolColorMap[key] ?? '#00f0ff'
 const statusText = (s: JobStatus) =>
   ({ done: '已完成', running: '生成中', queue: '排队中', failed: '失败' })[s]
 
-// 试听播放
-const audioEl = ref<HTMLAudioElement | null>(null)
-const playingId = ref<string | null>(null)
-const audioLoadedFor = ref<string | null>(null)
-
-const onAudioPause = () => {
-  if (audioEl.value && audioEl.value.ended) playingId.value = null
-}
-
-const togglePlay = async (id: string) => {
-  const el = audioEl.value
-  if (!el) return
-  if (playingId.value === id && !el.paused) {
-    el.pause()
-    playingId.value = null
-    return
-  }
-  if (audioLoadedFor.value !== id) {
-    const data = await api.getWorkAudio(id)
-    if (!data) {
-      ElMessage.error('无法加载生成的音频')
-      return
-    }
-    el.src = data
-    audioLoadedFor.value = id
-  }
-  await el.play()
-  playingId.value = id
-}
+// 进入独立音乐播放页，播放页会负责音频、歌词和 MV 画面。
+const openPlayer = (id: string) => router.push({ path: '/player', query: { work: id } })
 
 const onDownload = async (id: string) => {
   const dest = await api.exportWork(id)

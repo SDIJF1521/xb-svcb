@@ -1,11 +1,5 @@
 <template>
   <div class="page">
-    <audio
-      ref="audioEl"
-      style="display: none"
-      @ended="playingId = null"
-      @pause="onAudioPause"
-    />
     <!-- 页面标题 -->
     <div class="page-head">
       <div>
@@ -53,9 +47,8 @@
 
       <div class="work-row" v-for="w in filteredWorks" :key="w.id">
         <div class="col-title work-title-cell">
-          <button class="work-play" :disabled="w.status !== 'done'" @click="togglePlay(w.id)">
-            <el-icon v-if="playingId === w.id"><VideoPause /></el-icon>
-            <el-icon v-else><VideoPlay /></el-icon>
+          <button class="work-play" :disabled="w.status !== 'done'" title="打开音乐播放页" @click="openPlayer(w.id)">
+            <el-icon><VideoPlay /></el-icon>
           </button>
           <div class="work-cover" :style="{ '--wc': w.color }"><el-icon><Headset /></el-icon></div>
           <div class="work-meta">
@@ -111,7 +104,6 @@ import {
   Plus,
   Search,
   VideoPlay,
-  VideoPause,
   Headset,
   Download,
   Scissor,
@@ -147,8 +139,6 @@ watch(
     keyword.value = typeof q === 'string' ? q : ''
   },
 )
-const playingId = ref<string | null>(null)
-
 const countOf = (key: JobStatus | 'all') =>
   key === 'all' ? works.value.length : works.value.filter((w) => w.status === key).length
 
@@ -164,33 +154,7 @@ const filteredWorks = computed(() =>
 const statusText = (s: JobStatus) =>
   ({ done: '已完成', running: '生成中', queue: '排队中', failed: '失败' })[s]
 
-const audioEl = ref<HTMLAudioElement | null>(null)
-const audioLoadedFor = ref<string | null>(null)
-
-const onAudioPause = () => {
-  if (audioEl.value && audioEl.value.ended) playingId.value = null
-}
-
-const togglePlay = async (id: string) => {
-  const el = audioEl.value
-  if (!el) return
-  if (playingId.value === id && !el.paused) {
-    el.pause()
-    playingId.value = null
-    return
-  }
-  if (audioLoadedFor.value !== id) {
-    const data = await api.getWorkAudio(id)
-    if (!data) {
-      ElMessage.error('无法加载生成的音频')
-      return
-    }
-    el.src = data
-    audioLoadedFor.value = id
-  }
-  await el.play()
-  playingId.value = id
-}
+const openPlayer = (id: string) => router.push({ path: '/player', query: { work: id } })
 
 const onDownload = async (id: string) => {
   const dest = await api.exportWork(id)

@@ -46,6 +46,11 @@ const router = createRouter({
           component: () => import('@/views/works/works.vue'),
         },
         {
+          path: 'player',
+          name: 'Player',
+          component: () => import('@/views/player/player.vue'),
+        },
+        {
           path: 'api',
           name: 'ApiAccess',
           component: () => import('@/views/api/api.vue'),

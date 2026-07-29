@@ -1,6 +1,6 @@
 # XB-SVCB 安装器
 
-版本：`0.0.23`
+版本：`0.0.25`
 
 安装器由 Inno Setup 读取 `installer/xb-svcb.iss` 构建，负责打包桌面本体、环境搭建脚本、自带模型和文档。
 
@@ -8,9 +8,10 @@
 
 1. 在 `web/` 执行 `npm run build` 构建前端。
 2. 执行 `pyinstaller installer/xb-svcb-app.spec` 构建桌面本体。
-3. 构建 `native/juce-vst3-host`，并把产物放入 `dist/XB-SVCB/engines/juce-vst3-host/`。
-4. 校验内置前端、全部 worker（含 SeedVC / DDSP-SVC）与 JUCE Host。
-5. 使用 Inno Setup 6 的 `ISCC.exe` 编译 `installer/xb-svcb.iss`。
+3. 准备 Windows FFmpeg 与 So-VITS-SVC、SeedVC、DDSP-SVC 固定分支源码；本地缺失时由发布构建下载到忽略目录。
+4. 构建 `native/juce-vst3-host`，并把产物放入 `dist/XB-SVCB/engines/juce-vst3-host/`。
+5. 校验内置前端、全部 worker、离线载荷与 JUCE Host。
+6. 使用 Inno Setup 6 的 `ISCC.exe` 编译 `installer/xb-svcb.iss`。
 
 本地发布构建建议使用 `installer/build.ps1` 作为一键入口。
 `installer/build.ps1` 会校验应用、前端、版本号、全部 worker 和
@@ -22,13 +23,22 @@
 ./installer/build.ps1 -ValidateOnly
 ```
 
+## v0.0.25 安装器行为
+
+- 前置依赖改为用户辅助模式：安装器只检测 Python 3.10+、Git、Microsoft C++ Build Tools、CUDA Toolkit 与显卡驱动，不会调用 winget 或系统安装器；uv 会在 Python 可用后通过 pip 自动安装到用户目录；FFmpeg 已由安装分卷提供，不要求用户另行安装。
+- FFmpeg 作为安装包分卷资源随包携带：系统 PATH 已有 `ffmpeg` 时跳过释放；否则释放到 `{app}\\tools\\ffmpeg`，并自动配置 `PATH`、`XB_FFMPEG_DIR` 与 `FFMPEG_HOME`。
+- So-VITS-SVC、SeedVC、DDSP-SVC 引擎源码和离线模型随安装包分卷携带；安装时检测到已释放的源码会跳过 Git/ZIP 获取，Python venv 仍按目标机器的 GPU 栈创建。
+- GPU 栈页面之后提供逐项下载按钮，自动跳转 Python、Git、Visual C++、NVIDIA CUDA 或 AMD 驱动的官方/可信页面；用户安装后可点击“重新检测”。
+- 依赖检查脚本和 `install.py` 会在检测到 Python 后自动安装或修复 uv，并写入用户环境变量，然后继续搭建 AI 虚拟环境。
+- 已安装的前置依赖可直接跳过；安装器仍会隐藏执行环境搭建脚本，并把完整日志写入 `{app}\\install_logs`。
+
 由于自带模型总量超过单文件上限，发布产物是一组不可拆分的文件：
 
 - `XB-SVCB-Setup.exe`
 - `XB-SVCB-Setup-1.bin`
 - 后续编号的 `XB-SVCB-Setup-*.bin`（数量取决于本次模型体积）
 
-安装时必须把 `exe` 和全部 `bin` 放在同一目录，发布 Release 时也必须同时上传。
+`DiskSliceSize` 固定为 `1,900,000,000` 字节，构建结束还会逐个校验产物必须小于 2 GiB。安装时必须把 `exe` 和全部 `bin` 放在同一目录，发布 Release 时也必须同时上传。
 
 JUCE VST3 Host 构建需要 CMake、C++ Build Tools 和 JUCE。开发机可设置：
 
@@ -136,9 +146,9 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 - 用户数据目录默认使用 `.xb_svcb`；选择磁盘根目录或普通非空目录时，会自动在其中创建 `.xb_svcb` 子目录。
 - 安装器同时写入安装目录和用户 AppData 下的数据目录指针，升级/迁移后更稳。
 - 安装流程默认配置 HuggingFace 镜像与清华 PyPI 镜像，并写入修复环境时可复用的环境变量。
-- 可检测并按用户选择安装/配置 Python 3.10、Git、ffmpeg、uv、CUDA Toolkit 和 Microsoft C++ Build Tools。
+- 可检测并按用户辅助流程配置 Python 3.10、Git、CUDA Toolkit 和 Microsoft C++ Build Tools；uv 在 Python 可用后自动安装，FFmpeg 则由安装分卷提供。
 - 已存在的前置依赖会自动跳过。
-- 页面顺序为环境检查与前置依赖策略、安装路径、GPU 栈、依赖路径、用户数据路径。
+- 页面顺序为环境检查、安装路径、GPU 栈、前置依赖下载辅助、依赖路径、用户数据路径。
 - CUDA 栈会复核实际显卡：CPU 或不兼容显卡跳过 CUDA 并安装 CPU 版 torch；40 系及以下兼容 NVIDIA 使用 cu121；50 系 Blackwell 使用 cu128。
 - 运行环境搭建在安装器流程内隐藏执行，不再弹出 PowerShell 或 cmd 窗口。
 - 前置依赖安装/环境变量配置与虚拟环境搭建阶段会继续推进安装页进度条。

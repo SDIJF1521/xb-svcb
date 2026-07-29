@@ -5,8 +5,8 @@
   - 前端 web/dist 内置进 _internal/web/dist，应用自带界面、无需外置；
   - worker 脚本（svc/f0/uvr/rvc/seedvc/ddsp/vocal/hub）以「真实磁盘文件」形式放进
     _internal/infrastructure，供外部 .venv-* 的 Python 以子进程读取执行；
-  - 重负载 AI 环境（torch/so-vits-svc/RVC/audio-separator/SeedVC/DDSP-SVC）不进 exe，由安装器在
-    安装目录旁单独搭建（engines/.venv-svc/.venv-rvc/.venv-uvr/.venv-seedvc/.venv-ddsp/models）。
+  - 重负载 AI 环境的 Python venv 仍在安装目录旁按机器搭建；So-VITS-SVC、SeedVC、DDSP-SVC
+    引擎源码和离线模型由 Inno Setup 分卷携带，安装后不再下载这三套仓库。
 编译：在仓库根执行  pyinstaller installer/xb-svcb-app.spec  （用 app/.venv 的 Python）。
 """
 

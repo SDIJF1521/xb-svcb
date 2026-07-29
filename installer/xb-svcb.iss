@@ -10,18 +10,20 @@
 ;
 ;  安装器在用户机上的行为：
 ;    - 释放打包好的应用本体 XB-SVCB.exe（前端与 worker 已内置，无需 Python 也能起界面）
-;    - 可选“搭建运行环境”：检测/安装前置依赖，联网创建 .venv / 下载依赖与模型（由 batch 调 install.py）
+;    - 可选“搭建运行环境”：检测前置依赖，联网创建 .venv / 下载依赖与模型（由 batch 调 install.py）
 ;    - 创建开始菜单与桌面快捷方式（指向 XB-SVCB.exe）
 ;
-;  用户机前置：安装器可通过 winget 自动安装缺失的 Python/Git/ffmpeg/uv/C++ Build Tools/CUDA Toolkit；
+;  用户机前置：安装器只检测缺失的 Python/Git/C++ Build Tools/CUDA Toolkit，
+;  FFmpeg 由安装包分卷内置（检测到系统 ffmpeg 时跳过释放）；uv 会在 Python 可用后
+;  自动安装到用户目录；其他依赖提供跳转官方/可信下载页面的按钮。
 ;  JUCE VST3 Host 是发布包内置的原生组件，不在用户机现场编译。
-;  已安装则跳过。CUDA 栈可自动检测，也可手动指定 40 系及以下 cu121 / 50 系 cu128。
+;  CUDA 栈可自动检测，也可手动指定 40 系及以下 cu121 / 50 系 cu128。
 ;  应用界面本身由 exe 自带，无需 Node / Python。
 ; ============================================================
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.24"
+#define MyAppVersion "0.0.25"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 
@@ -31,6 +33,7 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 VersionInfoVersion={#MyAppVersion}.0
 AppPublisher={#MyAppPublisher}
+LicenseFile=..\LICENSE
 ; 默认装到用户可写目录，避免在 Program Files 内建 venv / 下模型需要管理员权限
 DefaultDirName={localappdata}\Programs\{#MyAppShort}
 DefaultGroupName={#MyAppShort}
@@ -76,12 +79,20 @@ Source: "..\setup_env.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\install_prereqs.bat"; DestDir: "{app}"; Flags: ignoreversion
 ; 应用图标（供 .bat 快捷方式引用；exe 已内嵌同一图标）
 Source: "..\assets\icon\xb-svcb.ico"; DestDir: "{app}"; Flags: ignoreversion
+; FFmpeg 随分卷离线携带。系统 PATH 已有 ffmpeg 时跳过释放；否则安装到应用 tools 目录。
+Source: "..\assets\tools\ffmpeg\*"; DestDir: "{app}\tools\ffmpeg"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression skipifsourcedoesntexist; Check: not SystemFfmpegAvailable
+; 三个歌声引擎源码随分卷携带。模型由 assets/models 统一提供，排除仓库元数据、缓存、
+; 示例与重复权重，安装后 install.py 会检测到源码并跳过 Git/ZIP 获取。
+Source: "..\.tmp\bundled-engines\so-vits-svc\*"; DestDir: "{app}\engines\so-vits-svc"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\.tmp\bundled-engines\ddsp-svc\*"; DestDir: "{app}\engines\ddsp-svc"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\.tmp\bundled-engines\seed-vc\*"; DestDir: "{app}\engines\seed-vc"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; 自带底模与 UVR 模型（随安装包分发；安装时由 install.py 本地复制，免联网慢下载）
 ; 模型为已压缩的二进制权重，用 nocompression 跳过再压缩，显著加快编译与安装速度
 ; 排除可选的 fcpe.pt（默认 F0 用 rmvpe），让安装器体积压到 GitHub Release 单文件 2GiB 上限内
 Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression; Excludes: "fcpe.pt"
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
-Source: "..\release_notes_v024.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release_notes_v025.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docs\api.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 #endif
 
@@ -105,6 +116,7 @@ Type: filesandordirs; Name: "{app}\.venv-seedvc"
 Type: filesandordirs; Name: "{app}\.venv-ddsp"
 Type: filesandordirs; Name: "{app}\.venv-hub"
 Type: filesandordirs; Name: "{app}\engines"
+Type: filesandordirs; Name: "{app}\tools"
 Type: filesandordirs; Name: "{app}\models"
 
 [Code]
@@ -112,6 +124,21 @@ var
   DataDirPage: TInputDirWizardPage;
   PrereqPage: TInputOptionWizardPage;
   GpuStackPage: TInputOptionWizardPage;
+  PrereqDownloadPage: TWizardPage;
+  PrereqDownloadIntro: TNewStaticText;
+  PythonStatusLabel: TNewStaticText;
+  GitStatusLabel: TNewStaticText;
+  UvStatusLabel: TNewStaticText;
+  CppStatusLabel: TNewStaticText;
+  CudaStatusLabel: TNewStaticText;
+  DriverStatusLabel: TNewStaticText;
+  PythonDownloadButton: TNewButton;
+  GitDownloadButton: TNewButton;
+  UvDownloadButton: TNewButton;
+  CppDownloadButton: TNewButton;
+  CudaDownloadButton: TNewButton;
+  DriverDownloadButton: TNewButton;
+  RefreshPrereqButton: TNewButton;
   PrereqPathPage: TInputDirWizardPage;
   CudaPathPage: TInputDirWizardPage;
   DetailsPage: TWizardPage;
@@ -231,6 +258,15 @@ var
 begin
   Result := Exec(ExpandConstant('{cmd}'), '/c where ' + Exe + ' >nul 2>&1',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+function SystemFfmpegAvailable(): Boolean;
+begin
+  Result := CmdAvailable('ffmpeg') or
+    (FileExists(ExpandConstant('{app}\tools\ffmpeg\bin\ffmpeg.exe')) and
+     FileExists(ExpandConstant('{app}\tools\ffmpeg\bin\ffprobe.exe'))) or
+    (FileExists(ExpandConstant('{app}\tools\ffmpeg\ffmpeg.exe')) and
+     FileExists(ExpandConstant('{app}\tools\ffmpeg\ffprobe.exe')));
 end;
 
 function CommandOutput(const CommandLine: String): String;
@@ -402,9 +438,27 @@ begin
     Result := 'CPU 或未检测到兼容 GPU，安装 CPU 版 torch';
 end;
 
+function NvidiaGpuDetected(): Boolean;
+var
+  Stack: String;
+begin
+  Stack := DetectedGpuStackName();
+  Result := (Stack = 'cu121') or (Stack = 'cu128');
+end;
+
+function DetectedCudaVersion(): String;
+begin
+  if DetectedGpuStackName() = 'cu128' then
+    Result := '12.8'
+  else if DetectedGpuStackName() = 'cu121' then
+    Result := '12.1'
+  else
+    Result := '';
+end;
+
 function ShowInstallDetails(): Boolean;
 begin
-  Result := PrereqPage.Values[0] and PrereqPage.Values[3];
+  Result := PrereqPage.Values[0] and PrereqPage.Values[2];
 end;
 
 function BuildEnvSelected(): Boolean;
@@ -412,14 +466,9 @@ begin
   Result := PrereqPage.Values[0];
 end;
 
-function EnvAutoInstallSelected(): Boolean;
-begin
-  Result := PrereqPage.Values[1];
-end;
-
 function EnvConfigureSelected(): Boolean;
 begin
-  Result := PrereqPage.Values[2];
+  Result := PrereqPage.Values[1];
 end;
 
 function StatusText(Ok: Boolean): String;
@@ -431,18 +480,189 @@ begin
 end;
 
 function EnvironmentCheckSummary(): String;
+var
+  DetectedStack: String;
 begin
+  DetectedStack := DetectedGpuStackName();
   Result :=
     '安装器会先检查运行环境，再进入安装路径选择。当前检测结果：' + #13#10 +
     '  Python 3.10+：' + StatusText(CmdAvailable('python') or CmdAvailable('py')) + #13#10 +
     '  Git：' + StatusText(CmdAvailable('git')) + #13#10 +
-    '  ffmpeg：' + StatusText(CmdAvailable('ffmpeg')) + #13#10 +
-    '  uv：' + StatusText(CmdAvailable('uv')) + #13#10 +
-    '  CUDA Toolkit：' + StatusText(CmdAvailable('nvcc')) + #13#10 +
+    '  ffmpeg：' + StatusText(CmdAvailable('ffmpeg')) + '（未检测到时使用安装包内置版本）' + #13#10 +
+    '  uv：' + StatusText(CmdAvailable('uv')) + '（Python 可用后自动安装）' + #13#10;
+  if (DetectedStack = 'cu121') or (DetectedStack = 'cu128') then
+    Result := Result + '  CUDA Toolkit ' + DetectedCudaVersion() + '：' +
+      StatusText(CmdAvailable('nvcc')) + #13#10;
+  Result := Result +
     '  JUCE VST3 Host：随安装包内置，安装后检查' + #13#10 +
-    '  GPU 推理栈：' + GpuStackLabel(DetectedGpuStackName()) + #13#10 +
-    '  winget：' + StatusText(CmdAvailable('winget')) + #13#10 +
-    '已安装的依赖会自动跳过；自动模式会让 CUDA / DirectML / torch 与显卡匹配，没有兼容 GPU 时使用 CPU。';
+    '  GPU 推理栈：' + GpuStackLabel(DetectedStack) + #13#10 +
+    '前置依赖采用用户辅助模式：安装器不会自动下载或安装系统组件；uv 会在检测到 Python 后通过 pip 自动安装。下一页可打开对应下载页面，完成后返回并重新检测。';
+end;
+
+procedure OpenDownloadUrl(const URL: String);
+var
+  ErrorCode: Integer;
+begin
+  if not ShellExec('open', URL, '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode) then
+    MsgBox('无法打开下载页面：' + URL + #13#10 +
+      '请复制链接到浏览器中打开。', mbError, MB_OK);
+end;
+
+procedure PythonDownloadClick(Sender: TObject);
+begin
+  OpenDownloadUrl('https://www.python.org/downloads/windows/');
+end;
+
+procedure GitDownloadClick(Sender: TObject);
+begin
+  OpenDownloadUrl('https://git-scm.com/download/win');
+end;
+
+procedure UvDownloadClick(Sender: TObject);
+begin
+  MsgBox('uv 会在检测到 Python 3.10+ 后自动安装到当前用户目录，无需手动下载。',
+    mbInformation, MB_OK);
+end;
+
+procedure CppDownloadClick(Sender: TObject);
+begin
+  OpenDownloadUrl('https://visualstudio.microsoft.com/visual-cpp-build-tools/');
+end;
+
+procedure CudaDownloadClick(Sender: TObject);
+begin
+  if DetectedGpuStackName() = 'cu128' then
+    OpenDownloadUrl('https://developer.nvidia.com/cuda-12-8-0-download-archive')
+  else if DetectedGpuStackName() = 'cu121' then
+    OpenDownloadUrl('https://developer.nvidia.com/cuda-12-1-0-download-archive');
+end;
+
+function GpuStackName(): String; forward;
+
+procedure DriverDownloadClick(Sender: TObject);
+begin
+  if GpuStackName() = 'directml' then
+    OpenDownloadUrl('https://www.amd.com/en/support/download/drivers.html')
+  else
+    OpenDownloadUrl('https://www.nvidia.com/download/index.aspx');
+end;
+
+procedure CreateDownloadRow(const LabelText, ButtonText: String; RowTop: Integer;
+  var StatusLabel: TNewStaticText; var DownloadButton: TNewButton);
+begin
+  StatusLabel := TNewStaticText.Create(PrereqDownloadPage);
+  StatusLabel.AutoSize := False;
+  StatusLabel.WordWrap := False;
+  StatusLabel.Left := 0;
+  StatusLabel.Top := ScaleY(RowTop);
+  StatusLabel.Height := ScaleY(28);
+  StatusLabel.Caption := LabelText;
+  StatusLabel.Parent := PrereqDownloadPage.Surface;
+
+  DownloadButton := TNewButton.Create(PrereqDownloadPage);
+  DownloadButton.Width := ScaleX(150);
+  DownloadButton.Height := ScaleY(26);
+  DownloadButton.Left := PrereqDownloadPage.SurfaceWidth - DownloadButton.Width;
+  DownloadButton.Top := ScaleY(RowTop - 2);
+  DownloadButton.Caption := ButtonText;
+  DownloadButton.Parent := PrereqDownloadPage.Surface;
+  StatusLabel.Width := DownloadButton.Left - ScaleX(12);
+end;
+
+function CommandOrFileAvailable(const Command, PathA, PathB, PathC: String): Boolean;
+begin
+  Result := CmdAvailable(Command) or
+    ((PathA <> '') and FileExists(PathA)) or
+    ((PathB <> '') and FileExists(PathB)) or
+    ((PathC <> '') and FileExists(PathC));
+end;
+
+procedure RefreshPrereqDownloadStatus;
+var
+  IsNvidia, IsDirectml, PythonReady: Boolean;
+  DetectedStack, CudaVersion, PythonPath, GitPath, CudaPath: String;
+  UserProfilePath, UvStandalonePath, UvPythonScriptsPath, UvUserScriptsPath: String;
+begin
+  PythonPath := ExpandConstant('{localappdata}\Programs\Python\Python310\python.exe');
+  GitPath := ExpandConstant('{localappdata}\Programs\Git\cmd\git.exe');
+  UserProfilePath := GetEnv('USERPROFILE');
+  if UserProfilePath <> '' then
+    UvStandalonePath := PathJoin(UserProfilePath, '.local\bin\uv.exe')
+  else
+    UvStandalonePath := '';
+  UvPythonScriptsPath := ExpandConstant('{localappdata}\Programs\Python\Python310\Scripts\uv.exe');
+  UvUserScriptsPath := ExpandConstant('{userappdata}\Python\Python310\Scripts\uv.exe');
+  PythonReady := CmdAvailable('python') or CmdAvailable('py') or FileExists(PythonPath) or
+    FileExists(PrereqPathPage.Values[0] + '\python.exe');
+  PythonStatusLabel.Caption := 'Python 3.10+：' +
+    StatusText(PythonReady);
+  GitStatusLabel.Caption := 'Git：' +
+    StatusText(CommandOrFileAvailable('git', GitPath,
+      ExpandConstant('{autopf}\Git\cmd\git.exe'), ''));
+  if CommandOrFileAvailable('uv', UvStandalonePath, UvPythonScriptsPath, UvUserScriptsPath) or
+     FileExists(PrereqPathPage.Values[0] + '\Scripts\uv.exe') then
+    UvStatusLabel.Caption := 'uv：已检测到'
+  else if PythonReady then
+    UvStatusLabel.Caption := 'uv：Python 可用，安装时自动安装'
+  else
+    UvStatusLabel.Caption := 'uv：等待 Python 安装完成后自动安装';
+  CppStatusLabel.Caption := 'Microsoft C++ Build Tools：' +
+    StatusText(CmdAvailable('cl') or
+      FileExists(ExpandConstant('{pf32}\Microsoft Visual Studio\Installer\vswhere.exe')));
+
+  DetectedStack := DetectedGpuStackName();
+  IsNvidia := (DetectedStack = 'cu121') or (DetectedStack = 'cu128');
+  IsDirectml := DetectedStack = 'directml';
+  CudaStatusLabel.Visible := IsNvidia;
+  CudaDownloadButton.Visible := IsNvidia;
+  DriverStatusLabel.Visible := IsNvidia or IsDirectml;
+  DriverDownloadButton.Visible := IsNvidia or IsDirectml;
+  if IsNvidia then
+  begin
+    CudaVersion := DetectedCudaVersion();
+    CudaDownloadButton.Caption := '下载 CUDA ' + CudaVersion;
+    CudaPath := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v' + CudaVersion + '\bin\nvcc.exe');
+    CudaStatusLabel.Caption := 'CUDA Toolkit ' + CudaVersion + '：' +
+      StatusText(CmdAvailable('nvcc') or FileExists(CudaPath) or
+        FileExists(CudaPathPage.Values[0] + '\bin\nvcc.exe'));
+    if FileExists(CudaPath) or FileExists(CudaPathPage.Values[0] + '\bin\nvcc.exe') then
+      CudaStatusLabel.Caption := 'CUDA Toolkit ' + CudaVersion + '：已检测到';
+  end
+  else
+  begin
+    CudaStatusLabel.Caption := '';
+    CudaDownloadButton.Caption := '打开 CUDA 下载';
+  end;
+  if IsDirectml then
+    DriverStatusLabel.Caption := 'AMD Radeon 驱动：请确认已安装'
+  else if IsNvidia then
+    DriverStatusLabel.Caption := 'NVIDIA 显卡驱动：请确认已安装'
+  else
+    DriverStatusLabel.Caption := '';
+end;
+
+procedure RefreshPrereqClick(Sender: TObject);
+begin
+  RefreshPrereqDownloadStatus;
+end;
+
+function RequiredPrereqMissing(): Boolean;
+begin
+  Result := not (CmdAvailable('python') or CmdAvailable('py') or
+      FileExists(ExpandConstant('{localappdata}\Programs\Python\Python310\python.exe')) or
+      FileExists(PrereqPathPage.Values[0] + '\python.exe')) or
+    not CommandOrFileAvailable('git', ExpandConstant('{localappdata}\Programs\Git\cmd\git.exe'),
+      ExpandConstant('{autopf}\Git\cmd\git.exe'), '') or
+    not (CmdAvailable('cl') or
+      FileExists(ExpandConstant('{pf32}\Microsoft Visual Studio\Installer\vswhere.exe')));
+  if DetectedGpuStackName() = 'cu128' then
+    Result := Result or ((not CmdAvailable('nvcc')) and
+      (not FileExists(ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin\nvcc.exe'))) and
+      (not FileExists(CudaPathPage.Values[0] + '\bin\nvcc.exe')))
+  else if DetectedGpuStackName() = 'cu121' then
+    Result := Result or ((not CmdAvailable('nvcc')) and
+      (not FileExists(ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.1\bin\nvcc.exe'))) and
+      (not FileExists(CudaPathPage.Values[0] + '\bin\nvcc.exe')));
 end;
 
 procedure SetEnvProgress(Position: Integer; const Detail: String);
@@ -597,13 +817,11 @@ begin
     False
   );
   PrereqPage.Add('安装后立即搭建运行环境（创建 AI 子环境、复制自带模型；仅 Python 依赖需联网，耗时较长）');
-  PrereqPage.Add('自动安装缺失的前置依赖（需要联网；优先使用 winget；可能弹出 UAC）');
-  PrereqPage.Add('自动配置 PATH / CUDA_PATH / VSINSTALLDIR 等用户环境变量');
+  PrereqPage.Add('配置 PATH / CUDA_PATH / VSINSTALLDIR 等用户环境变量（不安装软件）');
   PrereqPage.Add('在安装器窗口显示详细安装信息（可选；完整日志仍会写入安装目录）');
   PrereqPage.Values[0] := True;
   PrereqPage.Values[1] := True;
-  PrereqPage.Values[2] := True;
-  PrereqPage.Values[3] := False;
+  PrereqPage.Values[2] := False;
 
   GpuStackPage := CreateInputOptionPage(
     wpSelectDir,
@@ -620,17 +838,58 @@ begin
   GpuStackPage.Add('AMD Radeon：DirectML');
   GpuStackPage.Values[0] := True;
 
-  PrereqPathPage := CreateInputDirPage(
+  PrereqDownloadPage := CreateCustomPage(
     GpuStackPage.ID,
+    '下载前置依赖',
+    '系统依赖由用户安装，uv 在 Python 可用后自动安装'
+  );
+
+  PrereqDownloadIntro := TNewStaticText.Create(PrereqDownloadPage);
+  PrereqDownloadIntro.AutoSize := False;
+  PrereqDownloadIntro.WordWrap := True;
+  PrereqDownloadIntro.Left := 0;
+  PrereqDownloadIntro.Top := 0;
+  PrereqDownloadIntro.Width := PrereqDownloadPage.SurfaceWidth;
+  PrereqDownloadIntro.Height := ScaleY(48);
+  PrereqDownloadIntro.Caption :=
+    '安装器不会自动运行 winget、弹出系统安装程序或修改系统软件。点击右侧按钮打开下载页面，'
+    + '完成安装后点击“重新检测”，再继续下一步。uv 会在 Python 可用后自动安装。';
+  PrereqDownloadIntro.Parent := PrereqDownloadPage.Surface;
+
+  CreateDownloadRow('Python 3.10+：', '打开 Python 下载', 56, PythonStatusLabel, PythonDownloadButton);
+  PythonDownloadButton.OnClick := @PythonDownloadClick;
+  CreateDownloadRow('Git：', '打开 Git 下载', 88, GitStatusLabel, GitDownloadButton);
+  GitDownloadButton.OnClick := @GitDownloadClick;
+  CreateDownloadRow('uv：', '自动安装', 120, UvStatusLabel, UvDownloadButton);
+  UvDownloadButton.OnClick := @UvDownloadClick;
+  UvDownloadButton.Enabled := False;
+  CreateDownloadRow('Microsoft C++ Build Tools：', '打开 C++ 下载', 152, CppStatusLabel, CppDownloadButton);
+  CppDownloadButton.OnClick := @CppDownloadClick;
+  CreateDownloadRow('CUDA Toolkit：', '打开 CUDA 下载', 184, CudaStatusLabel, CudaDownloadButton);
+  CudaDownloadButton.OnClick := @CudaDownloadClick;
+  CreateDownloadRow('显卡驱动：', '打开驱动下载', 216, DriverStatusLabel, DriverDownloadButton);
+  DriverDownloadButton.OnClick := @DriverDownloadClick;
+
+  RefreshPrereqButton := TNewButton.Create(PrereqDownloadPage);
+  RefreshPrereqButton.Width := ScaleX(150);
+  RefreshPrereqButton.Height := ScaleY(28);
+  RefreshPrereqButton.Left := PrereqDownloadPage.SurfaceWidth - RefreshPrereqButton.Width;
+  RefreshPrereqButton.Top := ScaleY(254);
+  RefreshPrereqButton.Caption := '重新检测';
+  RefreshPrereqButton.OnClick := @RefreshPrereqClick;
+  RefreshPrereqButton.Parent := PrereqDownloadPage.Surface;
+
+  PrereqPathPage := CreateInputDirPage(
+    PrereqDownloadPage.ID,
     '前置依赖安装/查找路径',
     '选择依赖安装位置或已有路径',
-    '自动安装时会尽量使用这些位置；如果已经安装，也可以指向已有目录。',
+    '如果刚安装的依赖尚未加入 PATH，可在这里填写其安装目录；安装器不会在这些位置自动安装。',
     False,
     ''
   );
   PrereqPathPage.Add('Python 3.10 目录：');
   PrereqPathPage.Add('Git 目录：');
-  PrereqPathPage.Add('ffmpeg 目录：');
+  PrereqPathPage.Add('FFmpeg 目录（分卷内置，系统已安装则跳过）：');
   PrereqPathPage.Add('C++ Build Tools 目录：');
 
   CudaPathPage := CreateInputDirPage(
@@ -753,12 +1012,14 @@ begin
     if PrereqPathPage.Values[3] = '' then
       PrereqPathPage.Values[3] := ExpandConstant('{pf32}\Microsoft Visual Studio\2022\BuildTools');
   end;
+  if CurPageID = PrereqDownloadPage.ID then
+    RefreshPrereqDownloadStatus;
   if CurPageID = CudaPathPage.ID then
   begin
     if (CudaPathPage.Values[0] = '') or
        ContainsText(CudaPathPage.Values[0], '\NVIDIA GPU Computing Toolkit\CUDA\v12.') then
     begin
-      if GpuStackName() = 'cu128' then
+      if DetectedGpuStackName() = 'cu128' then
         CudaPathPage.Values[0] := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.8')
       else
         CudaPathPage.Values[0] := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.1');
@@ -781,11 +1042,11 @@ end;
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
-  if (PageID = GpuStackPage.ID) or (PageID = PrereqPathPage.ID) then
+  if (PageID = GpuStackPage.ID) or (PageID = PrereqDownloadPage.ID) or
+     (PageID = PrereqPathPage.ID) then
     Result := not BuildEnvSelected();
   if PageID = CudaPathPage.ID then
-    Result := (not BuildEnvSelected()) or (GpuStackName() = 'cpu') or
-      (GpuStackName() = 'directml');
+    Result := (not BuildEnvSelected()) or (not NvidiaGpuDetected());
   if PageID = DetailsPage.ID then
     Result := not ShowInstallDetails();
 end;
@@ -808,6 +1069,14 @@ begin
     end;
     DataDirPage.Values[0] := DataDir;
   end;
+  if CurPageID = PrereqDownloadPage.ID then
+  begin
+    RefreshPrereqDownloadStatus;
+    if RequiredPrereqMissing() then
+      if MsgBox('仍有一个或多个前置依赖未检测到。你可以先在下一页填写已有安装路径，'
+        + '也可以返回下载并安装缺失项。要继续吗？', mbConfirmation, MB_YESNO) <> IDYES then
+        Result := False;
+  end;
 end;
 
 procedure WriteInstallerEnv();
@@ -817,7 +1086,6 @@ begin
   Stack := GpuStackName();
   Payload := '@echo off' + #13#10 +
     'set "XB_FROM_INSTALLER=1"' + #13#10 +
-    'set "XB_PREREQ_AUTO=' + BoolFlag(EnvAutoInstallSelected()) + '"' + #13#10 +
     'set "XB_ENV_CONFIGURE=' + BoolFlag(EnvConfigureSelected()) + '"' + #13#10 +
     'set "XB_GPU_STACK_REQUESTED=' + BatchEscape(RequestedGpuStackName()) + '"' + #13#10 +
     'set "XB_GPU_STACK=' + BatchEscape(Stack) + '"' + #13#10 +
@@ -935,6 +1203,14 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'AI 歌声增强 worker', PathJoin(InternalDir, 'infrastructure\vocal_enhancement_worker.py'));
   if not FileExists(PathJoin(AppDir, 'install\configure_user_env.py')) then
     Missing := AddMissingRuntimeFile(Missing, '用户环境配置工具', PathJoin(AppDir, 'install\configure_user_env.py'));
+  if not SystemFfmpegAvailable() then
+    Missing := AddMissingRuntimeFile(Missing, 'FFmpeg/ffprobe 分卷载荷', PathJoin(AppDir, 'tools\ffmpeg\bin'));
+  if not FileExists(PathJoin(AppDir, 'engines\so-vits-svc\inference\infer_tool.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'So-VITS-SVC 分卷源码', PathJoin(AppDir, 'engines\so-vits-svc\inference\infer_tool.py'));
+  if not FileExists(PathJoin(AppDir, 'engines\seed-vc\inference.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'SeedVC 分卷源码', PathJoin(AppDir, 'engines\seed-vc\inference.py'));
+  if not FileExists(PathJoin(AppDir, 'engines\ddsp-svc\main_reflow.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC 分卷源码', PathJoin(AppDir, 'engines\ddsp-svc\main_reflow.py'));
   if not FileExists(PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt')) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC RMVPE', PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt'));
   if not FileExists(PathJoin(AppDir, 'assets\models\seedvc\campplus_cn_common.bin')) then
@@ -950,7 +1226,7 @@ begin
 
   Result := Missing = '';
   if Result then
-    AppendInstallValidation('[ok] 应用本体、前端、AI workers、环境配置工具、SeedVC / DeepFilterNet 离线底模与 JUCE Host 完整。')
+    AppendInstallValidation('[ok] 应用本体、前端、AI workers、FFmpeg、SVC/DDSP/SeedVC 分卷源码、离线模型与 JUCE Host 完整。')
   else
   begin
     AppendInstallValidation('[fail] 发布包缺少必要组件：');
@@ -1193,9 +1469,9 @@ begin
       SetEnvProgress(0, '准备搭建运行环境…');
       WriteInstallerEnv();
       PrereqsReady := True;
-      if EnvAutoInstallSelected() or EnvConfigureSelected() then
+      if EnvConfigureSelected() then
       begin
-        PrereqsReady := RunSetupBatch('install_prereqs.bat', '', '正在检测/安装前置依赖并配置环境变量…', 0, 35);
+        PrereqsReady := RunSetupBatch('install_prereqs.bat', '', '正在检测前置依赖并配置环境变量…', 0, 35);
         SetupProgressStart := 35;
       end
       else

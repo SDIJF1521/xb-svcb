@@ -45,6 +45,200 @@ function Require-FileSize([string]$Path, [long]$MinimumBytes, [string]$Label) {
   }
 }
 
+function Stop-WebNodeProcesses([string]$WebDir) {
+  $resolvedWebDir = [IO.Path]::GetFullPath($WebDir).TrimEnd('\')
+  $webPrefix = ($resolvedWebDir + '\').ToLowerInvariant()
+  $allProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+  $processById = @{}
+  foreach ($process in $allProcesses) {
+    $processById[[int]$process.ProcessId] = $process
+  }
+  $webProcesses = @(
+    $allProcesses | Where-Object {
+      if ($_.Name -ine 'node.exe') { return $false }
+      $commandLine = [string]$_.CommandLine
+      if ([string]::IsNullOrWhiteSpace($commandLine)) { return $false }
+      $commandLine.Replace('/', '\').ToLowerInvariant().Contains($webPrefix)
+    }
+  )
+  if ($webProcesses.Count -eq 0) { return }
+
+  $stopIds = [Collections.Generic.HashSet[int]]::new()
+  $stopOrder = [Collections.Generic.List[int]]::new()
+  foreach ($webProcess in $webProcesses) {
+    $chain = [Collections.Generic.List[int]]::new()
+    $current = $webProcess
+    [void]$chain.Add([int]$current.ProcessId)
+    while ($processById.ContainsKey([int]$current.ParentProcessId)) {
+      $parent = $processById[[int]$current.ParentProcessId]
+      $parentCommandLine = [string]$parent.CommandLine
+      $isNpmNode = $parent.Name -ieq 'node.exe' -and $parentCommandLine -match '(?i)npm-cli\.js'
+      $isCommandWrapper = $parent.Name -ieq 'cmd.exe' -and $parentCommandLine -match '(?i)(?:^|\s)/c(?:\s|$)'
+      if (-not ($isNpmNode -or $isCommandWrapper)) { break }
+      [void]$chain.Add([int]$parent.ProcessId)
+      $current = $parent
+    }
+    for ($index = $chain.Count - 1; $index -ge 0; $index--) {
+      $processId = $chain[$index]
+      if ($stopIds.Add($processId)) { [void]$stopOrder.Add($processId) }
+    }
+  }
+
+  Write-Host "Stopping frontend processes that would lock web/node_modules..." -ForegroundColor Yellow
+  foreach ($processId in $stopOrder) {
+    $process = $processById[$processId]
+    Write-Host ("  PID {0}: {1}" -f $processId, $process.CommandLine) -ForegroundColor DarkYellow
+    Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+  }
+
+  $deadline = [DateTime]::UtcNow.AddSeconds(10)
+  do {
+    $remaining = @($stopIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    if ($remaining.Count -eq 0) { return }
+    Start-Sleep -Milliseconds 200
+  } while ([DateTime]::UtcNow -lt $deadline)
+
+  $remainingIds = $remaining -join ', '
+  throw "Unable to stop frontend process(es): $remainingIds. Close the web development server and retry."
+}
+
+function Ensure-EngineSource(
+  [string]$Path,
+  [string]$Marker,
+  [string]$Repository,
+  [string]$Branch,
+  [string]$Label
+) {
+  $markerPath = Join-Path $Path $Marker
+  if (Test-Path -LiteralPath $markerPath -PathType Leaf) { return }
+  if (Test-Path -LiteralPath $Path) {
+    throw "$Label payload directory exists but is incomplete: $Path (missing $Marker)"
+  }
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    throw "Git is required to stage the bundled $Label source."
+  }
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
+  Write-Host ("Staging bundled {0} source ({1})..." -f $Label, $Branch) -ForegroundColor Cyan
+  & git clone --depth 1 --branch $Branch $Repository $Path
+  if ($LASTEXITCODE -ne 0) { throw "Failed to stage bundled $Label source." }
+  Require-File $markerPath "$Label payload marker"
+}
+
+function Ensure-FfmpegPayload([string]$PayloadDir) {
+  $ffmpegExe = Join-Path $PayloadDir "bin\ffmpeg.exe"
+  $ffprobeExe = Join-Path $PayloadDir "bin\ffprobe.exe"
+  if ((Test-Path -LiteralPath $ffmpegExe -PathType Leaf) -and
+      (Test-Path -LiteralPath $ffprobeExe -PathType Leaf)) { return }
+
+  $downloadDir = Join-Path $Root ".tmp\ffmpeg-payload"
+  $archive = Join-Path $downloadDir "ffmpeg-release-essentials.zip"
+  $extractDir = Join-Path $downloadDir "extract"
+  New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
+  Write-Host "Downloading the bundled Windows FFmpeg payload..." -ForegroundColor Cyan
+  Invoke-WebRequest -UseBasicParsing `
+    -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" `
+    -OutFile $archive
+  if (Test-Path -LiteralPath $extractDir) {
+    Remove-Item -LiteralPath $extractDir -Recurse -Force
+  }
+  Expand-Archive -LiteralPath $archive -DestinationPath $extractDir -Force
+  $sourceExe = Get-ChildItem -LiteralPath $extractDir -Filter "ffmpeg.exe" -File -Recurse |
+    Select-Object -First 1
+  if (-not $sourceExe) { throw "Downloaded FFmpeg archive does not contain ffmpeg.exe." }
+  $sourceBin = $sourceExe.Directory.FullName
+  New-Item -ItemType Directory -Force -Path (Join-Path $PayloadDir "bin") | Out-Null
+  Copy-Item -LiteralPath (Join-Path $sourceBin "ffmpeg.exe") -Destination $ffmpegExe -Force
+  Copy-Item -LiteralPath (Join-Path $sourceBin "ffprobe.exe") -Destination $ffprobeExe -Force
+  $sourceRoot = Split-Path -Parent $sourceBin
+  foreach ($notice in @("LICENSE", "README.txt")) {
+    $noticePath = Join-Path $sourceRoot $notice
+    if (Test-Path -LiteralPath $noticePath) {
+      Copy-Item -LiteralPath $noticePath -Destination (Join-Path $PayloadDir $notice) -Force
+    }
+  }
+}
+
+function Ensure-DdspContentvecPayload([string]$Path) {
+  $minimumBytes = 300MB
+  if ((Test-Path -LiteralPath $Path -PathType Leaf) -and
+      ((Get-Item -LiteralPath $Path).Length -ge $minimumBytes)) { return }
+
+  $partial = "$Path.download"
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
+  $urls = @(
+    "https://hf-mirror.com/lengyue233/content-vec-best/resolve/main/pytorch_model.bin",
+    "https://huggingface.co/lengyue233/content-vec-best/resolve/main/pytorch_model.bin"
+  )
+  foreach ($url in $urls) {
+    try {
+      Write-Host "Downloading the bundled DDSP ContentVec payload..." -ForegroundColor Cyan
+      Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $partial
+      if ((Get-Item -LiteralPath $partial).Length -lt $minimumBytes) {
+        throw "Downloaded file is smaller than expected."
+      }
+      Move-Item -LiteralPath $partial -Destination $Path -Force
+      return
+    } catch {
+      if (Test-Path -LiteralPath $partial) {
+        Remove-Item -LiteralPath $partial -Force
+      }
+    }
+  }
+  throw "Failed to stage the bundled DDSP ContentVec payload: $Path"
+}
+
+function Stage-EngineTree([string]$SourceDir, [string]$DestinationDir, [string]$Engine) {
+  if (Test-Path -LiteralPath $DestinationDir) {
+    Remove-Item -LiteralPath $DestinationDir -Recurse -Force
+  }
+  New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
+  $sourceRoot = (Resolve-Path -LiteralPath $SourceDir).Path
+  foreach ($file in Get-ChildItem -LiteralPath $sourceRoot -Recurse -File) {
+    $relative = $file.FullName.Substring($sourceRoot.Length + 1)
+    $parts = $relative -split '[\\/]'
+    $lowerParts = @($parts | ForEach-Object { $_.ToLowerInvariant() })
+    $skip = $lowerParts -contains '.git' -or
+      $lowerParts -contains '__pycache__' -or
+      $lowerParts -contains 'cache' -or
+      $lowerParts -contains 'data' -or
+      $lowerParts -contains 'examples' -or
+      $lowerParts -contains 'logs' -or
+      $lowerParts -contains 'outputs'
+    if ($Engine -eq 'sovits') {
+      $skip = $skip -or ($lowerParts -contains 'exp') -or ($lowerParts -contains 'pretrain')
+    } elseif ($Engine -eq 'ddsp') {
+      $skip = $skip -or ($lowerParts -contains 'pretrain')
+    } elseif ($Engine -eq 'seedvc') {
+      $skip = $skip -or ($lowerParts -contains 'checkpoints') -or ($lowerParts -contains 'assets')
+      $skip = $skip -or ($file.Name -ieq 'campplus_cn_common.bin')
+      $skip = $skip -or ($file.Extension.ToLowerInvariant() -in @('.pt', '.pth', '.ckpt', '.safetensors'))
+    }
+    if ($skip) { continue }
+    $target = Join-Path $DestinationDir $relative
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+    Copy-Item -LiteralPath $file.FullName -Destination $target -Force
+  }
+}
+
+function Prepare-BundledEnginePayloads([string]$PayloadRoot) {
+  if (Test-Path -LiteralPath $PayloadRoot) {
+    Remove-Item -LiteralPath $PayloadRoot -Recurse -Force
+  }
+  New-Item -ItemType Directory -Force -Path $PayloadRoot | Out-Null
+  Stage-EngineTree (Join-Path $Root 'engines\so-vits-svc') (Join-Path $PayloadRoot 'so-vits-svc') 'sovits'
+  Stage-EngineTree (Join-Path $Root 'engines\ddsp-svc') (Join-Path $PayloadRoot 'ddsp-svc') 'ddsp'
+  Stage-EngineTree (Join-Path $Root 'engines\seed-vc') (Join-Path $PayloadRoot 'seed-vc') 'seedvc'
+  $contentvec = Join-Path $PayloadRoot 'ddsp-svc\pretrain\contentvec\pytorch_model.bin'
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $contentvec) | Out-Null
+  Copy-Item -LiteralPath (Join-Path $Root 'engines\ddsp-svc\pretrain\contentvec\pytorch_model.bin') -Destination $contentvec -Force
+  foreach ($marker in @(
+    (Join-Path $PayloadRoot 'so-vits-svc\inference\infer_tool.py'),
+    (Join-Path $PayloadRoot 'ddsp-svc\main_reflow.py'),
+    (Join-Path $PayloadRoot 'seed-vc\inference.py'),
+    $contentvec
+  )) { Require-File $marker 'Staged bundled engine payload' }
+}
+
 function Read-RegexValue([string]$Path, [string]$Pattern, [string]$Label) {
   Require-File $Path $Label
   $text = Get-Content -LiteralPath $Path -Raw
@@ -66,12 +260,34 @@ function Find-ISCC {
   return $null
 }
 
+function Assert-InnoConstants([string]$Path) {
+  Require-File $Path "Inno Setup script"
+  $allowed = @(
+    'app', 'autopf', 'cmd', 'commondesktop', 'group', 'localappdata',
+    'pf32', 'tmp', 'uninstallexe', 'userappdata', 'win'
+  )
+  $text = Get-Content -LiteralPath $Path -Raw
+  $used = [regex]::Matches($text, '\{([A-Za-z][A-Za-z0-9]*)\}') |
+    ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() } |
+    Sort-Object -Unique
+  $unknown = @($used | Where-Object { $allowed -notcontains $_ })
+  if ($unknown.Count -gt 0) {
+    throw "Unknown Inno Setup constant(s): $($unknown -join ', '). Add only documented constants to installer/xb-svcb.iss."
+  }
+}
+
 # Refuse to publish mismatched app/frontend/installer versions.
 $appVersion = Read-RegexValue (Join-Path $Root "app\config.py") 'APP_VERSION\s*=\s*["'']([^"'']+)["'']' "app version"
 $appProjectVersion = Read-RegexValue (Join-Path $Root "app\pyproject.toml") '(?m)^version\s*=\s*["'']([^"'']+)["'']' "app project version"
 $appLockVersion = Read-RegexValue (Join-Path $Root "app\uv.lock") '(?s)\[\[package\]\]\s*name\s*=\s*["'']app["'']\s*version\s*=\s*["'']([^"'']+)["'']' "app lock version"
 $appExeVersion = Read-RegexValue (Join-Path $Root "installer\xb-svcb-version.txt") 'StringStruct\(u["'']ProductVersion["''],\s*u["'']([^"'']+)["'']\)' "app executable version"
 $installerVersion = Read-RegexValue (Join-Path $Root "installer\xb-svcb.iss") '#define\s+MyAppVersion\s+["'']([^"'']+)["'']' "installer version"
+$installerScript = Join-Path $Root "installer\xb-svcb.iss"
+Assert-InnoConstants $installerScript
+$installerSliceSize = [long](Read-RegexValue (Join-Path $Root "installer\xb-svcb.iss") '(?m)^DiskSliceSize\s*=\s*([0-9]+)\s*$' "installer slice size")
+if ($installerSliceSize -ge 2GB) {
+  throw "Installer DiskSliceSize must stay below 2 GiB; found $installerSliceSize bytes."
+}
 $webPackage = Get-Content -LiteralPath (Join-Path $Root "web\package.json") -Raw | ConvertFrom-Json
 $webVersion = [string]$webPackage.version
 $webLockVersion = Read-RegexValue (Join-Path $Root "web\package-lock.json") '\A\s*\{\s*["'']name["'']\s*:\s*["''][^"'']+["'']\s*,\s*["'']version["'']\s*:\s*["'']([^"'']+)["'']' "web lock version"
@@ -99,9 +315,14 @@ $workerFiles = @(
 foreach ($worker in $workerFiles) {
   Require-File (Join-Path $Root "app\infrastructure\$worker") "Worker source $worker"
 }
-Require-File (Join-Path $Root "release_notes_v024.md") "v0.0.24 release notes"
+Require-File (Join-Path $Root "release_notes_v025.md") "v0.0.25 release notes"
 Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
+$licensePath = Join-Path $Root "LICENSE"
+Require-File $licensePath "GPLv3 license"
+if ((Get-Content -LiteralPath $licensePath -Raw) -notmatch 'GNU GENERAL PUBLIC LICENSE\s+Version 3, 29 June 2007') {
+  throw "LICENSE must contain the complete GNU GPL version 3 text."
+}
 
 # Reject Git LFS pointers or partial DDSP/SeedVC snapshots before producing a release.
 Require-FileSize (Join-Path $Root "assets\models\pretrain\rmvpe.pt") 314572800 "Bundled SeedVC RMVPE"
@@ -142,16 +363,51 @@ if ($ValidateOnly) {
   exit 0
 }
 
+# Stage payloads that are downloaded only on the release builder. User machines
+# receive these files through Inno Setup's split data volumes and never fetch the
+# engine repositories or FFmpeg themselves.
+Ensure-FfmpegPayload (Join-Path $Root "assets\tools\ffmpeg")
+Ensure-EngineSource `
+  (Join-Path $Root "engines\so-vits-svc") `
+  "inference\infer_tool.py" `
+  "https://github.com/svc-develop-team/so-vits-svc.git" `
+  "4.1-Stable" `
+  "So-VITS-SVC"
+Ensure-EngineSource `
+  (Join-Path $Root "engines\ddsp-svc") `
+  "main_reflow.py" `
+  "https://github.com/yxlllc/DDSP-SVC.git" `
+  "6.3" `
+  "DDSP-SVC"
+Ensure-DdspContentvecPayload `
+  (Join-Path $Root "engines\ddsp-svc\pretrain\contentvec\pytorch_model.bin")
+Ensure-EngineSource `
+  (Join-Path $Root "engines\seed-vc") `
+  "inference.py" `
+  "https://github.com/Plachtaa/seed-vc.git" `
+  "main" `
+  "SeedVC"
+Require-File (Join-Path $Root "assets\tools\ffmpeg\bin\ffmpeg.exe") "Bundled FFmpeg"
+Require-File (Join-Path $Root "assets\tools\ffmpeg\bin\ffprobe.exe") "Bundled ffprobe"
+Require-FileSize `
+  (Join-Path $Root "engines\ddsp-svc\pretrain\contentvec\pytorch_model.bin") `
+  314572800 `
+  "Bundled DDSP ContentVec"
+
 # 1) Build frontend
 if (-not $SkipWebBuild) {
   Write-Host "==== Building frontend (web/dist) ====" -ForegroundColor Cyan
   if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
     throw "npm not found. Install Node.js LTS, or pass -SkipWebBuild."
   }
-  Push-Location (Join-Path $Root "web")
+  $webDir = Join-Path $Root "web"
+  Stop-WebNodeProcesses $webDir
+  Push-Location $webDir
   try {
     if (Test-Path "package-lock.json") { npm ci } else { npm install }
-    if ($LASTEXITCODE -ne 0) { throw "npm install/ci failed (exit code $LASTEXITCODE). Frontend NOT rebuilt." }
+    if ($LASTEXITCODE -ne 0) {
+      throw "npm install/ci failed (exit code $LASTEXITCODE). Frontend NOT rebuilt. If npm reports EPERM, check antivirus or another process locking web/node_modules."
+    }
     npm run build
     if ($LASTEXITCODE -ne 0) { throw "npm run build failed (exit code $LASTEXITCODE). Frontend NOT rebuilt." }
   } finally {
@@ -200,6 +456,14 @@ $hostDest = Join-Path $Root "dist\XB-SVCB\engines\juce-vst3-host"
 if (-not (Test-Path $hostSrc)) {
   throw "JUCE host output not found: $hostSrc"
 }
+# Remove stale payloads left by older PyInstaller builds. The three source trees
+# and FFmpeg are staged below from their filtered release payloads.
+foreach ($staleEngine in @('ffmpeg', 'so-vits-svc', 'ddsp-svc', 'seed-vc')) {
+  $stalePath = Join-Path $Root ("dist\XB-SVCB\engines\{0}" -f $staleEngine)
+  if (Test-Path -LiteralPath $stalePath) {
+    Remove-Item -LiteralPath $stalePath -Recurse -Force
+  }
+}
 # A PyInstaller rebuild replaces dist/XB-SVCB, so even a cached Host must be staged again.
 New-Item -ItemType Directory -Force -Path $hostDest | Out-Null
 Copy-Item -Path (Join-Path $hostSrc "*") -Destination $hostDest -Recurse -Force
@@ -209,6 +473,7 @@ Require-File $stagedHostExe "Staged JUCE VST3 host (build without -SkipJuceHostB
 Require-File (Join-Path $Root "setup_env.bat") "Runtime setup entry"
 Require-File (Join-Path $Root "install_prereqs.bat") "Prerequisite installer"
 Require-File (Join-Path $Root "install\install.py") "Runtime installer"
+Prepare-BundledEnginePayloads (Join-Path $Root '.tmp\bundled-engines')
 Write-Host "Staged runtime bundle validated." -ForegroundColor Green
 
 # 5) Compile installer
@@ -232,6 +497,11 @@ $artifacts = Get-ChildItem -LiteralPath (Join-Path $Root "dist") -Filter "XB-SVC
   Sort-Object Name
 if (-not ($artifacts | Where-Object { $_.Extension -eq ".bin" })) {
   throw "Installer payload slices were not generated. Check DiskSpanning in installer/xb-svcb.iss."
+}
+$oversizedArtifacts = $artifacts | Where-Object { $_.Length -ge 2GB }
+if ($oversizedArtifacts) {
+  $names = ($oversizedArtifacts | ForEach-Object { "{0} ({1} bytes)" -f $_.Name, $_.Length }) -join ", "
+  throw "Installer artifacts must each stay below 2 GiB: $names"
 }
 Write-Host "`nInstaller artifacts:" -ForegroundColor Green
 $artifacts | ForEach-Object {
