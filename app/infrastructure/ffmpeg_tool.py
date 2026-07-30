@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import shutil
@@ -20,6 +21,8 @@ import config
 class FfmpegTool:
     DEFAULT_VOCAL_GAIN_DB = 1.8
     DEFAULT_INSTRUMENTAL_GAIN_DB = -0.7
+    ADAPTIVE_VOCAL_UNDER_MUSIC_DB = 2.5
+    ADAPTIVE_FALLBACK_VOCAL_GAIN_DB = -1.0
 
     def __init__(self) -> None:
         self.ffmpeg = shutil.which("ffmpeg")
@@ -451,8 +454,9 @@ class FfmpegTool:
         sample_rate: int = 44100,
         vocal_gain_db: float = DEFAULT_VOCAL_GAIN_DB,
         instrumental_gain_db: float = DEFAULT_INSTRUMENTAL_GAIN_DB,
+        glue: bool = False,
     ) -> bool:
-        """把人声前推后与伴奏混合，并为求和峰值保留 1 dB 余量。"""
+        """按指定增益混合人声与伴奏，并为求和峰值保留 1.5 dB 余量。"""
         if not self.ffmpeg:
             return False
         try:
@@ -462,13 +466,22 @@ class FfmpegTool:
             music_gain = 10.0 ** (music_gain_db / 20.0)
             # 先把人声与伴奏统一为同采样率的立体声，避免单声道/立体声不匹配
             # 导致 amix 失败（失败会让上层回退成"仅干声"，表现为没有伴奏）。
+            mix_output = "[glue]" if glue else "[mix]"
+            glue_filter = (
+                "[mix]acompressor=threshold=0.251189:ratio=1.180:"
+                "attack=30:release=220:makeup=1:knee=2.828:"
+                "link=average:detection=rms:mix=0.55[glue];"
+                if glue
+                else ""
+            )
             filt = (
                 f"[0:a]aresample={sample_rate},aformat=channel_layouts=stereo,"
                 f"volume={vocal_gain:.6f}[v];"
                 f"[1:a]aresample={sample_rate},aformat=channel_layouts=stereo,"
                 f"volume={music_gain:.6f}[m];"
                 "[v][m]amix=inputs=2:duration=longest:normalize=0[mix];"
-                "[mix]alimiter=limit=0.841395:attack=5:release=50:level=false[a]"
+                f"{glue_filter}"
+                f"{mix_output}alimiter=limit=0.841395:attack=5:release=50:level=false[a]"
             )
             res = subprocess.run(
                 [
@@ -496,6 +509,80 @@ class FfmpegTool:
             return res.returncode == 0 and dst.exists()
         except (OSError, subprocess.SubprocessError):
             return False
+
+    def adaptive_mix_profile(
+        self,
+        vocals: Path,
+        instrumental: Path,
+    ) -> dict[str, float | bool | None]:
+        """Derive a bounded vocal balance from gated integrated loudness."""
+        vocal_lufs = self._measure_integrated_loudness(vocals)
+        music_lufs = self._measure_integrated_loudness(instrumental)
+        if vocal_lufs is None or music_lufs is None:
+            return {
+                "adaptive": False,
+                "vocal_lufs": vocal_lufs,
+                "instrumental_lufs": music_lufs,
+                "vocal_gain_db": self.ADAPTIVE_FALLBACK_VOCAL_GAIN_DB,
+                "instrumental_gain_db": 0.0,
+            }
+
+        # Keep unusually loud backing tracks from driving the final limiter while
+        # avoiding the previous permanent music attenuation on quieter material.
+        music_gain_db = max(-0.5, min(0.3, (-13.5 - music_lufs) * 0.12))
+        vocal_gain_db = (
+            music_lufs
+            + music_gain_db
+            - self.ADAPTIVE_VOCAL_UNDER_MUSIC_DB
+            - vocal_lufs
+        )
+        vocal_gain_db = max(-3.0, min(0.5, vocal_gain_db))
+        return {
+            "adaptive": True,
+            "vocal_lufs": vocal_lufs,
+            "instrumental_lufs": music_lufs,
+            "vocal_gain_db": vocal_gain_db,
+            "instrumental_gain_db": music_gain_db,
+        }
+
+    def _measure_integrated_loudness(self, source: Path) -> float | None:
+        """Read EBU R128 integrated loudness without modifying the source."""
+        if not self.ffmpeg or not source.is_file():
+            return None
+        try:
+            result = subprocess.run(
+                [
+                    self.ffmpeg,
+                    "-hide_banner",
+                    "-nostats",
+                    "-i",
+                    str(source),
+                    "-af",
+                    "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json",
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+                **config.subprocess_no_window(),
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        combined = f"{result.stdout or ''}\n{result.stderr or ''}"
+        for raw in reversed(re.findall(r"\{[^{}]*\}", combined, flags=re.DOTALL)):
+            try:
+                value = float(json.loads(raw).get("input_i"))
+            except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if math.isfinite(value) and -70.0 < value < 0.0:
+                return value
+        return None
 
     def mix_vocals(
         self, inputs: list[Path], dst: Path, sample_rate: int = 44100

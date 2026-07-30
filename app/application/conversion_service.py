@@ -215,6 +215,43 @@ class ConversionService:
         self._log(log_file, f"  AI 歌声增强完成: {enhanced}")
         return enhanced
 
+    def _mix_vocal_with_music(
+        self,
+        vocals: Path,
+        instrumental: Path,
+        output: Path,
+        *,
+        enhanced: bool,
+        log_file: Path,
+    ) -> bool:
+        if not enhanced:
+            return self._ffmpeg.mix(vocals, instrumental, output)
+
+        profile = self._ffmpeg.adaptive_mix_profile(vocals, instrumental)
+        vocal_gain = float(profile["vocal_gain_db"])
+        music_gain = float(profile["instrumental_gain_db"])
+        vocal_lufs = profile.get("vocal_lufs")
+        music_lufs = profile.get("instrumental_lufs")
+        measured = (
+            f"输入人声 {float(vocal_lufs):.2f} LUFS / 伴奏 {float(music_lufs):.2f} LUFS"
+            if vocal_lufs is not None and music_lufs is not None
+            else "响度测量不可用，使用保守回退"
+        )
+        self._log(
+            log_file,
+            "  AI 动态混音平衡："
+            f"人声 {vocal_gain:+.2f} dB / 伴奏 {music_gain:+.2f} dB；"
+            f"{measured}；轻量并行总线融合",
+        )
+        return self._ffmpeg.mix(
+            vocals,
+            instrumental,
+            output,
+            vocal_gain_db=vocal_gain,
+            instrumental_gain_db=music_gain,
+            glue=True,
+        )
+
     @staticmethod
     def _record_history(work: dict[str, Any]) -> None:
         history = list(work.get("history") or [])
@@ -462,7 +499,13 @@ class ConversionService:
                 and converted.exists()
                 and self._ffmpeg.available
             ):
-                mixed = self._ffmpeg.mix(converted, instrumental, output)
+                mixed = self._mix_vocal_with_music(
+                    converted,
+                    instrumental,
+                    output,
+                    enhanced=enhancement_enabled,
+                    log_file=log_file,
+                )
                 if not mixed:
                     self._log(log_file, "  混音失败：ffmpeg 合并人声+伴奏未成功，回退为仅干声")
             elif not instrumental or not (instrumental and instrumental.exists()):
@@ -477,7 +520,7 @@ class ConversionService:
             self._log(
                 log_file,
                 f"[{pipeline_total}/{pipeline_total}] 混音合成完成（"
-                f"{'人声 +1.8 dB / 伴奏 -0.7 dB' if mixed else '仅干声'}）: {output}",
+                f"{('AI 动态平衡 / 轻量总线融合' if enhancement_enabled else '人声 +1.8 dB / 伴奏 -0.7 dB') if mixed else '仅干声'}）: {output}",
             )
 
             work["progress"] = 100
@@ -950,7 +993,13 @@ class ConversionService:
                 and Path(full_vocal).exists()
                 and self._ffmpeg.available
             ):
-                mixed = self._ffmpeg.mix(Path(full_vocal), Path(instrumental), output)
+                mixed = self._mix_vocal_with_music(
+                    Path(full_vocal),
+                    Path(instrumental),
+                    output,
+                    enhanced=enhancement_enabled,
+                    log_file=log_file,
+                )
             if not mixed:
                 if self._ffmpeg.available and Path(full_vocal).exists():
                     if not self._ffmpeg.convert(Path(full_vocal), output):
@@ -961,7 +1010,7 @@ class ConversionService:
             self._log(
                 log_file,
                 f"[{pipeline_total}/{pipeline_total}] 混音合成完成（"
-                f"{'人声 +1.8 dB / 伴奏 -0.7 dB' if mixed else '仅人声'}）: {output}",
+                f"{('AI 动态平衡 / 轻量总线融合' if enhancement_enabled else '人声 +1.8 dB / 伴奏 -0.7 dB') if mixed else '仅人声'}）: {output}",
             )
 
             work["progress"] = 100
