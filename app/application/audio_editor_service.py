@@ -1867,6 +1867,9 @@ class AudioEditorService:
             stereo_width = self._vocal_enhancement.normalize_strength(
                 enhance_cfg.get("stereo_width", 0.30), 0.30
             )
+            loudness_envelope = self._vocal_enhancement.normalize_strength(
+                enhance_cfg.get("loudness_envelope", 0.58), 0.58
+            )
             enhanced_out = out_dir / f"{clip_id}_{model_id}_{rerun_key}_enhanced.wav"
             try:
                 enhanced_out.unlink(missing_ok=True)
@@ -1886,6 +1889,7 @@ class AudioEditorService:
                     ai_compressor=ai_compressor,
                     ai_exciter=ai_exciter,
                     stereo_width=stereo_width,
+                    loudness_envelope=loudness_envelope,
                 )
                 if enhanced_out.is_file():
                     out = enhanced_out
@@ -1924,6 +1928,7 @@ class AudioEditorService:
                 "rerun_ai_compressor": ai_compressor if enhance_used else 0.0,
                 "rerun_ai_exciter": ai_exciter if enhance_used else 0.0,
                 "rerun_stereo_width": stereo_width if enhance_used else 0.0,
+                "rerun_loudness_envelope": loudness_envelope if enhance_used else 0.0,
             }
         )
         if enhance_error:

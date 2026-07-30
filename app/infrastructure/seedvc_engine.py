@@ -36,9 +36,9 @@ class SeedVcEngine:
 
     @staticmethod
     def _diffusion_steps(ratio: float) -> int:
-        """复用现有 0~1 参数，映射到 SeedVC 推荐的 10~50 扩散步数范围。"""
+        """Map 0..1 to a natural-singing quality range of 20..50 steps."""
         value = max(0.0, min(1.0, float(ratio)))
-        return max(1, round(10 + value * 40))
+        return round(20 + value * 30)
 
     def infer(
         self,
@@ -125,7 +125,7 @@ class SeedVcEngine:
             "--length-adjust",
             "1.0",
             "--cfg-rate",
-            "0.7",
+            "0.55",
             "--fp16",
             "False" if (params.device or "").lower() == "cpu" else "True",
         ]

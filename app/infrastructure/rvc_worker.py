@@ -20,6 +20,10 @@ import urllib.request
 from pathlib import Path
 
 try:
+    from inference_naturalizer import (
+        format_naturalizer_stats,
+        naturalize_inference_output,
+    )
     from inference_device import (
         ResolvedDevice,
         patch_directml_float32,
@@ -27,6 +31,10 @@ try:
         resolve_torch_device,
     )
 except ImportError:  # package import used by tests/application tooling
+    from infrastructure.inference_naturalizer import (
+        format_naturalizer_stats,
+        naturalize_inference_output,
+    )
     from infrastructure.inference_device import (
         ResolvedDevice,
         patch_directml_float32,
@@ -548,6 +556,8 @@ def main() -> int:
             filter_radius=int(args.filter_radius),
         )
         _infer_file_checked(rvc, args.input, args.output)
+        natural_stats = naturalize_inference_output(args.input, args.output, "rvc")
+        print(f"RVC_NATURAL {format_naturalizer_stats(natural_stats)}", flush=True)
         print(f"RVC_DEVICE {resolved_device.backend} {resolved_device.name}", flush=True)
         print(f"RVC_OK {args.output}", flush=True)
         return 0

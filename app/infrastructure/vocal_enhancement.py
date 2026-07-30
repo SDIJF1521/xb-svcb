@@ -23,6 +23,7 @@ class VocalEnhancementProcessor:
     DEFAULT_AI_COMPRESSOR = 0.45
     DEFAULT_AI_EXCITER = 0.25
     DEFAULT_STEREO_WIDTH = 0.30
+    DEFAULT_LOUDNESS_ENVELOPE = 0.58
 
     @property
     def available(self) -> bool:
@@ -30,7 +31,7 @@ class VocalEnhancementProcessor:
 
     def version(self) -> str | None:
         return (
-            "Praat AI 对齐/自然修音 + DeepFilterNet + AI EQ/Compressor/Exciter/Stereo"
+            "Praat AI 对齐/自然修音 + DeepFilterNet + AI EQ/Compressor/Exciter/Stereo/响度包络"
             if self.available
             else None
         )
@@ -51,6 +52,7 @@ class VocalEnhancementProcessor:
         ai_compressor: float = DEFAULT_AI_COMPRESSOR,
         ai_exciter: float = DEFAULT_AI_EXCITER,
         stereo_width: float = DEFAULT_STEREO_WIDTH,
+        loudness_envelope: float = DEFAULT_LOUDNESS_ENVELOPE,
     ) -> Path:
         normalized_level = str(level or self.LEVEL_BASIC).strip().lower()
         if normalized_level not in self.LEVELS:
@@ -80,6 +82,9 @@ class VocalEnhancementProcessor:
         )
         stereo_amount = self.normalize_strength(
             stereo_width, self.DEFAULT_STEREO_WIDTH
+        )
+        loudness_amount = self.normalize_strength(
+            loudness_envelope, self.DEFAULT_LOUDNESS_ENVELOPE
         )
 
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -142,6 +147,8 @@ class VocalEnhancementProcessor:
                 f"{exciter_amount:.4f}",
                 "--stereo-width",
                 f"{stereo_amount:.4f}",
+                "--loudness-envelope",
+                f"{loudness_amount:.4f}",
             ]
             if reference is not None:
                 cmd.extend(["--reference", str(reference)])

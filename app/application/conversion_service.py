@@ -132,6 +132,7 @@ class ConversionService:
                 "ai_compressor": 0.45,
                 "ai_exciter": 0.25,
                 "stereo_width": 0.30,
+                "loudness_envelope": 0.58,
             }
         level = str(raw.get("level") or "basic").strip().lower()
         if level not in VocalEnhancementProcessor.LEVELS:
@@ -154,6 +155,7 @@ class ConversionService:
             "ai_compressor": strength("ai_compressor", 0.45),
             "ai_exciter": strength("ai_exciter", 0.25),
             "stereo_width": strength("stereo_width", 0.30),
+            "loudness_envelope": strength("loudness_envelope", 0.58),
         }
         return bool(raw.get("enabled")), level, controls
 
@@ -179,9 +181,9 @@ class ConversionService:
             else "基础层 Clean Voice"
         )
         chain = (
-            "AI 对齐/自然修音 → 自然停顿扩展 → 宽带参考 → 限量降噪 → 真实细节保护 → 轻母带 → 并行混合 → AI 角色共振峰 → AI EQ → AI Compressor → AI Exciter → Stereo"
+            "AI 对齐/自然修音 → 自然停顿扩展 → 宽带参考 → 限量降噪 → 真实细节保护 → 轻母带 → 并行混合 → AI 角色共振峰 → AI EQ → AI Compressor → AI Exciter → Stereo → AI 响度包络"
             if level == "advanced"
-            else "AI 对齐/自然修音 → 自然停顿扩展 → 限量降噪 → 轻母带 → 并行混合 → AI 角色共振峰 → AI EQ → AI Compressor → AI Exciter → Stereo"
+            else "AI 对齐/自然修音 → 自然停顿扩展 → 限量降噪 → 轻母带 → 并行混合 → AI 角色共振峰 → AI EQ → AI Compressor → AI Exciter → Stereo → AI 响度包络"
         )
         self._log(
             log_file,
@@ -189,7 +191,8 @@ class ConversionService:
             f"{controls['timing_alignment']:.0%}；自然修音 {controls['pitch_correction']:.0%}；"
             f"AI 角色共振峰 {controls['timbre_focus']:.0%}；"
             f"AI EQ {controls['ai_eq']:.0%}；AI Compressor {controls['ai_compressor']:.0%}；"
-            f"AI Exciter {controls['ai_exciter']:.0%}；Stereo {controls['stereo_width']:.0%}）",
+            f"AI Exciter {controls['ai_exciter']:.0%}；Stereo {controls['stereo_width']:.0%}；"
+            f"AI 响度包络 {controls['loudness_envelope']:.0%}）",
         )
         enhanced = self._vocal_enhancement.enhance(
             source,

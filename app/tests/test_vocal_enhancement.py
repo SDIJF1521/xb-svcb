@@ -56,6 +56,7 @@ def test_work_service_normalizes_levels_and_disables_manual_merge() -> None:
         "ai_compressor": 0.45,
         "ai_exciter": 0.25,
         "stereo_width": 0.30,
+        "loudness_envelope": 0.58,
     }
     assert WorkService._vocal_enhancement(
         {"vocal_enhancement": {"enabled": True, "level": "unknown"}},
@@ -70,6 +71,7 @@ def test_work_service_normalizes_levels_and_disables_manual_merge() -> None:
         "ai_compressor": 0.45,
         "ai_exciter": 0.25,
         "stereo_width": 0.30,
+        "loudness_envelope": 0.58,
     }
     assert WorkService._vocal_enhancement(
         {
@@ -83,6 +85,7 @@ def test_work_service_normalizes_levels_and_disables_manual_merge() -> None:
                 "ai_compressor": -1.0,
                 "ai_exciter": "invalid",
                 "stereo_width": float("nan"),
+                "loudness_envelope": 2.0,
             }
         },
         "manual_vocal_merge",
@@ -96,6 +99,7 @@ def test_work_service_normalizes_levels_and_disables_manual_merge() -> None:
         "ai_compressor": 0.0,
         "ai_exciter": 0.25,
         "stereo_width": 0.30,
+        "loudness_envelope": 1.0,
     }
 
 
@@ -112,6 +116,7 @@ def test_conversion_service_reads_all_enhancement_controls() -> None:
                 "ai_compressor": 0.44,
                 "ai_exciter": 0.21,
                 "stereo_width": 0.35,
+                "loudness_envelope": 0.64,
             }
         }
     )
@@ -126,6 +131,7 @@ def test_conversion_service_reads_all_enhancement_controls() -> None:
         "ai_compressor": 0.44,
         "ai_exciter": 0.21,
         "stereo_width": 0.35,
+        "loudness_envelope": 0.64,
     }
 
 
@@ -186,6 +192,12 @@ def test_worker_basic_and_advanced_layers_use_expected_order(tmp_path: Path) -> 
         calls.append(f"stereo:{amount:.2f}")
         output.write_bytes(_source.read_bytes())
 
+    def fake_loudness(
+        _control: Path, source_path: Path, output: Path, amount: float
+    ) -> None:
+        calls.append(f"loudness:{amount:.2f}")
+        output.write_bytes(source_path.read_bytes())
+
     with (
         patch.object(
             vocal_enhancement_worker, "_silence_vocalfloor_file", fake_silence
@@ -211,6 +223,7 @@ def test_worker_basic_and_advanced_layers_use_expected_order(tmp_path: Path) -> 
         ),
         patch.object(vocal_enhancement_worker, "_ai_exciter", fake_ai_exciter),
         patch.object(vocal_enhancement_worker, "_stereo_image", fake_stereo),
+        patch.object(vocal_enhancement_worker, "_ai_loudness_envelope", fake_loudness),
     ):
         # Basic 保持目标音色，即使有 reference 也不做参考匹配/细节迁移。
         basic = tmp_path / "basic.wav"
@@ -225,6 +238,7 @@ def test_worker_basic_and_advanced_layers_use_expected_order(tmp_path: Path) -> 
             "compressor:0.45",
             "exciter:0.25",
             "stereo:0.30",
+            "loudness:0.58",
         ]
         assert basic.read_bytes() == b"RIFF-dsp-basic"
 
@@ -244,6 +258,7 @@ def test_worker_basic_and_advanced_layers_use_expected_order(tmp_path: Path) -> 
             "compressor:0.45",
             "exciter:0.25",
             "stereo:0.30",
+            "loudness:0.58",
         ]
         assert advanced.read_bytes() == b"RIFF-dsp-master"
 
@@ -288,6 +303,53 @@ def test_adaptive_beauty_activity_tracks_local_vocal_level() -> None:
     assert silence_amount < breath_amount < voice_amount
     assert voice_amount > 0.90
     assert stats["dynamic_db"] > 20.0
+
+
+def test_ai_loudness_envelope_restores_phrase_dynamics_without_raising_pauses() -> None:
+    sample_rate = 8000
+    time = np.arange(sample_rate * 4, dtype=np.float64) / sample_rate
+    carrier = np.sin(2.0 * np.pi * 220.0 * time)
+    quiet_phrase = (time >= 0.40) & (time < 1.40)
+    loud_phrase = (time >= 2.20) & (time < 3.20)
+
+    control = np.zeros_like(time)
+    control[quiet_phrase] = 0.04 * carrier[quiet_phrase]
+    control[loud_phrase] = 0.20 * carrier[loud_phrase]
+    flattened = np.zeros_like(time)
+    flattened[quiet_phrase | loud_phrase] = 0.10 * carrier[quiet_phrase | loud_phrase]
+
+    restored, stats = vocal_enhancement_worker._ai_loudness_envelope_array(
+        control[:, np.newaxis],
+        flattened[:, np.newaxis],
+        sample_rate,
+        1.0,
+    )
+
+    def rms(values: np.ndarray, mask: np.ndarray) -> float:
+        return float(np.sqrt(np.mean(values[mask] ** 2) + 1e-12))
+
+    target_contrast = 20.0 * np.log10(rms(control, loud_phrase) / rms(control, quiet_phrase))
+    before_contrast = 20.0 * np.log10(rms(flattened, loud_phrase) / rms(flattened, quiet_phrase))
+    after_contrast = 20.0 * np.log10(
+        rms(restored[:, 0], loud_phrase) / rms(restored[:, 0], quiet_phrase)
+    )
+    pause = (time >= 1.65) & (time < 1.95)
+
+    assert restored.shape == (len(time), 1)
+    assert abs(target_contrast - after_contrast) < abs(target_contrast - before_contrast)
+    assert np.array_equal(restored[pause, 0], flattened[pause])
+    assert stats["correction_db_min"] < -0.5
+    assert stats["correction_db_max"] > 0.5
+
+    identity, identity_stats = vocal_enhancement_worker._ai_loudness_envelope_array(
+        control[:, np.newaxis],
+        flattened[:, np.newaxis],
+        sample_rate,
+        0.0,
+    )
+    assert np.array_equal(identity[:, 0], flattened)
+    assert identity_stats["correction_db_min"] == 0.0
+    assert identity_stats["correction_db_max"] == 0.0
 
 
 def test_adaptive_mastering_profile_changes_with_source_character() -> None:
@@ -711,6 +773,7 @@ def test_processor_invokes_isolated_worker_and_uses_project_cache(tmp_path: Path
         assert cmd[cmd.index("--ai-compressor") + 1] == "0.4500"
         assert cmd[cmd.index("--ai-exciter") + 1] == "0.2500"
         assert cmd[cmd.index("--stereo-width") + 1] == "0.3000"
+        assert cmd[cmd.index("--loudness-envelope") + 1] == "0.5800"
         assert kwargs["env"]["USERPROFILE"] == str(cache_home)
         return subprocess.CompletedProcess(cmd, 0, "VOCAL_ENHANCE_OK", "")
 
@@ -772,6 +835,7 @@ def test_processor_tunes_before_enhancement_and_passes_strengths(
         assert cmd[cmd.index("--ai-compressor") + 1] == "0.4400"
         assert cmd[cmd.index("--ai-exciter") + 1] == "0.2200"
         assert cmd[cmd.index("--stereo-width") + 1] == "0.3300"
+        assert cmd[cmd.index("--loudness-envelope") + 1] == "0.6400"
         output.write_bytes(b"RIFF-enhanced")
         return subprocess.CompletedProcess(cmd, 0, "VOCAL_ENHANCE_OK", "")
 
@@ -795,6 +859,7 @@ def test_processor_tunes_before_enhancement_and_passes_strengths(
             ai_compressor=0.44,
             ai_exciter=0.22,
             stereo_width=0.33,
+            loudness_envelope=0.64,
         )
 
     assert result == output

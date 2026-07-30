@@ -17,8 +17,16 @@ import traceback
 from pathlib import Path
 
 try:
+    from inference_naturalizer import (
+        format_naturalizer_stats,
+        naturalize_inference_output,
+    )
     from inference_device import ResolvedDevice, resolve_torch_device
 except ImportError:  # package import used by tests/application tooling
+    from infrastructure.inference_naturalizer import (
+        format_naturalizer_stats,
+        naturalize_inference_output,
+    )
     from infrastructure.inference_device import ResolvedDevice, resolve_torch_device
 from typing import Any
 
@@ -475,6 +483,7 @@ def main() -> int:
         if not output.is_file() or output.stat().st_size <= 44:
             raise RuntimeError("上游脚本未生成有效 WAV")
         audio_stats = _finalize_ddsp_output(source, output)
+        natural_stats = naturalize_inference_output(source, output, "ddsp-svc")
         print(
             "DDSP_AUDIO "
             f"peak={audio_stats['peak']:.6f} rms={audio_stats['rms']:.6f} "
@@ -482,12 +491,16 @@ def main() -> int:
             f"gain={audio_stats['gain']:.3f} finite={audio_stats['finite_ratio']:.2%}",
             flush=True,
         )
+        print(f"DDSP_NATURAL {format_naturalizer_stats(natural_stats)}", flush=True)
         print(f"DDSP_DEVICE {resolved_device.backend} {resolved_device.name}", flush=True)
         print(f"DDSP_OK {output}", flush=True)
         return 0
     except SystemExit as exc:
         code = int(exc.code or 0)
         if code == 0 and output.is_file():
+            _finalize_ddsp_output(source, output)
+            natural_stats = naturalize_inference_output(source, output, "ddsp-svc")
+            print(f"DDSP_NATURAL {format_naturalizer_stats(natural_stats)}", flush=True)
             print(f"DDSP_DEVICE {resolved_device.backend} {resolved_device.name}", flush=True)
             print(f"DDSP_OK {output}", flush=True)
             return 0

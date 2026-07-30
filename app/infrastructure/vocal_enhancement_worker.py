@@ -584,6 +584,134 @@ def _parallel_mix(dry: Path, wet: Path, output: Path, wet_mix: float) -> None:
     )
 
 
+def _ai_loudness_envelope_array(
+    control: "np.ndarray",
+    processed: "np.ndarray",
+    sample_rate: int,
+    strength: float,
+) -> tuple["np.ndarray", dict[str, float]]:
+    """
+    使用有界增益曲线恢复AI人声的局部响度轮廓。
+    控制信号是增强前的AI渲染结果。仅使用其短期能量，
+    因此此阶段无法复制原始音色或波形细节。
+    轮廓处理特意比压缩检测器慢，并通过人声活动进行门控，
+    以避免出现停顿、呼吸声或残留的降噪噪声。
+    """
+    import numpy as np
+    from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+
+    target = np.asarray(control, dtype=np.float64)
+    wet = np.asarray(processed, dtype=np.float64)
+    if target.ndim == 1:
+        target = target[:, np.newaxis]
+    if wet.ndim == 1:
+        wet = wet[:, np.newaxis]
+    amount = float(np.clip(strength, 0.0, 1.0))
+    if amount <= 0.0 or not len(target) or not len(wet):
+        return wet.copy(), {"correction_db_min": 0.0, "correction_db_max": 0.0, "active_db": 0.0}
+
+    total = len(target)
+    channels = max(target.shape[1], wet.shape[1])
+    if target.shape[1] != channels:
+        target = np.repeat(target.mean(axis=1, keepdims=True), channels, axis=1)
+    if wet.shape[1] != channels:
+        wet = np.repeat(wet.mean(axis=1, keepdims=True), channels, axis=1)
+    if len(wet) < total:
+        wet = np.pad(wet, ((0, total - len(wet)), (0, 0)))
+    else:
+        wet = wet[:total]
+
+    mono_target = target.mean(axis=1)
+    mono_wet = wet.mean(axis=1)
+    frame_size = max(32, int(round(sample_rate * 0.020)))
+    hop = max(16, int(round(sample_rate * 0.010)))
+    centres = np.arange(0, total, hop, dtype=np.int64)
+    if not len(centres):
+        return wet.copy(), {"correction_db_min": 0.0, "correction_db_max": 0.0, "active_db": 0.0}
+
+    target_power = uniform_filter1d(mono_target * mono_target, frame_size, mode="nearest")
+    wet_power = uniform_filter1d(mono_wet * mono_wet, frame_size, mode="nearest")
+    target_db = 20.0 * np.log10(np.sqrt(np.maximum(target_power[centres], 1e-12)) + 1e-10)
+    wet_db = 20.0 * np.log10(np.sqrt(np.maximum(wet_power[centres], 1e-12)) + 1e-10)
+
+    # Use a 70 ms contour so individual consonants do not turn into audible gain
+    # pumping. The source AI envelope remains the only loudness reference.
+    contour_sigma = max(1.0, 0.070 / 0.010)
+    target_contour = gaussian_filter1d(target_db, sigma=contour_sigma, mode="nearest")
+    wet_contour = gaussian_filter1d(wet_db, sigma=contour_sigma, mode="nearest")
+    correction_db = np.clip(target_contour - wet_contour, -3.0, 3.0)
+
+    activity, activity_stats = _adaptive_activity_curve(target, sample_rate)
+    frame_activity = activity[centres]
+    gate = np.clip((frame_activity - 0.08) / 0.42, 0.0, 1.0)
+    gate = gaussian_filter1d(gate, sigma=max(1.0, 0.035 / 0.010), mode="nearest")
+    correction_db *= amount * gate
+
+    correction_samples = np.interp(
+        np.arange(total, dtype=np.float64),
+        centres.astype(np.float64),
+        correction_db,
+        left=float(correction_db[0]),
+        right=float(correction_db[-1]),
+    )
+    correction_samples = gaussian_filter1d(
+        correction_samples,
+        sigma=max(1.0, 0.012 * sample_rate),
+        mode="nearest",
+    )
+    gain = 10.0 ** (correction_samples / 20.0)
+    restored = wet * gain[:, np.newaxis]
+    peak = float(np.max(np.abs(restored))) if restored.size else 0.0
+    if peak > 0.99:
+        restored *= 0.99 / peak
+
+    active = frame_activity >= 0.10
+    active_correction = correction_db[active]
+    return restored, {
+        "correction_db_min": float(np.percentile(active_correction, 10)) if len(active_correction) else 0.0,
+        "correction_db_max": float(np.percentile(active_correction, 90)) if len(active_correction) else 0.0,
+        "active_db": float(activity_stats["active_db"]),
+    }
+
+
+def _ai_loudness_envelope(
+    control_source: Path,
+    source: Path,
+    output: Path,
+    strength: float,
+) -> None:
+    """Apply the AI loudness envelope to a rendered enhancement output."""
+    try:
+        import librosa
+        import numpy as np
+        import soundfile as sf
+    except ImportError as exc:
+        raise RuntimeError("soundfile/librosa/scipy 未安装，请修复 vocal 增强环境") from exc
+
+    control, control_sr = sf.read(str(control_source), always_2d=True)
+    processed, processed_sr = sf.read(str(source), always_2d=True)
+    if processed_sr != control_sr:
+        processed = np.column_stack(
+            [
+                librosa.resample(channel, orig_sr=processed_sr, target_sr=control_sr)
+                for channel in processed.T
+            ]
+        )
+    restored, stats = _ai_loudness_envelope_array(
+        control,
+        processed,
+        control_sr,
+        strength,
+    )
+    _write_float_wav(output, restored.T, control_sr)
+    print(
+        "  AI 响度包络: "
+        f"active={stats['active_db']:.1f}dB, "
+        f"correction={stats['correction_db_min']:+.2f}~{stats['correction_db_max']:+.2f}dB",
+        flush=True,
+    )
+
+
 def _deepfilter(source: Path, output: Path) -> None:
     """以原生速率运行 DeepFilterNet，然后恢复输入速率。
         DeepFilterNet3 是一个 48 kHz 模型。
@@ -1324,6 +1452,7 @@ def run(
     ai_compressor: float = 0.45,
     ai_exciter: float = 0.25,
     stereo_width: float = 0.30,
+    loudness_envelope: float = 0.58,
 ) -> None:
     if not source.is_file():
         raise RuntimeError(f"输入文件不存在: {source}")
@@ -1332,7 +1461,7 @@ def run(
     with tempfile.TemporaryDirectory(prefix="xb-vocal-enhance-") as raw_temp:
         temp = Path(raw_temp)
         silenced = temp / "00_silenced.wav"
-        print("[1/11] 自然停顿扩展（保留起音、呼吸与尾音）", flush=True)
+        print("[1/12] 自然停顿扩展（保留起音、呼吸与尾音）", flush=True)
         _silence_vocalfloor_file(source, silenced)
         current = silenced
 
@@ -1341,60 +1470,67 @@ def run(
         )
         if use_reference:
             matched = temp / "01_matched.wav"
-            print(f"[2/11] 宽带频谱参考（{reference.name}）", flush=True)
+            print(f"[2/12] 宽带频谱参考（{reference.name}）", flush=True)
             _match_reference(current, reference, matched)
             current = matched
         else:
-            print("[2/11] 跳过宽带频谱参考（仅高级模式且需要原始人声）", flush=True)
+            print("[2/12] 跳过宽带频谱参考（仅高级模式且需要原始人声）", flush=True)
 
         filtered = temp / "02_deepfilter.wav"
-        print("[3/11] DeepFilterNet 原生采样率限量降噪", flush=True)
+        print("[3/12] DeepFilterNet 原生采样率限量降噪", flush=True)
         _deepfilter(current, filtered)
         current = filtered
 
         if use_reference:
             detailed = temp / "03_human_detail.wav"
-            print("[4/11] 真实辅音与呼吸细节保护", flush=True)
+            print("[4/12] 真实辅音与呼吸细节保护", flush=True)
             _restore_reference_detail(current, reference, detailed)
             current = detailed
         else:
-            print("[4/11] 跳过真实细节保护", flush=True)
+            print("[4/12] 跳过真实细节保护", flush=True)
 
         if level == "advanced":
-            print("[5/11] 动态自然度母带（按素材分析 + 去金属感）", flush=True)
+            print("[5/12] 动态自然度母带（按素材分析 + 去金属感）", flush=True)
             dsp_output = temp / "04_mastering.wav"
             wet_mix = _pedalboard_mastering(current, dsp_output)
             if wet_mix is None:
                 wet_mix = 0.82
         else:
-            print("[5/11] 动态基础轻母带（按素材分析）", flush=True)
+            print("[5/12] 动态基础轻母带（按素材分析）", flush=True)
             dsp_output = temp / "04_basic.wav"
             wet_mix = _pedalboard_basic(current, dsp_output)
             if wet_mix is None:
                 wet_mix = 0.68
 
         natural = temp / "05_natural_mix.wav"
-        print(f"[6/11] 动态并行自然度混合（wet 上限={wet_mix:.0%}）", flush=True)
+        print(f"[6/12] 动态并行自然度混合（wet 上限={wet_mix:.0%}）", flush=True)
         _parallel_mix(silenced, dsp_output, natural, wet_mix)
 
         focused = temp / "06_timbre.wav"
-        print(f"[7/11] AI 角色共振峰（{float(timbre_focus):.0%}）", flush=True)
+        print(f"[7/12] AI 角色共振峰（{float(timbre_focus):.0%}）", flush=True)
         _focus_target_timbre(natural, focused, timbre_focus)
 
         equalized = temp / "07_ai_eq.wav"
-        print(f"[8/11] AI EQ（{float(ai_eq):.0%}）", flush=True)
+        print(f"[8/12] AI EQ（{float(ai_eq):.0%}）", flush=True)
         _ai_eq(focused, equalized, ai_eq)
 
         compressed = temp / "08_ai_compressor.wav"
-        print(f"[9/11] AI Compressor（{float(ai_compressor):.0%}）", flush=True)
+        print(f"[9/12] AI Compressor（{float(ai_compressor):.0%}）", flush=True)
         _ai_compressor(equalized, compressed, ai_compressor)
 
         excited = temp / "09_ai_exciter.wav"
-        print(f"[10/11] AI Exciter（{float(ai_exciter):.0%}）", flush=True)
+        print(f"[10/12] AI Exciter（{float(ai_exciter):.0%}）", flush=True)
         _ai_exciter(compressed, excited, ai_exciter)
 
-        print(f"[11/11] Stereo（{float(stereo_width):.0%}）", flush=True)
-        _stereo_image(excited, output, stereo_width)
+        stereo = temp / "10_stereo.wav"
+        print(f"[11/12] Stereo（{float(stereo_width):.0%}）", flush=True)
+        _stereo_image(excited, stereo, stereo_width)
+
+        print(
+            f"[12/12] AI 响度包络（{float(loudness_envelope):.0%}）",
+            flush=True,
+        )
+        _ai_loudness_envelope(silenced, stereo, output, loudness_envelope)
 
 
 def main() -> int:
@@ -1409,6 +1545,7 @@ def main() -> int:
     parser.add_argument("--ai-compressor", type=float, default=0.45)
     parser.add_argument("--ai-exciter", type=float, default=0.25)
     parser.add_argument("--stereo-width", type=float, default=0.30)
+    parser.add_argument("--loudness-envelope", type=float, default=0.58)
     args = parser.parse_args()
     try:
         output = Path(args.output)
@@ -1425,6 +1562,7 @@ def main() -> int:
             args.ai_compressor,
             args.ai_exciter,
             args.stereo_width,
+            args.loudness_envelope,
         )
         print(f"VOCAL_ENHANCE_OK {output}", flush=True)
         return 0

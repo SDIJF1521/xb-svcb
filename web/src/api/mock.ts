@@ -780,6 +780,7 @@ export const mock = {
         ai_compressor: Math.max(0, Math.min(1, payload.vocal_enhancement?.ai_compressor ?? 0.45)),
         ai_exciter: Math.max(0, Math.min(1, payload.vocal_enhancement?.ai_exciter ?? 0.25)),
         stereo_width: Math.max(0, Math.min(1, payload.vocal_enhancement?.stereo_width ?? 0.30)),
+        loudness_envelope: Math.max(0, Math.min(1, payload.vocal_enhancement?.loudness_envelope ?? 0.58)),
       },
       mode: isMulti ? 'multi' : 'single',
       segments: payload.segments,
@@ -1791,6 +1792,7 @@ export const mock = {
       ai_compressor?: number
       ai_exciter?: number
       stereo_width?: number
+      loudness_envelope?: number
     },
   ): EditorRerunResult {
     const project = mockEditorProjects.find((p) => p.id === projectId)
@@ -1815,6 +1817,7 @@ export const mock = {
       rerun_ai_compressor: enhance?.enabled ? (enhance.ai_compressor ?? 0.45) : 0,
       rerun_ai_exciter: enhance?.enabled ? (enhance.ai_exciter ?? 0.25) : 0,
       rerun_stereo_width: enhance?.enabled ? (enhance.stereo_width ?? 0.30) : 0,
+      rerun_loudness_envelope: enhance?.enabled ? (enhance.loudness_envelope ?? 0.58) : 0,
     }
     project.updated_at = now()
     return { ok: true, project: cloneProject(project), clip: { ...clip } }

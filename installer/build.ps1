@@ -303,6 +303,7 @@ Write-Host ("Release version: {0}" -f $appVersion) -ForegroundColor Green
 
 $workerFiles = @(
   "inference_device.py",
+  "inference_naturalizer.py",
   "svc_worker.py",
   "f0_worker.py",
   "vocal_tuning_worker.py",

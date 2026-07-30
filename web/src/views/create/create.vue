@@ -780,6 +780,13 @@
               </div>
               <el-slider v-model="stereoWidth" :min="0" :max="1" :step="0.05" :show-tooltip="false" aria-label="Stereo 宽度" />
             </div>
+            <div class="enhancement-control">
+              <div class="enhancement-control-label">
+                <span>AI 响度包络</span>
+                <b>{{ Math.round(loudnessEnvelope * 100) }}%</b>
+              </div>
+              <el-slider v-model="loudnessEnvelope" :min="0" :max="1" :step="0.05" :show-tooltip="false" aria-label="AI 响度包络强度" />
+            </div>
           </div>
           <p v-else-if="!enhancementWorkflowAllowed" class="enhancement-note">手动人声合并将在编辑器导出后处理</p>
         </section>
@@ -1020,6 +1027,7 @@ const aiEq = ref(Math.max(0, Math.min(1, num(prefs.aiEq, 0.55))))
 const aiCompressor = ref(Math.max(0, Math.min(1, num(prefs.aiCompressor, 0.45))))
 const aiExciter = ref(Math.max(0, Math.min(1, num(prefs.aiExciter, 0.25))))
 const stereoWidth = ref(Math.max(0, Math.min(1, num(prefs.stereoWidth, 0.30))))
+const loudnessEnvelope = ref(Math.max(0, Math.min(1, num(prefs.loudnessEnvelope, 0.58))))
 
 /* RVC 专属参数 */
 const rvcVersions = ['v2', 'v1']
@@ -1042,7 +1050,7 @@ function frameworkLabel(id: string): string {
   return map[id] || id || 'So-VITS-SVC'
 }
 function qualitySteps(ratio: number): number {
-  return Math.max(1, Math.round(10 + Math.max(0, Math.min(1, ratio || 0)) * 40))
+  return Math.round(20 + Math.max(0, Math.min(1, ratio || 0)) * 30)
 }
 function ddspQualitySteps(ratio: number): number {
   return Math.round(50 + Math.max(0, Math.min(1, ratio || 0)) * 50)
@@ -1857,7 +1865,7 @@ const alignStatus = computed(() => {
 
 // 任一参数变化即写回 localStorage
 watch(
-  [uvrModel, f0Method, pitch, formantShift, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion, vocalEnhancementEnabled, vocalEnhancementLevel, pitchCorrection, timingAlignment, timbreFocus, aiEq, aiCompressor, aiExciter, stereoWidth],
+  [uvrModel, f0Method, pitch, formantShift, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion, vocalEnhancementEnabled, vocalEnhancementLevel, pitchCorrection, timingAlignment, timbreFocus, aiEq, aiCompressor, aiExciter, stereoWidth, loudnessEnvelope],
   () => {
     try {
       localStorage.setItem(
@@ -1886,6 +1894,7 @@ watch(
           aiCompressor: aiCompressor.value,
           aiExciter: aiExciter.value,
           stereoWidth: stereoWidth.value,
+          loudnessEnvelope: loudnessEnvelope.value,
         }),
       )
     } catch {
@@ -2025,6 +2034,7 @@ function currentVocalEnhancement() {
     ai_compressor: Number(aiCompressor.value.toFixed(2)),
     ai_exciter: Number(aiExciter.value.toFixed(2)),
     stereo_width: Number(stereoWidth.value.toFixed(2)),
+    loudness_envelope: Number(loudnessEnvelope.value.toFixed(2)),
   }
 }
 

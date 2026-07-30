@@ -195,6 +195,7 @@ class HttpApiContractTests(unittest.TestCase):
                 "ai_compressor": 0.45,
                 "ai_exciter": 0.25,
                 "stereo_width": 0.30,
+                "loudness_envelope": 0.58,
             },
         )
 

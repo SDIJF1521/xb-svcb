@@ -19,6 +19,10 @@ from types import SimpleNamespace
 import numpy as np
 
 try:
+    from inference_naturalizer import (
+        format_naturalizer_stats,
+        naturalize_inference_output,
+    )
     from inference_device import (
         patch_directml_no_half,
         patch_directml_rmvpe_cpu,
@@ -26,6 +30,10 @@ try:
         resolve_torch_device,
     )
 except ImportError:  # package import used by tests/application tooling
+    from infrastructure.inference_naturalizer import (
+        format_naturalizer_stats,
+        naturalize_inference_output,
+    )
     from infrastructure.inference_device import (
         patch_directml_no_half,
         patch_directml_rmvpe_cpu,
@@ -342,7 +350,7 @@ def main() -> int:
     parser.add_argument("--pitch", type=int, default=0, help="半音变调")
     parser.add_argument("--diffusion-steps", type=int, default=30)
     parser.add_argument("--length-adjust", type=float, default=1.0)
-    parser.add_argument("--cfg-rate", type=float, default=0.7)
+    parser.add_argument("--cfg-rate", type=float, default=0.55)
     parser.add_argument("--fp16", type=_parse_bool, default=True)
     args = parser.parse_args()
 
@@ -480,8 +488,18 @@ def main() -> int:
                 return 5
             try:
                 shutil.copy2(generated, out_path)
-            except OSError as exc:
-                print(f"SEEDVC_ERR 写出失败: {exc}", flush=True)
+                natural_stats = naturalize_inference_output(
+                    source,
+                    out_path,
+                    "seed-vc",
+                    duration_ratio=float(args.length_adjust),
+                )
+                print(
+                    f"SEEDVC_NATURAL {format_naturalizer_stats(natural_stats)}",
+                    flush=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"SEEDVC_ERR 输出自然度处理失败: {exc}", flush=True)
                 return 6
     finally:
         try:

@@ -667,6 +667,13 @@
                   </div>
                   <input v-model.number="rerunStereoWidth" type="range" min="0" max="1" step="0.05" />
                 </div>
+                <div class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>AI 响度包络</span>
+                    <b>{{ Math.round(rerunLoudnessEnvelope * 100) }}%</b>
+                  </div>
+                  <input v-model.number="rerunLoudnessEnvelope" type="range" min="0" max="1" step="0.05" />
+                </div>
               </div>
             </div>
             <span v-if="rerunGuardText" class="rerun-hint">{{ rerunGuardText }}</span>
@@ -933,6 +940,7 @@ interface RerunPrefs {
   aiCompressor?: number
   aiExciter?: number
   stereoWidth?: number
+  loudnessEnvelope?: number
 }
 interface EffectControl {
   key: string
@@ -1262,6 +1270,7 @@ const rerunAiEq = ref(prefNum(rerunPrefs.aiEq, 0.55, 0, 1))
 const rerunAiCompressor = ref(prefNum(rerunPrefs.aiCompressor, 0.45, 0, 1))
 const rerunAiExciter = ref(prefNum(rerunPrefs.aiExciter, 0.25, 0, 1))
 const rerunStereoWidth = ref(prefNum(rerunPrefs.stereoWidth, 0.30, 0, 1))
+const rerunLoudnessEnvelope = ref(prefNum(rerunPrefs.loudnessEnvelope, 0.58, 0, 1))
 
 const selectedTrack = computed(() => {
   if (!project.value || !selected.value) return null
@@ -1360,7 +1369,7 @@ function modelFrameworkLabel(framework: string | undefined) {
   return map[framework || 'so-vits-svc'] || framework || 'So-VITS-SVC'
 }
 function qualitySteps(ratio: number): number {
-  return Math.max(1, Math.round(10 + Math.max(0, Math.min(1, ratio || 0)) * 40))
+  return Math.round(20 + Math.max(0, Math.min(1, ratio || 0)) * 30)
 }
 function ddspQualitySteps(ratio: number): number {
   return Math.round(50 + Math.max(0, Math.min(1, ratio || 0)) * 50)
@@ -1414,6 +1423,7 @@ function resetRerunParams() {
   rerunAiCompressor.value = 0.45
   rerunAiExciter.value = 0.25
   rerunStereoWidth.value = 0.30
+  rerunLoudnessEnvelope.value = 0.58
 }
 
 async function pickRerunReference() {
@@ -3391,6 +3401,7 @@ async function rerunClip() {
           ai_compressor: Number(rerunAiCompressor.value.toFixed(2)),
           ai_exciter: Number(rerunAiExciter.value.toFixed(2)),
           stereo_width: Number(rerunStereoWidth.value.toFixed(2)),
+          loudness_envelope: Number(rerunLoudnessEnvelope.value.toFixed(2)),
         }
       : { enabled: false },
   )
@@ -3500,6 +3511,7 @@ watch(
     rerunAiCompressor,
     rerunAiExciter,
     rerunStereoWidth,
+    rerunLoudnessEnvelope,
   ],
   () => {
     try {
@@ -3526,6 +3538,7 @@ watch(
           aiCompressor: rerunAiCompressor.value,
           aiExciter: rerunAiExciter.value,
           stereoWidth: rerunStereoWidth.value,
+          loudnessEnvelope: rerunLoudnessEnvelope.value,
         }),
       )
     } catch {

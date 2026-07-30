@@ -267,6 +267,7 @@ class WorkService:
             "ai_compressor": strength("ai_compressor", 0.45),
             "ai_exciter": strength("ai_exciter", 0.25),
             "stereo_width": strength("stereo_width", 0.30),
+            "loudness_envelope": strength("loudness_envelope", 0.58),
         }
 
     @staticmethod

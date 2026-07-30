@@ -229,6 +229,8 @@ export interface VocalEnhancementOptions {
   ai_exciter: number
   /** Stereo 单声道兼容立体声宽度（0~1）。 */
   stereo_width: number
+  /** AI 响度包络恢复强度（0~1），只校正局部响度起伏。 */
+  loudness_envelope: number
 }
 
 export interface InferenceParams {

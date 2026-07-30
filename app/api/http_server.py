@@ -584,6 +584,7 @@ JOB_CREATE_API_DOC = _api_operation_description(
         ("vocal_enhancement.ai_compressor", "number", "否", "0.45", "AI Compressor 自适应动态控制强度，范围 0~1"),
         ("vocal_enhancement.ai_exciter", "number", "否", "0.25", "AI Exciter 高频谐波增强强度，范围 0~1"),
         ("vocal_enhancement.stereo_width", "number", "否", "0.30", "Stereo 单声道兼容的立体声宽度，范围 0~1"),
+        ("vocal_enhancement.loudness_envelope", "number", "否", "0.58", "AI 响度包络强度，按局部响度恢复自然起伏，范围 0~1"),
     ],
     [
         ("id", "string", "任务 ID，用于查询、重试和下载"),
@@ -903,6 +904,12 @@ class VocalEnhancementRequest(BaseModel):
         ge=0.0,
         le=1.0,
         description="Stereo 强度，0~1；低频保持居中并保证单声道折叠兼容。",
+    )
+    loudness_envelope: float = Field(
+        default=0.58,
+        ge=0.0,
+        le=1.0,
+        description="AI 响度包络强度，0~1；按 AI 人声局部响度恢复自然起伏，避开停顿与噪声。",
     )
 
 

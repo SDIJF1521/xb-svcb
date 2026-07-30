@@ -21,6 +21,10 @@ import traceback
 from typing import Optional, Tuple
 
 try:
+    from inference_naturalizer import (
+        format_naturalizer_stats,
+        naturalize_inference_output,
+    )
     from inference_device import (
         patch_directml_checkpoint_load,
         patch_directml_float32,
@@ -29,6 +33,10 @@ try:
         resolve_torch_device,
     )
 except ImportError:  # package import used by tests/application tooling
+    from infrastructure.inference_naturalizer import (
+        format_naturalizer_stats,
+        naturalize_inference_output,
+    )
     from infrastructure.inference_device import (
         patch_directml_checkpoint_load,
         patch_directml_float32,
@@ -309,10 +317,10 @@ def main() -> int:
             slice_db=args.slice_db,
             cluster_infer_ratio=0,
             auto_predict_f0=False,  # 翻唱歌声必须关闭，否则严重跑调
-            noice_scale=0.4,
-            pad_seconds=0.5,
+            noice_scale=0.25,
+            pad_seconds=0.75,
             clip_seconds=args.clip,
-            lg_num=0,
+            lg_num=0.12 if args.clip > 0 else 0,
             lgr_num=0.75,
             f0_predictor=args.f0,
             enhancer_adaptive_key=0,
@@ -320,7 +328,7 @@ def main() -> int:
             k_step=effective_k_step,
             use_spk_mix=False,
             second_encoding=False,
-            loudness_envelope_adjustment=1,
+            loudness_envelope_adjustment=0.65,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"SVC_ERR 推理失败: {exc}")
@@ -331,6 +339,8 @@ def main() -> int:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     try:
         soundfile.write(out_path, audio, svc.target_sample, format="WAV")
+        natural_stats = naturalize_inference_output(args.input, out_path, "so-vits-svc")
+        print(f"SVC_NATURAL {format_naturalizer_stats(natural_stats)}", flush=True)
     except Exception as exc:  # noqa: BLE001
         print(f"SVC_ERR 写出失败: {exc}")
         traceback.print_exc()

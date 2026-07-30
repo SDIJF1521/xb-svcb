@@ -575,6 +575,7 @@ export const api = {
       ai_compressor?: number
       ai_exciter?: number
       stereo_width?: number
+      loudness_envelope?: number
     },
   ) =>
     invoke<EditorRerunResult>('rerun_editor_clip', [projectId, trackId, clipId, modelId, params, enhance], () =>
