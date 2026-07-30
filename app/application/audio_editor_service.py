@@ -75,16 +75,61 @@ class AudioEditorService:
         return self._public(project) if project else None
 
     def remove(self, project_id: str) -> bool:
-        if not self._repo.get(project_id):
+        project = self._repo.get(project_id)
+        if not project:
             return False
-        self._repo.remove(project_id)
+
+        stored_id = str(project.get("id") or "")
+        if not stored_id or stored_id != project_id:
+            return False
         try:
             base = config.EDITOR_DIR.resolve()
-            target = (config.EDITOR_DIR / project_id).resolve()
+            cache_root = config.EDITOR_CACHE_DIR.resolve()
+            project_path = config.EDITOR_DIR / stored_id
+            target = project_path.resolve()
+        except (OSError, RuntimeError):
+            return False
+
+        if (
+            Path(stored_id).name != stored_id
+            or stored_id in {".", ".."}
+            or target.parent != base
+            or target.name != stored_id
+            or target == cache_root
+        ):
+            return False
+
+        try:
+            if project_path.exists():
+                if project_path.is_symlink() or not project_path.is_dir():
+                    return False
+                shutil.rmtree(project_path)
+
+            if cache_root.exists():
+                cache_prefix = f"{stored_id}_"
+                for candidate in cache_root.iterdir():
+                    if not candidate.name.startswith(cache_prefix):
+                        continue
+                    if candidate.is_symlink():
+                        candidate.unlink()
+                        continue
+                    resolved = candidate.resolve()
+                    if resolved.parent != cache_root:
+                        return False
+                    if candidate.is_dir():
+                        shutil.rmtree(candidate)
+                    elif candidate.is_file():
+                        candidate.unlink()
+                    else:
+                        return False
+        except (OSError, RuntimeError):
+            # 保留工程记录，用户下次仍可重试清理。
+            return False
+
+        try:
+            self._repo.remove(stored_id)
         except OSError:
-            return True
-        if target.parent == base and target.exists():
-            shutil.rmtree(target, ignore_errors=True)
+            return False
         return True
 
     def create_from_audio(self, path: str, title: str | None = None) -> dict[str, Any] | None:
@@ -1794,14 +1839,34 @@ class AudioEditorService:
         except Exception as exc:  # noqa: BLE001 - 需要把推理错误回传给前端
             return {"ok": False, "error": str(exc)}
 
-        # 可选美声工程：对重推理产物做与主流程一致的高级层处理
-        # 以裁剪出的干声（dry）作为 reference，让频谱匹配回归自然
+        # 可选增强：以裁剪出的原始干声保护高级层的辅音、呼吸和宽带平衡。
         enhance_used = False
         enhance_level = ""
         enhance_error = ""
         enhance_cfg = enhance or {}
         if enhance_cfg.get("enabled") and self._vocal_enhancement.available:
             enhance_level = "advanced" if str(enhance_cfg.get("level") or "basic").lower() == "advanced" else "basic"
+            pitch_correction = self._vocal_enhancement.normalize_strength(
+                enhance_cfg.get("pitch_correction", 0.45), 0.45
+            )
+            timing_alignment = self._vocal_enhancement.normalize_strength(
+                enhance_cfg.get("timing_alignment", 0.45), 0.45
+            )
+            timbre_focus = self._vocal_enhancement.normalize_strength(
+                enhance_cfg.get("timbre_focus", 0.60), 0.60
+            )
+            ai_eq = self._vocal_enhancement.normalize_strength(
+                enhance_cfg.get("ai_eq", 0.55), 0.55
+            )
+            ai_compressor = self._vocal_enhancement.normalize_strength(
+                enhance_cfg.get("ai_compressor", 0.45), 0.45
+            )
+            ai_exciter = self._vocal_enhancement.normalize_strength(
+                enhance_cfg.get("ai_exciter", 0.25), 0.25
+            )
+            stereo_width = self._vocal_enhancement.normalize_strength(
+                enhance_cfg.get("stereo_width", 0.30), 0.30
+            )
             enhanced_out = out_dir / f"{clip_id}_{model_id}_{rerun_key}_enhanced.wav"
             try:
                 enhanced_out.unlink(missing_ok=True)
@@ -1814,6 +1879,13 @@ class AudioEditorService:
                     level=enhance_level,
                     device=str(enhance_cfg.get("device") or "auto"),
                     reference=dry,
+                    pitch_correction=pitch_correction,
+                    timing_alignment=timing_alignment,
+                    timbre_focus=timbre_focus,
+                    ai_eq=ai_eq,
+                    ai_compressor=ai_compressor,
+                    ai_exciter=ai_exciter,
+                    stereo_width=stereo_width,
                 )
                 if enhanced_out.is_file():
                     out = enhanced_out
@@ -1845,6 +1917,13 @@ class AudioEditorService:
                 "rerun_dry_effects": True,
                 "rerun_enhanced": enhance_used,
                 "rerun_enhance_level": enhance_level if enhance_used else "",
+                "rerun_pitch_correction": pitch_correction if enhance_used else 0.0,
+                "rerun_timing_alignment": timing_alignment if enhance_used else 0.0,
+                "rerun_timbre_focus": timbre_focus if enhance_used else 0.0,
+                "rerun_ai_eq": ai_eq if enhance_used else 0.0,
+                "rerun_ai_compressor": ai_compressor if enhance_used else 0.0,
+                "rerun_ai_exciter": ai_exciter if enhance_used else 0.0,
+                "rerun_stereo_width": stereo_width if enhance_used else 0.0,
             }
         )
         if enhance_error:

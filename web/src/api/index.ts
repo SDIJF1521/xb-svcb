@@ -121,6 +121,9 @@ export const api = {
   getThemeMediaData: (path: string) =>
     invoke<string>('get_theme_media_data', [path], () => mock.getThemeMediaData(path)),
 
+  deleteThemeMediaFile: (path: string) =>
+    invoke<boolean>('delete_theme_media_file', [path], () => mock.deleteThemeMediaFile(path)),
+
   getDataStorageStatus: () =>
     invoke<DataStorageStatus>('get_data_storage_status', [], () =>
       mock.getDataStorageStatus(),
@@ -561,7 +564,18 @@ export const api = {
     clipId: string,
     modelId: string,
     params?: InferenceParams,
-    enhance?: { enabled?: boolean; level?: 'basic' | 'advanced'; device?: string },
+    enhance?: {
+      enabled?: boolean
+      level?: 'basic' | 'advanced'
+      device?: string
+      pitch_correction?: number
+      timing_alignment?: number
+      timbre_focus?: number
+      ai_eq?: number
+      ai_compressor?: number
+      ai_exciter?: number
+      stereo_width?: number
+    },
   ) =>
     invoke<EditorRerunResult>('rerun_editor_clip', [projectId, trackId, clipId, modelId, params, enhance], () =>
       mock.rerunEditorClip(projectId, trackId, clipId, modelId, params, enhance),

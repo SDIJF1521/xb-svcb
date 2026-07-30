@@ -33,7 +33,8 @@
           @select="selectTheme"
         />
         <CustomThemeEditor
-          v-model="customDraft"
+          :model-value="customDraft"
+          @update:model-value="updateCustomDraft"
           @preview="previewCustomTheme"
           @save="saveCustomTheme"
         />
@@ -46,6 +47,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Brush, Moon, Sunny } from '@element-plus/icons-vue'
+import { api } from '@/api'
 import CustomThemeEditor from '@/components/theme/CustomThemeEditor.vue'
 import ThemePresetList from '@/components/theme/ThemePresetList.vue'
 import { cloneCustomTheme, DEFAULT_CUSTOM_THEME, useThemeStore } from '@/stores/theme'
@@ -56,8 +58,26 @@ defineOptions({ name: 'ThemeSwitcher' })
 const themeStore = useThemeStore()
 const { theme, customTheme, themeLabel } = storeToRefs(themeStore)
 const customDraft = ref<CustomTheme>(cloneCustomTheme(customTheme.value))
+const persistedMedia = ref(customTheme.value.bgImage)
 const themeWrap = ref<HTMLElement>()
 const open = ref(false)
+
+function deleteStoredMedia(path: string) {
+  if (!path || path.startsWith('data:')) return
+  void api.deleteThemeMediaFile(path).catch(() => {})
+}
+
+function updateCustomDraft(value: CustomTheme) {
+  const previousMedia = customDraft.value.bgImage
+  customDraft.value = value
+  if (
+    previousMedia
+    && previousMedia !== value.bgImage
+    && previousMedia !== persistedMedia.value
+  ) {
+    deleteStoredMedia(previousMedia)
+  }
+}
 
 function togglePanel() {
   open.value = !open.value
@@ -84,13 +104,22 @@ function previewCustomTheme(e: MouseEvent) {
 }
 
 function saveCustomTheme(e: MouseEvent) {
+  const previousMedia = persistedMedia.value
+  const nextMedia = customDraft.value.bgImage
   themeStore.saveCustomTheme(customDraft.value, { event: e })
+  persistedMedia.value = nextMedia
+  if (previousMedia !== nextMedia) deleteStoredMedia(previousMedia)
   open.value = false
 }
 
 function resetCustomTheme(e: MouseEvent) {
+  const previousMedia = persistedMedia.value
+  const draftMedia = customDraft.value.bgImage
   customDraft.value = cloneCustomTheme(DEFAULT_CUSTOM_THEME)
   themeStore.resetCustomTheme({ event: e })
+  persistedMedia.value = ''
+  deleteStoredMedia(previousMedia)
+  if (draftMedia !== previousMedia) deleteStoredMedia(draftMedia)
 }
 
 onMounted(() => {

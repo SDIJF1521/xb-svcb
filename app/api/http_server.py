@@ -575,6 +575,15 @@ JOB_CREATE_API_DOC = _api_operation_description(
         ("params.reference_audio", "string", "否", '""', "仅 SeedVC；本机参考音频绝对路径"),
         ("params.ddsp_infer_steps", "integer", "否", "50", "仅 DDSP；采样步数，最小 1，推荐 50~100"),
         ("params.ddsp_formant_shift", "number", "否", "0", "仅 DDSP；共振峰半音偏移，范围 -2~2"),
+        ("vocal_enhancement.enabled", "boolean", "否", "false", "启用自然修音、AI 角色共振峰与歌声增强"),
+        ("vocal_enhancement.level", "string", "否", "basic", "basic 或 advanced"),
+        ("vocal_enhancement.pitch_correction", "number", "否", "0.45", "自然修音强度，范围 0~1"),
+        ("vocal_enhancement.timing_alignment", "number", "否", "0.45", "AI 对齐强度，范围 0~1"),
+        ("vocal_enhancement.timbre_focus", "number", "否", "0.60", "AI 角色共振峰强度，范围 0~1"),
+        ("vocal_enhancement.ai_eq", "number", "否", "0.55", "AI EQ 自适应宽带校正强度，范围 0~1"),
+        ("vocal_enhancement.ai_compressor", "number", "否", "0.45", "AI Compressor 自适应动态控制强度，范围 0~1"),
+        ("vocal_enhancement.ai_exciter", "number", "否", "0.25", "AI Exciter 高频谐波增强强度，范围 0~1"),
+        ("vocal_enhancement.stereo_width", "number", "否", "0.30", "Stereo 单声道兼容的立体声宽度，范围 0~1"),
     ],
     [
         ("id", "string", "任务 ID，用于查询、重试和下载"),
@@ -847,8 +856,53 @@ class VocalEnhancementRequest(BaseModel):
     level: Literal["basic", "advanced"] = Field(
         default="basic",
         description=(
-            "basic：DeepFilterNet 降噪 + 基础美声 EQ；advanced：额外做频谱参考匹配与精细母带 EQ + 胶水压缩"
+            "basic：自然停顿扩展 + 限量降噪 + 并行轻母带；advanced：额外保护原始人声的高频辅音/呼吸细节并做保守宽带校正"
         ),
+    )
+    pitch_correction: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        description="自然修音强度，0~1；保留颤音和滑音，只收敛音高漂移与持续音音准。",
+    )
+    timing_alignment: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "AI 对齐强度，0~1；先按停顿匹配句段，再用声学音素 DTW 生成时间锚点，"
+            "通过受限拉伸校正抢拍和拖拍并保持整轨时长。"
+        ),
+    )
+    timbre_focus: float = Field(
+        default=0.60,
+        ge=0.0,
+        le=1.0,
+        description="AI 角色共振峰强度，0~1；仅强化转换声音自身的稳定共振峰。",
+    )
+    ai_eq: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        description="AI EQ 强度，0~1；按人声频谱自适应做保守宽带校正。",
+    )
+    ai_compressor: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        description="AI Compressor 强度，0~1；按人声动态自动设定阈值并补偿响度。",
+    )
+    ai_exciter: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        description="AI Exciter 强度，0~1；抑制齿音后生成少量高频谐波。",
+    )
+    stereo_width: float = Field(
+        default=0.30,
+        ge=0.0,
+        le=1.0,
+        description="Stereo 强度，0~1；低频保持居中并保证单声道折叠兼容。",
     )
 
 
@@ -1078,6 +1132,10 @@ class EditorRerunRequest(BaseModel):
     params: InferenceParamsRequest = Field(
         default_factory=InferenceParamsRequest,
         description="局部重推理参数",
+    )
+    vocal_enhancement: VocalEnhancementRequest = Field(
+        default_factory=VocalEnhancementRequest,
+        description="局部重推理后的自然修音、AI 角色共振峰与歌声增强设置",
     )
 
 
@@ -2664,6 +2722,7 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
                 ("clip_id", "string", "是", "-", "片段 ID"),
                 ("model_id", "string", "是", "-", "声音模型 ID"),
                 ("reference_upload_id", "string|null", "SeedVC 必填", "null", "参考音频上传 ID"),
+                ("vocal_enhancement", "object", "否", "禁用", "局部自然修音、角色音色聚焦与增强设置"),
             ],
         ),
     )
@@ -2682,7 +2741,12 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
         if str(model.get("framework") or "") == "seed-vc" and not params.get("reference_audio"):
             raise HTTPException(status_code=422, detail="SeedVC 局部重推理需要 reference_upload_id")
         result = facade.rerun_editor_clip(
-            project_id, track_id, clip_id, request.model_id, params
+            project_id,
+            track_id,
+            clip_id,
+            request.model_id,
+            params,
+            request.vocal_enhancement.model_dump(),
         )
         return _editor_result(result, project_id)
 

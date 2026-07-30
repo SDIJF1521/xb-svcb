@@ -3,7 +3,7 @@
 
 产物：dist/XB-SVCB/XB-SVCB.exe（+ _internal/）。其中：
   - 前端 web/dist 内置进 _internal/web/dist，应用自带界面、无需外置；
-  - worker 脚本（svc/f0/uvr/rvc/seedvc/ddsp/vocal/hub）以「真实磁盘文件」形式放进
+  - worker 脚本（svc/f0/tuning/uvr/rvc/seedvc/ddsp/vocal/hub）以「真实磁盘文件」形式放进
     _internal/infrastructure，供外部 .venv-* 的 Python 以子进程读取执行；
   - 重负载 AI 环境的 Python venv 仍在安装目录旁按机器搭建；So-VITS-SVC、SeedVC、DDSP-SVC
     引擎源码和离线模型由 Inno Setup 分卷携带，安装后不再下载这三套仓库。
@@ -81,7 +81,7 @@ for pkg in (
 datas += [(str(APP.parent / "web" / "dist"), "web/dist")]
 
 # worker 脚本：必须是磁盘上的真实 .py，供外部环境的 Python 读取执行
-for w in ("inference_device.py", "svc_worker.py", "f0_worker.py", "uvr_worker.py", "hub_worker.py", "rvc_worker.py", "seedvc_worker.py", "ddsp_worker.py", "vocal_enhancement_worker.py"):
+for w in ("inference_device.py", "svc_worker.py", "f0_worker.py", "vocal_tuning_worker.py", "uvr_worker.py", "hub_worker.py", "rvc_worker.py", "seedvc_worker.py", "ddsp_worker.py", "vocal_enhancement_worker.py"):
     datas += [(str(APP / "infrastructure" / w), "infrastructure")]
 
 

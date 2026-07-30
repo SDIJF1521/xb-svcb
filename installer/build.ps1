@@ -305,6 +305,7 @@ $workerFiles = @(
   "inference_device.py",
   "svc_worker.py",
   "f0_worker.py",
+  "vocal_tuning_worker.py",
   "uvr_worker.py",
   "hub_worker.py",
   "rvc_worker.py",
@@ -315,7 +316,7 @@ $workerFiles = @(
 foreach ($worker in $workerFiles) {
   Require-File (Join-Path $Root "app\infrastructure\$worker") "Worker source $worker"
 }
-Require-File (Join-Path $Root "release_notes_v025.md") "v0.0.25 release notes"
+Require-File (Join-Path $Root "release_notes_v026.md") "v0.0.26 release notes"
 Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
 $licensePath = Join-Path $Root "LICENSE"

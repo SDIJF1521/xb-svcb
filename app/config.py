@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.25"
+APP_VERSION = "0.0.26"
 APP_BG = "#05060d"
 
 
@@ -141,6 +141,8 @@ SVC_PYTHON = _detect_svc_python()
 SVC_WORKER = BUNDLE_DIR / "infrastructure" / "svc_worker.py"
 # F0 提取 worker（同样在 so-vits-svc 环境中运行）
 F0_WORKER = BUNDLE_DIR / "infrastructure" / "f0_worker.py"
+# Praat/Parselmouth AI 对齐与自然修音 worker。由美声环境运行，覆盖全部推理框架。
+VOCAL_TUNING_WORKER = BUNDLE_DIR / "infrastructure" / "vocal_tuning_worker.py"
 
 
 def svc_engine_ready() -> bool:

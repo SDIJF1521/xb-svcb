@@ -540,6 +540,9 @@ export const mock = {
   getThemeMediaData(path: string): string {
     return path
   },
+  deleteThemeMediaFile(_path: string): boolean {
+    return true
+  },
   getDataStorageStatus(): DataStorageStatus {
     return {
       data_dir: mockDataDir,
@@ -770,6 +773,13 @@ export const mock = {
       vocal_enhancement: {
         enabled: enhancement,
         level: payload.vocal_enhancement?.level === 'advanced' ? 'advanced' : 'basic',
+        pitch_correction: Math.max(0, Math.min(1, payload.vocal_enhancement?.pitch_correction ?? 0.45)),
+        timing_alignment: Math.max(0, Math.min(1, payload.vocal_enhancement?.timing_alignment ?? 0.45)),
+        timbre_focus: Math.max(0, Math.min(1, payload.vocal_enhancement?.timbre_focus ?? 0.60)),
+        ai_eq: Math.max(0, Math.min(1, payload.vocal_enhancement?.ai_eq ?? 0.55)),
+        ai_compressor: Math.max(0, Math.min(1, payload.vocal_enhancement?.ai_compressor ?? 0.45)),
+        ai_exciter: Math.max(0, Math.min(1, payload.vocal_enhancement?.ai_exciter ?? 0.25)),
+        stereo_width: Math.max(0, Math.min(1, payload.vocal_enhancement?.stereo_width ?? 0.30)),
       },
       mode: isMulti ? 'multi' : 'single',
       segments: payload.segments,
@@ -1770,7 +1780,18 @@ export const mock = {
     clipId: string,
     modelId: string,
     params?: InferenceParams,
-    enhance?: { enabled?: boolean; level?: 'basic' | 'advanced'; device?: string },
+    enhance?: {
+      enabled?: boolean
+      level?: 'basic' | 'advanced'
+      device?: string
+      pitch_correction?: number
+      timing_alignment?: number
+      timbre_focus?: number
+      ai_eq?: number
+      ai_compressor?: number
+      ai_exciter?: number
+      stereo_width?: number
+    },
   ): EditorRerunResult {
     const project = mockEditorProjects.find((p) => p.id === projectId)
     if (!project) return { ok: false, error: '工程不存在' }
@@ -1787,6 +1808,13 @@ export const mock = {
       rerun_params: { ...(params || {}) },
       rerun_enhanced: Boolean(enhance?.enabled),
       rerun_enhance_level: enhance?.enabled ? (enhance.level || 'basic') : '',
+      rerun_pitch_correction: enhance?.enabled ? (enhance.pitch_correction ?? 0.45) : 0,
+      rerun_timing_alignment: enhance?.enabled ? (enhance.timing_alignment ?? 0.45) : 0,
+      rerun_timbre_focus: enhance?.enabled ? (enhance.timbre_focus ?? 0.60) : 0,
+      rerun_ai_eq: enhance?.enabled ? (enhance.ai_eq ?? 0.55) : 0,
+      rerun_ai_compressor: enhance?.enabled ? (enhance.ai_compressor ?? 0.45) : 0,
+      rerun_ai_exciter: enhance?.enabled ? (enhance.ai_exciter ?? 0.25) : 0,
+      rerun_stereo_width: enhance?.enabled ? (enhance.stereo_width ?? 0.30) : 0,
     }
     project.updated_at = now()
     return { ok: true, project: cloneProject(project), clip: { ...clip } }

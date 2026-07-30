@@ -18,6 +18,9 @@ import config
 
 
 class FfmpegTool:
+    DEFAULT_VOCAL_GAIN_DB = 1.8
+    DEFAULT_INSTRUMENTAL_GAIN_DB = -0.7
+
     def __init__(self) -> None:
         self.ffmpeg = shutil.which("ffmpeg")
         self.ffprobe = shutil.which("ffprobe")
@@ -441,18 +444,31 @@ class FfmpegTool:
             return False
 
     def mix(
-        self, vocals: Path, instrumental: Path, dst: Path, sample_rate: int = 44100
+        self,
+        vocals: Path,
+        instrumental: Path,
+        dst: Path,
+        sample_rate: int = 44100,
+        vocal_gain_db: float = DEFAULT_VOCAL_GAIN_DB,
+        instrumental_gain_db: float = DEFAULT_INSTRUMENTAL_GAIN_DB,
     ) -> bool:
-        """把人声与伴奏混合为成品。成功返回 True。"""
+        """把人声前推后与伴奏混合，并为求和峰值保留 1 dB 余量。"""
         if not self.ffmpeg:
             return False
         try:
+            gain_db = max(-6.0, min(6.0, float(vocal_gain_db)))
+            vocal_gain = 10.0 ** (gain_db / 20.0)
+            music_gain_db = max(-6.0, min(6.0, float(instrumental_gain_db)))
+            music_gain = 10.0 ** (music_gain_db / 20.0)
             # 先把人声与伴奏统一为同采样率的立体声，避免单声道/立体声不匹配
             # 导致 amix 失败（失败会让上层回退成"仅干声"，表现为没有伴奏）。
             filt = (
-                f"[0:a]aresample={sample_rate},aformat=channel_layouts=stereo[v];"
-                f"[1:a]aresample={sample_rate},aformat=channel_layouts=stereo[m];"
-                "[v][m]amix=inputs=2:duration=longest:normalize=0[a]"
+                f"[0:a]aresample={sample_rate},aformat=channel_layouts=stereo,"
+                f"volume={vocal_gain:.6f}[v];"
+                f"[1:a]aresample={sample_rate},aformat=channel_layouts=stereo,"
+                f"volume={music_gain:.6f}[m];"
+                "[v][m]amix=inputs=2:duration=longest:normalize=0[mix];"
+                "[mix]alimiter=limit=0.841395:attack=5:release=50:level=false[a]"
             )
             res = subprocess.run(
                 [
@@ -464,18 +480,18 @@ class FfmpegTool:
                     str(instrumental),
                     "-filter_complex",
                     filt,
-                "-map",
-                "[a]",
-                "-ar",
-                str(sample_rate),
-                str(dst),
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=300,
-            **config.subprocess_no_window(),
+                    "-map",
+                    "[a]",
+                    "-ar",
+                    str(sample_rate),
+                    str(dst),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+                **config.subprocess_no_window(),
             )
             return res.returncode == 0 and dst.exists()
         except (OSError, subprocess.SubprocessError):

@@ -162,6 +162,89 @@ class AudioEditorWorkflowTests(unittest.TestCase):
             self.assertEqual(reopened["metadata"]["timeline_template_id"], "duet")
             self.assertEqual(reopened["tracks"][0]["metadata"]["role_id"], "role-a")
 
+    def test_remove_project_deletes_project_files_and_owned_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            editor_root = root / "editor"
+            cache_root = editor_root / "cache"
+            project_dir = editor_root / "project-1"
+            nested_file = project_dir / "media" / "voice.wav"
+            nested_file.parent.mkdir(parents=True)
+            nested_file.write_bytes(b"audio")
+            cache_root.mkdir(parents=True)
+            owned_cache = cache_root / "project-1_render.wav"
+            other_cache = cache_root / "project-10_render.wav"
+            owned_cache.write_bytes(b"owned")
+            other_cache.write_bytes(b"other")
+            outside = root / "original.wav"
+            outside.write_bytes(b"original")
+            service, repo, _ = self.make_service(root)
+            repo.add(self.project(outside))
+
+            with (
+                patch("application.audio_editor_service.config.EDITOR_DIR", editor_root),
+                patch("application.audio_editor_service.config.EDITOR_CACHE_DIR", cache_root),
+            ):
+                removed = service.remove("project-1")
+
+            self.assertTrue(removed)
+            self.assertIsNone(repo.get("project-1"))
+            self.assertFalse(project_dir.exists())
+            self.assertFalse(owned_cache.exists())
+            self.assertTrue(other_cache.exists())
+            self.assertTrue(outside.exists())
+
+    def test_remove_project_keeps_record_when_file_cleanup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            editor_root = root / "editor"
+            cache_root = editor_root / "cache"
+            project_dir = editor_root / "project-1"
+            project_dir.mkdir(parents=True)
+            source = root / "source.wav"
+            source.write_bytes(b"audio")
+            service, repo, _ = self.make_service(root)
+            repo.add(self.project(source))
+
+            with (
+                patch("application.audio_editor_service.config.EDITOR_DIR", editor_root),
+                patch("application.audio_editor_service.config.EDITOR_CACHE_DIR", cache_root),
+                patch(
+                    "application.audio_editor_service.shutil.rmtree",
+                    side_effect=PermissionError("in use"),
+                ),
+            ):
+                removed = service.remove("project-1")
+
+            self.assertFalse(removed)
+            self.assertIsNotNone(repo.get("project-1"))
+            self.assertTrue(project_dir.exists())
+
+    def test_remove_project_rejects_path_traversal_id(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            editor_root = root / "editor"
+            editor_root.mkdir()
+            outside = root / "keep.txt"
+            outside.write_text("keep", encoding="utf-8")
+            service, repo, _ = self.make_service(root)
+            project = self.project(outside)
+            project["id"] = ".."
+            repo.add(project)
+
+            with (
+                patch("application.audio_editor_service.config.EDITOR_DIR", editor_root),
+                patch(
+                    "application.audio_editor_service.config.EDITOR_CACHE_DIR",
+                    editor_root / "cache",
+                ),
+            ):
+                removed = service.remove("..")
+
+            self.assertFalse(removed)
+            self.assertIsNotNone(repo.get(".."))
+            self.assertTrue(outside.exists())
+
     def test_lrc_parser_remains_timestamp_compatible(self) -> None:
         lines = AudioEditorService._parse_lyric_lines(
             "[00:01.25]第一句\n[00:03.50]第二句"

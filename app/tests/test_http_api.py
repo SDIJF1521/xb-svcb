@@ -185,7 +185,17 @@ class HttpApiContractTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202, response.text)
         self.assertEqual(
             self.facade.created_payload["vocal_enhancement"],
-            {"enabled": True, "level": "advanced"},
+            {
+                "enabled": True,
+                "level": "advanced",
+                "pitch_correction": 0.45,
+                "timing_alignment": 0.45,
+                "timbre_focus": 0.60,
+                "ai_eq": 0.55,
+                "ai_compressor": 0.45,
+                "ai_exciter": 0.25,
+                "stereo_width": 0.30,
+            },
         )
 
     def test_seedvc_job_requires_reference_audio(self) -> None:

@@ -245,9 +245,29 @@ class WorkService:
         level = str(raw.get("level") or "basic").strip().lower()
         if level not in {"basic", "advanced"}:
             level = "basic"
+
+        def strength(key: str, default: float) -> float:
+            try:
+                value = float(raw.get(key, default))
+            except (TypeError, ValueError):
+                value = default
+            if value != value:
+                value = default
+            return max(0.0, min(1.0, value))
+
         # 手动人声合并没有自动生成的整轨 AI 人声，增强应在编辑器导出后进行。
         enabled = bool(raw.get("enabled")) and workflow != "manual_vocal_merge"
-        return {"enabled": enabled, "level": level}
+        return {
+            "enabled": enabled,
+            "level": level,
+            "pitch_correction": strength("pitch_correction", 0.45),
+            "timing_alignment": strength("timing_alignment", 0.45),
+            "timbre_focus": strength("timbre_focus", 0.60),
+            "ai_eq": strength("ai_eq", 0.55),
+            "ai_compressor": strength("ai_compressor", 0.45),
+            "ai_exciter": strength("ai_exciter", 0.25),
+            "stereo_width": strength("stereo_width", 0.30),
+        }
 
     @staticmethod
     def _resolve_model_paths(model: dict[str, Any] | None) -> dict[str, str]:

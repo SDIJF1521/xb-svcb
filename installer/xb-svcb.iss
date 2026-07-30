@@ -23,7 +23,7 @@
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.25"
+#define MyAppVersion "0.0.26"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 
@@ -92,7 +92,7 @@ Source: "..\.tmp\bundled-engines\seed-vc\*"; DestDir: "{app}\engines\seed-vc"; F
 Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression; Excludes: "fcpe.pt"
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\release_notes_v025.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release_notes_v026.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docs\api.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 #endif
 
@@ -1201,6 +1201,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC worker', PathJoin(InternalDir, 'infrastructure\ddsp_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\vocal_enhancement_worker.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'AI 歌声增强 worker', PathJoin(InternalDir, 'infrastructure\vocal_enhancement_worker.py'));
+  if not FileExists(PathJoin(InternalDir, 'infrastructure\vocal_tuning_worker.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'AI 对齐/自然修音 worker', PathJoin(InternalDir, 'infrastructure\vocal_tuning_worker.py'));
   if not FileExists(PathJoin(AppDir, 'install\configure_user_env.py')) then
     Missing := AddMissingRuntimeFile(Missing, '用户环境配置工具', PathJoin(AppDir, 'install\configure_user_env.py'));
   if not SystemFfmpegAvailable() then
@@ -1355,11 +1357,12 @@ end;
 
 function ValidateVocalRuntime(): Boolean;
 var
-  AppDir, VocalPython, VocalWorker, VocalReady, Missing: String;
+  AppDir, VocalPython, VocalWorker, TuningWorker, VocalReady, Missing: String;
 begin
   AppDir := ExpandConstant('{app}');
   VocalPython := PathJoin(AppDir, '.venv-vocal\Scripts\python.exe');
   VocalWorker := PathJoin(AppDir, '_internal\infrastructure\vocal_enhancement_worker.py');
+  TuningWorker := PathJoin(AppDir, '_internal\infrastructure\vocal_tuning_worker.py');
   VocalReady := PathJoin(AppDir, 'models\vocal-enhancement\runtime.ready');
   Missing := '';
 
@@ -1371,6 +1374,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, '.venv-vocal Python', VocalPython);
   if not FileExists(VocalWorker) then
     Missing := AddMissingRuntimeFile(Missing, 'AI 歌声增强 worker', VocalWorker);
+  if not FileExists(TuningWorker) then
+    Missing := AddMissingRuntimeFile(Missing, 'AI 对齐/自然修音 worker', TuningWorker);
   if not FileExists(VocalReady) then
     Missing := AddMissingRuntimeFile(Missing, 'runtime.ready 标记', VocalReady);
 

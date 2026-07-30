@@ -211,6 +211,31 @@ class Api:
         b64 = base64.b64encode(data).decode("ascii")
         return f"data:{mime};base64,{b64}"
 
+    def delete_theme_media_file(self, media_path: str) -> bool:
+        """删除由应用保存的主题媒体；外部路径与 data URI 一律不处理。"""
+        raw = str(media_path or "").strip()
+        if not raw or raw.lower().startswith(("data:", "http://", "https://")):
+            return False
+        try:
+            media_root = config.THEME_MEDIA_DIR.resolve()
+            candidate = Path(raw)
+            if candidate.is_absolute():
+                path = candidate.expanduser().resolve()
+            else:
+                if candidate.name != raw or candidate.name in {"", ".", ".."}:
+                    return False
+                path = (media_root / candidate.name).resolve()
+            if path.parent != media_root:
+                return False
+            if not path.exists():
+                return True
+            if not path.is_file():
+                return False
+            path.unlink()
+        except (OSError, RuntimeError, ValueError):
+            return False
+        return True
+
     def get_data_storage_status(self) -> dict[str, Any]:
         """返回用户数据目录、占用和所在磁盘剩余空间。"""
         self._refresh_active_data_dir_from_home()

@@ -1,6 +1,6 @@
 # XB-SVCB 安装器
 
-版本：`0.0.25`
+版本：`0.0.26`
 
 安装器由 Inno Setup 读取 `installer/xb-svcb.iss` 构建，负责打包桌面本体、环境搭建脚本、自带模型和文档。
 
@@ -22,6 +22,14 @@
 ```powershell
 ./installer/build.ps1 -ValidateOnly
 ```
+
+## v0.0.26 安装器行为
+
+- 应用、Python 项目、前端包、锁文件、Windows EXE 版本资源和 Inno Setup 版本统一为 `0.0.26`。
+- 安装包新增 `vocal_tuning_worker.py`，并在安装前校验 AI 对齐/自然修音 worker 与 AI 歌声增强 worker 均已进入 `_internal/infrastructure`。
+- `.venv-vocal` 新增 `praat-parselmouth==0.4.6`，供参考人声动态对齐、DurationTier 受限时间校正和 PitchTier 自然修音使用；`runtime.ready` 同步记录该依赖。
+- 安装目录携带最新 `release_notes_v026.md`、`README.md` 与 `docs/api.md`，旧数据目录可继续覆盖升级使用。
+- 分卷发布方式、离线模型、内置 FFmpeg 和 GPU 环境策略延续 v0.0.25，不要求用户重新下载已有作品或模型。
 
 ## v0.0.25 安装器行为
 

@@ -215,6 +215,20 @@ export type VocalEnhancementLevel = 'basic' | 'advanced'
 export interface VocalEnhancementOptions {
   enabled: boolean
   level: VocalEnhancementLevel
+  /** 自然修音强度（0~1），保留颤音与滑音。 */
+  pitch_correction: number
+  /** AI 对齐强度（0~1），参考原唱校正局部抢拍与拖拍。 */
+  timing_alignment: number
+  /** AI 角色共振峰强度（0~1）。 */
+  timbre_focus: number
+  /** AI EQ 自适应宽带校正强度（0~1）。 */
+  ai_eq: number
+  /** AI Compressor 自适应动态控制强度（0~1）。 */
+  ai_compressor: number
+  /** AI Exciter 高频谐波增强强度（0~1）。 */
+  ai_exciter: number
+  /** Stereo 单声道兼容立体声宽度（0~1）。 */
+  stereo_width: number
 }
 
 export interface InferenceParams {

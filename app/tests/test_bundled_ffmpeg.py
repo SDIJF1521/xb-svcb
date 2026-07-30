@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import config
+from infrastructure.ffmpeg_tool import FfmpegTool
 
 
 def test_bundled_ffmpeg_is_added_when_system_command_is_missing(
@@ -37,3 +39,31 @@ def test_system_ffmpeg_keeps_existing_path(tmp_path: Path, monkeypatch) -> None:
 
     assert config._activate_bundled_ffmpeg() is None
     assert os.environ["PATH"] == r"C:\Tools"
+
+
+def test_mix_brings_vocal_forward_and_limits_true_peak_headroom(
+    tmp_path: Path, monkeypatch
+) -> None:
+    tool = FfmpegTool()
+    tool.ffmpeg = "ffmpeg"
+    vocals = tmp_path / "vocals.wav"
+    instrumental = tmp_path / "instrumental.wav"
+    output = tmp_path / "output.wav"
+    vocals.write_bytes(b"vocal")
+    instrumental.write_bytes(b"music")
+    captured: list[str] = []
+
+    def fake_run(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        captured.extend(command)
+        output.write_bytes(b"mixed")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("infrastructure.ffmpeg_tool.subprocess.run", fake_run)
+
+    assert tool.mix(vocals, instrumental, output)
+    filter_graph = captured[captured.index("-filter_complex") + 1]
+    assert "volume=1.230269[v]" in filter_graph
+    assert "volume=0.922571[m]" in filter_graph
+    assert "amix=inputs=2:duration=longest:normalize=0" in filter_graph
+    assert "alimiter=limit=0.841395" in filter_graph
+    assert "level=false" in filter_graph

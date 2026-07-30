@@ -690,8 +690,8 @@
             >
               <el-icon><Brush /></el-icon>
               <span class="enhancement-level-copy">
-                <b>基础层 · Vocal Beauty Engine</b>
-                <span class="engine-list"><i>DeepFilterNet</i><i>Pedalboard DSP</i></span>
+                <b>基础层 · Clean Voice</b>
+                <span class="engine-list"><i>限量降噪</i><i>并行轻母带</i></span>
               </span>
               <el-icon v-if="vocalEnhancementLevel === 'basic'" class="level-check"><Select /></el-icon>
             </button>
@@ -703,11 +703,83 @@
             >
               <el-icon><Cpu /></el-icon>
               <span class="enhancement-level-copy">
-                <b>高级层 · Vocal AI Model</b>
-                <span class="engine-list"><i>频谱参考匹配</i><i>DeepFilterNet</i><i>Pedalboard 母带</i></span>
+                <b>高级层 · Natural Voice</b>
+                <span class="engine-list"><i>真实细节保护</i><i>宽带校正</i><i>自然度母带</i></span>
               </span>
               <el-icon v-if="vocalEnhancementLevel === 'advanced'" class="level-check"><Select /></el-icon>
             </button>
+          </div>
+          <div v-if="vocalEnhancementEnabled && enhancementWorkflowAllowed" class="enhancement-controls">
+            <div class="enhancement-control">
+              <div class="enhancement-control-label">
+                <span>自然修音</span>
+                <b>{{ Math.round(pitchCorrection * 100) }}%</b>
+              </div>
+              <el-slider
+                v-model="pitchCorrection"
+                :min="0"
+                :max="1"
+                :step="0.05"
+                :show-tooltip="false"
+                aria-label="自然修音强度"
+              />
+            </div>
+            <div class="enhancement-control">
+              <div class="enhancement-control-label">
+                <span>AI 对齐</span>
+                <b>{{ Math.round(timingAlignment * 100) }}%</b>
+              </div>
+              <el-slider
+                v-model="timingAlignment"
+                :min="0"
+                :max="1"
+                :step="0.05"
+                :show-tooltip="false"
+                aria-label="AI 对齐强度"
+              />
+            </div>
+            <div class="enhancement-control">
+              <div class="enhancement-control-label">
+                <span>AI 角色共振峰</span>
+                <b>{{ Math.round(timbreFocus * 100) }}%</b>
+              </div>
+              <el-slider
+                v-model="timbreFocus"
+                :min="0"
+                :max="1"
+                :step="0.05"
+                :show-tooltip="false"
+                aria-label="AI 角色共振峰强度"
+              />
+            </div>
+            <div class="enhancement-control">
+              <div class="enhancement-control-label">
+                <span>AI EQ</span>
+                <b>{{ Math.round(aiEq * 100) }}%</b>
+              </div>
+              <el-slider v-model="aiEq" :min="0" :max="1" :step="0.05" :show-tooltip="false" aria-label="AI EQ 强度" />
+            </div>
+            <div class="enhancement-control">
+              <div class="enhancement-control-label">
+                <span>AI Compressor</span>
+                <b>{{ Math.round(aiCompressor * 100) }}%</b>
+              </div>
+              <el-slider v-model="aiCompressor" :min="0" :max="1" :step="0.05" :show-tooltip="false" aria-label="AI Compressor 强度" />
+            </div>
+            <div class="enhancement-control">
+              <div class="enhancement-control-label">
+                <span>AI Exciter</span>
+                <b>{{ Math.round(aiExciter * 100) }}%</b>
+              </div>
+              <el-slider v-model="aiExciter" :min="0" :max="1" :step="0.05" :show-tooltip="false" aria-label="AI Exciter 强度" />
+            </div>
+            <div class="enhancement-control">
+              <div class="enhancement-control-label">
+                <span>Stereo</span>
+                <b>{{ Math.round(stereoWidth * 100) }}%</b>
+              </div>
+              <el-slider v-model="stereoWidth" :min="0" :max="1" :step="0.05" :show-tooltip="false" aria-label="Stereo 宽度" />
+            </div>
           </div>
           <p v-else-if="!enhancementWorkflowAllowed" class="enhancement-note">手动人声合并将在编辑器导出后处理</p>
         </section>
@@ -941,6 +1013,13 @@ const vocalEnhancementEnabled = ref(Boolean(prefs.vocalEnhancementEnabled))
 const vocalEnhancementLevel = ref<VocalEnhancementLevel>(
   prefs.vocalEnhancementLevel === 'advanced' ? 'advanced' : 'basic',
 )
+const pitchCorrection = ref(Math.max(0, Math.min(1, num(prefs.pitchCorrection, 0.45))))
+const timingAlignment = ref(Math.max(0, Math.min(1, num(prefs.timingAlignment, 0.45))))
+const timbreFocus = ref(Math.max(0, Math.min(1, num(prefs.timbreFocus, 0.60))))
+const aiEq = ref(Math.max(0, Math.min(1, num(prefs.aiEq, 0.55))))
+const aiCompressor = ref(Math.max(0, Math.min(1, num(prefs.aiCompressor, 0.45))))
+const aiExciter = ref(Math.max(0, Math.min(1, num(prefs.aiExciter, 0.25))))
+const stereoWidth = ref(Math.max(0, Math.min(1, num(prefs.stereoWidth, 0.30))))
 
 /* RVC 专属参数 */
 const rvcVersions = ['v2', 'v1']
@@ -1778,7 +1857,7 @@ const alignStatus = computed(() => {
 
 // 任一参数变化即写回 localStorage
 watch(
-  [uvrModel, f0Method, pitch, formantShift, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion, vocalEnhancementEnabled, vocalEnhancementLevel],
+  [uvrModel, f0Method, pitch, formantShift, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion, vocalEnhancementEnabled, vocalEnhancementLevel, pitchCorrection, timingAlignment, timbreFocus, aiEq, aiCompressor, aiExciter, stereoWidth],
   () => {
     try {
       localStorage.setItem(
@@ -1800,6 +1879,13 @@ watch(
           rvcVersion: rvcVersion.value,
           vocalEnhancementEnabled: vocalEnhancementEnabled.value,
           vocalEnhancementLevel: vocalEnhancementLevel.value,
+          pitchCorrection: pitchCorrection.value,
+          timingAlignment: timingAlignment.value,
+          timbreFocus: timbreFocus.value,
+          aiEq: aiEq.value,
+          aiCompressor: aiCompressor.value,
+          aiExciter: aiExciter.value,
+          stereoWidth: stereoWidth.value,
         }),
       )
     } catch {
@@ -1817,7 +1903,7 @@ const stepMeta: Record<string, string> = {
   infer: '加载模型进行歌声转换',
   split: '按歌词时间轴切分人声',
   merge: '按顺序拼接各模型片段',
-  enhance: '频谱匹配 · DeepFilterNet · 母带',
+  enhance: '限量降噪 · 真实细节保护 · 并行母带',
   mix: 'ffmpeg 合成与重采样',
 }
 const singlePipeline: PipelineStep[] = [
@@ -1932,6 +2018,13 @@ function currentVocalEnhancement() {
       vocalEnhancementReady.value
     ),
     level: vocalEnhancementLevel.value,
+    pitch_correction: Number(pitchCorrection.value.toFixed(2)),
+    timing_alignment: Number(timingAlignment.value.toFixed(2)),
+    timbre_focus: Number(timbreFocus.value.toFixed(2)),
+    ai_eq: Number(aiEq.value.toFixed(2)),
+    ai_compressor: Number(aiCompressor.value.toFixed(2)),
+    ai_exciter: Number(aiExciter.value.toFixed(2)),
+    stereo_width: Number(stereoWidth.value.toFixed(2)),
   }
 }
 
@@ -2757,6 +2850,26 @@ onUnmounted(() => {
   line-height: 1.35;
 }
 .enhancement-level .level-check { font-size: 16px; }
+.enhancement-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  padding-top: 16px;
+}
+.enhancement-control { min-width: 0; }
+.enhancement-control-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--xb-text);
+  font-size: 13px;
+}
+.enhancement-control-label b {
+  color: var(--xb-primary);
+  font-variant-numeric: tabular-nums;
+}
+.enhancement-control :deep(.el-slider) { height: 28px; }
 .enhancement-note { margin: 0; color: var(--xb-muted); font-size: 12.5px; }
 
 /* 多模型：每个模型 + 参数 */
@@ -3548,6 +3661,7 @@ input[type='range'] {
   .enhancement-levels { grid-template-columns: 1fr; }
   .enhancement-level { border-right: 0; border-bottom: 1px solid var(--xb-border); }
   .enhancement-level:last-child { border-bottom: 0; }
+  .enhancement-controls { grid-template-columns: 1fr; gap: 10px; }
 }
 </style>
 

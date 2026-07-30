@@ -617,6 +617,57 @@
                   高级层
                 </button>
               </div>
+              <div v-if="rerunEnhanceEnabled" class="rerun-enhance-controls">
+                <div class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>自然修音</span>
+                    <b>{{ Math.round(rerunPitchCorrection * 100) }}%</b>
+                  </div>
+                  <input v-model.number="rerunPitchCorrection" type="range" min="0" max="1" step="0.05" />
+                </div>
+                <div class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>AI 对齐</span>
+                    <b>{{ Math.round(rerunTimingAlignment * 100) }}%</b>
+                  </div>
+                  <input v-model.number="rerunTimingAlignment" type="range" min="0" max="1" step="0.05" />
+                </div>
+                <div class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>AI 角色共振峰</span>
+                    <b>{{ Math.round(rerunTimbreFocus * 100) }}%</b>
+                  </div>
+                  <input v-model.number="rerunTimbreFocus" type="range" min="0" max="1" step="0.05" />
+                </div>
+                <div class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>AI EQ</span>
+                    <b>{{ Math.round(rerunAiEq * 100) }}%</b>
+                  </div>
+                  <input v-model.number="rerunAiEq" type="range" min="0" max="1" step="0.05" />
+                </div>
+                <div class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>AI Compressor</span>
+                    <b>{{ Math.round(rerunAiCompressor * 100) }}%</b>
+                  </div>
+                  <input v-model.number="rerunAiCompressor" type="range" min="0" max="1" step="0.05" />
+                </div>
+                <div class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>AI Exciter</span>
+                    <b>{{ Math.round(rerunAiExciter * 100) }}%</b>
+                  </div>
+                  <input v-model.number="rerunAiExciter" type="range" min="0" max="1" step="0.05" />
+                </div>
+                <div class="rerun-param">
+                  <div class="rerun-param-label">
+                    <span>Stereo</span>
+                    <b>{{ Math.round(rerunStereoWidth * 100) }}%</b>
+                  </div>
+                  <input v-model.number="rerunStereoWidth" type="range" min="0" max="1" step="0.05" />
+                </div>
+              </div>
             </div>
             <span v-if="rerunGuardText" class="rerun-hint">{{ rerunGuardText }}</span>
             <el-button
@@ -875,6 +926,13 @@ interface RerunPrefs {
   referenceAudio?: string
   enhanceEnabled?: boolean
   enhanceLevel?: 'basic' | 'advanced'
+  pitchCorrection?: number
+  timingAlignment?: number
+  timbreFocus?: number
+  aiEq?: number
+  aiCompressor?: number
+  aiExciter?: number
+  stereoWidth?: number
 }
 interface EffectControl {
   key: string
@@ -1197,6 +1255,13 @@ const rerunEnhanceEnabled = ref(Boolean(rerunPrefs.enhanceEnabled))
 const rerunEnhanceLevel = ref<'basic' | 'advanced'>(
   rerunPrefs.enhanceLevel === 'advanced' ? 'advanced' : 'basic',
 )
+const rerunPitchCorrection = ref(prefNum(rerunPrefs.pitchCorrection, 0.45, 0, 1))
+const rerunTimingAlignment = ref(prefNum(rerunPrefs.timingAlignment, 0.45, 0, 1))
+const rerunTimbreFocus = ref(prefNum(rerunPrefs.timbreFocus, 0.60, 0, 1))
+const rerunAiEq = ref(prefNum(rerunPrefs.aiEq, 0.55, 0, 1))
+const rerunAiCompressor = ref(prefNum(rerunPrefs.aiCompressor, 0.45, 0, 1))
+const rerunAiExciter = ref(prefNum(rerunPrefs.aiExciter, 0.25, 0, 1))
+const rerunStereoWidth = ref(prefNum(rerunPrefs.stereoWidth, 0.30, 0, 1))
 
 const selectedTrack = computed(() => {
   if (!project.value || !selected.value) return null
@@ -1342,6 +1407,13 @@ function resetRerunParams() {
   rerunFilterRadius.value = 3
   rerunRvcVersion.value = 'v2'
   rerunReferenceAudio.value = ''
+  rerunPitchCorrection.value = 0.45
+  rerunTimingAlignment.value = 0.45
+  rerunTimbreFocus.value = 0.60
+  rerunAiEq.value = 0.55
+  rerunAiCompressor.value = 0.45
+  rerunAiExciter.value = 0.25
+  rerunStereoWidth.value = 0.30
 }
 
 async function pickRerunReference() {
@@ -3308,7 +3380,18 @@ async function rerunClip() {
     rerunModelId.value,
     currentRerunParams(),
     rerunEnhanceEnabled.value
-      ? { enabled: true, level: rerunEnhanceLevel.value, device: rerunDevice.value }
+      ? {
+          enabled: true,
+          level: rerunEnhanceLevel.value,
+          device: rerunDevice.value,
+          pitch_correction: Number(rerunPitchCorrection.value.toFixed(2)),
+          timing_alignment: Number(rerunTimingAlignment.value.toFixed(2)),
+          timbre_focus: Number(rerunTimbreFocus.value.toFixed(2)),
+          ai_eq: Number(rerunAiEq.value.toFixed(2)),
+          ai_compressor: Number(rerunAiCompressor.value.toFixed(2)),
+          ai_exciter: Number(rerunAiExciter.value.toFixed(2)),
+          stereo_width: Number(rerunStereoWidth.value.toFixed(2)),
+        }
       : { enabled: false },
   )
   rerunning.value = false
@@ -3408,6 +3491,15 @@ watch(
     rerunFilterRadius,
     rerunRvcVersion,
     rerunReferenceAudio,
+    rerunEnhanceEnabled,
+    rerunEnhanceLevel,
+    rerunPitchCorrection,
+    rerunTimingAlignment,
+    rerunTimbreFocus,
+    rerunAiEq,
+    rerunAiCompressor,
+    rerunAiExciter,
+    rerunStereoWidth,
   ],
   () => {
     try {
@@ -3427,6 +3519,13 @@ watch(
           referenceAudio: rerunReferenceAudio.value,
           enhanceEnabled: rerunEnhanceEnabled.value,
           enhanceLevel: rerunEnhanceLevel.value,
+          pitchCorrection: rerunPitchCorrection.value,
+          timingAlignment: rerunTimingAlignment.value,
+          timbreFocus: rerunTimbreFocus.value,
+          aiEq: rerunAiEq.value,
+          aiCompressor: rerunAiCompressor.value,
+          aiExciter: rerunAiExciter.value,
+          stereoWidth: rerunStereoWidth.value,
         }),
       )
     } catch {
@@ -4126,6 +4225,11 @@ onUnmounted(() => {
   border-color: var(--xb-accent, #00f0ff);
   color: var(--xb-accent, #00f0ff);
   background: rgba(0, 240, 255, 0.08);
+}
+.rerun-enhance-controls {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
 }
 .rerun-hint {
   color: var(--xb-warn);

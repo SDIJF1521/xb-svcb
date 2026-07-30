@@ -1129,7 +1129,6 @@ def step_svc(uv: str, gpu_stack: str) -> None:
     # （pkg_resources 属于 setuptools），缺失会导致推理一加载 librosa 就 ModuleNotFoundError。
     # 注意：setuptools 81+ 已移除 pkg_resources，必须钉 <81 才仍带该模块。
     pip("setuptools<81", "wheel")
-
     req_win = SOVITS_DIR / "requirements_win.txt"
     req = SOVITS_DIR / "requirements.txt"
     req_file = req_win if req_win.exists() else req
@@ -1743,6 +1742,7 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
         "PyYAML",
         "deepfilternet[soundfile]==0.5.6",
         "pedalboard==0.9.24",
+        "praat-parselmouth==0.4.6",
     )
     if gpu_stack in {"cu121", "cu128"}:
         _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, gpu_stack)
@@ -1764,7 +1764,7 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
     # 安装阶段预取权重（若自带模型已命中则跳过下载），避免用户首次生成时才等待。
     run([py, "-c", "from df.enhance import init_df; init_df()"], env=cache_env)
     (VOCAL_MODELS_DIR / "runtime.ready").write_text(
-        "deepfilternet=0.5.6\npedalboard=0.9.24\n",
+        "deepfilternet=0.5.6\npedalboard=0.9.24\npraat-parselmouth=0.4.6\n",
         encoding="ascii",
     )
     print(c("g", "AI 歌声增强环境与模型就绪"))

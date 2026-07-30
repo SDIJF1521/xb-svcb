@@ -119,14 +119,43 @@ class ConversionService:
                 break
 
     @staticmethod
-    def _enhancement_settings(work: dict[str, Any]) -> tuple[bool, str]:
+    def _enhancement_settings(
+        work: dict[str, Any],
+    ) -> tuple[bool, str, dict[str, float]]:
         raw = work.get("vocal_enhancement") or {}
         if not isinstance(raw, dict):
-            return False, "basic"
+            return False, "basic", {
+                "pitch_correction": 0.45,
+                "timing_alignment": 0.45,
+                "timbre_focus": 0.60,
+                "ai_eq": 0.55,
+                "ai_compressor": 0.45,
+                "ai_exciter": 0.25,
+                "stereo_width": 0.30,
+            }
         level = str(raw.get("level") or "basic").strip().lower()
         if level not in VocalEnhancementProcessor.LEVELS:
             level = VocalEnhancementProcessor.LEVEL_BASIC
-        return bool(raw.get("enabled")), level
+
+        def strength(key: str, default: float) -> float:
+            try:
+                value = float(raw.get(key, default))
+            except (TypeError, ValueError):
+                value = default
+            if value != value:
+                value = default
+            return max(0.0, min(1.0, value))
+
+        controls = {
+            "pitch_correction": strength("pitch_correction", 0.45),
+            "timing_alignment": strength("timing_alignment", 0.45),
+            "timbre_focus": strength("timbre_focus", 0.60),
+            "ai_eq": strength("ai_eq", 0.55),
+            "ai_compressor": strength("ai_compressor", 0.45),
+            "ai_exciter": strength("ai_exciter", 0.25),
+            "stereo_width": strength("stereo_width", 0.30),
+        }
+        return bool(raw.get("enabled")), level, controls
 
     def _enhance_vocal(
         self,
@@ -139,18 +168,29 @@ class ConversionService:
         progress: int,
         reference: Path | None = None,
     ) -> Path:
-        enabled, level = self._enhancement_settings(work)
+        enabled, level, controls = self._enhancement_settings(work)
         if not enabled:
             return source
         self._set_step(work, "enhance", StepStatus.ACTIVE.value)
         self._save(work)
-        layer = "高级层 Vocal AI Model" if level == "advanced" else "基础层 Vocal Beauty Engine"
-        chain = (
-            "vocalfloor 软衰减 → 频谱匹配 → DeepFilterNet → Pedalboard 母带 DSP"
+        layer = (
+            "高级层 Natural Voice"
             if level == "advanced"
-            else "vocalfloor 软衰减 → DeepFilterNet → Pedalboard DSP"
+            else "基础层 Clean Voice"
         )
-        self._log(log_file, f"AI 歌声增强开始：{layer}（{chain}）")
+        chain = (
+            "AI 对齐/自然修音 → 自然停顿扩展 → 宽带参考 → 限量降噪 → 真实细节保护 → 轻母带 → 并行混合 → AI 角色共振峰 → AI EQ → AI Compressor → AI Exciter → Stereo"
+            if level == "advanced"
+            else "AI 对齐/自然修音 → 自然停顿扩展 → 限量降噪 → 轻母带 → 并行混合 → AI 角色共振峰 → AI EQ → AI Compressor → AI Exciter → Stereo"
+        )
+        self._log(
+            log_file,
+            f"AI 歌声增强开始：{layer}（{chain}；AI 对齐 "
+            f"{controls['timing_alignment']:.0%}；自然修音 {controls['pitch_correction']:.0%}；"
+            f"AI 角色共振峰 {controls['timbre_focus']:.0%}；"
+            f"AI EQ {controls['ai_eq']:.0%}；AI Compressor {controls['ai_compressor']:.0%}；"
+            f"AI Exciter {controls['ai_exciter']:.0%}；Stereo {controls['stereo_width']:.0%}）",
+        )
         enhanced = self._vocal_enhancement.enhance(
             source,
             output,
@@ -158,11 +198,13 @@ class ConversionService:
             device=device,
             log_file=log_file,
             reference=reference,
+            **controls,
         )
         self._set_step(work, "enhance", StepStatus.DONE.value)
         work["progress"] = progress
         work["vocal_enhancement_result"] = {
             "level": level,
+            **controls,
             "input_path": str(source),
             "output_path": str(enhanced),
         }
@@ -246,7 +288,7 @@ class ConversionService:
 
         try:
             params = InferenceParams.from_dict(work.get("params", {}))
-            enhancement_enabled, _ = self._enhancement_settings(work)
+            enhancement_enabled, _, _ = self._enhancement_settings(work)
             pipeline_total = 5 if enhancement_enabled else 4
             framework = config.modelhub_normalize_framework(work.get("framework"))
             is_sovits = framework == "so-vits-svc"
@@ -431,7 +473,8 @@ class ConversionService:
             self._set_step(work, "mix", StepStatus.DONE.value)
             self._log(
                 log_file,
-                f"[{pipeline_total}/{pipeline_total}] 混音合成完成（{'人声+伴奏' if mixed else '仅干声'}）: {output}",
+                f"[{pipeline_total}/{pipeline_total}] 混音合成完成（"
+                f"{'人声 +1.8 dB / 伴奏 -0.7 dB' if mixed else '仅干声'}）: {output}",
             )
 
             work["progress"] = 100
@@ -537,7 +580,7 @@ class ConversionService:
 
         try:
             base_params = InferenceParams.from_dict(work.get("params", {}))
-            enhancement_enabled, _ = self._enhancement_settings(work)
+            enhancement_enabled, _, _ = self._enhancement_settings(work)
             pipeline_total = 6 if enhancement_enabled else 5
             source = Path(work["source_path"]) if work.get("source_path") else None
             duration = (
@@ -914,7 +957,8 @@ class ConversionService:
             self._set_step(work, "mix", StepStatus.DONE.value)
             self._log(
                 log_file,
-                f"[{pipeline_total}/{pipeline_total}] 混音合成完成（{'人声+伴奏' if mixed else '仅人声'}）: {output}",
+                f"[{pipeline_total}/{pipeline_total}] 混音合成完成（"
+                f"{'人声 +1.8 dB / 伴奏 -0.7 dB' if mixed else '仅人声'}）: {output}",
             )
 
             work["progress"] = 100
