@@ -74,7 +74,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; 应用本体：PyInstaller 打包产物（XB-SVCB.exe + _internal，含前端与 worker 脚本）
 Source: "..\dist\XB-SVCB\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; 环境搭建脚本（纯 batch + Python，安装过程不涉及 PowerShell）
-Source: "..\install\*"; DestDir: "{app}\install"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "\__pycache__\*"
+Source: "..\install\install.py"; DestDir: "{app}\install"; Flags: ignoreversion
+Source: "..\install\configure_user_env.py"; DestDir: "{app}\install"; Flags: ignoreversion
+Source: "..\install\detect_python.bat"; DestDir: "{app}\install"; Flags: ignoreversion
 Source: "..\setup_env.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\install_prereqs.bat"; DestDir: "{app}"; Flags: ignoreversion
 ; 应用图标（供 .bat 快捷方式引用；exe 已内嵌同一图标）
@@ -260,13 +262,65 @@ begin
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
 end;
 
+function CommandSucceeds(const CommandLine: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := Exec(ExpandConstant('{cmd}'), '/d /c ' + CommandLine + ' >nul 2>&1',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+function PythonFileAvailable(const FileName: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := False;
+  if (FileName = '') or (not FileExists(FileName)) then
+    Exit;
+  Result := Exec(FileName,
+    '-c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+function PythonAvailable(const CustomDir: String): Boolean;
+begin
+  Result := False;
+  if (CustomDir <> '') and PythonFileAvailable(PathJoin(CustomDir, 'python.exe')) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if PythonFileAvailable(ExpandConstant('{localappdata}\Programs\Python\Python310\python.exe')) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if CommandSucceeds(
+      'py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"') then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Result := CommandSucceeds(
+    'python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"');
+end;
+
 function SystemFfmpegAvailable(): Boolean;
 begin
-  Result := CmdAvailable('ffmpeg') or
-    (FileExists(ExpandConstant('{app}\tools\ffmpeg\bin\ffmpeg.exe')) and
-     FileExists(ExpandConstant('{app}\tools\ffmpeg\bin\ffprobe.exe'))) or
-    (FileExists(ExpandConstant('{app}\tools\ffmpeg\ffmpeg.exe')) and
-     FileExists(ExpandConstant('{app}\tools\ffmpeg\ffprobe.exe')));
+  Result := False;
+  if CommandSucceeds('ffmpeg -version') and CommandSucceeds('ffprobe -version') then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if FileExists(ExpandConstant('{app}\tools\ffmpeg\bin\ffmpeg.exe')) and
+     FileExists(ExpandConstant('{app}\tools\ffmpeg\bin\ffprobe.exe')) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Result := FileExists(ExpandConstant('{app}\tools\ffmpeg\ffmpeg.exe')) and
+    FileExists(ExpandConstant('{app}\tools\ffmpeg\ffprobe.exe'));
 end;
 
 function CommandOutput(const CommandLine: String): String;
@@ -486,9 +540,9 @@ begin
   DetectedStack := DetectedGpuStackName();
   Result :=
     '安装器会先检查运行环境，再进入安装路径选择。当前检测结果：' + #13#10 +
-    '  Python 3.10+：' + StatusText(CmdAvailable('python') or CmdAvailable('py')) + #13#10 +
+    '  Python 3.10+：' + StatusText(PythonAvailable('')) + #13#10 +
     '  Git：' + StatusText(CmdAvailable('git')) + #13#10 +
-    '  ffmpeg：' + StatusText(CmdAvailable('ffmpeg')) + '（未检测到时使用安装包内置版本）' + #13#10 +
+    '  ffmpeg / ffprobe：' + StatusText(SystemFfmpegAvailable()) + '（未检测到时使用安装包内置版本）' + #13#10 +
     '  uv：' + StatusText(CmdAvailable('uv')) + '（Python 可用后自动安装）' + #13#10;
   if (DetectedStack = 'cu121') or (DetectedStack = 'cu128') then
     Result := Result + '  CUDA Toolkit ' + DetectedCudaVersion() + '：' +
@@ -580,10 +634,9 @@ end;
 procedure RefreshPrereqDownloadStatus;
 var
   IsNvidia, IsDirectml, PythonReady: Boolean;
-  DetectedStack, CudaVersion, PythonPath, GitPath, CudaPath: String;
+  DetectedStack, CudaVersion, GitPath, CudaPath: String;
   UserProfilePath, UvStandalonePath, UvPythonScriptsPath, UvUserScriptsPath: String;
 begin
-  PythonPath := ExpandConstant('{localappdata}\Programs\Python\Python310\python.exe');
   GitPath := ExpandConstant('{localappdata}\Programs\Git\cmd\git.exe');
   UserProfilePath := GetEnv('USERPROFILE');
   if UserProfilePath <> '' then
@@ -592,8 +645,7 @@ begin
     UvStandalonePath := '';
   UvPythonScriptsPath := ExpandConstant('{localappdata}\Programs\Python\Python310\Scripts\uv.exe');
   UvUserScriptsPath := ExpandConstant('{userappdata}\Python\Python310\Scripts\uv.exe');
-  PythonReady := CmdAvailable('python') or CmdAvailable('py') or FileExists(PythonPath) or
-    FileExists(PrereqPathPage.Values[0] + '\python.exe');
+  PythonReady := PythonAvailable(PrereqPathPage.Values[0]);
   PythonStatusLabel.Caption := 'Python 3.10+：' +
     StatusText(PythonReady);
   GitStatusLabel.Caption := 'Git：' +
@@ -648,9 +700,7 @@ end;
 
 function RequiredPrereqMissing(): Boolean;
 begin
-  Result := not (CmdAvailable('python') or CmdAvailable('py') or
-      FileExists(ExpandConstant('{localappdata}\Programs\Python\Python310\python.exe')) or
-      FileExists(PrereqPathPage.Values[0] + '\python.exe')) or
+  Result := not PythonAvailable(PrereqPathPage.Values[0]) or
     not CommandOrFileAvailable('git', ExpandConstant('{localappdata}\Programs\Git\cmd\git.exe'),
       ExpandConstant('{autopf}\Git\cmd\git.exe'), '') or
     not (CmdAvailable('cl') or
@@ -1042,9 +1092,10 @@ end;
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
-  if (PageID = GpuStackPage.ID) or (PageID = PrereqDownloadPage.ID) or
-     (PageID = PrereqPathPage.ID) then
+  if PageID = GpuStackPage.ID then
     Result := not BuildEnvSelected();
+  if (PageID = PrereqDownloadPage.ID) or (PageID = PrereqPathPage.ID) then
+    Result := (not BuildEnvSelected()) and (not EnvConfigureSelected());
   if PageID = CudaPathPage.ID then
     Result := (not BuildEnvSelected()) or (not NvidiaGpuDetected());
   if PageID = DetailsPage.ID then
@@ -1205,6 +1256,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'AI 对齐/自然修音 worker', PathJoin(InternalDir, 'infrastructure\vocal_tuning_worker.py'));
   if not FileExists(PathJoin(AppDir, 'install\configure_user_env.py')) then
     Missing := AddMissingRuntimeFile(Missing, '用户环境配置工具', PathJoin(AppDir, 'install\configure_user_env.py'));
+  if not FileExists(PathJoin(AppDir, 'install\detect_python.bat')) then
+    Missing := AddMissingRuntimeFile(Missing, 'Python 运行时检测工具', PathJoin(AppDir, 'install\detect_python.bat'));
   if not SystemFfmpegAvailable() then
     Missing := AddMissingRuntimeFile(Missing, 'FFmpeg/ffprobe 分卷载荷', PathJoin(AppDir, 'tools\ffmpeg\bin'));
   if not FileExists(PathJoin(AppDir, 'engines\so-vits-svc\inference\infer_tool.py')) then
@@ -1223,6 +1276,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC BigVGAN', PathJoin(AppDir, 'assets\models\seedvc\bigvgan_v2_44khz_128band_512x\bigvgan_generator.pt'));
   if not FileExists(PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\checkpoints\model_120.ckpt.best')) then
     Missing := AddMissingRuntimeFile(Missing, 'DeepFilterNet 权重', PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\checkpoints\model_120.ckpt.best'));
+  if not FileExists(PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\config.ini')) then
+    Missing := AddMissingRuntimeFile(Missing, 'DeepFilterNet 配置', PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\config.ini'));
   if not FileExists(PathJoin(AppDir, 'engines\juce-vst3-host\xb-juce-vst3-host.exe')) then
     Missing := AddMissingRuntimeFile(Missing, 'JUCE VST3 Host', PathJoin(AppDir, 'engines\juce-vst3-host\xb-juce-vst3-host.exe'));
 
@@ -1469,19 +1524,23 @@ begin
 
     ValidateBundledRuntime();
 
-    if BuildEnvSelected() then
+    if BuildEnvSelected() or EnvConfigureSelected() then
     begin
       SetEnvProgress(0, '准备搭建运行环境…');
       WriteInstallerEnv();
       PrereqsReady := True;
       if EnvConfigureSelected() then
       begin
-        PrereqsReady := RunSetupBatch('install_prereqs.bat', '', '正在检测前置依赖并配置环境变量…', 0, 35);
-        SetupProgressStart := 35;
+        if BuildEnvSelected() then
+          SetupProgressStart := 35
+        else
+          SetupProgressStart := 100;
+        PrereqsReady := RunSetupBatch('install_prereqs.bat', '', '正在检测前置依赖并配置环境变量…', 0, SetupProgressStart);
       end
       else
         SetupProgressStart := 0;
-      if PrereqsReady and RunSetupBatch('setup_env.bat', GpuInstallArgs(), '正在搭建运行环境（创建子环境、复制模型、安装 Python 依赖）…', SetupProgressStart, 100) then
+      if BuildEnvSelected() and PrereqsReady and
+         RunSetupBatch('setup_env.bat', GpuInstallArgs(), '正在搭建运行环境（创建子环境、复制模型、安装 Python 依赖）…', SetupProgressStart, 100) then
       begin
         UvrReady := ValidateUvrRuntime();
         SeedVcReady := ValidateSeedVcRuntime();

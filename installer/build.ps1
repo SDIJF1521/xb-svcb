@@ -320,6 +320,7 @@ foreach ($worker in $workerFiles) {
 Require-File (Join-Path $Root "release_notes_v026.md") "v0.0.26 release notes"
 Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
+Require-File (Join-Path $Root "install\detect_python.bat") "Python runtime detector"
 $licensePath = Join-Path $Root "LICENSE"
 Require-File $licensePath "GPLv3 license"
 if ((Get-Content -LiteralPath $licensePath -Raw) -notmatch 'GNU GENERAL PUBLIC LICENSE\s+Version 3, 29 June 2007') {
@@ -341,6 +342,7 @@ Require-File (Join-Path $Root "assets\models\seedvc\whisper-small\preprocessor_c
 Require-FileSize (Join-Path $Root "assets\models\seedvc\whisper-small\model.safetensors") 943718400 "Bundled Whisper weights"
 Require-File (Join-Path $Root "assets\models\seedvc\bigvgan_v2_44khz_128band_512x\config.json") "Bundled BigVGAN config"
 Require-FileSize (Join-Path $Root "assets\models\seedvc\bigvgan_v2_44khz_128band_512x\bigvgan_generator.pt") 419430400 "Bundled BigVGAN weights"
+Require-FileSize (Join-Path $Root "assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\config.ini") 1024 "Bundled DeepFilterNet3 config"
 Require-FileSize (Join-Path $Root "assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\checkpoints\model_120.ckpt.best") 8388608 "Bundled DeepFilterNet3 weights"
 
 if ($ValidateOnly) {

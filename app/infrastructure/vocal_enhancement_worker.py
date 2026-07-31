@@ -9,6 +9,7 @@ AI 痕迹。基础层使用自然停顿扩展、限量神经降噪和轻母带�
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 import tempfile
@@ -727,7 +728,8 @@ def _deepfilter(source: Path, output: Path) -> None:
     import numpy as np
     import torchaudio
 
-    model, state, _ = init_df()
+    model_dir = os.environ.get("XB_DEEPFILTER_MODEL_DIR")
+    model, state, _ = init_df(model_dir) if model_dir else init_df()
     model_sr = int(state.sr())
     audio, info = load_audio(str(source), sr=model_sr)
     enhanced = enhance(model, state, audio, atten_lim_db=3.0)

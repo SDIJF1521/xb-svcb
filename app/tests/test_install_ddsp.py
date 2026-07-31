@@ -45,18 +45,62 @@ def test_bundled_ddsp_pc_vocoder_is_deployed_without_downloading(tmp_path, monke
 def test_ddsp_requirements_pin_transformers_for_directml(tmp_path):
     installer = _load_installer_module()
     requirements = tmp_path / "requirements.txt"
-    requirements.write_text("numpy==1.26.4\ntransformers\ntorch\n", encoding="utf-8")
+    requirements.write_text(
+        "gin\ngin_config\nnumpy==1.26.4\ntransformers\ntorch\n",
+        encoding="utf-8",
+    )
 
     filtered = installer._filter_requirements(
         requirements,
-        extra_deny=installer.DIRECTML_EXTRA_DENY,
+        extra_deny=installer.DDSP_REQ_DENY | installer.DIRECTML_EXTRA_DENY,
         overrides=installer.DDSP_REQ_OVERRIDES,
     )
     result = filtered.read_text(encoding="utf-8")
+    lines = result.splitlines()
 
     assert "transformers==4.46.3" in result
     assert "\ntransformers\n" not in result
     assert "\ntorch\n" not in result
+    assert "gin" not in lines
+    assert "gin_config" in lines
+
+
+def test_bundled_deepfilter_model_uses_an_explicit_project_path(
+    tmp_path, monkeypatch
+):
+    installer = _load_installer_module()
+    assets_dir = tmp_path / "assets" / "models"
+    vocal_models_dir = tmp_path / "models" / "vocal-enhancement"
+    bundled = (
+        assets_dir
+        / "vocal-enhancement"
+        / "DeepFilterNet"
+        / "DeepFilterNet"
+        / "Cache"
+        / "DeepFilterNet3"
+    )
+    (bundled / "checkpoints").mkdir(parents=True)
+    (bundled / "config.ini").write_text("[df]\nsr = 48000\n", encoding="utf-8")
+    (bundled / "checkpoints" / "model_120.ckpt.best").write_bytes(b"model")
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(installer, "ASSETS_MODELS_DIR", assets_dir)
+    monkeypatch.setattr(installer, "VOCAL_MODELS_DIR", vocal_models_dir)
+    monkeypatch.setattr(installer, "DEEPFILTER_CHECKPOINT_MIN_BYTES", 1)
+    monkeypatch.setattr(installer, "run", lambda command: calls.append(command))
+
+    model_dir = installer._prepare_vocal_deepfilter_model("vocal-python.exe")
+
+    assert model_dir == vocal_models_dir / "DeepFilterNet3"
+    assert (model_dir / "config.ini").is_file()
+    assert calls == [
+        [
+            "vocal-python.exe",
+            "-c",
+            "import sys; from df.enhance import init_df; init_df(sys.argv[1])",
+            str(model_dir),
+        ]
+    ]
 
 
 def test_ddsp_hubert_validation_imports_runtime_entrypoint(monkeypatch):

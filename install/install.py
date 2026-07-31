@@ -1554,6 +1554,10 @@ SEEDVC_REQ_DENY = {
 DDSP_REQ_DENY = {
     "freesimplegui",
     "sounddevice",
+    # Upstream lists both `gin` and `gin_config`. The `gin` project on PyPI is
+    # unrelated and only publishes legacy, non-PEP 625 source archives; the
+    # required `import gin` module is provided by the retained gin_config line.
+    "gin",
 }
 
 # DDSP 6.3 leaves Transformers unpinned. Transformers 5.x imports the public
@@ -1564,6 +1568,10 @@ DDSP_REQ_DENY = {
 DDSP_REQ_OVERRIDES = {
     "transformers": "transformers==4.46.3",
 }
+
+# The bundled DeepFilterNet3 checkpoint is intentionally much smaller than
+# the SVC base models checked by _is_large_model_file().
+DEEPFILTER_CHECKPOINT_MIN_BYTES = 8 * 1024 * 1024
 
 
 def step_seedvc(uv: str, gpu_stack: str) -> None:
@@ -1709,6 +1717,37 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
         print(c("g", "DDSP-SVC 推理环境就绪（CPU）"))
 
 
+def _prepare_vocal_deepfilter_model(py: str) -> Path:
+    """Deploy and validate the bundled model without consulting the user cache."""
+    model_dir = VOCAL_MODELS_DIR / "DeepFilterNet3"
+    bundled_rel = (
+        "vocal-enhancement/DeepFilterNet/DeepFilterNet/Cache/DeepFilterNet3"
+    )
+    if not copy_bundled(bundled_rel, model_dir):
+        raise RuntimeError("安装包缺少 DeepFilterNet3 自带模型")
+
+    config_file = model_dir / "config.ini"
+    checkpoint = model_dir / "checkpoints" / "model_120.ckpt.best"
+    try:
+        checkpoint_ready = (
+            checkpoint.is_file()
+            and checkpoint.stat().st_size >= DEEPFILTER_CHECKPOINT_MIN_BYTES
+        )
+    except OSError:
+        checkpoint_ready = False
+    if not config_file.is_file() or not checkpoint_ready:
+        raise RuntimeError(
+            "DeepFilterNet3 自带模型不完整：需要 config.ini 与完整的 model_120.ckpt.best"
+        )
+
+    # appdirs uses the Windows known-folder API and ignores a LOCALAPPDATA
+    # override. Passing the model directory explicitly keeps install and runtime
+    # fully offline and independent of the current user's cache.
+    check = "import sys; from df.enhance import init_df; init_df(sys.argv[1])"
+    run([py, "-c", check, str(model_dir)])
+    return model_dir
+
+
 def step_vocal(uv: str, gpu_stack: str) -> None:
     hr("8/10 AI 歌声增强环境 .venv-vocal")
     if not venv_python(VOCAL_VENV).exists():
@@ -1747,22 +1786,7 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
     if gpu_stack in {"cu121", "cu128"}:
         _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, gpu_stack)
 
-    VOCAL_MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    cache_env = {
-        "HOME": str(VOCAL_MODELS_DIR),
-        "USERPROFILE": str(VOCAL_MODELS_DIR),
-        "XDG_CACHE_HOME": str(VOCAL_MODELS_DIR / ".cache"),
-        "LOCALAPPDATA": str(VOCAL_MODELS_DIR / ".local"),
-    }
-    # 自带 DeepFilterNet 模型优先复制到缓存目录，命中则 init_df() 跳过联网下载。
-    # appdirs.user_cache_dir("DeepFilterNet") 在 LOCALAPPDATA 下解析为
-    # <LOCALAPPDATA>/DeepFilterNet/DeepFilterNet/Cache/
-    copy_bundled(
-        "vocal-enhancement/DeepFilterNet",
-        VOCAL_MODELS_DIR / ".local" / "DeepFilterNet",
-    )
-    # 安装阶段预取权重（若自带模型已命中则跳过下载），避免用户首次生成时才等待。
-    run([py, "-c", "from df.enhance import init_df; init_df()"], env=cache_env)
+    _prepare_vocal_deepfilter_model(py)
     (VOCAL_MODELS_DIR / "runtime.ready").write_text(
         "deepfilternet=0.5.6\npedalboard=0.9.24\npraat-parselmouth=0.4.6\n",
         encoding="ascii",

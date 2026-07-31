@@ -40,6 +40,7 @@ call :CHECK_JUCE_HOST
 
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 12 正在检查 Python 3.10
 call :CHECK_PYTHON
+if errorlevel 1 exit /b 1
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 28 正在检查 Git
 call :CHECK_GIT
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 40 正在检查 ffmpeg
@@ -221,38 +222,20 @@ if not errorlevel 1 (
 exit /b 0
 
 :CHECK_PYTHON
-where python >nul 2>&1 && (
-  for /f "delims=" %%P in ('where python 2^>nul') do if not defined XB_PYTHON_EXE set "XB_PYTHON_EXE=%%P"
-  for %%D in ("!XB_PYTHON_EXE!") do set "XB_PYTHON_DIR=%%~dpD"
-  if "!XB_PYTHON_DIR:~-1!"=="\" set "XB_PYTHON_DIR=!XB_PYTHON_DIR:~0,-1!"
-  echo [ok] Python found in PATH
+set "PYTHON_DETECTOR=%~dp0install\detect_python.bat"
+if not exist "!PYTHON_DETECTOR!" (
+  echo [fail] Python detector not found: !PYTHON_DETECTOR!
+  exit /b 1
+)
+call "!PYTHON_DETECTOR!"
+if not errorlevel 1 (
+  set "PATH=!XB_PYTHON_DIR!;!XB_PYTHON_DIR!\Scripts;!PATH!"
+  echo [ok] Python 3.10+ verified: !XB_PYTHON_EXE!
   exit /b 0
 )
-if defined XB_PYTHON_EXE if exist "%XB_PYTHON_EXE%" (
-  if not defined XB_PYTHON_DIR for %%D in ("%XB_PYTHON_EXE%") do set "XB_PYTHON_DIR=%%~dpD"
-  if "!XB_PYTHON_DIR:~-1!"=="\" set "XB_PYTHON_DIR=!XB_PYTHON_DIR:~0,-1!"
-  echo [ok] Python found: %XB_PYTHON_EXE%
-  exit /b 0
-)
-if exist "%LocalAppData%\Programs\Python\Python310\python.exe" (
-  set "XB_PYTHON_EXE=%LocalAppData%\Programs\Python\Python310\python.exe"
-  set "XB_PYTHON_DIR=%LocalAppData%\Programs\Python\Python310"
-  echo [ok] Python found: !XB_PYTHON_EXE!
-  exit /b 0
-)
-where py >nul 2>&1 && (
-  for /f "delims=" %%P in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do if not defined XB_PYTHON_EXE set "XB_PYTHON_EXE=%%P"
-  if defined XB_PYTHON_EXE if exist "!XB_PYTHON_EXE!" (
-    for %%D in ("!XB_PYTHON_EXE!") do set "XB_PYTHON_DIR=%%~dpD"
-    if "!XB_PYTHON_DIR:~-1!"=="\" set "XB_PYTHON_DIR=!XB_PYTHON_DIR:~0,-1!"
-    echo [ok] Python found through py launcher: !XB_PYTHON_EXE!
-    exit /b 0
-  )
-)
-echo [miss] Python 3.10 not found.
+echo [fail] A runnable Python 3.10 or newer was not found.
 call :MANUAL_GUIDANCE "Python 3.10" "https://www.python.org/downloads/windows/"
-call :RESOLVE_PATHS
-exit /b 0
+exit /b 1
 
 :CHECK_GIT
 where git >nul 2>&1 && (
@@ -269,7 +252,7 @@ call :RESOLVE_PATHS
 exit /b 0
 
 :CHECK_FFMPEG
-where ffmpeg >nul 2>&1 && (
+ffmpeg -version >nul 2>&1 && ffprobe -version >nul 2>&1 && (
   set "XB_FFMPEG_BIN="
   for /f "delims=" %%P in ('where ffmpeg 2^>nul') do if not defined XB_FFMPEG_BIN set "XB_FFMPEG_BIN=%%~dpP"
   if defined XB_FFMPEG_BIN set "XB_FFMPEG_BIN=!XB_FFMPEG_BIN:~0,-1!"
@@ -288,12 +271,12 @@ where ffmpeg >nul 2>&1 && (
   )
   exit /b 0
 )
-if defined XB_FFMPEG_BIN if exist "%XB_FFMPEG_BIN%\ffmpeg.exe" (
-  echo [ok] bundled ffmpeg found: %XB_FFMPEG_BIN%\ffmpeg.exe
+if defined XB_FFMPEG_BIN if exist "%XB_FFMPEG_BIN%\ffmpeg.exe" if exist "%XB_FFMPEG_BIN%\ffprobe.exe" (
+  echo [ok] bundled ffmpeg/ffprobe found: %XB_FFMPEG_BIN%
   exit /b 0
 )
-echo [fail] ffmpeg was not found in PATH and the bundled payload is missing.
-echo        Expected: %~dp0tools\ffmpeg\bin\ffmpeg.exe
+echo [fail] A working ffmpeg/ffprobe pair was not found in PATH and the bundled payload is missing.
+echo        Expected: %~dp0tools\ffmpeg\bin\ffmpeg.exe and ffprobe.exe
 exit /b 1
 
 :CHECK_CPP_TOOLS
@@ -448,14 +431,14 @@ if not exist "!ENV_CONFIG_HELPER!" (
   echo [fail] Environment configuration helper not found: !ENV_CONFIG_HELPER!
   exit /b 1
 )
+if not defined XB_PYTHON_EXE (
+  call :CHECK_PYTHON
+  if errorlevel 1 (
+    echo [fail] Python executable unavailable for environment configuration.
+    exit /b 1
+  )
+)
 if defined XB_PYTHON_DIR set "XB_PYTHON_SCRIPTS=%XB_PYTHON_DIR%\Scripts"
-if not defined XB_PYTHON_EXE (
-  for /f "delims=" %%P in ('where python 2^>nul') do if not defined XB_PYTHON_EXE set "XB_PYTHON_EXE=%%P"
-)
-if not defined XB_PYTHON_EXE (
-  echo [fail] Python executable unavailable for environment configuration.
-  exit /b 1
-)
 set "ENV_CONFIG_DRY_RUN="
 if "%XB_ENV_DRY_RUN%"=="1" set "ENV_CONFIG_DRY_RUN=--dry-run"
 

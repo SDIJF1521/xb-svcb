@@ -710,9 +710,15 @@ def test_deepfilter_uses_model_rate_then_restores_input_rate(
         calls["resample"] = (source_rate, target_rate)
         return FakeTensor(np.zeros((1, 44101), dtype=np.float32))
 
+    model_dir = tmp_path / "DeepFilterNet3"
+
+    def fake_init_df(path: str):
+        calls["model_dir"] = path
+        return object(), FakeState(), object()
+
     enhance_module = types.ModuleType("df.enhance")
     enhance_module.enhance = fake_enhance
-    enhance_module.init_df = lambda: (object(), FakeState(), object())
+    enhance_module.init_df = fake_init_df
     enhance_module.load_audio = fake_load
     df_module = types.ModuleType("df")
     df_module.enhance = enhance_module
@@ -721,6 +727,7 @@ def test_deepfilter_uses_model_rate_then_restores_input_rate(
     monkeypatch.setitem(sys.modules, "df", df_module)
     monkeypatch.setitem(sys.modules, "df.enhance", enhance_module)
     monkeypatch.setitem(sys.modules, "torchaudio", torchaudio_module)
+    monkeypatch.setenv("XB_DEEPFILTER_MODEL_DIR", str(model_dir))
 
     output = tmp_path / "filtered.wav"
 
@@ -732,6 +739,7 @@ def test_deepfilter_uses_model_rate_then_restores_input_rate(
     vocal_enhancement_worker._deepfilter(tmp_path / "source.wav", output)
 
     assert calls == {
+        "model_dir": str(model_dir),
         "load_sr": 48000,
         "attenuation": 3.0,
         "resample": (48000, 44100),
@@ -775,6 +783,9 @@ def test_processor_invokes_isolated_worker_and_uses_project_cache(tmp_path: Path
         assert cmd[cmd.index("--stereo-width") + 1] == "0.3000"
         assert cmd[cmd.index("--loudness-envelope") + 1] == "0.5800"
         assert kwargs["env"]["USERPROFILE"] == str(cache_home)
+        assert kwargs["env"]["XB_DEEPFILTER_MODEL_DIR"] == str(
+            cache_home / "DeepFilterNet3"
+        )
         return subprocess.CompletedProcess(cmd, 0, "VOCAL_ENHANCE_OK", "")
 
     with (

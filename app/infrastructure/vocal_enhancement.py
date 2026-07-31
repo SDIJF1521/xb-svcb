@@ -103,6 +103,7 @@ class VocalEnhancementProcessor:
         env["USERPROFILE"] = str(cache_home)
         env["XDG_CACHE_HOME"] = str(cache_home / ".cache")
         env["LOCALAPPDATA"] = str(cache_home / ".local")
+        env["XB_DEEPFILTER_MODEL_DIR"] = str(cache_home / "DeepFilterNet3")
 
         with tempfile.TemporaryDirectory(
             prefix="xb-vocal-tune-",
