@@ -15,6 +15,7 @@ if not defined HUGGINGFACE_HUB_ENDPOINT set "HUGGINGFACE_HUB_ENDPOINT=%XB_HF_MIR
 if not defined XB_PYPI_MIRROR set "XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple"
 if not defined PIP_INDEX_URL set "PIP_INDEX_URL=%XB_PYPI_MIRROR%"
 if not defined UV_DEFAULT_INDEX set "UV_DEFAULT_INDEX=%XB_PYPI_MIRROR%"
+if not defined UV_LINK_MODE set "UV_LINK_MODE=copy"
 if not defined PIP_DISABLE_PIP_VERSION_CHECK set "PIP_DISABLE_PIP_VERSION_CHECK=1"
 echo [XB-SVCB] HuggingFace mirror: %HF_ENDPOINT%
 echo [XB-SVCB] PyPI mirror       : %PIP_INDEX_URL%

@@ -1151,6 +1151,7 @@ begin
     'set "XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple"' + #13#10 +
     'set "PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple"' + #13#10 +
     'set "UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple"' + #13#10 +
+    'set "UV_LINK_MODE=copy"' + #13#10 +
     'set "PIP_DISABLE_PIP_VERSION_CHECK=1"' + #13#10;
   SaveStringToFile(ExpandConstant('{app}\installer_env.cmd'), Payload, False);
 end;

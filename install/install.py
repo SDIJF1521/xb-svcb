@@ -54,7 +54,7 @@ from pathlib import Path
 
 DEFAULT_HF_MIRROR = "https://hf-mirror.com"
 DEFAULT_PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
-PYPI_FALLBACK_INDEX = "https://pypi.org/simple"
+PYPI_FALLBACK_INDEX = "https://mirrors.cloud.tencent.com/pypi/simple"
 
 
 def _normalize_url(raw: str | None, default: str = "") -> str:
@@ -78,6 +78,7 @@ os.environ.setdefault("HUGGINGFACE_HUB_ENDPOINT", HF_MIRROR)
 os.environ.setdefault("XB_PYPI_MIRROR", PYPI_MIRROR)
 os.environ.setdefault("PIP_INDEX_URL", PYPI_MIRROR)
 os.environ.setdefault("UV_DEFAULT_INDEX", PYPI_MIRROR)
+os.environ.setdefault("UV_LINK_MODE", "copy")
 os.environ.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
 
 for _stream in (sys.stdout, sys.stderr):
@@ -298,7 +299,7 @@ def pypi_index_args(
 
 
 def warn_pypi_fallback() -> None:
-    print(c("y", f"    PyPI mirror failed; retrying with official PyPI: {PYPI_FALLBACK_INDEX}"))
+    print(c("y", f"    PyPI mirror failed; retrying with fallback PyPI mirror: {PYPI_FALLBACK_INDEX}"))
 
 
 def venv_python(venv_dir: Path) -> Path:
@@ -500,12 +501,13 @@ def uv_pip_install(
     *args: str,
     index: str | None = None,
 ) -> None:
-    """`uv pip install`；失败时自动加 --reinstall 重试一次。
+    """`uv pip install`；失败时自动换源/加 --reinstall 重试。
 
     用于自愈被中断的半成品安装：典型表现是 site-packages 里留下空的
     `*.dist-info` 目录（缺 METADATA），再次安装会报
     `failed to open file ... METADATA (os error 2)`。--reinstall 会强制
-    重新下载并覆盖，绕过损坏的旧元数据。
+    重新下载并覆盖，绕过损坏的旧元数据。国内镜像偶发 403/残缺 wheel 时
+    先切官方 PyPI，避免重复撞同一个失效镜像。
     """
     def build(reinstall: bool, use_mirror: bool = True) -> list[str]:
         extra = ["--reinstall"] if reinstall else []
@@ -516,18 +518,17 @@ def uv_pip_install(
     try:
         run(build(reinstall=False))
     except subprocess.CalledProcessError:
-        print(c("y", "    安装失败，尝试 --reinstall 重装以修复损坏/残缺的旧安装 …"))
-        try:
-            run(build(reinstall=True))
-        except subprocess.CalledProcessError:
-            if PYPI_MIRROR == PYPI_FALLBACK_INDEX:
-                raise
+        if PYPI_MIRROR != PYPI_FALLBACK_INDEX:
             warn_pypi_fallback()
             try:
                 run(build(reinstall=False, use_mirror=False))
+                return
             except subprocess.CalledProcessError:
-                print(c("y", "    Official PyPI retry failed; trying --reinstall once..."))
+                print(c("y", "    Fallback PyPI mirror retry failed; trying --reinstall once..."))
                 run(build(reinstall=True, use_mirror=False))
+                return
+        print(c("y", "    安装失败，尝试 --reinstall 重装以修复损坏/残缺的旧安装 …"))
+        run(build(reinstall=True))
 
 
 # ---------- 下载工具 ----------
@@ -1373,15 +1374,14 @@ def _reaffirm_torch_wheels(
     torch.cuda.is_available() is False"。普通 install 因版本号相同会判定已满足而不覆盖，
     这里用 --reinstall-package 只强制重装 torch/torchaudio（不动其它包）。
     """
-    cmd = uv_cmd(
-        uv, "pip", "install",
-        "--reinstall-package", "torch", "--reinstall-package", "torchaudio",
-        "--python", py,
-        *torch_specs,
-        *pypi_index_args(index),
-    )
     try:
-        run(cmd)
+        uv_pip_install(
+            uv,
+            py,
+            "--reinstall-package", "torch", "--reinstall-package", "torchaudio",
+            *torch_specs,
+            index=index,
+        )
         print(c("g", f"    已校正 {label} torch（防止被依赖替换成 CPU 版）"))
     except subprocess.CalledProcessError:
         print(c("y", f"    {label} torch 校正失败，请检查网络/驱动后重跑该步"))

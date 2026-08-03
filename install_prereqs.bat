@@ -20,6 +20,7 @@ if not defined HUGGINGFACE_HUB_ENDPOINT set "HUGGINGFACE_HUB_ENDPOINT=%XB_HF_MIR
 if not defined XB_PYPI_MIRROR set "XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple"
 if not defined PIP_INDEX_URL set "PIP_INDEX_URL=%XB_PYPI_MIRROR%"
 if not defined UV_DEFAULT_INDEX set "UV_DEFAULT_INDEX=%XB_PYPI_MIRROR%"
+if not defined UV_LINK_MODE set "UV_LINK_MODE=copy"
 if not defined PIP_DISABLE_PIP_VERSION_CHECK set "PIP_DISABLE_PIP_VERSION_CHECK=1"
 if not defined XB_FFMPEG_DIR if exist "%~dp0tools\ffmpeg\bin\ffmpeg.exe" set "XB_FFMPEG_DIR=%~dp0tools\ffmpeg"
 
@@ -374,8 +375,8 @@ echo [auto] uv not found. Installing uv with the detected Python...
 if errorlevel 1 echo [warn] ensurepip did not complete; trying existing pip anyway.
 call :PIP_INSTALL_UV "%PIP_INDEX_URL%"
 if errorlevel 1 (
-  echo [warn] uv install from mirror failed; retrying official PyPI.
-  call :PIP_INSTALL_UV "https://pypi.org/simple"
+  echo [warn] uv install from mirror failed; retrying fallback PyPI mirror.
+  call :PIP_INSTALL_UV "https://mirrors.cloud.tencent.com/pypi/simple"
 )
 if errorlevel 1 (
   echo [fail] uv automatic installation failed.

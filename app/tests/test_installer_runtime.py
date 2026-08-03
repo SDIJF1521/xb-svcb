@@ -80,3 +80,13 @@ def test_installer_explicitly_packages_and_validates_python_detector() -> None:
 
     assert 'Source: "..\\install\\detect_python.bat"' in script
     assert "install\\detect_python.bat')) then" in script
+
+
+def test_installer_entrypoints_suppress_uv_cross_drive_hardlink_warning() -> None:
+    setup_env = (ROOT / "setup_env.bat").read_text(encoding="utf-8")
+    prereqs = (ROOT / "install_prereqs.bat").read_text(encoding="utf-8")
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'set "UV_LINK_MODE=copy"' in setup_env
+    assert 'set "UV_LINK_MODE=copy"' in prereqs
+    assert 'set "UV_LINK_MODE=copy"' in script
