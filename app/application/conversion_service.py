@@ -33,8 +33,10 @@ def _wants_vocal_output(work: dict[str, Any]) -> bool:
 def default_steps(enhancement: bool = False) -> list[dict[str, Any]]:
     steps = [
         {"key": "separate", "label": "人声分离", "status": StepStatus.WAIT.value},
+        {"key": "repair_input", "label": "分离人声修复", "status": StepStatus.WAIT.value},
         {"key": "f0", "label": "F0 提取", "status": StepStatus.WAIT.value},
         {"key": "infer", "label": "模型推理", "status": StepStatus.WAIT.value},
+        {"key": "repair_output", "label": "输出人声修复", "status": StepStatus.WAIT.value},
     ]
     if enhancement:
         steps.append(
@@ -50,9 +52,11 @@ def default_steps_multi(enhancement: bool = False) -> list[dict[str, Any]]:
     """多模型混合翻唱的流水线步骤。"""
     steps = [
         {"key": "separate", "label": "人声分离", "status": StepStatus.WAIT.value},
+        {"key": "repair_input", "label": "分离人声修复", "status": StepStatus.WAIT.value},
         {"key": "split", "label": "歌词分割", "status": StepStatus.WAIT.value},
         {"key": "infer", "label": "逐段推理", "status": StepStatus.WAIT.value},
         {"key": "merge", "label": "人声合并", "status": StepStatus.WAIT.value},
+        {"key": "repair_output", "label": "输出人声修复", "status": StepStatus.WAIT.value},
     ]
     if enhancement:
         steps.append(
@@ -159,6 +163,109 @@ class ConversionService:
         }
         return bool(raw.get("enabled")), level, controls
 
+    def _repair_vocal(
+        self,
+        work: dict[str, Any],
+        source: Path,
+        output: Path,
+        device: str,
+        log_file: Path,
+        *,
+        stage: str,
+        progress: int,
+    ) -> tuple[Path, dict[str, float | bool]]:
+        step_key = "repair_output" if stage == "output" else "repair_input"
+        self._set_step(work, step_key, StepStatus.ACTIVE.value)
+        self._save(work)
+        profile: dict[str, float | bool] = {}
+        repaired = source
+        if not source.is_file():
+            self._log(log_file, f"  AI 人声修复跳过：输入不存在 {source}")
+        elif not self._vocal_enhancement.available:
+            self._log(
+                log_file,
+                "  AI 人声修复跳过：DeepFilterNet3 环境未就绪（请修复 vocal 环境）",
+            )
+        else:
+            stage_label = "模型输出" if stage == "output" else "分离干声"
+            self._log(
+                log_file,
+                f"  {stage_label}进入 DeepFilterNet3 修复，并保护高频辅音与高音泛音",
+            )
+            try:
+                profile = self._vocal_enhancement.analyze(source, log_file=log_file)
+                repaired = self._vocal_enhancement.repair(
+                    source,
+                    output,
+                    stage=stage,
+                    device=device,
+                    log_file=log_file,
+                    profile=profile,
+                )
+                self._log(log_file, f"  {stage_label}修复完成: {repaired}")
+            except (OSError, RuntimeError, ValueError) as exc:
+                self._log(log_file, f"  {stage_label}修复失败，沿用未修复人声: {exc}")
+        repair_results = work.get("vocal_repair")
+        if not isinstance(repair_results, dict):
+            repair_results = {}
+            work["vocal_repair"] = repair_results
+        repair_results[stage] = {
+            "model": "DeepFilterNet3",
+            "input_path": str(source),
+            "output_path": str(repaired),
+            "applied": repaired != source,
+            "profile": profile,
+        }
+        self._set_step(work, step_key, StepStatus.DONE.value)
+        work["progress"] = progress
+        self._save(work)
+        return repaired, profile
+
+    def _adapt_high_range(
+        self,
+        params: InferenceParams,
+        profile: dict[str, float | bool],
+        log_file: Path,
+        framework: str = "",
+    ) -> None:
+        high_pitch = bool(profile.get("high_pitch"))
+        high_frequency = bool(profile.get("high_frequency"))
+        recommended = max(
+            1100.0,
+            min(1800.0, float(profile.get("recommended_f0_max") or 1100.0)),
+        )
+        setattr(params, "adaptive_f0_max", recommended)
+        normalized_framework = config.modelhub_normalize_framework(framework)
+        current_method = str(params.f0_method or "rmvpe").lower()
+        adaptive_method = current_method
+        if high_pitch and normalized_framework == "so-vits-svc":
+            fcpe_model = (config.SOVITS_REPO or config.SOVITS_REPO_DIR) / "pretrain" / "fcpe.pt"
+            adaptive_method = "fcpe" if fcpe_model.is_file() else "crepe"
+        elif high_pitch and normalized_framework == "ddsp-svc":
+            adaptive_method = "fcpe"
+        elif high_pitch and normalized_framework == "rvc":
+            adaptive_method = "crepe"
+        elif high_pitch and current_method not in {"rmvpe", "crepe", "fcpe"}:
+            adaptive_method = "rmvpe"
+        if adaptive_method != current_method:
+            old_method = params.f0_method
+            params.f0_method = adaptive_method
+            self._log(
+                log_file,
+                f"  检测到高音域，F0 提取器由 {old_method or '默认'} 自动切换为 {adaptive_method}",
+            )
+        if high_pitch or high_frequency:
+            params.filter_radius = min(int(params.filter_radius), 2)
+            params.protect = min(float(params.protect), 0.28)
+        self._log(
+            log_file,
+            "  自适应音域分析："
+            f"F0 P95={float(profile.get('p95_f0_hz') or 0.0):.1f}Hz，"
+            f"高频占比={float(profile.get('high_band_ratio') or 0.0):.1%}，"
+            f"推理上限={recommended:.0f}Hz，"
+            f"高音={'是' if high_pitch else '否'} / 高频={'是' if high_frequency else '否'}",
+        )
+
     def _enhance_vocal(
         self,
         work: dict[str, Any],
@@ -181,9 +288,9 @@ class ConversionService:
             else "基础层 Clean Voice"
         )
         chain = (
-            "AI 对齐/自然修音 → 自然停顿扩展 → 宽带参考 → 限量降噪 → 真实细节保护 → 轻母带 → 并行混合 → AI 角色共振峰 → AI EQ → AI Compressor → AI Exciter → Stereo → AI 响度包络"
+            "AI 对齐/自然修音 → 自然停顿扩展 → 宽带参考 → 已完成 DeepFilterNet3 修复 → 真实细节保护 → 轻母带 → 并行混合 → AI 角色共振峰 → AI EQ → AI Compressor → AI Exciter → Stereo → AI 响度包络"
             if level == "advanced"
-            else "AI 对齐/自然修音 → 自然停顿扩展 → 限量降噪 → 轻母带 → 并行混合 → AI 角色共振峰 → AI EQ → AI Compressor → AI Exciter → Stereo → AI 响度包络"
+            else "AI 对齐/自然修音 → 自然停顿扩展 → 已完成 DeepFilterNet3 修复 → 轻母带 → 并行混合 → AI 角色共振峰 → AI EQ → AI Compressor → AI Exciter → Stereo → AI 响度包络"
         )
         self._log(
             log_file,
@@ -201,6 +308,7 @@ class ConversionService:
             device=device,
             log_file=log_file,
             reference=reference,
+            skip_repair=True,
             **controls,
         )
         self._set_step(work, "enhance", StepStatus.DONE.value)
@@ -329,7 +437,7 @@ class ConversionService:
         try:
             params = InferenceParams.from_dict(work.get("params", {}))
             enhancement_enabled, _, _ = self._enhancement_settings(work)
-            pipeline_total = 5 if enhancement_enabled else 4
+            pipeline_total = 7 if enhancement_enabled else 6
             framework = config.modelhub_normalize_framework(work.get("framework"))
             is_sovits = framework == "so-vits-svc"
             engine = self._engines.for_framework(framework)
@@ -387,16 +495,31 @@ class ConversionService:
                         self._log(log_file, "  跳过去混响：未找到去混响模型")
             else:
                 vocals = work_dir / "placeholder.wav"
-            # 保存分离结果路径，供前端展示与试听（背景音乐 / 干声）
+            # 保存原始分离结果，再用专用模型修复分离伪影。
             if instrumental and Path(instrumental).exists():
                 work["instrumental_path"] = str(instrumental)
             if Path(vocals).exists():
-                work["vocals_path"] = str(vocals)
+                work["separated_vocals_path"] = str(vocals)
             self._set_step(work, "separate", StepStatus.DONE.value)
-            work["progress"] = 25
+            work["progress"] = 16
             self._save(work)
 
-            # 2) F0 提取：先把人声统一为 wav，再用 SVC 环境的预测器真实提取基频曲线
+            vocals, audio_profile = self._repair_vocal(
+                work,
+                Path(vocals),
+                work_dir / "vocals_repaired.wav",
+                params.device,
+                log_file,
+                stage="separated",
+                progress=32,
+            )
+            if Path(vocals).exists():
+                work["vocals_path"] = str(vocals)
+            work["adaptive_audio_profile"] = audio_profile
+            self._adapt_high_range(params, audio_profile, log_file, framework)
+            self._save(work)
+
+            # 3) F0 提取：先把人声统一为 wav，再用 SVC 环境的预测器真实提取基频曲线
             self._set_step(work, "f0", StepStatus.ACTIVE.value)
             self._save(work)
             infer_input = Path(vocals)
@@ -404,7 +527,7 @@ class ConversionService:
                 wav_input = work_dir / "infer_input.wav"
                 if self._ffmpeg.convert(infer_input, wav_input):
                     infer_input = wav_input
-            self._log(log_file, f"[2/{pipeline_total}] 推理输入已准备: {infer_input}")
+            self._log(log_file, f"[3/{pipeline_total}] 推理输入已准备: {infer_input}")
             # 真实 F0 提取（rmvpe 等），保存曲线并校验是否检测到人声。
             # F0 探针为 so-vits 专属；其它框架（如 RVC 内部自行处理 F0）跳过该步。
             f0_stats = None
@@ -439,20 +562,18 @@ class ConversionService:
             else:
                 self._log(log_file, "  F0 提取跳过/失败（不影响后续推理，推理内部会再算一次）")
             self._set_step(work, "f0", StepStatus.DONE.value)
-            work["progress"] = 50
+            work["progress"] = 48
             self._save(work)
 
-            # 3) 推理（按模型框架路由引擎：so-vits-svc / rvc / …）
+            # 4) 推理（按模型框架路由引擎：so-vits-svc / rvc / …）
             self._set_step(work, "infer", StepStatus.ACTIVE.value)
             self._save(work)
             fw_label = config.MODELHUB_FRAMEWORKS.get(framework, framework)
             self._log(
                 log_file,
-                f"[3/{pipeline_total}] {fw_label} 推理开始（引擎 {'可用' if getattr(engine, 'available', False) else '降级模式'}）",
+                f"[4/{pipeline_total}] {fw_label} 推理开始（引擎 {'可用' if getattr(engine, 'available', False) else '降级模式'}）",
             )
-            raw_converted = work_dir / (
-                "converted_raw.wav" if enhancement_enabled else "converted.wav"
-            )
+            raw_converted = work_dir / "converted_raw.wav"
             engine.infer(
                 model={
                     "framework": framework,
@@ -469,21 +590,31 @@ class ConversionService:
                 log_file=log_file,
             )
             self._set_step(work, "infer", StepStatus.DONE.value)
-            work["progress"] = 68 if enhancement_enabled else 75
+            work["progress"] = 68
             self._save(work)
             self._log(log_file, "  模型推理完成")
 
-            converted = self._enhance_vocal(
+            repaired_converted, _ = self._repair_vocal(
                 work,
                 raw_converted,
+                work_dir / (
+                    "converted_repaired.wav" if enhancement_enabled else "converted.wav"
+                ),
+                params.device,
+                log_file,
+                stage="output",
+                progress=82,
+            )
+            converted = self._enhance_vocal(
+                work,
+                repaired_converted,
                 work_dir / "converted.wav",
                 params.device,
                 log_file,
-                progress=84,
+                progress=90,
                 reference=Path(work["vocals_path"]) if work.get("vocals_path") else None,
             )
-            if enhancement_enabled:
-                work["raw_converted_path"] = str(raw_converted)
+            work["raw_converted_path"] = str(raw_converted)
 
             # 最后混音：转换/增强后人声 + 原伴奏 → 完整翻唱；无伴奏则仅输出干声
             self._set_step(work, "mix", StepStatus.ACTIVE.value)
@@ -627,7 +758,7 @@ class ConversionService:
         try:
             base_params = InferenceParams.from_dict(work.get("params", {}))
             enhancement_enabled, _, _ = self._enhancement_settings(work)
-            pipeline_total = 6 if enhancement_enabled else 5
+            pipeline_total = 8 if enhancement_enabled else 7
             source = Path(work["source_path"]) if work.get("source_path") else None
             duration = (
                 self._ffmpeg.probe_duration(source)
@@ -681,12 +812,26 @@ class ConversionService:
             if instrumental and Path(instrumental).exists():
                 work["instrumental_path"] = str(instrumental)
             if Path(vocals).exists():
-                work["vocals_path"] = str(vocals)
+                work["separated_vocals_path"] = str(vocals)
             self._set_step(work, "separate", StepStatus.DONE.value)
-            work["progress"] = 20
+            work["progress"] = 14
             self._save(work)
 
-            # 2) 歌词分割：把人声统一为 wav，并规划时间轴 / 参与模型
+            vocals, audio_profile = self._repair_vocal(
+                work,
+                Path(vocals),
+                work_dir / "vocals_repaired.wav",
+                base_params.device,
+                log_file,
+                stage="separated",
+                progress=27,
+            )
+            if Path(vocals).exists():
+                work["vocals_path"] = str(vocals)
+            work["adaptive_audio_profile"] = audio_profile
+            self._save(work)
+
+            # 3) 歌词分割：把人声统一为 wav，并规划时间轴 / 参与模型
             self._set_step(work, "split", StepStatus.ACTIVE.value)
             self._save(work)
             infer_input = Path(vocals)
@@ -703,28 +848,34 @@ class ConversionService:
             sung = sum(1 for s in timeline if s.get("model_ids"))
             self._log(
                 log_file,
-                f"[2/{pipeline_total}] 歌词分割完成：共 {len(timeline)} 段"
+                f"[3/{pipeline_total}] 歌词分割完成：共 {len(timeline)} 段"
                 f"（演唱 {sung} 段，间奏 {len(timeline) - sung} 段），"
                 f"参与模型 {len(used_models)} 个",
             )
             self._set_step(work, "split", StepStatus.DONE.value)
-            work["progress"] = 35
+            work["progress"] = 40
             self._save(work)
 
-            # 3) 整轨逐模型推理：每个模型在「完整人声」上推理一次。
+            # 4) 整轨逐模型推理：每个模型在「完整人声」上推理一次。
             #    关键修复：不再把人声切成碎片逐句送推——短碎片会产生句首/句尾
             #    电流声、咔哒声并拼出卡顿。整轨推理保证上下文连续、无边界伪声。
             self._set_step(work, "infer", StepStatus.ACTIVE.value)
             self._save(work)
             self._log(
                 log_file,
-                f"[3/{pipeline_total}] 整轨逐模型推理（按各模型框架路由引擎）",
+                f"[4/{pipeline_total}] 整轨逐模型推理（按各模型框架路由引擎）",
             )
             full_renders: dict[str, Path] = {}
             for n, mid in enumerate(used_models):
                 model = seg_models.get(mid) or {}
                 seg_params = InferenceParams.from_dict(model.get("params", {}))
                 seg_framework = config.modelhub_normalize_framework(model.get("framework"))
+                self._adapt_high_range(
+                    seg_params,
+                    audio_profile,
+                    log_file,
+                    seg_framework,
+                )
                 seg_engine = self._engines.for_framework(seg_framework)
                 full_raw = work_dir / f"full_{mid}.wav"
                 fw_label = config.MODELHUB_FRAMEWORKS.get(seg_framework, seg_framework)
@@ -764,6 +915,45 @@ class ConversionService:
             self._set_step(work, "infer", StepStatus.DONE.value)
             work["progress"] = 75
             self._save(work)
+
+            manual_vocal_merge = (
+                str(work.get("workflow") or "auto_mix") == "manual_vocal_merge"
+            )
+            if manual_vocal_merge:
+                self._set_step(work, "repair_output", StepStatus.ACTIVE.value)
+                self._save(work)
+                repaired_renders: dict[str, Path] = {}
+                for mid, rendered in full_renders.items():
+                    repair_output = work_dir / f"full_{mid}_repaired.wav"
+                    try:
+                        repaired_renders[mid] = self._vocal_enhancement.repair(
+                            Path(rendered),
+                            repair_output,
+                            stage="output",
+                            device=base_params.device,
+                            log_file=log_file,
+                        )
+                    except (OSError, RuntimeError, ValueError) as exc:
+                        repaired_renders[mid] = Path(rendered)
+                        self._log(
+                            log_file,
+                            f"  模型 {mid} 输出修复失败，编辑器沿用原输出: {exc}",
+                        )
+                full_renders = repaired_renders
+                work["vocal_repair"] = {
+                    **(work.get("vocal_repair") or {}),
+                    "output": {
+                        "model": "DeepFilterNet3",
+                        "applied": any(
+                            path.name.endswith("_repaired.wav")
+                            for path in full_renders.values()
+                        ),
+                        "outputs": [str(path) for path in full_renders.values()],
+                    },
+                }
+                self._set_step(work, "repair_output", StepStatus.DONE.value)
+                work["progress"] = 84
+                self._save(work)
 
             # 给编辑器准备真正的“按模型、按句段”素材。
             # full_renders 仍是为了整轨推理的连续上下文，但编辑器不直接使用整轨；
@@ -831,12 +1021,12 @@ class ConversionService:
                 f"（每段仅含对应 AI 声音）",
             )
 
-            if str(work.get("workflow") or "auto_mix") == "manual_vocal_merge":
+            if manual_vocal_merge:
                 self._set_step(work, "merge", StepStatus.ACTIVE.value)
                 self._save(work)
                 self._log(
                     log_file,
-                    "[4/5] 手动人声合并：跳过自动拼接，等待进入编辑器逐段合并",
+                    f"[5/{pipeline_total}] 手动人声合并：跳过自动拼接，等待进入编辑器逐段合并",
                 )
                 work["converted_path"] = ""
                 work["ai_vocal_paths"] = []
@@ -935,9 +1125,7 @@ class ConversionService:
                 if ok:
                     pieces.append(piece)
 
-            full_vocal = work_dir / (
-                "converted_raw.wav" if enhancement_enabled else "converted.wav"
-            )
+            full_vocal = work_dir / "converted_raw.wav"
             merged = (
                 self._ffmpeg.concat_crossfade(pieces, full_vocal, xf=xf)
                 if self._ffmpeg.available and pieces
@@ -956,24 +1144,34 @@ class ConversionService:
             else:
                 self._log(
                     log_file,
-                    f"[4/{pipeline_total}] 人声合并完成（{len(timeline)} 句合并为 {len(pieces)} 段）：{full_vocal}",
+                    f"[5/{pipeline_total}] 人声合并完成（{len(timeline)} 句合并为 {len(pieces)} 段）：{full_vocal}",
                 )
             self._set_step(work, "merge", StepStatus.DONE.value)
-            work["progress"] = 80 if enhancement_enabled else 88
+            work["progress"] = 76
             self._save(work)
 
             raw_full_vocal = Path(full_vocal)
-            full_vocal = self._enhance_vocal(
+            repaired_full_vocal, _ = self._repair_vocal(
                 work,
                 raw_full_vocal,
+                work_dir / (
+                    "converted_repaired.wav" if enhancement_enabled else "converted.wav"
+                ),
+                base_params.device,
+                log_file,
+                stage="output",
+                progress=86,
+            )
+            full_vocal = self._enhance_vocal(
+                work,
+                repaired_full_vocal,
                 work_dir / "converted.wav",
                 base_params.device,
                 log_file,
                 progress=90,
                 reference=Path(work["vocals_path"]) if work.get("vocals_path") else None,
             )
-            if enhancement_enabled:
-                work["raw_converted_path"] = str(raw_full_vocal)
+            work["raw_converted_path"] = str(raw_full_vocal)
             work["converted_path"] = str(full_vocal)
             work["ai_vocal_paths"] = [str(p) for p in full_renders.values()]
             work["ai_merged_vocal_path"] = str(full_vocal)

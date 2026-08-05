@@ -34,6 +34,9 @@ class ModelServiceDownloadedModelTests(unittest.TestCase):
                         "main_model": str(model_file),
                         "index_file": str(index_file),
                         "source_repo_id": "owner/xb-svcb-downloaded",
+                        "source_version": "1.2.0",
+                        "source_uploaded_at": "2026-07-20T12:00:00",
+                        "source_tags": ["RVC", "女声"],
                     }
                 )
                 listed = service.list()
@@ -46,6 +49,8 @@ class ModelServiceDownloadedModelTests(unittest.TestCase):
                 listed[0]["metadata"]["source_repo_id"],
                 "owner/xb-svcb-downloaded",
             )
+            self.assertEqual(listed[0]["metadata"]["source_version"], "1.2.0")
+            self.assertEqual(listed[0]["metadata"]["source_tags"], ["RVC", "女声"])
             self.assertTrue(Path(listed[0]["main_model"]["path"]).is_file())
 
 

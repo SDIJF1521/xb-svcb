@@ -1,5 +1,7 @@
 <template>
   <div class="page">
+    <audio ref="hubAudioEl" style="display: none" @ended="hubPlayingRepo = ''" @pause="onHubAudioPause" />
+
     <!-- 页面标题 -->
     <div class="page-head">
       <div>
@@ -25,6 +27,21 @@
 
     <!-- ===================== 本地模型 ===================== -->
     <template v-if="tab === 'local'">
+      <div v-if="modelUpdates.length" class="update-banner glass">
+        <el-icon class="update-ic"><RefreshRight /></el-icon>
+        <div class="update-main">
+          <div class="update-title">发现 {{ modelUpdates.length }} 个模型有新版本</div>
+          <div class="update-list">
+            <span v-for="u in modelUpdates" :key="u.model_id">
+              {{ u.model_name }} {{ u.installed_version || '本地版' }} → {{ u.latest_version || '新版' }}
+            </span>
+          </div>
+        </div>
+        <el-button round class="cta-btn" :loading="upgradingId === firstUpdate?.model_id" @click="firstUpdate && upgradeModel(firstUpdate)">
+          <el-icon v-if="upgradingId !== firstUpdate?.model_id" class="el-icon--left"><Download /></el-icon>升级首个
+        </el-button>
+      </div>
+
       <div class="block">
         <div class="block-head">
           <h2>多框架统一管理</h2>
@@ -263,9 +280,9 @@
       <div v-if="!hasToken" class="notice glass">
         <el-icon class="notice-ic"><Key /></el-icon>
         <div class="notice-main">
-          <div class="notice-title">尚未配置 ModelScope 访问令牌</div>
+          <div class="notice-title">尚未配置模型上传令牌</div>
           <div class="notice-sub">
-            模型站基于魔搭社区（ModelScope）。上传 / 下载需填写你自己的访问令牌（个人中心→访问令牌）。
+            浏览和下载无需本地令牌；分享到自己的 ModelScope 仓库时再配置访问令牌。
           </div>
         </div>
         <el-button round class="cta-btn" @click="openSettings">前往设置</el-button>
@@ -276,6 +293,13 @@
           <el-select v-model="hubFramework" class="fw-select" placeholder="架构" @change="onFrameworkChange">
             <el-option label="全部架构" value="" />
             <el-option v-for="f in frameworks" :key="f.id" :label="f.name" :value="f.id" />
+          </el-select>
+        </div>
+        <div class="rank-field">
+          <el-select v-model="hubSort" class="rank-select" placeholder="排序">
+            <el-option label="综合排序" value="score" />
+            <el-option label="下载排行" value="downloads" />
+            <el-option label="最近更新" value="recent" />
           </el-select>
         </div>
         <div class="search">
@@ -290,7 +314,7 @@
             <el-icon><Close /></el-icon>
           </button>
         </div>
-        <el-button round class="cta-btn" :loading="hubSearching" :disabled="!hasToken" @click="doHubSearch">
+        <el-button round class="cta-btn" :loading="hubSearching" @click="doHubSearch">
           <el-icon v-if="!hubSearching" class="el-icon--left"><Search /></el-icon>搜索
         </el-button>
       </div>
@@ -301,15 +325,27 @@
       </p>
 
       <div v-if="hubItems.length" class="list glass">
-        <div class="row" v-for="it in hubItems" :key="it.repo_id">
+        <div class="row" v-for="it in sortedHubItems" :key="it.repo_id">
           <div class="row-cover hub"><el-icon><Connection /></el-icon></div>
           <div class="row-main">
             <div class="row-title" :title="it.name">
               {{ it.name }}
               <span class="fw-tag">{{ it.framework_label || it.framework || 'SVC' }}</span>
+              <span v-if="it.version" class="ver-tag">v{{ it.version }}</span>
               <span v-if="it.has_diffusion" class="diff-tag">扩散</span>
+              <span class="health-tag" :class="it.dependency_ok === false ? 'error' : 'ok'">
+                {{ it.dependency_ok === false ? '依赖缺失' : '依赖 OK' }}
+              </span>
             </div>
-            <div class="row-sub">{{ it.sample_rate || '44.1kHz' }} · 作者 {{ it.author }}</div>
+            <div class="row-sub">
+              {{ it.sample_rate || '44.1kHz' }} · 作者 {{ it.author }}
+              · {{ countText(it.download_count) }} 下载
+            </div>
+            <div v-if="(it.tags || []).length || it.preview_audio || (it.screenshots || []).length" class="row-tags">
+              <span v-for="tag in (it.tags || []).slice(0, 4)" :key="tag" class="mini-tag">{{ tag }}</span>
+              <span v-if="it.preview_audio" class="mini-tag media"><el-icon><Headset /></el-icon>试听</span>
+              <span v-if="(it.screenshots || []).length" class="mini-tag media"><el-icon><Picture /></el-icon>{{ it.screenshots?.length }} 图</span>
+            </div>
             <div v-if="dlJob(it.repo_id)?.status === 'running'" class="row-prog">
               <el-progress
                 :percentage="Math.round(dlJob(it.repo_id)?.pct || 0)"
@@ -325,6 +361,18 @@
             </div>
           </div>
           <div class="row-ops">
+            <button
+              class="op"
+              :disabled="!it.preview_audio || hubPreviewLoading === it.repo_id"
+              :title="it.preview_audio ? (hubPlayingRepo === it.repo_id ? '暂停试听' : '试听模型') : '暂无试听'"
+              @click="toggleHubPreview(it)"
+            >
+              <el-icon v-if="hubPreviewLoading === it.repo_id" class="spin"><Loading /></el-icon>
+              <el-icon v-else><Headset /></el-icon>
+            </button>
+            <button class="op" title="模型详情" @click="showHubDetail(it)">
+              <el-icon><InfoFilled /></el-icon>
+            </button>
             <a v-if="it.url && it.url !== '#'" :href="it.url" target="_blank" rel="noreferrer" class="op" title="在 ModelScope 查看">
               <el-icon><Link /></el-icon>
             </a>
@@ -350,13 +398,13 @@
         <p class="empty-title">没有找到相关模型</p>
         <p class="empty-sub">换个关键词，或把你的模型「分享到模型站」让社区也能用</p>
       </div>
-      <div v-else-if="hasToken && !hubSearched" class="empty glass small">
+      <div v-else-if="!hubSearched" class="empty glass small">
         <span>点击「搜索」浏览模型站中的社区翻唱模型。</span>
       </div>
     </template>
 
     <!-- 分享到模型站弹窗（选择模型架构）-->
-    <el-dialog v-model="uploadVisible" title="分享到模型站" width="460px" class="api-dialog">
+    <el-dialog v-model="uploadVisible" title="分享到模型站" width="min(460px, calc(100vw - 32px))" class="api-dialog">
       <div class="dialog-body">
         <p class="dialog-tip">
           将「{{ uploadTarget?.name }}」上传到你的 ModelScope <b>公开</b>仓库，供社区在模型站下载。
@@ -365,6 +413,30 @@
         <el-select v-model="uploadFramework" class="fw-select-full">
           <el-option v-for="f in frameworks" :key="f.id" :label="f.name" :value="f.id" />
         </el-select>
+        <label class="dialog-label">版本号</label>
+        <el-input v-model="uploadVersion" placeholder="例如 1.0.0" />
+        <label class="dialog-label">模型简介</label>
+        <el-input
+          v-model="uploadDescription"
+          type="textarea"
+          :rows="3"
+          resize="none"
+          maxlength="1000"
+          show-word-limit
+          placeholder="描述音色特点、适合曲风或使用说明"
+        />
+        <label class="dialog-label">标签</label>
+        <el-input v-model="uploadTagsText" placeholder="中文, 女声, RVC, 高音" />
+        <div class="asset-pickers">
+          <button class="asset-picker" type="button" @click="pickUploadPreview">
+            <el-icon><Headset /></el-icon>
+            <span>{{ baseName(uploadPreviewAudio) || '选择试听音频' }}</span>
+          </button>
+          <button class="asset-picker" type="button" @click="pickUploadScreenshots">
+            <el-icon><Picture /></el-icon>
+            <span>{{ uploadScreenshots.length ? `${uploadScreenshots.length} 张截图` : '选择截图' }}</span>
+          </button>
+        </div>
         <p class="dialog-tip" style="margin: 0">
           请选择该模型的框架类型，模型站和本地模型库会按统一框架标签筛选，并在推理时路由到对应引擎。
         </p>
@@ -384,7 +456,7 @@
     </el-dialog>
 
     <!-- ModelScope 设置弹窗 -->
-    <el-dialog v-model="settingsVisible" title="ModelScope 设置" width="480px" class="api-dialog">
+    <el-dialog v-model="settingsVisible" title="ModelScope 设置" width="min(480px, calc(100vw - 32px))" class="api-dialog">
       <div class="dialog-body">
         <p class="dialog-tip">
           模型站基于
@@ -413,6 +485,106 @@
         <el-button round class="cta-btn" :loading="savingToken" @click="saveToken">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 模型站详情 / 版本 / 依赖 -->
+    <el-dialog
+      v-model="detailVisible"
+      :title="hubDetail?.name || '模型详情'"
+      width="min(760px, calc(100vw - 32px))"
+      class="hub-detail-dialog"
+    >
+      <div v-if="detailLoading" class="detail-loading">
+        <el-icon class="spin"><Loading /></el-icon>
+        <span>正在读取模型清单…</span>
+      </div>
+      <div v-else-if="hubDetail" class="detail-body">
+        <div class="detail-hero">
+          <div class="detail-cover" :class="{ empty: !detailShots.length }">
+            <img v-if="detailShots[0]" :src="detailShots[0]" alt="" />
+            <el-icon v-else><Connection /></el-icon>
+          </div>
+          <div class="detail-main">
+            <div class="detail-title-row">
+              <h3>{{ hubDetail.name }}</h3>
+              <span class="fw-tag">{{ hubDetail.framework_label || frameworkLabel(hubDetail.framework) }}</span>
+              <span v-if="hubDetail.version" class="ver-tag">v{{ hubDetail.version }}</span>
+            </div>
+            <p v-if="hubDetail.description" class="detail-desc">{{ hubDetail.description }}</p>
+            <div class="detail-stats">
+              <span>{{ countText(hubDetail.download_count) }} 下载</span>
+              <span v-if="hubDetail.likes">{{ countText(hubDetail.likes) }} 喜欢</span>
+              <span>{{ hubDetail.uploaded_at || '未知时间' }}</span>
+            </div>
+            <div v-if="(hubDetail.tags || []).length" class="row-tags">
+              <span v-for="tag in hubDetail.tags" :key="tag" class="mini-tag">{{ tag }}</span>
+            </div>
+            <div class="detail-actions">
+              <el-button
+                round
+                class="ghost-btn"
+                :disabled="!hubDetail.preview_audio"
+                :loading="hubPreviewLoading === hubDetail.repo_id"
+                @click="toggleHubPreview(hubDetail)"
+              >
+                <el-icon class="el-icon--left"><Headset /></el-icon>{{ hubPlayingRepo === hubDetail.repo_id ? '暂停试听' : '试听' }}
+              </el-button>
+              <el-button
+                round
+                class="cta-btn"
+                :loading="dlJob(hubDetail.repo_id)?.status === 'running'"
+                @click="downloadHub(hubDetail)"
+              >
+                <el-icon class="el-icon--left"><Download /></el-icon>下载导入
+              </el-button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="detailShots.length > 1" class="shot-strip">
+          <img v-for="src in detailShots.slice(1)" :key="src" :src="src" alt="" />
+        </div>
+
+        <div class="detail-grid">
+          <section class="detail-panel">
+            <div class="detail-panel-head">
+              <span><el-icon><CircleCheck /></el-icon>依赖检查</span>
+              <b :class="hubDetail.dependency_ok === false ? 'bad' : 'ok'">
+                {{ hubDetail.dependency_ok === false ? '需处理' : '可用' }}
+              </b>
+            </div>
+            <div class="dep-list">
+              <div v-for="dep in hubDetail.dependencies || []" :key="dep.id" class="dep-row">
+                <span>{{ dep.name }}</span>
+                <i :class="{ ok: dep.ok, optional: !dep.required }">{{ dep.message }}</i>
+              </div>
+            </div>
+          </section>
+
+          <section class="detail-panel">
+            <div class="detail-panel-head">
+              <span><el-icon><RefreshRight /></el-icon>版本</span>
+              <b v-if="hubDetail.update?.available" class="bad">有更新</b>
+              <b v-else class="ok">最新</b>
+            </div>
+            <div class="version-list">
+              <div v-for="v in hubDetail.versions || []" :key="`${v.version}-${v.uploaded_at}`" class="version-row">
+                <span>v{{ v.version }}</span>
+                <i>{{ v.uploaded_at || '未知时间' }}</i>
+              </div>
+            </div>
+            <el-button
+              v-if="hubDetail.update?.available && hubDetail.update.model_id"
+              round
+              class="ghost-btn detail-upgrade"
+              :loading="upgradingId === hubDetail.update.model_id"
+              @click="upgradeByModelId(hubDetail.update.model_id)"
+            >
+              <el-icon class="el-icon--left"><Download /></el-icon>一键升级
+            </el-button>
+          </section>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -421,9 +593,10 @@ import { ref, computed, onMounted } from 'vue'
 import {
   Setting, FolderOpened, Connection, Document, Plus, Microphone, Star, Delete,
   Upload, Search, Close, Download, Key, Link, InfoFilled, CircleCheck, WarningFilled,
+  Loading, Headset, Picture, RefreshRight,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, type HubModelItem, type ModelFramework } from '@/api'
+import { api, type HubModelItem, type HubModelUpdateItem, type ModelFramework } from '@/api'
 import { useModelsStore, type ModelVM } from '@/stores/models'
 import { useTransfersStore } from '@/stores/transfers'
 
@@ -649,6 +822,9 @@ async function saveToken() {
     await api.setModelscopeToken(tokenDraft.value.trim())
     hasToken.value = !!tokenDraft.value.trim()
     settingsVisible.value = false
+    if (hasToken.value) {
+      void refreshUpdates()
+    }
     ElMessage.success('已保存')
   } finally {
     savingToken.value = false
@@ -665,6 +841,30 @@ const hubItems = ref<HubModelItem[]>([])
 const hubPage = ref(1)
 const hubHasMore = ref(false)
 const hubLoadingMore = ref(false)
+const hubSort = ref<'score' | 'downloads' | 'recent'>('score')
+const modelUpdates = ref<HubModelUpdateItem[]>([])
+const firstUpdate = computed(() => modelUpdates.value[0] || null)
+const upgradingId = ref('')
+
+const hubAudioEl = ref<HTMLAudioElement | null>(null)
+const hubPlayingRepo = ref('')
+const hubPreviewLoading = ref('')
+
+const detailVisible = ref(false)
+const detailLoading = ref(false)
+const hubDetail = ref<HubModelItem | null>(null)
+const detailShots = ref<string[]>([])
+
+const sortedHubItems = computed(() => {
+  const rows = [...hubItems.value]
+  const sort = hubSort.value
+  rows.sort((a, b) => {
+    if (sort === 'downloads') return (b.download_count || 0) - (a.download_count || 0)
+    if (sort === 'recent') return String(b.uploaded_at || '').localeCompare(String(a.uploaded_at || ''))
+    return (b.score || 0) - (a.score || 0)
+  })
+  return rows
+})
 
 /* 后台传输：上传 / 下载挂后台，进度统一在顶栏「传输」面板查看；
    此处仅用于列表行内联显示对应任务的实时进度。 */
@@ -673,15 +873,109 @@ function dlJob(repoId: string) {
   return transfers.jobByKey(`dl:${repoId}`)
 }
 
+function countText(value?: number): string {
+  const n = Number(value || 0)
+  if (n >= 10000) return `${(n / 10000).toFixed(1)}万`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
+async function refreshUpdates() {
+  const res = await api.hubCheckUpdates()
+  if (res.ok) modelUpdates.value = res.items || []
+}
+
+const onHubAudioPause = () => {
+  if (hubAudioEl.value && hubAudioEl.value.ended) hubPlayingRepo.value = ''
+}
+
+async function toggleHubPreview(it: HubModelItem) {
+  const audio = hubAudioEl.value
+  if (!audio || !it.preview_audio) return
+  if (hubPlayingRepo.value === it.repo_id && !audio.paused) {
+    audio.pause()
+    hubPlayingRepo.value = ''
+    return
+  }
+  hubPreviewLoading.value = it.repo_id
+  try {
+    const res = await api.hubAssetData(it.repo_id, it.preview_audio.path)
+    const src = res.data || res.url
+    if (!res.ok || !src) {
+      ElMessage.error(res.error || '试听素材读取失败')
+      return
+    }
+    audio.src = src
+    audio.load()
+    await audio.play()
+    hubPlayingRepo.value = it.repo_id
+  } catch {
+    ElMessage.error('试听播放失败')
+  } finally {
+    hubPreviewLoading.value = ''
+  }
+}
+
+async function loadDetailShots(it: HubModelItem) {
+  detailShots.value = []
+  const shots = it.screenshots || []
+  const loaded: string[] = []
+  for (const shot of shots.slice(0, 4)) {
+    const res = await api.hubAssetData(it.repo_id, shot.path)
+    if (res.ok && res.data) loaded.push(res.data)
+  }
+  detailShots.value = loaded
+}
+
+function mergeHubItem(item: HubModelItem) {
+  const merge = (rows: HubModelItem[]) =>
+    rows.map((row) => (row.repo_id === item.repo_id ? { ...row, ...item } : row))
+  hubItems.value = merge(hubItems.value)
+}
+
+async function showHubDetail(it: HubModelItem) {
+  detailVisible.value = true
+  detailLoading.value = true
+  hubDetail.value = it
+  try {
+    const res = await api.hubModelDetail(it.repo_id)
+    if (!res.ok || !res.item) {
+      ElMessage.error(res.error || '读取模型详情失败')
+      return
+    }
+    hubDetail.value = res.item
+    mergeHubItem(res.item)
+    await loadDetailShots(res.item)
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+async function upgradeByModelId(modelId: string) {
+  upgradingId.value = modelId
+  try {
+    const res = await api.hubStartUpgrade(modelId)
+    if (!res.ok || !res.key) {
+      ElMessage.error(res.error || '启动升级失败')
+      return
+    }
+    transfers.start()
+    await transfers.refresh()
+    ElMessage.success('已加入后台升级下载')
+  } finally {
+    upgradingId.value = ''
+  }
+}
+
+function upgradeModel(update: HubModelUpdateItem) {
+  return upgradeByModelId(update.model_id)
+}
+
 function onFrameworkChange() {
-  if (hasToken.value) doHubSearch()
+  void doHubSearch()
 }
 
 async function doHubSearch() {
-  if (!hasToken.value) {
-    openSettings()
-    return
-  }
   hubSearching.value = true
   hubPage.value = 1
   try {
@@ -756,6 +1050,11 @@ const uploadingId = ref<string | null>(null)
 const uploadVisible = ref(false)
 const uploadTarget = ref<ModelVM | null>(null)
 const uploadFramework = ref('so-vits-svc')
+const uploadVersion = ref('1.0.0')
+const uploadDescription = ref('')
+const uploadTagsText = ref('')
+const uploadPreviewAudio = ref('')
+const uploadScreenshots = ref<string[]>([])
 
 function uploadModel(m: ModelVM) {
   if (!hasToken.value) {
@@ -769,7 +1068,22 @@ function uploadModel(m: ModelVM) {
   }
   uploadTarget.value = m
   uploadFramework.value = m.framework || guessFramework(m.type)
+  uploadVersion.value = '1.0.0'
+  uploadDescription.value = ''
+  uploadTagsText.value = [frameworkLabel(uploadFramework.value), m.type, m.sr].filter(Boolean).join(', ')
+  uploadPreviewAudio.value = ''
+  uploadScreenshots.value = []
   uploadVisible.value = true
+}
+
+async function pickUploadPreview() {
+  const path = await api.pickModelhubPreviewAudioFile()
+  if (path) uploadPreviewAudio.value = path
+}
+
+async function pickUploadScreenshots() {
+  const paths = await api.pickModelhubScreenshotFiles()
+  if (paths.length) uploadScreenshots.value = paths.slice(0, 8)
 }
 
 async function confirmUpload() {
@@ -777,7 +1091,13 @@ async function confirmUpload() {
   if (!m) return
   uploadingId.value = m.id
   try {
-    const key = await transfers.startUpload(m.id, m.name, uploadFramework.value)
+    const key = await transfers.startUpload(m.id, m.name, uploadFramework.value, {
+      version: uploadVersion.value.trim() || '1.0.0',
+      description: uploadDescription.value.trim(),
+      tags: uploadTagsText.value.split(/[,，;；\s]+/).map((x) => x.trim()).filter(Boolean),
+      preview_audio: uploadPreviewAudio.value || undefined,
+      screenshots: uploadScreenshots.value,
+    })
     if (key) {
       uploadVisible.value = false
       ElMessage.success('已加入后台上传，可在顶栏「传输」查看进度')
@@ -799,6 +1119,7 @@ onMounted(async () => {
   hasToken.value = !!token
   uploadReady.value = ready
   frameworks.value = fws
+  void refreshUpdates()
 })
 </script>
 
@@ -926,6 +1247,26 @@ onMounted(async () => {
 .search-clear { display: grid; place-items: center; border: none; background: none; color: var(--xb-muted); cursor: pointer; padding: 0; }
 .search-clear:hover { color: var(--xb-accent); }
 .hub-hint { display: flex; align-items: center; gap: 7px; margin: 0 0 18px; }
+.rank-field { flex-shrink: 0; }
+.rank-select { width: 132px; }
+.rank-select :deep(.el-select__wrapper) { background: rgba(var(--xb-fill-rgb), 0.04); border: 1px solid var(--xb-border); border-radius: 9px; box-shadow: none; min-height: 42px; }
+.rank-select :deep(.el-select__wrapper.is-focused) { border-color: var(--xb-primary); }
+.rank-select :deep(.el-select__selected-item) { color: var(--xb-text); }
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 6px;
+  border-color: rgba(var(--xb-warn-rgb), 0.35);
+  margin-bottom: 18px;
+}
+.update-ic { color: var(--xb-warn); font-size: 24px; flex-shrink: 0; }
+.update-main { flex: 1; min-width: 0; }
+.update-title { font-weight: 800; font-size: 14px; }
+.update-list { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 5px; color: var(--xb-muted); font-size: 12.5px; }
+.update-list span { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 列表 */
 .list { border-radius: 6px; padding: 6px; }
@@ -938,10 +1279,26 @@ onMounted(async () => {
 .row-main { flex: 1; min-width: 0; }
 .row-title { font-weight: 600; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-sub { font-size: 12.5px; color: var(--xb-muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.def-tag, .diff-tag, .fw-tag, .fav-tag, .health-tag { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 6px; font-size: 11px; font-weight: 700; vertical-align: middle; }
+.row-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.mini-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 140px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  color: var(--xb-muted);
+  background: rgba(var(--xb-fill-rgb), 0.06);
+  border: 1px solid var(--xb-border);
+  font-size: 11px;
+  font-weight: 700;
+}
+.mini-tag.media { color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.1); }
+.def-tag, .diff-tag, .fw-tag, .fav-tag, .health-tag, .ver-tag { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 6px; font-size: 11px; font-weight: 700; vertical-align: middle; }
 .def-tag { color: var(--xb-on-primary); background: var(--xb-primary); }
 .diff-tag { color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.14); border: 1px solid rgba(var(--xb-primary-rgb), 0.35); }
 .fw-tag { color: var(--xb-accent); background: rgba(var(--xb-accent-rgb), 0.14); border: 1px solid rgba(var(--xb-accent-rgb), 0.35); }
+.ver-tag { color: var(--xb-text); background: rgba(var(--xb-fill-rgb), 0.08); border: 1px solid var(--xb-border); }
 .fav-tag { color: #f5a524; background: rgba(245, 165, 36, 0.14); border: 1px solid rgba(245, 165, 36, 0.35); }
 .health-tag.ok { color: #27c08a; background: rgba(39, 192, 138, 0.14); border: 1px solid rgba(39, 192, 138, 0.35); }
 .health-tag.error { color: var(--xb-accent); background: rgba(var(--xb-accent-rgb), 0.12); border: 1px solid rgba(var(--xb-accent-rgb), 0.3); }
@@ -984,7 +1341,71 @@ onMounted(async () => {
 .dialog-tip.warn { display: flex; align-items: center; gap: 6px; color: var(--xb-warn); }
 .dialog-label { font-size: 13px; font-weight: 600; color: var(--xb-text); }
 .verify-ok { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--xb-primary); font-weight: 600; }
+.asset-pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.asset-picker {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-muted);
+  cursor: pointer;
+}
+.asset-picker:hover { border-color: var(--xb-primary); color: var(--xb-primary); }
+.asset-picker span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+:deep(.hub-detail-dialog) {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 92px);
+  margin: 76px auto 16px;
+}
+:deep(.hub-detail-dialog .el-dialog__body) { min-height: 0; overflow-y: auto; }
+
+.detail-loading { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 180px; color: var(--xb-muted); }
+.detail-body { display: flex; flex-direction: column; gap: 14px; }
+.detail-hero { display: grid; grid-template-columns: 220px 1fr; gap: 16px; }
+.detail-cover {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(var(--xb-fill-rgb), 0.06);
+  border: 1px solid var(--xb-border);
+  display: grid;
+  place-items: center;
+}
+.detail-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.detail-cover.empty { color: var(--xb-muted); font-size: 38px; }
+.detail-main { min-width: 0; }
+.detail-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.detail-title-row h3 { margin: 0; font-size: 20px; line-height: 1.25; overflow-wrap: anywhere; }
+.detail-desc { color: var(--xb-muted); line-height: 1.7; margin: 10px 0 0; font-size: 13.5px; }
+.detail-stats { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; color: var(--xb-muted); font-size: 12.5px; }
+.detail-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.shot-strip { display: flex; gap: 8px; overflow-x: auto; }
+.shot-strip img { width: 150px; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 6px; border: 1px solid var(--xb-border); }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.detail-panel {
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.03);
+  border-radius: 6px;
+  padding: 12px;
+}
+.detail-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.detail-panel-head span { display: flex; align-items: center; gap: 6px; font-weight: 800; }
+.detail-panel-head b { font-size: 12px; }
+.detail-panel-head b.ok { color: var(--xb-success); }
+.detail-panel-head b.bad { color: var(--xb-warn); }
+.dep-list, .version-list { display: flex; flex-direction: column; gap: 7px; }
+.dep-row, .version-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
+.dep-row i, .version-row i { color: var(--xb-muted); font-style: normal; font-size: 12px; text-align: right; }
+.dep-row i.ok { color: var(--xb-success); }
+.dep-row i.optional { color: var(--xb-muted); }
+.detail-upgrade { margin-top: 12px; }
 /* 进度 */
 .row-prog { display: flex; align-items: center; gap: 10px; margin-top: 7px; }
 .row-prog :deep(.el-progress) { flex: 1; min-width: 0; }
@@ -993,6 +1414,8 @@ onMounted(async () => {
 .row-prog.failed .prog-msg { max-width: 100%; color: var(--xb-danger, #d14343); }
 .upload-prog { margin-top: 6px; }
 .upload-prog .prog-msg { margin: 6px 0 0; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 720px) {
   .page-head { flex-direction: column; align-items: flex-start; }
@@ -1000,6 +1423,10 @@ onMounted(async () => {
   .imp-grid { grid-template-columns: 1fr; }
   .local-tools { flex-direction: column; align-items: stretch; }
   .local-tools .fw-select { width: 100%; }
+  .toolbar { flex-direction: column; align-items: stretch; }
+  .toolbar .fw-select, .rank-select { width: 100%; }
+  .update-banner { align-items: flex-start; flex-direction: column; }
+  .asset-pickers, .detail-hero, .detail-grid { grid-template-columns: 1fr; }
   .row-ops .el-button span { display: none; }
 }
 @media (min-width: 721px) and (max-width: 1080px) {

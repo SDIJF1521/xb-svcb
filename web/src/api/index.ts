@@ -30,6 +30,10 @@ import type {
   HubSearchResult,
   HubDownloadResult,
   HubUploadResult,
+  HubUploadOptions,
+  HubModelDetailResult,
+  HubAssetDataResult,
+  HubModelUpdateResult,
   HubProgress,
   HubStartResult,
   HubJob,
@@ -338,6 +342,16 @@ export const api = {
   listModelFrameworks: () =>
     invoke<ModelFramework[]>('list_model_frameworks', [], () => mock.listModelFrameworks()),
 
+  pickModelhubPreviewAudioFile: () =>
+    invoke<string | null>('pick_modelhub_preview_audio_file', [], () =>
+      mock.pickModelhubPreviewAudioFile(),
+    ),
+
+  pickModelhubScreenshotFiles: () =>
+    invoke<string[]>('pick_modelhub_screenshot_files', [], () =>
+      mock.pickModelhubScreenshotFiles(),
+    ),
+
   hubSearchModels: (query = '', page = 1, framework?: string, pageSize = 12) =>
     invoke<HubSearchResult>('hub_search_models', [query, page, framework, pageSize], () =>
       mock.hubSearchModels(query, page, framework, pageSize),
@@ -348,9 +362,27 @@ export const api = {
       mock.hubDownloadModel(repoId),
     ),
 
-  hubUploadModel: (modelId: string, name?: string, framework?: string) =>
-    invoke<HubUploadResult>('hub_upload_model', [modelId, name, framework], () =>
-      mock.hubUploadModel(modelId, name, framework),
+  hubUploadModel: (modelId: string, name?: string, framework?: string, options?: HubUploadOptions) =>
+    invoke<HubUploadResult>('hub_upload_model', [modelId, name, framework, options], () =>
+      mock.hubUploadModel(modelId, name, framework, options),
+    ),
+
+  hubModelDetail: (repoId: string) =>
+    invoke<HubModelDetailResult>('hub_model_detail', [repoId], () =>
+      mock.hubModelDetail(repoId),
+    ),
+
+  hubAssetData: (repoId: string, path: string) =>
+    invoke<HubAssetDataResult>('hub_asset_data', [repoId, path], () =>
+      mock.hubAssetData(repoId, path),
+    ),
+
+  hubCheckUpdates: () =>
+    invoke<HubModelUpdateResult>('hub_check_updates', [], () => mock.hubCheckUpdates()),
+
+  hubStartUpgrade: (modelId: string) =>
+    invoke<HubStartResult>('hub_start_upgrade', [modelId], () =>
+      mock.hubStartUpgrade(modelId),
     ),
 
   hubProgress: (key: string) =>
@@ -362,9 +394,9 @@ export const api = {
       mock.hubStartDownload(repoId),
     ),
 
-  hubStartUpload: (modelId: string, name?: string, framework?: string) =>
-    invoke<HubStartResult>('hub_start_upload', [modelId, name, framework], () =>
-      mock.hubStartUpload(modelId, name, framework),
+  hubStartUpload: (modelId: string, name?: string, framework?: string, options?: HubUploadOptions) =>
+    invoke<HubStartResult>('hub_start_upload', [modelId, name, framework, options], () =>
+      mock.hubStartUpload(modelId, name, framework, options),
     ),
 
   hubListJobs: () =>

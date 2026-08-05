@@ -313,7 +313,7 @@ def test_directml_double_stays_float32_but_other_devices_keep_double(monkeypatch
     ]
 
 
-def test_sovits_directml_rmvpe_is_forced_to_cpu() -> None:
+def test_sovits_directml_neural_f0_is_forced_to_cpu() -> None:
     calls: list[tuple[tuple, dict]] = []
 
     def get_f0_predictor(*args, **kwargs):
@@ -332,6 +332,11 @@ def test_sovits_directml_rmvpe_is_forced_to_cpu() -> None:
     assert calls[-1][1]["device"] == "cpu"
 
     utils.get_f0_predictor(
+        "fcpe", 512, 44100, device="privateuseone:0", threshold=0.05
+    )
+    assert calls[-1][1]["device"] == "cpu"
+
+    utils.get_f0_predictor(
         "crepe", 512, 44100, device="privateuseone:0", threshold=0.05
     )
     assert calls[-1][1]["device"] == "privateuseone:0"
@@ -340,6 +345,40 @@ def test_sovits_directml_rmvpe_is_forced_to_cpu() -> None:
         "rmvpe", 512, 44100, device="cuda:0", threshold=0.05
     )
     assert calls[-1][1]["device"] == "cuda:0"
+
+
+def test_sovits_fcpe_import_failure_falls_back_once_and_keeps_f0_range() -> None:
+    calls: list[tuple[str, str]] = []
+
+    def get_f0_predictor(name, _hop, _sampling_rate, **kwargs):
+        calls.append((name, kwargs["device"]))
+        if name == "fcpe":
+            raise ModuleNotFoundError("No module named 'einops'")
+        return SimpleNamespace(name=name, f0_max=1100.0)
+
+    utils = SimpleNamespace(get_f0_predictor=get_f0_predictor)
+    inference_device.patch_sovits_fcpe_fallback(utils, 1448.6)
+    inference_device.patch_directml_sovits_rmvpe_cpu(utils)
+
+    predictor = utils.get_f0_predictor(
+        "fcpe", 512, 44100, device="privateuseone:0", threshold=0.05
+    )
+
+    assert calls == [("fcpe", "cpu"), ("crepe", "cpu")]
+    assert predictor.name == "fcpe"
+    assert predictor.xb_fallback_name == "crepe"
+    assert predictor.f0_max == 1448.6
+
+
+def test_sovits_fcpe_fallback_does_not_hide_other_predictor_errors() -> None:
+    def get_f0_predictor(name, _hop, _sampling_rate, **_kwargs):
+        raise RuntimeError(f"{name} failed")
+
+    utils = SimpleNamespace(get_f0_predictor=get_f0_predictor)
+    inference_device.patch_sovits_fcpe_fallback(utils)
+
+    with pytest.raises(RuntimeError, match="rmvpe failed"):
+        utils.get_f0_predictor("rmvpe", 512, 44100, device="cpu")
 
 
 def test_sovits_directml_f0_coarse_clamps_before_integer_conversion() -> None:

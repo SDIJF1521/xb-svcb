@@ -9,6 +9,7 @@ AI 痕迹。基础层使用自然停顿扩展、限量神经降噪和轻母带�
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -713,7 +714,11 @@ def _ai_loudness_envelope(
     )
 
 
-def _deepfilter(source: Path, output: Path) -> None:
+def _deepfilter(
+    source: Path,
+    output: Path,
+    atten_lim_db: float = 3.0,
+) -> None:
     """以原生速率运行 DeepFilterNet，然后恢复输入速率。
         DeepFilterNet3 是一个 48 kHz 模型。
         将 44.1 kHz 的采样信号直接输入其 STFT，
@@ -732,7 +737,12 @@ def _deepfilter(source: Path, output: Path) -> None:
     model, state, _ = init_df(model_dir) if model_dir else init_df()
     model_sr = int(state.sr())
     audio, info = load_audio(str(source), sr=model_sr)
-    enhanced = enhance(model, state, audio, atten_lim_db=3.0)
+    enhanced = enhance(
+        model,
+        state,
+        audio,
+        atten_lim_db=float(max(1.5, min(12.0, atten_lim_db))),
+    )
 
     orig_sr = int(info.sample_rate)
     if model_sr != orig_sr:
@@ -752,6 +762,209 @@ def _deepfilter(source: Path, output: Path) -> None:
     _write_float_wav(output, enhanced_audio, orig_sr)
     if not output.is_file():
         raise RuntimeError("DeepFilterNet 未生成输出文件")
+
+
+def _audio_profile_array(
+    audio: "np.ndarray",
+    sample_rate: int,
+) -> dict[str, float | bool]:
+    """Measure high-band energy and the usable singing range of a vocal."""
+    import numpy as np
+    from scipy.signal import find_peaks, spectrogram, welch
+
+    data = np.asarray(audio, dtype=np.float32)
+    if data.ndim == 2:
+        mono = np.mean(data, axis=1)
+    else:
+        mono = data.reshape(-1)
+    mono = np.nan_to_num(mono, copy=False)
+    if sample_rate < 4000 or len(mono) < 512:
+        return {
+            "sample_rate": float(sample_rate),
+            "spectral_centroid_hz": 0.0,
+            "high_band_ratio": 0.0,
+            "median_f0_hz": 0.0,
+            "p95_f0_hz": 0.0,
+            "max_f0_hz": 0.0,
+            "high_frequency": False,
+            "high_pitch": False,
+            "recommended_f0_max": 1100.0,
+        }
+
+    # Bound analysis cost for long songs while retaining a representative opening.
+    analysis_frames = min(len(mono), int(sample_rate * 120.0))
+    mono = mono[:analysis_frames]
+    frequencies, power = welch(
+        mono,
+        fs=sample_rate,
+        nperseg=min(8192, len(mono)),
+        noverlap=min(4096, max(0, len(mono) // 2 - 1)),
+        average="median",
+    )
+    audible = (frequencies >= 120.0) & (
+        frequencies <= min(16000.0, sample_rate * 0.48)
+    )
+    high = (frequencies >= 6000.0) & (
+        frequencies <= min(16000.0, sample_rate * 0.48)
+    )
+    audible_power = float(np.sum(power[audible])) if bool(audible.any()) else 0.0
+    high_power = float(np.sum(power[high])) if bool(high.any()) else 0.0
+    high_ratio = high_power / max(audible_power, 1e-12)
+    centroid = float(
+        np.sum(frequencies[audible] * power[audible])
+        / max(float(np.sum(power[audible])), 1e-12)
+    ) if bool(audible.any()) else 0.0
+
+    frame_length = min(4096 if sample_rate >= 32000 else 2048, len(mono))
+    hop_length = max(128, int(round(sample_rate * 0.020)))
+    frame_overlap = max(0, frame_length - hop_length)
+    f0_frequencies, _, frame_power = spectrogram(
+        mono,
+        fs=sample_rate,
+        window="hann",
+        nperseg=frame_length,
+        noverlap=frame_overlap,
+        detrend=False,
+        scaling="spectrum",
+        mode="psd",
+    )
+    f0_band = (f0_frequencies >= 55.0) & (
+        f0_frequencies <= min(1600.0, sample_rate * 0.45)
+    )
+    frame_levels = np.sum(frame_power, axis=0)
+    active_threshold = max(
+        1e-10,
+        float(np.percentile(frame_levels, 75)) * 0.015
+        if len(frame_levels)
+        else 1e-10,
+    )
+    voiced_values: list[float] = []
+    band_frequencies = f0_frequencies[f0_band]
+    for frame_index in np.flatnonzero(frame_levels >= active_threshold):
+        spectrum = frame_power[f0_band, frame_index]
+        if not len(spectrum) or float(np.max(spectrum)) <= 1e-12:
+            continue
+        peaks, _ = find_peaks(spectrum)
+        if not len(peaks):
+            peaks = np.asarray([int(np.argmax(spectrum))])
+        strong = peaks[spectrum[peaks] >= float(np.max(spectrum)) * 0.06]
+        if len(strong):
+            voiced_values.append(float(band_frequencies[int(strong[0])]))
+    voiced_f0 = np.asarray(voiced_values, dtype=np.float32)
+    median_f0 = float(np.median(voiced_f0)) if len(voiced_f0) else 0.0
+    p95_f0 = float(np.percentile(voiced_f0, 95)) if len(voiced_f0) else 0.0
+    max_f0 = float(np.percentile(voiced_f0, 99.5)) if len(voiced_f0) else 0.0
+    high_pitch = p95_f0 >= 700.0 or max_f0 >= 880.0
+    high_frequency = high_ratio >= 0.075 or centroid >= 3600.0
+    recommended_f0_max = float(
+        np.clip(max(1100.0, p95_f0 * 1.35, max_f0 * 1.15), 1100.0, 1800.0)
+    )
+    return {
+        "sample_rate": float(sample_rate),
+        "spectral_centroid_hz": centroid,
+        "high_band_ratio": float(high_ratio),
+        "median_f0_hz": median_f0,
+        "p95_f0_hz": p95_f0,
+        "max_f0_hz": max_f0,
+        "high_frequency": bool(high_frequency),
+        "high_pitch": bool(high_pitch),
+        "recommended_f0_max": recommended_f0_max,
+    }
+
+
+def _analyze_audio(source: Path) -> dict[str, float | bool]:
+    import soundfile as sf
+
+    audio, sample_rate = sf.read(str(source), always_2d=True, dtype="float32")
+    return _audio_profile_array(audio, int(sample_rate))
+
+
+def _restore_repair_high_band(
+    dry_source: Path,
+    repaired_source: Path,
+    output: Path,
+    *,
+    stage: str,
+) -> None:
+    """Restore only guarded high-band transients after neural repair."""
+    import librosa
+    import numpy as np
+    import soundfile as sf
+    from scipy.signal import butter, sosfiltfilt
+
+    dry, sample_rate = sf.read(str(dry_source), always_2d=True, dtype="float32")
+    repaired, repaired_rate = sf.read(
+        str(repaired_source), always_2d=True, dtype="float32"
+    )
+    if repaired_rate != sample_rate:
+        repaired = np.column_stack(
+            [
+                librosa.resample(channel, orig_sr=repaired_rate, target_sr=sample_rate)
+                for channel in repaired.T
+            ]
+        )
+    frames = min(len(dry), len(repaired))
+    channels = min(dry.shape[1], repaired.shape[1])
+    dry = dry[:frames, :channels]
+    repaired = repaired[:frames, :channels]
+    if frames < 64 or sample_rate < 16000:
+        _write_float_wav(output, repaired.T, sample_rate)
+        return
+
+    cutoff = min(6500.0, sample_rate * 0.38)
+    sos = butter(4, cutoff, btype="highpass", fs=sample_rate, output="sos")
+    dry_high = sosfiltfilt(sos, dry, axis=0)
+    repaired_high = sosfiltfilt(sos, repaired, axis=0)
+    activity, _ = _adaptive_activity_curve(dry, sample_rate)
+    guard, stats = _adaptive_high_guard_curve(dry, dry_high, sample_rate)
+    blend = 0.46 if stage == "separated" else 0.34
+    control = (activity * guard * blend)[:, np.newaxis]
+    restored = repaired + (dry_high - repaired_high) * control
+    dry_peak = float(np.max(np.abs(dry))) if dry.size else 0.0
+    restored_peak = float(np.max(np.abs(restored))) if restored.size else 0.0
+    peak_limit = max(0.98, dry_peak * 1.02)
+    if restored_peak > peak_limit:
+        restored *= peak_limit / restored_peak
+    _write_float_wav(output, restored.T, sample_rate)
+    print(
+        "  高频保护: "
+        f"guard={stats['peak_guard']:.0%}, dry blend max={blend:.0%}",
+        flush=True,
+    )
+
+
+def run_repair(
+    source: Path,
+    output: Path,
+    stage: str = "separated",
+    profile: dict[str, float | bool] | None = None,
+) -> dict[str, float | bool]:
+    """Repair separated/model vocals with DeepFilterNet3 and guarded HF recovery."""
+    if not source.is_file():
+        raise RuntimeError(f"输入文件不存在: {source}")
+    normalized_stage = "output" if stage == "output" else "separated"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    profile = profile or _analyze_audio(source)
+    high_guard = bool(profile["high_frequency"] or profile["high_pitch"])
+    base_attenuation = 6.0 if normalized_stage == "separated" else 4.5
+    attenuation = base_attenuation - (1.5 if high_guard else 0.0)
+    attenuation = max(2.5, attenuation)
+    print(
+        "[1/2] DeepFilterNet3 专用人声修复 "
+        f"(stage={normalized_stage}, attenuation={attenuation:.1f}dB)",
+        flush=True,
+    )
+    with tempfile.TemporaryDirectory(prefix="xb-vocal-repair-") as raw_temp:
+        repaired = Path(raw_temp) / "deepfilter.wav"
+        _deepfilter(source, repaired, atten_lim_db=attenuation)
+        print("[2/2] 高频辅音与高音泛音保护", flush=True)
+        _restore_repair_high_band(
+            source,
+            repaired,
+            output,
+            stage=normalized_stage,
+        )
+    return profile
 
 
 def _target_timbre_peaks(
@@ -1455,6 +1668,7 @@ def run(
     ai_exciter: float = 0.25,
     stereo_width: float = 0.30,
     loudness_envelope: float = 0.58,
+    skip_deepfilter: bool = False,
 ) -> None:
     if not source.is_file():
         raise RuntimeError(f"输入文件不存在: {source}")
@@ -1478,10 +1692,13 @@ def run(
         else:
             print("[2/12] 跳过宽带频谱参考（仅高级模式且需要原始人声）", flush=True)
 
-        filtered = temp / "02_deepfilter.wav"
-        print("[3/12] DeepFilterNet 原生采样率限量降噪", flush=True)
-        _deepfilter(current, filtered)
-        current = filtered
+        if skip_deepfilter:
+            print("[3/12] 已完成专用修复，跳过重复 DeepFilterNet", flush=True)
+        else:
+            filtered = temp / "02_deepfilter.wav"
+            print("[3/12] DeepFilterNet 原生采样率限量降噪", flush=True)
+            _deepfilter(current, filtered)
+            current = filtered
 
         if use_reference:
             detailed = temp / "03_human_detail.wav"
@@ -1538,7 +1755,16 @@ def run(
 def main() -> int:
     parser = argparse.ArgumentParser(description="XB-SVCB AI 歌声增强 worker")
     parser.add_argument("--input", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--output", default="")
+    parser.add_argument(
+        "--mode", choices=("enhance", "repair", "analyze"), default="enhance"
+    )
+    parser.add_argument(
+        "--repair-stage", choices=("separated", "output"), default="separated"
+    )
+    parser.add_argument("--analysis-output", default="")
+    parser.add_argument("--analysis-json", default="")
+    parser.add_argument("--skip-deepfilter", action="store_true")
     parser.add_argument("--level", choices=("basic", "advanced"), default="basic")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--reference", default=None, help="原始人声参考文件路径（用于频谱包络匹配）")
@@ -1550,11 +1776,45 @@ def main() -> int:
     parser.add_argument("--loudness-envelope", type=float, default=0.58)
     args = parser.parse_args()
     try:
+        source = Path(args.input)
+        if args.mode == "analyze":
+            if not args.analysis_output:
+                raise RuntimeError("分析模式缺少 --analysis-output")
+            analysis_output = Path(args.analysis_output)
+            analysis_output.parent.mkdir(parents=True, exist_ok=True)
+            profile = _analyze_audio(source)
+            analysis_output.write_text(
+                json.dumps(profile, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            print(f"VOCAL_ANALYZE_OK {analysis_output}", flush=True)
+            return 0
+        if not args.output:
+            raise RuntimeError(f"{args.mode} 模式缺少 --output")
         output = Path(args.output)
         output.unlink(missing_ok=True)
+        if args.mode == "repair":
+            supplied_profile = None
+            if args.analysis_json:
+                decoded_profile = json.loads(args.analysis_json)
+                if isinstance(decoded_profile, dict):
+                    supplied_profile = decoded_profile
+            profile = run_repair(
+                source,
+                output,
+                args.repair_stage,
+                supplied_profile,
+            )
+            print(
+                "VOCAL_REPAIR_PROFILE "
+                + json.dumps(profile, ensure_ascii=False, separators=(",", ":")),
+                flush=True,
+            )
+            print(f"VOCAL_REPAIR_OK {output}", flush=True)
+            return 0
         reference = Path(args.reference) if args.reference else None
         run(
-            Path(args.input),
+            source,
             output,
             args.level,
             args.device,
@@ -1565,6 +1825,7 @@ def main() -> int:
             args.ai_exciter,
             args.stereo_width,
             args.loudness_envelope,
+            args.skip_deepfilter,
         )
         print(f"VOCAL_ENHANCE_OK {output}", flush=True)
         return 0

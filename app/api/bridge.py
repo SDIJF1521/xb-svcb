@@ -530,6 +530,29 @@ class Api:
         )
         return result[0] if result else None
 
+    def pick_modelhub_preview_audio_file(self) -> str | None:
+        """选择模型站展示用试听音频。"""
+        result = self._open_dialog(
+            "选择模型试听音频",
+            multiple=False,
+            file_types=(
+                "音频文件 (*.mp3;*.wav;*.flac;*.m4a;*.ogg;*.aac)",
+                "所有文件 (*.*)",
+            ),
+        )
+        return result[0] if result else None
+
+    def pick_modelhub_screenshot_files(self) -> list[str]:
+        """选择模型站展示截图，可多选。"""
+        return self._open_dialog(
+            "选择模型截图",
+            multiple=True,
+            file_types=(
+                "图片 (*.jpg;*.jpeg;*.png;*.webp;*.gif)",
+                "所有文件 (*.*)",
+            ),
+        )
+
     def import_model(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         """导入一组模型，按 framework 分支处理 so-vits / RVC / SeedVC 文件角色。"""
         return self._models.import_model(payload or {})
@@ -580,10 +603,30 @@ class Api:
         return self._hub.download(repo_id)
 
     def hub_upload_model(
-        self, model_id: str, name: str | None = None, framework: str | None = None
+        self,
+        model_id: str,
+        name: str | None = None,
+        framework: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """把本地模型上传到模型站（用户自己的 ModelScope 命名空间），并标注模型架构。"""
-        return self._hub.upload(model_id, name, framework)
+        return self._hub.upload(model_id, name, framework, metadata or {})
+
+    def hub_model_detail(self, repo_id: str) -> dict[str, Any]:
+        """读取模型详情、版本、依赖与展示素材索引。"""
+        return self._hub.model_detail(repo_id)
+
+    def hub_asset_data(self, repo_id: str, file_path: str) -> dict[str, Any]:
+        """读取模型清单声明过的截图/试听素材，返回 data URI 或远端 URL。"""
+        return self._hub.asset_data(repo_id, file_path)
+
+    def hub_check_updates(self) -> dict[str, Any]:
+        """检查本地下载模型是否有远端新版本。"""
+        return self._hub.check_updates()
+
+    def hub_start_upgrade(self, model_id: str) -> dict[str, Any]:
+        """从来源仓库一键拉取最新版本并导入。"""
+        return self._hub.start_upgrade(model_id)
 
     def hub_progress(self, key: str) -> dict[str, Any]:
         """轮询上传/下载进度。key 形如 'dl:<repo_id>' 或 'ul:<model_id>'。"""
@@ -594,10 +637,14 @@ class Api:
         return self._hub.start_download(repo_id)
 
     def hub_start_upload(
-        self, model_id: str, name: str | None = None, framework: str | None = None
+        self,
+        model_id: str,
+        name: str | None = None,
+        framework: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """后台上传本地模型到模型站，立即返回 {ok, key}，不阻塞前端。"""
-        return self._hub.start_upload(model_id, name, framework)
+        return self._hub.start_upload(model_id, name, framework, metadata or {})
 
     def hub_list_jobs(self) -> list[dict[str, Any]]:
         """列出全部上传/下载后台任务（含实时进度）。"""

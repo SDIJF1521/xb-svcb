@@ -1,6 +1,6 @@
 # XB-SVCB 安装器
 
-版本：`0.0.26`
+版本：`0.0.27`
 
 安装器由 Inno Setup 读取 `installer/xb-svcb.iss` 构建，负责打包桌面本体、环境搭建脚本、自带模型和文档。
 
@@ -10,8 +10,9 @@
 2. 执行 `pyinstaller installer/xb-svcb-app.spec` 构建桌面本体。
 3. 准备 Windows FFmpeg 与 So-VITS-SVC、SeedVC、DDSP-SVC 固定分支源码；本地缺失时由发布构建下载到忽略目录。
 4. 构建 `native/juce-vst3-host`，并把产物放入 `dist/XB-SVCB/engines/juce-vst3-host/`。
-5. 校验内置前端、全部 worker、离线载荷与 JUCE Host。
-6. 使用 Inno Setup 6 的 `ISCC.exe` 编译 `installer/xb-svcb.iss`。
+5. 以 `--clean` 运行 `install/prepare_wheelhouse.py` 预下载/预构建 Windows x64 whl，重新生成 `assets/wheels/wheelhouse.json`。
+6. 校验内置前端、全部 worker、离线载荷、wheelhouse 与 JUCE Host。
+7. 使用 Inno Setup 6 的 `ISCC.exe` 编译 `installer/xb-svcb.iss`。
 
 本地发布构建建议使用 `installer/build.ps1` 作为一键入口。
 `installer/build.ps1` 会校验应用、前端、版本号、全部 worker 和
@@ -23,13 +24,21 @@
 ./installer/build.ps1 -ValidateOnly
 ```
 
+## v0.0.27 安装器行为
+
+- 应用、Python 项目、前端包、锁文件、Windows EXE 版本资源和 Inno Setup 版本统一为 `0.0.27`。
+- 安装包内置的 `DeepFilterNet3` 现在同时用于分离干声与翻唱模型输出的双阶段修复；运行时会分析高频和高音域，修复后受控恢复辅音/泛音，无需首次运行再下载模型。原先排除的 `fcpe.pt` 也改为随分卷携带，供 So-VITS/DDSP 极高音 F0 自动切换。
+- 发布构建会把 `uv` 与各 AI 子环境依赖预下载/预构建为 whl，按 `py310/cpu`、`py310/directml`、`py310/cu121`、`py310/cu128` 分组，并对 SVC/RVC py39、DirectML 下 DDSP/Vocal 等 torch 版本冲突环境使用组件子目录；安装/修复环境时根据用户机器的 Python 版本、GPU 栈和组件自动 `--no-index --no-build --find-links` 离线安装对应 whl。
+- Inno Setup 分卷固定为 `1,900,000,000` 字节，发布构建会拒绝任何达到 2 GiB 的数据卷。
+- 安装目录携带最新 `release_notes_v027.md`、`README.md` 与 `docs/api.md`，旧数据目录可继续覆盖升级使用。
+- 分卷发布方式、离线模型、内置 FFmpeg、GPU 环境策略和离线 wheelhouse 不要求用户重新下载已有作品或模型。
+
 ## v0.0.26 安装器行为
 
 - 应用、Python 项目、前端包、锁文件、Windows EXE 版本资源和 Inno Setup 版本统一为 `0.0.26`。
 - 安装包新增 `vocal_tuning_worker.py`，并在安装前校验 AI 对齐/自然修音 worker 与 AI 歌声增强 worker 均已进入 `_internal/infrastructure`。
 - `.venv-vocal` 新增 `praat-parselmouth==0.4.6`，供参考人声动态对齐、DurationTier 受限时间校正和 PitchTier 自然修音使用；`runtime.ready` 同步记录该依赖。
-- 安装目录携带最新 `release_notes_v026.md`、`README.md` 与 `docs/api.md`，旧数据目录可继续覆盖升级使用。
-- 分卷发布方式、离线模型、内置 FFmpeg 和 GPU 环境策略延续 v0.0.25，不要求用户重新下载已有作品或模型。
+- 安装目录携带 `release_notes_v026.md`、`README.md` 与 `docs/api.md`，旧数据目录可继续覆盖升级使用。
 
 ## v0.0.25 安装器行为
 

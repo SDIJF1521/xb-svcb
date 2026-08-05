@@ -1,36 +1,5 @@
 <div align="center">
 
-# 🎤 XB-SVCB · AI 翻唱工具
-
-#### 开箱即用的桌面级 AI 翻唱工作站
-
-**🎵 导入歌曲 ｜ 🎚️ 人声分离 ｜ 🌫️ 去混响 ｜ 🗣️ AI 歌声转换 ｜ 🎧 AI 歌声增强 ｜ 🎼 合并伴奏 ｜ 🎤 成品翻唱**
-
-一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **AI 歌声增强工程** · **在线曲库** · **模型站** · **音频编辑器**
-
-<br/>
-
-[![License](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release&color=ff6b9d)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/SDIJF1521/xb-svcb/total?color=brightgreen&label=downloads)](https://github.com/SDIJF1521/xb-svcb/releases)
-[![Stars](https://img.shields.io/github/stars/SDIJF1521/xb-svcb?style=flat&color=yellow)](https://github.com/SDIJF1521/xb-svcb/stargazers)
-
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#)
-[![Python](https://img.shields.io/badge/python-3.9%20|%203.10-3776AB?logo=python&logoColor=white)](#)
-[![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
-[![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
-
-<br/>
-
-### ⬇️ [**点此下载安装器 · XB-SVCB-Setup.exe**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-
-<sub>Windows 一键安装 · 内置前端与底模 · 无需手动配置 Python / Node</sub>
-
-<sub>用户交流 / 反馈 QQ 群：**1038366109**</sub>
-
-</div>
-
-
 ---
 
 <a id="features"></a>
@@ -46,7 +15,7 @@
 - 🎵 **在线资源获取（可播放校验）** —— 内置 **网易云 / QQ音乐 / 酷我音乐** 曲库的搜索、试听、下载（QQ 可填会员 Cookie 取高品质音频）；酷我支持无损音质候选回退、后端代理试听、Range 分段下载及内联歌词。下载前统一校验资源可播放性（魔数 / Content-Type / ffprobe），VIP / 无版权 / 失效链接不可下载；下载素材可一键进入翻唱。
 - 🎬 **作品音乐播放页** —— 从作品库进入带过渡动画的独立播放器，支持进度 / 音量控制、歌词逐句跟随和点击跳转；歌词可导入 LRC，或选择网易云、QQ、酷我曲库并从多个搜索结果中指定歌曲序号通过 API 获取；每首作品还可关联图片或 MP4 MV 画面并持久化恢复。
 - 🌐 **模型站（魔搭社区 · 后台传输）** —— 基于 **ModelScope** 一键**上传/下载**声音模型：填自己的访问令牌即可发布到自有公开仓库，按关键词**模糊搜索**（**分页加载**）社区模型并直接导入；带**架构标签**（So-VITS-SVC / RVC / SeedVC / DDSP-SVC）与**清单防污染**校验；上传/下载**挂后台执行、不阻塞操作**，大模型支持断点续传和重试，下载完成后立即进入可选模型列表。
-- 🎼 **专业人声分离** —— `5_HP-Karaoke-UVR` 分离 + `UVR-DeEcho-DeReverb` 去混响，得到干净干声。
+- 🎼 **专业人声分离与双阶段修复** —— `5_HP-Karaoke-UVR` 分离 + `UVR-DeEcho-DeReverb` 去混响后，使用安装包内置的专用 `DeepFilterNet3` 模型修复分离伪影；修复前会分析 6 kHz 以上高频占比和人声音域，神经修复后只在有效人声窗口受控恢复高频辅音与高音泛音。翻唱模型输出还会再经过一次独立修复，再进入可选美声与混音。
 - 🎧 **AI 歌声增强工程** —— 可调的 **AI 对齐**（默认 45%）先根据停顿切分并单调匹配原唱与 AI 人声句段，再用去音色化倒谱/动态特征执行带约束声学音素 DTW，生成间距约 300 ms 的高置信度时间锚点。密集锚点只负责参考 F0 的字音对应；只有同一句内至少三个相邻锚点方向一致、原始偏差超过 25 ms、按当前强度应用后仍达到 8 ms 时，才通过受限 Praat DurationTier 校正波形节奏，避免持续元音产生“电风扇”式周期调制，整轨时长始终不变。随后在同一次 PSOLA 重合成中执行自然修音（默认 45%）：参考映射后的原唱 F0，过滤误检、弱化半音吸附、限制最大修正并在乐句边缘渐入渐出，以保留颤音、滑音和清辅音；PSOLA 只覆盖连续人声区域，长数字静音恢复原始样本，0.45 秒以内句内空隙保持连续。AI 角色共振峰（默认 60%）只分析转换后目标声音自身在 250 Hz–4.5 kHz 的稳定宽带峰，不复制原唱的中频身份。另有独立可调的 **AI EQ**（默认 55%，宽带频谱自适应校正）、**AI Compressor**（默认 45%，按有效人声动态自动设阈值并补偿响度）、**AI Exciter**（默认 25%，带齿音保护的高频谐波增强）、**Stereo**（默认 30%，低频居中、单声道兼容的中侧扩展）和 **AI 响度包络**（默认 58%，从 AI 人声自身恢复局部响度起伏）。所有滑块只定义处理上限：引擎会先按整首素材推导高通、body、harsh、presence、air、压缩参数与 wet 上限，再按 20 ms 人声窗口动态收放角色共振峰、EQ、压缩、激励、声场、响度包络和并行母带；静音、弱呼吸与清辅音保留更多原声，高频占比突增时 Exciter 和 Stereo 自动退让。响度包络在效果链末端以约 70 ms 平滑轮廓执行最多 ±3 dB 的受限校正，并避开停顿和底噪。basic 的动态 wet 上限通常在 57%–72%，advanced 通常在 69%–84%，而不是固定比例。vocalfloor 对 0.5 秒以内句内停顿保持开启且最大只衰减 6 dB；advanced 额外保护最多 8% 的高频辅音/呼吸细节，并只做最大 ±1.25 dB 的参考宽带倾斜校正。美声任务的最终混音会测量人声与伴奏的 EBU R128 有效响度，让人声保持在伴奏下方约 2.5 dB，并用低比例并行总线压缩收拢共同峰值；增益始终受限，最终以 -1.5 dBFS 采样峰值限幅，为真峰值保留余量。
 - ⚡ **GPU / CPU 自由切换** —— 自动识别 NVIDIA CUDA 与 AMD Radeon DirectML（含 **50 系/Blackwell 自动走 cu128 + torch 2.7**），长音频自动分段避免显存溢出。
 - 🔌 **FastAPI 外部接入** —— 软件内手动启停本机或局域网 API，支持 API Key、流式上传大音频、模型管理、单模型/多模型/批量任务、推理历史与预设、作品管理和成品下载；Audio Editor Lite 也开放工程、音轨、片段、切分、分离、局部重推理与渲染接口。内置连通性测试、Swagger/ReDoc、Python 与 PowerShell 示例。
@@ -56,7 +25,9 @@
 - 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-seedvc` / `.venv-ddsp` / `.venv-uvr` / `.venv-vocal`），互不污染。
 - 🎧 **作品库** —— 试听 / 导出成品，单独试听伴奏与干声，失败任务一键查日志；删除作品同步真实清理本地生成文件。
 
-> **最新版本 v0.0.26**：AI 歌声增强升级为参考人声句段/音素动态对齐、受限局部节奏校正和自然 F0 修音，并加入 AI 角色共振峰、AI EQ、AI Compressor、AI Exciter、Stereo 与 AI 响度包络独立控制；同时优化持续元音的“电风扇”式微时拉伸伪影，提高人声响度，并在删除编辑工程或更换主题壁纸时同步清理对应本地文件。详见 [v0.0.26 更新说明](release_notes_v026.md) 与 [API 接入文档](docs/api.md)。
+> **最新版本 v0.0.27**：模型站升级为带详情、版本、依赖、更新和试听素材的社区模型流程；AI 翻唱增加 DeepFilterNet3 分离人声/模型输出双阶段修复、高频保护与最高 1800 Hz 自适应音域，So-VITS-SVC 和 DDSP-SVC 可自动或手动使用 FCPE，并补齐 FCPE 离线依赖及失败回退；安装器预置按 Python、组件和 GPU 栈选择的离线 whl wheelhouse，所有分卷严格小于 2 GiB。详见 [v0.0.27 更新说明](release_notes_v027.md) 与 [API 接入文档](docs/api.md)。
+
+> v0.0.26：AI 歌声增强升级为参考人声句段/音素动态对齐、受限局部节奏校正和自然 F0 修音，并加入 AI 角色共振峰、AI EQ、AI Compressor、AI Exciter、Stereo 与 AI 响度包络独立控制；同时优化持续元音的“电风扇”式微时拉伸伪影，提高人声响度，并在删除编辑工程或更换主题壁纸时同步清理对应本地文件。详见 [v0.0.26 更新说明](release_notes_v026.md) 与 [API 接入文档](docs/api.md)。
 
 > v0.0.25：安装器前置依赖改为用户辅助检测与跳转下载，用户安装好 Python 后会自动安装 uv；FFmpeg、So-VITS-SVC、SeedVC、DDSP-SVC 改为随分卷自带，系统已有 FFmpeg 时自动跳过释放；作品播放页补齐歌词搜索多结果手动选择、QQ / 网易 / 酷我 API 来源选择、MV 画面导入与更细致的播放体验。详见 [v0.0.25 更新说明](release_notes_v025.md) 与 [API 接入文档](docs/api.md)。
 
@@ -228,7 +199,7 @@ flowchart TB
 4. 勾选「安装后立即搭建运行环境」，联网创建 AI 子环境（由 `setup_env.bat` 调 `install.py`，无 PowerShell）。
 5. 通过桌面 / 开始菜单的 **XB-SVCB** 快捷方式启动。后续可在首页「数据存储位置」查看占用/剩余空间，并迁移到其它磁盘。
 
-> 💡 **应用界面本身无需任何依赖即可打开**；FFmpeg、So-VITS-SVC、SeedVC、DDSP-SVC 源码和离线模型由安装分卷携带。只有「搭建运行环境」需要 **Python 3.10+** 来创建匹配本机 GPU 的隔离环境；uv 会在 Python 可用后自动安装。若某步失败，可从开始菜单「搭建/修复运行环境」重试。
+> 💡 **应用界面本身无需任何依赖即可打开**；FFmpeg、So-VITS-SVC、SeedVC、DDSP-SVC 源码、离线模型和 Python whl wheelhouse 由安装分卷携带。只有「搭建运行环境」需要 **Python 3.10+** 来创建匹配本机 GPU 的隔离环境；uv 与各 AI 子环境依赖会优先从安装包内的 `assets/wheels` 离线安装。若某步失败，可从开始菜单「搭建/修复运行环境」重试。
 
 ### 💾 数据存储与迁移
 
@@ -245,7 +216,7 @@ flowchart TB
 | ------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Python 3.10.5+**        | 运行安装器与主程序        | 安装时勾选*Add to PATH*                                                                                                                  |
 | **uv**                    | 虚拟环境管理工具          | 安装器使用 uv 管理虚拟环境；用户安装好 Python 后会自动通过 pip 安装到用户目录                                                              |
-| **ffmpeg**                | 音频转码 / 混音           | 安装分卷自带；系统 PATH 已有时优先使用系统版本并跳过随包释放                                                                                |
+| **ffmpeg**                | 音频转码 / 混音           | 安装分卷自带；系统 PATH 已有时优先使用系统版本并跳过随包释放                                                                               |
 | **Git**（可选）           | 开发机获取引擎源码        | 图形安装包已自带 SVC/DDSP/SeedVC 源码；仅源码开发或重新准备发布载荷时需要                                                                  |
 | **GPU 运行时**（可选）    | GPU 加速                  | NVIDIA 自动安装 cu121/cu128 PyTorch；Windows AMD Radeon 自动安装`torch-directml`；无兼容 GPU 时使用 CPU torch                            |
 | **Node.js LTS**（含 npm） | 构建前端                  | 仅「从源码安装」需要                                                                                                                       |
@@ -253,16 +224,16 @@ flowchart TB
 
 #### 🔗 安装链接
 
-| 软件                               | 下载链接                                                                                                                                                                                                            |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Python 3.10.5**            | [https://www.python.org/downloads/release/python-3105/](https://www.python.org/downloads/release/python-3105/)                                                                                                       |
-| **Git**                      | [https://git-scm.com/downloads](https://git-scm.com/downloads)                                                                                                                                                       |
-| **CUDA Toolkit 12.1 / 12.8** | [https://developer.nvidia.com/cuda-toolkit-archive](https://developer.nvidia.com/cuda-toolkit-archive)                                                                                                               |
-| **ffmpeg**（仅源码安装）     | [https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip](https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip)                                                                       |
-| **Node.js LTS**              | [https://nodejs.org/](https://nodejs.org/)                                                                                                                                                                           |
-| **C++ Build Tools**          | [https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/)                                                                             |
-| **CMake**                    | [https://cmake.org/download/](https://cmake.org/download/)                                                                                                                                                           |
-| **JUCE**                     | [https://github.com/juce-framework/JUCE](https://github.com/juce-framework/JUCE)                                                                                                                                     |
+| 软件                               | 下载链接                                                                                                                                |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **Python 3.10.5**            | [https://www.python.org/downloads/release/python-3105/](https://www.python.org/downloads/release/python-3105/)                           |
+| **Git**                      | [https://git-scm.com/downloads](https://git-scm.com/downloads)                                                                           |
+| **CUDA Toolkit 12.1 / 12.8** | [https://developer.nvidia.com/cuda-toolkit-archive](https://developer.nvidia.com/cuda-toolkit-archive)                                   |
+| **ffmpeg**（仅源码安装）     | [https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip](https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip)     |
+| **Node.js LTS**              | [https://nodejs.org/](https://nodejs.org/)                                                                                               |
+| **C++ Build Tools**          | [https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/) |
+| **CMake**                    | [https://cmake.org/download/](https://cmake.org/download/)                                                                               |
+| **JUCE**                     | [https://github.com/juce-framework/JUCE](https://github.com/juce-framework/JUCE)                                                         |
 
 > 💡 **关于 CUDA**：安装器会先复核实际显卡，40 系及以下兼容 NVIDIA 使用 **cu121**，50 系 Blackwell 使用 **cu128**；CPU 或不兼容显卡会跳过 CUDA 并安装 CPU 版 torch。PyTorch wheel 已内置对应 CUDA 运行库，通常只需匹配的新 NVIDIA 驱动，完整 CUDA Toolkit 仅用于本地编译/工具链。
 
@@ -350,9 +321,9 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 
 构建产物会写到 `engines/juce-vst3-host/xb-juce-vst3-host.exe`，这也是源码运行时默认寻找的位置。
 
-> 每一步都是**幂等**的：失败后重跑只补齐缺失部分。首次安装需下载较多依赖与模型（合计数 GB），请保持网络通畅。
+> 每一步都是**幂等**的：失败后重跑只补齐缺失部分。图形安装包会优先使用内置 `assets/wheels` 与离线模型；源码安装或 wheelhouse 缺失时才需要联网下载依赖/模型。
 
-**国内加速 / 离线镜像**：安装器会自动为当前安装流程配置 `XB_HF_MIRROR` / `HF_ENDPOINT`（默认 `https://hf-mirror.com`）和 `XB_PYPI_MIRROR` / `PIP_INDEX_URL` / `UV_DEFAULT_INDEX`（默认清华 PyPI 镜像），底模与普通 Python 依赖优先走国内镜像，官方 PyPI 仅作兜底；torch 的 CUDA/CPU wheel 仍走 PyTorch 专用源，避免装错版本。GitHub 资源带 ghproxy 回退。仍不通时可手动覆盖后重跑 `python install\install.py --only models`：
+**国内加速 / 离线镜像**：图形安装包会设置 `XB_WHEELHOUSE=<安装目录>\assets\wheels` 与 `XB_WHEELHOUSE_STRICT=1`，Python 依赖优先按本机 Python 版本和 GPU 栈从本地 whl 安装；源码安装或缺少 wheelhouse 时，安装器会自动配置 `XB_HF_MIRROR` / `HF_ENDPOINT`（默认 `https://hf-mirror.com`）和 `XB_PYPI_MIRROR` / `PIP_INDEX_URL` / `UV_DEFAULT_INDEX`（默认清华 PyPI 镜像），底模与普通 Python 依赖优先走国内镜像，官方 PyPI 仅作兜底；torch 的 CUDA/CPU wheel 仍走 PyTorch 专用源，避免装错版本。GitHub 资源带 ghproxy 回退。仍不通时可手动覆盖后重跑 `python install\install.py --only models`：
 
 ```bat
 set XB_HF_MIRROR=https://hf-mirror.com
@@ -401,7 +372,7 @@ v0.0.23 起可在软件的“资料库 -> API 接入”页手动启动 FastAPI �
 - **多模型混合** —— 勾选多个模型并分别设参；按歌名获取歌词、校验时长对齐（可整体偏移），再逐句指派模型。
 
 4. **选择高级工作流（可选）** —— 默认走「自动混音合成」；多模型模式可选「自动人声合并」或「手动人声合并」；需要后期微调时选「自动 + 编辑器二次调整」，只想从素材开始剪辑时选「全手动编辑」。
-5. **自动处理** —— 单模型：分离 → 去混响 →（so-vits-svc 才需）F0 → 模型推理 → 混音；多模型：分离 → 歌词分割 → 整轨逐模型推理 → 人声合并（同源连唱合并 + 换人处交叉淡化）→ 混音。可在创建任务时勾选「AI 歌声增强」，分别调节 AI 对齐、自然修音与 AI 角色共振峰等强度，再选择 basic / advanced 等级；advanced 额外使用原始人声保护高频辅音/呼吸细节并校正宽带平衡。
+5. **自动处理** —— 单模型：分离/去混响 → 分离人声修复与高频分析 → 自适应 F0 → 模型推理 → 输出人声修复 → 混音；多模型：分离/去混响 → 分离人声修复与高频分析 → 歌词分割 → 整轨逐模型推理 → 人声合并 → 输出人声修复 → 混音。检测到高音时会自动使用适合高音跟踪的 F0 路径、降低过度平滑并把可配置音高分析上限提高到最高 1800 Hz。可在创建任务时额外勾选「AI 歌声增强」，分别调节 AI 对齐、自然修音与 AI 角色共振峰等强度，再选择 basic / advanced 等级。
 6. **作品库 / 音频编辑器** —— 试听 / 导出成品，单独试听**伴奏**与**干声**；失败任务一键打开日志；删除作品会真实清理其本地生成文件。需要微调时可从作品创建编辑工程，在音频编辑器中剪切、淡化、调声道、重推理片段并导出；局部重推理可勾选「重推理后自动增强」，高级层会以裁切出的原始干声保护辅音、呼吸和宽带平衡。
 
 ---
@@ -480,7 +451,7 @@ flowchart LR
 
 ## 🌐 模型站（ModelScope 魔搭社区）
 
-在「声音模型 → 模型站」标签页，可以把训练好的模型分享到社区，也能搜索并下载别人分享的模型，**全程在软件内完成、带进度条**。
+在「声音模型 → 模型站」标签页，可以把训练好的模型分享到社区，也能搜索并下载别人分享的模型。浏览和下载不要求本地 Access Token，模型传输会在软件内显示进度。
 
 **方案要点（每人自有令牌 + 标记防污染）**
 
@@ -490,17 +461,18 @@ flowchart LR
 
 **搜索 / 下载**
 
-1. 填好令牌后，在搜索框输入关键词（支持中文、多词**模糊匹配**，留空浏览全部），可叠加架构筛选。
-2. 命中结果会先列出**你自己命名空间**内的模型（上传后必定可见），再合并全站按标记搜索到的社区模型。
-3. 点「下载导入」即流式下载（按字节显示**进度条**），完成后自动导入到「本地模型」。
+1. 在搜索框输入关键词（支持中文、多词**模糊匹配**，留空浏览全部），可叠加架构筛选；浏览公开模型无需先填写访问令牌。
+2. 命中结果会先列出**你自己命名空间**内的模型（上传后必定可见），再合并全站按标记搜索到的社区模型；列表支持按综合排序、下载排行和更新时间排序。
+3. 搜索结果会显示版本、下载数、标签、依赖状态，以及可用的截图 / 试听素材；点「详情」可查看完整清单、依赖检查和版本信息。
+4. 点「下载导入」即流式下载（按字节显示**进度条**），完成后自动导入到「本地模型」；从模型站导入的模型会记录来源仓库与版本，用于后续更新提醒。
 
 **上传分享**
 
-1. 在「本地模型」列表对某个模型点「分享到模型站」，确认/选择其框架架构。
-2. 软件打包模型文件 + 生成清单后，经独立上传组件逐个文件上传（按文件显示**进度条**）。
-3. 完成后即在你的 ModelScope 公开仓库可见，社区可搜索下载。
+1. 在「本地模型」列表对某个模型点「分享到模型站」，确认/选择其框架架构，并填写版本、简介、标签，可选试听音频（需可解析音频，≤1GB）与截图。
+2. 软件打包模型文件 + 生成清单后，经独立上传组件逐个文件上传（按文件显示**进度条**）；清单会记录文件角色、版本、依赖、展示素材和生态元数据。
+3. 完成后即在你的 ModelScope 公开仓库可见，社区可搜索下载；已下载的来源模型支持检查远端版本并一键拉取最新版本导入。
 
-> 💡 上传需要独立的上传组件环境 `.venv-hub`（含 `modelscope` SDK），由安装器的「模型上传组件」步骤创建；**搜索 / 下载仅用内置 httpx，无需该组件**。
+> 💡 只有模型上传需要独立的 `.venv-hub`（含 `modelscope` SDK），由安装器的「模型上传组件」步骤创建；**搜索和下载仅用内置 httpx，无需该组件**。
 
 ---
 
@@ -569,8 +541,8 @@ flowchart LR
 | `checkpoint_best_legacy_500.pt`                           | ContentVec / RVC hubert 语音编码器   | `assets/models/pretrain/` → `engines/so-vits-svc/pretrain/`，并硬链接或复制为 `.venv-rvc/.../base_model/hubert_base.pt`；缺失则使用 Hugging Face 镜像                        |
 | `nsf_hifigan/`                                            | NSF-HiFiGAN 声码器 / 浅扩散          | 部署到 so-vits-svc 与 DDSP-SVC 预训练模型目录；缺失则使用 openvpi/vocoders Releases                                                                                                 |
 | `rmvpe.pt`                                                | SVC / RVC / SeedVC / DDSP 共用 RMVPE | 部署到 so-vits-svc、RVC base_model、SeedVC checkpoints 与 DDSP-SVC`pretrain/rmvpe/model.pt`；缺失则使用镜像下载                                                                   |
-| DDSP ContentVec`pytorch_model.bin`                        | DDSP-SVC 内容编码器                  | 安装分卷离线携带并释放到`engines/ddsp-svc/pretrain/contentvec/`，无需目标机器另行下载                                                                                           |
-| `fcpe.pt`（可选）                                         | FCPE F0 预测器                       | 仅在自带目录存在时复制                                                                                                                                                              |
+| DDSP ContentVec`pytorch_model.bin`                        | DDSP-SVC 内容编码器                  | 安装分卷离线携带并释放到`engines/ddsp-svc/pretrain/contentvec/`，无需目标机器另行下载                                                                                             |
+| `fcpe.pt`                                                 | 高音域 FCPE F0 预测器                | 随安装分卷离线携带并部署到 So-VITS-SVC；检测到极高音时自动启用                                                                                                                      |
 | `seedvc/campplus_cn_common.bin`                           | SeedVC 目标音色编码器                | worker 优先读取随包文件，并部署到`engines/seed-vc/checkpoints/`                                                                                                                   |
 | `seedvc/whisper-small/`                                   | SeedVC 语音内容编码器                | worker 通过本地临时配置直接读取完整 Whisper Small 快照                                                                                                                              |
 | `seedvc/bigvgan_v2_44khz_128band_512x/`                   | SeedVC 44.1kHz 声码器                | worker 通过本地临时配置直接读取 BigVGAN 快照                                                                                                                                        |
@@ -756,18 +728,14 @@ CPU 模式下模型较慢。使用 `python install\install.py --gpu` 会自动�
 
 <br/>
 
-- [ ] 模型评分
-- [ ] 模型评论
-- [ ] 下载排行
 - [X] 模型标签系统（架构标签）
 - [X] 模型搜索优化（模糊搜索 + 分页加载）
-- [ ] 模型推荐
-- [ ] 模型版本管理
-- [ ] 模型更新提醒
-- [ ] 一键升级模型
-- [ ] 模型依赖检查
-- [ ] 模型截图展示
-- [ ] 模型试听功能
+- [X] 模型版本管理
+- [X] 模型更新提醒
+- [X] 一键升级模型
+- [X] 模型依赖检查
+- [X] 模型截图展示
+- [X] 模型试听功能
 
 </details>
 
@@ -829,7 +797,7 @@ CPU 模式下模型较慢。使用 `python install\install.py --gpu` 会自动�
 
 1. 安装 [Inno Setup 6](https://jrsoftware.org/isdl.php)（提供 `ISCC.exe`）。
 2. 安装 CMake、C++ Build Tools 和 JUCE，并设置 `XB_JUCE_DIR` 指向 JUCE 源码目录。
-3. 可先运行轻量校验，检查版本、worker、SeedVC 离线权重和 Inno Setup/Pascal 脚本，不压缩数 GB 模型：
+3. 可先运行轻量校验，检查版本、worker、SeedVC 离线权重和 Inno Setup/Pascal 脚本，不压缩数 GB 模型或下载 whl：
 
 ```powershell
 ./installer/build.ps1 -ValidateOnly
@@ -841,7 +809,8 @@ CPU 模式下模型较慢。使用 `python install\install.py --gpu` 会自动�
 ./installer/build.ps1
 ```
 
-5. 将 `dist/XB-SVCB-Setup.exe` 与全部 `dist/XB-SVCB-Setup-*.bin` 一起上传到 GitHub Releases；用户下载后也必须把这些文件放在同一目录。
+5. 完整构建会以 `--clean` 运行 `install/prepare_wheelhouse.py`，重新生成 `assets/wheels` 并写入 `assets/wheels/wheelhouse.json`；只有确认 wheelhouse 已存在且完整时，才可临时使用 `-SkipWheelhouse`。
+6. 将 `dist/XB-SVCB-Setup.exe` 与全部 `dist/XB-SVCB-Setup-*.bin` 一起上传到 GitHub Releases；用户下载后也必须把这些文件放在同一目录。
 
 ```mermaid
 flowchart LR
@@ -851,6 +820,7 @@ flowchart LR
     HOST --> STAGE["发布目录完整性校验<br/>应用 / 前端 / workers / Host / 安装脚本"]
 
     ASSETS["assets/models 离线资产<br/>UVR / SVC / RVC / SeedVC / DDSP / DeepFilterNet"] --> ISCC["Inno Setup 6<br/>分卷打包"]
+    WHEELS["assets/wheels 离线 whl<br/>py310/py39 + CPU/DirectML/cu121/cu128"] --> ISCC
     STAGE --> ISCC
 
     ISCC --> EXE["XB-SVCB-Setup.exe<br/>安装引导程序"]
@@ -860,14 +830,15 @@ flowchart LR
     INSTALL --> READY["组件校验<br/>完成或稍后单步修复"]
 ```
 
-| 文件                           | 作用                                                                      |
-| ------------------------------ | ------------------------------------------------------------------------- |
-| `installer/xb-svcb.iss`      | Inno Setup 脚本：分卷、快捷方式、安装后环境搭建、完整性检查与卸载清理     |
-| `installer/build.ps1`        | 构建前端、PyInstaller 应用和 JUCE Host，校验发布目录并调用 ISCC           |
-| `installer/xb-svcb-app.spec` | 定义 PyInstaller 运行目录、内置前端及所有 AI worker                       |
-| `install/install.py`         | 创建 SVC / RVC / SeedVC / DDSP-SVC / UVR / Vocal / Hub 隔离环境并部署底模 |
-| `setup_env.bat`              | 用户机搭建或修复运行环境入口（纯 batch，无 PowerShell）                   |
-| `install_prereqs.bat`        | 图形安装器调用的前置依赖检查与安装入口                                    |
+| 文件                              | 作用                                                                      |
+| --------------------------------- | ------------------------------------------------------------------------- |
+| `installer/xb-svcb.iss`         | Inno Setup 脚本：分卷、快捷方式、安装后环境搭建、完整性检查与卸载清理     |
+| `installer/build.ps1`           | 构建前端、PyInstaller 应用和 JUCE Host，校验发布目录并调用 ISCC           |
+| `installer/xb-svcb-app.spec`    | 定义 PyInstaller 运行目录、内置前端及所有 AI worker                       |
+| `install/install.py`            | 创建 SVC / RVC / SeedVC / DDSP-SVC / UVR / Vocal / Hub 隔离环境并部署底模 |
+| `install/prepare_wheelhouse.py` | 发布构建时预下载 Windows whl，并生成`assets/wheels/wheelhouse.json`     |
+| `setup_env.bat`                 | 用户机搭建或修复运行环境入口（纯 batch，无 PowerShell）                   |
+| `install_prereqs.bat`           | 图形安装器调用的前置依赖检查与安装入口                                    |
 
 **设计说明**
 
@@ -875,6 +846,7 @@ flowchart LR
 - PyInstaller 运行目录内包含当前 `web/dist` 与 SVC / RVC / SeedVC / DDSP-SVC / UVR / Vocal / Hub workers，最终用户无需安装 Node.js。
 - 安装器携带预构建的 `xb-juce-vst3-host.exe`；开发者仅在确认已有正确产物时使用 `-SkipJuceHostBuild`。
 - `assets/models/` 包含 UVR、SVC/RVC 底模、SeedVC 所需 RMVPE、CampPlus、Whisper Small、BigVGAN，以及 AI 歌声增强所需的 DeepFilterNet3 权重；缺少或疑似 LFS 指针时构建直接失败（DeepFilterNet 权重校验阈值 8 MB）。
+- `assets/wheels/` 包含 `uv` bootstrap wheel，以及按 `py310/cpu`、`py310/directml`、`py310/cu121`、`py310/cu128` 分组的 Python 依赖；对 SVC/RVC 的 py39 和 DirectML 下 DDSP/Vocal 这类 torch 版本冲突环境，会额外使用组件子目录；安装器会写入 `XB_WHEELHOUSE_STRICT=1`，缺 whl 时直接报错，避免在用户机器临时解析/编译。
 - Inno Setup 使用 `DiskSpanning` 生成小于 2GB 的 `.bin` 分卷。EXE 不是完整离线包，发布和安装时都不能遗漏任何分卷。
 - 安装完成后会复核应用组件、UVR、SeedVC、DDSP-SVC 与 AI 歌声增强的 Python、worker 和上游推理入口；失败时给出修复命令和日志位置。
 - 卸载时清理安装目录内生成的 `.venv-*`、`engines/` 和 `models/`；可迁移的 `.xb_svcb` 用户数据默认保留。

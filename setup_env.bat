@@ -15,12 +15,18 @@ if not defined HUGGINGFACE_HUB_ENDPOINT set "HUGGINGFACE_HUB_ENDPOINT=%XB_HF_MIR
 if not defined XB_PYPI_MIRROR set "XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple"
 if not defined PIP_INDEX_URL set "PIP_INDEX_URL=%XB_PYPI_MIRROR%"
 if not defined UV_DEFAULT_INDEX set "UV_DEFAULT_INDEX=%XB_PYPI_MIRROR%"
+if not defined XB_WHEELHOUSE if exist "%~dp0assets\wheels\wheelhouse.json" set "XB_WHEELHOUSE=%~dp0assets\wheels"
+if defined XB_WHEELHOUSE if not defined XB_WHEELHOUSE_STRICT set "XB_WHEELHOUSE_STRICT=1"
 if not defined UV_LINK_MODE set "UV_LINK_MODE=copy"
 if not defined PIP_DISABLE_PIP_VERSION_CHECK set "PIP_DISABLE_PIP_VERSION_CHECK=1"
 echo [XB-SVCB] HuggingFace mirror: %HF_ENDPOINT%
 echo [XB-SVCB] PyPI mirror       : %PIP_INDEX_URL%
+if defined XB_WHEELHOUSE echo [XB-SVCB] Wheelhouse        : %XB_WHEELHOUSE%
 
-if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 3 正在查找 Python 运行时
+rem install.py emits the authoritative 0-100 progress stream for this step.
+rem These wrapper messages deliberately stay at the local start position so
+rem they cannot jump ahead and then move backwards when install.py starts.
+if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 0 正在查找 Python 运行时
 set "PYTHON_DETECTOR=%~dp0install\detect_python.bat"
 if not exist "%PYTHON_DETECTOR%" (
   echo [XB-SVCB] Python detector not found: %PYTHON_DETECTOR%
@@ -35,14 +41,14 @@ if defined XB_GIT_BIN set "PATH=%XB_GIT_BIN%;%PATH%"
 if defined XB_FFMPEG_BIN set "PATH=%XB_FFMPEG_BIN%;%PATH%"
 if defined XB_CUDA_BIN set "PATH=%XB_CUDA_BIN%;%PATH%"
 
-if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 10 已找到 Python，准备创建隔离环境
+if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 0 已找到 Python，准备创建隔离环境
 echo [XB-SVCB] Using verified Python 3.10+: %XB_PYTHON_EXE%
 echo [XB-SVCB] Building runtime environment, this may take a while...
 echo.
 rem App UI ships as XB-SVCB.exe, so the app/web build steps are not needed here;
 rem only the heavy AI envs (uvr/svc/rvc/seedvc/ddsp) and models are set up.
 rem --root pins all deps (engines/.venv-svc/.venv-uvr/models) to THIS install folder.
-if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 18 正在执行运行环境安装脚本
+if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 0 正在执行运行环境安装脚本
 "%XB_PYTHON_EXE%" "install\install.py" --root "%CD%" --skip-app --skip-web %*
 set "RC=%ERRORLEVEL%"
 

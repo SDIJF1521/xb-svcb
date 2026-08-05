@@ -28,6 +28,7 @@ try:
         patch_directml_checkpoint_load,
         patch_directml_float32,
         patch_directml_sovits_rmvpe_cpu,
+        patch_sovits_fcpe_fallback,
         resolve_torch_device,
     )
 except ImportError:  # package import used by tests/application tooling
@@ -35,6 +36,7 @@ except ImportError:  # package import used by tests/application tooling
         patch_directml_checkpoint_load,
         patch_directml_float32,
         patch_directml_sovits_rmvpe_cpu,
+        patch_sovits_fcpe_fallback,
         resolve_torch_device,
     )
 
@@ -58,6 +60,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--input", required=True, help="输入人声 wav 路径")
     p.add_argument("--out-npy", required=True, help="F0 曲线输出 .npy 路径")
     p.add_argument("--f0", default="rmvpe", help="F0 预测器")
+    p.add_argument("--f0-max", type=float, default=1100.0, help="自适应 F0 上限")
     p.add_argument(
         "--device",
         default="auto",
@@ -94,6 +97,8 @@ def main() -> int:
         traceback.print_exc()
         return 3
 
+    patch_sovits_fcpe_fallback(utils, args.f0_max)
+
     # 从模型配置读取采样率与 hop，保证与推理时一致
     try:
         with open(args.config, "r", encoding="utf-8") as f:
@@ -111,9 +116,9 @@ def main() -> int:
             patch_directml_float32(torch)
             patch_directml_checkpoint_load(torch)
             patch_directml_sovits_rmvpe_cpu(utils)
-            if str(args.f0).lower() == "rmvpe":
+            if str(args.f0).lower() in {"rmvpe", "fcpe"}:
                 print(
-                    "XB: DirectML 主推理环境下，F0 探针的 RMVPE 使用 CPU 稳定路径",
+                    "XB: DirectML 主推理环境下，F0 探针的 RMVPE/FCPE 使用 CPU 稳定路径",
                     flush=True,
                 )
     except RuntimeError as exc:
@@ -135,6 +140,11 @@ def main() -> int:
             device=device,
             threshold=0.05,
         )
+        if hasattr(predictor, "f0_max"):
+            predictor.f0_max = max(
+                float(getattr(predictor, "f0_max", 1100.0)),
+                min(1800.0, float(args.f0_max)),
+            )
         f0, uv = predictor.compute_f0_uv(wav)
     except Exception as exc:  # noqa: BLE001
         print(f"F0_ERR F0 计算失败: {exc}")

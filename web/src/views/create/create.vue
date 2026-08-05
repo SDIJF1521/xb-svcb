@@ -215,7 +215,7 @@
                   <div v-if="frameworkOf(m.id) !== 'seed-vc'" class="mp-mini">
                     <span>F0</span>
                     <select v-model="mp(m.id).f0Method">
-                      <option v-for="f in f0Methods" :key="f" :value="f">{{ f }}</option>
+                      <option v-for="f in f0MethodsForFramework(frameworkOf(m.id))" :key="f" :value="f">{{ f }}</option>
                     </select>
                   </div>
                   <div class="mp-mini">
@@ -316,7 +316,7 @@
             <label class="field-block-label">F0 提取算法</label>
             <div class="seg">
               <button
-                v-for="f in f0Methods"
+                v-for="f in selectedF0Methods"
                 :key="f"
                 class="seg-item"
                 :class="{ active: f0Method === f }"
@@ -968,6 +968,7 @@ import {
 import { useModelsStore } from '@/stores/models'
 import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
+import { f0MethodsForFramework, normalizeF0Method } from '@/utils/f0'
 
 defineOptions({ name: 'CreatePage' })
 
@@ -1004,8 +1005,7 @@ const selectedModel = ref<string>('')
 const uvrModels = ['MDX-Net', 'Demucs v4', 'VR Arch']
 const uvrModel = ref(str(prefs.uvrModel, 'MDX-Net'))
 
-const f0Methods = ['rmvpe', 'crepe', 'harvest', 'pm']
-const f0Method = ref(str(prefs.f0Method, 'rmvpe'))
+const f0Method = ref(normalizeF0Method('so-vits-svc', str(prefs.f0Method, 'rmvpe')))
 
 const pitch = ref(num(prefs.pitch, 0))
 const formantShift = ref(Math.max(-2, Math.min(2, num(prefs.formantShift, 0))))
@@ -1063,6 +1063,7 @@ function baseName(p: string): string {
   return p ? p.split(/[/\\]/).pop() || p : ''
 }
 const selectedFramework = computed(() => frameworkOf(selectedModel.value))
+const selectedF0Methods = computed(() => f0MethodsForFramework(selectedFramework.value))
 
 /* 模型框架筛选：'' = 全部；只在存在多种框架时展示筛选条 */
 const modelFilter = ref('')
@@ -1135,18 +1136,18 @@ function paramsForFramework(framework: string, values: ParamValues): InferencePa
     params.diffusion_ratio = values.diffusionRatio
     params.reference_audio = values.referenceAudio
   } else if (framework === 'rvc') {
-    params.f0_method = values.f0Method
+    params.f0_method = normalizeF0Method(framework, values.f0Method)
     params.index_rate = values.indexRate
     params.rms_mix = values.rmsMix
     params.protect = values.protect
     params.filter_radius = Math.round(values.filterRadius)
     params.rvc_version = values.rvcVersion
   } else if (framework === 'ddsp-svc') {
-    params.f0_method = values.f0Method
+    params.f0_method = normalizeF0Method(framework, values.f0Method)
     params.ddsp_infer_steps = ddspQualitySteps(values.diffusionRatio)
     params.ddsp_formant_shift = Number(Math.max(-2, Math.min(2, values.formantShift)).toFixed(2))
   } else {
-    params.f0_method = values.f0Method
+    params.f0_method = normalizeF0Method(framework, values.f0Method)
     params.diffusion_ratio = values.diffusionRatio
   }
   return params
@@ -1228,12 +1229,12 @@ function timelineModelColor(index: number): string {
   return `hsl(${hue} 78% 56%)`
 }
 
-function defaultParams(): MultiParams {
+function defaultParams(framework: string): MultiParams {
   return {
     pitch: pitch.value,
     formantShift: formantShift.value,
     diffusionRatio: diffusionRatio.value,
-    f0Method: f0Method.value,
+    f0Method: normalizeF0Method(framework, f0Method.value),
     device: device.value,
     indexRate: indexRate.value,
     rmsMix: rmsMix.value,
@@ -1244,11 +1245,13 @@ function defaultParams(): MultiParams {
   }
 }
 function mp(id: string): MultiParams {
+  const framework = frameworkOf(id)
   let p = modelParams[id]
   if (!p) {
-    p = defaultParams()
+    p = defaultParams(framework)
     modelParams[id] = p
   }
+  p.f0Method = normalizeF0Method(framework, p.f0Method)
   return p
 }
 function isPicked(id: string) {
@@ -1269,7 +1272,7 @@ function togglePick(id: string) {
   if (isPicked(id)) {
     selectedMulti.value = selectedMulti.value.filter((x) => x !== id)
   } else {
-    if (!modelParams[id]) modelParams[id] = defaultParams()
+    if (!modelParams[id]) modelParams[id] = defaultParams(frameworkOf(id))
     selectedMulti.value = [...selectedMulti.value, id]
   }
 }
@@ -1908,24 +1911,30 @@ const currentWork = ref<WorkDTO | null>(null)
 
 const stepMeta: Record<string, string> = {
   separate: 'UVR 提取干声与伴奏',
+  repair_input: 'DeepFilterNet3 清理分离伪影并保护高频细节',
   f0: '分析音高曲线',
   infer: '加载模型进行歌声转换',
   split: '按歌词时间轴切分人声',
   merge: '按顺序拼接各模型片段',
+  repair_output: 'DeepFilterNet3 修复模型输出并保护高音泛音',
   enhance: '限量降噪 · 真实细节保护 · 并行母带',
   mix: 'ffmpeg 合成与重采样',
 }
 const singlePipeline: PipelineStep[] = [
   { key: 'separate', label: '人声分离', status: 'wait' },
+  { key: 'repair_input', label: '分离人声修复', status: 'wait' },
   { key: 'f0', label: 'F0 提取', status: 'wait' },
   { key: 'infer', label: '模型推理', status: 'wait' },
+  { key: 'repair_output', label: '输出人声修复', status: 'wait' },
   { key: 'mix', label: '混音合成', status: 'wait' },
 ]
 const multiPipeline: PipelineStep[] = [
   { key: 'separate', label: '人声分离', status: 'wait' },
+  { key: 'repair_input', label: '分离人声修复', status: 'wait' },
   { key: 'split', label: '歌词分割', status: 'wait' },
   { key: 'infer', label: '逐段推理', status: 'wait' },
   { key: 'merge', label: '人声合并', status: 'wait' },
+  { key: 'repair_output', label: '输出人声修复', status: 'wait' },
   { key: 'mix', label: '混音合成', status: 'wait' },
 ]
 
@@ -2059,7 +2068,7 @@ function applyParams(raw: Record<string, unknown>) {
   }
   pitch.value = next.pitch
   formantShift.value = next.formantShift
-  f0Method.value = next.f0Method
+  f0Method.value = normalizeF0Method(selectedFramework.value, next.f0Method)
   indexRate.value = next.indexRate
   rmsMix.value = next.rmsMix
   uvrModel.value = next.uvrModel
@@ -2073,7 +2082,7 @@ function applyParams(raw: Record<string, unknown>) {
     const p = mp(id)
     p.pitch = next.pitch
     p.formantShift = next.formantShift
-    p.f0Method = next.f0Method
+    p.f0Method = normalizeF0Method(frameworkOf(id), next.f0Method)
     p.indexRate = next.indexRate
     p.rmsMix = next.rmsMix
     p.diffusionRatio = next.diffusionRatio
@@ -2430,6 +2439,9 @@ watch(
   normalizeDeviceSelections,
   { deep: true },
 )
+watch(selectedFramework, (framework) => {
+  f0Method.value = normalizeF0Method(framework, f0Method.value)
+})
 onUnmounted(() => {
   stopPolling()
   trackRO?.disconnect()

@@ -106,9 +106,11 @@ VOCAL_VENV = ROOT / ".venv-vocal"
 UVR_MODELS_DIR = ROOT / "models" / "uvr"
 VOCAL_MODELS_DIR = ROOT / "models" / "vocal-enhancement"
 
-# 随安装包一起分发的「自带模型」目录：安装时直接本地复制，免联网慢下载。
-# 始终相对本脚本位置（assets/models 与 install/ 同级），不随 --root 改变。
-ASSETS_MODELS_DIR = Path(__file__).resolve().parent.parent / "assets" / "models"
+# 随安装包一起分发的离线载荷：安装时直接本地复制/安装，免用户机器联网慢下载。
+# 始终相对本脚本位置（assets/* 与 install/ 同级），不随 --root 改变。
+ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+ASSETS_MODELS_DIR = ASSETS_DIR / "models"
+ASSETS_WHEELS_DIR = ASSETS_DIR / "wheels"
 
 
 def _derive_paths(root: Path) -> None:
@@ -174,6 +176,13 @@ TORCH_DIRECTML_VER = "0.2.5.dev240914"
 TORCH_DIRECTML_TORCH_VER = "2.4.1"
 TORCHAUDIO_DIRECTML_VER = "2.4.1"
 AUDIO_SEPARATOR_VER = "0.44.2"
+# FCPE imports both modules at predictor startup. Pin local-attention before
+# 1.11, whose hyper-connections dependency requires torch>=2.5 and conflicts
+# with the validated DirectML torch 2.4.1 stack.
+SVC_FCPE_RUNTIME_DEPS = (
+    "einops==0.8.2",
+    "local-attention==1.10.0",
+)
 
 # 底模下载清单（见 README 与 so-vits-svc 官方说明）
 # HuggingFace 在国内常连不上，统一走「镜像优先 + 官方回退」。
@@ -295,6 +304,122 @@ def pypi_index_args(
     if use_mirror and PYPI_MIRROR and PYPI_MIRROR != PYPI_FALLBACK_INDEX:
         args += ["--index", PYPI_MIRROR]
     args += ["--default-index", PYPI_FALLBACK_INDEX]
+    return args
+
+
+def _truthy_env(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _wheelhouse_root() -> Path | None:
+    raw = os.environ.get("XB_WHEELHOUSE")
+    root = Path(raw).expanduser() if raw else ASSETS_WHEELS_DIR
+    return root if root.exists() else None
+
+
+def _dir_has_wheels(path: Path) -> bool:
+    try:
+        return path.is_dir() and any(path.glob("*.whl"))
+    except OSError:
+        return False
+
+
+def _wheel_py_tag(python_version: str | None) -> str | None:
+    if not python_version:
+        return None
+    m = re.match(r"^\s*(\d+)\.(\d+)", python_version)
+    if not m:
+        return None
+    return f"py{m.group(1)}{m.group(2)}"
+
+
+def _wheelhouse_strict() -> bool:
+    # 安装包内已有 wheelhouse 时默认走离线 whl；源码开发环境未准备 wheelhouse 时仍可联网。
+    return _truthy_env("XB_WHEELHOUSE_STRICT", default=True)
+
+
+def _wheelhouse_dirs(
+    *,
+    component: str | None = None,
+    gpu_stack: str | None = None,
+    python_version: str | None = None,
+) -> list[Path]:
+    root = _wheelhouse_root()
+    py_tag = _wheel_py_tag(python_version)
+    stack = (gpu_stack or "").strip().lower()
+    comp = (component or "").strip().lower()
+    if root is None:
+        return []
+
+    candidates: list[Path] = []
+    if comp:
+        candidates += [root / comp / "common"]
+        if py_tag:
+            candidates += [root / comp / py_tag / "common"]
+            if stack:
+                candidates.append(root / comp / py_tag / stack)
+        if stack:
+            candidates.append(root / comp / stack)
+            if py_tag:
+                candidates.append(root / comp / stack / py_tag)
+        if py_tag:
+            candidates.append(root / comp / py_tag)
+        candidates.append(root / comp)
+    if py_tag:
+        candidates += [root / py_tag / "common"]
+        if stack:
+            candidates.append(root / py_tag / stack)
+    if stack:
+        candidates.append(root / stack)
+    candidates.append(root / "common")
+
+    found: list[Path] = []
+    seen: set[Path] = set()
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        if resolved in seen or not _dir_has_wheels(path):
+            continue
+        seen.add(resolved)
+        found.append(path)
+    return found
+
+
+def _wheelhouse_args(
+    *,
+    component: str | None = None,
+    gpu_stack: str | None = None,
+    python_version: str | None = None,
+) -> list[str]:
+    dirs = _wheelhouse_dirs(
+        component=component,
+        gpu_stack=gpu_stack,
+        python_version=python_version,
+    )
+    if not dirs:
+        return []
+    args = ["--no-index", "--no-build"]
+    for directory in dirs:
+        args += ["--find-links", str(directory)]
+    return args
+
+
+def _uv_bootstrap_wheelhouse_args() -> list[str]:
+    root = _wheelhouse_root()
+    if root is None:
+        return []
+    dirs = [root / "bootstrap", root / "common"]
+    found = [path for path in dirs if _dir_has_wheels(path)]
+    if not found:
+        return []
+    args = ["--no-index"]
+    for directory in found:
+        args += ["--find-links", str(directory)]
     return args
 
 
@@ -453,6 +578,15 @@ def _pip_install_uv(use_mirror: bool = True) -> None:
         "uv",
         "--disable-pip-version-check",
     ]
+    local_args = _uv_bootstrap_wheelhouse_args()
+    if local_args:
+        try:
+            run(cmd + local_args)
+            return
+        except subprocess.CalledProcessError:
+            if _wheelhouse_strict():
+                raise
+            print(c("y", "    自带 uv wheel 安装失败，回退在线 PyPI 安装 …"))
     if use_mirror and PYPI_MIRROR:
         cmd += ["--index-url", PYPI_MIRROR]
     elif not use_mirror:
@@ -478,6 +612,8 @@ def ensure_uv() -> str:
     try:
         _pip_install_uv(use_mirror=True)
     except subprocess.CalledProcessError:
+        if _uv_bootstrap_wheelhouse_args() and _wheelhouse_strict():
+            raise
         warn_pypi_fallback()
         _pip_install_uv(use_mirror=False)
 
@@ -500,6 +636,9 @@ def uv_pip_install(
     py: str,
     *args: str,
     index: str | None = None,
+    component: str | None = None,
+    gpu_stack: str | None = None,
+    python_version: str | None = None,
 ) -> None:
     """`uv pip install`；失败时自动换源/加 --reinstall 重试。
 
@@ -509,11 +648,40 @@ def uv_pip_install(
     重新下载并覆盖，绕过损坏的旧元数据。国内镜像偶发 403/残缺 wheel 时
     先切官方 PyPI，避免重复撞同一个失效镜像。
     """
-    def build(reinstall: bool, use_mirror: bool = True) -> list[str]:
+    local_args = _wheelhouse_args(
+        component=component,
+        gpu_stack=gpu_stack,
+        python_version=python_version,
+    )
+
+    def build(
+        reinstall: bool,
+        use_mirror: bool = True,
+        use_wheelhouse: bool = False,
+    ) -> list[str]:
         extra = ["--reinstall"] if reinstall else []
-        cmd = uv_cmd(uv, "pip", "install", *extra, "--python", py, *args)
-        cmd += pypi_index_args(index, use_mirror=use_mirror)
+        cmd = uv_cmd(uv, "pip", "install", *extra, "--python", py)
+        if use_wheelhouse:
+            cmd += local_args
+        cmd += list(args)
+        if not use_wheelhouse:
+            cmd += pypi_index_args(index, use_mirror=use_mirror)
         return cmd
+
+    if local_args:
+        try:
+            run(build(reinstall=False, use_wheelhouse=True))
+            return
+        except subprocess.CalledProcessError as exc:
+            print(c("y", "    自带 whl 安装失败，尝试 --reinstall 修复旧环境 …"))
+            try:
+                run(build(reinstall=True, use_wheelhouse=True))
+                return
+            except subprocess.CalledProcessError as reinstall_exc:
+                exc = reinstall_exc
+            if _wheelhouse_strict():
+                raise exc
+            print(c("y", "    自带 whl 安装失败，回退在线 PyPI 安装 …"))
 
     try:
         run(build(reinstall=False))
@@ -529,6 +697,28 @@ def uv_pip_install(
                 return
         print(c("y", "    安装失败，尝试 --reinstall 重装以修复损坏/残缺的旧安装 …"))
         run(build(reinstall=True))
+
+
+def make_pip(
+    uv: str,
+    py: str,
+    *,
+    component: str,
+    gpu_stack: str,
+    python_version: str,
+):
+    def pip(*args: str, index: str | None = None) -> None:
+        uv_pip_install(
+            uv,
+            py,
+            *args,
+            index=index,
+            component=component,
+            gpu_stack=gpu_stack,
+            python_version=python_version,
+        )
+
+    return pip
 
 
 # ---------- 下载工具 ----------
@@ -814,9 +1004,13 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
     if not venv_python(UVR_VENV).exists():
         run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_ENGINES, str(UVR_VENV)))
     py = str(venv_python(UVR_VENV))
-
-    def pip(*args: str, index: str | None = None) -> None:
-        uv_pip_install(uv, py, *args, index=index)
+    pip = make_pip(
+        uv,
+        py,
+        component="uvr",
+        gpu_stack=gpu_stack,
+        python_version=PYTHON_FOR_ENGINES,
+    )
 
     # uv venv 默认不含 setuptools，部分库运行时需要 pkg_resources，先补齐
     # （setuptools 81+ 已移除 pkg_resources，钉 <81）
@@ -863,11 +1057,25 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
     if use_cuda:
         # 安装 audio-separator 时也带上 PyTorch wheel 源，避免依赖解析把 CUDA torch 换成 PyPI CPU 版。
         pip(f"audio-separator[gpu]=={AUDIO_SEPARATOR_VER}", index=torch_index)
-        _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, torch_label)
+        _reaffirm_torch_wheels(
+            uv,
+            py,
+            torch_specs,
+            torch_index,
+            torch_label,
+            component="uvr",
+            gpu_stack=gpu_stack,
+            python_version=PYTHON_FOR_ENGINES,
+        )
         _verify_cuda_torch(py, "UVR")
     elif use_directml:
         pip(f"audio-separator[dml]=={AUDIO_SEPARATOR_VER}")
-        _reaffirm_directml_runtime(uv, py)
+        _reaffirm_directml_runtime(
+            uv,
+            py,
+            component="uvr",
+            python_version=PYTHON_FOR_ENGINES,
+        )
         _verify_directml_torch(py, "UVR")
         _verify_uvr_directml(py)
     else:
@@ -1122,9 +1330,13 @@ def step_svc(uv: str, gpu_stack: str) -> None:
     if not venv_python(SVC_VENV).exists():
         run(uv_cmd(uv, "venv", "--python", target_py, str(SVC_VENV)))
     py = str(venv_python(SVC_VENV))
-
-    def pip(*args: str, index: str | None = None) -> None:
-        uv_pip_install(uv, py, *args, index=index)
+    pip = make_pip(
+        uv,
+        py,
+        component="svc",
+        gpu_stack=gpu_stack,
+        python_version=target_py,
+    )
 
     # uv venv 默认不含 setuptools/pip，而 librosa 运行时要 `from pkg_resources import ...`
     # （pkg_resources 属于 setuptools），缺失会导致推理一加载 librosa 就 ModuleNotFoundError。
@@ -1144,10 +1356,17 @@ def step_svc(uv: str, gpu_stack: str) -> None:
             )
             pip("-r", str(filtered))
             pip("matplotlib==3.7.5", "soundfile")
+            pip(*SVC_FCPE_RUNTIME_DEPS)
         else:
             print(c("r", "    未找到 requirements，跳过依赖安装（请检查仓库）"))
-        _reaffirm_directml_runtime(uv, py)
+        _reaffirm_directml_runtime(
+            uv,
+            py,
+            component="svc",
+            python_version=target_py,
+        )
         _verify_directml_torch(py, "So-VITS-SVC")
+        _verify_svc_fcpe_runtime(py)
         print(
             c(
                 "g",
@@ -1174,17 +1393,24 @@ def step_svc(uv: str, gpu_stack: str) -> None:
             pip("-r", str(filtered))
             # 显式确保读写音频用的 soundfile 在位（svc_worker 的 torchaudio 垫片依赖它）
             pip("soundfile")
+            pip(*SVC_FCPE_RUNTIME_DEPS)
             # matplotlib 在 3.10 用较新版本（3.7.5 也可，但 3.10 下放宽到 3.8.x 更易装）
             pip("matplotlib==3.8.4")
             # fairseq 单独装（py3.10 无官方 wheel，单列以便定位失败）
             _install_fairseq_blackwell(pip)
             # 兜底：fairseq 可能把 cu128 torch 换成同号 CPU 版 → 强制校正回 cu128
-            _reaffirm_blackwell_torch(uv, py)
+            _reaffirm_blackwell_torch(
+                uv,
+                py,
+                component="svc",
+                python_version=target_py,
+            )
             # 修复早期错误补丁（weights_only 误插进 torch.device）；weights_only 兼容由
             # svc_worker 运行时 monkey-patch torch.load 处理
             _patch_fairseq_weights_only(venv_python(SVC_VENV))
         else:
             print(c("r", "    未找到 requirements，跳过依赖安装（请检查仓库）"))
+        _verify_svc_fcpe_runtime(py)
         print(c("g", "推理环境就绪（Blackwell/cu128）"))
         return
 
@@ -1204,11 +1430,25 @@ def step_svc(uv: str, gpu_stack: str) -> None:
     # so-vits-svc 的 vdecoder 代码里 `import matplotlib`，但官方 requirements 漏列了它，
     # 不补会在推理加载模型时报 No module named 'matplotlib'。钉 3.7.5 以兼容 numpy 1.22 / py3.9，
     # 避免最新 matplotlib(3.9+) 强行把 numpy 升到 >=1.23 而破坏 so-vits-svc 依赖。
-        pip("matplotlib==3.7.5")
+        # Python 3.9 的 matplotlib 还需要 importlib-resources；单独安装它后，
+        # matplotlib 使用 --no-deps，避免修复旧环境时再次升级 NumPy。
+        pip("importlib-resources>=3.2.0")
+        pip("--no-deps", "matplotlib==3.7.5")
+        pip(*SVC_FCPE_RUNTIME_DEPS)
     else:
         print(c("r", "    未找到 requirements，跳过依赖安装（请检查仓库）"))
     if use_gpu:
-        _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, "cu121")
+        _reaffirm_torch_wheels(
+            uv,
+            py,
+            torch_specs,
+            torch_index,
+            "cu121",
+            component="svc",
+            gpu_stack=gpu_stack,
+            python_version=target_py,
+        )
+    _verify_svc_fcpe_runtime(py)
     print(c("g", "推理环境就绪"))
 
 
@@ -1291,7 +1531,13 @@ def _install_selected_torch_runtime(
     pip(*torch_specs, index=torch_index)
 
 
-def _reaffirm_directml_runtime(uv: str, py: str) -> None:
+def _reaffirm_directml_runtime(
+    uv: str,
+    py: str,
+    *,
+    component: str,
+    python_version: str,
+) -> None:
     uv_pip_install(
         uv,
         py,
@@ -1299,6 +1545,9 @@ def _reaffirm_directml_runtime(uv: str, py: str) -> None:
         "torch-directml",
         f"torch-directml=={TORCH_DIRECTML_VER}",
         f"torchaudio=={TORCHAUDIO_DIRECTML_VER}",
+        component=component,
+        gpu_stack="directml",
+        python_version=python_version,
     )
 
 
@@ -1342,6 +1591,21 @@ def _verify_uvr_directml(py: str) -> None:
         ) from exc
 
 
+def _verify_svc_fcpe_runtime(py: str) -> None:
+    """Fail environment setup when FCPE's Python runtime is incomplete."""
+    check = (
+        "import einops,local_attention; "
+        "from modules.F0Predictor.fcpe.pcmer import PCmer; "
+        "print('FCPE runtime',einops.__version__,local_attention.__name__,PCmer.__name__)"
+    )
+    try:
+        run([py, "-c", check], cwd=SOVITS_DIR)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "So-VITS-SVC FCPE 依赖校验失败：einops/local-attention 或 FCPE 模块无法导入"
+        ) from exc
+
+
 def _verify_ddsp_hubert(py: str) -> None:
     """Verify the exact Transformers entry point used by DDSP inference."""
     check = (
@@ -1365,6 +1629,10 @@ def _reaffirm_torch_wheels(
     torch_specs: list[str],
     index: str,
     label: str,
+    *,
+    component: str,
+    gpu_stack: str,
+    python_version: str,
 ) -> None:
     """兜底：强制把指定 PyTorch wheel 源里的 torch/torchaudio 重新装回来。
 
@@ -1381,19 +1649,31 @@ def _reaffirm_torch_wheels(
             "--reinstall-package", "torch", "--reinstall-package", "torchaudio",
             *torch_specs,
             index=index,
+            component=component,
+            gpu_stack=gpu_stack,
+            python_version=python_version,
         )
         print(c("g", f"    已校正 {label} torch（防止被依赖替换成 CPU 版）"))
     except subprocess.CalledProcessError:
         print(c("y", f"    {label} torch 校正失败，请检查网络/驱动后重跑该步"))
 
 
-def _reaffirm_blackwell_torch(uv: str, py: str) -> None:
+def _reaffirm_blackwell_torch(
+    uv: str,
+    py: str,
+    *,
+    component: str,
+    python_version: str,
+) -> None:
     _reaffirm_torch_wheels(
         uv,
         py,
         [f"torch=={TORCH_BLACKWELL_VER}", f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}"],
         TORCH_BLACKWELL_INDEX,
         "cu128",
+        component=component,
+        gpu_stack="cu128",
+        python_version=python_version,
     )
 
 
@@ -1495,16 +1775,25 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
     if not venv_python(RVC_VENV).exists():
         run(uv_cmd(uv, "venv", "--python", target_py, str(RVC_VENV)))
     py = str(venv_python(RVC_VENV))
-
-    def pip(*args: str, index: str | None = None) -> None:
-        uv_pip_install(uv, py, *args, index=index)
+    pip = make_pip(
+        uv,
+        py,
+        component="rvc",
+        gpu_stack=gpu_stack,
+        python_version=target_py,
+    )
 
     # uv venv 默认不含 setuptools；fairseq/rvc 运行时可能用到 pkg_resources，先补齐
     pip("setuptools<81", "wheel")
     if use_directml:
         _install_directml_runtime(pip)
         pip("rvc-python")
-        _reaffirm_directml_runtime(uv, py)
+        _reaffirm_directml_runtime(
+            uv,
+            py,
+            component="rvc",
+            python_version=target_py,
+        )
         seed_rvc_base_models(venv_python(RVC_VENV))
         _verify_directml_torch(py, "RVC")
         print(c("g", "RVC 推理环境就绪（AMD DirectML；RMVPE 使用 CPU 稳定路径）"))
@@ -1520,7 +1809,12 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
         pip("rvc-python")
         seed_rvc_base_models(venv_python(RVC_VENV))
         # 兜底：rvc-python/fairseq 可能把 cu128 torch 换成同号 CPU 版 → 强制校正回 cu128
-        _reaffirm_blackwell_torch(uv, py)
+        _reaffirm_blackwell_torch(
+            uv,
+            py,
+            component="rvc",
+            python_version=target_py,
+        )
         _patch_fairseq_weights_only(venv_python(RVC_VENV))
         print(c("g", "RVC 推理环境就绪（Blackwell/cu128）"))
         return
@@ -1532,7 +1826,16 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
     # rvc-python（含 fairseq / faiss 等推理依赖）
     pip("rvc-python")
     if use_gpu:
-        _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, "cu121")
+        _reaffirm_torch_wheels(
+            uv,
+            py,
+            torch_specs,
+            torch_index,
+            "cu121",
+            component="rvc",
+            gpu_stack=gpu_stack,
+            python_version=target_py,
+        )
     seed_rvc_base_models(venv_python(RVC_VENV))
     print(c("g", "RVC 推理环境就绪"))
 
@@ -1592,9 +1895,13 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
     if not venv_python(SEEDVC_VENV).exists():
         run(uv_cmd(uv, "venv", "--python", target_py, str(SEEDVC_VENV)))
     py = str(venv_python(SEEDVC_VENV))
-
-    def pip(*args: str, index: str | None = None) -> None:
-        uv_pip_install(uv, py, *args, index=index)
+    pip = make_pip(
+        uv,
+        py,
+        component="seedvc",
+        gpu_stack=gpu_stack,
+        python_version=target_py,
+    )
 
     pip("setuptools<81", "wheel")
     if use_directml:
@@ -1626,14 +1933,33 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
     seed_seedvc_base_models(venv_python(SEEDVC_VENV))
 
     if use_directml:
-        _reaffirm_directml_runtime(uv, py)
+        _reaffirm_directml_runtime(
+            uv,
+            py,
+            component="seedvc",
+            python_version=target_py,
+        )
         _verify_directml_torch(py, "SeedVC")
         print(c("g", "SeedVC 推理环境就绪（AMD DirectML；RMVPE 使用 CPU 稳定路径）"))
     elif use_blackwell:
-        _reaffirm_blackwell_torch(uv, py)
+        _reaffirm_blackwell_torch(
+            uv,
+            py,
+            component="seedvc",
+            python_version=target_py,
+        )
         print(c("g", "SeedVC 推理环境就绪（Blackwell/cu128）"))
     elif use_gpu:
-        _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, "cu121")
+        _reaffirm_torch_wheels(
+            uv,
+            py,
+            torch_specs,
+            torch_index,
+            "cu121",
+            component="seedvc",
+            gpu_stack=gpu_stack,
+            python_version=target_py,
+        )
         print(c("g", "SeedVC 推理环境就绪（cu121）"))
     else:
         print(c("g", "SeedVC 推理环境就绪（CPU）"))
@@ -1661,9 +1987,13 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
     if not venv_python(DDSP_VENV).exists():
         run(uv_cmd(uv, "venv", "--python", target_py, str(DDSP_VENV)))
     py = str(venv_python(DDSP_VENV))
-
-    def pip(*args: str, index: str | None = None) -> None:
-        uv_pip_install(uv, py, *args, index=index)
+    pip = make_pip(
+        uv,
+        py,
+        component="ddsp",
+        gpu_stack=gpu_stack,
+        python_version=target_py,
+    )
 
     pip("setuptools<81", "wheel")
     if use_blackwell:
@@ -1703,12 +2033,26 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
         _verify_ddsp_hubert(py)
         print(c("g", "DDSP-SVC 推理环境就绪（AMD 机器使用 CPU 稳定路径，避免 DirectML 电流杂音）"))
     elif use_blackwell:
-        _reaffirm_blackwell_torch(uv, py)
+        _reaffirm_blackwell_torch(
+            uv,
+            py,
+            component="ddsp",
+            python_version=target_py,
+        )
         _verify_cuda_torch(py, "DDSP-SVC")
         _verify_ddsp_hubert(py)
         print(c("g", "DDSP-SVC 推理环境就绪（Blackwell/cu128）"))
     elif use_gpu:
-        _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, "cu121")
+        _reaffirm_torch_wheels(
+            uv,
+            py,
+            torch_specs,
+            torch_index,
+            "cu121",
+            component="ddsp",
+            gpu_stack=gpu_stack,
+            python_version=target_py,
+        )
         _verify_cuda_torch(py, "DDSP-SVC")
         _verify_ddsp_hubert(py)
         print(c("g", "DDSP-SVC 推理环境就绪（cu121）"))
@@ -1753,9 +2097,13 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
     if not venv_python(VOCAL_VENV).exists():
         run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_ENGINES, str(VOCAL_VENV)))
     py = str(venv_python(VOCAL_VENV))
-
-    def pip(*args: str, index: str | None = None) -> None:
-        uv_pip_install(uv, py, *args, index=index)
+    pip = make_pip(
+        uv,
+        py,
+        component="vocal",
+        gpu_stack=gpu_stack,
+        python_version=PYTHON_FOR_ENGINES,
+    )
 
     pip("setuptools<81", "wheel")
     if gpu_stack == "cu128":
@@ -1784,7 +2132,16 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
         "praat-parselmouth==0.4.6",
     )
     if gpu_stack in {"cu121", "cu128"}:
-        _reaffirm_torch_wheels(uv, py, torch_specs, torch_index, gpu_stack)
+        _reaffirm_torch_wheels(
+            uv,
+            py,
+            torch_specs,
+            torch_index,
+            gpu_stack,
+            component="vocal",
+            gpu_stack=gpu_stack,
+            python_version=PYTHON_FOR_ENGINES,
+        )
 
     _prepare_vocal_deepfilter_model(py)
     (VOCAL_MODELS_DIR / "runtime.ready").write_text(
@@ -1794,16 +2151,20 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
     print(c("g", "AI 歌声增强环境与模型就绪"))
 
 
-def step_hub(uv: str) -> None:
+def step_hub(uv: str, gpu_stack: str) -> None:
     hr("9/10 模型上传组件 .venv-hub（modelscope）")
     # 仅「分享到模型站（上传）」需要 modelscope SDK；搜索 / 下载走纯 HTTP，不依赖本环境。
     # 用 3.10（与 UVR 一致），装 modelscope hub 能力即可（上传用 upload_folder，无需本地 git）。
     if not venv_python(HUB_VENV).exists():
         run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_ENGINES, str(HUB_VENV)))
     py = str(venv_python(HUB_VENV))
-
-    def pip(*args: str, index: str | None = None) -> None:
-        uv_pip_install(uv, py, *args, index=index)
+    pip = make_pip(
+        uv,
+        py,
+        component="hub",
+        gpu_stack=gpu_stack,
+        python_version=PYTHON_FOR_ENGINES,
+    )
 
     # uv venv 默认不含 setuptools，modelscope 运行时可能用到 pkg_resources，先补齐
     pip("setuptools<81", "wheel")
@@ -1859,10 +2220,10 @@ def step_models(uv: str) -> None:
     else:
         print(c("g", "    已存在，跳过"))
 
-    # 3b) FCPE（可选 F0 预测器；仅在自带目录里有时复制）
-    if (ASSETS_MODELS_DIR / "pretrain" / "fcpe.pt").exists():
-        print(c("b", "  · FCPE (可选)"))
-        copy_bundled("pretrain/fcpe.pt", PRETRAIN_DIR / "fcpe.pt")
+    # 3b) FCPE：高音域素材自动切换，发布安装包必须离线携带。
+    print(c("b", "  · FCPE（高音域自适应）"))
+    if not copy_bundled("pretrain/fcpe.pt", PRETRAIN_DIR / "fcpe.pt"):
+        raise RuntimeError("安装包缺少高音域 FCPE 模型：assets/models/pretrain/fcpe.pt")
 
     # 4) UVR 分离模型：自带优先，缺失再用 audio-separator 联网下载
     print(c("b", "  · UVR 分离模型（5_HP-Karaoke / DeEcho-DeReverb）"))
@@ -1923,7 +2284,7 @@ STEPS = {
     "seedvc": lambda uv, stack: step_seedvc(uv, stack),
     "ddsp": lambda uv, stack: step_ddsp(uv, stack),
     "vocal": lambda uv, stack: step_vocal(uv, stack),
-    "hub": lambda uv, stack: step_hub(uv),
+    "hub": lambda uv, stack: step_hub(uv, stack),
     "models": lambda uv, stack: step_models(uv),
 }
 ORDER = ["app", "web", "uvr", "svc", "rvc", "seedvc", "ddsp", "vocal", "hub", "models"]
@@ -2007,6 +2368,11 @@ def main() -> int:
         print("（检测到 NVIDIA 显卡，自动选择 CUDA；如需 CPU 请加 --cpu）")
     if detected_stack == "cu128" and not args.cu128:
         print("（检测到 50 系/Blackwell，自动切换 cu128 栈）")
+    wheelhouse = _wheelhouse_root()
+    if wheelhouse:
+        print(c("g", f"自带 whl 目录: {wheelhouse}"))
+    else:
+        print(c("y", "未检测到自带 whl 目录，依赖安装将使用在线 PyPI/torch 源。"))
 
     installer_progress(12, "Preparing uv package manager")
     uv = ensure_uv()

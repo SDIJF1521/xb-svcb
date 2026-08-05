@@ -30,6 +30,7 @@ try:
         patch_directml_float32,
         patch_directml_sovits_f0_coarse,
         patch_directml_sovits_rmvpe_cpu,
+        patch_sovits_fcpe_fallback,
         resolve_torch_device,
     )
 except ImportError:  # package import used by tests/application tooling
@@ -42,6 +43,7 @@ except ImportError:  # package import used by tests/application tooling
         patch_directml_float32,
         patch_directml_sovits_f0_coarse,
         patch_directml_sovits_rmvpe_cpu,
+        patch_sovits_fcpe_fallback,
         resolve_torch_device,
     )
 
@@ -61,6 +63,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--speaker", default="", help="目标说话人，留空取配置首个")
     p.add_argument("--f0", default="rmvpe", help="F0 预测器")
+    p.add_argument("--f0-max", type=float, default=1100.0, help="自适应 F0 上限")
     p.add_argument("--k-step", type=int, default=100, help="浅扩散步数")
     p.add_argument(
         "--diffusion-ratio",
@@ -245,13 +248,14 @@ def main() -> int:
                 print(f"SVC_WARN torchaudio->soundfile 垫片未生效: {_ta_exc}")
 
         import utils as sovits_utils
+        patch_sovits_fcpe_fallback(sovits_utils, args.f0_max)
 
         if resolved_device.backend == "directml":
             patch_directml_sovits_f0_coarse(sovits_utils)
             patch_directml_sovits_rmvpe_cpu(sovits_utils)
             print(
                 "XB: So-VITS-SVC checkpoint/F0 粗化使用 DirectML 安全路径；"
-                "RMVPE 使用 CPU 稳定路径，"
+                "RMVPE/FCPE 使用 CPU 稳定路径，"
                 "主模型/扩散/声码器继续使用 AMD DirectML",
                 flush=True,
             )

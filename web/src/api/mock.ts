@@ -26,6 +26,11 @@ import type {
   HubSearchResult,
   HubDownloadResult,
   HubUploadResult,
+  HubUploadOptions,
+  HubModelDetailResult,
+  HubAssetDataResult,
+  HubModelUpdateResult,
+  HubModelItem,
   HubProgress,
   HubStartResult,
   HubJob,
@@ -241,12 +246,83 @@ const mockFrameworks: ModelFramework[] = [
   { id: 'ddsp-svc', name: 'DDSP-SVC' },
   { id: 'other', name: '其他' },
 ]
-const mockHubModels = [
-  { repo_id: 'demo-user/xb-svcb-luotianyi-a1b2c3', name: '洛天依（社区）', type: 'So-VITS', framework: 'so-vits-svc', framework_label: 'So-VITS-SVC', sample_rate: '44.1kHz', author: 'demo-user', has_diffusion: true, url: '#' },
-  { repo_id: 'demo-user/xb-svcb-reze-d4e5f6', name: 'Reze（社区）', type: 'RVC', framework: 'rvc', framework_label: 'RVC', sample_rate: '44.1kHz', author: 'demo-user', has_diffusion: false, url: '#' },
-  { repo_id: 'demo-user/xb-svcb-seedvc-demo-a7b8c9', name: 'SeedVC 示例音色', type: 'SeedVC', framework: 'seed-vc', framework_label: 'SeedVC', sample_rate: '44.1kHz', author: 'demo-user', has_diffusion: false, url: '#' },
+const mockHubModels: HubModelItem[] = [
+  {
+    repo_id: 'demo-user/xb-svcb-luotianyi-a1b2c3',
+    name: '洛天依（社区）',
+    type: 'So-VITS',
+    framework: 'so-vits-svc',
+    framework_label: 'So-VITS-SVC',
+    sample_rate: '44.1kHz',
+    author: 'demo-user',
+    has_diffusion: true,
+    url: '#',
+    description: '明亮、贴脸的中文歌声音色，适合流行和二次元曲风。',
+    tags: ['中文', '女声', '扩散'],
+    version: '1.3.0',
+    uploaded_at: '2026-07-20T12:00:00',
+    download_count: 238,
+    downloads: 236,
+    local_downloads: 2,
+    likes: 41,
+    screenshots: [{ path: 'screenshot_1_demo.png', name: 'screenshot_1_demo.png', kind: 'image', mime: 'image/png' }],
+    preview_audio: { path: 'preview_demo.mp3', name: 'preview_demo.mp3', kind: 'audio', mime: 'audio/mpeg' },
+    dependency_ok: true,
+    dependencies: [],
+    versions: [{ version: '1.3.0', uploaded_at: '2026-07-20T12:00:00', current: true }],
+    score: 110,
+  },
+  {
+    repo_id: 'demo-user/xb-svcb-reze-d4e5f6',
+    name: 'Reze（社区）',
+    type: 'RVC',
+    framework: 'rvc',
+    framework_label: 'RVC',
+    sample_rate: '44.1kHz',
+    author: 'demo-user',
+    has_diffusion: false,
+    url: '#',
+    description: 'RVC v2 音色，带 index，适合摇滚和快歌。',
+    tags: ['RVC', '女声', 'index'],
+    version: '2.1.0',
+    uploaded_at: '2026-07-24T16:20:00',
+    download_count: 412,
+    downloads: 412,
+    local_downloads: 0,
+    likes: 62,
+    screenshots: [],
+    preview_audio: { path: 'preview_reze.mp3', name: 'preview_reze.mp3', kind: 'audio', mime: 'audio/mpeg' },
+    dependency_ok: true,
+    dependencies: [],
+    versions: [{ version: '2.1.0', uploaded_at: '2026-07-24T16:20:00', current: true }],
+    score: 118,
+  },
+  {
+    repo_id: 'demo-user/xb-svcb-seedvc-demo-a7b8c9',
+    name: 'SeedVC 示例音色',
+    type: 'SeedVC',
+    framework: 'seed-vc',
+    framework_label: 'SeedVC',
+    sample_rate: '44.1kHz',
+    author: 'demo-user',
+    has_diffusion: false,
+    url: '#',
+    description: '少样本迁移示例 checkpoint，推理时需要选择目标参考音频。',
+    tags: ['SeedVC', 'zero-shot'],
+    version: '1.0.0',
+    uploaded_at: '2026-07-18T08:00:00',
+    download_count: 96,
+    downloads: 96,
+    local_downloads: 0,
+    likes: 15,
+    screenshots: [],
+    preview_audio: null,
+    dependency_ok: false,
+    dependencies: [],
+    versions: [{ version: '1.0.0', uploaded_at: '2026-07-18T08:00:00', current: true }],
+    score: 82,
+  },
 ]
-
 let mockMigrationTimer: ReturnType<typeof setInterval> | null = null
 let mockDataDir = 'D:/XB-SVCB-Data'
 let mockMigrationStatus: DataMigrationProgress = {
@@ -302,17 +378,21 @@ function mockModelOverview(): ModelLibraryOverview {
 
 const baseSteps = (enhancement = false): PipelineStep[] => [
   { key: 'separate', label: '人声分离', status: 'wait' },
+  { key: 'repair_input', label: '分离人声修复', status: 'wait' },
   { key: 'f0', label: 'F0 提取', status: 'wait' },
   { key: 'infer', label: '模型推理', status: 'wait' },
+  { key: 'repair_output', label: '输出人声修复', status: 'wait' },
   ...(enhancement ? [{ key: 'enhance', label: 'AI 歌声增强', status: 'wait' as const }] : []),
   { key: 'mix', label: '混音合成', status: 'wait' },
 ]
 
 const multiSteps = (enhancement = false): PipelineStep[] => [
   { key: 'separate', label: '人声分离', status: 'wait' },
+  { key: 'repair_input', label: '分离人声修复', status: 'wait' },
   { key: 'split', label: '歌词分割', status: 'wait' },
   { key: 'infer', label: '逐段推理', status: 'wait' },
   { key: 'merge', label: '人声合并', status: 'wait' },
+  { key: 'repair_output', label: '输出人声修复', status: 'wait' },
   ...(enhancement ? [{ key: 'enhance', label: 'AI 歌声增强', status: 'wait' as const }] : []),
   { key: 'mix', label: '混音合成', status: 'wait' },
 ]
@@ -997,11 +1077,18 @@ export const mock = {
   listModelFrameworks(): ModelFramework[] {
     return [...mockFrameworks]
   },
+  pickModelhubPreviewAudioFile(): Promise<string | null> {
+    return browserPickFile('.mp3,.wav,.flac,.m4a,.ogg,.aac,audio/*')
+  },
+  async pickModelhubScreenshotFiles(): Promise<string[]> {
+    const picked = await browserPickFile('.jpg,.jpeg,.png,.webp,.gif,image/*')
+    return picked ? [picked] : []
+  },
   hubSearchModels(query = '', page = 1, framework?: string, pageSize = 12): HubSearchResult {
     const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
     const fw = (framework || '').trim().toLowerCase()
     const all = mockHubModels.filter((m) => {
-      const hay = `${m.name} ${m.repo_id}`.toLowerCase()
+      const hay = `${m.name} ${m.repo_id} ${(m.tags || []).join(' ')}`.toLowerCase()
       const hit = tokens.every((t) => hay.includes(t))
       return hit && (!fw || m.framework === fw)
     })
@@ -1024,17 +1111,129 @@ export const mock = {
       diffusion_model: hit.has_diffusion ? { name: 'diffusion.pt', path: '' } : null,
       diffusion_config: hit.has_diffusion ? { name: 'diffusion.yaml', path: '' } : null,
       framework: hit.framework,
+      metadata: {
+        schema: 'xb-svcb.model.v1',
+        framework: hit.framework,
+        valid: true,
+        source_repo_id: repoId,
+        source_version: hit.version || '1.0.0',
+        source_uploaded_at: hit.uploaded_at || '',
+      },
     }
     mockModels.unshift(m)
+    hit.local_downloads = (hit.local_downloads || 0) + 1
+    hit.download_count = (hit.downloads || 0) + (hit.local_downloads || 0)
     return { ok: true, model: m }
   },
-  hubUploadModel(modelId: string, name?: string, framework?: string): HubUploadResult {
-    void framework
+  hubUploadModel(modelId: string, name?: string, framework?: string, options?: HubUploadOptions): HubUploadResult {
     if (!mockHubToken) return { ok: false, error: '未填写 ModelScope 访问令牌' }
     const model = mockModels.find((m) => m.id === modelId)
     if (!model) return { ok: false, error: '本地模型不存在' }
     const repo = `demo-user/xb-svcb-${(name || model.name).toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Math.random().toString(36).slice(2, 8)}`
+    const fw = framework || model.framework || 'so-vits-svc'
+    const version = options?.version || '1.0.0'
+    const uploadedAt = new Date().toISOString()
+    mockHubModels.unshift({
+      repo_id: repo,
+      name: name || model.name,
+      type: model.type,
+      framework: fw,
+      framework_label: mockFrameworks.find((f) => f.id === fw)?.name || fw,
+      sample_rate: model.sample_rate,
+      author: 'demo-user',
+      has_diffusion: !!model.diffusion_model,
+      url: '#',
+      description: options?.description || '',
+      tags: options?.tags || [],
+      version,
+      uploaded_at: uploadedAt,
+      download_count: 0,
+      downloads: 0,
+      local_downloads: 0,
+      likes: 0,
+      screenshots: (options?.screenshots || []).map((path) => ({
+        path,
+        name: fileName(path),
+        kind: 'image',
+        mime: 'image/png',
+      })),
+      preview_audio: options?.preview_audio
+        ? { path: options.preview_audio, name: fileName(options.preview_audio), kind: 'audio', mime: 'audio/mpeg' }
+        : null,
+      dependency_ok: true,
+      dependencies: [],
+      versions: [{ version, uploaded_at: uploadedAt, current: true }],
+      score: 20,
+    })
     return { ok: true, url: '#', repo_id: repo }
+  },
+
+  hubModelDetail(repoId: string): HubModelDetailResult {
+    const hit = mockHubModels.find((m) => m.repo_id === repoId)
+    if (!hit) return { ok: false, error: '未找到该模型' }
+    return {
+      ok: true,
+      item: {
+        ...hit,
+        dependencies: [
+          { id: 'ffmpeg', name: 'ffmpeg', required: true, kind: 'runtime', ok: true, message: '已就绪' },
+          { id: 'uvr', name: 'UVR 人声分离', required: true, kind: 'runtime', ok: true, message: '已就绪' },
+          {
+            id: hit.framework,
+            name: hit.framework_label,
+            required: true,
+            kind: 'runtime',
+            ok: hit.dependency_ok !== false,
+            message: hit.dependency_ok === false ? '缺失' : '已就绪',
+          },
+        ],
+        update: {
+          installed: false,
+          available: false,
+          latest_version: hit.version,
+        },
+      },
+    }
+  },
+
+  hubAssetData(repoId: string, path: string): HubAssetDataResult {
+    const hit = mockHubModels.find((m) => m.repo_id === repoId)
+    if (!hit) return { ok: false, error: '未找到该模型' }
+    const allowed = [...(hit.screenshots || []), ...(hit.preview_audio ? [hit.preview_audio] : [])]
+    const asset = allowed.find((x) => x.path === path)
+    if (!asset) return { ok: false, error: '该素材不存在' }
+    const isImage = asset.kind === 'image'
+    return {
+      ok: true,
+      name: asset.name,
+      mime: asset.mime,
+      data: isImage
+        ? 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="100%" height="100%" fill="%23202a3a"/><text x="50%" y="50%" fill="%23ffffff" text-anchor="middle" font-size="28">XB-SVCB Preview</text></svg>'
+        : 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=',
+    }
+  },
+
+  hubCheckUpdates(): HubModelUpdateResult {
+    const items = mockModels
+      .filter((m) => m.metadata?.source_repo_id)
+      .slice(0, 1)
+      .map((m) => ({
+        model_id: m.id,
+        model_name: m.name,
+        repo_id: String(m.metadata?.source_repo_id),
+        installed_version: String(m.metadata?.source_version || '1.0.0'),
+        latest_version: '1.1.0',
+        uploaded_at: new Date().toISOString(),
+        framework: m.framework || 'so-vits-svc',
+      }))
+    return { ok: true, items }
+  },
+
+  hubStartUpgrade(modelId: string): HubStartResult {
+    const m = mockModels.find((item) => item.id === modelId)
+    const repoId = String(m?.metadata?.source_repo_id || '')
+    if (!repoId) return { ok: false, error: '该模型没有来源仓库' }
+    return this.hubStartDownload(repoId)
   },
 
   hubProgress(key: string): HubProgress {
@@ -1065,11 +1264,11 @@ export const mock = {
     }
     return { ok: true, key }
   },
-  hubStartUpload(modelId: string, name?: string, framework?: string): HubStartResult {
-    void framework
+  hubStartUpload(modelId: string, name?: string, framework?: string, options?: HubUploadOptions): HubStartResult {
     if (!mockHubToken) return { ok: false, error: '未填写 ModelScope 访问令牌' }
     const model = mockModels.find((m) => m.id === modelId)
     const key = `ul:${modelId}`
+    if (model) this.hubUploadModel(modelId, name, framework, options)
     mockProgress[key] = 0
     mockJobs[key] = {
       key,

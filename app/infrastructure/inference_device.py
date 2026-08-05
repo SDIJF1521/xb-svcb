@@ -517,7 +517,7 @@ def patch_directml_checkpoint_load(torch: Any) -> None:
 
 
 def patch_directml_sovits_rmvpe_cpu(utils_module: Any) -> None:
-    """Use CPU RMVPE inside so-vits-svc while keeping its models on DML."""
+    """Use CPU neural F0 predictors inside so-vits-svc while models stay on DML."""
     if getattr(utils_module, "_xb_directml_cpu_rmvpe", False):
         return
     original_get_f0_predictor = utils_module.get_f0_predictor
@@ -526,7 +526,7 @@ def patch_directml_sovits_rmvpe_cpu(utils_module: Any) -> None:
         f0_predictor: Any, hop_length: Any, sampling_rate: Any, **kwargs: Any
     ) -> Any:
         if (
-            str(f0_predictor).lower() == "rmvpe"
+            str(f0_predictor).lower() in {"rmvpe", "fcpe"}
             and str(kwargs.get("device", "")).startswith("privateuseone")
         ):
             kwargs["device"] = "cpu"
@@ -536,6 +536,52 @@ def patch_directml_sovits_rmvpe_cpu(utils_module: Any) -> None:
 
     utils_module.get_f0_predictor = get_f0_predictor
     utils_module._xb_directml_cpu_rmvpe = True
+
+
+def patch_sovits_fcpe_fallback(
+    utils_module: Any,
+    f0_max: float = 1100.0,
+    fallback: str = "crepe",
+) -> None:
+    """Keep So-VITS inference running when the optional FCPE stack is broken."""
+    if getattr(utils_module, "_xb_fcpe_fallback_patch", False):
+        return
+    original_get_f0_predictor = utils_module.get_f0_predictor
+    bounded_f0_max = max(1100.0, min(1800.0, float(f0_max)))
+
+    def get_f0_predictor(
+        f0_predictor: Any, hop_length: Any, sampling_rate: Any, **kwargs: Any
+    ) -> Any:
+        requested = str(f0_predictor).strip().lower()
+        try:
+            predictor = original_get_f0_predictor(
+                f0_predictor, hop_length, sampling_rate, **kwargs
+            )
+        except Exception as exc:  # noqa: BLE001 - FCPE is an optional predictor
+            if requested != "fcpe":
+                raise
+            print(
+                f"XB_WARN FCPE 初始化失败，自动回退 {fallback.upper()}: {exc}",
+                flush=True,
+            )
+            predictor = original_get_f0_predictor(
+                fallback, hop_length, sampling_rate, **kwargs
+            )
+            # infer_tool caches by predictor.name. Preserve the requested name
+            # so every audio slice does not retry the same broken FCPE import.
+            try:
+                predictor.name = requested
+                predictor.xb_fallback_name = fallback
+            except Exception:  # noqa: BLE001 - third-party predictor metadata
+                pass
+        if hasattr(predictor, "f0_max"):
+            predictor.f0_max = max(
+                float(getattr(predictor, "f0_max", 1100.0)), bounded_f0_max
+            )
+        return predictor
+
+    utils_module.get_f0_predictor = get_f0_predictor
+    utils_module._xb_fcpe_fallback_patch = True
 
 
 def patch_directml_sovits_f0_coarse(utils_module: Any) -> None:

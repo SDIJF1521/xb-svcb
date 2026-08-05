@@ -20,6 +20,8 @@ if not defined HUGGINGFACE_HUB_ENDPOINT set "HUGGINGFACE_HUB_ENDPOINT=%XB_HF_MIR
 if not defined XB_PYPI_MIRROR set "XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple"
 if not defined PIP_INDEX_URL set "PIP_INDEX_URL=%XB_PYPI_MIRROR%"
 if not defined UV_DEFAULT_INDEX set "UV_DEFAULT_INDEX=%XB_PYPI_MIRROR%"
+if not defined XB_WHEELHOUSE if exist "%~dp0assets\wheels\wheelhouse.json" set "XB_WHEELHOUSE=%~dp0assets\wheels"
+if defined XB_WHEELHOUSE if not defined XB_WHEELHOUSE_STRICT set "XB_WHEELHOUSE_STRICT=1"
 if not defined UV_LINK_MODE set "UV_LINK_MODE=copy"
 if not defined PIP_DISABLE_PIP_VERSION_CHECK set "PIP_DISABLE_PIP_VERSION_CHECK=1"
 if not defined XB_FFMPEG_DIR if exist "%~dp0tools\ffmpeg\bin\ffmpeg.exe" set "XB_FFMPEG_DIR=%~dp0tools\ffmpeg"
@@ -29,6 +31,7 @@ echo           install mode : user-assisted (no automatic system installs)
 echo           gpu request  : %XB_GPU_STACK_REQUESTED%
 echo           HF mirror    : %HF_ENDPOINT%
 echo           PyPI mirror  : %PIP_INDEX_URL%
+if defined XB_WHEELHOUSE echo           wheelhouse   : %XB_WHEELHOUSE%
 echo.
 
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 5 正在解析依赖路径
@@ -392,6 +395,12 @@ exit /b 1
 
 :PIP_INSTALL_UV
 set "UV_INDEX_URL=%~1"
+if defined XB_WHEELHOUSE if exist "%XB_WHEELHOUSE%\bootstrap" (
+  "%XB_PYTHON_EXE%" -m pip install --user --upgrade uv --disable-pip-version-check --no-index --find-links "%XB_WHEELHOUSE%\bootstrap"
+  if not errorlevel 1 exit /b 0
+  if "%XB_WHEELHOUSE_STRICT%"=="1" exit /b 1
+  echo [warn] bundled uv wheel failed; retrying online PyPI.
+)
 if defined UV_INDEX_URL (
   "%XB_PYTHON_EXE%" -m pip install --user --upgrade uv --disable-pip-version-check --index-url "%UV_INDEX_URL%"
 ) else (
@@ -459,6 +468,8 @@ if "%XB_ENV_DRY_RUN%"=="1" set "ENV_CONFIG_DRY_RUN=--dry-run"
   --value-env XB_PYPI_MIRROR=XB_PYPI_MIRROR ^
   --value-env PIP_INDEX_URL=PIP_INDEX_URL ^
   --value-env UV_DEFAULT_INDEX=UV_DEFAULT_INDEX ^
+  --value-env XB_WHEELHOUSE=XB_WHEELHOUSE ^
+  --value-env XB_WHEELHOUSE_STRICT=XB_WHEELHOUSE_STRICT ^
   --value-env PIP_DISABLE_PIP_VERSION_CHECK=PIP_DISABLE_PIP_VERSION_CHECK
 set "ENV_CONFIG_RC=!ERRORLEVEL!"
 if not "!ENV_CONFIG_RC!"=="0" echo [fail] User environment configuration failed with exit code !ENV_CONFIG_RC!.

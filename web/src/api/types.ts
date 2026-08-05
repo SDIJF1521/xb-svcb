@@ -465,6 +465,46 @@ export interface ModelFramework {
   name: string
 }
 
+export interface HubModelAsset {
+  path: string
+  name: string
+  kind: 'image' | 'audio' | string
+  mime?: string
+}
+
+export interface HubModelDependency {
+  id: string
+  name: string
+  required: boolean
+  kind: string
+  present?: boolean
+  ok: boolean
+  message: string
+}
+
+export interface HubModelVersion {
+  version: string
+  uploaded_at?: string
+  repo_id?: string
+  current?: boolean
+}
+
+export interface HubModelUpdateInfo {
+  installed: boolean
+  available: boolean
+  model_id?: string
+  model_name?: string
+  installed_version?: string
+  latest_version?: string
+  installed_models?: {
+    model_id: string
+    model_name: string
+    installed_version: string
+    installed_at: string
+    source_uploaded_at?: string
+  }[]
+}
+
 /** 模型站搜索到的一个（经清单校验、确为本软件上传的）模型。 */
 export interface HubModelItem {
   repo_id: string
@@ -478,6 +518,21 @@ export interface HubModelItem {
   author: string
   has_diffusion: boolean
   url: string
+  description?: string
+  tags?: string[]
+  version?: string
+  uploaded_at?: string
+  downloads?: number
+  local_downloads?: number
+  download_count?: number
+  likes?: number
+  screenshots?: HubModelAsset[]
+  preview_audio?: HubModelAsset | null
+  dependency_ok?: boolean
+  dependencies?: HubModelDependency[]
+  versions?: HubModelVersion[]
+  update?: HubModelUpdateInfo
+  score?: number
 }
 
 export interface HubSearchResult {
@@ -503,6 +558,45 @@ export interface HubUploadResult {
   error?: string
   url?: string
   repo_id?: string
+}
+
+export interface HubUploadOptions {
+  version?: string
+  description?: string
+  tags?: string[]
+  preview_audio?: string
+  screenshots?: string[]
+}
+
+export interface HubModelDetailResult {
+  ok: boolean
+  error?: string
+  item?: HubModelItem
+}
+
+export interface HubAssetDataResult {
+  ok: boolean
+  error?: string
+  name?: string
+  mime?: string
+  data?: string
+  url?: string
+}
+
+export interface HubModelUpdateItem {
+  model_id: string
+  model_name: string
+  repo_id: string
+  installed_version: string
+  latest_version: string
+  uploaded_at: string
+  framework: string
+}
+
+export interface HubModelUpdateResult {
+  ok: boolean
+  error?: string
+  items?: HubModelUpdateItem[]
 }
 
 /** 上传/下载进度（前端轮询）。 */

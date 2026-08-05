@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.26"
+APP_VERSION = "0.0.27"
 APP_BG = "#05060d"
 
 

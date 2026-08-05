@@ -115,7 +115,7 @@ class SystemService:
                 {
                     "key": "vocal-enhancement",
                     "name": "AI Vocal Enhancement",
-                    "desc": "自然修音、AI 角色共振峰、限量降噪与自然细节保护",
+                    "desc": "分离/输出双阶段修复、高音域自适应、自然修音与细节保护",
                     "version": self._vocal_enhancement.version() or "未安装",
                     "status": "已就绪" if enhancement_ok else "未安装 · 请修复 vocal 环境",
                     "ok": enhancement_ok,

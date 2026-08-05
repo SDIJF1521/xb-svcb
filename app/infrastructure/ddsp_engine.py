@@ -101,6 +101,13 @@ class DdspSvcEngine:
             str(int(params.pitch)),
             "--f0",
             f0_method,
+            "--f0-max",
+            str(
+                max(
+                    1100.0,
+                    min(1800.0, float(getattr(params, "adaptive_f0_max", 1100.0))),
+                )
+            ),
             "--infer-steps",
             str(max(1, int(params.ddsp_infer_steps))),
             "--formant-shift",

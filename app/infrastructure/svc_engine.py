@@ -135,6 +135,13 @@ class SvcEngine:
             str(out_npy),
             "--f0",
             params.f0_method or "rmvpe",
+            "--f0-max",
+            str(
+                max(
+                    1100.0,
+                    min(1800.0, float(getattr(params, "adaptive_f0_max", 1100.0))),
+                )
+            ),
             "--device",
             params.device or "auto",
         ]
@@ -213,6 +220,13 @@ class SvcEngine:
             params.device or "auto",
             "--f0",
             params.f0_method or "rmvpe",
+            "--f0-max",
+            str(
+                max(
+                    1100.0,
+                    min(1800.0, float(getattr(params, "adaptive_f0_max", 1100.0))),
+                )
+            ),
             "--k-step",
             str(self._ratio_to_kstep(params.diffusion_ratio)),
             "--diffusion-ratio",

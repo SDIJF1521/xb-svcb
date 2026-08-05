@@ -23,7 +23,7 @@
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.26"
+#define MyAppVersion "0.0.27"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 
@@ -90,11 +90,13 @@ Source: "..\.tmp\bundled-engines\ddsp-svc\*"; DestDir: "{app}\engines\ddsp-svc";
 Source: "..\.tmp\bundled-engines\seed-vc\*"; DestDir: "{app}\engines\seed-vc"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; 自带底模与 UVR 模型（随安装包分发；安装时由 install.py 本地复制，免联网慢下载）
 ; 模型为已压缩的二进制权重，用 nocompression 跳过再压缩，显著加快编译与安装速度
-; 排除可选的 fcpe.pt（默认 F0 用 rmvpe），让安装器体积压到 GitHub Release 单文件 2GiB 上限内
-Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression; Excludes: "fcpe.pt"
+; FCPE 用于检测到极高音时自动扩展 F0 覆盖；分卷仍由 DiskSliceSize 控制在 2 GB 内
+Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
+; Python 依赖 wheelhouse：安装/修复运行环境时按 Python 版本与 GPU 栈自动选择 whl 离线安装
+Source: "..\assets\wheels\*"; DestDir: "{app}\assets\wheels"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\release_notes_v026.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release_notes_v027.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docs\api.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 #endif
 
@@ -793,6 +795,8 @@ begin
     if Span < 0 then
       Span := 0;
     Target := EnvProgressStart + (Span * Percent) div 100;
+    if Target < EnvProgressCurrent then
+      Target := EnvProgressCurrent;
     if Detail = '' then
       Detail := '正在执行安装步骤...';
 
@@ -1151,6 +1155,8 @@ begin
     'set "XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple"' + #13#10 +
     'set "PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple"' + #13#10 +
     'set "UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple"' + #13#10 +
+    'set "XB_WHEELHOUSE=' + BatchEscape(ExpandConstant('{app}\assets\wheels')) + '"' + #13#10 +
+    'set "XB_WHEELHOUSE_STRICT=1"' + #13#10 +
     'set "UV_LINK_MODE=copy"' + #13#10 +
     'set "PIP_DISABLE_PIP_VERSION_CHECK=1"' + #13#10;
   SaveStringToFile(ExpandConstant('{app}\installer_env.cmd'), Payload, False);
@@ -1269,6 +1275,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC 分卷源码', PathJoin(AppDir, 'engines\ddsp-svc\main_reflow.py'));
   if not FileExists(PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt')) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC RMVPE', PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt'));
+  if not FileExists(PathJoin(AppDir, 'assets\models\pretrain\fcpe.pt')) then
+    Missing := AddMissingRuntimeFile(Missing, '高音域 FCPE', PathJoin(AppDir, 'assets\models\pretrain\fcpe.pt'));
   if not FileExists(PathJoin(AppDir, 'assets\models\seedvc\campplus_cn_common.bin')) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC CampPlus', PathJoin(AppDir, 'assets\models\seedvc\campplus_cn_common.bin'));
   if not FileExists(PathJoin(AppDir, 'assets\models\seedvc\whisper-small\model.safetensors')) then
@@ -1279,12 +1287,14 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'DeepFilterNet 权重', PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\checkpoints\model_120.ckpt.best'));
   if not FileExists(PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\config.ini')) then
     Missing := AddMissingRuntimeFile(Missing, 'DeepFilterNet 配置', PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\config.ini'));
+  if not FileExists(PathJoin(AppDir, 'assets\wheels\wheelhouse.json')) then
+    Missing := AddMissingRuntimeFile(Missing, 'Python whl 离线依赖清单', PathJoin(AppDir, 'assets\wheels\wheelhouse.json'));
   if not FileExists(PathJoin(AppDir, 'engines\juce-vst3-host\xb-juce-vst3-host.exe')) then
     Missing := AddMissingRuntimeFile(Missing, 'JUCE VST3 Host', PathJoin(AppDir, 'engines\juce-vst3-host\xb-juce-vst3-host.exe'));
 
   Result := Missing = '';
   if Result then
-    AppendInstallValidation('[ok] 应用本体、前端、AI workers、FFmpeg、SVC/DDSP/SeedVC 分卷源码、离线模型与 JUCE Host 完整。')
+    AppendInstallValidation('[ok] 应用本体、前端、AI workers、FFmpeg、SVC/DDSP/SeedVC 分卷源码、离线模型、Python whl 与 JUCE Host 完整。')
   else
   begin
     AppendInstallValidation('[fail] 发布包缺少必要组件：');

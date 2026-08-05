@@ -579,7 +579,7 @@
                 <div v-if="!isSeedVcRerunModel" class="rerun-mini">
                   <span>F0</span>
                   <select v-model="rerunF0Method">
-                    <option v-for="f in f0Methods" :key="f" :value="f">{{ f }}</option>
+                    <option v-for="f in rerunF0Methods" :key="f" :value="f">{{ f }}</option>
                   </select>
                 </div>
                 <div class="rerun-mini">
@@ -888,6 +888,7 @@ import TimelineTemplatePanel from '@/components/editor/TimelineTemplatePanel.vue
 import { api } from '@/api'
 import { useModelsStore } from '@/stores/models'
 import { useSystemStore } from '@/stores/system'
+import { f0MethodsForFramework, normalizeF0Method } from '@/utils/f0'
 import type {
   EditorClip,
   EditorClipChannel,
@@ -1050,8 +1051,8 @@ const LIVE_CONTROL_SAVE_DEBOUNCE_MS = 120
 const MIX_CROSSFADE_MS = 90
 const PLUGIN_STATE_SYNC_INTERVAL_MS = 120
 const RERUN_PREFS_KEY = 'xb-editor-rerun-params'
-const f0Methods = ['rmvpe', 'crepe', 'harvest', 'pm']
 const rerunFramework = () => models.value.find((m) => m.id === rerunModelId.value)?.framework || 'so-vits-svc'
+const rerunF0Methods = computed(() => f0MethodsForFramework(rerunFramework()))
 const deviceOptions = computed(() => systemStore.optionsForFramework(rerunFramework()))
 const rvcVersions = ['v2', 'v1']
 const channelOptions: { value: EditorClipChannel; label: string; title: string }[] = [
@@ -1250,7 +1251,7 @@ function prefStr(value: unknown, fallback: string, allowed?: string[]) {
 const rerunPrefs = loadRerunPrefs()
 const rerunPitch = ref(prefNum(rerunPrefs.pitch, 0, -12, 12))
 const rerunFormantShift = ref(prefNum(rerunPrefs.formantShift, 0, -2, 2))
-const rerunF0Method = ref(prefStr(rerunPrefs.f0Method, 'rmvpe', f0Methods))
+const rerunF0Method = ref(normalizeF0Method('so-vits-svc', prefStr(rerunPrefs.f0Method, 'rmvpe')))
 const rerunIndexRate = ref(prefNum(rerunPrefs.indexRate, 0.75, 0, 1))
 const rerunRmsMix = ref(prefNum(rerunPrefs.rmsMix, 0.25, 0, 1))
 const rerunDiffusionRatio = ref(prefNum(rerunPrefs.diffusionRatio, 0.5, 0, 1))
@@ -1379,6 +1380,7 @@ function baseName(p: string): string {
 }
 
 function currentRerunParams(): InferenceParams {
+  const f0Method = normalizeF0Method(selectedRerunFramework.value, rerunF0Method.value)
   const params: InferenceParams = {
     pitch: Math.round(rerunPitch.value),
     device: rerunDevice.value,
@@ -1387,18 +1389,18 @@ function currentRerunParams(): InferenceParams {
     params.diffusion_ratio = Number(rerunDiffusionRatio.value.toFixed(3))
     params.reference_audio = rerunReferenceAudio.value
   } else if (isRvcRerunModel.value) {
-    params.f0_method = rerunF0Method.value
+    params.f0_method = f0Method
     params.index_rate = Number(rerunIndexRate.value.toFixed(3))
     params.rms_mix = Number(rerunRmsMix.value.toFixed(3))
     params.protect = Number(rerunProtect.value.toFixed(3))
     params.filter_radius = Math.round(rerunFilterRadius.value)
     params.rvc_version = rerunRvcVersion.value
   } else if (isDdspRerunModel.value) {
-    params.f0_method = rerunF0Method.value
+    params.f0_method = f0Method
     params.ddsp_infer_steps = ddspQualitySteps(rerunDiffusionRatio.value)
     params.ddsp_formant_shift = Number(rerunFormantShift.value.toFixed(2))
   } else {
-    params.f0_method = rerunF0Method.value
+    params.f0_method = f0Method
     params.diffusion_ratio = Number(rerunDiffusionRatio.value.toFixed(3))
   }
   return params
@@ -3551,6 +3553,9 @@ watch(deviceOptions, (options) => {
   if (!options.some((item) => item.value === rerunDevice.value)) {
     rerunDevice.value = 'auto'
   }
+})
+watch(rerunF0Methods, () => {
+  rerunF0Method.value = normalizeF0Method(selectedRerunFramework.value, rerunF0Method.value)
 })
 
 function calcDuration(p: EditorProject) {

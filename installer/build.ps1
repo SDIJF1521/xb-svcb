@@ -4,9 +4,10 @@
   1）将前端构建为 web/dist（除非使用 -SkipWebBuild）
   2）使用 PyInstaller 将应用程序打包成 exe 文件，存入 dist/XB-SVCB（除非使用 -SkipAppBuild）
   3）将原生 JUCE VST3 主机构建为 engines/juce-vst3-host（除非使用 -SkipJuceHostBuild）
-  4）验证生成的运行时捆绑包
-  5）使用 Inno Setup 的 ISCC 编译 installer/xb-svcb.iss
-  6）输出结果：dist/XB-SVCB-Setup.exe + 分割后的 .bin 数据包
+  4）预下载 Windows wheelhouse（uv + 各 AI 环境依赖 whl）
+  5）验证生成的运行时捆绑包
+  6）使用 Inno Setup 的 ISCC 编译 installer/xb-svcb.iss
+  7）输出结果：dist/XB-SVCB-Setup.exe + 分割后的 .bin 数据包
 
   Prerequisites: Node.js (frontend build), app/.venv with pywebview + pyinstaller,
                  CMake + C++17 compiler + JUCE for the VST3 host,
@@ -17,6 +18,7 @@
     ./installer/build.ps1
     ./installer/build.ps1 -SkipWebBuild     # skip when web/dist already built
     ./installer/build.ps1 -SkipAppBuild     # skip when dist/XB-SVCB already built
+    ./installer/build.ps1 -SkipWheelhouse   # skip only when assets/wheels is already prepared
     ./installer/build.ps1 -ValidateOnly     # validate scripts without packaging models
 #>
 
@@ -24,6 +26,7 @@ param(
   [switch]$SkipWebBuild,
   [switch]$SkipAppBuild,
   [switch]$SkipJuceHostBuild,
+  [switch]$SkipWheelhouse,
   [switch]$ValidateOnly
 )
 
@@ -317,10 +320,11 @@ $workerFiles = @(
 foreach ($worker in $workerFiles) {
   Require-File (Join-Path $Root "app\infrastructure\$worker") "Worker source $worker"
 }
-Require-File (Join-Path $Root "release_notes_v026.md") "v0.0.26 release notes"
+Require-File (Join-Path $Root "release_notes_v027.md") "v0.0.27 release notes"
 Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
 Require-File (Join-Path $Root "install\detect_python.bat") "Python runtime detector"
+Require-File (Join-Path $Root "install\prepare_wheelhouse.py") "Wheelhouse preparation script"
 $licensePath = Join-Path $Root "LICENSE"
 Require-File $licensePath "GPLv3 license"
 if ((Get-Content -LiteralPath $licensePath -Raw) -notmatch 'GNU GENERAL PUBLIC LICENSE\s+Version 3, 29 June 2007') {
@@ -329,6 +333,7 @@ if ((Get-Content -LiteralPath $licensePath -Raw) -notmatch 'GNU GENERAL PUBLIC L
 
 # Reject Git LFS pointers or partial DDSP/SeedVC snapshots before producing a release.
 Require-FileSize (Join-Path $Root "assets\models\pretrain\rmvpe.pt") 314572800 "Bundled SeedVC RMVPE"
+Require-FileSize (Join-Path $Root "assets\models\pretrain\fcpe.pt") 67108864 "Bundled high-range FCPE"
 $pcVocoderConfigPath = Join-Path $Root "assets\models\pretrain\pc_nsf_hifigan\config.json"
 Require-File $pcVocoderConfigPath "Bundled DDSP PC-NSF-HiFiGAN config"
 Require-FileSize (Join-Path $Root "assets\models\pretrain\pc_nsf_hifigan\model.ckpt") 33554432 "Bundled DDSP PC-NSF-HiFiGAN weights"
@@ -397,6 +402,22 @@ Require-FileSize `
   (Join-Path $Root "engines\ddsp-svc\pretrain\contentvec\pytorch_model.bin") `
   314572800 `
   "Bundled DDSP ContentVec"
+
+# 0b) Prepare Python wheelhouse for runtime setup. The installed machine uses
+# these whl files through assets/wheels and should not resolve AI libraries from
+# PyPI unless a developer explicitly disables strict wheelhouse mode.
+if (-not $SkipWheelhouse) {
+  Write-Host "`n==== Preparing Python wheelhouse (assets/wheels) ====" -ForegroundColor Cyan
+  $pythonCmd = Get-Command "python" -ErrorAction SilentlyContinue
+  if (-not $pythonCmd) {
+    throw "python not found. Install Python 3.10+ or pass -SkipWheelhouse only when assets/wheels is already prepared."
+  }
+  & $pythonCmd.Source (Join-Path $Root "install\prepare_wheelhouse.py") --root $Root --clean
+  if ($LASTEXITCODE -ne 0) { throw "Wheelhouse preparation failed (exit code $LASTEXITCODE)" }
+} else {
+  Write-Host "`n==== Skipping Python wheelhouse preparation ====" -ForegroundColor Yellow
+}
+Require-File (Join-Path $Root "assets\wheels\wheelhouse.json") "Bundled wheelhouse manifest (build without -SkipWheelhouse)"
 
 # 1) Build frontend
 if (-not $SkipWebBuild) {

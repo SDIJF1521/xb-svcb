@@ -196,9 +196,16 @@ class ModelService:
         record = self._normalize_item(info.to_dict(), refresh_size=True)
         source_repo_id = str(payload.get("source_repo_id") or "").strip().strip("/")
         if source_repo_id:
+            source_tags = payload.get("source_tags")
+            if not isinstance(source_tags, list):
+                source_tags = []
             record["metadata"] = {
                 **(record.get("metadata") or {}),
                 "source_repo_id": source_repo_id,
+                "source_version": str(payload.get("source_version") or ""),
+                "source_uploaded_at": str(payload.get("source_uploaded_at") or ""),
+                "source_lineage_id": str(payload.get("source_lineage_id") or source_repo_id),
+                "source_tags": [str(x) for x in source_tags[:12]],
             }
         self._repo.add(record)
         if not self._settings.get("default_model_id"):

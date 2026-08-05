@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { api, type HubJob } from '@/api'
+import { api, type HubJob, type HubUploadOptions } from '@/api'
 import { useModelsStore } from './models'
 
 /**
@@ -79,8 +79,9 @@ export const useTransfersStore = defineStore('transfers', () => {
     modelId: string,
     name?: string,
     framework?: string,
+    options?: HubUploadOptions,
   ): Promise<string | null> {
-    const res = await api.hubStartUpload(modelId, name, framework)
+    const res = await api.hubStartUpload(modelId, name, framework, options)
     if (!res.ok) return null
     start()
     await refresh()

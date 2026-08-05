@@ -892,7 +892,7 @@ def tune(
         "To Manipulation",
         0.01,
         55.0,
-        1100.0,
+        1800.0,
     )
     (
         duration_source_points,
@@ -919,7 +919,7 @@ def tune(
         "To Manipulation",
         0.01,
         55.0,
-        1100.0,
+        1800.0,
     )
     source_tier = call(source_manipulation, "Extract pitch tier")
     reference_tier = call(reference_manipulation, "Extract pitch tier")

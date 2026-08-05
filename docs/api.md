@@ -1,6 +1,6 @@
 # XB-SVCB FastAPI 接入文档
 
-适用版本：XB-SVCB 0.0.26
+适用版本：XB-SVCB 0.0.27
 
 ## 启动与安全
 

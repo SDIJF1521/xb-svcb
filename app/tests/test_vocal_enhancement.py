@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import config
 from application.conversion_service import ConversionService, default_steps, default_steps_multi
 from application.work_service import WorkService
+from domain import InferenceParams
 from infrastructure.vocal_enhancement import VocalEnhancementProcessor
 from infrastructure import vocal_enhancement_worker, vocal_tuning_worker
 
@@ -21,22 +22,28 @@ from infrastructure import vocal_enhancement_worker, vocal_tuning_worker
 def test_optional_pipeline_step_is_inserted_before_mix() -> None:
     assert [step["key"] for step in default_steps()] == [
         "separate",
+        "repair_input",
         "f0",
         "infer",
+        "repair_output",
         "mix",
     ]
     assert [step["key"] for step in default_steps(True)] == [
         "separate",
+        "repair_input",
         "f0",
         "infer",
+        "repair_output",
         "enhance",
         "mix",
     ]
     assert [step["key"] for step in default_steps_multi(True)] == [
         "separate",
+        "repair_input",
         "split",
         "infer",
         "merge",
+        "repair_output",
         "enhance",
         "mix",
     ]
@@ -133,6 +140,49 @@ def test_conversion_service_reads_all_enhancement_controls() -> None:
         "stereo_width": 0.35,
         "loudness_envelope": 0.64,
     }
+
+
+def test_high_range_profile_adapts_f0_and_transient_protection(tmp_path: Path) -> None:
+    params = InferenceParams(f0_method="harvest", protect=0.33, filter_radius=5)
+    logger = types.SimpleNamespace(_log=lambda *_args: None)
+    fcpe_model = tmp_path / "pretrain" / "fcpe.pt"
+    fcpe_model.parent.mkdir(parents=True)
+    fcpe_model.write_bytes(b"fcpe")
+
+    with patch.object(config, "SOVITS_REPO", tmp_path):
+        ConversionService._adapt_high_range(
+            logger,
+            params,
+            {
+                "high_pitch": True,
+                "high_frequency": True,
+                "p95_f0_hz": 980.0,
+                "high_band_ratio": 0.12,
+                "recommended_f0_max": 1480.0,
+            },
+            tmp_path / "run.log",
+            "so-vits-svc",
+        )
+
+    assert params.f0_method == "fcpe"
+    assert params.filter_radius == 2
+    assert params.protect == 0.28
+    assert getattr(params, "adaptive_f0_max") == 1480.0
+
+
+def test_audio_profile_detects_high_pitch_and_high_band() -> None:
+    sample_rate = 24000
+    time_axis = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    audio = (
+        0.22 * np.sin(2.0 * np.pi * 1100.0 * time_axis)
+        + 0.12 * np.sin(2.0 * np.pi * 8000.0 * time_axis)
+    ).astype(np.float32)
+
+    profile = vocal_enhancement_worker._audio_profile_array(audio, sample_rate)
+
+    assert profile["high_pitch"] is True
+    assert profile["high_frequency"] is True
+    assert float(profile["recommended_f0_max"]) > 1100.0
 
 
 def test_worker_basic_and_advanced_layers_use_expected_order(tmp_path: Path) -> None:
@@ -804,6 +854,41 @@ def test_processor_invokes_isolated_worker_and_uses_project_cache(tmp_path: Path
 
     assert result == output
     assert output.read_bytes() == b"RIFF-enhanced"
+
+
+def test_processor_invokes_dedicated_repair_mode_with_profile(tmp_path: Path) -> None:
+    source = tmp_path / "source.wav"
+    output = tmp_path / "repaired.wav"
+    python = tmp_path / "python.exe"
+    worker = tmp_path / "worker.py"
+    marker = tmp_path / "runtime.ready"
+    cache_home = tmp_path / "cache"
+    for path in (source, python, worker, marker):
+        path.write_bytes(b"ready")
+
+    def fake_run(cmd: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        assert cmd[cmd.index("--mode") + 1] == "repair"
+        assert cmd[cmd.index("--repair-stage") + 1] == "output"
+        assert '"high_pitch":true' in cmd[cmd.index("--analysis-json") + 1]
+        output.write_bytes(b"RIFF-repaired")
+        return subprocess.CompletedProcess(cmd, 0, "VOCAL_REPAIR_OK", "")
+
+    with (
+        patch.object(config, "VOCAL_ENHANCEMENT_PYTHON", python),
+        patch.object(config, "VOCAL_ENHANCEMENT_WORKER", worker),
+        patch.object(config, "VOCAL_ENHANCEMENT_MARKER", marker),
+        patch.object(config, "VOCAL_ENHANCEMENT_MODEL_DIR", cache_home),
+        patch("infrastructure.vocal_enhancement.subprocess.run", side_effect=fake_run),
+    ):
+        result = VocalEnhancementProcessor().repair(
+            source,
+            output,
+            stage="output",
+            profile={"high_pitch": True, "recommended_f0_max": 1450.0},
+        )
+
+    assert result == output
+    assert output.read_bytes() == b"RIFF-repaired"
 
 
 def test_processor_tunes_before_enhancement_and_passes_strengths(

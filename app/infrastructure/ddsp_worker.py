@@ -372,6 +372,7 @@ def main() -> int:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--pitch", type=int, default=0)
     parser.add_argument("--f0", default="rmvpe")
+    parser.add_argument("--f0-max", type=float, default=1100.0)
     parser.add_argument("--infer-steps", type=int, default=50)
     parser.add_argument("--formant-shift", type=float, default=0.0)
     parser.add_argument("--speaker", default="1")
@@ -470,7 +471,15 @@ def main() -> int:
             "--f0_min",
             str(float(data_config.get("f0_min", 50))),
             "--f0_max",
-            str(float(data_config.get("f0_max", 1100))),
+            str(
+                min(
+                    1800.0,
+                    max(
+                        float(data_config.get("f0_max", 1100)),
+                        float(args.f0_max),
+                    ),
+                )
+            ),
             "--infer_step",
             str(infer_steps),
             "--formant_shift_key",

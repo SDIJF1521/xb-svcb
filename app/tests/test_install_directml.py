@@ -114,7 +114,7 @@ def test_ddsp_amd_stack_uses_cpu_torch(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         installer,
         "uv_pip_install",
-        lambda uv, py, *args, index=None: calls.append((args, index)),
+        lambda uv, py, *args, index=None, **_kwargs: calls.append((args, index)),
     )
 
     installer.step_ddsp("uv", "directml")

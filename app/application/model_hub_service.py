@@ -9,19 +9,21 @@
   的条目，避免被无关模型污染（软校验：他人理论上可伪造标记）。
 - 下载：读清单 → 拉取各文件到暂存目录 → 复用 ModelService.import_model 导入本地模型库。
 
-搜索 / 下载 / 校验令牌均走纯 httpx（无需上传组件）；上传才用 .venv-hub。
+搜索 / 下载 / 校验令牌均走纯 httpx；仅模型上传使用 .venv-hub。
 所有对外方法返回带 ``ok`` 字段的字典，便于前端统一处理。
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import re
 import shutil
 import subprocess
 import threading
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,21 @@ from typing import Any
 import config
 from infrastructure import paths
 from infrastructure.storage import SettingsStore
+
+MODELHUB_ASSET_MIMES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".aac": "audio/aac",
+}
+MODELHUB_PREVIEW_AUDIO_MAX_BYTES = 1024 * 1024 * 1024
 
 
 class _AsyncRateLimiter:
@@ -60,6 +77,134 @@ def _first(d: dict[str, Any], *keys: str) -> Any:
         if k in d and d[k] not in (None, ""):
             return d[k]
     return None
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        if isinstance(value, str):
+            value = value.replace(",", "").strip()
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if isinstance(value, str):
+            value = value.replace(",", "").strip()
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _trim_text(value: Any, max_len: int) -> str:
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]+", " ", str(value or "")).strip()
+    return text[:max_len]
+
+
+def _file_size(path: Path) -> int:
+    return path.stat().st_size
+
+
+def _audio_signature_matches(path: Path) -> bool:
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(64)
+    except OSError:
+        return False
+    if len(head) < 4:
+        return False
+    if head.startswith(b"ID3"):
+        return True
+    if head[:2] == b"\xff\xfb" or (head[0] == 0xFF and (head[1] & 0xE0) == 0xE0):
+        return True
+    if head.startswith(b"RIFF") and head[8:12] == b"WAVE":
+        return True
+    if head.startswith(b"fLaC") or head.startswith(b"OggS"):
+        return True
+    if head[4:8] == b"ftyp":
+        return True
+    if head[0] == 0xFF and (head[1] & 0xF0) == 0xF0:
+        return True
+    return False
+
+
+def _ffprobe_audio_ok(path: Path) -> bool | None:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        result = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "csv=p=0",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            check=False,
+            **config.subprocess_no_window(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and "audio" in result.stdout.lower()
+
+
+def _ensure_preview_audio_file(path: Path) -> None:
+    size = _file_size(path)
+    if size > MODELHUB_PREVIEW_AUDIO_MAX_BYTES:
+        raise OSError("试听音频不能大于 1GB")
+    probe_ok = _ffprobe_audio_ok(path)
+    if probe_ok is False:
+        raise OSError(f"试听音频不是可解析的音频文件：{path.name}")
+    if probe_ok is None and not _audio_signature_matches(path):
+        raise OSError(f"试听音频格式校验失败：{path.name}")
+
+
+def _normalize_tags(value: Any) -> list[str]:
+    raw: list[Any]
+    if isinstance(value, list):
+        raw = value
+    else:
+        raw = re.split(r"[,，;；\s]+", str(value or ""))
+    tags: list[str] = []
+    for item in raw:
+        tag = _trim_text(item, 24).strip("#")
+        if tag and tag not in tags:
+            tags.append(tag)
+    return tags[:12]
+
+
+def _version_key(value: Any) -> tuple[int, int, int, int, str]:
+    text = str(value or "").strip()
+    nums = [int(x) for x in re.findall(r"\d+", text)[:4]]
+    nums += [0] * (4 - len(nums))
+    return nums[0], nums[1], nums[2], nums[3], text.lower()
+
+
+def _is_remote_newer(
+    remote_version: Any,
+    local_version: Any,
+    remote_time: Any = "",
+    local_time: Any = "",
+) -> bool:
+    rv = str(remote_version or "").strip()
+    lv = str(local_version or "").strip()
+    if rv and lv and _version_key(rv) != _version_key(lv):
+        return _version_key(rv) > _version_key(lv)
+    rt = str(remote_time or "")
+    lt = str(local_time or "")
+    return bool(rt and lt and rt > lt)
 
 
 class ModelHubService:
@@ -162,7 +307,11 @@ class ModelHubService:
         return {"ok": True, "key": key}
 
     def start_upload(
-        self, model_id: str, name: str | None = None, framework: str | None = None
+        self,
+        model_id: str,
+        name: str | None = None,
+        framework: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """后台上传本地模型到模型站，立即返回任务 key。"""
         model_id = (model_id or "").strip()
@@ -184,7 +333,7 @@ class ModelHubService:
             created_at=datetime.now().isoformat(timespec="seconds"),
         )
         self._set_progress(key, "start", 0, "排队中…")
-        self._spawn(key, self._upload(model_id, name, framework))
+        self._spawn(key, self._upload(model_id, name, framework, metadata or {}))
         return {"ok": True, "key": key}
 
     def list_jobs(self) -> list[dict[str, Any]]:
@@ -232,6 +381,295 @@ class ModelHubService:
             for fid, name in config.MODELHUB_FRAMEWORKS.items()
         ]
 
+    # ---- 阶段四：模型生态元数据 / 更新 ----
+
+    @staticmethod
+    def _dependency_specs(framework: str, files: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        fw = config.modelhub_normalize_framework(framework)
+        files = files or {}
+        specs: list[dict[str, Any]] = [
+            {
+                "id": "ffmpeg",
+                "name": "ffmpeg",
+                "required": True,
+                "kind": "runtime",
+            },
+            {
+                "id": "uvr",
+                "name": "UVR 人声分离",
+                "required": True,
+                "kind": "runtime",
+            },
+        ]
+        if fw == "rvc":
+            specs.append(
+                {
+                    "id": "rvc",
+                    "name": "RVC 推理环境",
+                    "required": True,
+                    "kind": "runtime",
+                }
+            )
+            specs.append(
+                {
+                    "id": "index_file",
+                    "name": "RVC index 检索文件",
+                    "required": False,
+                    "kind": "model_file",
+                    "present": bool(files.get("index_file")),
+                }
+            )
+        elif fw == "seed-vc":
+            specs.append(
+                {
+                    "id": "seedvc",
+                    "name": "SeedVC 推理环境",
+                    "required": True,
+                    "kind": "runtime",
+                }
+            )
+            specs.append(
+                {
+                    "id": "reference_audio",
+                    "name": "推理参考音频",
+                    "required": True,
+                    "kind": "runtime_input",
+                }
+            )
+        elif fw == "ddsp-svc":
+            specs.append(
+                {
+                    "id": "ddsp",
+                    "name": "DDSP-SVC 推理环境",
+                    "required": True,
+                    "kind": "runtime",
+                }
+            )
+        else:
+            specs.append(
+                {
+                    "id": "svc",
+                    "name": "So-VITS-SVC 推理环境",
+                    "required": True,
+                    "kind": "runtime",
+                }
+            )
+            specs.append(
+                {
+                    "id": "diffusion_model",
+                    "name": "扩散模型",
+                    "required": False,
+                    "kind": "model_file",
+                    "present": bool(files.get("diffusion_model")),
+                }
+            )
+        return specs
+
+    @staticmethod
+    def _dependency_ok(dep_id: str, present: bool | None = None) -> bool:
+        if dep_id == "ffmpeg":
+            return shutil.which("ffmpeg") is not None
+        if dep_id == "uvr":
+            return config.uvr_ready()
+        if dep_id == "svc":
+            return config.svc_engine_ready()
+        if dep_id == "rvc":
+            return config.rvc_engine_ready()
+        if dep_id == "seedvc":
+            return config.seedvc_engine_ready()
+        if dep_id == "ddsp":
+            return config.ddsp_engine_ready()
+        if present is not None:
+            return bool(present)
+        return True
+
+    def _dependency_status(
+        self, framework: str, files: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for spec in self._dependency_specs(framework, files):
+            ok = self._dependency_ok(spec["id"], spec.get("present"))
+            if spec.get("kind") == "runtime_input":
+                ok = True
+            message = "已就绪" if ok else ("缺失" if spec.get("required") else "未提供")
+            if spec.get("kind") == "runtime_input":
+                message = "推理时选择"
+            out.append({**spec, "ok": ok, "message": message})
+        return out
+
+    def _metric_summary(
+        self,
+        manifest: dict[str, Any] | None = None,
+        entry: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        manifest = manifest or {}
+        entry = entry or {}
+        metrics = manifest.get("metrics")
+        if not isinstance(metrics, dict):
+            metrics = {}
+        downloads = max(
+            _as_int(_first(entry, "DownloadCount", "Downloads", "DownloadsCount", "download_count")),
+            _as_int(metrics.get("downloads")),
+        )
+        return {
+            "downloads": downloads,
+            "local_downloads": 0,
+            "download_count": downloads,
+            "likes": max(_as_int(_first(entry, "LikeCount", "Likes", "like_count")), _as_int(metrics.get("likes"))),
+        }
+
+    def _assets_from_manifest(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        raw = manifest.get("assets")
+        if not isinstance(raw, dict):
+            raw = {}
+        screenshots = []
+        raw_screenshots = raw.get("screenshots") or manifest.get("screenshots") or []
+        if not isinstance(raw_screenshots, list):
+            raw_screenshots = []
+        for item in raw_screenshots:
+            path = str(item.get("path") if isinstance(item, dict) else item or "").strip()
+            if path:
+                screenshots.append(
+                    {
+                        "path": path,
+                        "name": Path(path).name,
+                        "kind": "image",
+                        "mime": MODELHUB_ASSET_MIMES.get(Path(path).suffix.lower(), "image/png"),
+                    }
+                )
+        preview = raw.get("preview_audio") or manifest.get("preview_audio")
+        if isinstance(preview, dict):
+            preview = preview.get("path")
+        preview_path = str(preview or "").strip()
+        return {
+            "screenshots": screenshots[:8],
+            "preview_audio": {
+                "path": preview_path,
+                "name": Path(preview_path).name,
+                "kind": "audio",
+                "mime": MODELHUB_ASSET_MIMES.get(Path(preview_path).suffix.lower(), "audio/mpeg"),
+            }
+            if preview_path
+            else None,
+        }
+
+    def _installed_info(self, repo_id: str, manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+        latest_version = str((manifest or {}).get("version") or "1.0.0")
+        latest_time = str((manifest or {}).get("uploaded_at") or "")
+        matches: list[dict[str, Any]] = []
+        for model in self._models.list():
+            meta = model.get("metadata") or {}
+            if meta.get("source_repo_id") != repo_id:
+                continue
+            installed_version = str(meta.get("source_version") or "")
+            installed_time = str(meta.get("source_uploaded_at") or "")
+            matches.append(
+                {
+                    "model_id": model.get("id", ""),
+                    "model_name": model.get("name", ""),
+                    "installed_version": installed_version,
+                    "installed_at": model.get("imported_at", ""),
+                    "source_uploaded_at": installed_time,
+                }
+            )
+        current = matches[0] if matches else {}
+        return {
+            "installed": bool(matches),
+            "installed_models": matches,
+            "model_id": current.get("model_id", ""),
+            "model_name": current.get("model_name", ""),
+            "installed_version": current.get("installed_version", ""),
+            "latest_version": latest_version,
+            "available": bool(
+                matches
+                and _is_remote_newer(
+                    latest_version,
+                    current.get("installed_version"),
+                    latest_time,
+                    current.get("source_uploaded_at"),
+                )
+            ),
+        }
+
+    def _build_item(
+        self,
+        repo_id: str,
+        manifest: dict[str, Any],
+        entry: dict[str, Any] | None = None,
+        *,
+        detail: bool = False,
+    ) -> dict[str, Any]:
+        fw = config.modelhub_normalize_framework(manifest.get("framework"))
+        files = manifest.get("files") if isinstance(manifest.get("files"), dict) else {}
+        assets = self._assets_from_manifest(manifest)
+        metric_summary = self._metric_summary(manifest, entry)
+        deps = self._dependency_status(fw, files)
+        required_deps_ok = all(d.get("ok") for d in deps if d.get("required"))
+        version = str(manifest.get("version") or "1.0.0")
+        uploaded_at = str(manifest.get("uploaded_at") or "")
+        item = {
+            "repo_id": repo_id,
+            "name": manifest.get("name") or repo_id.split("/", 1)[-1],
+            "type": manifest.get("type", ""),
+            "framework": fw,
+            "framework_label": config.MODELHUB_FRAMEWORKS.get(fw, fw),
+            "sample_rate": manifest.get("sample_rate", ""),
+            "author": repo_id.split("/", 1)[0],
+            "has_diffusion": bool(files.get("diffusion_model")),
+            "url": f"{config.MODELSCOPE_ENDPOINT}/models/{repo_id}",
+            "description": _trim_text(manifest.get("description"), 1000),
+            "tags": _normalize_tags(manifest.get("tags")),
+            "version": version,
+            "uploaded_at": uploaded_at,
+            "screenshots": assets["screenshots"],
+            "preview_audio": assets["preview_audio"],
+            "dependency_ok": required_deps_ok,
+            "dependencies": deps if detail else [],
+            "versions": manifest.get("versions")
+            if isinstance(manifest.get("versions"), list)
+            else [
+                {
+                    "version": version,
+                    "uploaded_at": uploaded_at,
+                    "repo_id": repo_id,
+                    "current": True,
+                }
+            ],
+            "update": self._installed_info(repo_id, manifest),
+            **metric_summary,
+        }
+        item["score"] = round(
+            min(10, _as_int(item.get("download_count")) / 10)
+            + (8 if item.get("preview_audio") else 0)
+            + min(8, len(item.get("screenshots") or []) * 2)
+            + (6 if item.get("dependency_ok") else 0),
+            2,
+        )
+        return item
+
+    def _record_download(self, repo_id: str, manifest: dict[str, Any]) -> None:
+        # 下载量以 ModelScope 仓库返回值为准，不在本地伪造社区数据。
+        return None
+
+    def model_detail(self, repo_id: str) -> dict[str, Any]:
+        return self._submit(self._model_detail(repo_id))
+
+    def asset_data(self, repo_id: str, file_path: str) -> dict[str, Any]:
+        return self._submit(self._asset_data(repo_id, file_path))
+
+    def check_updates(self) -> dict[str, Any]:
+        return self._submit(self._check_updates())
+
+    def start_upgrade(self, model_id: str) -> dict[str, Any]:
+        model_id = (model_id or "").strip()
+        model = self._models.get(model_id)
+        if not model:
+            return {"ok": False, "error": "本地模型不存在"}
+        repo_id = str((model.get("metadata") or {}).get("source_repo_id") or "").strip()
+        if "/" not in repo_id:
+            return {"ok": False, "error": "该模型没有来源仓库，无法一键升级"}
+        return self.start_download(repo_id)
+
     # ---- 同步入口（供桥接调用）----
     def _submit(self, coro: Any) -> Any:
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
@@ -254,9 +692,13 @@ class ModelHubService:
         return self._submit(self._download(repo_id))
 
     def upload(
-        self, model_id: str, name: str | None = None, framework: str | None = None
+        self,
+        model_id: str,
+        name: str | None = None,
+        framework: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return self._submit(self._upload(model_id, name, framework))
+        return self._submit(self._upload(model_id, name, framework, metadata or {}))
 
     # ---- HTTP 基础 ----
     def _headers(self, token: str | None) -> dict[str, str]:
@@ -342,13 +784,17 @@ class ModelHubService:
 
         # 汇集多来源候选条目，保证既能看到自己上传的，也能发现他人分享的：
         raw_entries: list[Any] = []
-        # 来源 1：当前用户自己的命名空间（仅第 1 页合并，避免翻页时重复堆叠）
-        if page == 1:
+        viewer = ""
+        me: dict[str, Any] = {}
+        if self.get_token():
             me = await self._verify_token(None)
             if me.get("ok") and me.get("username"):
-                raw_entries += await self._query_models(
-                    {"Path": me["username"], "PageNumber": 1, "PageSize": 100}
-                )
+                viewer = _trim_text(me.get("username"), 40)
+        # 来源 1：当前用户自己的命名空间（仅第 1 页合并，避免翻页时重复堆叠）
+        if page == 1 and viewer:
+            raw_entries += await self._query_models(
+                {"Path": viewer, "PageNumber": 1, "PageSize": 100}
+            )
         # 来源 2：全站按「仓库名前缀」搜索（发现所有人公开分享的本软件模型）。
         # 经实测：PUT /api/v1/models 真正生效的搜索字段是「Name」（帕斯卡），分页用
         # PageNumber/PageSize。早期用的 "Search"（及小写 search/page_size）会被服务端
@@ -380,7 +826,7 @@ class ModelHubService:
         # 模糊匹配：拆分为多个关键词，全部命中（名称/仓库/作者拼接文本）才算匹配
         tokens = [t for t in q.lower().split() if t]
 
-        items: list[dict[str, Any]] = []
+        candidates: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
         seen: set[str] = set()
         for entry in raw_entries:
             if not isinstance(entry, dict):
@@ -403,21 +849,16 @@ class ModelHubService:
             fw = config.modelhub_normalize_framework(manifest.get("framework"))
             if fw_filter and fw != fw_filter:
                 continue
-            items.append(
-                {
-                    "repo_id": repo_id,
-                    "name": display,
-                    "type": manifest.get("type", ""),
-                    "framework": fw,
-                    "framework_label": config.MODELHUB_FRAMEWORKS.get(fw, fw),
-                    "sample_rate": manifest.get("sample_rate", ""),
-                    "author": repo_id.split("/", 1)[0],
-                    "has_diffusion": bool(
-                        (manifest.get("files") or {}).get("diffusion_model")
-                    ),
-                    "url": f"{config.MODELSCOPE_ENDPOINT}/models/{repo_id}",
-                }
+            candidates.append((repo_id, manifest, entry))
+        items = [
+            self._build_item(
+                repo_id,
+                manifest,
+                entry,
+                detail=False,
             )
+            for repo_id, manifest, entry in candidates
+        ]
         return {
             "ok": True,
             "items": items,
@@ -425,6 +866,104 @@ class ModelHubService:
             "page_size": page_size,
             "has_more": has_more,
         }
+
+    async def _model_detail(self, repo_id: str) -> dict[str, Any]:
+        repo_id = (repo_id or "").strip().strip("/")
+        if "/" not in repo_id:
+            return {"ok": False, "error": "无效的模型仓库标识"}
+        manifest = await self._fetch_manifest(repo_id)
+        if not manifest:
+            return {"ok": False, "error": "该模型不是本软件上传或清单校验失败"}
+        return {
+            "ok": True,
+            "item": self._build_item(
+                repo_id,
+                manifest,
+                detail=True,
+            ),
+        }
+
+    def _asset_allowed(self, manifest: dict[str, Any], file_path: str) -> bool:
+        assets = self._assets_from_manifest(manifest)
+        allowed = {x.get("path") for x in assets.get("screenshots") or []}
+        preview = assets.get("preview_audio")
+        if preview:
+            allowed.add(preview.get("path"))
+        clean = file_path.replace("\\", "/").lstrip("./")
+        return clean in {str(x).replace("\\", "/").lstrip("./") for x in allowed if x}
+
+    def _raw_file_url(self, repo_id: str, file_path: str) -> str:
+        repo = urllib.parse.quote(repo_id.strip("/"), safe="/")
+        query = urllib.parse.urlencode({"FilePath": file_path, "Revision": "master"})
+        return f"{config.MODELSCOPE_ENDPOINT}/api/v1/models/{repo}/repo?{query}"
+
+    async def _asset_data(self, repo_id: str, file_path: str) -> dict[str, Any]:
+        repo_id = (repo_id or "").strip().strip("/")
+        file_path = str(file_path or "").strip()
+        if "/" not in repo_id or not file_path:
+            return {"ok": False, "error": "缺少模型仓库或素材路径"}
+        manifest = await self._fetch_manifest(repo_id)
+        if not manifest:
+            return {"ok": False, "error": "清单校验失败"}
+        if not self._asset_allowed(manifest, file_path):
+            return {"ok": False, "error": "该文件不是模型清单中的展示素材"}
+        ext = Path(file_path).suffix.lower()
+        mime = MODELHUB_ASSET_MIMES.get(ext, "application/octet-stream")
+        if mime.startswith("audio/"):
+            return {
+                "ok": True,
+                "name": Path(file_path).name,
+                "mime": mime,
+                "url": self._raw_file_url(repo_id, file_path),
+            }
+        raw = await self._get_raw(repo_id, file_path)
+        if not raw:
+            return {"ok": False, "error": "读取展示素材失败"}
+        if len(raw) > 8 * 1024 * 1024:
+            return {"ok": False, "error": "展示素材过大，无法内联预览"}
+        data = base64.b64encode(raw).decode("ascii")
+        return {
+            "ok": True,
+            "name": Path(file_path).name,
+            "mime": mime,
+            "data": f"data:{mime};base64,{data}",
+        }
+
+    async def _check_updates(self) -> dict[str, Any]:
+        items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for model in self._models.list():
+            meta = model.get("metadata") or {}
+            repo_id = str(meta.get("source_repo_id") or "").strip().strip("/")
+            if "/" not in repo_id or repo_id in seen:
+                continue
+            seen.add(repo_id)
+            manifest = await self._fetch_manifest(repo_id)
+            if not manifest:
+                continue
+            installed_version = str(meta.get("source_version") or "")
+            latest_version = str(manifest.get("version") or "1.0.0")
+            installed_time = str(meta.get("source_uploaded_at") or "")
+            latest_time = str(manifest.get("uploaded_at") or "")
+            available = _is_remote_newer(
+                latest_version,
+                installed_version,
+                latest_time,
+                installed_time,
+            )
+            if available:
+                items.append(
+                    {
+                        "model_id": model.get("id", ""),
+                        "model_name": model.get("name", ""),
+                        "repo_id": repo_id,
+                        "installed_version": installed_version,
+                        "latest_version": latest_version,
+                        "uploaded_at": latest_time,
+                        "framework": config.modelhub_normalize_framework(manifest.get("framework")),
+                    }
+                )
+        return {"ok": True, "items": items}
 
     @staticmethod
     def _extract_repo_id(entry: dict[str, Any]) -> str | None:
@@ -685,18 +1224,27 @@ class ModelHubService:
             "diffusion_config": local_paths.get("diffusion_config"),
             "index_file": local_paths.get("index_file"),
             "source_repo_id": repo_id,
+            "source_version": str(manifest.get("version") or "1.0.0"),
+            "source_uploaded_at": str(manifest.get("uploaded_at") or ""),
+            "source_lineage_id": str(manifest.get("lineage_id") or repo_id),
+            "source_tags": _normalize_tags(manifest.get("tags")),
         }
         imported = self._models.import_model(payload)
         if not imported:
             self._set_progress(key, "error", 0, "导入失败")
             return {"ok": False, "error": "导入到本地模型库失败"}
+        self._record_download(repo_id, manifest)
         shutil.rmtree(stage, ignore_errors=True)  # 导入成功后才清理断点文件
         self._set_progress(key, "done", 100, "完成")
         return {"ok": True, "model": imported}
 
     # ---- 上传 ----
     async def _upload(
-        self, model_id: str, name: str | None, framework: str | None = None
+        self,
+        model_id: str,
+        name: str | None,
+        framework: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not config.modelhub_upload_ready():
             return {
@@ -734,7 +1282,6 @@ class ModelHubService:
         if stage.exists():
             shutil.rmtree(stage, ignore_errors=True)
         stage.mkdir(parents=True, exist_ok=True)
-
         def _copy_role(role: str) -> str | None:
             mf = model.get(role) or {}
             src = mf.get("path")
@@ -759,6 +1306,65 @@ class ModelHubService:
             shutil.rmtree(stage, ignore_errors=True)
             return {"ok": False, "error": "模型主文件缺失，无法上传"}
 
+        meta = metadata if isinstance(metadata, dict) else {}
+        version = _trim_text(meta.get("version"), 32) or "1.0.0"
+        description = _trim_text(meta.get("description"), 1000)
+        tags = _normalize_tags(meta.get("tags") or model.get("tags"))
+
+        def _copy_asset(
+            raw: Any,
+            prefix: str,
+            allowed_exts: tuple[str, ...],
+            max_bytes: int,
+            *,
+            validate_audio: bool = False,
+        ) -> str | None:
+            src_raw = _trim_text(raw, 1000)
+            if not src_raw:
+                return None
+            src = Path(src_raw)
+            if not src.exists() or not src.is_file():
+                raise OSError(f"展示素材不存在：{src_raw}")
+            ext = src.suffix.lower()
+            if ext not in allowed_exts:
+                raise OSError(f"展示素材格式不支持：{src.name}")
+            if validate_audio:
+                _ensure_preview_audio_file(src)
+            elif src.stat().st_size > max_bytes:
+                raise OSError(f"展示素材过大：{src.name}")
+            safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", src.stem).strip("._")
+            safe_stem = safe_stem[:42] or prefix.strip("_")
+            dst_name = f"{prefix}{safe_stem}{ext}"
+            dst = stage / dst_name
+            shutil.copy2(src, dst)
+            return dst_name
+
+        assets: dict[str, Any] = {"screenshots": []}
+        try:
+            preview_name = _copy_asset(
+                meta.get("preview_audio"),
+                "preview_",
+                tuple(config.AUDIO_EXTS),
+                MODELHUB_PREVIEW_AUDIO_MAX_BYTES,
+                validate_audio=True,
+            )
+            if preview_name:
+                assets["preview_audio"] = preview_name
+            raw_shots = meta.get("screenshots")
+            screenshots = raw_shots if isinstance(raw_shots, list) else []
+            for idx, raw in enumerate(screenshots[:8], start=1):
+                shot_name = _copy_asset(
+                    raw,
+                    f"screenshot_{idx}_",
+                    (".jpg", ".jpeg", ".png", ".webp", ".gif"),
+                    8 * 1024 * 1024,
+                )
+                if shot_name:
+                    assets["screenshots"].append(shot_name)
+        except OSError as exc:
+            shutil.rmtree(stage, ignore_errors=True)
+            return {"ok": False, "error": str(exc)}
+
         manifest = {
             "magic": config.MODELHUB_MAGIC,
             "schema": config.MODELHUB_SCHEMA,
@@ -771,6 +1377,12 @@ class ModelHubService:
             "framework_label": fw_label,
             "sample_rate": model.get("sample_rate", "44.1kHz"),
             "files": roles,
+            "version": version,
+            "lineage_id": str((model.get("metadata") or {}).get("source_lineage_id") or repo_id),
+            "description": description,
+            "tags": tags,
+            "assets": assets,
+            "dependencies": self._dependency_specs(fw, roles),
             "uploaded_by": username,
             "uploaded_at": datetime.now().isoformat(timespec="seconds"),
         }
@@ -778,13 +1390,16 @@ class ModelHubService:
             (stage / config.MODELHUB_MANIFEST).write_text(
                 json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-            (stage / "README.md").write_text(
+            readme = (
                 f"# {display}\n\n"
                 f"XB-SVCB 翻唱声音模型 · 架构：{fw_label}（{fw}）。\n\n"
-                f"> 标记: {config.MODELSCOPE_MARKER}\n\n"
-                "由「XB-SVCB AI 翻唱工具」上传。下载请在软件内「模型站」搜索使用。\n",
-                encoding="utf-8",
+                f"版本：{version}\n\n"
+                + (f"{description}\n\n" if description else "")
+                + (f"标签：{', '.join(tags)}\n\n" if tags else "")
+                + f"> 标记: {config.MODELSCOPE_MARKER}\n\n"
+                + "由「XB-SVCB AI 翻唱工具」上传。下载请在软件内「模型站」搜索使用。\n"
             )
+            (stage / "README.md").write_text(readme, encoding="utf-8")
         except OSError as exc:
             shutil.rmtree(stage, ignore_errors=True)
             return {"ok": False, "error": f"准备上传文件失败：{exc}"}
