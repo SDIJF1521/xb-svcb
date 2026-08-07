@@ -27,6 +27,16 @@ def _load_wheelhouse_module():
     return module
 
 
+def _load_install_module():
+    script = ROOT / "install" / "install.py"
+    spec = importlib.util.spec_from_file_location("xb_install", script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _run_detector(tmp_path: Path, candidate: Path) -> subprocess.CompletedProcess[str]:
     wrapper = tmp_path / "run_detector.bat"
     wrapper.write_text(
@@ -103,6 +113,99 @@ def test_installer_entrypoints_suppress_uv_cross_drive_hardlink_warning() -> Non
     assert 'set "UV_LINK_MODE=copy"' in script
 
 
+def test_setup_env_exports_verified_python310_for_runtime_venvs() -> None:
+    setup_env = (ROOT / "setup_env.bat").read_text(encoding="utf-8")
+
+    assert 'set "XB_PYTHON_310_EXE=%XB_PYTHON_EXE%"' in setup_env
+
+
+def test_installer_batch_entrypoints_use_windows_line_endings() -> None:
+    for relative in ("setup_env.bat", "install_prereqs.bat", "install/detect_python.bat"):
+        data = (ROOT / relative).read_bytes()
+        assert data.count(b"\n") == data.count(b"\r\n"), relative
+
+
+def test_install_py_prefers_verified_python310_over_uv_managed_cache(
+    tmp_path: Path, monkeypatch
+) -> None:
+    installer = _load_install_module()
+    py310 = tmp_path / "Python310" / "python.exe"
+    py314 = tmp_path / "Python314" / "python.exe"
+    py310.parent.mkdir()
+    py314.parent.mkdir()
+    py310.write_text("", encoding="ascii")
+    py314.write_text("", encoding="ascii")
+
+    monkeypatch.setenv("XB_PYTHON_310_EXE", str(py310))
+    monkeypatch.setenv("XB_PYTHON_EXE", str(py314))
+
+    def fake_minor(path: Path) -> str | None:
+        if path == py310:
+            return "3.10"
+        if path == py314:
+            return "3.14"
+        return None
+
+    monkeypatch.setattr(installer, "_python_minor_version", fake_minor)
+
+    assert installer.python_spec_for_venv("3.10") == str(py310)
+    assert installer.python_spec_for_venv("3.9") == "3.9"
+
+
+def test_install_py_rejects_non310_verified_python_for_py310_venvs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    installer = _load_install_module()
+    py314 = tmp_path / "Python314" / "python.exe"
+    py314.parent.mkdir()
+    py314.write_text("", encoding="ascii")
+
+    monkeypatch.delenv("XB_PYTHON_310_EXE", raising=False)
+    monkeypatch.setenv("XB_PYTHON_EXE", str(py314))
+    monkeypatch.setattr(installer, "_python_minor_version", lambda path: "3.14")
+
+    assert installer.python_spec_for_venv("3.10") == "3.10"
+
+
+def test_ensure_venv_rebuilds_an_unreadable_existing_environment(
+    tmp_path: Path, monkeypatch
+) -> None:
+    installer = _load_install_module()
+    venv_dir = tmp_path / ".venv-vocal"
+    venv_python = installer.venv_python(venv_dir)
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_text("", encoding="ascii")
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(installer, "_python_minor_version", lambda path: None)
+    monkeypatch.setattr(
+        installer,
+        "python_spec_for_venv",
+        lambda version: r"C:\Python310\python.exe",
+    )
+    monkeypatch.setattr(installer, "run", lambda cmd: commands.append(cmd))
+
+    installer.ensure_venv("uv.exe", venv_dir, "3.10")
+
+    assert not venv_dir.exists()
+    assert commands == [
+        [
+            "uv.exe",
+            "venv",
+            "--python",
+            r"C:\Python310\python.exe",
+            str(venv_dir),
+        ]
+    ]
+
+
+def test_installer_env_batch_escape_handles_percent_and_caret() -> None:
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+
+    assert "StringChangeEx(Result, '^', '^^', True);" in script
+    assert "StringChangeEx(Result, '%', '%%', True);" in script
+
+
 def test_setup_env_uses_install_py_as_the_single_progress_source() -> None:
     setup_env = (ROOT / "setup_env.bat").read_text(encoding="utf-8")
     script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
@@ -111,6 +214,16 @@ def test_setup_env_uses_install_py_as_the_single_progress_source() -> None:
     assert "[XB-PROGRESS] 10 已找到 Python，准备创建隔离环境" not in setup_env
     assert "[XB-PROGRESS] 18 正在执行运行环境安装脚本" not in setup_env
     assert "if Target < EnvProgressCurrent then" in script
+
+
+def test_vocal_runtime_avoids_wheel_packaging_conflict() -> None:
+    source = (ROOT / "install" / "install.py").read_text(encoding="utf-8")
+    vocal = source[source.index("def step_vocal"):source.index("def step_hub")]
+
+    assert "deepfilternet==0.5.6 requires packaging<24" in vocal
+    assert 'pip("setuptools<81")' in vocal
+    assert 'pip("setuptools<81", "wheel")' not in vocal
+    assert 'pip("setuptools<81", "wheel")' in source
 
 
 def test_installer_packages_and_uses_bundled_wheelhouse() -> None:
@@ -195,10 +308,22 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
         and "fairseq==0.12.2" in batch.packages
         for batch in cpu
     )
+    expected_matplotlib_support = (
+        "contourpy==1.2.1",
+        "cycler>=0.10",
+        "fonttools>=4.22.0",
+        "kiwisolver>=1.0.1",
+        "packaging>=20.0",
+        "pillow>=6.2.0",
+        "pyparsing>=2.3.1",
+        "python-dateutil>=2.7",
+        "importlib-resources>=3.2.0",
+    )
     assert any(
         batch.label == "svc py39 matplotlib support"
         and batch.dest == ROOT / "assets" / "wheels" / "svc" / "py39" / "cpu"
-        and "importlib-resources>=3.2.0" in batch.packages
+        and batch.no_deps
+        and batch.packages == expected_matplotlib_support
         for batch in cpu
     )
     assert any(

@@ -183,6 +183,20 @@ SVC_FCPE_RUNTIME_DEPS = (
     "einops==0.8.2",
     "local-attention==1.10.0",
 )
+# So-VITS-SVC imports matplotlib while loading its vocoder. The py39 stack
+# installs matplotlib with --no-deps to preserve its validated NumPy pin, so
+# keep matplotlib's remaining import-time dependencies explicit.
+SVC_MATPLOTLIB_RUNTIME_DEPS = (
+    "contourpy==1.2.1",
+    "cycler>=0.10",
+    "fonttools>=4.22.0",
+    "kiwisolver>=1.0.1",
+    "packaging>=20.0",
+    "pillow>=6.2.0",
+    "pyparsing>=2.3.1",
+    "python-dateutil>=2.7",
+    "importlib-resources>=3.2.0",
+)
 
 # 底模下载清单（见 README 与 so-vits-svc 官方说明）
 # HuggingFace 在国内常连不上，统一走「镜像优先 + 官方回退」。
@@ -433,6 +447,142 @@ def venv_python(venv_dir: Path) -> Path:
         if os.name == "nt"
         else venv_dir / "bin" / "python"
     )
+
+
+def _python_minor_version(py: Path) -> str | None:
+    """Return a Python executable's major.minor version, or None if unusable."""
+    try:
+        out = subprocess.run(
+            [str(py), "-c", "import sys;print('%d.%d'%sys.version_info[:2])"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    ver = out.stdout.strip()
+    return ver if re.match(r"^\d+\.\d+$", ver) else None
+
+
+def _path_is_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
+def _path_exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
+def _python_launcher_path(python_version: str) -> str | None:
+    if os.name != "nt":
+        return None
+    try:
+        out = subprocess.run(
+            [
+                "py",
+                f"-{python_version}",
+                "-c",
+                "import sys;print(sys.executable)",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
+
+
+def _where_python_paths() -> list[str]:
+    try:
+        found = shutil.which("python")
+        out = subprocess.run(
+            ["where", "python"] if os.name == "nt" else ["which", "-a", "python"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return [found] if found else []
+    values = out.stdout.splitlines() if out.returncode == 0 else []
+    if found:
+        values.insert(0, found)
+    return values
+
+
+def _candidate_python_paths(python_version: str | None = None) -> list[Path]:
+    launcher = _python_launcher_path(python_version) if python_version else None
+    raw_candidates = [
+        os.environ.get("XB_PYTHON_310_EXE"),
+        os.environ.get("XB_PYTHON_EXE"),
+        (
+            str(Path(os.environ["XB_PYTHON_DIR"]) / "python.exe")
+            if os.environ.get("XB_PYTHON_DIR")
+            else None
+        ),
+        launcher,
+        os.environ.get("LocalAppData") and str(
+            Path(os.environ["LocalAppData"]) / "Programs" / "Python" / "Python310" / "python.exe"
+        ),
+        sys.executable,
+        *_where_python_paths(),
+    ]
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for raw in raw_candidates:
+        if not raw:
+            continue
+        path = Path(raw).expanduser()
+        key = os.path.normcase(str(path))
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(path)
+    return paths
+
+
+def python_spec_for_venv(python_version: str) -> str:
+    """Prefer the verified local CPython 3.10 over uv's managed interpreter cache."""
+    requested = _wheel_py_tag(python_version)
+    if requested != "py310":
+        return python_version
+    for path in _candidate_python_paths(python_version):
+        if _path_is_file(path) and _python_minor_version(path) == "3.10":
+            return str(path)
+    return python_version
+
+
+def ensure_venv(uv: str, venv_dir: Path, python_version: str) -> None:
+    """Create a venv, rebuilding stale or unreadable environments."""
+    py_path = venv_python(venv_dir)
+    if _path_exists(py_path):
+        ver = _python_minor_version(py_path)
+        if ver == python_version:
+            return
+        print(
+            c(
+                "y",
+                f"    现有 {venv_dir.name} 为 Python {ver or '不可运行/未知'}，需要 {python_version}，重建中 …",
+            )
+        )
+        shutil.rmtree(venv_dir, ignore_errors=True)
+    elif _path_exists(venv_dir):
+        print(c("y", f"    现有 {venv_dir.name} 不完整，重建中 …"))
+        shutil.rmtree(venv_dir, ignore_errors=True)
+
+    spec = python_spec_for_venv(python_version)
+    if spec != python_version:
+        print(c("g", f"    使用已验证 Python {python_version}: {spec}"))
+    run(uv_cmd(uv, "venv", "--python", spec, str(venv_dir)))
 
 
 # ---------- 环境/前置检查 ----------
@@ -1001,8 +1151,7 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
     use_blackwell = gpu_stack == "cu128"
     use_cuda = gpu_stack in {"cu121", "cu128"}
     use_directml = gpu_stack == "directml"
-    if not venv_python(UVR_VENV).exists():
-        run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_ENGINES, str(UVR_VENV)))
+    ensure_venv(uv, UVR_VENV, PYTHON_FOR_ENGINES)
     py = str(venv_python(UVR_VENV))
     pip = make_pip(
         uv,
@@ -1299,14 +1448,7 @@ def seed_seedvc_base_models(py: Path) -> None:
 
 def _venv_pyver(py: Path) -> str | None:
     """返回 venv 内 Python 的 '主.次' 版本号（如 '3.9'）；失败返回 None。"""
-    try:
-        out = subprocess.run(
-            [str(py), "-c", "import sys;print('%d.%d'%sys.version_info[:2])"],
-            capture_output=True, text=True, timeout=30,
-        )
-        return out.stdout.strip() or None
-    except (OSError, subprocess.SubprocessError):
-        return None
+    return _python_minor_version(py)
 
 
 def step_svc(uv: str, gpu_stack: str) -> None:
@@ -1320,15 +1462,7 @@ def step_svc(uv: str, gpu_stack: str) -> None:
     # torch-directml 0.2.5 imports only on Python 3.10+; CUDA/CPU keep their
     # established versions to avoid changing already-validated dependency sets.
     target_py = _svc_python_for_stack(gpu_stack)
-    # 创建环境。若已存在但版本不符（含老卡/新卡切换），则重建，避免依赖错配。
-    py_path = venv_python(SVC_VENV)
-    if py_path.exists():
-        ver = _venv_pyver(py_path)
-        if ver != target_py:
-            print(c("y", f"    现有 .venv-svc 为 Python {ver or '未知'}，需要 {target_py}，重建中 …"))
-            shutil.rmtree(SVC_VENV, ignore_errors=True)
-    if not venv_python(SVC_VENV).exists():
-        run(uv_cmd(uv, "venv", "--python", target_py, str(SVC_VENV)))
+    ensure_venv(uv, SVC_VENV, target_py)
     py = str(venv_python(SVC_VENV))
     pip = make_pip(
         uv,
@@ -1367,6 +1501,7 @@ def step_svc(uv: str, gpu_stack: str) -> None:
         )
         _verify_directml_torch(py, "So-VITS-SVC")
         _verify_svc_fcpe_runtime(py)
+        _verify_svc_matplotlib_runtime(py)
         print(
             c(
                 "g",
@@ -1411,6 +1546,7 @@ def step_svc(uv: str, gpu_stack: str) -> None:
         else:
             print(c("r", "    未找到 requirements，跳过依赖安装（请检查仓库）"))
         _verify_svc_fcpe_runtime(py)
+        _verify_svc_matplotlib_runtime(py)
         print(c("g", "推理环境就绪（Blackwell/cu128）"))
         return
 
@@ -1430,9 +1566,9 @@ def step_svc(uv: str, gpu_stack: str) -> None:
     # so-vits-svc 的 vdecoder 代码里 `import matplotlib`，但官方 requirements 漏列了它，
     # 不补会在推理加载模型时报 No module named 'matplotlib'。钉 3.7.5 以兼容 numpy 1.22 / py3.9，
     # 避免最新 matplotlib(3.9+) 强行把 numpy 升到 >=1.23 而破坏 so-vits-svc 依赖。
-        # Python 3.9 的 matplotlib 还需要 importlib-resources；单独安装它后，
-        # matplotlib 使用 --no-deps，避免修复旧环境时再次升级 NumPy。
-        pip("importlib-resources>=3.2.0")
+        # 仍使用 --no-deps 防止修复旧环境时升级 NumPy，但显式补齐 Matplotlib
+        # 的其余导入依赖（尤其 pyparsing；缺失时扩散模型加载会直接失败）。
+        pip("--no-deps", *SVC_MATPLOTLIB_RUNTIME_DEPS)
         pip("--no-deps", "matplotlib==3.7.5")
         pip(*SVC_FCPE_RUNTIME_DEPS)
     else:
@@ -1449,6 +1585,7 @@ def step_svc(uv: str, gpu_stack: str) -> None:
             python_version=target_py,
         )
     _verify_svc_fcpe_runtime(py)
+    _verify_svc_matplotlib_runtime(py)
     print(c("g", "推理环境就绪"))
 
 
@@ -1603,6 +1740,21 @@ def _verify_svc_fcpe_runtime(py: str) -> None:
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
             "So-VITS-SVC FCPE 依赖校验失败：einops/local-attention 或 FCPE 模块无法导入"
+        ) from exc
+
+
+def _verify_svc_matplotlib_runtime(py: str) -> None:
+    """Verify the vocoder's matplotlib import chain before marking SVC ready."""
+    check = (
+        "import matplotlib,contourpy,cycler,fontTools,kiwisolver,packaging,PIL,pyparsing; "
+        "print('Matplotlib runtime',matplotlib.__version__,pyparsing.__version__)"
+    )
+    try:
+        run([py, "-c", check])
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "So-VITS-SVC Matplotlib 依赖校验失败："
+            "contourpy/cycler/fonttools/kiwisolver/packaging/Pillow/pyparsing 未完整安装"
         ) from exc
 
 
@@ -1766,14 +1918,7 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
     # rvc-python 默认会在首次推理时下载 hubert / rmvpe；这里安装后立即预置，
     # 避免新用户运行 RVC 时因为 HuggingFace 连接失败而报 HTTPSConnectionPool。
     target_py = _rvc_python_for_stack(gpu_stack)
-    py_path = venv_python(RVC_VENV)
-    if py_path.exists():
-        ver = _venv_pyver(py_path)
-        if ver != target_py:
-            print(c("y", f"    现有 .venv-rvc 为 Python {ver or '未知'}，需要 {target_py}，重建中 …"))
-            shutil.rmtree(RVC_VENV, ignore_errors=True)
-    if not venv_python(RVC_VENV).exists():
-        run(uv_cmd(uv, "venv", "--python", target_py, str(RVC_VENV)))
+    ensure_venv(uv, RVC_VENV, target_py)
     py = str(venv_python(RVC_VENV))
     pip = make_pip(
         uv,
@@ -1886,14 +2031,7 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
     use_directml = gpu_stack == "directml"
 
     target_py = PYTHON_FOR_ENGINES
-    py_path = venv_python(SEEDVC_VENV)
-    if py_path.exists():
-        ver = _venv_pyver(py_path)
-        if ver != target_py:
-            print(c("y", f"    现有 .venv-seedvc 为 Python {ver or '未知'}，需要 {target_py}，重建中 …"))
-            shutil.rmtree(SEEDVC_VENV, ignore_errors=True)
-    if not venv_python(SEEDVC_VENV).exists():
-        run(uv_cmd(uv, "venv", "--python", target_py, str(SEEDVC_VENV)))
+    ensure_venv(uv, SEEDVC_VENV, target_py)
     py = str(venv_python(SEEDVC_VENV))
     pip = make_pip(
         uv,
@@ -1978,14 +2116,7 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
     amd_cpu_stable = gpu_stack == "directml"
 
     target_py = PYTHON_FOR_ENGINES
-    py_path = venv_python(DDSP_VENV)
-    if py_path.exists():
-        ver = _venv_pyver(py_path)
-        if ver != target_py:
-            print(c("y", f"    现有 .venv-ddsp 为 Python {ver or '未知'}，需要 {target_py}，重建中 …"))
-            shutil.rmtree(DDSP_VENV, ignore_errors=True)
-    if not venv_python(DDSP_VENV).exists():
-        run(uv_cmd(uv, "venv", "--python", target_py, str(DDSP_VENV)))
+    ensure_venv(uv, DDSP_VENV, target_py)
     py = str(venv_python(DDSP_VENV))
     pip = make_pip(
         uv,
@@ -2094,8 +2225,7 @@ def _prepare_vocal_deepfilter_model(py: str) -> Path:
 
 def step_vocal(uv: str, gpu_stack: str) -> None:
     hr("8/10 AI 歌声增强环境 .venv-vocal")
-    if not venv_python(VOCAL_VENV).exists():
-        run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_ENGINES, str(VOCAL_VENV)))
+    ensure_venv(uv, VOCAL_VENV, PYTHON_FOR_ENGINES)
     py = str(venv_python(VOCAL_VENV))
     pip = make_pip(
         uv,
@@ -2105,7 +2235,10 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
         python_version=PYTHON_FOR_ENGINES,
     )
 
-    pip("setuptools<81", "wheel")
+    # Vocal's deepfilternet==0.5.6 requires packaging<24, while wheel>=0.47
+    # requires packaging>=24. Vocal installs only prebuilt wheels, so it does
+    # not need wheel at runtime; keeping it out avoids an impossible resolver.
+    pip("setuptools<81")
     if gpu_stack == "cu128":
         torch_specs = [
             f"torch=={TORCH_BLACKWELL_VER}",
@@ -2155,8 +2288,7 @@ def step_hub(uv: str, gpu_stack: str) -> None:
     hr("9/10 模型上传组件 .venv-hub（modelscope）")
     # 仅「分享到模型站（上传）」需要 modelscope SDK；搜索 / 下载走纯 HTTP，不依赖本环境。
     # 用 3.10（与 UVR 一致），装 modelscope hub 能力即可（上传用 upload_folder，无需本地 git）。
-    if not venv_python(HUB_VENV).exists():
-        run(uv_cmd(uv, "venv", "--python", PYTHON_FOR_ENGINES, str(HUB_VENV)))
+    ensure_venv(uv, HUB_VENV, PYTHON_FOR_ENGINES)
     py = str(venv_python(HUB_VENV))
     pip = make_pip(
         uv,

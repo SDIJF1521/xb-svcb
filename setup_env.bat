@@ -34,6 +34,7 @@ if not exist "%PYTHON_DETECTOR%" (
 )
 call "%PYTHON_DETECTOR%"
 if errorlevel 1 goto PYTHON_MISSING
+set "XB_PYTHON_310_EXE=%XB_PYTHON_EXE%"
 set "PATH=%XB_PYTHON_DIR%;%XB_PYTHON_DIR%\Scripts;%PATH%"
 if defined XB_FFMPEG_DIR if exist "%XB_FFMPEG_DIR%\bin\ffmpeg.exe" if exist "%XB_FFMPEG_DIR%\bin\ffprobe.exe" set "XB_FFMPEG_BIN=%XB_FFMPEG_DIR%\bin"
 if defined XB_FFMPEG_DIR if not defined XB_FFMPEG_BIN if exist "%XB_FFMPEG_DIR%\ffmpeg.exe" if exist "%XB_FFMPEG_DIR%\ffprobe.exe" set "XB_FFMPEG_BIN=%XB_FFMPEG_DIR%"

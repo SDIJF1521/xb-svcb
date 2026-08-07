@@ -237,6 +237,8 @@ end;
 function BatchEscape(const S: String): String;
 begin
   Result := S;
+  StringChangeEx(Result, '^', '^^', True);
+  StringChangeEx(Result, '%', '%%', True);
   StringChangeEx(Result, '"', '', True);
 end;
 

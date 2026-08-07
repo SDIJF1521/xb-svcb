@@ -486,15 +486,15 @@ def _py39_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> l
             installer.SVC_FCPE_RUNTIME_DEPS,
             constraints=svc_constraints,
         ),
-        # matplotlib 3.7.5 imports the backport on Python 3.9. Download its
-        # compatible runtime dependency separately, then keep matplotlib's
-        # own dependency resolution disabled so it cannot replace So-VITS'
-        # pinned NumPy with a newer ABI-incompatible wheel.
+        # Keep Matplotlib's py39 import-time dependencies separate because the
+        # runtime installs matplotlib with --no-deps to preserve So-VITS'
+        # validated NumPy pin.
         DownloadBatch(
             "svc py39 matplotlib support",
             svc_dest,
             py,
-            ("importlib-resources>=3.2.0",),
+            installer.SVC_MATPLOTLIB_RUNTIME_DEPS,
+            no_deps=True,
             constraints=svc_constraints,
         ),
         DownloadBatch(
