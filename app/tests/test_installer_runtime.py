@@ -113,6 +113,17 @@ def test_installer_entrypoints_suppress_uv_cross_drive_hardlink_warning() -> Non
     assert 'set "UV_LINK_MODE=copy"' in script
 
 
+def test_ffmpeg_file_check_does_not_expand_app_before_directory_initialization() -> None:
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    start = script.index("function SystemFfmpegAvailable(): Boolean;")
+    end = script.index("function CommandOutput(", start)
+    function = script[start:end]
+
+    assert "CommandSucceeds('ffmpeg -version')" in function
+    assert "CommandSucceeds('ffprobe -version')" in function
+    assert "{app}" not in function
+
+
 def test_setup_env_exports_verified_python310_for_runtime_venvs() -> None:
     setup_env = (ROOT / "setup_env.bat").read_text(encoding="utf-8")
 

@@ -311,20 +311,8 @@ end;
 
 function SystemFfmpegAvailable(): Boolean;
 begin
-  Result := False;
-  if CommandSucceeds('ffmpeg -version') and CommandSucceeds('ffprobe -version') then
-  begin
-    Result := True;
-    Exit;
-  end;
-  if FileExists(ExpandConstant('{app}\tools\ffmpeg\bin\ffmpeg.exe')) and
-     FileExists(ExpandConstant('{app}\tools\ffmpeg\bin\ffprobe.exe')) then
-  begin
-    Result := True;
-    Exit;
-  end;
-  Result := FileExists(ExpandConstant('{app}\tools\ffmpeg\ffmpeg.exe')) and
-    FileExists(ExpandConstant('{app}\tools\ffmpeg\ffprobe.exe'));
+  { This function is used by [Files] Check before the app dir is initialized. }
+  Result := CommandSucceeds('ffmpeg -version') and CommandSucceeds('ffprobe -version');
 end;
 
 function CommandOutput(const CommandLine: String): String;
