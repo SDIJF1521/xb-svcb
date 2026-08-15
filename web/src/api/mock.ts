@@ -68,6 +68,11 @@ import type {
   DataMigrationStartResult,
   DataStorageStatus,
   ThemeMediaPickResult,
+  PluginStatus,
+  PluginInfo,
+  PluginMarketResult,
+  PluginInstallResult,
+  PluginActionResult,
 } from './types'
 
 const now = () => new Date().toISOString()
@@ -88,6 +93,14 @@ let mockHttpApi: HttpApiStatus = {
   docs_url: 'http://127.0.0.1:8765/docs',
   redoc_url: 'http://127.0.0.1:8765/redoc',
 }
+
+let mockPluginStatus: PluginStatus = {
+  enabled: false,
+  market_url: '',
+  development_dir: 'C:/Users/example/.xb_svcb/plugins',
+  security: '纯前端插件使用受限声明式能力；Python/混合插件会以当前用户权限执行代码，仅应启用可信来源。',
+}
+const mockPlugins: PluginInfo[] = []
 
 function updateMockHttpApi(scope: HttpApiScope, port: number): HttpApiStatus {
   const local = `http://127.0.0.1:${port}`
@@ -557,6 +570,39 @@ function advance(work: WorkDTO) {
 }
 
 export const mock = {
+  getPluginStatus: (): PluginStatus => ({ ...mockPluginStatus }),
+  configurePlugins: (payload: { enabled?: boolean; market_url?: string }): PluginStatus => {
+    mockPluginStatus = { ...mockPluginStatus, ...payload, ok: true }
+    return { ...mockPluginStatus }
+  },
+  listPlugins: (): PluginInfo[] => mockPlugins.map((item) => ({ ...item })),
+  setPluginEnabled: (id: string, enabled: boolean) => {
+    const plugin = mockPlugins.find((item) => item.id === id)
+    if (!plugin) return false
+    plugin.enabled = enabled
+    return true
+  },
+  pickPluginBundle: () => null,
+  installPluginBundle: (_path: string): PluginInstallResult => ({ ok: false, error: '浏览器预览不支持安装本地插件包。' }),
+  installPluginBundleData: (_name: string, _data: string): PluginInstallResult => ({ ok: false, error: '浏览器预览不支持安装本地插件包。' }),
+  installPluginFromMarket: (_url: string): PluginInstallResult => ({ ok: false, error: '浏览器预览不支持下载插件包。' }),
+  uninstallPlugin: (id: string) => {
+    const index = mockPlugins.findIndex((item) => item.id === id)
+    if (index < 0) return false
+    mockPlugins.splice(index, 1)
+    return true
+  },
+  fetchPluginMarket: (): PluginMarketResult => ({ ok: true, items: [] }),
+  runPluginAction: (_pluginId: string, _actionId: string, _values: Record<string, unknown>): PluginActionResult => ({ ok: true, type: 'message', message: '插件动作已完成。' }),
+  getPluginFrontendDocument: (_pluginId: string) => ({
+    ok: true,
+    entry: 'frontend/index.html',
+    html: '<!doctype html><html><body><main style="font-family: sans-serif; padding: 24px"><h1>浏览器预览插件页</h1><button onclick="XBSVCB.notify(\'来自插件页面的消息\')">发送消息</button></main></body></html>',
+  }),
+  getPluginFrontendAssetData: (_pluginId: string, _assetPath: string) => ({
+    ok: false,
+    error: '浏览器预览没有插件资源目录。',
+  }),
   getSystemStatus(): SystemStatus {
     return {
       ready: true,

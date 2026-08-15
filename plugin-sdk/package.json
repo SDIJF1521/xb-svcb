@@ -1,0 +1,47 @@
+{
+  "name": "@xb-svcb/plugin-sdk",
+  "version": "0.1.0",
+  "description": "TypeScript-first SDK for building and packaging XB-SVCB plugins",
+  "type": "module",
+  "main": "./index.mjs",
+  "types": "./index.d.ts",
+  "bin": {
+    "xb-plugin": "./bin/xb-plugin.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs"
+    },
+    "./client": {
+      "types": "./client.d.ts",
+      "import": "./client.mjs"
+    },
+    "./vue": {
+      "types": "./vue.d.ts",
+      "import": "./vue.mjs"
+    }
+  },
+  "files": ["index.mjs", "index.d.ts", "client.mjs", "client.d.ts", "vue.mjs", "vue.d.ts", "bin", "README.md"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/sdk.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vue": "^3.5.32"
+  },
+  "peerDependencies": {
+    "vue": "^3.5.0"
+  },
+  "peerDependenciesMeta": {
+    "vue": {
+      "optional": true
+    }
+  }
+}

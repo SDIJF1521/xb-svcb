@@ -1,0 +1,35 @@
+import type { ComputedRef, DeepReadonly, Ref } from 'vue'
+
+import type {
+  CreateWorkPayload,
+  CreatedWork,
+  HostAssetResult,
+  HostMessageResult,
+  NotifyType,
+  PluginHostContext,
+} from '@xb-svcb/plugin-sdk/client'
+import type { Manifest, Page } from '@xb-svcb/plugin-sdk'
+
+export interface UsePluginHostOptions {
+  /** Load plugin, page and theme context when the component is mounted. */
+  loadContext?: boolean
+}
+
+export interface UsePluginHostResult {
+  hosted: DeepReadonly<Ref<boolean>>
+  context: DeepReadonly<Ref<PluginHostContext | null>>
+  plugin: ComputedRef<Manifest | undefined>
+  page: ComputedRef<Page | undefined>
+  theme: ComputedRef<string>
+  loading: DeepReadonly<Ref<boolean>>
+  error: DeepReadonly<Ref<Error | null>>
+  refreshContext(): Promise<PluginHostContext | undefined>
+  runAction(actionId: string, values?: Record<string, unknown>): Promise<HostMessageResult>
+  createWork(payload: CreateWorkPayload): Promise<CreatedWork>
+  assetData(path: string): Promise<HostAssetResult>
+  assetUrl(path: string): Promise<string>
+  notify(message: string, type?: NotifyType): Promise<true>
+  clearError(): void
+}
+
+export declare function usePluginHost(options?: UsePluginHostOptions): UsePluginHostResult

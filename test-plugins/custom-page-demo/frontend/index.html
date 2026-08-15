@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>自定义页面测试插件</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, "Microsoft YaHei", system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #eaf6ff; background: #0b1020; }
+    main { width: min(1180px, 100%); min-height: 100vh; margin: 0 auto; padding: 36px; }
+    header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding-bottom: 18px; border-bottom: 1px solid rgba(120, 220, 255, .22); }
+    h1 { margin: 0; font-size: 24px; }
+    p { color: #9fb2c8; line-height: 1.65; }
+    .badge { padding: 5px 9px; border: 1px solid rgba(116, 232, 207, .36); border-radius: 6px; color: #82ead7; font-size: 12px; white-space: nowrap; }
+    .panel { display: grid; gap: 16px; margin-top: 26px; padding: 24px; border: 1px solid rgba(120, 220, 255, .18); border-radius: 8px; background: rgba(255, 255, 255, .045); }
+    label { display: grid; gap: 6px; color: #b8c8d8; font-size: 13px; }
+    input { min-height: 38px; border: 1px solid rgba(160, 210, 255, .28); border-radius: 6px; padding: 0 11px; color: inherit; background: rgba(0, 0, 0, .2); }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    button { min-height: 38px; border: 0; border-radius: 6px; padding: 0 14px; color: #061018; background: #7ae8d1; font-weight: 700; cursor: pointer; }
+    button.secondary { color: #d8edff; background: rgba(120, 180, 255, .18); border: 1px solid rgba(120, 180, 255, .32); }
+    button:disabled { cursor: wait; opacity: .55; }
+    pre { min-height: 240px; margin: 0; padding: 14px; border-radius: 6px; color: #b5f7c5; background: rgba(0, 0, 0, .28); white-space: pre-wrap; overflow-wrap: anywhere; }
+    @media (max-width: 560px) { main { padding: 22px 14px; } header { flex-direction: column; } .actions { display: grid; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>自定义页面测试插件</h1>
+        <p>这个页面用于测试插件中心 iframe、宿主上下文、通知、动作调用和资源读取。</p>
+      </div>
+      <span id="mode" class="badge">检测宿主中...</span>
+    </header>
+
+    <section class="panel">
+      <label>
+        测试名称
+        <input id="name" value="测试用户" autocomplete="off">
+      </label>
+      <div class="actions">
+        <button id="context" type="button">读取上下文</button>
+        <button id="notify" type="button" class="secondary">发送通知</button>
+        <button id="action" type="button">调用消息动作</button>
+        <button id="asset" type="button" class="secondary">读取插件资源</button>
+      </div>
+      <pre id="output">等待操作...</pre>
+    </section>
+  </main>
+
+  <script>
+    const mode = document.querySelector('#mode')
+    const output = document.querySelector('#output')
+    const nameInput = document.querySelector('#name')
+    const buttons = Array.from(document.querySelectorAll('button'))
+
+    function host() {
+      return window.XBSVCB || null
+    }
+
+    function setOutput(value) {
+      output.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+    }
+
+    function withLoading(button, task) {
+      return async () => {
+        button.disabled = true
+        try {
+          await task()
+        } catch (error) {
+          setOutput(error instanceof Error ? error.message : String(error))
+        } finally {
+          button.disabled = false
+        }
+      }
+    }
+
+    function updateMode() {
+      mode.textContent = host() ? 'XB-SVCB 宿主模式' : '浏览器预览模式'
+    }
+
+    window.addEventListener('xb-svcb-ready', updateMode)
+    updateMode()
+
+    document.querySelector('#context').addEventListener('click', withLoading(buttons[0], async () => {
+      if (!host()) return setOutput('当前不在 XB-SVCB 插件宿主中。')
+      setOutput(await host().getContext())
+    }))
+
+    document.querySelector('#notify').addEventListener('click', withLoading(buttons[1], async () => {
+      if (!host()) return setOutput('当前不在 XB-SVCB 插件宿主中。')
+      await host().notify('来自自定义页面测试插件的通知', 'success')
+      setOutput('通知已发送。')
+    }))
+
+    document.querySelector('#action').addEventListener('click', withLoading(buttons[2], async () => {
+      if (!host()) return setOutput('当前不在 XB-SVCB 插件宿主中。')
+      const result = await host().runAction('hello', { name: nameInput.value || '朋友' })
+      setOutput(result)
+    }))
+
+    document.querySelector('#asset').addEventListener('click', withLoading(buttons[3], async () => {
+      if (!host()) return setOutput('当前不在 XB-SVCB 插件宿主中。')
+      const result = await host().assetData('assets/preset.json')
+      setOutput(result)
+    }))
+  </script>
+</body>
+</html>

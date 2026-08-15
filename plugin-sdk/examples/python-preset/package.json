@@ -1,0 +1,16 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsx src/plugin.ts",
+    "typecheck": "tsc --noEmit",
+    "validate": "npm run typecheck && npm run build && xb-plugin validate .",
+    "pack": "npm run validate && xb-plugin pack . ./python-preset.xbplugin"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@xb-svcb/plugin-sdk": "file:../..",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

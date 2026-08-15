@@ -113,6 +113,13 @@ def test_installer_entrypoints_suppress_uv_cross_drive_hardlink_warning() -> Non
     assert 'set "UV_LINK_MODE=copy"' in script
 
 
+def test_pyinstaller_packages_python_plugin_worker_and_sdk() -> None:
+    spec = (ROOT / "installer" / "xb-svcb-app.spec").read_text(encoding="utf-8")
+
+    assert '"plugin_sdk_python/xb_svcb_plugin"' in spec
+    assert '"plugin_worker.py"' in spec
+
+
 def test_ffmpeg_file_check_does_not_expand_app_before_directory_initialization() -> None:
     script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
     start = script.index("function SystemFfmpegAvailable(): Boolean;")

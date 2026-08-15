@@ -1,0 +1,24 @@
+{
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "build:manifest": "tsx src/plugin.ts",
+    "build:frontend": "vite build",
+    "build": "npm run build:frontend && npm run build:manifest",
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "validate": "npm run typecheck && npm run build && xb-plugin validate .",
+    "pack": "npm run validate && xb-plugin pack . ./hybrid-assistant.xbplugin"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.2",
+    "@xb-svcb/plugin-sdk": "file:../..",
+    "tsx": "^4.21.0",
+    "typescript": "~6.0.0",
+    "vite": "^8.0.8",
+    "vite-plugin-singlefile": "^2.3.0"
+  }
+}

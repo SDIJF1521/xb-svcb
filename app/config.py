@@ -47,6 +47,47 @@ else:
 # 项目根目录（外部引擎/环境的定位基准）
 ROOT_DIR = BASE_DIR
 
+# ---- Python 插件运行时 ----
+# 安装版优先使用专用环境；源码模式直接使用当前解释器。也可由用户/安装器显式覆盖。
+PLUGIN_VENV_DIR = ROOT_DIR / ".venv-plugins"
+PLUGIN_WORKER = BUNDLE_DIR / "infrastructure" / "plugin_worker.py"
+PLUGIN_SDK_DIR = (
+    BUNDLE_DIR / "plugin_sdk_python"
+    if _FROZEN
+    else ROOT_DIR / "plugin-sdk" / "python"
+)
+
+
+def _detect_plugin_python() -> Path | None:
+    explicit = os.environ.get("XB_PLUGIN_PYTHON") or os.environ.get("XB_PYTHON_EXE")
+    if explicit:
+        candidate = Path(explicit).expanduser()
+        if candidate.exists():
+            return candidate
+    dedicated = (
+        PLUGIN_VENV_DIR / "Scripts" / "python.exe"
+        if os.name == "nt"
+        else PLUGIN_VENV_DIR / "bin" / "python"
+    )
+    if dedicated.exists():
+        return dedicated
+    if not _FROZEN:
+        return Path(sys.executable).resolve()
+    # 安装器必备的 AI 子环境也都是标准 CPython，可承载零依赖插件 SDK。
+    for environment in (".venv-uvr", ".venv-svc", ".venv-rvc"):
+        candidate = (
+            ROOT_DIR / environment / "Scripts" / "python.exe"
+            if os.name == "nt"
+            else ROOT_DIR / environment / "bin" / "python"
+        )
+        if candidate.exists():
+            return candidate
+    system = shutil.which("python")
+    return Path(system).resolve() if system else None
+
+
+PLUGIN_PYTHON = _detect_plugin_python()
+
 
 def _activate_bundled_ffmpeg() -> Path | None:
     """Expose the packaged FFmpeg to this process when no system copy exists."""
@@ -702,7 +743,7 @@ def _apply_data_dir(data_dir: Path) -> None:
     """更新当前进程内的数据目录派生路径。"""
     global DATA_DIR, MODELS_DIR, WORKS_DIR, TEMP_DIR, MUSIC_DIR, WEBVIEW_DIR
     global MODELS_DB, WORKS_DB, SETTINGS_DB, MODELHUB_DIR, EDITOR_DIR
-    global EDITOR_CACHE_DIR, EDITOR_PROJECTS_DB, THEME_MEDIA_DIR, API_UPLOADS_DIR
+    global EDITOR_CACHE_DIR, EDITOR_PROJECTS_DB, THEME_MEDIA_DIR, API_UPLOADS_DIR, PLUGINS_DIR, PLUGIN_DATA_DIR
 
     DATA_DIR = data_dir.expanduser().resolve()
     MODELS_DIR = DATA_DIR / "models"
@@ -727,6 +768,9 @@ def _apply_data_dir(data_dir: Path) -> None:
     THEME_MEDIA_DIR = DATA_DIR / "theme" / "media"
     # FastAPI 外部接入上传的源音频。服务默认关闭，仅在用户手动启动后写入。
     API_UPLOADS_DIR = DATA_DIR / "api" / "uploads"
+    # 用户安装的声明式扩展插件。插件代码不会在桌面进程内执行。
+    PLUGINS_DIR = DATA_DIR / "plugins"
+    PLUGIN_DATA_DIR = DATA_DIR / "plugin-data"
 
 
 def switch_data_dir(data_dir: Path) -> None:
@@ -817,6 +861,8 @@ MODELHUB_DIR = DATA_DIR / "modelhub"
 EDITOR_DIR = DATA_DIR / "editor"
 EDITOR_CACHE_DIR = EDITOR_DIR / "cache"
 EDITOR_PROJECTS_DB = DATA_DIR / "editor_projects.json"
+PLUGINS_DIR = DATA_DIR / "plugins"
+PLUGIN_DATA_DIR = DATA_DIR / "plugin-data"
 # ModelScope 接口限流（客户端侧保守值）
 MODELSCOPE_QPS = 5
 # settings.json 中保存 ModelScope 访问令牌的键名

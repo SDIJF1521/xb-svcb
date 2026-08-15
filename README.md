@@ -1,35 +1,5 @@
 <div align="center">
 
-# 🎤 XB-SVCB · AI 翻唱工具
-
-#### 开箱即用的桌面级 AI 翻唱工作站
-
-**🎵 导入歌曲 ｜ 🎚️ 人声分离 ｜ 🌫️ 去混响 ｜ 🗣️ AI 歌声转换 ｜ 🎧 AI 歌声增强 ｜ 🎼 合并伴奏 ｜ 🎤 成品翻唱**
-
-一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **AI 歌声增强工程** · **在线曲库** · **模型站** · **音频编辑器**
-
-<br/>
-
-[![License](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release&color=ff6b9d)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/SDIJF1521/xb-svcb/total?color=brightgreen&label=downloads)](https://github.com/SDIJF1521/xb-svcb/releases)
-[![Stars](https://img.shields.io/github/stars/SDIJF1521/xb-svcb?style=flat&color=yellow)](https://github.com/SDIJF1521/xb-svcb/stargazers)
-
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#)
-[![Python](https://img.shields.io/badge/python-3.9%20|%203.10-3776AB?logo=python&logoColor=white)](#)
-[![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
-[![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
-
-<br/>
-
-### ⬇️ [**点此下载安装器 · XB-SVCB-Setup.exe**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-
-<sub>Windows 一键安装 · 内置前端与底模 · 无需手动配置 Python / Node</sub>
-
-<sub>用户交流 / 反馈 QQ 群：**1038366109**</sub>
-
-</div>
-
 ---
 
 <a id="features"></a>
@@ -387,6 +357,20 @@ v0.0.23 起可在软件的“资料库 -> API 接入”页手动启动 FastAPI �
 5. 成功后请求响应中的 `result_url` 下载成品。
 
 除 `/health` 与接口文档外，请求必须携带软件页面显示的 `X-API-Key`。服务启动后可访问 `/docs`、`/redoc` 和 `/openapi.json`；软件内也提供真实鉴权测试和可复制的完整调用示例。HTTP API 可创建单模型、多模型和批量任务，并覆盖模型管理、作品管理及 Audio Editor Lite 的主要自动化流程。编辑工程响应使用受控音频 URL，不会泄露片段或插件的本机路径。详细字段、SeedVC 参考音频、多模型时间轴、编辑器接口和错误码见 [API 接入文档](docs/api.md)。
+
+---
+
+<a id="plugin-development"></a>
+
+## 插件开发
+
+XB-SVCB 提供三种插件运行类型：纯前端声明式页面、纯 Python 翻唱钩子，以及页面与 Python 动作协作的混合插件。仓库内置 TypeScript 优先的清单构建器、`xb-plugin` 脚手架与打包 CLI、零依赖 Python SDK，以及三类可运行示例。
+
+- 从概念到发布的完整教程：[插件开发指南](docs/plugin-development.md)
+- SDK 命令与最小示例：[Plugin SDK README](plugin-sdk/README.md)
+- 可直接构建的工程：[`plugin-sdk/examples`](plugin-sdk/examples)
+
+纯前端插件只使用宿主提供的受限页面与动作；Python 和混合插件会以当前用户权限执行真实代码。独立 Worker 提供崩溃隔离，但不是安全沙箱，只应启用来源可信且经过检查的插件。
 
 ---
 

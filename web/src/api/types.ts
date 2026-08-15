@@ -465,6 +465,115 @@ export interface ModelFramework {
   name: string
 }
 
+export interface PluginStatus {
+  enabled: boolean
+  market_url: string
+  development_dir: string
+  security: string
+  ok?: boolean
+  error?: string
+}
+
+export interface PluginField {
+  id: string
+  label?: string
+  type: 'text' | 'number' | 'select' | 'switch' | 'textarea'
+  default?: string | number | boolean
+  options?: { label: string; value: string | number }[]
+  placeholder?: string
+  help?: string
+}
+
+export interface PluginPage {
+  id: string
+  title: string
+  description?: string
+  fields: PluginField[]
+  actions?: string[]
+}
+
+export interface PluginFrontend {
+  entry?: string
+}
+
+export interface PluginAction {
+  id: string
+  label: string
+  type: 'message' | 'create_work' | 'python'
+  message?: string
+}
+
+export interface PluginInfo {
+  id: string
+  name: string
+  version: string
+  description: string
+  author: string
+  runtime: 'frontend' | 'python' | 'hybrid'
+  frontend?: PluginFrontend
+  permissions: string[]
+  pages: PluginPage[]
+  actions: PluginAction[]
+  enabled: boolean
+  installed: boolean
+  path: string
+}
+
+export interface PluginMarketTag {
+  label: string
+  color?: string
+}
+
+export interface PluginMarketItem {
+  id: string
+  module_name?: string
+  project_link?: string
+  name: string
+  version: string
+  description: string
+  author: string
+  bundle_url?: string
+  homepage?: string
+  tags?: PluginMarketTag[]
+  is_official?: boolean
+}
+
+export interface PluginMarketResult {
+  ok: boolean
+  items: PluginMarketItem[]
+  error?: string
+}
+
+export interface PluginInstallResult {
+  ok: boolean
+  plugin?: PluginInfo
+  message?: string
+  error?: string
+}
+
+export interface PluginActionResult {
+  ok: boolean
+  type?: 'message' | 'create_work'
+  message?: string
+  payload?: CreateWorkPayload
+  error?: string
+}
+
+export interface PluginFrontendDocumentResult {
+  ok: boolean
+  entry?: string
+  html?: string
+  error?: string
+}
+
+export interface PluginFrontendAssetResult {
+  ok: boolean
+  name?: string
+  mime?: string
+  data?: string
+  error?: string
+}
+
 export interface HubModelAsset {
   path: string
   name: string

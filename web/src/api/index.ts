@@ -63,6 +63,13 @@ import type {
   DataMigrationProgress,
   DataStorageStatus,
   ThemeMediaPickResult,
+  PluginStatus,
+  PluginInfo,
+  PluginMarketResult,
+  PluginInstallResult,
+  PluginActionResult,
+  PluginFrontendDocumentResult,
+  PluginFrontendAssetResult,
 } from './types'
 
 export * from './types'
@@ -115,6 +122,47 @@ export const api = {
 
   testHttpApi: () =>
     invoke<HttpApiTestResult>('test_http_api', [], () => mock.testHttpApi()),
+
+  getPluginStatus: () =>
+    invoke<PluginStatus>('get_plugin_status', [], () => mock.getPluginStatus()),
+
+  configurePlugins: (payload: { enabled?: boolean; market_url?: string }) =>
+    invoke<PluginStatus>('configure_plugins', [payload], () => mock.configurePlugins(payload)),
+
+  listPlugins: () => invoke<PluginInfo[]>('list_plugins', [], () => mock.listPlugins()),
+
+  setPluginEnabled: (id: string, enabled: boolean) =>
+    invoke<boolean>('set_plugin_enabled', [id, enabled], () => mock.setPluginEnabled(id, enabled)),
+
+  pickPluginBundle: () =>
+    invoke<string | null>('pick_plugin_bundle', [], () => mock.pickPluginBundle()),
+
+  installPluginBundle: (path: string) =>
+    invoke<PluginInstallResult>('install_plugin_bundle', [path], () => mock.installPluginBundle(path)),
+
+  installPluginBundleData: (name: string, data: string) =>
+    invoke<PluginInstallResult>('install_plugin_bundle_data', [name, data], () => mock.installPluginBundleData(name, data)),
+
+  installPluginFromMarket: (url: string) =>
+    invoke<PluginInstallResult>('install_plugin_from_market', [url], () => mock.installPluginFromMarket(url)),
+
+  uninstallPlugin: (id: string) =>
+    invoke<boolean>('uninstall_plugin', [id], () => mock.uninstallPlugin(id)),
+
+  fetchPluginMarket: () =>
+    invoke<PluginMarketResult>('fetch_plugin_market', [], () => mock.fetchPluginMarket()),
+
+  runPluginAction: (pluginId: string, actionId: string, values: Record<string, unknown>) =>
+    invoke<PluginActionResult>('run_plugin_action', [pluginId, actionId, values], () =>
+      mock.runPluginAction(pluginId, actionId, values)),
+
+  getPluginFrontendDocument: (pluginId: string) =>
+    invoke<PluginFrontendDocumentResult>('get_plugin_frontend_document', [pluginId], () =>
+      mock.getPluginFrontendDocument(pluginId)),
+
+  getPluginFrontendAssetData: (pluginId: string, assetPath: string) =>
+    invoke<PluginFrontendAssetResult>('get_plugin_frontend_asset_data', [pluginId, assetPath], () =>
+      mock.getPluginFrontendAssetData(pluginId, assetPath)),
 
   openHttpApiDocs: (kind: 'docs' | 'redoc' = 'docs') =>
     invoke<boolean>('open_http_api_docs', [kind], () => mock.openHttpApiDocs(kind)),

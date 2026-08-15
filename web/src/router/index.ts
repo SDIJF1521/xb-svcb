@@ -55,6 +55,16 @@ const router = createRouter({
           name: 'ApiAccess',
           component: () => import('@/views/api/api.vue'),
         },
+        {
+          path: 'plugins',
+          name: 'Plugins',
+          component: () => import('@/views/plugins/plugins.vue'),
+        },
+        {
+          path: 'plugins/:pluginId/:pageId',
+          name: 'PluginPage',
+          component: () => import('@/views/plugins/page.vue'),
+        },
       ],
     },
   ],

@@ -176,6 +176,67 @@ html {
   background: var(--xb-scroll-thumb-hover);
 }
 
+.xb-notification-center.el-notification {
+  --el-color-success: var(--xb-success);
+  --el-color-warning: var(--xb-warn);
+  --el-color-info: var(--xb-primary);
+  --el-color-danger: var(--xb-accent);
+  --el-color-error: var(--xb-accent);
+  --el-notification-title-color: var(--xb-text);
+  --el-notification-content-color: var(--xb-muted);
+  --el-notification-close-color: var(--xb-muted);
+  --el-notification-close-hover-color: var(--xb-primary);
+  left: 50% !important;
+  right: auto !important;
+  width: min(420px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  overflow: hidden;
+  transform: translateX(-50%);
+  border: 1px solid var(--xb-border);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(var(--xb-fill-rgb), 0.08), rgba(var(--xb-primary-rgb), 0.04)),
+    var(--xb-panel);
+  color: var(--xb-text);
+  font-family: var(--xb-font);
+  box-shadow: 0 16px 36px rgba(var(--xb-bg-rgb), 0.22), 0 0 24px rgba(var(--xb-primary-rgb), 0.1);
+  backdrop-filter: blur(18px);
+}
+.xb-notification-center.el-notification::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: var(--xb-brand-gradient);
+  opacity: 0.72;
+}
+.xb-notification-center .el-notification__title {
+  color: var(--xb-text);
+  font-weight: 700;
+}
+.xb-notification-center .el-notification__content,
+.xb-notification-center .el-notification__content p {
+  color: var(--xb-muted);
+  line-height: 1.55;
+}
+.xb-notification-center .el-notification__closeBtn {
+  color: var(--xb-muted);
+}
+.xb-notification-center .el-notification__closeBtn:hover {
+  color: var(--xb-primary);
+}
+.xb-notification-center .el-notification--success {
+  color: var(--xb-success);
+}
+.xb-notification-center .el-notification--warning {
+  color: var(--xb-warn);
+}
+.xb-notification-center .el-notification--info {
+  color: var(--xb-primary);
+}
+.xb-notification-center .el-notification--error {
+  color: var(--xb-accent);
+}
 ::view-transition {
   background: var(--theme-transition-from-bg, transparent);
 }

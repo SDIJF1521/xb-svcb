@@ -79,9 +79,10 @@ for pkg in (
 
 # 内置前端构建产物
 datas += [(str(APP.parent / "web" / "dist"), "web/dist")]
+datas += [(str(APP.parent / "plugin-sdk" / "python" / "xb_svcb_plugin"), "plugin_sdk_python/xb_svcb_plugin")]
 
 # worker 脚本：必须是磁盘上的真实 .py，供外部环境的 Python 读取执行
-for w in ("inference_device.py", "inference_naturalizer.py", "svc_worker.py", "f0_worker.py", "vocal_tuning_worker.py", "uvr_worker.py", "hub_worker.py", "rvc_worker.py", "seedvc_worker.py", "ddsp_worker.py", "vocal_enhancement_worker.py"):
+for w in ("inference_device.py", "inference_naturalizer.py", "svc_worker.py", "f0_worker.py", "vocal_tuning_worker.py", "uvr_worker.py", "hub_worker.py", "rvc_worker.py", "seedvc_worker.py", "ddsp_worker.py", "vocal_enhancement_worker.py", "plugin_worker.py"):
     datas += [(str(APP / "infrastructure" / w), "infrastructure")]
 
 

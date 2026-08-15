@@ -1,0 +1,35 @@
+{
+  "id": "com.example.custom-page-demo",
+  "name": "自定义页面测试插件",
+  "version": "1.0.0",
+  "description": "用于验证插件中心自定义页面、宿主通知、动作调用和资源读取。",
+  "author": "XB Test",
+  "runtime": "frontend",
+  "python": {},
+  "frontend": {
+    "entry": "frontend/index.html"
+  },
+  "permissions": [
+    "filesystem.plugin"
+  ],
+  "pages": [
+    {
+      "id": "home",
+      "title": "自定义页面测试",
+      "description": "打开页面后可测试宿主 Bridge、通知、动作和资源。",
+      "fields": [],
+      "actions": [
+        "hello"
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "hello",
+      "label": "测试消息",
+      "type": "message",
+      "message": "你好，{{name}}！来自自定义页面测试插件。"
+    }
+  ],
+  "workflow": {}
+}

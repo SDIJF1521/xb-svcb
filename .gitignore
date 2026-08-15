@@ -27,6 +27,14 @@ web/dist-ssr/
 *.local
 .eslintcache
 *.tsbuildinfo
+*.xbplugin
+
+# ===== 插件 SDK 示例 / 打包生成物 =====
+plugin-sdk/examples/**/dist/
+plugin-sdk/examples/**/xb-svcb-plugin.json
+plugin-sdk/examples/**/.vite/
+plugin-sdk/python/dist/
+plugin-sdk/*.tgz
 
 # ===== Native / JUCE Host 本地构建产物 =====
 native/juce-vst3-host/build/
@@ -77,9 +85,16 @@ assets/tools/ffmpeg/bin/*.exe
 # DeepFilterNet 在未重定向 LOCALAPPDATA 时会在 cwd 生成缓存目录（开发测试产物）
 /DeepFilterNet/
 
-# ===== 本地用户数据（默认在 ~/.xb-svcb，仅在被移入仓库时生效）=====
+# ===== 本地用户数据（默认 .xb_svcb；仅在被移入仓库时生效）=====
+.xb_svcb/
 .xb-svcb/
+.sb-svcb/
+.xb_xvcb/
+.sv-xvcb/
+/plugins/
+/plugin-data/
 .venv-svc/
+.venv-plugins/
 
 .vscode
 

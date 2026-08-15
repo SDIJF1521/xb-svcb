@@ -23,6 +23,8 @@ def ensure_dirs() -> None:
         config.EDITOR_CACHE_DIR,
         config.THEME_MEDIA_DIR,
         config.API_UPLOADS_DIR,
+        config.PLUGINS_DIR,
+        config.PLUGIN_DATA_DIR,
     ):
         d.mkdir(parents=True, exist_ok=True)
     marker = config.DATA_DIR / config.DATA_MARKER_FILE

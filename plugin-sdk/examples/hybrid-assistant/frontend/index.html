@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>混合翻唱助手</title>
+</head>
+<body>
+  <main>
+    <h1>Python 动作翻唱助手</h1>
+    <label>源音频路径 <input id="source_path" value="D:/Music/song.wav"></label>
+    <label>模型 ID <input id="model_id" value="model_xxx"></label>
+    <label>标题 <input id="title" value="混合插件翻唱"></label>
+    <label>声音风格
+      <select id="style">
+        <option value="natural">自然</option>
+        <option value="bright">明亮</option>
+      </select>
+    </label>
+    <button id="create">交给 Python 创建</button>
+    <pre id="output" aria-live="polite"></pre>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+:root { color-scheme: light dark; font-family: Inter, "Microsoft YaHei", sans-serif; }
+body { margin: 0; color: #eef2ff; background: #111827; }
+main { display: grid; gap: 14px; max-width: 720px; margin: 0 auto; padding: 28px; }
+label { display: grid; gap: 6px; color: #b6c2d8; font-size: 13px; }
+input, select { min-height: 38px; border: 1px solid #334155; border-radius: 8px; padding: 0 12px; color: inherit; background: #0f172a; }
+button { width: fit-content; min-height: 38px; border: 0; border-radius: 8px; padding: 0 16px; color: #06121f; background: #a7f3d0; font-weight: 700; cursor: pointer; }
+button:disabled { cursor: wait; opacity: .55; }
+pre { min-height: 24px; white-space: pre-wrap; overflow-wrap: anywhere; color: #a7f3d0; }

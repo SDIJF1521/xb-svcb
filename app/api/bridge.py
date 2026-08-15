@@ -28,6 +28,7 @@ from application import (
     ModelHubService,
     ModelService,
     MusicService,
+    PluginService,
     SystemService,
     WorkService,
 )
@@ -62,6 +63,7 @@ class Api:
         works_repo: ListRepository,
         editor_repo: ListRepository,
         settings: SettingsStore,
+        plugins: PluginService,
     ) -> None:
         self._system = system
         self._models = models
@@ -73,6 +75,7 @@ class Api:
         self._works_repo = works_repo
         self._editor_repo = editor_repo
         self._settings = settings
+        self._plugins = plugins
         self._window = None
         self._migration_lock = threading.Lock()
         self._migration = self._empty_migration_status()
@@ -731,10 +734,66 @@ class Api:
         return self._works.get(work_id)
 
     def create_work(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._works.create(payload or {})
+        return self._works.create(self._plugins.apply_before_create(payload or {}))
+
+    # ---- 扩展插件（声明式 UI + 受限工作流钩子） ----
+    def get_plugin_status(self) -> dict[str, Any]:
+        return self._plugins.status()
+
+    def configure_plugins(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._plugins.configure(payload or {})
+
+    def list_plugins(self) -> list[dict[str, Any]]:
+        return self._plugins.list()
+
+    def set_plugin_enabled(self, plugin_id: str, enabled: bool) -> bool:
+        return self._plugins.set_enabled(plugin_id, bool(enabled))
+
+    def pick_plugin_bundle(self) -> str | None:
+        result = self._open_dialog(
+            "选择 XB-SVCB 插件包",
+            multiple=False,
+            file_types=("XB-SVCB 插件包 (*.xbplugin;*.zip)", "所有文件 (*.*)"),
+        )
+        return result[0] if result else None
+
+    def install_plugin_bundle(self, path: str) -> dict[str, Any]:
+        return self._plugins.install_bundle(path)
+
+    def install_plugin_bundle_data(self, name: str, data: str) -> dict[str, Any]:
+        raw = str(data or "")
+        if raw.startswith("data:") and "," in raw:
+            raw = raw.split(",", 1)[1]
+        try:
+            content = base64.b64decode(raw, validate=True)
+        except Exception:
+            return {"ok": False, "error": "插件包数据无效。"}
+        return self._plugins.install_bundle_bytes(str(name or "plugin.xbplugin"), content)
+
+    def install_plugin_from_market(self, url: str) -> dict[str, Any]:
+        return self._plugins.install_from_market(url)
+
+    def uninstall_plugin(self, plugin_id: str) -> bool:
+        return self._plugins.uninstall(plugin_id)
+
+    def fetch_plugin_market(self) -> dict[str, Any]:
+        return self._plugins.fetch_market()
+
+    def run_plugin_action(
+        self, plugin_id: str, action_id: str, values: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return self._plugins.run_action(plugin_id, action_id, values or {})
+
+    def get_plugin_frontend_document(self, plugin_id: str) -> dict[str, Any]:
+        return self._plugins.frontend_document(plugin_id)
+
+    def get_plugin_frontend_asset_data(self, plugin_id: str, asset_path: str) -> dict[str, Any]:
+        return self._plugins.frontend_asset_data(plugin_id, asset_path)
 
     def create_batch_work(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        return self._works.create_batch(payload or {})
+        raw = payload or {}
+        # 批量任务也必须走同一插件工作流钩子；逐条创建时由 WorkService 分配源文件。
+        return self._works.create_batch(self._plugins.apply_before_create(raw))
 
     def get_inference_queue(self) -> dict[str, Any]:
         return self._works.queue_status()
@@ -1198,6 +1257,8 @@ class Api:
             config.EDITOR_CACHE_DIR,
             config.THEME_MEDIA_DIR,
             config.API_UPLOADS_DIR,
+            config.PLUGINS_DIR,
+            config.PLUGIN_DATA_DIR,
         ):
             directory.mkdir(parents=True, exist_ok=True)
         self._models_repo.set_path(config.MODELS_DB)
@@ -1540,6 +1601,7 @@ def build_api() -> Api:
     editor_service = AudioEditorService(
         editor_repo, works_repo, model_service, ffmpeg, uvr, engines, vocal_enhancement
     )
+    plugin_service = PluginService(settings)
 
     # 启动时回收上次会话残留的"处理中"任务（其后台线程已随进程退出而终止）
     work_service.recover_stale()
@@ -1555,4 +1617,5 @@ def build_api() -> Api:
         works_repo,
         editor_repo,
         settings,
+        plugin_service,
     )

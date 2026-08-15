@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xb-svcb-plugin-sdk"
+version = "0.1.0"
+description = "Python SDK for XB-SVCB plugins"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools]
+packages = ["xb_svcb_plugin"]
