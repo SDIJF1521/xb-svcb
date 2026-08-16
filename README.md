@@ -558,31 +558,58 @@ flowchart LR
 
 ```
 翻唱工具/
-├─ app/                         # 主程序（pywebview + Python 业务分层）
-│  ├─ api/                      #   暴露给 Vue 的 Bridge API
-│  ├─ application/              #   转换、模型、曲库、作品、编辑器服务
-│  ├─ domain/                   #   实体、枚举与核心业务模型
-│  ├─ infrastructure/           #   ffmpeg、仓储、引擎适配与全部 worker
-│  ├─ config.py                 #   路径配置（项目相对 + 环境变量覆盖）
-│  └─ main.py
-├─ web/                         # 前端（Vue 3 + Vite + Element Plus）
-├─ assets/models/               # 随安装包分发的 UVR / SVC / RVC / SeedVC / DDSP / DeepFilterNet 共用底模
-├─ engines/                     # 外部引擎与原生 Host 的运行目录
-│  ├─ so-vits-svc/              #   So-VITS-SVC 4.1 上游仓库
-│  ├─ seed-vc/                  #   SeedVC 上游仓库与 inference.py
-│  ├─ ddsp-svc/                 #   DDSP-SVC 上游仓库与 main_reflow.py
-│  └─ juce-vst3-host/           #   构建后的原生 VST3 Host
-├─ installer/
-│  ├─ xb-svcb-app.spec          #   PyInstaller 桌面应用规格
-│  ├─ xb-svcb.iss               #   Inno Setup 与分卷规则
-│  └─ build.ps1                 #   构建、完整性校验与发布打包
-├─ native/
-│  └─ juce-vst3-host/           #   C++ / JUCE VST3 Host 源码
-├─ install/install.py           # 在用户机搭建隔离环境、部署底模
-├─ setup_env.bat                # 搭建/修复运行环境入口（纯 batch）
-├─ models/                      # 安装后使用的 UVR 模型目录
-└─ run.bat                      # 源码运行入口（安装版使用 XB-SVCB.exe）
+├─ app/                              # Python 主程序与共享业务核心
+│  ├─ api/                           #   pywebview Bridge 与 FastAPI HTTP 接入
+│  ├─ application/                   #   转换、模型、曲库、作品、编辑器与 PluginService
+│  ├─ domain/                        #   实体、枚举与核心业务模型
+│  ├─ infrastructure/                #   引擎适配、仓储、FFmpeg、JUCE 与全部 worker
+│  │  └─ plugin_worker.py            #     Python/混合插件独立进程入口
+│  ├─ tests/                         #   后端、安装器与插件平台回归测试
+│  ├─ config.py                      #   数据、引擎、插件和随包资源路径
+│  ├─ main.py                        #   桌面应用入口
+│  ├─ pyproject.toml
+│  └─ uv.lock
+├─ web/                              # Vue 3 + Vite + Element Plus 前端
+│  ├─ public/
+│  ├─ src/
+│  │  ├─ api/                        #     Bridge/HTTP Client 与共享类型
+│  │  ├─ components/                 #     布局、编辑器和主题组件
+│  │  ├─ stores/                     #     Pinia 状态与通知/传输管理
+│  │  └─ views/plugins/              #     插件中心与自定义页面宿主
+│  ├─ package.json
+│  └─ vite.config.ts
+├─ plugin-sdk/                       # 插件开发、校验、打包与页面/Python SDK
+│  ├─ bin/xb-plugin.mjs              #   create / validate / pack CLI
+│  ├─ python/xb_svcb_plugin/         #   Python Plugin、Context、动作与钩子 API
+│  ├─ examples/                      #   前端、Python、混合插件示例工程
+│  ├─ tests/                         #   SDK 运行时测试
+│  ├─ index.mjs                      #   清单构建与校验
+│  ├─ client.mjs                     #   iframe 页面宿主 Client
+│  └─ vue.mjs                        #   Vue 响应式宿主封装
+├─ docs/
+│  ├─ plugins/                       # 插件入门、清单、前端、Python、测试与发布
+│  ├─ api.md                         # HTTP API 接入文档
+│  └─ plugin-development.md          # 完整插件开发手册
+├─ assets/
+│  ├─ models/                        # 安装分卷携带的 UVR/SVC/RVC/SeedVC/DDSP/Vocal 底模
+│  ├─ tools/ffmpeg/                  # 随包 FFmpeg 许可与构建时准备的二进制
+│  └─ icon/                          # 应用与安装器图标
+├─ native/juce-vst3-host/            # C++ / JUCE VST3 Host 源码与构建脚本
+├─ installer/                        # PyInstaller + Inno Setup 发布构建
+│  ├─ xb-svcb-app.spec
+│  ├─ xb-svcb.iss
+│  ├─ xb-svcb-version.txt
+│  └─ build.ps1
+├─ install/                          # 用户机环境检测、wheelhouse 与隔离环境部署
+├─ setup_env.bat                     # 搭建/修复运行环境入口
+├─ install_prereqs.bat               # 安装器前置依赖入口
+├─ run.bat / run.ps1                 # 源码运行入口
+├─ release_notes_v*.md               # 各版本更新说明
+├─ CONTRIBUTING.md
+└─ README.md
 ```
+
+> 运行或构建时生成的 .xb_svcb/、.venv-*、engines/、models/、web/dist/、dist/ 与 .tmp/ 不属于主程序源码；本地插件项目 test-plugins/ 及 .xbplugin 包也独立于主仓库管理。
 
 ---
 
