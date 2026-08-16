@@ -201,6 +201,10 @@ const pluginHost = usePluginHost({ loadContext: true })
 | `assetData()` | 函数 | 获取资源元数据和 Data URL |
 | `assetUrl()` | 函数 | 只获取资源 Data URL |
 | `notify()` | 函数 | 显示宿主通知 |
+| `getStorage()` / `setStorage()` / `removeStorage()` | 函数 | 按插件 ID 持久化 JSON 配置 |
+| `togglePluginFullscreen()` | 函数 | 设置或切换当前插件全屏 |
+| `toggleWindowFullscreen()` | 函数 | 切换整个软件窗口全屏 |
+| `openYaohuPlayer()` | 函数 | 在宿主受限弹层中打开妖狐播放器 |
 | `clearError()` | 函数 | 清空错误状态 |
 
 多个请求并发时，`loading` 会等所有请求结束后才变回 `false`。`error` 是共享的“最近错误”，复杂页面可以在自己的 composable 中为不同操作维护独立错误状态。
@@ -289,15 +293,35 @@ const presets = await assetData('assets/presets.json')
 | 创建翻唱任务 | 支持 | `runAction()` 或 `createWork()` |
 | 读取插件包资源 | 支持 | `assetData()` / `assetUrl()` |
 | 显示宿主通知 | 支持 | `notify()` |
+| 持久化页面配置 | 支持 | `getStorage()` / `setStorage()` / `removeStorage()` |
+| 插件内容全屏 | 支持 | `togglePluginFullscreen()` |
+| 软件窗口全屏 | 支持 | `toggleWindowFullscreen()` |
+| 妖狐 M3U8 播放器 | 支持，域名受限 | `openYaohuPlayer()`，清单需声明 `network` |
 | 读取宿主 DOM 或 Vue store | 不支持 | 通过公开 Client API 获取上下文 |
 | 打开宿主内部路由 | 不支持 | 提示用户从宿主导航 |
 | 调用宿主文件选择器 | 不支持 | 当前没有公开 API |
 | 查询模型列表或任务列表 | 不支持 | 当前没有公开 API |
 | 普通相对脚本和 CSS 文件 | 不可靠 | 使用 singlefile 构建 |
 | 外部网络请求 | 取决于 CORS | 目标服务必须允许 opaque origin 请求 |
-| localStorage 持久化 | 不应依赖 | 使用混合插件的 `PluginContext.config` |
+| iframe localStorage 持久化 | 不应依赖 | 使用页面宿主存储；复杂或敏感数据使用 Python `PluginContext.config` |
 
 iframe 使用 opaque origin。即使页面能发出网络请求，也会受浏览器 CORS 约束；前端 `network` 权限声明目前不会改变浏览器策略。
+
+### 11.1 第三方播放器页面
+
+不要把依赖自身 origin、localStorage 或多层跨域请求的第三方播放器直接放进插件 iframe。沙箱标记会被子 frame 继承，远程页面可能能显示外壳，却一直停在“初始化播放器”。不要通过增加 `allow-same-origin` 绕过该限制，这会削弱所有插件的宿主隔离。
+
+妖狐 M3U8 播放器使用宿主提供的受限弹层：
+
+```ts
+const { openYaohuPlayer } = usePluginHost()
+
+await openYaohuPlayer(
+  'http://m3u8.yaohud.cn/?url=https://cdn.example.com/video/index.m3u8',
+)
+```
+
+插件清单必须声明 `network`。宿主只接受 `m3u8.yaohud.cn`，会升级为 HTTPS，并在非沙箱跨域 iframe 中打开。插件不能读取播放器 DOM 或播放状态；关闭和全屏还原由宿主及播放器自身控制。
 
 ## 12. 构建和验证
 

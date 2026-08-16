@@ -1,6 +1,6 @@
 # XB-SVCB 安装器
 
-版本：`0.0.27`
+版本：`0.0.28`
 
 安装器由 Inno Setup 读取 `installer/xb-svcb.iss` 构建，负责打包桌面本体、环境搭建脚本、自带模型和文档。
 
@@ -23,6 +23,15 @@
 ```powershell
 ./installer/build.ps1 -ValidateOnly
 ```
+
+## v0.0.28 安装器行为
+
+- 应用、Python 项目、前端包、锁文件、Windows EXE 版本资源和 Inno Setup 版本统一为 `0.0.28`。
+- 安装版携带插件 Python SDK 与 `plugin_worker.py`，支持前端、Python 和混合插件；插件代码与数据继续保存到用户数据目录，不写入安装目录。
+- 环境搭建统一验证本机 Python 3.10 和各组件虚拟环境版本，损坏或版本不匹配时自动重建；So-VITS-SVC 会补齐并验证 Matplotlib 导入链。
+- AI 歌声增强环境不再安装会引发 `packaging` 版本冲突的运行期 wheel 包，离线 wheelhouse 继续按组件和 GPU 栈选择。
+- 系统 PATH 没有可用 `ffmpeg` / `ffprobe` 时正常释放安装分卷内置 FFmpeg，不再因安装前检查应用目录而误判资源已存在。
+- 安装目录携带最新 `release_notes_v028.md`、`README.md` 与 `docs/api.md`，覆盖升级保留作品、模型、编辑工程、主题、API 设置和插件数据。
 
 ## v0.0.27 安装器行为
 

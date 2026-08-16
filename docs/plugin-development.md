@@ -629,6 +629,8 @@ export default defineConfig({
 
 自定义页面不是声明式表单。你可以编写普通 HTML、CSS 和 TypeScript，自由决定布局与交互，再通过页面 SDK 请求宿主执行受支持的操作。宿主会在带有 `sandbox="allow-scripts"` 的 iframe 中运行最终 HTML。
 
+页面 SDK 还提供按插件 ID 隔离的配置存储、插件全屏、软件窗口全屏和受限妖狐播放器弹层。完整签名、返回值与安全限制见[页面 Client API](plugins/client-api.md)。
+
 先创建项目：
 
 ```powershell
@@ -823,8 +825,9 @@ switch (context.page?.id) {
 #### 5.6.6 页面运行限制
 
 - iframe 只有 `allow-scripts`，不能取得宿主 DOM、文件系统对象或 Python 对象。
+- iframe 使用 opaque origin；第三方播放器可能因同源、localStorage 或 CORS 停在初始化状态。妖狐播放器使用 `host.openYaohuPlayer()`，不要放宽 iframe 的 `allow-same-origin`。
 - 页面通过 `postMessage` 与宿主通信，SDK 默认 30 秒超时。
-- 页面刷新或关闭后，内存状态会丢失；需要持久化配置时使用混合插件的 Python `PluginContext.config`。
+- 页面刷新或关闭后，内存状态会丢失；普通 JSON 配置使用 `host.getStorage()` / `host.setStorage()`，文件或敏感数据使用混合插件的 Python `PluginContext.config`。
 - `npm run dev` 只能预览页面布局。涉及真实模型、任务和 Python 的调用必须打包安装后验证。
 - `XBSVCB` 全局对象保留给无构建 JavaScript 页面；TypeScript 项目应导入 `@xb-svcb/plugin-sdk/client`。
 

@@ -68,4 +68,7 @@ test('Vue composable exposes reactive host state without requiring a component w
   assert.equal(pluginHost.context.value, null)
   assert.equal(typeof pluginHost.runAction, 'function')
   assert.equal(typeof pluginHost.createWork, 'function')
+  assert.equal(typeof pluginHost.getStorage, 'function')
+  assert.equal(typeof pluginHost.togglePluginFullscreen, 'function')
+  assert.equal(typeof pluginHost.openYaohuPlayer, 'function')
 })

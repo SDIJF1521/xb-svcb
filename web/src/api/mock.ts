@@ -570,6 +570,7 @@ function advance(work: WorkDTO) {
 }
 
 export const mock = {
+  toggleWindowFullscreen: () => ({ ok: true }),
   getPluginStatus: (): PluginStatus => ({ ...mockPluginStatus }),
   configurePlugins: (payload: { enabled?: boolean; market_url?: string }): PluginStatus => {
     mockPluginStatus = { ...mockPluginStatus, ...payload, ok: true }

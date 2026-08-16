@@ -117,6 +117,18 @@ class Api:
         """释放桌面进程内的后台服务。"""
         self._http_api.shutdown()
 
+    def toggle_window_fullscreen(self) -> dict[str, Any]:
+        """切换软件主窗口全屏，供插件自定义页面通过宿主 Bridge 调用。"""
+        if self._window is None:
+            return {"ok": False, "error": "宿主窗口尚未就绪。"}
+        toggle = getattr(self._window, "toggle_fullscreen", None)
+        if not callable(toggle):
+            return {"ok": False, "error": "当前窗口运行时不支持软件全屏。"}
+        try:
+            toggle()
+        except Exception as exc:  # noqa: BLE001 - pywebview backend boundary
+            return {"ok": False, "error": f"切换软件全屏失败：{exc}"}
+        return {"ok": True}
     def apply_window_theme(self, theme: str) -> bool:
         """让原生窗口标题栏/边框跟随前端主题（cyber / anime）。
 

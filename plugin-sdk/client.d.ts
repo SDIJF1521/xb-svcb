@@ -83,6 +83,22 @@ export interface HostAssetResult {
 
 export type NotifyType = 'success' | 'warning' | 'info' | 'error'
 
+export interface PluginFullscreenResult {
+  ok: true
+  fullscreen: boolean
+}
+
+export interface WindowFullscreenResult {
+  ok: boolean
+  fullscreen?: boolean
+  error?: string
+}
+
+export interface YaohuPlayerResult {
+  opened: true
+  url: string
+}
+
 export interface RequestOptions {
   /** Set to 0 to disable the timeout. Defaults to 30 seconds. */
   timeoutMs?: number
@@ -95,6 +111,12 @@ export interface PluginHost {
   assetData(path: string): Promise<HostAssetResult>
   assetUrl(path: string): Promise<string>
   notify(message: string, type?: NotifyType): Promise<true>
+  getStorage<T = unknown>(key: string, fallback?: T): Promise<T>
+  setStorage(key: string, value: unknown): Promise<true>
+  removeStorage(key: string): Promise<true>
+  togglePluginFullscreen(enabled?: boolean): Promise<PluginFullscreenResult>
+  toggleWindowFullscreen(): Promise<WindowFullscreenResult>
+  openYaohuPlayer(url: string): Promise<YaohuPlayerResult>
 }
 
 export declare function isHosted(): boolean

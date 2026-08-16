@@ -21,7 +21,7 @@
 - [快速开始](getting-started.md)：环境、CLI 参数、目录结构、构建、安装和第一个修改。
 - [Vue 3 自定义页面](frontend-vue.md)：`App.vue`、组件、composable、状态、主题、路由、资源和 UI 库。
 - [清单、页面与动作](manifest.md)：所有清单字段、字段组件、动作、插值、工作流补丁与校验规则。
-- [页面 Client API](client-api.md)：无框架 Client 与 Vue `usePluginHost()` 的参数、返回值、错误和完整示例。
+- [页面 Client API](client-api.md)：无框架 Client 与 Vue `usePluginHost()` 的动作、资源、通知、持久化、全屏和宿主播放器 API。
 - [Python 插件](python.md)：动作、钩子、生命周期、上下文、配置、异步函数、依赖和 Worker 模型。
 - [混合插件](hybrid.md)：Vue 收集输入、Python 处理、创建翻唱任务和完整项目模板。
 - [测试与调试](testing.md)：类型检查、单元测试、浏览器预览、宿主调试、日志和常见故障定位。
@@ -74,7 +74,7 @@ plugin.py / python package ------------------------------------> 在独立 Pytho
 └─ vendor/                          # 可选，Python 第三方依赖
 ```
 
-插件持久数据不写在安装目录，而写在宿主分配的数据目录。Python 中通过 `ctx.data_dir` 访问，页面端当前没有直接读写数据目录的 API。
+插件持久数据不写在安装目录。Python 文件数据通过 `ctx.data_dir` 访问；页面端不能直接读写该目录，但可以用 `host.getStorage()`、`host.setStorage()` 和 `host.removeStorage()` 保存按插件 ID 隔离的 JSON 配置。
 
 ## 两套 TypeScript API
 
@@ -97,6 +97,7 @@ import { usePluginHost } from '@xb-svcb/plugin-sdk/vue'
 
 - 所有插件安装后默认关闭；插件总开关和单插件开关都开启后才运行。
 - 自定义页面运行在 `sandbox="allow-scripts"` iframe 中，不能读取宿主 DOM。
+- iframe 使用 opaque origin；不要直接嵌套依赖同源、本地存储或复杂跨域请求的第三方播放器。
 - 页面只能通过 Client SDK 使用宿主提供的能力。
 - 页面宿主调用使用 `postMessage` token、请求 ID 和 30 秒默认超时。
 - Python Worker 提供进程崩溃隔离，不是权限沙箱；Python 代码具有当前用户权限。
@@ -115,6 +116,7 @@ import { usePluginHost } from '@xb-svcb/plugin-sdk/vue'
 - 一个插件只有一个 `frontend.entry`；多个页面共享入口，并通过 `context.page.id` 区分。
 - 当前插件中心通常只打开 `pages[0]`，多页面体验建议在自定义 Vue 页面内实现。
 - 插件市场和远程安装仅接受 GitHub HTTPS raw/API 下载地址。
+- 宿主播放器目前只接受声明了 `network` 权限的 `m3u8.yaohud.cn` URL，不是通用网页或任意 M3U8 播放接口。
 
 这些限制是当前宿主实现的一部分。发布插件前应在目标 XB-SVCB 版本中重新验证。
 ## 最容易混淆的边界

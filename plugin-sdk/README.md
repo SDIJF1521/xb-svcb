@@ -121,6 +121,9 @@ async function submit() {
 - `host.createWork()`：使用强类型参数直接创建翻唱任务；
 - `host.assetData()` / `host.assetUrl()`：读取插件包内资源；
 - `host.notify()`：显示宿主通知；
+- `host.getStorage()` / `host.setStorage()` / `host.removeStorage()`：读写按插件 ID 隔离的持久化数据；
+- `host.togglePluginFullscreen()` / `host.toggleWindowFullscreen()`：切换插件内容或整个软件窗口全屏；
+- `host.openYaohuPlayer()`：在宿主受限弹层中打开 `m3u8.yaohud.cn` 播放器，要求 `network` 权限；
 - `isHosted()`：区分浏览器预览和真实插件宿主。
 
 Client 同时导出 `CreateWorkPayload`、`InferenceParams`、`CreatedWork`、`BlendModel` 等类型。请求默认 30 秒超时。
@@ -156,6 +159,8 @@ npm run pack
 ## 运行边界
 
 自定义页面在 `sandbox="allow-scripts"` iframe 中运行，不能访问宿主 DOM。构建器使用 Vite 将 JavaScript 和 CSS 内联到单文件 HTML；入口 HTML 上限为 2 MB，大型资源应放入插件包并通过 `host.assetUrl()` 读取。
+
+iframe 使用 opaque origin。页面配置使用宿主存储；依赖同源、本地存储或复杂跨域请求的第三方播放器不要直接嵌套，妖狐播放器应通过 `host.openYaohuPlayer()` 打开。
 
 Python 插件会执行真实代码，并拥有当前用户权限。独立 Worker 只提供崩溃隔离，不是安全沙箱，只应启用可信来源。
 安装和执行的当前硬限制：

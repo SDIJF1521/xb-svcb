@@ -33,8 +33,14 @@ web/dist-ssr/
 plugin-sdk/examples/**/dist/
 plugin-sdk/examples/**/xb-svcb-plugin.json
 plugin-sdk/examples/**/.vite/
+plugin-sdk/examples/**/.vite-temp/
 plugin-sdk/python/dist/
 plugin-sdk/*.tgz
+
+# ===== 本地插件开发 / 测试项目 =====
+# 插件项目不属于 XB-SVCB 主程序源码，仅保留在开发机。
+/test-plugins/
+/pyrightconfig.json
 
 # ===== Native / JUCE Host 本地构建产物 =====
 native/juce-vst3-host/build/

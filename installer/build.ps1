@@ -320,7 +320,7 @@ $workerFiles = @(
 foreach ($worker in $workerFiles) {
   Require-File (Join-Path $Root "app\infrastructure\$worker") "Worker source $worker"
 }
-Require-File (Join-Path $Root "release_notes_v027.md") "v0.0.27 release notes"
+Require-File (Join-Path $Root "release_notes_v028.md") "v0.0.28 release notes"
 Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
 Require-File (Join-Path $Root "install\detect_python.bat") "Python runtime detector"

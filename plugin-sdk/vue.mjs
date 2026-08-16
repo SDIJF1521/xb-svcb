@@ -41,6 +41,12 @@ export function usePluginHost(options = {}) {
   const assetData = path => invoke(() => host.assetData(path))
   const assetUrl = path => invoke(() => host.assetUrl(path))
   const notify = (message, type = 'success') => invoke(() => host.notify(message, type))
+  const getStorage = (key, fallback) => invoke(() => host.getStorage(key, fallback))
+  const setStorage = (key, value) => invoke(() => host.setStorage(key, value))
+  const removeStorage = key => invoke(() => host.removeStorage(key))
+  const togglePluginFullscreen = enabled => invoke(() => host.togglePluginFullscreen(enabled))
+  const toggleWindowFullscreen = () => invoke(() => host.toggleWindowFullscreen())
+  const openYaohuPlayer = url => invoke(() => host.openYaohuPlayer(url))
   const clearError = () => { error.value = null }
 
   if (options.loadContext !== false) {
@@ -61,6 +67,12 @@ export function usePluginHost(options = {}) {
     assetData,
     assetUrl,
     notify,
+    getStorage,
+    setStorage,
+    removeStorage,
+    togglePluginFullscreen,
+    toggleWindowFullscreen,
+    openYaohuPlayer,
     clearError,
   }
 }

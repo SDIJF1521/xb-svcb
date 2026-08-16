@@ -129,6 +129,8 @@ export const api = {
   configurePlugins: (payload: { enabled?: boolean; market_url?: string }) =>
     invoke<PluginStatus>('configure_plugins', [payload], () => mock.configurePlugins(payload)),
 
+  toggleWindowFullscreen: () =>
+    invoke<{ ok: boolean; error?: string }>('toggle_window_fullscreen', [], () => mock.toggleWindowFullscreen()),
   listPlugins: () => invoke<PluginInfo[]>('list_plugins', [], () => mock.listPlugins()),
 
   setPluginEnabled: (id: string, enabled: boolean) =>

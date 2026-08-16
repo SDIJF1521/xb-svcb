@@ -285,9 +285,15 @@ host.createWork(payload): Promise<CreatedWork>
 host.assetData(path): Promise<HostAssetResult>
 host.assetUrl(path): Promise<string>
 host.notify(message, type?): Promise<true>
+host.getStorage<T>(key, fallback?): Promise<T>
+host.setStorage(key, value): Promise<true>
+host.removeStorage(key): Promise<true>
+host.togglePluginFullscreen(enabled?): Promise<PluginFullscreenResult>
+host.toggleWindowFullscreen(): Promise<WindowFullscreenResult>
+host.openYaohuPlayer(url): Promise<YaohuPlayerResult>
 ```
 
-固定 method：`getContext`、`runAction`、`createWork`、`assetData`、`notify`。
+固定 method：`getContext`、`runAction`、`createWork`、`assetData`、`notify`、`getStorage`、`setStorage`、`removeStorage`、`togglePluginFullscreen`、`toggleWindowFullscreen`、`openYaohuPlayer`。
 
 请求规则：
 
@@ -332,6 +338,8 @@ interface HostAssetResult {
 ```
 
 `assetUrl(path)` 返回 Data URL 字符串。路径相对插件安装根目录，不能是绝对路径，不能包含 `..`，单个资源最大 10 MB。
+
+存储 key 只能使用字母、数字、点、下划线和连字符，长度 1 到 80；value 必须可 JSON 序列化。插件全屏和软件窗口全屏彼此独立。`openYaohuPlayer()` 要求 `network` 权限，只接受 `m3u8.yaohud.cn`，并自动升级为 HTTPS。
 
 ## 11. 创建作品类型
 
@@ -430,6 +438,12 @@ const {
   assetData,
   assetUrl,
   notify,
+  getStorage,
+  setStorage,
+  removeStorage,
+  togglePluginFullscreen,
+  toggleWindowFullscreen,
+  openYaohuPlayer,
   clearError,
 } = usePluginHost()
 ```
@@ -451,6 +465,12 @@ usePluginHost(options?: { loadContext?: boolean }): {
   assetData(path): Promise<HostAssetResult>
   assetUrl(path): Promise<string>
   notify(message, type?): Promise<true>
+  getStorage<T>(key, fallback?): Promise<T>
+  setStorage(key, value): Promise<true>
+  removeStorage(key): Promise<true>
+  togglePluginFullscreen(enabled?): Promise<PluginFullscreenResult>
+  toggleWindowFullscreen(): Promise<WindowFullscreenResult>
+  openYaohuPlayer(url): Promise<YaohuPlayerResult>
   clearError(): void
 }
 ```

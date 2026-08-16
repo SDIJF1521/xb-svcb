@@ -54,6 +54,12 @@ export const host = {
   assetData: path => request('assetData', { path }),
   assetUrl: path => request('assetData', { path }).then(result => result.data),
   notify: (message, type = 'success') => request('notify', { message, type }),
+  getStorage: (key, fallback) => request('getStorage', { key, fallback }),
+  setStorage: (key, value) => request('setStorage', { key, value }),
+  removeStorage: key => request('removeStorage', { key }),
+  togglePluginFullscreen: enabled => request('togglePluginFullscreen', { enabled }),
+  toggleWindowFullscreen: () => request('toggleWindowFullscreen'),
+  openYaohuPlayer: url => request('openYaohuPlayer', { url }),
 }
 
 if (typeof globalThis === 'object' && !globalThis.XBSVCB) {

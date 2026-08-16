@@ -6,7 +6,10 @@ import type {
   HostAssetResult,
   HostMessageResult,
   NotifyType,
+  PluginFullscreenResult,
   PluginHostContext,
+  WindowFullscreenResult,
+  YaohuPlayerResult,
 } from '@xb-svcb/plugin-sdk/client'
 import type { Manifest, Page } from '@xb-svcb/plugin-sdk'
 
@@ -29,6 +32,12 @@ export interface UsePluginHostResult {
   assetData(path: string): Promise<HostAssetResult>
   assetUrl(path: string): Promise<string>
   notify(message: string, type?: NotifyType): Promise<true>
+  getStorage<T = unknown>(key: string, fallback?: T): Promise<T>
+  setStorage(key: string, value: unknown): Promise<true>
+  removeStorage(key: string): Promise<true>
+  togglePluginFullscreen(enabled?: boolean): Promise<PluginFullscreenResult>
+  toggleWindowFullscreen(): Promise<WindowFullscreenResult>
+  openYaohuPlayer(url: string): Promise<YaohuPlayerResult>
   clearError(): void
 }
 

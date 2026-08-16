@@ -313,7 +313,116 @@ await host.notify('配置已保存', 'success')
 
 `runAction(message)`、`runAction(create_work)` 和 `createWork()` 已自动通知，通常不用再次调用。
 
-## 9. Vue `usePluginHost()`
+## 9. 页面持久化
+
+页面 iframe 使用 opaque origin，不要直接依赖 `window.localStorage`。宿主提供按插件 ID 隔离的 JSON 存储：
+
+```ts
+getStorage<T = unknown>(key: string, fallback?: T): Promise<T>
+setStorage(key: string, value: unknown): Promise<true>
+removeStorage(key: string): Promise<true>
+```
+
+```ts
+interface AnimePreferences {
+  apiKey: string
+  source: number
+}
+
+const preferences = await host.getStorage<AnimePreferences>('anime-preferences', {
+  apiKey: '',
+  source: 1,
+})
+
+await host.setStorage('anime-preferences', {
+  apiKey: preferences.apiKey,
+  source: 3,
+})
+
+await host.removeStorage('anime-preferences')
+```
+
+规则：
+
+- `key` 只能包含字母、数字、点、下划线和连字符，长度为 1 到 80。
+- 数据使用插件 ID 隔离，同名 key 不会在不同插件之间共享。
+- `value` 必须可以 JSON 序列化；`undefined` 会被拒绝。
+- key 不存在、保存内容损坏或无法解析时，`getStorage()` 返回 `fallback`。
+- 重新安装同 ID 插件会保留宿主存储；更换插件 ID 会得到新的存储命名空间。
+- 存储不是加密保险箱。可以保存普通 API key 和用户偏好，但不要保存无法撤销的高价值凭据。
+
+Vue composable 暴露同名方法，调用期间会更新共享 `loading` 和 `error`。
+
+## 10. 全屏控制
+
+```ts
+interface PluginFullscreenResult {
+  ok: true
+  fullscreen: boolean
+}
+
+interface WindowFullscreenResult {
+  ok: boolean
+  fullscreen?: boolean
+  error?: string
+}
+
+togglePluginFullscreen(enabled?: boolean): Promise<PluginFullscreenResult>
+toggleWindowFullscreen(): Promise<WindowFullscreenResult>
+```
+
+`togglePluginFullscreen()` 只让当前插件内容占满宿主工作区，不切换操作系统窗口。传 `true` 或 `false` 可显式设置；省略参数时切换当前状态。
+
+```ts
+const result = await host.togglePluginFullscreen(true)
+console.log(result.fullscreen)
+```
+
+宿主的退出按钮或 `Escape` 可以结束插件全屏。宿主主动改变状态时，会向页面派发事件：
+
+```ts
+window.addEventListener('xb-svcb-host-event', (event) => {
+  const detail = (event as CustomEvent).detail
+  if (detail?.name === 'pluginFullscreenChanged') {
+    console.log(Boolean(detail.payload?.fullscreen))
+  }
+})
+```
+
+`toggleWindowFullscreen()` 切换整个 XB-SVCB 窗口，适合播放器或演示工具。它和插件全屏是两种独立状态，普通表单页不应自动切换软件窗口。
+
+## 11. 妖狐 M3U8 播放器
+
+第三方播放器页面不应直接嵌套在插件 iframe 中。插件 iframe 继承 `sandbox="allow-scripts"` 和 opaque origin，依赖自身 origin、localStorage 或复杂跨域请求的播放器可能一直停在初始化状态。
+
+宿主为妖狐播放器提供受限的顶层播放弹层：
+
+```ts
+interface YaohuPlayerResult {
+  opened: true
+  url: string
+}
+
+openYaohuPlayer(url: string): Promise<YaohuPlayerResult>
+```
+
+```ts
+await host.openYaohuPlayer(
+  'http://m3u8.yaohud.cn/?url=https://cdn.example.com/video/index.m3u8',
+)
+```
+
+宿主行为和限制：
+
+- 插件清单必须声明 `network` 权限。
+- 只接受主机名严格等于 `m3u8.yaohud.cn` 的 HTTP 或 HTTPS URL。
+- HTTP 地址会在打开前升级为 HTTPS。
+- 播放器在宿主控制的非沙箱跨域 iframe 中运行，插件仍不能读取播放器 DOM、播放进度或媒体响应。
+- 关闭按钮和 `Escape` 会卸载播放器 iframe 并停止播放。
+- 这不是通用外部网址或任意 M3U8 打开 API，其他域名会被拒绝。
+- 旧版宿主不认识该 method 时 Promise 会 reject，插件应显示明确的升级提示。
+
+## 12. Vue `usePluginHost()`
 
 ```ts
 const {
@@ -330,6 +439,12 @@ const {
   assetData,
   assetUrl,
   notify,
+  getStorage,
+  setStorage,
+  removeStorage,
+  togglePluginFullscreen,
+  toggleWindowFullscreen,
+  openYaohuPlayer,
   clearError,
 } = usePluginHost()
 ```
@@ -362,8 +477,8 @@ export function useSharedPluginHost() {
 
 注意：只有第一次调用发生在组件 setup 中时，`onMounted()` 才能正确注册。也可以传 `loadContext: false`，由根组件显式刷新。
 
-## 10. 当前没有的页面 API
+## 13. 当前没有的页面 API
 
-Client 目前不提供：模型列表、作品列表、任务状态查询、文件选择器、宿主路由跳转、插件数据目录写入、主题变化订阅、请求取消和任意自定义 RPC。
+Client 目前不提供：模型列表、作品列表、任务状态查询、文件选择器、宿主路由跳转、插件数据目录直接读写、主题变化订阅、请求取消、通用外部网址播放器和任意自定义 RPC。
 
-需要持久化配置或复杂系统操作时，使用混合插件的 Python 动作；需要宿主新能力时，应先扩展正式 Client 契约，而不是访问内部 Bridge。
+普通配置使用宿主存储；需要插件数据目录、复杂系统操作或加密凭据管理时使用混合插件的 Python 动作。需要宿主新能力时，应先扩展正式 Client 契约，而不是访问内部 Bridge。

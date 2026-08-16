@@ -1,5 +1,33 @@
-<div align="center">
 
+# 🎤 XB-SVCB · AI 翻唱工具
+
+#### 开箱即用的桌面级 AI 翻唱工作站
+
+**🎵 导入歌曲 ｜ 🎚️ 人声分离 ｜ 🌫️ 去混响 ｜ 🗣️ AI 歌声转换 ｜ 🎧 AI 歌声增强 ｜ 🎼 合并伴奏 ｜ 🎤 成品翻唱**
+
+一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **AI 歌声增强工程** · **在线曲库** · **模型站** · **音频编辑器**
+
+<br/>
+
+[![License](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release&color=ff6b9d)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/SDIJF1521/xb-svcb/total?color=brightgreen&label=downloads)](https://github.com/SDIJF1521/xb-svcb/releases)
+[![Stars](https://img.shields.io/github/stars/SDIJF1521/xb-svcb?style=flat&color=yellow)](https://github.com/SDIJF1521/xb-svcb/stargazers)
+
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#)
+[![Python](https://img.shields.io/badge/python-3.9%20|%203.10-3776AB?logo=python&logoColor=white)](#)
+[![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
+[![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
+
+<br/>
+
+### ⬇️ [**点此下载安装器 · XB-SVCB-Setup.exe**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+
+<sub>Windows 一键安装 · 内置前端与底模 · 无需手动配置 Python / Node</sub>
+
+<sub>用户交流 / 反馈 QQ 群：**1038366109**</sub>
+
+</div>
 ---
 
 <a id="features"></a>
@@ -25,7 +53,9 @@
 - 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-seedvc` / `.venv-ddsp` / `.venv-uvr` / `.venv-vocal`），互不污染。
 - 🎧 **作品库** —— 试听 / 导出成品，单独试听伴奏与干声，失败任务一键查日志；删除作品同步真实清理本地生成文件。
 
-> **最新版本 v0.0.27**：模型站升级为带详情、版本、依赖、更新和试听素材的社区模型流程；AI 翻唱增加 DeepFilterNet3 分离人声/模型输出双阶段修复、高频保护与最高 1800 Hz 自适应音域，So-VITS-SVC 和 DDSP-SVC 可自动或手动使用 FCPE，并补齐 FCPE 离线依赖及失败回退；安装器预置按 Python、组件和 GPU 栈选择的离线 whl wheelhouse，所有分卷严格小于 2 GiB。详见 [v0.0.27 更新说明](release_notes_v027.md) 与 [API 接入文档](docs/api.md)。
+> **最新版本 v0.0.28**：新增完整插件中心、NoneBot2 风格 GitHub 插件市场、前端/Python/混合运行时、TypeScript/Python SDK 和自定义页面宿主 API；页面配置支持按插件持久化，插件与软件窗口支持全屏，并为妖狐 M3U8 提供受限宿主播放器。安装器同时修复 Python 环境识别、So-VITS-SVC Matplotlib 依赖、Vocal packaging 冲突、特殊路径转义和系统缺少 FFmpeg 时的随包释放。详见 [v0.0.28 更新说明](release_notes_v028.md)、[插件开发文档](docs/plugins/README.md) 与 [API 接入文档](docs/api.md)。
+
+> v0.0.27：模型站升级为带详情、版本、依赖、更新和试听素材的社区模型流程；AI 翻唱增加 DeepFilterNet3 分离人声/模型输出双阶段修复、高频保护与最高 1800 Hz 自适应音域，So-VITS-SVC 和 DDSP-SVC 可自动或手动使用 FCPE，并补齐 FCPE 离线依赖及失败回退；安装器预置按 Python、组件和 GPU 栈选择的离线 whl wheelhouse，所有分卷严格小于 2 GiB。详见 [v0.0.27 更新说明](release_notes_v027.md) 与 [API 接入文档](docs/api.md)。
 
 > v0.0.26：AI 歌声增强升级为参考人声句段/音素动态对齐、受限局部节奏校正和自然 F0 修音，并加入 AI 角色共振峰、AI EQ、AI Compressor、AI Exciter、Stereo 与 AI 响度包络独立控制；同时优化持续元音的“电风扇”式微时拉伸伪影，提高人声响度，并在删除编辑工程或更换主题壁纸时同步清理对应本地文件。详见 [v0.0.26 更新说明](release_notes_v026.md) 与 [API 接入文档](docs/api.md)。
 
