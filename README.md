@@ -1,3 +1,4 @@
+<div align="center">
 
 # 🎤 XB-SVCB · AI 翻唱工具
 
