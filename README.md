@@ -29,9 +29,10 @@
 <sub>用户交流 / 反馈 QQ 群：**1038366109**</sub>
 
 </div>
----
 
 <a id="features"></a>
+
+---
 
 ## ✨ 特性
 
@@ -109,20 +110,23 @@
 
 ## 🏗️ 架构一览
 
-XB-SVCB 采用“**桌面与 HTTP 共用业务核心，重型引擎在独立进程运行**”的结构。安装版以 `XB-SVCB.exe` 为统一进程，内含 Vue 前端、pywebview Bridge、可选 FastAPI 服务、Python 业务代码与 worker 脚本；So-VITS-SVC、RVC、SeedVC、DDSP-SVC、UVR、模型站组件和 VST3 插件分别通过隔离环境或原生 Host 执行，避免依赖与插件崩溃相互污染。
+XB-SVCB 采用“**桌面与 HTTP 共用业务核心，重型引擎和插件在独立进程运行**”的结构。安装版以 `XB-SVCB.exe` 为统一进程，内含 Vue 前端、pywebview Bridge、可选 FastAPI 服务、Python 业务代码与 worker 脚本；So-VITS-SVC、RVC、SeedVC、DDSP-SVC、UVR、模型站组件、VST3 插件和 Python 插件分别通过隔离环境或原生 Host 执行，插件前端则在受限 iframe 中通过宿主 Bridge 调用能力，避免依赖与插件崩溃相互污染。
 
 ```mermaid
 flowchart TB
     DESKTOP_USER([桌面用户])
     API_CLIENT([外部程序 / 局域网客户端])
+    PLUGIN_DEV([插件开发者])
 
     subgraph ENTRY["交互与接入层 · XB-SVCB.exe"]
         direction LR
         SHELL["pywebview 桌面壳<br/>单实例 / 原生窗口 / 文件选择"]
-        WEB["Vue 3 + Element Plus<br/>创建 / 模型 / 曲库 / 作品 / 编辑器 / API"]
-        BRIDGE["Bridge API<br/>桌面调用 / 本地能力"]
+        WEB["Vue 3 + Element Plus<br/>创建 / 模型 / 曲库 / 作品 / 编辑器 / 插件中心 / API"]
+        BRIDGE["Bridge API<br/>桌面调用 / 本地能力 / 插件服务"]
         HTTP["FastAPI /api/v1<br/>API Key / OpenAPI / 流式上传"]
+        PLUGIN_HOST["插件页面宿主<br/>iframe / 主题 / 通知 / 全屏 / M3U8 播放器"]
         SHELL --> WEB --> BRIDGE
+        WEB --> PLUGIN_HOST
     end
 
     subgraph CORE["共享 Python 业务核心"]
@@ -133,10 +137,21 @@ flowchart TB
         ROUTER["EngineRegistry<br/>按模型框架统一路由"]
         EDITOR["AudioEditorService<br/>工程 / 时间轴 / 效果链 / 渲染"]
         CONNECT["Music / ModelHub / Theme Services<br/>曲库 / 模型站 / 主题媒体"]
+        PLUGINS["PluginService<br/>清单 / 安装 / 开关 / 市场 / 页面"]
         FACADE --> APP
         FACADE --> EDITOR
         FACADE --> CONNECT
+        FACADE --> PLUGINS
         APP --> QUEUE --> ROUTER
+    end
+
+    subgraph PLUGIN_RUNTIME["插件运行时"]
+        direction LR
+        IFRAME["插件前端 iframe<br/>HTML / JS / Vue bundle"]
+        PWORKER["Python Plugin Worker<br/>每次动作独立进程 / 30 秒超时"]
+        PYSDK["Python SDK<br/>Plugin / actions / hooks / context"]
+        IFRAME <-->|postMessage / Client SDK| PLUGIN_HOST
+        PWORKER --> PYSDK
     end
 
     subgraph RUNTIME["隔离运行时与原生进程"]
@@ -156,7 +171,7 @@ flowchart TB
 
     subgraph STORAGE["本地数据与随包资产"]
         direction LR
-        DATA[".xb_svcb 用户数据<br/>models / works / downloads / editor_projects<br/>api/uploads / cache / settings / theme/media"]
+        DATA[".xb_svcb 用户数据<br/>models / works / downloads / editor_projects<br/>api/uploads / plugins / plugin-data / cache / settings / theme/media"]
         ASSETS["assets/models 离线资产<br/>UVR / RMVPE / ContentVec / CampPlus / Whisper / BigVGAN / DeepFilterNet"]
     end
 
@@ -164,12 +179,28 @@ flowchart TB
         direction LR
         MUSIC["妖狐音乐 API + 酷我 CDN<br/>网易云 / QQ音乐 / 酷我音乐 / 歌词"]
         HUB["ModelScope<br/>模型搜索 / 断点下载 / 上传"]
+        GITHUB["GitHub Raw / Release<br/>market.json / .xbplugin"]
+        YAOHU["妖狐影视 API + M3U8<br/>动漫搜索 / 详情 / 播放"]
+    end
+
+    subgraph SDK["插件开发与发布"]
+        direction LR
+        SDK_CORE["Plugin SDK<br/>Manifest / Client / Vue / Python"]
+        BUNDLE[".xbplugin 插件包<br/>清单 + 前端 + Python"]
+        PLUGIN_DEV --> SDK_CORE --> BUNDLE --> GITHUB
     end
 
     DESKTOP_USER --> SHELL
     API_CLIENT --> HTTP
     BRIDGE --> FACADE
     HTTP --> FACADE
+    PLUGIN_HOST --> BRIDGE
+    PLUGINS --> IFRAME
+    PLUGINS --> PWORKER
+    PLUGINS <--> DATA
+    GITHUB --> PLUGINS
+    PWORKER <--> DATA
+    PWORKER --> YAOHU
     APP --> UVR
     APP --> FFMPEG
     ROUTER --> SVC
@@ -185,21 +216,22 @@ flowchart TB
     HUBWORKER <--> HUB
     CONNECT <--> MUSIC
     CONNECT -. 酷我代理试听 .-> FFMPEG
-    APP <--> DATA
-    EDITOR <--> DATA
-    CONNECT <--> DATA
-    HTTP -. 上传文件 .-> DATA
     ASSETS -. 本地优先 .-> UVR
     ASSETS -. 本地优先 .-> SVC
     ASSETS -. 本地优先 .-> RVC
     ASSETS -. 本地优先 .-> SEED
     ASSETS -. 本地优先 .-> DDSP
     ASSETS -. 本地优先 .-> VOCAL
+    APP <--> DATA
+    EDITOR <--> DATA
+    CONNECT <--> DATA
+    HTTP -. 上传文件 .-> DATA
 ```
 
 **关键边界**
 
 - **桌面与 HTTP 共用核心**：Vue 通过 pywebview Bridge、外部程序通过手动启用的 FastAPI 进入同一个 `Api` Facade，共用模型、作品、编辑工程和串行推理队列；HTTP 层只负责鉴权、DTO、上传与下载。
+- **插件平台分层运行**：插件中心通过 PluginService 管理清单、安装、单插件开关和 GitHub 市场；自定义页面运行在受限 iframe，通过 Client SDK 与宿主 Bridge 通信，Python/混合插件的动作再交给独立 Worker 执行。
 - **模型按框架路由**：`EngineRegistry` 统一接收模型与推理参数，再分别调用 So-VITS-SVC、RVC、SeedVC 或 DDSP-SVC；SeedVC 额外传入参考音频，DDSP-SVC 使用 Rectified Flow checkpoint 与 YAML 配置。
 - **编辑器与插件隔离**：内置效果、混音和导出走 FFmpeg；VST3 加载与原生窗口由 JUCE Host 承载，局部重推理再回到统一引擎路由，重推理后可选自动调用 AI 歌声增强流水线。
 - **在线服务可替换且受控**：网易云、QQ音乐和酷我音乐统一经过音乐服务适配；酷我试听由本地 FFmpeg 代理，模型站的重型依赖由 `.venv-hub` worker 隔离。
@@ -209,6 +241,7 @@ flowchart TB
 | 层 / 进程         | 主要实现                                                  | 职责与边界                                                     |
 | ----------------- | --------------------------------------------------------- | -------------------------------------------------------------- |
 | 交互与接入层      | pywebview + Vue 3 + FastAPI                               | 桌面交互、API Key 鉴权、OpenAPI、流式上传及受控文件下载        |
+| 插件平台层        | PluginService + iframe Host + Plugin SDK + Python Worker | 插件安装、开关、GitHub 市场、页面 Bridge、动作与生命周期执行 |
 | API 与业务层      | `api` + `application` + `domain`                    | 桌面/HTTP 共用契约、任务队列、模型/作品/曲库/编辑工程业务编排  |
 | 基础设施层        | `infrastructure` + `EngineRegistry` + FFmpeg          | 路径、仓储、下载、音频处理和多框架引擎适配                     |
 | AI 与模型站子进程 | SVC / RVC / SeedVC / DDSP-SVC / UVR / Vocal / Hub workers | 在独立`.venv-*` 中执行重型任务，隔离 Python、CUDA 与平台依赖 |
