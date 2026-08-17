@@ -424,17 +424,57 @@ v0.0.23 起可在软件的“资料库 -> API 接入”页手动启动 FastAPI �
 
 ---
 
+<a id="plugin-system"></a>
 <a id="plugin-development"></a>
 
-## 插件开发
+## 🔌 插件系统
 
-XB-SVCB 提供三种插件运行类型：纯前端声明式页面、纯 Python 翻唱钩子，以及页面与 Python 动作协作的混合插件。仓库内置 TypeScript 优先的清单构建器、`xb-plugin` 脚手架与打包 CLI、零依赖 Python SDK，以及三类可运行示例。
+v0.0.28 起，XB-SVCB 内置完整插件中心，可通过本地 `.xbplugin` 包或 GitHub 插件市场扩展工作台页面、翻唱参数预设、创建任务动作和流程钩子。插件安装后默认关闭，必须同时开启“插件功能”总开关和单个插件开关后才会运行，便于在不影响主流程的情况下逐个授权。
 
-- 从概念到发布的完整教程：[插件开发指南](docs/plugin-development.md)
+**用户使用**
+
+1. 打开“插件中心”，开启插件功能总开关。
+2. 选择“安装本地插件包”安装 `.xbplugin` / `.zip`，或填写 GitHub Raw/API 市场索引地址并刷新市场。
+3. 安装后检查插件名称、版本、作者、权限和运行类型，再单独启用插件。
+4. 对带页面的插件点击“打开”；对 Python / 混合插件，可在创建任务时通过动作或流程钩子参与翻唱流程。
+
+**插件形态**
+
+- **frontend**：声明式表单或自定义 Vue/TypeScript 页面，适合做参数面板、资源工具、任务创建助手和工作台页面。
+- **python**：无页面的 Python 动作、生命周期和 `before_create` 翻唱钩子，适合预处理参数、生成配置或接入外部服务。
+- **hybrid**：前端页面收集输入，再调用 Python 动作处理复杂逻辑，适合更完整的创作助手。
+
+插件包以 `xb-svcb-plugin.json` 为入口，可包含 `dist/frontend/index.html`、`plugin.py`、`assets/` 和可选 `vendor/` 依赖。页面端通过 `@xb-svcb/plugin-sdk/client` 或 `@xb-svcb/plugin-sdk/vue` 调用宿主能力，包括 `runAction()`、`createWork()`、插件资源读取、通知、按插件 ID 隔离的持久化配置、插件全屏、软件窗口全屏和受限妖狐 M3U8 播放器。Python 端通过 `xb_svcb_plugin` SDK 获取上下文、动作输入、配置和插件数据目录。
+
+**开发与打包**
+
+```powershell
+npx @xb-svcb/plugin-sdk create my-plugin `
+  --id com.example.my-plugin `
+  --name "我的插件" `
+  --type frontend
+
+cd my-plugin
+npm install
+npm run dev
+npm run validate
+npm run pack
+```
+
+`--type` 可选 `frontend`、`python` 或 `hybrid`；TypeScript 前端默认使用 Vue 3，也可用 `--framework vanilla` 创建原生 TypeScript 页面。发布前应至少完成 `npm run validate`、生成 `.xbplugin`，并在真实 XB-SVCB 插件中心完成一次全新安装、启用和动作执行测试。
+
+**市场与安全边界**
+
+插件市场使用 GitHub 上的 `market.json` / `plugins.json5` 索引，索引项指向 GitHub Release 中的 `.xbplugin` 包。当前市场不做签名、哈希校验、依赖解析、版本比较、自动更新或失败回滚；发布者需要在 Release 中写清楚兼容版本、权限、依赖和变更，用户也应只安装可信来源。
+
+自定义页面运行在 `sandbox="allow-scripts"` iframe 中，不能直接读取宿主 DOM，只能通过宿主 Client API 调用受控能力。Python 和混合插件会以当前用户权限执行真实代码；独立 Worker 只提供崩溃隔离，不是权限沙箱。当前硬限制包括：插件包最大 20 MB、解压后最大 50 MB、清单最大 512 KB、自定义页面入口 HTML 最大 2 MB、单个插件资源最大 10 MB、页面请求和 Python Worker 单次调用默认 30 秒。
+
+详细文档：
+
+- 分章节教程：[插件开发文档](docs/plugins/README.md)
+- 旧版全文指南：[插件开发完整指南](docs/plugin-development.md)
 - SDK 命令与最小示例：[Plugin SDK README](plugin-sdk/README.md)
 - 可直接构建的工程：[`plugin-sdk/examples`](plugin-sdk/examples)
-
-纯前端插件只使用宿主提供的受限页面与动作；Python 和混合插件会以当前用户权限执行真实代码。独立 Worker 提供崩溃隔离，但不是安全沙箱，只应启用来源可信且经过检查的插件。
 
 ---
 
