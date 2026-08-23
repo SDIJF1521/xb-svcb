@@ -10,6 +10,7 @@ from typing import Any, Optional
 import config
 from domain import InferenceParams
 from infrastructure.inference_device import environment_device_label
+from infrastructure.persistent_worker import PersistentInferenceSession
 
 
 class SeedVcEngine:
@@ -39,6 +40,12 @@ class SeedVcEngine:
         """Map 0..1 to a natural-singing quality range of 20..50 steps."""
         value = max(0.0, min(1.0, float(ratio)))
         return round(20 + value * 30)
+
+    @staticmethod
+    def _realtime_diffusion_steps(ratio: float) -> int:
+        """Map the quality control to SeedVC's low-latency 4..10 step range."""
+        value = max(0.0, min(1.0, float(ratio)))
+        return round(4 + value * 6)
 
     def infer(
         self,
@@ -91,6 +98,52 @@ class SeedVcEngine:
         )
         return out_path
 
+    def open_realtime_session(
+        self,
+        model: dict[str, Any],
+        params: InferenceParams,
+        log_file: Optional[Path] = None,
+        low_latency: bool = False,
+    ) -> PersistentInferenceSession:
+        """Load one SeedVC model once and reuse it for successive song blocks."""
+        main_model = str((model or {}).get("main_model_path") or "")
+        main_config = str((model or {}).get("main_config_path") or "")
+        reference_audio = str(params.reference_audio or "")
+        if not self.available:
+            raise RuntimeError("SeedVC 实时推理环境未就绪")
+        for label, value in (
+            ("模型", main_model),
+            ("配置", main_config),
+            ("参考音频", reference_audio),
+        ):
+            if not Path(value).is_file():
+                raise RuntimeError(f"SeedVC {label}不存在: {value or '未配置'}")
+        command = [
+            str(config.SEEDVC_PYTHON),
+            str(config.SEEDVC_WORKER),
+            "--server",
+            "--repo", str(config.SEEDVC_REPO),
+            "--checkpoint", main_model,
+            "--config", main_config,
+            "--reference", reference_audio,
+            "--device", params.device or "auto",
+            "--pitch", str(int(params.pitch)),
+            "--diffusion-steps", str(self._realtime_diffusion_steps(params.diffusion_ratio)),
+            "--length-adjust", "1.0",
+            "--cfg-rate", "0.55",
+            "--fp16", "False" if (params.device or "").lower() == "cpu" else "True",
+        ]
+        if low_latency:
+            command.append("--low-latency")
+        return PersistentInferenceSession(
+            command,
+            ready_marker="SEEDVC_SERVER_READY",
+            result_marker="SEEDVC_SERVER_RESULT\t",
+            cwd=config.SEEDVC_REPO,
+            env=self._worker_env(),
+            log_file=log_file,
+        )
+
     def _run_worker(
         self,
         main_model: str,
@@ -129,18 +182,7 @@ class SeedVcEngine:
             "--fp16",
             "False" if (params.device or "").lower() == "cpu" else "True",
         ]
-        env = os.environ.copy()
-        env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
-        env["PYTHONIOENCODING"] = "utf-8"
-        env["PYTHONUTF8"] = "1"
-        hf_mirror = (
-            env.get("XB_HF_MIRROR")
-            or env.get("HF_ENDPOINT")
-            or "https://hf-mirror.com"
-        ).strip().rstrip("/")
-        env.setdefault("XB_HF_MIRROR", hf_mirror)
-        env.setdefault("HF_ENDPOINT", hf_mirror)
-        env.setdefault("HUGGINGFACE_HUB_ENDPOINT", hf_mirror)
+        env = self._worker_env()
 
         try:
             proc = subprocess.run(
@@ -171,6 +213,22 @@ class SeedVcEngine:
         if proc.returncode != 0 or not out_path.exists():
             tail = self._error_tail(proc.stdout, proc.stderr)
             raise RuntimeError(f"SeedVC 推理失败: {tail}")
+
+    @staticmethod
+    def _worker_env() -> dict[str, str]:
+        env = os.environ.copy()
+        env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+        hf_mirror = (
+            env.get("XB_HF_MIRROR")
+            or env.get("HF_ENDPOINT")
+            or "https://hf-mirror.com"
+        ).strip().rstrip("/")
+        env.setdefault("XB_HF_MIRROR", hf_mirror)
+        env.setdefault("HF_ENDPOINT", hf_mirror)
+        env.setdefault("HUGGINGFACE_HUB_ENDPOINT", hf_mirror)
+        return env
 
     @staticmethod
     def _error_tail(stdout: str | None, stderr: str | None) -> str:

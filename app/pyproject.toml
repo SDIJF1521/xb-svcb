@@ -1,6 +1,6 @@
 [project]
 name = "app"
-version = "0.0.28"
+version = "0.0.29"
 description = "Add your description here"
 readme = "README.md"
 license = "GPL-3.0-only"
@@ -11,5 +11,6 @@ dependencies = [
     "httpx[http2]>=0.28.1",
     "python-multipart>=0.0.20",
     "pywebview>=6.2.1",
+    "soundcard>=0.4.3",
     "uvicorn>=0.35.0",
 ]

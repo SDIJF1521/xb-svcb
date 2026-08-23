@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from infrastructure import rvc_worker
 from infrastructure import rvc_engine
+from domain import InferenceParams
 
 
 def test_rvc_prepares_pytorch_models_and_keeps_onnx_optional(
@@ -138,3 +139,53 @@ def test_rvc_native_failure_reports_and_logs_exit_code(
 
     assert "子进程退出码" in log.read_text(encoding="utf-8")
     assert "-1073741819" in log.read_text(encoding="utf-8")
+
+
+def test_realtime_rvc_session_passes_custom_parameters(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    python = tmp_path / "python.exe"
+    worker = tmp_path / "rvc_worker.py"
+    model = tmp_path / "voice.pth"
+    index = tmp_path / "voice.index"
+    for path in (python, worker, model, index):
+        path.write_bytes(b"test")
+    captured: dict = {}
+
+    class Session:
+        def __init__(self, command, **kwargs):  # noqa: ANN001
+            captured["command"] = command
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(rvc_engine.config, "RVC_PYTHON", python)
+    monkeypatch.setattr(rvc_engine.config, "RVC_WORKER", worker)
+    monkeypatch.setattr(rvc_engine.config, "rvc_engine_ready", lambda: True)
+    monkeypatch.setattr(rvc_engine, "PersistentInferenceSession", Session)
+
+    params = InferenceParams.from_dict(
+        {
+            "device": "cpu",
+            "f0_method": "harvest",
+            "pitch": -5,
+            "index_rate": 0.42,
+            "rms_mix": 0.61,
+            "protect": 0.18,
+            "filter_radius": 5,
+            "rvc_version": "v1",
+        }
+    )
+    rvc_engine.RvcEngine().open_realtime_session(
+        {"main_model_path": str(model), "index_path": str(index)},
+        params,
+    )
+
+    command = captured["command"]
+    assert command[command.index("--device") + 1] == "cpu"
+    assert command[command.index("--method") + 1] == "harvest"
+    assert command[command.index("--pitch") + 1] == "-5"
+    assert command[command.index("--index-rate") + 1] == "0.42"
+    assert command[command.index("--rms-mix") + 1] == "0.61"
+    assert command[command.index("--protect") + 1] == "0.18"
+    assert command[command.index("--filter-radius") + 1] == "5"
+    assert command[command.index("--version") + 1] == "v1"
+    assert command[command.index("--index") + 1] == str(index)

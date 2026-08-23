@@ -77,8 +77,19 @@
           <button class="op" title="重命名" @click="onRename(w.id, w.title)"><el-icon><EditPen /></el-icon></button>
           <button class="op" :disabled="w.status !== 'done'" title="下载" @click="onDownload(w.id)"><el-icon><Download /></el-icon></button>
           <button class="op" :disabled="w.status !== 'done'" title="进入音频编辑" @click="onEdit(w.id)"><el-icon><Scissor /></el-icon></button>
+          <button
+            v-if="w.status === 'done' && w.workflow !== 'ai_enhancement'"
+            class="op"
+            title="AI 增强"
+            @click="onEnhance(w.id)"
+          ><el-icon><MagicStick /></el-icon></button>
           <button class="op" v-if="w.status === 'failed'" title="打开日志" @click="onOpenLog(w.id)"><el-icon><Document /></el-icon></button>
-          <button class="op" title="重新生成" @click="onRetry(w.id)"><el-icon><RefreshRight /></el-icon></button>
+          <button
+            v-if="w.workflow !== 'realtime_cover'"
+            class="op"
+            title="重新生成"
+            @click="onRetry(w.id)"
+          ><el-icon><RefreshRight /></el-icon></button>
           <button class="op danger" title="删除" @click="onRemove(w.id)"><el-icon><Delete /></el-icon></button>
         </span>
       </div>
@@ -111,6 +122,7 @@ import {
   Delete,
   Document,
   EditPen,
+  MagicStick,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
@@ -166,6 +178,7 @@ const onRetry = (id: string) => worksStore.retry(id)
 const onRemove = (id: string) => worksStore.remove(id)
 const onOpenLog = (id: string) => api.openWorkLog(id)
 const onEdit = (id: string) => router.push({ path: '/editor', query: { work: id } })
+const onEnhance = (id: string) => router.push({ path: '/enhancement', query: { work: id } })
 
 const onRename = async (id: string, current: string) => {
   try {

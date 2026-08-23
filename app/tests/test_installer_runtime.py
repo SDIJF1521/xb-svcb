@@ -103,6 +103,20 @@ def test_installer_explicitly_packages_and_validates_python_detector() -> None:
     assert "install\\detect_python.bat')) then" in script
 
 
+def test_installer_detects_vbcable_and_provides_manual_official_download() -> None:
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    prereqs = (ROOT / "install_prereqs.bat").read_text(encoding="utf-8")
+
+    assert "function VbCableAvailable(): Boolean;" in script
+    assert "CABLE Input" in script
+    assert "CABLE Output" in script
+    assert "https://vb-audio.com/Cable/" in script
+    assert "VbCableDownloadButton" in script
+    assert ":CHECK_VBCABLE" in prereqs
+    assert "https://vb-audio.com/Cable/" in prereqs
+    assert "XB_VBCABLE_READY" in prereqs
+
+
 def test_installer_entrypoints_suppress_uv_cross_drive_hardlink_warning() -> None:
     setup_env = (ROOT / "setup_env.bat").read_text(encoding="utf-8")
     prereqs = (ROOT / "install_prereqs.bat").read_text(encoding="utf-8")

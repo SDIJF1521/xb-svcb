@@ -12,11 +12,16 @@ rvc-python 默认会在首次实例化时下载 hubert / rmvpe 底模；本 work
 from __future__ import annotations
 
 import argparse
+import array
+import json
+import math
 import os
 import shutil
 import sys
+import tempfile
 import traceback
 import urllib.request
+import wave
 from pathlib import Path
 
 try:
@@ -396,12 +401,36 @@ def _infer_file_checked(rvc, input_path: str, output_path: str) -> str:  # noqa:
     return output_path
 
 
+def _warm_up_realtime(rvc) -> None:  # noqa: ANN001
+    """Load lazy HuBERT/F0 components before accepting live audio."""
+    sample_rate = 16000
+    frame_count = sample_rate * 2
+    tone = array.array(
+        "h",
+        (
+            int(1200 * math.sin(2.0 * math.pi * 220.0 * index / sample_rate))
+            for index in range(frame_count)
+        ),
+    )
+    with tempfile.TemporaryDirectory(prefix="xb_rvc_warmup_") as temp_dir:
+        source = Path(temp_dir) / "warmup.wav"
+        output = Path(temp_dir) / "warmup-out.wav"
+        with wave.open(str(source), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(tone.tobytes())
+        _infer_file_checked(rvc, str(source), str(output))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="RVC inference worker (rvc-python)")
     parser.add_argument("--model", required=True, help=".pth 主模型路径")
     parser.add_argument("--index", default="", help=".index 检索特征路径（可选）")
-    parser.add_argument("--input", required=True, help="输入人声 wav")
-    parser.add_argument("--output", required=True, help="输出转换后人声 wav")
+    parser.add_argument("--input", default="", help="输入人声 wav")
+    parser.add_argument("--output", default="", help="输出转换后人声 wav")
+    parser.add_argument("--server", action="store_true", help="常驻进程，逐行接收 JSON 音频块")
+    parser.add_argument("--low-latency", action="store_true", help="实时变声模式：跳过逐块自然度后处理")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--method", default="rmvpe")
     parser.add_argument("--pitch", type=int, default=0)
@@ -555,6 +584,32 @@ def main() -> int:
             protect=float(args.protect),
             filter_radius=int(args.filter_radius),
         )
+        if args.server:
+            try:
+                _warm_up_realtime(rvc)
+                print("XB: RVC 实时组件预热完成", flush=True)
+            except Exception as exc:  # noqa: BLE001 - a real block may still succeed
+                print(f"XB: RVC 实时预热失败（继续启动）: {exc}", flush=True)
+            print("RVC_SERVER_READY", flush=True)
+            for raw in sys.stdin:
+                try:
+                    request = json.loads(raw)
+                    if request.get("command") == "close":
+                        break
+                    input_path = str(request.get("input") or "")
+                    output_path = str(request.get("output") or "")
+                    if not input_path or not output_path:
+                        raise ValueError("输入或输出路径为空")
+                    _infer_file_checked(rvc, input_path, output_path)
+                    if not args.low_latency:
+                        naturalize_inference_output(input_path, output_path, "rvc")
+                    result = {"ok": True, "output": output_path}
+                except Exception as exc:  # noqa: BLE001 - per-block errors must not kill the session
+                    result = {"ok": False, "error": str(exc)}
+                print("RVC_SERVER_RESULT\t" + json.dumps(result, ensure_ascii=False), flush=True)
+            return 0
+        if not args.input or not args.output:
+            raise ValueError("非 server 模式必须提供 --input 和 --output")
         _infer_file_checked(rvc, args.input, args.output)
         natural_stats = naturalize_inference_output(args.input, args.output, "rvc")
         print(f"RVC_NATURAL {format_naturalizer_stats(natural_stats)}", flush=True)

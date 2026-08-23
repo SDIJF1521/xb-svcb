@@ -320,7 +320,7 @@ $workerFiles = @(
 foreach ($worker in $workerFiles) {
   Require-File (Join-Path $Root "app\infrastructure\$worker") "Worker source $worker"
 }
-Require-File (Join-Path $Root "release_notes_v028.md") "v0.0.28 release notes"
+Require-File (Join-Path $Root "release_notes_v029.md") "v0.0.29 release notes"
 Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
 Require-File (Join-Path $Root "install\detect_python.bat") "Python runtime detector"
@@ -448,12 +448,20 @@ if (-not $SkipAppBuild) {
   if (-not (Test-Path $venvPy)) {
     throw "app\.venv not found. Run setup first (uv sync in app/), then: uv pip install --python app\.venv\Scripts\python.exe pyinstaller"
   }
-  & $venvPy -c "import PyInstaller" 2>$null
+  # Use importlib for the probe so a missing optional build tool does not emit
+  # a misleading Python traceback through PowerShell's native stderr handler.
+  & $venvPy -c "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('PyInstaller') else 1)" 2>$null
   if ($LASTEXITCODE -ne 0) {
     Write-Host "PyInstaller missing in app/.venv, installing..." -ForegroundColor Yellow
-    & uv pip install --python $venvPy pyinstaller
+    $uvCommand = Get-Command "uv" -ErrorAction SilentlyContinue
+    if (-not $uvCommand) {
+      throw "uv not found. Install uv or run: uv pip install --python app\.venv\Scripts\python.exe pyinstaller"
+    }
+    & $uvCommand.Source pip install --python $venvPy pyinstaller
     if ($LASTEXITCODE -ne 0) { throw "Failed to install PyInstaller into app/.venv" }
   }
+  & $venvPy -c "import PyInstaller; print('PyInstaller ' + getattr(PyInstaller, '__version__', 'unknown'))"
+  if ($LASTEXITCODE -ne 0) { throw "PyInstaller is unavailable in app/.venv after installation" }
   & $venvPy -m PyInstaller (Join-Path $Root "installer\xb-svcb-app.spec") --noconfirm --distpath (Join-Path $Root "dist") --workpath (Join-Path $Root "build")
   if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed (exit code $LASTEXITCODE)" }
 }

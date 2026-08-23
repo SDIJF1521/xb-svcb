@@ -21,6 +21,7 @@ import webview
 
 import config
 from api import build_api
+from infrastructure import paths
 from infrastructure.single_instance import SingleInstance, focus_window
 
 
@@ -120,9 +121,15 @@ def main() -> None:
             storage_path=str(config.WEBVIEW_DIR),
         )
     finally:
-        if api is not None:
-            api.shutdown()
-        single.close()
+        try:
+            if api is not None:
+                api.shutdown()
+        finally:
+            # Stop background services first, then remove every generated
+            # artifact below data/temp before releasing the single-instance
+            # handle. Keep the directory itself for the next launch.
+            paths.clear_temp_directory()
+            single.close()
 
 
 if __name__ == "__main__":

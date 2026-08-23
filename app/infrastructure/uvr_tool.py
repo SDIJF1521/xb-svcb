@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 import config
+from infrastructure.persistent_worker import PersistentInferenceSession
 
 
 @dataclass
@@ -130,6 +131,40 @@ class UvrTool:
             # 分离失败时降级，保证后续推理仍可进行
             return SeparationResult(vocals=Path(src), instrumental=None, simulated=True)
         return result
+
+    def open_realtime_session(
+        self,
+        model: str = "",
+        device: str = "auto",
+        out_dir: Path | None = None,
+        log_file: Path | None = None,
+    ) -> PersistentInferenceSession:
+        """Keep UVR loaded while processing mixed system-audio blocks."""
+        if not self.available:
+            raise RuntimeError("实时人声分离环境或模型未就绪")
+        model_name = model if model and (config.UVR_MODEL_DIR / model).exists() else config.UVR_MODEL
+        directory = Path(out_dir or config.TEMP_DIR / "realtime-uvr")
+        directory.mkdir(parents=True, exist_ok=True)
+        requested_device = str(device or "auto").strip().lower()
+        if requested_device == "dml":
+            requested_device = "directml"
+        command = [
+            str(config.UVR_PYTHON),
+            str(config.UVR_WORKER),
+            "--server",
+            "--model-dir", str(config.UVR_MODEL_DIR),
+            "--model", model_name,
+            "--out-dir", str(directory),
+            "--device", requested_device,
+        ]
+        return PersistentInferenceSession(
+            command,
+            ready_marker="UVR_SERVER_READY",
+            result_marker="UVR_SERVER_RESULT\t",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+            log_file=log_file,
+            startup_timeout=900.0,
+        )
 
     @staticmethod
     def _read_result_json(out_dir: Path) -> Optional[SeparationResult]:

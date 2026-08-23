@@ -23,7 +23,7 @@
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.28"
+#define MyAppVersion "0.0.29"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 
@@ -96,7 +96,7 @@ Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubd
 Source: "..\assets\wheels\*"; DestDir: "{app}\assets\wheels"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\release_notes_v028.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release_notes_v029.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docs\api.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 #endif
 
@@ -136,12 +136,14 @@ var
   CppStatusLabel: TNewStaticText;
   CudaStatusLabel: TNewStaticText;
   DriverStatusLabel: TNewStaticText;
+  VbCableStatusLabel: TNewStaticText;
   PythonDownloadButton: TNewButton;
   GitDownloadButton: TNewButton;
   UvDownloadButton: TNewButton;
   CppDownloadButton: TNewButton;
   CudaDownloadButton: TNewButton;
   DriverDownloadButton: TNewButton;
+  VbCableDownloadButton: TNewButton;
   RefreshPrereqButton: TNewButton;
   PrereqPathPage: TInputDirWizardPage;
   CudaPathPage: TInputDirWizardPage;
@@ -376,6 +378,23 @@ begin
   Result := Pos(Uppercase(Needle), Uppercase(S)) > 0;
 end;
 
+function VbCableAvailable(): Boolean;
+var
+  DeviceNames: String;
+begin
+  { VB-CABLE registers both endpoints. Registry checks are fast; the device
+    name check handles manual installs whose registry layout differs. }
+  Result := RegKeyExists(HKLM, 'SOFTWARE\VB-Audio\VBCABLE') or
+    RegKeyExists(HKLM, 'SOFTWARE\WOW6432Node\VB-Audio\VBCABLE');
+  if Result then
+    Exit;
+
+  DeviceNames := CommandOutput(
+    'powershell.exe -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_SoundDevice -ErrorAction SilentlyContinue).Name; (Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FriendlyName)"');
+  Result := ContainsText(DeviceNames, 'CABLE Input') and
+    ContainsText(DeviceNames, 'CABLE Output');
+end;
+
 function HasComputeMajorAtLeast(const Text: String; MinMajor: Integer): Boolean;
 var
   I, Major: Integer;
@@ -540,6 +559,7 @@ begin
     Result := Result + '  CUDA Toolkit ' + DetectedCudaVersion() + '：' +
       StatusText(CmdAvailable('nvcc')) + #13#10;
   Result := Result +
+    '  VB-CABLE：' + StatusText(VbCableAvailable()) + '（系统音频变声可选，未安装时请手动安装）' + #13#10 +
     '  JUCE VST3 Host：随安装包内置，安装后检查' + #13#10 +
     '  GPU 推理栈：' + GpuStackLabel(DetectedStack) + #13#10 +
     '前置依赖采用用户辅助模式：安装器不会自动下载或安装系统组件；uv 会在检测到 Python 后通过 pip 自动安装。下一页可打开对应下载页面，完成后返回并重新检测。';
@@ -581,6 +601,11 @@ begin
     OpenDownloadUrl('https://developer.nvidia.com/cuda-12-8-0-download-archive')
   else if DetectedGpuStackName() = 'cu121' then
     OpenDownloadUrl('https://developer.nvidia.com/cuda-12-1-0-download-archive');
+end;
+
+procedure VbCableDownloadClick(Sender: TObject);
+begin
+  OpenDownloadUrl('https://vb-audio.com/Cable/');
 end;
 
 function GpuStackName(): String; forward;
@@ -653,6 +678,8 @@ begin
   CppStatusLabel.Caption := 'Microsoft C++ Build Tools：' +
     StatusText(CmdAvailable('cl') or
       FileExists(ExpandConstant('{pf32}\Microsoft Visual Studio\Installer\vswhere.exe')));
+  VbCableStatusLabel.Caption := 'VB-CABLE：' + StatusText(VbCableAvailable()) +
+    '（系统音频变声需要；普通歌曲翻唱不需要）';
 
   DetectedStack := DetectedGpuStackName();
   IsNvidia := (DetectedStack = 'cu121') or (DetectedStack = 'cu128');
@@ -913,12 +940,14 @@ begin
   CudaDownloadButton.OnClick := @CudaDownloadClick;
   CreateDownloadRow('显卡驱动：', '打开驱动下载', 216, DriverStatusLabel, DriverDownloadButton);
   DriverDownloadButton.OnClick := @DriverDownloadClick;
+  CreateDownloadRow('VB-CABLE 虚拟音频线：', '打开 VB-CABLE 下载', 248, VbCableStatusLabel, VbCableDownloadButton);
+  VbCableDownloadButton.OnClick := @VbCableDownloadClick;
 
   RefreshPrereqButton := TNewButton.Create(PrereqDownloadPage);
   RefreshPrereqButton.Width := ScaleX(150);
   RefreshPrereqButton.Height := ScaleY(28);
   RefreshPrereqButton.Left := PrereqDownloadPage.SurfaceWidth - RefreshPrereqButton.Width;
-  RefreshPrereqButton.Top := ScaleY(254);
+  RefreshPrereqButton.Top := ScaleY(286);
   RefreshPrereqButton.Caption := '重新检测';
   RefreshPrereqButton.OnClick := @RefreshPrereqClick;
   RefreshPrereqButton.Parent := PrereqDownloadPage.Surface;

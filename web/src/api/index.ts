@@ -70,6 +70,10 @@ import type {
   PluginActionResult,
   PluginFrontendDocumentResult,
   PluginFrontendAssetResult,
+  RealtimeCoverPayload,
+  RealtimeCoverStatus,
+  RealtimeCoverChunk,
+  SystemAudioDevice,
 } from './types'
 
 export * from './types'
@@ -274,6 +278,30 @@ export const api = {
 
   createBatchWork: (payload: CreateBatchWorkPayload) =>
     invoke<WorkDTO[]>('create_batch_work', [payload], () => mock.createBatchWork(payload)),
+
+  startRealtimeCover: (payload: RealtimeCoverPayload) =>
+    invoke<RealtimeCoverStatus>('start_realtime_cover', [payload], () => mock.startRealtimeCover(payload)),
+
+  listSystemAudioDevices: () =>
+    invoke<SystemAudioDevice[]>('list_system_audio_devices', [], () => mock.listSystemAudioDevices()),
+
+  startSystemAudioRealtime: (payload: RealtimeCoverPayload) =>
+    invoke<RealtimeCoverStatus>('start_system_audio_realtime', [payload], () => mock.startSystemAudioRealtime(payload)),
+
+  getRealtimeCoverStatus: (id: string) =>
+    invoke<RealtimeCoverStatus>('get_realtime_cover_status', [id], () => mock.getRealtimeCoverStatus(id)),
+
+  getRealtimeCoverChunk: (id: string, index: number) =>
+    invoke<RealtimeCoverChunk>('get_realtime_cover_chunk', [id, index], () => mock.getRealtimeCoverChunk(id, index)),
+
+  stopRealtimeCover: (id: string) =>
+    invoke<RealtimeCoverStatus>('stop_realtime_cover', [id], () => mock.stopRealtimeCover(id)),
+
+  cleanupRealtimeCover: (id: string) =>
+    invoke<boolean>('cleanup_realtime_cover', [id], () => mock.cleanupRealtimeCover(id)),
+
+  exportRealtimeCover: (id: string) =>
+    invoke<string>('export_realtime_cover', [id], () => mock.exportRealtimeCover(id)),
 
   getInferenceQueue: () =>
     invoke<InferenceQueueStatus>('get_inference_queue', [], () => mock.getInferenceQueue()),
@@ -662,6 +690,17 @@ export const api = {
   ) =>
     invoke<EditorRerunResult>('rerun_editor_clip', [projectId, trackId, clipId, modelId, params, enhance], () =>
       mock.rerunEditorClip(projectId, trackId, clipId, modelId, params, enhance),
+    ),
+
+  enhanceEditorClip: (
+    projectId: string,
+    trackId: string,
+    clipId: string,
+    referencePath: string,
+    options?: Omit<NonNullable<CreateWorkPayload['vocal_enhancement']>, 'enabled'>,
+  ) =>
+    invoke<EditorRerunResult>('enhance_editor_clip', [projectId, trackId, clipId, referencePath, options], () =>
+      mock.enhanceEditorClip(projectId, trackId, clipId, referencePath, options),
     ),
 }
 

@@ -52,6 +52,8 @@ call :CHECK_FFMPEG
 if errorlevel 1 exit /b 1
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 52 正在检查 C++ Build Tools
 call :CHECK_CPP_TOOLS
+if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 60 正在检查 VB-CABLE 虚拟音频线
+call :CHECK_VBCABLE
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 66 正在检查 GPU 运行环境
 call :CHECK_CUDA
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 80 正在检查 uv
@@ -333,6 +335,33 @@ if "%XB_RESOLVED_GPU_STACK%"=="cu128" (
 )
 call :RESOLVE_PATHS
 call :USE_CUDA_DIR_IF_VERSION "%XB_CUDA_DIR%" "selected path" >nul 2>&1
+exit /b 0
+
+:CHECK_VBCABLE
+set "XB_VBCABLE_INPUT="
+set "XB_VBCABLE_OUTPUT="
+for /f "delims=" %%D in ('powershell.exe -NoProfile -NonInteractive -Command "(Get-CimInstance Win32_SoundDevice -ErrorAction SilentlyContinue).Name; (Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FriendlyName)" 2^>nul') do (
+  echo %%D | findstr /I /C:"CABLE Input" >nul && set "XB_VBCABLE_INPUT=1"
+  echo %%D | findstr /I /C:"CABLE Output" >nul && set "XB_VBCABLE_OUTPUT=1"
+)
+if defined XB_VBCABLE_INPUT if defined XB_VBCABLE_OUTPUT (
+  set "XB_VBCABLE_READY=1"
+  echo [ok] VB-CABLE virtual audio endpoints found.
+  exit /b 0
+)
+reg query "HKLM\SOFTWARE\VB-Audio\VBCABLE" >nul 2>&1 && (
+  set "XB_VBCABLE_READY=1"
+  echo [ok] VB-CABLE installation record found.
+  exit /b 0
+)
+reg query "HKLM\SOFTWARE\WOW6432Node\VB-Audio\VBCABLE" >nul 2>&1 && (
+  set "XB_VBCABLE_READY=1"
+  echo [ok] VB-CABLE installation record found.
+  exit /b 0
+)
+set "XB_VBCABLE_READY="
+echo [optional] VB-CABLE not detected. System audio voice changing will need it.
+echo            Install manually from: https://vb-audio.com/Cable/
 exit /b 0
 
 :USE_CUDA_DIR_IF_VERSION

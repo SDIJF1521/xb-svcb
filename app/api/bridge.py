@@ -29,6 +29,7 @@ from application import (
     ModelService,
     MusicService,
     PluginService,
+    RealtimeCoverService,
     SystemService,
     WorkService,
 )
@@ -64,6 +65,7 @@ class Api:
         editor_repo: ListRepository,
         settings: SettingsStore,
         plugins: PluginService,
+        realtime_cover: RealtimeCoverService,
     ) -> None:
         self._system = system
         self._models = models
@@ -76,6 +78,7 @@ class Api:
         self._editor_repo = editor_repo
         self._settings = settings
         self._plugins = plugins
+        self._realtime_cover = realtime_cover
         self._window = None
         self._migration_lock = threading.Lock()
         self._migration = self._empty_migration_status()
@@ -115,7 +118,71 @@ class Api:
 
     def shutdown(self) -> None:
         """释放桌面进程内的后台服务。"""
+        self._realtime_cover.shutdown()
         self._http_api.shutdown()
+        # 清理所有应用生成的临时音频、UVR 中间文件和编辑器缓存；保留
+        # data/temp 目录本身，便于下次启动直接复用。
+        paths.clear_temp_directory()
+
+    # ---- 实时翻唱工程 ----
+    def start_realtime_cover(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._realtime_cover.start(payload or {})
+
+    def list_system_audio_devices(self) -> list[dict[str, Any]]:
+        return self._realtime_cover.list_system_audio_devices()
+
+    def start_system_audio_realtime(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._realtime_cover.start_system(payload or {})
+
+    def get_realtime_cover_status(self, session_id: str) -> dict[str, Any]:
+        return self._ensure_realtime_work(session_id)
+
+    def get_realtime_cover_chunk(self, session_id: str, index: int) -> dict[str, Any]:
+        return self._realtime_cover.chunk(session_id, int(index))
+
+    def stop_realtime_cover(self, session_id: str) -> dict[str, Any]:
+        status = self._realtime_cover.stop(session_id)
+        if status.get("input_mode") == "system":
+            return status
+        if status.get("status") == "done" and not status.get("work_id"):
+            return self._ensure_realtime_work(session_id)
+        return status
+
+    def cleanup_realtime_cover(self, session_id: str) -> bool:
+        return self._realtime_cover.cleanup(session_id)
+
+    def export_realtime_cover(self, session_id: str) -> str:
+        status = self._ensure_realtime_work(session_id)
+        work_id = str(status.get("work_id") or "")
+        if work_id:
+            return self.export_work(work_id)
+        source = Path(str(status.get("output_path") or ""))
+        if not source.is_file():
+            return ""
+        destination = self._save_dialog("导出实时翻唱", "实时翻唱.wav")
+        if not destination:
+            return ""
+        target = Path(destination)
+        if target.suffix.lower() != ".wav":
+            target = target.with_suffix(".wav")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            return str(target)
+        except OSError:
+            return ""
+
+    def _ensure_realtime_work(self, session_id: str) -> dict[str, Any]:
+        """Persist a completed realtime session before exposing its status."""
+        status = self._realtime_cover.status(session_id)
+        if status.get("input_mode") == "system":
+            return status
+        if status.get("status") == "done" and not status.get("work_id"):
+            work = self._works.register_realtime_output(status)
+            if work:
+                self._realtime_cover.attach_work_id(session_id, str(work.get("id") or ""))
+                status = self._realtime_cover.status(session_id)
+        return status
 
     def toggle_window_fullscreen(self) -> dict[str, Any]:
         """切换软件主窗口全屏，供插件自定义页面通过宿主 Bridge 调用。"""
@@ -1200,6 +1267,22 @@ class Api:
     ) -> dict[str, Any]:
         return self._editor.rerun_clip(project_id, track_id, clip_id, model_id, params or {}, enhance or {})
 
+    def enhance_editor_clip(
+        self,
+        project_id: str,
+        track_id: str,
+        clip_id: str,
+        reference_path: str,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._editor.enhance_clip(
+            project_id,
+            track_id,
+            clip_id,
+            reference_path,
+            options or {},
+        )
+
     @staticmethod
     def _empty_migration_status() -> dict[str, Any]:
         return {
@@ -1614,6 +1697,7 @@ def build_api() -> Api:
         editor_repo, works_repo, model_service, ffmpeg, uvr, engines, vocal_enhancement
     )
     plugin_service = PluginService(settings)
+    realtime_cover_service = RealtimeCoverService(model_service, ffmpeg, uvr, engines)
 
     # 启动时回收上次会话残留的"处理中"任务（其后台线程已随进程退出而终止）
     work_service.recover_stale()
@@ -1630,4 +1714,5 @@ def build_api() -> Api:
         editor_repo,
         settings,
         plugin_service,
+        realtime_cover_service,
     )

@@ -202,7 +202,7 @@
                   <el-dropdown-item command="rename">
                     <el-icon><EditPen /></el-icon> 重命名
                   </el-dropdown-item>
-                  <el-dropdown-item command="retry">
+                  <el-dropdown-item v-if="w.workflow !== 'realtime_cover'" command="retry">
                     <el-icon><RefreshRight /></el-icon> 重新生成
                   </el-dropdown-item>
                   <el-dropdown-item v-if="w.status === 'failed'" command="log">

@@ -446,6 +446,79 @@ class FfmpegTool:
         except (OSError, subprocess.SubprocessError):
             return False
 
+    def silence(self, dst: Path, duration: float, sample_rate: int = 44100) -> bool:
+        """Create a fixed-duration stereo silence file."""
+        if not self.ffmpeg:
+            return False
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            result = subprocess.run(
+                [
+                    self.ffmpeg,
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"anullsrc=r={sample_rate}:cl=stereo",
+                    "-t",
+                    f"{max(0.01, float(duration)):.6f}",
+                    "-ar",
+                    str(sample_rate),
+                    "-ac",
+                    "2",
+                    str(dst),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+                **config.subprocess_no_window(),
+            )
+            return result.returncode == 0 and dst.exists()
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return False
+
+    def edge_fade(
+        self,
+        src: Path,
+        dst: Path,
+        duration: float,
+        fade_seconds: float = 0.012,
+        sample_rate: int = 44100,
+    ) -> bool:
+        """Apply a short vocal-only edge fade without changing block duration."""
+        if not self.ffmpeg:
+            return False
+        length = max(0.01, float(duration))
+        fade = max(0.0, min(float(fade_seconds), length / 2.0))
+        if fade <= 0:
+            return self.convert(src, dst, sample_rate)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        filters = (
+            f"aresample={sample_rate},"
+            f"afade=t=in:st=0:d={fade:.6f},"
+            f"afade=t=out:st={max(0.0, length - fade):.6f}:d={fade:.6f}"
+        )
+        try:
+            result = subprocess.run(
+                [
+                    self.ffmpeg, "-y", "-i", str(src),
+                    "-af", filters,
+                    "-t", f"{length:.6f}",
+                    "-ar", str(sample_rate), "-ac", "2", str(dst),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+                **config.subprocess_no_window(),
+            )
+            return result.returncode == 0 and dst.exists()
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return False
+
     def mix(
         self,
         vocals: Path,

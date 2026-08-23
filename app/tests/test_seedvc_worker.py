@@ -15,9 +15,15 @@ from infrastructure.seedvc_worker import (
     _patch_seedvc_directml_f0_postprocessing,
     _patch_whisper_sampling_rate,
 )
+from infrastructure.seedvc_engine import SeedVcEngine
 
 
 class SeedVcWorkerLocalAssetTests(unittest.TestCase):
+    def test_realtime_quality_maps_to_four_through_ten_steps(self) -> None:
+        self.assertEqual(SeedVcEngine._realtime_diffusion_steps(0), 4)
+        self.assertEqual(SeedVcEngine._realtime_diffusion_steps(0.5), 7)
+        self.assertEqual(SeedVcEngine._realtime_diffusion_steps(1), 10)
+
     def test_directml_rmvpe_f0_transfer_is_deferred_for_cpu_statistics(self) -> None:
         calls: list[tuple] = []
 

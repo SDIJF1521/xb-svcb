@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.28"
+APP_VERSION = "0.0.29"
 APP_BG = "#05060d"
 
 
@@ -144,6 +144,33 @@ def _venv_python(venv_dir: Path) -> Path:
     return win if os.name == "nt" else nix
 
 
+def _external_install_roots() -> list[Path]:
+    """Find an adjacent installed runtime when the app is run from a source checkout."""
+    roots = [ROOT_DIR]
+    explicit = os.environ.get("XB_APP_ROOT")
+    if explicit:
+        roots.insert(0, Path(explicit).expanduser())
+    for marker in (BASE_DIR / "data_home.json", BASE_DIR.parent / "data_home.json"):
+        try:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            data_dir = payload.get("data_dir") if isinstance(payload, dict) else None
+            if data_dir:
+                roots.append(Path(str(data_dir)).expanduser().parent)
+        except (OSError, json.JSONDecodeError, TypeError):
+            continue
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root.resolve()).lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return unique
+
+
+RUNTIME_ROOTS = _external_install_roots()
+
+
 # 项目内引擎与环境的约定位置（由安装器创建）
 ENGINES_DIR = ROOT_DIR / "engines"
 SOVITS_REPO_DIR = ENGINES_DIR / "so-vits-svc"
@@ -167,7 +194,7 @@ def _detect_svc_python() -> Path | None:
     # 优先项目内安装器创建的 .venv-svc；其次常见 conda 环境名 svc（开发便利）
     return _first_existing(
         [
-            _venv_python(SVC_VENV_DIR),
+            *(_venv_python(root / ".venv-svc") for root in RUNTIME_ROOTS),
             Path.home() / "anaconda3" / "envs" / "svc" / "python.exe",
             Path.home() / "miniconda3" / "envs" / "svc" / "python.exe",
         ]
@@ -208,7 +235,7 @@ def _detect_rvc_python() -> Path | None:
     env = os.environ.get("XB_RVC_PYTHON")
     if env:
         return Path(env)
-    return _first_existing([_venv_python(RVC_VENV_DIR)])
+    return _first_existing([_venv_python(root / ".venv-rvc") for root in RUNTIME_ROOTS])
 
 
 # 运行 RVC 推理的 Python 解释器（需装有 rvc-python + torch）
@@ -232,14 +259,14 @@ def _detect_seedvc_repo() -> Path | None:
     env = os.environ.get("XB_SEEDVC_REPO")
     if env:
         return Path(env)
-    return _first_existing([SEEDVC_REPO_DIR])
+    return _first_existing([root / "engines" / "seed-vc" for root in RUNTIME_ROOTS])
 
 
 def _detect_seedvc_python() -> Path | None:
     env = os.environ.get("XB_SEEDVC_PYTHON")
     if env:
         return Path(env)
-    return _first_existing([_venv_python(SEEDVC_VENV_DIR)])
+    return _first_existing([_venv_python(root / ".venv-seedvc") for root in RUNTIME_ROOTS])
 
 
 SEEDVC_REPO = _detect_seedvc_repo()

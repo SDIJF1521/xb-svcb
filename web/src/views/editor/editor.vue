@@ -196,6 +196,13 @@
             >
               重推理
             </button>
+            <button
+              type="button"
+              :class="{ active: activeInspectorPanel === 'enhance' }"
+              @click="activeInspectorPanel = 'enhance'"
+            >
+              AI 增强
+            </button>
           </div>
 
           <div v-if="activeInspectorPanel === 'clip'" class="clip-panel">
@@ -497,6 +504,28 @@
                 <el-icon class="el-icon--left"><Scissor /></el-icon>{{ lyricHasTimestamps ? '歌词切分' : '自动切句' }}
               </el-button>
             </div>
+          </div>
+
+          <div v-if="activeInspectorPanel === 'enhance'" class="rerun-box editor-enhance-box">
+            <label>当前片段 AI 增强</label>
+            <button type="button" class="rerun-path-picker" @click="pickEditorEnhanceReference">
+              {{ baseName(editorEnhanceReference) || '选择对应的原始歌曲' }}
+            </button>
+            <div class="rerun-enhance-level">
+              <button type="button" class="enhance-level" :class="{ active: rerunEnhanceLevel === 'basic' }" @click="rerunEnhanceLevel = 'basic'">基础层</button>
+              <button type="button" class="enhance-level" :class="{ active: rerunEnhanceLevel === 'advanced' }" @click="rerunEnhanceLevel = 'advanced'">高级层</button>
+            </div>
+            <div class="rerun-mini"><span>设备</span><select v-model="rerunDevice"><option v-for="d in deviceOptions" :key="d.value" :value="d.value">{{ d.label }}</option></select></div>
+            <div class="rerun-enhance-controls">
+              <div v-for="control in editorEnhanceControls" :key="control.key" class="rerun-param">
+                <div class="rerun-param-label"><span>{{ control.label }}</span><b>{{ Math.round(control.value() * 100) }}%</b></div>
+                <input :value="control.value()" type="range" min="0" max="1" step="0.05" @input="control.set(Number(($event.target as HTMLInputElement).value))" />
+              </div>
+            </div>
+            <span v-if="!editorEnhanceReference" class="rerun-hint">需要原始歌曲作为当前时间段的音准、节奏和动态参考。</span>
+            <el-button :disabled="!selectedClipEditable || !editorEnhanceReference || enhancingClip" :loading="enhancingClip" round class="cta-btn mini" @click="enhanceSelectedClip">
+              <el-icon class="el-icon--left"><MagicStick /></el-icon>增强并替换片段
+            </el-button>
           </div>
 
           <div v-if="activeInspectorPanel === 'rerun'" class="rerun-box">
@@ -909,7 +938,7 @@ defineOptions({ name: 'AudioEditorPage' })
 type DragMode = 'move' | 'start' | 'end'
 type PlaybackMode = 'none' | 'mix' | 'clip'
 type LyricSourceMode = 'manual' | 'api' | 'file'
-type InspectorPanel = 'clip' | 'effects' | 'vocal' | 'rerun'
+type InspectorPanel = 'clip' | 'effects' | 'vocal' | 'rerun' | 'enhance'
 interface Selection { trackId: string; clipId: string }
 interface DragState {
   mode: DragMode
@@ -982,6 +1011,7 @@ const copyingAudio = ref(false)
 const mergingAudio = ref(false)
 const pastingAudio = ref(false)
 const rerunning = ref(false)
+const enhancingClip = ref(false)
 const silenceSplitting = ref(false)
 const separating = ref(false)
 const lyricSplitting = ref(false)
@@ -1260,6 +1290,7 @@ const rerunProtect = ref(prefNum(rerunPrefs.protect, 0.33, 0, 0.5))
 const rerunFilterRadius = ref(prefNum(rerunPrefs.filterRadius, 3, 0, 7))
 const rerunRvcVersion = ref(prefStr(rerunPrefs.rvcVersion, 'v2', rvcVersions))
 const rerunReferenceAudio = ref(prefStr(rerunPrefs.referenceAudio, ''))
+const editorEnhanceReference = ref('')
 const rerunEnhanceEnabled = ref(Boolean(rerunPrefs.enhanceEnabled))
 const rerunEnhanceLevel = ref<'basic' | 'advanced'>(
   rerunPrefs.enhanceLevel === 'advanced' ? 'advanced' : 'basic',
@@ -1272,6 +1303,16 @@ const rerunAiCompressor = ref(prefNum(rerunPrefs.aiCompressor, 0.45, 0, 1))
 const rerunAiExciter = ref(prefNum(rerunPrefs.aiExciter, 0.25, 0, 1))
 const rerunStereoWidth = ref(prefNum(rerunPrefs.stereoWidth, 0.30, 0, 1))
 const rerunLoudnessEnvelope = ref(prefNum(rerunPrefs.loudnessEnvelope, 0.58, 0, 1))
+const editorEnhanceControls = [
+  { key: 'pitch_correction', label: '自然修音', value: () => rerunPitchCorrection.value, set: (value: number) => { rerunPitchCorrection.value = value } },
+  { key: 'timing_alignment', label: 'AI 对齐', value: () => rerunTimingAlignment.value, set: (value: number) => { rerunTimingAlignment.value = value } },
+  { key: 'timbre_focus', label: '角色音色', value: () => rerunTimbreFocus.value, set: (value: number) => { rerunTimbreFocus.value = value } },
+  { key: 'ai_eq', label: 'AI EQ', value: () => rerunAiEq.value, set: (value: number) => { rerunAiEq.value = value } },
+  { key: 'ai_compressor', label: 'AI 压缩', value: () => rerunAiCompressor.value, set: (value: number) => { rerunAiCompressor.value = value } },
+  { key: 'ai_exciter', label: 'AI 激励', value: () => rerunAiExciter.value, set: (value: number) => { rerunAiExciter.value = value } },
+  { key: 'stereo_width', label: '立体声宽度', value: () => rerunStereoWidth.value, set: (value: number) => { rerunStereoWidth.value = value } },
+  { key: 'loudness_envelope', label: '响度包络', value: () => rerunLoudnessEnvelope.value, set: (value: number) => { rerunLoudnessEnvelope.value = value } },
+]
 
 const selectedTrack = computed(() => {
   if (!project.value || !selected.value) return null
@@ -1431,6 +1472,11 @@ function resetRerunParams() {
 async function pickRerunReference() {
   const path = await api.pickAudioFile()
   if (path) rerunReferenceAudio.value = path
+}
+
+async function pickEditorEnhanceReference() {
+  const path = await api.pickAudioFile()
+  if (path) editorEnhanceReference.value = path
 }
 
 function snapshot(): EditorProject | null {
@@ -3422,6 +3468,36 @@ async function rerunClip() {
   if (enhanceErr) msg += `（美声失败：${enhanceErr}）`
   if (removedCount > 0 && !enhanced) msg = `片段已替换，已移除 ${removedCount} 个插件效果避免污染干声`
   ElMessage.success(msg)
+}
+
+async function enhanceSelectedClip() {
+  if (!project.value || !selected.value || !editorEnhanceReference.value || !selectedClipEditable.value) return
+  enhancingClip.value = true
+  const result = await api.enhanceEditorClip(
+    project.value.id,
+    selected.value.trackId,
+    selected.value.clipId,
+    editorEnhanceReference.value,
+    {
+      level: rerunEnhanceLevel.value,
+      device: rerunDevice.value,
+      pitch_correction: Number(rerunPitchCorrection.value.toFixed(2)),
+      timing_alignment: Number(rerunTimingAlignment.value.toFixed(2)),
+      timbre_focus: Number(rerunTimbreFocus.value.toFixed(2)),
+      ai_eq: Number(rerunAiEq.value.toFixed(2)),
+      ai_compressor: Number(rerunAiCompressor.value.toFixed(2)),
+      ai_exciter: Number(rerunAiExciter.value.toFixed(2)),
+      stereo_width: Number(rerunStereoWidth.value.toFixed(2)),
+      loudness_envelope: Number(rerunLoudnessEnvelope.value.toFixed(2)),
+    },
+  )
+  enhancingClip.value = false
+  if (!result.ok || !result.project) {
+    ElMessage.error(result.error || '片段 AI 增强失败')
+    return
+  }
+  applyProject(result.project)
+  ElMessage.success('当前片段已增强，可使用撤销恢复原片段')
 }
 
 function seekStart() {

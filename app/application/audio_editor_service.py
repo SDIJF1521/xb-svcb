@@ -57,6 +57,7 @@ class AudioEditorService:
         self._vocal_enhancement = vocal_enhancement or VocalEnhancementProcessor()
 
     def list(self) -> list[dict[str, Any]]:
+        self._cleanup_orphan_project_dirs()
         projects = []
         for p in self._repo.all():
             projects.append(
@@ -130,7 +131,56 @@ class AudioEditorService:
             self._repo.remove(stored_id)
         except OSError:
             return False
+        self._cleanup_editor_cache_after_remove()
         return True
+
+    def _cleanup_orphan_project_dirs(self) -> None:
+        """清理数据库中已不存在的编辑工程目录，避免历史删除失败留下文件。"""
+        try:
+            base = config.EDITOR_DIR.resolve()
+            known = {str(item.get("id") or "") for item in self._repo.all()}
+            if not base.exists():
+                return
+            for candidate in base.iterdir():
+                if (
+                    not candidate.is_dir()
+                    or candidate.name == config.EDITOR_CACHE_DIR.name
+                    or not candidate.name.startswith("edt_")
+                    or candidate.name in known
+                ):
+                    continue
+                resolved = candidate.resolve()
+                if resolved.parent == base and resolved.name == candidate.name:
+                    shutil.rmtree(candidate, ignore_errors=True)
+        except (OSError, RuntimeError):
+            return
+
+    def _cleanup_editor_cache_after_remove(self) -> None:
+        """删除无工程所有者的编辑器缓存；最后一个工程删除时清空整个缓存目录。"""
+        try:
+            cache_root = config.EDITOR_CACHE_DIR.resolve()
+            if not cache_root.exists():
+                return
+            remaining = {str(item.get("id") or "") for item in self._repo.all()}
+            for candidate in list(cache_root.iterdir()):
+                # 带工程 ID 的渲染缓存可以在删除对应工程时安全识别。
+                if any(candidate.name.startswith(f"{project_id}_") for project_id in remaining if project_id):
+                    continue
+                if remaining and not candidate.name.startswith("edt_"):
+                    continue
+                if not remaining and not candidate.name.startswith(
+                    ("aud_", "wf_", "fx_", "plugin_", "juce_", "edt_")
+                ):
+                    continue
+                resolved = candidate.resolve()
+                if resolved.parent != cache_root:
+                    continue
+                if candidate.is_symlink() or candidate.is_file():
+                    candidate.unlink()
+                elif candidate.is_dir():
+                    shutil.rmtree(candidate)
+        except (OSError, RuntimeError):
+            return
 
     def create_from_audio(self, path: str, title: str | None = None) -> dict[str, Any] | None:
         src = Path(path) if path else None
@@ -1936,6 +1986,123 @@ class AudioEditorService:
         if plugin_effects:
             meta["rerun_removed_plugin_effects"] = plugin_effects
         next_clip["metadata"] = meta
+        next_track["clips"][next_idx] = next_clip
+        next_project["waveform_cache"] = {}
+        saved = self.save(next_project, push_history=True)
+        return {"ok": True, "project": saved, "clip": next_clip}
+
+    def enhance_clip(
+        self,
+        project_id: str,
+        track_id: str,
+        clip_id: str,
+        reference_path: str,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Apply AI enhancement to an existing editor clip without rerunning VC."""
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        track, idx, clip = self._find_clip_ref(project, track_id, clip_id)
+        if not track or idx < 0 or not clip:
+            return {"ok": False, "error": "片段不存在"}
+        if track.get("locked") or clip.get("locked"):
+            return {"ok": False, "error": "片段已锁定"}
+        source = Path(str(clip.get("file") or ""))
+        reference = Path(str(reference_path or ""))
+        if not source.is_file():
+            return {"ok": False, "error": "片段音频不存在"}
+        if not reference.is_file():
+            return {"ok": False, "error": "请选择与片段对应的原始歌曲"}
+        if not self._vocal_enhancement.available:
+            return {"ok": False, "error": "AI 歌声增强环境未就绪"}
+
+        start = float(clip.get("start") or 0.0)
+        end = float(clip.get("end") or 0.0)
+        duration = end - start
+        if duration < self._MIN_RERUN_DURATION:
+            return {
+                "ok": False,
+                "error": f"片段过短：至少 {self._MIN_RERUN_DURATION:.2f} 秒才能增强",
+            }
+        sample_rate = int(project.get("sample_rate") or 44100)
+        out_dir = self._project_dir(project_id) / "enhancements"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        key = self._rerun_key(source, clip, "ai-enhancement", options or {})
+        target_input = out_dir / f"{clip_id}_{key}_input.wav"
+        reference_input = out_dir / f"{clip_id}_{key}_reference.wav"
+        output = out_dir / f"{clip_id}_{key}_enhanced.wav"
+        if not self._audio.trim(
+            source,
+            float(clip.get("offset") or 0.0),
+            float(clip.get("offset") or 0.0) + duration,
+            target_input,
+            sample_rate=sample_rate,
+        ):
+            return {"ok": False, "error": "无法读取待增强片段"}
+        if not self._audio.trim(reference, start, end, reference_input, sample_rate=sample_rate):
+            return {"ok": False, "error": "原始歌曲未覆盖当前片段的时间范围"}
+
+        cfg = options or {}
+        level = "advanced" if str(cfg.get("level") or "advanced").lower() == "advanced" else "basic"
+        strengths = {
+            "pitch_correction": self._vocal_enhancement.normalize_strength(
+                cfg.get("pitch_correction", 0.45), 0.45
+            ),
+            "timing_alignment": self._vocal_enhancement.normalize_strength(
+                cfg.get("timing_alignment", 0.45), 0.45
+            ),
+            "timbre_focus": self._vocal_enhancement.normalize_strength(
+                cfg.get("timbre_focus", 0.60), 0.60
+            ),
+            "ai_eq": self._vocal_enhancement.normalize_strength(cfg.get("ai_eq", 0.55), 0.55),
+            "ai_compressor": self._vocal_enhancement.normalize_strength(
+                cfg.get("ai_compressor", 0.45), 0.45
+            ),
+            "ai_exciter": self._vocal_enhancement.normalize_strength(
+                cfg.get("ai_exciter", 0.25), 0.25
+            ),
+            "stereo_width": self._vocal_enhancement.normalize_strength(
+                cfg.get("stereo_width", 0.30), 0.30
+            ),
+            "loudness_envelope": self._vocal_enhancement.normalize_strength(
+                cfg.get("loudness_envelope", 0.58), 0.58
+            ),
+        }
+        try:
+            self._vocal_enhancement.enhance(
+                target_input,
+                output,
+                level=level,
+                device=str(cfg.get("device") or "auto"),
+                reference=reference_input,
+                **strengths,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+        if not output.is_file():
+            return {"ok": False, "error": "AI 增强没有生成输出文件"}
+
+        next_project = copy.deepcopy(project)
+        next_track, next_idx, next_clip = self._find_clip_ref(next_project, track_id, clip_id)
+        if not next_track or next_idx < 0 or not next_clip:
+            return {"ok": False, "error": "片段替换失败"}
+        next_clip = dict(next_clip)
+        next_clip["file"] = str(output)
+        next_clip["offset"] = 0.0
+        next_clip["name"] = f"{next_clip.get('name') or '片段'} · AI 增强"
+        metadata = dict(next_clip.get("metadata") or {})
+        metadata.update(
+            {
+                "ai_enhanced": True,
+                "ai_enhancement_level": level,
+                "ai_enhancement_reference": str(reference),
+                "ai_enhancement_source": str(source),
+                "ai_enhancement_at": self._now(),
+                **{f"ai_enhancement_{key}": value for key, value in strengths.items()},
+            }
+        )
+        next_clip["metadata"] = metadata
         next_track["clips"][next_idx] = next_clip
         next_project["waveform_cache"] = {}
         saved = self.save(next_project, push_history=True)

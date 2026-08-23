@@ -21,6 +21,16 @@ const router = createRouter({
           component: () => import('@/views/create/create.vue'),
         },
         {
+          path: 'create/realtime',
+          name: 'RealtimeCover',
+          component: () => import('@/views/create/realtime.vue'),
+        },
+        {
+          path: 'enhancement',
+          name: 'AiEnhancement',
+          component: () => import('@/views/enhancement/enhancement.vue'),
+        },
+        {
           path: 'models',
           name: 'Models',
           component: () => import('@/views/models/models.vue'),

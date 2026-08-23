@@ -249,7 +249,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Picture, Close, Right, Download, Loading, Scissor, ArrowDown, Connection, Grid } from '@element-plus/icons-vue'
+import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Picture, Close, Right, Download, Loading, Scissor, ArrowDown, Connection, Grid, MagicStick } from '@element-plus/icons-vue'
 import ThemeSwitcher from '@/components/theme/ThemeSwitcher.vue'
 import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
@@ -266,6 +266,7 @@ const route = useRoute()
 const primaryNavItems = [
   { label: '首页', to: '/', icon: HomeFilled },
   { label: 'AI 翻唱', to: '/create', icon: Microphone },
+  { label: 'AI 增强', to: '/enhancement', icon: MagicStick },
   { label: '音频编辑', to: '/editor/projects', icon: Scissor },
 ]
 

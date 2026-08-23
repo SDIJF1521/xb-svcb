@@ -53,6 +53,10 @@ import type {
   EditorProject,
   EditorProjectSummary,
   EditorTrack,
+  RealtimeCoverPayload,
+  RealtimeCoverStatus,
+  RealtimeCoverChunk,
+  SystemAudioDevice,
   EditorWaveform,
   EditorRerunResult,
   EditorSilenceSplitOptions,
@@ -235,6 +239,15 @@ const mockModels: ModelDTO[] = [
     main_model: { name: 'Hoshino_G.pth', path: '' }, main_config: { name: 'config.json', path: '' },
     diffusion_model: { name: 'model_diff.pt', path: '' }, diffusion_config: { name: 'diff.yaml', path: '' },
   },
+  {
+    id: 'm3', name: 'Reze RVC v2', type: 'RVC', framework: 'rvc', sample_rate: '40kHz', size: '92 MB', imported_at: '07-24',
+    main_model: { name: 'reze_v2.pth', path: '' }, main_config: { name: '—', path: '' },
+    index_file: { name: 'added_IVF.index', path: '' },
+  },
+  {
+    id: 'm4', name: 'SeedVC 示例音色', type: 'SeedVC', framework: 'seed-vc', sample_rate: '44.1kHz', size: '428 MB', imported_at: '07-18',
+    main_model: { name: 'seed_v2.pth', path: '' }, main_config: { name: 'config.yml', path: '' },
+  },
 ]
 let defaultModelId = 'm1'
 let mockInferencePresets: InferencePreset[] = []
@@ -410,6 +423,13 @@ const multiSteps = (enhancement = false): PipelineStep[] => [
   { key: 'mix', label: '混音合成', status: 'wait' },
 ]
 
+const enhancementSteps = (): PipelineStep[] => [
+  { key: 'reference', label: '原曲人声与伴奏分析', status: 'wait' },
+  { key: 'cover_vocal', label: '翻唱人声准备', status: 'wait' },
+  { key: 'enhance', label: 'AI 歌声增强', status: 'wait' },
+  { key: 'mix', label: '增强成品混音', status: 'wait' },
+]
+
 const mockWorks: WorkDTO[] = [
   { id: 'w1', title: '星辰大海 (AI 翻唱)', model: 'MyVoice_v2.pth', model_id: 'm1', status: 'done', progress: 100, duration: '03:42', format: 'WAV', size: '38 MB', created_at: now(), time: '今天 14:20', steps: baseSteps().map((s) => ({ ...s, status: 'done' })), output: 'demo.wav' },
   { id: 'w2', title: '夜空中最亮的星 (AI 翻唱)', model: 'Hoshino_so-vits.pth', model_id: 'm2', status: 'done', progress: 100, duration: '04:05', format: 'FLAC', size: '42 MB', created_at: now(), time: '今天 13:08', steps: baseSteps().map((s) => ({ ...s, status: 'done' })), output: 'demo.flac' },
@@ -427,6 +447,7 @@ const mockWorkflowKeys: CreateWorkflow[] = [
   'manual_vocal_merge',
   'auto_then_editor',
   'full_manual_editor',
+  'ai_enhancement',
 ]
 const mockVocalMergeWorkflows: CreateWorkflow[] = ['auto_vocal_merge', 'manual_vocal_merge']
 
@@ -569,6 +590,8 @@ function advance(work: WorkDTO) {
   tick()
 }
 
+const mockRealtimeSessions = new Map<string, RealtimeCoverStatus>()
+
 export const mock = {
   toggleWindowFullscreen: () => ({ ok: true }),
   getPluginStatus: (): PluginStatus => ({ ...mockPluginStatus }),
@@ -614,6 +637,7 @@ export const mock = {
         { key: 'rvc', name: 'RVC 推理引擎', desc: '加载用户 RVC 模型（.pth + 可选 .index）进行歌声转换推理', version: 'rvc-python', status: 'cuda', ok: true },
         { key: 'seedvc', name: 'SeedVC 推理引擎', desc: '加载 SeedVC checkpoint + 参考音频进行歌声转换推理', version: 'Seed-VC', status: 'cuda', ok: true },
         { key: 'ddsp', name: 'DDSP-SVC 推理引擎', desc: '加载 DDSP-SVC Rectified Flow 模型进行歌声转换', version: 'DDSP-SVC', status: 'cuda', ok: true },
+        { key: 'vocal-enhancement', name: 'AI Vocal Enhancement', desc: '原曲参考对齐与 AI 歌声增强', version: 'Natural Voice', status: '已就绪', ok: true },
       ],
       inference_devices: {
         preferred: 'cuda',
@@ -877,16 +901,18 @@ export const mock = {
   createWork(payload: CreateWorkPayload): WorkDTO {
     const isMulti = payload.mode === 'multi'
     const workflow = normalizeMockWorkflow(payload.workflow, isMulti)
+    const isEnhancement = workflow === 'ai_enhancement'
     const enhancement = Boolean(
       payload.vocal_enhancement?.enabled && workflow !== 'manual_vocal_merge',
     )
     const model = mockModels.find((m) => m.id === (payload.model_id || defaultModelId))
     const rawTitle = payload.title || (payload.source_path ? payload.source_path.split(/[/\\]/).pop()?.replace(/\.[^.]+$/, '') : '') || '未命名翻唱'
+    const parent = isEnhancement ? mockWorks.find((item) => item.id === payload.target_work_id) : undefined
     const work: WorkDTO = {
       id: rid('wrk_'),
-      title: `${rawTitle} (${isMulti ? '混合翻唱' : 'AI 翻唱'})`,
-      model: isMulti ? `多模型混合（${payload.models?.length || 0} 个）` : (model?.name || '默认模型'),
-      model_id: payload.models?.[0]?.model_id || model?.id || '',
+      title: `${rawTitle} (${isEnhancement ? 'AI 增强' : isMulti ? '混合翻唱' : 'AI 翻唱'})`,
+      model: isEnhancement ? `${parent?.model || '翻唱作品'} · AI 增强` : isMulti ? `多模型混合（${payload.models?.length || 0} 个）` : (model?.name || '默认模型'),
+      model_id: isEnhancement ? (parent?.model_id || '') : payload.models?.[0]?.model_id || model?.id || '',
       status: 'queue',
       progress: 0,
       duration: '—',
@@ -894,7 +920,7 @@ export const mock = {
       size: '—',
       created_at: now(),
       time: '刚刚',
-      source_path: payload.source_path,
+      source_path: payload.original_audio_path || payload.source_path,
       params: payload.params,
       workflow,
       vocal_enhancement: {
@@ -911,7 +937,7 @@ export const mock = {
       },
       mode: isMulti ? 'multi' : 'single',
       segments: payload.segments,
-      steps: isMulti ? multiSteps(enhancement) : baseSteps(enhancement),
+      steps: isEnhancement ? enhancementSteps() : isMulti ? multiSteps(enhancement) : baseSteps(enhancement),
     }
     mockWorks.unshift(work)
     advance(work)
@@ -919,6 +945,79 @@ export const mock = {
   },
   createBatchWork(payload: CreateBatchWorkPayload): WorkDTO[] {
     return (payload.source_paths || []).map((path) => this.createWork({ ...payload, source_path: path }))
+  },
+  startRealtimeCover(payload: RealtimeCoverPayload): RealtimeCoverStatus {
+    const id = rid('live_')
+    const status: RealtimeCoverStatus = {
+      id,
+      status: 'buffering',
+      message: '浏览器预览正在模拟实时缓冲',
+      duration: 210,
+      chunk_seconds: payload.chunk_seconds,
+      buffer_seconds: payload.buffer_seconds,
+      ready_seconds: 0,
+      processed_seconds: 0,
+      ready_chunks: 0,
+      total_chunks: Math.ceil(210 / payload.chunk_seconds),
+      mode: payload.mode,
+    }
+    mockRealtimeSessions.set(id, status)
+    return { ...status }
+  },
+  listSystemAudioDevices(): SystemAudioDevice[] {
+    return [
+      { id: 'Virtual Mic Input', name: 'Virtual Mic Input（示例）', kind: 'input', loopback: false, system_mix: false },
+      { id: 'Virtual Music Loopback', name: 'QQ 音乐混合回环（示例）', kind: 'input', loopback: true, system_mix: true },
+      { id: 'Default Speaker', name: '系统默认扬声器（示例）', kind: 'output' },
+    ]
+  },
+  startSystemAudioRealtime(payload: RealtimeCoverPayload): RealtimeCoverStatus {
+    const id = rid('system_')
+    const status: RealtimeCoverStatus = {
+      id,
+      input_mode: 'system',
+      status: 'ready',
+      message: '浏览器预览：系统音频变声已就绪',
+      duration: 0,
+      chunk_seconds: payload.chunk_seconds,
+      buffer_seconds: payload.buffer_seconds,
+      ready_seconds: 0,
+      processed_seconds: 0,
+      ready_chunks: 0,
+      total_chunks: 0,
+      mode: 'single',
+    }
+    mockRealtimeSessions.set(id, status)
+    return { ...status }
+  },
+  getRealtimeCoverStatus(id: string): RealtimeCoverStatus {
+    const status = mockRealtimeSessions.get(id)
+    if (!status) return { id, status: 'missing', error: '实时会话不存在' }
+    if (status.status === 'buffering') {
+      const ready = Math.min(210, (status.ready_seconds || 0) + (status.chunk_seconds || 8))
+      status.ready_seconds = ready
+      status.processed_seconds = ready
+      status.ready_chunks = Math.ceil(ready / (status.chunk_seconds || 8))
+      if (ready >= (status.buffer_seconds || 20)) {
+        status.status = 'ready'
+        status.message = '模拟缓冲已完成（桌面端使用真实模型音频）'
+      }
+    }
+    return { ...status }
+  },
+  getRealtimeCoverChunk(_id: string, _index: number): RealtimeCoverChunk {
+    return { ok: false, pending: true }
+  },
+  stopRealtimeCover(id: string): RealtimeCoverStatus {
+    const status = mockRealtimeSessions.get(id) || { id, status: 'missing' as const }
+    if (status.status !== 'missing') status.status = 'stopped'
+    return { ...status }
+  },
+  cleanupRealtimeCover(id: string): boolean {
+    return mockRealtimeSessions.delete(id)
+  },
+  exportRealtimeCover(_id: string): string {
+    return 'C:/music/实时翻唱.wav'
   },
   getInferenceQueue(): InferenceQueueStatus {
     const pending = mockWorks.filter((w) => w.status === 'queue').map((w) => w.id)
@@ -956,7 +1055,9 @@ export const mock = {
   retryWork(id: string): boolean {
     const w = mockWorks.find((x) => x.id === id)
     if (!w) return false
-    w.steps = w.mode === 'multi' ? multiSteps() : baseSteps()
+    w.steps = w.workflow === 'ai_enhancement'
+      ? enhancementSteps()
+      : w.mode === 'multi' ? multiSteps() : baseSteps()
     w.progress = 0
     advance(w)
     return true
@@ -2064,6 +2165,28 @@ export const mock = {
       rerun_ai_exciter: enhance?.enabled ? (enhance.ai_exciter ?? 0.25) : 0,
       rerun_stereo_width: enhance?.enabled ? (enhance.stereo_width ?? 0.30) : 0,
       rerun_loudness_envelope: enhance?.enabled ? (enhance.loudness_envelope ?? 0.58) : 0,
+    }
+    project.updated_at = now()
+    return { ok: true, project: cloneProject(project), clip: { ...clip } }
+  },
+  enhanceEditorClip(
+    projectId: string,
+    trackId: string,
+    clipId: string,
+    referencePath: string,
+    options?: Omit<NonNullable<CreateWorkPayload['vocal_enhancement']>, 'enabled'>,
+  ): EditorRerunResult {
+    const project = mockEditorProjects.find((p) => p.id === projectId)
+    const track = project?.tracks.find((t) => t.id === trackId)
+    const clip = track?.clips.find((c) => c.id === clipId)
+    if (!project || !track || !clip) return { ok: false, error: '工程或片段不存在' }
+    if (!referencePath) return { ok: false, error: '请选择原始歌曲' }
+    clip.name = `${clip.name} · AI 增强`
+    clip.metadata = {
+      ...(clip.metadata || {}),
+      ai_enhanced: true,
+      ai_enhancement_reference: referencePath,
+      ai_enhancement_level: options?.level || 'advanced',
     }
     project.updated_at = now()
     return { ok: true, project: cloneProject(project), clip: { ...clip } }

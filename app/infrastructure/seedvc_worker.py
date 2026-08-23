@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -340,8 +341,10 @@ def main() -> int:
     parser.add_argument("--checkpoint", required=True, help="SeedVC checkpoint .pth 路径")
     parser.add_argument("--config", required=True, help="SeedVC config .yml/.yaml 路径")
     parser.add_argument("--reference", required=True, help="目标音色参考音频路径")
-    parser.add_argument("--input", required=True, help="待转换人声 wav")
-    parser.add_argument("--output", required=True, help="输出 wav 路径")
+    parser.add_argument("--input", default="", help="待转换人声 wav")
+    parser.add_argument("--output", default="", help="输出 wav 路径")
+    parser.add_argument("--server", action="store_true", help="常驻进程，逐行接收 JSON 音频块")
+    parser.add_argument("--low-latency", action="store_true", help="实时变声模式：跳过逐块自然度后处理")
     parser.add_argument(
         "--device",
         default="auto",
@@ -358,16 +361,18 @@ def main() -> int:
     checkpoint = Path(args.checkpoint).resolve()
     config = Path(args.config).resolve()
     reference = Path(args.reference).resolve()
-    source = Path(args.input).resolve()
-    out_path = Path(args.output).resolve()
+    source = Path(args.input).resolve() if args.input else None
+    out_path = Path(args.output).resolve() if args.output else None
 
-    for label, path in (
+    required_paths = [
         ("仓库", repo),
         ("模型", checkpoint),
         ("配置", config),
         ("参考音频", reference),
-        ("输入音频", source),
-    ):
+    ]
+    if source is not None:
+        required_paths.append(("输入音频", source))
+    for label, path in required_paths:
         if not path.exists():
             print(f"SEEDVC_ERR {label}不存在: {path}", flush=True)
             return 2
@@ -453,54 +458,85 @@ def main() -> int:
 
                 WhisperModel.from_pretrained = classmethod(directml_from_pretrained)
             seedvc_main = seedvc_inference.main
+            if args.server:
+                original_load_models = seedvc_inference.load_models
+                loaded_models = None
+
+                def load_models_once(load_args):  # noqa: ANN001, ANN202
+                    nonlocal loaded_models
+                    if loaded_models is None:
+                        loaded_models = original_load_models(load_args)
+                    return loaded_models
+
+                seedvc_inference.load_models = load_models_once
         except Exception as exc:  # noqa: BLE001
             print(f"SEEDVC_ERR SeedVC 依赖导入失败: {exc}", flush=True)
             return 3
 
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="xb_seedvc_") as td:
-            out_dir = Path(td)
-            inference_config = _localized_config(config, out_dir, local_assets)
-            ns = SimpleNamespace(
-                source=str(source),
-                target=str(reference),
-                output=str(out_dir),
-                diffusion_steps=max(1, int(args.diffusion_steps)),
-                length_adjust=float(args.length_adjust),
-                inference_cfg_rate=float(args.cfg_rate),
-                f0_condition=True,
-                auto_f0_adjust=False,
-                semi_tone_shift=int(args.pitch),
-                checkpoint=str(checkpoint),
-                config=str(inference_config),
-                fp16=fp16,
-            )
-            try:
+        def convert_one(one_source: Path, one_output: Path) -> None:
+            one_output.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix="xb_seedvc_") as td:
+                out_dir = Path(td)
+                inference_config = _localized_config(config, out_dir, local_assets)
+                ns = SimpleNamespace(
+                    source=str(one_source),
+                    target=str(reference),
+                    output=str(out_dir),
+                    diffusion_steps=max(1, int(args.diffusion_steps)),
+                    length_adjust=float(args.length_adjust),
+                    inference_cfg_rate=float(args.cfg_rate),
+                    f0_condition=True,
+                    auto_f0_adjust=False,
+                    semi_tone_shift=int(args.pitch),
+                    checkpoint=str(checkpoint),
+                    config=str(inference_config),
+                    fp16=fp16,
+                )
                 seedvc_main(ns)
-            except Exception as exc:  # noqa: BLE001
-                message = str(exc).strip() or type(exc).__name__
-                print(f"SEEDVC_ERR SeedVC 推理失败: {message}", flush=True)
-                traceback.print_exc()
-                return 4
-            generated = _latest_wav(out_dir)
-            if not generated or not generated.exists():
-                print("SEEDVC_ERR SeedVC 未生成 wav 输出", flush=True)
-                return 5
-            try:
-                shutil.copy2(generated, out_path)
-                natural_stats = naturalize_inference_output(
-                    source,
-                    out_path,
-                    "seed-vc",
-                    duration_ratio=float(args.length_adjust),
-                )
-                print(
-                    f"SEEDVC_NATURAL {format_naturalizer_stats(natural_stats)}",
-                    flush=True,
-                )
-            except Exception as exc:  # noqa: BLE001
-                print(f"SEEDVC_ERR 输出自然度处理失败: {exc}", flush=True)
-                return 6
+                generated = _latest_wav(out_dir)
+                if not generated or not generated.exists():
+                    raise RuntimeError("SeedVC 未生成 wav 输出")
+                shutil.copy2(generated, one_output)
+                if not args.low_latency:
+                    natural_stats = naturalize_inference_output(
+                        one_source,
+                        one_output,
+                        "seed-vc",
+                        duration_ratio=float(args.length_adjust),
+                    )
+                    print(
+                        f"SEEDVC_NATURAL {format_naturalizer_stats(natural_stats)}",
+                        flush=True,
+                    )
+
+        if args.server:
+            print("SEEDVC_SERVER_READY", flush=True)
+            for raw in sys.stdin:
+                try:
+                    request = json.loads(raw)
+                    if request.get("command") == "close":
+                        break
+                    one_source = Path(str(request.get("input") or "")).resolve()
+                    one_output = Path(str(request.get("output") or "")).resolve()
+                    if not one_source.is_file():
+                        raise ValueError(f"输入音频不存在: {one_source}")
+                    convert_one(one_source, one_output)
+                    result = {"ok": True, "output": str(one_output)}
+                except Exception as exc:  # noqa: BLE001 - keep serving after a block error
+                    traceback.print_exc()
+                    result = {"ok": False, "error": str(exc).strip() or type(exc).__name__}
+                print("SEEDVC_SERVER_RESULT\t" + json.dumps(result, ensure_ascii=False), flush=True)
+            return 0
+
+        if source is None or out_path is None:
+            raise ValueError("非 server 模式必须提供 --input 和 --output")
+        try:
+            convert_one(source, out_path)
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc).strip() or type(exc).__name__
+            print(f"SEEDVC_ERR SeedVC 推理失败: {message}", flush=True)
+            traceback.print_exc()
+            return 4
     finally:
         try:
             os.chdir(old_cwd)

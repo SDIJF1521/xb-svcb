@@ -6,7 +6,7 @@
 
 **🎵 导入歌曲 ｜ 🎚️ 人声分离 ｜ 🌫️ 去混响 ｜ 🗣️ AI 歌声转换 ｜ 🎧 AI 歌声增强 ｜ 🎼 合并伴奏 ｜ 🎤 成品翻唱**
 
-一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **AI 歌声增强工程** · **在线曲库** · **模型站** · **音频编辑器**
+一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **实时系统音频变声** · **AI 歌声增强工程** · **在线曲库** · **模型站** · **音频编辑器**
 
 <br/>
 
@@ -42,6 +42,7 @@
 - 🧬 **多模型混合翻唱（可跨框架 · 合唱 · 可编辑时间轴）** —— 按歌名自动获取带时间轴歌词、或**导入本地 `.lrc`**，做时长对齐校验；提供**可编辑可视化时间轴**：拖动边界调整起止（自动吸附歌词时间）、缩放精修、拆分 / 合并 / 删除片段，**片段独立指派模型**；**一段可同时指派多个模型实现「合唱」**（多路人声等响度叠加 + 软限幅防破音）；**同一首歌可混用 So-VITS-SVC、RVC、SeedVC 与 DDSP-SVC 模型**；每个模型在完整人声上整轨推理，再「同源连唱合并、换人处交叉淡化」无缝拼成多人合唱。
 - 🎛️ **Audio Editor Lite 音频编辑器** —— 从作品或本地音频创建编辑工程，支持工程选择页、多轨时间轴、真实波形、片段拖动/拉伸、精确播放头定位与剪切、切口交叉淡化、相邻片段渲染合并、片段声道分配（双声道 / L / R）、片段/音轨音频复制与剪贴板粘贴、音量包络、内置效果器、非模态 JUCE VST3 插件窗口、声卡回调块级实时插件处理、设备延迟状态、混音预览、时间轴拖动快进及 WAV / MP3 / FLAC 导出；支持 TXT / LRC 歌词导入与自动切句，可维护多角色并把片段分配给角色，内置独唱、对唱、主唱 + 和声、三角色剧情等时间轴模板。
 - 🧠 **高级创作工作流** —— 歌声转换工作台支持「自动混音合成」「自动人声合并」「手动人声合并」「自动 + 编辑器二次调整」「全手动编辑」；其中人声合并只在多模型模式开放，避免单模型流程误用。
+- 🎙️ **实时翻唱 / 系统音频变声** —— 读取播放器的 WASAPI 回环或 VB-CABLE 混合输出，只转换人声并保持伴奏原样；实时模式使用常驻 UVR 与 RVC/SeedVC、预缓冲、重叠上下文和等功率交叉淡化，适合 QQ 音乐等播放器监听。系统音频模式只允许单模型，歌曲文件模式支持实时分块播放与作品登记。
 - 🎵 **在线资源获取（可播放校验）** —— 内置 **网易云 / QQ音乐 / 酷我音乐** 曲库的搜索、试听、下载（QQ 可填会员 Cookie 取高品质音频）；酷我支持无损音质候选回退、后端代理试听、Range 分段下载及内联歌词。下载前统一校验资源可播放性（魔数 / Content-Type / ffprobe），VIP / 无版权 / 失效链接不可下载；下载素材可一键进入翻唱。
 - 🎬 **作品音乐播放页** —— 从作品库进入带过渡动画的独立播放器，支持进度 / 音量控制、歌词逐句跟随和点击跳转；歌词可导入 LRC，或选择网易云、QQ、酷我曲库并从多个搜索结果中指定歌曲序号通过 API 获取；每首作品还可关联图片或 MP4 MV 画面并持久化恢复。
 - 🌐 **模型站（魔搭社区 · 后台传输）** —— 基于 **ModelScope** 一键**上传/下载**声音模型：填自己的访问令牌即可发布到自有公开仓库，按关键词**模糊搜索**（**分页加载**）社区模型并直接导入；带**架构标签**（So-VITS-SVC / RVC / SeedVC / DDSP-SVC）与**清单防污染**校验；上传/下载**挂后台执行、不阻塞操作**，大模型支持断点续传和重试，下载完成后立即进入可选模型列表。
@@ -55,7 +56,9 @@
 - 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-seedvc` / `.venv-ddsp` / `.venv-uvr` / `.venv-vocal`），互不污染。
 - 🎧 **作品库** —— 试听 / 导出成品，单独试听伴奏与干声，失败任务一键查日志；删除作品同步真实清理本地生成文件。
 
-> **最新版本 v0.0.28**：新增完整插件中心、NoneBot2 风格 GitHub 插件市场、前端/Python/混合运行时、TypeScript/Python SDK 和自定义页面宿主 API；页面配置支持按插件持久化，插件与软件窗口支持全屏，并为妖狐 M3U8 提供受限宿主播放器。安装器同时修复 Python 环境识别、So-VITS-SVC Matplotlib 依赖、Vocal packaging 冲突、特殊路径转义和系统缺少 FFmpeg 时的随包释放。详见 [v0.0.28 更新说明](release_notes_v028.md)、[插件开发文档](docs/plugins/README.md) 与 [API 接入文档](docs/api.md)。
+> **最新版本 v0.0.29**：新增真实实时翻唱与系统音频变声，支持 VB-CABLE/WASAPI 回环输入、单模型 RVC/SeedVC、伴奏保持、流式处理和块间交叉淡化；新增独立 AI 增强工程与编辑器片段增强；退出时清空当前用户数据目录的 `temp` 临时内容；安装器增加 VB-CABLE 检测和手动安装引导。详见 [v0.0.29 更新说明](release_notes_v029.md)、[v0.0.28 更新说明](release_notes_v028.md)、[API 接入文档](docs/api.md)。
+
+> v0.0.28：新增完整插件中心、NoneBot2 风格 GitHub 插件市场、前端/Python/混合运行时、TypeScript/Python SDK 和自定义页面宿主 API；页面配置支持按插件持久化，插件与软件窗口支持全屏，并为妖狐 M3U8 提供受限宿主播放器。安装器同时修复 Python 环境识别、So-VITS-SVC Matplotlib 依赖、Vocal packaging 冲突、特殊路径转义和系统缺少 FFmpeg 时的随包释放。详见 [v0.0.28 更新说明](release_notes_v028.md)、[插件开发文档](docs/plugins/README.md) 与 [API 接入文档](docs/api.md)。
 
 > v0.0.27：模型站升级为带详情、版本、依赖、更新和试听素材的社区模型流程；AI 翻唱增加 DeepFilterNet3 分离人声/模型输出双阶段修复、高频保护与最高 1800 Hz 自适应音域，So-VITS-SVC 和 DDSP-SVC 可自动或手动使用 FCPE，并补齐 FCPE 离线依赖及失败回退；安装器预置按 Python、组件和 GPU 栈选择的离线 whl wheelhouse，所有分卷严格小于 2 GiB。详见 [v0.0.27 更新说明](release_notes_v027.md) 与 [API 接入文档](docs/api.md)。
 
@@ -110,7 +113,7 @@
 
 ## 🏗️ 架构一览
 
-XB-SVCB 采用“**桌面与 HTTP 共用业务核心，重型引擎和插件在独立进程运行**”的结构。安装版以 `XB-SVCB.exe` 为统一进程，内含 Vue 前端、pywebview Bridge、可选 FastAPI 服务、Python 业务代码与 worker 脚本；So-VITS-SVC、RVC、SeedVC、DDSP-SVC、UVR、模型站组件、VST3 插件和 Python 插件分别通过隔离环境或原生 Host 执行，插件前端则在受限 iframe 中通过宿主 Bridge 调用能力，避免依赖与插件崩溃相互污染。
+XB-SVCB 采用“**桌面与 HTTP 共用业务核心，重型引擎和插件在独立进程运行**”的结构。安装版以 `XB-SVCB.exe` 为统一进程，内含 Vue 前端、pywebview Bridge、可选 FastAPI 服务、Python 业务代码与 worker 脚本；So-VITS-SVC、RVC、SeedVC、DDSP-SVC、UVR、模型站组件、VST3 插件和 Python 插件分别通过隔离环境或原生 Host 执行，插件前端则在受限 iframe 中通过宿主 Bridge 调用能力，避免依赖与插件崩溃相互污染。实时翻唱在同一业务核心中增加文件流和系统音频两条路径：系统路径由回环/虚拟声卡采集混音，常驻 UVR 与单个 RVC/SeedVC Worker 处理人声，再由播放线程以重叠块交叉淡化输出。
 
 ```mermaid
 flowchart TB
@@ -135,11 +138,13 @@ flowchart TB
         APP["Application Services<br/>转换 / 作品 / 模型 / 系统编排"]
         QUEUE["共享串行推理队列<br/>单模型 / 多模型 / 批量任务"]
         ROUTER["EngineRegistry<br/>按模型框架统一路由"]
+        REALTIME["RealtimeCoverService<br/>文件流 / 系统音频 / 单模型实时块调度"]
         EDITOR["AudioEditorService<br/>工程 / 时间轴 / 效果链 / 渲染"]
         CONNECT["Music / ModelHub / Theme Services<br/>曲库 / 模型站 / 主题媒体"]
         PLUGINS["PluginService<br/>清单 / 安装 / 开关 / 市场 / 页面"]
         FACADE --> APP
         FACADE --> EDITOR
+        FACADE --> REALTIME
         FACADE --> CONNECT
         FACADE --> PLUGINS
         APP --> QUEUE --> ROUTER
@@ -163,6 +168,8 @@ flowchart TB
         DDSP["DDSP-SVC 6.3 worker<br/>.venv-ddsp"]
         VOCAL["AI 歌声增强 worker<br/>.venv-vocal"]
         HUBWORKER["ModelScope worker<br/>.venv-hub"]
+        STREAM["常驻实时 Worker<br/>UVR + RVC/SeedVC / 预缓冲"]
+        AUDIO_IO["SystemAudioReader/Writer<br/>WASAPI 回环 / VB-CABLE / 交叉淡化"]
         FFMPEG["FFmpegEngine<br/>分离后处理 / 混音 / 酷我试听 / 导出"]
         JUCE["C++ JUCE VST3 Host<br/>检查 / GUI / state / 实时与离线处理"]
         VST["64 位 Windows VST3"]
@@ -171,7 +178,7 @@ flowchart TB
 
     subgraph STORAGE["本地数据与随包资产"]
         direction LR
-        DATA[".xb_svcb 用户数据<br/>models / works / downloads / editor_projects<br/>api/uploads / plugins / plugin-data / cache / settings / theme/media"]
+        DATA[".xb_svcb 用户数据<br/>models / works / downloads / editor_projects<br/>api/uploads / plugins / plugin-data / cache / settings / theme/media / temp"]
         ASSETS["assets/models 离线资产<br/>UVR / RMVPE / ContentVec / CampPlus / Whisper / BigVGAN / DeepFilterNet"]
     end
 
@@ -203,6 +210,13 @@ flowchart TB
     PWORKER --> YAOHU
     APP --> UVR
     APP --> FFMPEG
+    REALTIME --> STREAM
+    REALTIME --> AUDIO_IO
+    REALTIME --> FFMPEG
+    STREAM --> UVR
+    STREAM --> RVC
+    STREAM --> SEED
+    AUDIO_IO --> STREAM
     ROUTER --> SVC
     ROUTER --> RVC
     ROUTER --> SEED
@@ -223,6 +237,7 @@ flowchart TB
     ASSETS -. 本地优先 .-> DDSP
     ASSETS -. 本地优先 .-> VOCAL
     APP <--> DATA
+    REALTIME <--> DATA
     EDITOR <--> DATA
     CONNECT <--> DATA
     HTTP -. 上传文件 .-> DATA
@@ -233,6 +248,7 @@ flowchart TB
 - **桌面与 HTTP 共用核心**：Vue 通过 pywebview Bridge、外部程序通过手动启用的 FastAPI 进入同一个 `Api` Facade，共用模型、作品、编辑工程和串行推理队列；HTTP 层只负责鉴权、DTO、上传与下载。
 - **插件平台分层运行**：插件中心通过 PluginService 管理清单、安装、单插件开关和 GitHub 市场；自定义页面运行在受限 iframe，通过 Client SDK 与宿主 Bridge 通信，Python/混合插件的动作再交给独立 Worker 执行。
 - **模型按框架路由**：`EngineRegistry` 统一接收模型与推理参数，再分别调用 So-VITS-SVC、RVC、SeedVC 或 DDSP-SVC；SeedVC 额外传入参考音频，DDSP-SVC 使用 Rectified Flow checkpoint 与 YAML 配置。
+- **实时音频独立走流式管线**：`RealtimeCoverService` 不进入普通串行任务队列；文件模式按块获取结果，系统模式由 `SystemAudioReader` 读取 WASAPI 回环/VB-CABLE 混音，常驻 UVR 与单个 RVC/SeedVC Worker 处理人声，`SystemAudioWriter` 通过预缓冲和约 40 ms 等功率交叉淡化维持连续输出。
 - **编辑器与插件隔离**：内置效果、混音和导出走 FFmpeg；VST3 加载与原生窗口由 JUCE Host 承载，局部重推理再回到统一引擎路由，重推理后可选自动调用 AI 歌声增强流水线。
 - **在线服务可替换且受控**：网易云、QQ音乐和酷我音乐统一经过音乐服务适配；酷我试听由本地 FFmpeg 代理，模型站的重型依赖由 `.venv-hub` worker 隔离。
 - **数据与程序分离**：模型、作品、下载素材、编辑工程、API 上传、缓存、设置及 `theme/media` 都写入可迁移的 `.xb_svcb`，覆盖升级不会替换用户数据。
@@ -243,11 +259,31 @@ flowchart TB
 | 交互与接入层      | pywebview + Vue 3 + FastAPI                               | 桌面交互、API Key 鉴权、OpenAPI、流式上传及受控文件下载        |
 | 插件平台层        | PluginService + iframe Host + Plugin SDK + Python Worker | 插件安装、开关、GitHub 市场、页面 Bridge、动作与生命周期执行 |
 | API 与业务层      | `api` + `application` + `domain`                    | 桌面/HTTP 共用契约、任务队列、模型/作品/曲库/编辑工程业务编排  |
+| 实时音频层        | `RealtimeCoverService` + `SystemAudioReader/Writer` | 文件流与系统混音变声；常驻 UVR/RVC/SeedVC、预缓冲、块级对齐和交叉淡化 |
 | 基础设施层        | `infrastructure` + `EngineRegistry` + FFmpeg          | 路径、仓储、下载、音频处理和多框架引擎适配                     |
 | AI 与模型站子进程 | SVC / RVC / SeedVC / DDSP-SVC / UVR / Vocal / Hub workers | 在独立`.venv-*` 中执行重型任务，隔离 Python、CUDA 与平台依赖 |
 | 原生插件进程      | C++ / JUCE VST3 Host                                      | 插件检查、原生 GUI、实时播放、参数 state 回写与离线渲染        |
 | 持久化层          | `.xb_svcb` + `assets/models`                          | 用户数据与 API 上传可迁移保存；随包资产优先供各 worker 使用    |
 | 在线集成          | 妖狐音乐 API + 酷我 CDN + ModelScope                      | 三曲库/歌词、酷我代理试听与分段下载、模型搜索、上传和断点下载  |
+
+### 实时翻唱数据流
+
+系统音频模式只允许一个 RVC 或 SeedVC 模型。播放器输出的伴奏和人声先作为同一混合信号采集，伴奏不会单独从播放器获取；UVR 提取人声后，转换结果与同一时间块的伴奏残差重新混音，再在输出端处理块间衔接。
+
+```mermaid
+flowchart LR
+    PLAYER["QQ音乐 / 其他播放器<br/>混合音频"] --> CAPTURE["WASAPI 回环 / VB-CABLE<br/>SystemAudioReader"]
+    FILE["歌曲文件模式"] --> BLOCK["固定时间块<br/>重叠上下文 + 预缓冲"]
+    CAPTURE --> BLOCK
+    BLOCK --> SPLIT["常驻 UVR<br/>人声 / 伴奏残差"]
+    SPLIT --> VOICE["单个 RVC / SeedVC<br/>常驻推理 Worker"]
+    SPLIT --> BED["同块原始伴奏<br/>增益调整"]
+    VOICE --> MIX["人声 + 对应伴奏块<br/>样本级对齐混音"]
+    BED --> MIX
+    MIX --> XFADE["输出端约 40 ms<br/>等功率交叉淡化"]
+    XFADE --> OUT["SystemAudioWriter / Web Audio<br/>监听输出 / 文件分块播放"]
+    OUT --> WORK["文件模式完成后<br/>登记到我的作品"]
+```
 
 ---
 

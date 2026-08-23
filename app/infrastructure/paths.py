@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import time
 import uuid
 from pathlib import Path
 
@@ -37,6 +39,40 @@ def ensure_dirs() -> None:
             ),
             encoding="utf-8",
         )
+
+
+def clear_temp_directory(*, retries: int = 3, retry_delay: float = 0.15) -> bool:
+    """Remove all generated files below the current data ``temp`` directory.
+
+    The directory itself is kept so callers can continue writing to it after a
+    restart. The parent check prevents a misconfigured path from turning this
+    shutdown cleanup into a broad deletion.
+    """
+    try:
+        data_root = config.DATA_DIR.resolve()
+        temp_root = config.TEMP_DIR.resolve()
+    except OSError:
+        return False
+    if temp_root.parent != data_root or temp_root == data_root:
+        return False
+    try:
+        temp_root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+
+    attempts = max(1, int(retries))
+    for attempt in range(attempts):
+        try:
+            for entry in list(temp_root.iterdir()):
+                if entry.is_symlink() or not entry.is_dir():
+                    entry.unlink(missing_ok=True)
+                else:
+                    shutil.rmtree(entry)
+            return not any(temp_root.iterdir())
+        except OSError:
+            if attempt + 1 < attempts:
+                time.sleep(max(0.0, float(retry_delay)))
+    return False
 
 
 def new_id(prefix: str = "") -> str:

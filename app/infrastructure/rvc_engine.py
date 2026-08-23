@@ -14,6 +14,7 @@ from typing import Any, Optional
 import config
 from domain import InferenceParams
 from infrastructure.inference_device import environment_device_label
+from infrastructure.persistent_worker import PersistentInferenceSession
 
 
 class RvcEngine:
@@ -69,6 +70,45 @@ class RvcEngine:
         self._run_worker(main_model, index_path, Path(vocals), out_path, params, log_file)
         return out_path
 
+    def open_realtime_session(
+        self,
+        model: dict[str, Any],
+        params: InferenceParams,
+        log_file: Optional[Path] = None,
+        low_latency: bool = False,
+    ) -> PersistentInferenceSession:
+        """Load one RVC model once and keep it alive for successive song blocks."""
+        main_model = str((model or {}).get("main_model_path") or "")
+        index_path = str((model or {}).get("index_path") or "")
+        if not self.available or not Path(main_model).is_file():
+            raise RuntimeError("RVC 实时推理环境或模型未就绪")
+        command = [
+            str(config.RVC_PYTHON),
+            str(config.RVC_WORKER),
+            "--server",
+            "--model", main_model,
+            "--device", params.device or "auto",
+            "--method", params.f0_method or "rmvpe",
+            "--pitch", str(int(params.pitch)),
+            "--index-rate", str(float(params.index_rate)),
+            "--rms-mix", str(float(params.rms_mix)),
+            "--protect", str(float(params.protect)),
+            "--filter-radius", str(int(params.filter_radius)),
+            "--version", params.rvc_version or "v2",
+        ]
+        if index_path and Path(index_path).is_file():
+            command += ["--index", index_path]
+        if low_latency:
+            command.append("--low-latency")
+        env = self._worker_env()
+        return PersistentInferenceSession(
+            command,
+            ready_marker="RVC_SERVER_READY",
+            result_marker="RVC_SERVER_RESULT\t",
+            env=env,
+            log_file=log_file,
+        )
+
     def _run_worker(
         self,
         main_model: str,
@@ -107,18 +147,7 @@ class RvcEngine:
         if index_path and Path(index_path).exists():
             cmd += ["--index", str(index_path)]
 
-        env = os.environ.copy()
-        env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
-        env["PYTHONIOENCODING"] = "utf-8"
-        env["PYTHONUTF8"] = "1"
-        hf_mirror = (
-            env.get("XB_HF_MIRROR")
-            or env.get("HF_ENDPOINT")
-            or "https://hf-mirror.com"
-        ).strip().rstrip("/")
-        env.setdefault("XB_HF_MIRROR", hf_mirror)
-        env.setdefault("HF_ENDPOINT", hf_mirror)
-        env.setdefault("HUGGINGFACE_HUB_ENDPOINT", hf_mirror)
+        env = self._worker_env()
 
         try:
             proc = subprocess.run(
@@ -149,6 +178,22 @@ class RvcEngine:
         if proc.returncode != 0 or not out_path.exists():
             tail = self._error_tail(proc.stdout, proc.stderr)
             raise RuntimeError(f"RVC 推理失败（子进程退出码 {proc.returncode}）: {tail}")
+
+    @staticmethod
+    def _worker_env() -> dict[str, str]:
+        env = os.environ.copy()
+        env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+        hf_mirror = (
+            env.get("XB_HF_MIRROR")
+            or env.get("HF_ENDPOINT")
+            or "https://hf-mirror.com"
+        ).strip().rstrip("/")
+        env.setdefault("XB_HF_MIRROR", hf_mirror)
+        env.setdefault("HF_ENDPOINT", hf_mirror)
+        env.setdefault("HUGGINGFACE_HUB_ENDPOINT", hf_mirror)
+        return env
 
     @staticmethod
     def _error_tail(stdout: str | None, stderr: str | None) -> str:

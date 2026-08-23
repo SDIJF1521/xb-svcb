@@ -209,12 +209,16 @@ export type CreateWorkflow =
   | 'manual_vocal_merge'
   | 'auto_then_editor'
   | 'full_manual_editor'
+  | 'realtime_cover'
+  | 'ai_enhancement'
 
 export type VocalEnhancementLevel = 'basic' | 'advanced'
 
 export interface VocalEnhancementOptions {
   enabled: boolean
   level: VocalEnhancementLevel
+  /** 增强推理设备。 */
+  device?: string
   /** 自然修音强度（0~1），保留颤音与滑音。 */
   pitch_correction: number
   /** AI 对齐强度（0~1），参考原唱校正局部抢拍与拖拍。 */
@@ -341,10 +345,83 @@ export interface CreateWorkPayload {
   models?: BlendModel[]
   /** 多模型混合时每句歌词的模型指派。 */
   segments?: BlendSegment[]
+  /** 独立 AI 增强：待处理的已完成翻唱作品 ID。 */
+  target_work_id?: string
+  /** 独立 AI 增强：与翻唱作品对应的原始歌曲路径。 */
+  original_audio_path?: string
+  /** 独立 AI 增强：用户直接导入的待增强翻唱音频。 */
+  target_audio_path?: string
 }
 
 export interface CreateBatchWorkPayload extends CreateWorkPayload {
   source_paths: string[]
+}
+
+export type RealtimeCoverState =
+  | 'preparing'
+  | 'buffering'
+  | 'ready'
+  | 'live'
+  | 'done'
+  | 'failed'
+  | 'stopped'
+  | 'missing'
+
+export interface RealtimeCoverPayload {
+  source_path?: string
+  input_mode?: 'file' | 'system'
+  title?: string
+  mode: 'single'
+  model_id?: string
+  params?: InferenceParams
+  chunk_seconds: number
+  buffer_seconds: number
+  vocal_gain_db: number
+  instrumental_gain_db: number
+  input_device?: string
+  accompaniment_device?: string
+  output_device?: string
+  sample_rate?: number
+}
+
+export interface SystemAudioDevice {
+  id: string
+  name: string
+  kind: 'input' | 'output'
+  loopback?: boolean
+  system_mix?: boolean
+}
+
+export interface RealtimeCoverStatus {
+  id: string
+  status: RealtimeCoverState
+  message?: string
+  error?: string | null
+  duration?: number
+  chunk_seconds?: number
+  buffer_seconds?: number
+  ready_seconds?: number
+  processed_seconds?: number
+  realtime_factor?: number | null
+  input_silent?: boolean
+  ready_chunks?: number
+  total_chunks?: number
+  mode?: 'single'
+  input_mode?: 'file' | 'system'
+  output_path?: string | null
+  work_id?: string | null
+}
+
+export interface RealtimeCoverChunk {
+  ok: boolean
+  pending?: boolean
+  error?: string
+  index?: number
+  start?: number
+  end?: number
+  duration?: number
+  model_ids?: string[]
+  audio?: string
 }
 
 // ---- 音乐资源获取（妖狐 API）----

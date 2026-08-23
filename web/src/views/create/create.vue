@@ -34,6 +34,8 @@
           <div class="card-head">
             <span class="step-no">ADV</span>
             <h2>高级功能</h2>
+            <router-link to="/enhancement" class="head-link">AI 增强 <el-icon><Right /></el-icon></router-link>
+            <router-link to="/create/realtime" class="head-link">实时翻唱 <el-icon><Right /></el-icon></router-link>
           </div>
           <div class="workflow-grid">
             <button

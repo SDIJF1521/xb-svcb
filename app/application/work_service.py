@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import shutil
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,7 +14,12 @@ from domain import JobStatus, Work
 from infrastructure import paths
 from infrastructure.storage import ListRepository, SettingsStore
 
-from .conversion_service import ConversionService, default_steps, default_steps_multi
+from .conversion_service import (
+    ConversionService,
+    default_steps,
+    default_steps_ai_enhancement,
+    default_steps_multi,
+)
 from .model_service import ModelService
 
 
@@ -23,6 +30,7 @@ class WorkService:
         "manual_vocal_merge",
         "auto_then_editor",
         "full_manual_editor",
+        "ai_enhancement",
     }
     _VOCAL_MERGE_WORKFLOWS = {"auto_vocal_merge", "manual_vocal_merge"}
 
@@ -37,9 +45,161 @@ class WorkService:
         self._conversion = conversion
         self._models = models
         self._settings = settings
+        self._realtime_lock = threading.Lock()
 
     def list(self) -> list[dict[str, Any]]:
+        self._cleanup_orphan_work_dirs()
+        self._cleanup_orphan_temp_files()
         return [self._view(w) for w in self._repo.all()]
+
+    def register_realtime_output(self, status: dict[str, Any]) -> dict[str, Any] | None:
+        """Archive a completed realtime session as a normal playable work.
+
+        The realtime pipeline writes into TEMP_DIR while it is streaming. Once the
+        final file exists, copy the complete session directory into the work store
+        so the regular player, editor, export and deletion paths can own it.
+        """
+        if str(status.get("status") or "") != JobStatus.DONE.value:
+            return None
+        existing_id = str(status.get("work_id") or "").strip()
+        if existing_id:
+            existing = self._repo.get(existing_id)
+            if existing:
+                return self._view(existing)
+        output = Path(str(status.get("output_path") or ""))
+        try:
+            output = output.resolve()
+            temp_base = (config.TEMP_DIR / "realtime-covers").resolve()
+        except OSError:
+            return None
+        if not output.is_file() or temp_base not in output.parents:
+            return None
+        session_dir = output.parent
+        if session_dir.parent != temp_base:
+            return None
+        realtime_session_id = str(status.get("id") or session_dir.name).strip()
+
+        with self._realtime_lock:
+            existing_id = str(status.get("work_id") or "").strip()
+            if existing_id:
+                existing = self._repo.get(existing_id)
+                if existing:
+                    return self._view(existing)
+            work_id = paths.new_id("wrk_")
+            work_dir = config.WORKS_DIR / work_id
+            artifact_dir = work_dir / "realtime"
+            try:
+                work_dir.mkdir(parents=True, exist_ok=False)
+                shutil.copytree(session_dir, artifact_dir)
+            except OSError:
+                shutil.rmtree(work_dir, ignore_errors=True)
+                return None
+
+            archived_output = artifact_dir / output.name
+            if not archived_output.is_file():
+                shutil.rmtree(work_dir, ignore_errors=True)
+                return None
+            names = [str(item).strip() for item in (status.get("model_names") or []) if str(item).strip()]
+            model_label = "、".join(names) if names else "实时翻唱"
+            seconds = self._duration_seconds(status.get("duration"))
+            record = {
+                "id": work_id,
+                "title": f"{str(status.get('title') or '实时翻唱').strip() or '实时翻唱'} (实时翻唱)",
+                "model": model_label,
+                "model_id": str((status.get("model_ids") or [""])[0] or ""),
+                "status": JobStatus.DONE.value,
+                "progress": 100,
+                "duration": self._format_duration(seconds),
+                "format": archived_output.suffix.lstrip(".").upper() or "WAV",
+                "size": paths.file_size_label(archived_output),
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+                "source_path": status.get("source_path"),
+                "output_path": str(archived_output),
+                "realtime_session_id": realtime_session_id,
+                "error": None,
+                "params": {},
+                "steps": [{"key": "realtime", "label": "实时翻唱", "status": "done"}],
+                "workflow": "realtime_cover",
+                "mode": "multi" if status.get("mode") == "multi" else "single",
+                "segments": list(status.get("segments") or []),
+                "log_path": str(artifact_dir / "realtime.log") if (artifact_dir / "realtime.log").is_file() else None,
+            }
+            stems_dir = artifact_dir / "stems"
+            for key, names_to_try in {
+                "vocals_path": ("vocals.wav", "vocals.flac"),
+                "instrumental_path": ("instrumental.wav", "instrumental.flac"),
+            }.items():
+                candidate = next((stems_dir / name for name in names_to_try if (stems_dir / name).is_file()), None)
+                if candidate:
+                    record[key] = str(candidate)
+            self._repo.add(record)
+            return self._view(record)
+
+    @staticmethod
+    def _duration_seconds(value: Any) -> float:
+        try:
+            return max(0.0, float(value or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        total = max(0, int(round(seconds)))
+        return f"{total // 60:02d}:{total % 60:02d}"
+
+    def _cleanup_orphan_work_dirs(self) -> None:
+        """Remove generated work directories whose database record was deleted."""
+        try:
+            base = config.WORKS_DIR.resolve()
+            known = {str(item.get("id") or "") for item in self._repo.all()}
+            if not base.exists():
+                return
+            for child in base.iterdir():
+                if child.is_dir() and child.name.startswith("wrk_") and child.name not in known:
+                    shutil.rmtree(child, ignore_errors=True)
+        except OSError:
+            return
+
+    def _cleanup_orphan_temp_files(self) -> None:
+        """清理已无作品记录的试听缓存和失去所有者的旧实时会话。"""
+        try:
+            temp_root = config.TEMP_DIR.resolve()
+            if not temp_root.exists():
+                return
+            works = self._repo.all()
+            known_work_ids = {str(item.get("id") or "") for item in works}
+            known_session_ids = {
+                str(item.get("realtime_session_id") or "")
+                for item in works
+                if item.get("realtime_session_id")
+            }
+            cache_suffixes = ("_output.mp3", "_instrumental.mp3", "_vocals.mp3")
+            for candidate in temp_root.iterdir():
+                if not candidate.is_file():
+                    continue
+                suffix = next((item for item in cache_suffixes if candidate.name.endswith(item)), "")
+                if not suffix:
+                    continue
+                work_id = candidate.name[: -len(suffix)]
+                if work_id.startswith("wrk_") and work_id not in known_work_ids:
+                    candidate.unlink(missing_ok=True)
+
+            realtime_root = temp_root / "realtime-covers"
+            if not realtime_root.is_dir():
+                return
+            stale_before = time.time() - 6 * 60 * 60
+            for session_dir in realtime_root.iterdir():
+                if (
+                    not session_dir.is_dir()
+                    or not session_dir.name.startswith("live_")
+                    or session_dir.name in known_session_ids
+                ):
+                    continue
+                # 未归档的实时任务没有作品记录；只清理长期未更新的目录，保护活跃会话。
+                if session_dir.stat().st_mtime < stale_before:
+                    shutil.rmtree(session_dir, ignore_errors=True)
+        except (OSError, RuntimeError):
+            return
 
     def get(self, work_id: str) -> dict[str, Any] | None:
         work = self._repo.get(work_id)
@@ -47,6 +207,8 @@ class WorkService:
 
     def create(self, payload: dict[str, Any]) -> dict[str, Any]:
         """根据前端配置创建翻唱任务并启动后台处理。"""
+        if str((payload or {}).get("workflow") or "") == "ai_enhancement":
+            return self._create_ai_enhancement(payload or {})
         if (payload or {}).get("mode") == "multi":
             return self._create_multi(payload or {})
         return self._create_single(payload or {})
@@ -140,6 +302,63 @@ class WorkService:
         )
         record = work.to_dict()
         record.update(self._resolve_model_paths(model))
+        self._repo.add(record)
+        self._conversion.start(work.id)
+        return self._view(record)
+
+    def _create_ai_enhancement(self, payload: dict[str, Any]) -> dict[str, Any]:
+        parent_id = str(payload.get("target_work_id") or payload.get("parent_work_id") or "").strip()
+        parent = self._repo.get(parent_id) if parent_id else None
+        target_audio = str(payload.get("target_audio_path") or payload.get("cover_audio_path") or "").strip()
+        if parent and parent.get("status") != JobStatus.DONE.value:
+            raise ValueError("请选择一个已完成的翻唱作品")
+        if parent:
+            target_output = Path(str(parent.get("output_path") or ""))
+        else:
+            target_output = Path(target_audio)
+            if not target_audio:
+                raise ValueError("请选择已完成翻唱作品或导入待增强音频")
+        if not target_output.is_file():
+            raise ValueError("待增强的翻唱音频不存在")
+        original = Path(str(payload.get("original_audio_path") or payload.get("source_path") or ""))
+        if not original.is_file():
+            raise ValueError("请选择与翻唱作品对应的原始歌曲音频")
+
+        settings = self._vocal_enhancement(payload, "ai_enhancement")
+        settings["enabled"] = True
+        title = str(payload.get("title") or (parent or {}).get("title") or target_output.stem).strip()
+        work = Work(
+            id=paths.new_id("wrk_"),
+            title=f"{title} (AI 增强)",
+            model=f"{(parent or {}).get('model') or '导入音频'} · AI 增强",
+            model_id=str((parent or {}).get("model_id") or ""),
+            status=JobStatus.QUEUE.value,
+            progress=0,
+            duration=str((parent or {}).get("duration") or "—"),
+            format="—",
+            size="—",
+            created_at=datetime.now().isoformat(timespec="seconds"),
+            source_path=str(original),
+            params=payload.get("params", {}) or {},
+            steps=default_steps_ai_enhancement(),
+            workflow="ai_enhancement",
+            vocal_enhancement=settings,
+            mode=str((parent or {}).get("mode") or "single"),
+        )
+        record = work.to_dict()
+        record.update(
+            {
+                "parent_work_id": parent_id or None,
+                "original_audio_path": str(original),
+                "target_output_path": str(target_output),
+                "target_vocal_path": str(
+                    (parent or {}).get("ai_merged_vocal_path")
+                    or (parent or {}).get("converted_path")
+                    or ""
+                ),
+                "target_instrumental_path": str((parent or {}).get("instrumental_path") or ""),
+            }
+        )
         self._repo.add(record)
         self._conversion.start(work.id)
         return self._view(record)
@@ -302,17 +521,23 @@ class WorkService:
         work = self._repo.get(work_id)
         if not work:
             return False
+        # 实时翻唱的归档记录没有普通转换任务所需的推理参数，不能按常规任务重跑。
+        if work.get("workflow") == "realtime_cover":
+            return False
         work["status"] = JobStatus.QUEUE.value
         work["progress"] = 0
         work["error"] = None
         enhancement_enabled = bool(
             (work.get("vocal_enhancement") or {}).get("enabled")
         )
-        work["steps"] = (
-            default_steps_multi(enhancement_enabled)
-            if work.get("mode") == "multi"
-            else default_steps(enhancement_enabled)
-        )
+        if work.get("workflow") == "ai_enhancement":
+            work["steps"] = default_steps_ai_enhancement()
+        else:
+            work["steps"] = (
+                default_steps_multi(enhancement_enabled)
+                if work.get("mode") == "multi"
+                else default_steps(enhancement_enabled)
+            )
         self._repo.update(work_id, work)
         self._conversion.start(work_id)
         return True
@@ -352,8 +577,10 @@ class WorkService:
         """
         if not self._repo.get(work_id):
             return False
+        work = self._repo.get(work_id) or {}
         self._repo.remove(work_id)
         self._purge_work_dir(work_id)
+        self._purge_work_cache(work_id, work)
         return True
 
     @staticmethod
@@ -370,6 +597,33 @@ class WorkService:
         if target.parent != base or not target.exists():
             return
         shutil.rmtree(target, ignore_errors=True)
+
+    @staticmethod
+    def _purge_work_cache(work_id: str, work: dict[str, Any] | None = None) -> None:
+        """删除作品关联的试听缓存和实时会话目录，不触碰用户导出的文件。"""
+        if not work_id:
+            return
+        try:
+            temp_dir = config.TEMP_DIR.resolve()
+        except OSError:
+            return
+        for kind in ("output", "instrumental", "vocals"):
+            target = temp_dir / f"{work_id}_{kind}.mp3"
+            try:
+                if target.parent == temp_dir and target.is_file():
+                    target.unlink()
+            except OSError:
+                continue
+        session_id = str((work or {}).get("realtime_session_id") or "").strip()
+        if not session_id or Path(session_id).name != session_id:
+            return
+        realtime_base = temp_dir / "realtime-covers"
+        session_dir = realtime_base / session_id
+        try:
+            if session_dir.parent == realtime_base and session_dir.is_dir():
+                shutil.rmtree(session_dir, ignore_errors=True)
+        except OSError:
+            return
 
     @staticmethod
     def _view(work: dict[str, Any]) -> dict[str, Any]:

@@ -68,6 +68,16 @@ def default_steps_multi(enhancement: bool = False) -> list[dict[str, Any]]:
     return steps
 
 
+def default_steps_ai_enhancement() -> list[dict[str, Any]]:
+    """独立 AI 增强任务：原曲分析、翻唱人声准备、增强和重新混音。"""
+    return [
+        {"key": "reference", "label": "原曲人声与伴奏分析", "status": StepStatus.WAIT.value},
+        {"key": "cover_vocal", "label": "翻唱人声准备", "status": StepStatus.WAIT.value},
+        {"key": "enhance", "label": "AI 歌声增强", "status": StepStatus.WAIT.value},
+        {"key": "mix", "label": "增强成品混音", "status": StepStatus.WAIT.value},
+    ]
+
+
 class ConversionService:
     def __init__(
         self,
@@ -386,10 +396,163 @@ class ConversionService:
 
     def _run(self, work_id: str) -> None:
         work = self._repo.get(work_id)
-        if work and work.get("mode") == "multi":
+        if work and work.get("workflow") == "ai_enhancement":
+            self._run_ai_enhancement(work_id)
+        elif work and work.get("mode") == "multi":
             self._run_multi(work_id)
         else:
             self._run_locked(work_id)
+
+    def _run_ai_enhancement(self, work_id: str) -> None:
+        work = self._repo.get(work_id)
+        if not work:
+            return
+        work_dir = config.WORKS_DIR / work_id
+        work_dir.mkdir(parents=True, exist_ok=True)
+        log_file = work_dir / "run.log"
+        try:
+            log_file.write_text(
+                f"=== {work.get('title', work_id)} ===\n"
+                f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n"
+                f"原始歌曲: {work.get('original_audio_path', '')}\n"
+                f"待增强作品: {work.get('parent_work_id', '')}\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        work["status"] = JobStatus.RUNNING.value
+        work["progress"] = 0
+        work["log_path"] = str(log_file)
+        work.pop("queue_position", None)
+        self._save(work)
+
+        try:
+            if not self._vocal_enhancement.available:
+                raise RuntimeError("AI 歌声增强环境未就绪，请先修复 vocal 环境")
+            if not self._uvr.available:
+                raise RuntimeError("AI 增强需要可用的 UVR 原曲分离环境")
+            original = Path(str(work.get("original_audio_path") or ""))
+            cover_output = Path(str(work.get("target_output_path") or ""))
+            if not original.is_file():
+                raise RuntimeError("原始歌曲文件不存在，请重新选择原始音频")
+            if not cover_output.is_file():
+                raise RuntimeError("待增强的翻唱成品不存在")
+            params = InferenceParams.from_dict(work.get("params") or {})
+            sep_model = params.uvr_model or config.UVR_SEP_MODEL
+
+            self._set_step(work, "reference", StepStatus.ACTIVE.value)
+            self._save(work)
+            original_sep = self._uvr.separate(
+                original,
+                work_dir / "original_stems",
+                sep_model,
+                params.device,
+            )
+            reference_vocal = Path(original_sep.vocals)
+            reference_instrumental = (
+                Path(original_sep.instrumental) if original_sep.instrumental else None
+            )
+            if not reference_vocal.is_file():
+                raise RuntimeError("无法从原始歌曲提取参考人声")
+            if getattr(original_sep, "simulated", False):
+                raise RuntimeError("原始歌曲分离未使用真实 UVR 结果，无法进行可靠增强")
+            self._set_step(work, "reference", StepStatus.DONE.value)
+            work["progress"] = 25
+            work["reference_vocals_path"] = str(reference_vocal)
+            if reference_instrumental and reference_instrumental.is_file():
+                work["instrumental_path"] = str(reference_instrumental)
+            else:
+                fallback_instrumental = Path(str(work.get("target_instrumental_path") or ""))
+                if fallback_instrumental.is_file():
+                    reference_instrumental = fallback_instrumental
+                    work["instrumental_path"] = str(fallback_instrumental)
+            self._save(work)
+            self._log(log_file, f"原曲参考人声: {reference_vocal}")
+
+            self._set_step(work, "cover_vocal", StepStatus.ACTIVE.value)
+            self._save(work)
+            direct_vocal = Path(str(work.get("target_vocal_path") or ""))
+            if direct_vocal.is_file():
+                cover_vocal = direct_vocal
+                self._log(log_file, f"复用翻唱作品干声: {cover_vocal}")
+            else:
+                cover_sep = self._uvr.separate(
+                    cover_output,
+                    work_dir / "cover_stems",
+                    sep_model,
+                    params.device,
+                )
+                cover_vocal = Path(cover_sep.vocals)
+                if not cover_vocal.is_file():
+                    raise RuntimeError("无法从翻唱成品提取待增强人声")
+                self._log(log_file, f"从翻唱成品分离人声: {cover_vocal}")
+            self._set_step(work, "cover_vocal", StepStatus.DONE.value)
+            work["progress"] = 45
+            work["enhancement_input_path"] = str(cover_vocal)
+            self._save(work)
+
+            enabled, level, controls = self._enhancement_settings(work)
+            if not enabled:
+                raise RuntimeError("AI 增强参数未启用")
+            self._set_step(work, "enhance", StepStatus.ACTIVE.value)
+            self._save(work)
+            enhanced = self._vocal_enhancement.enhance(
+                cover_vocal,
+                work_dir / "enhanced_vocals.wav",
+                level=level,
+                device=params.device,
+                log_file=log_file,
+                reference=reference_vocal,
+                **controls,
+            )
+            self._set_step(work, "enhance", StepStatus.DONE.value)
+            work["progress"] = 80
+            work["converted_path"] = str(enhanced)
+            work["ai_vocal_paths"] = [str(enhanced)]
+            work["vocal_enhancement_result"] = {
+                "level": level,
+                **controls,
+                "reference_path": str(reference_vocal),
+                "input_path": str(cover_vocal),
+                "output_path": str(enhanced),
+            }
+            self._save(work)
+
+            self._set_step(work, "mix", StepStatus.ACTIVE.value)
+            self._save(work)
+            output = work_dir / "output.wav"
+            mixed = False
+            if reference_instrumental and reference_instrumental.is_file():
+                mixed = self._mix_vocal_with_music(
+                    enhanced,
+                    reference_instrumental,
+                    output,
+                    enhanced=True,
+                    log_file=log_file,
+                )
+            if not mixed:
+                if not self._ffmpeg.convert(enhanced, output):
+                    output = enhanced
+            self._set_step(work, "mix", StepStatus.DONE.value)
+            duration = float(self._ffmpeg.probe_duration(output) or 0.0)
+            work["progress"] = 100
+            work["status"] = JobStatus.DONE.value
+            work["output_path"] = str(output)
+            work["format"] = output.suffix.lstrip(".").upper() or "WAV"
+            work["size"] = paths.file_size_label(output)
+            work["duration"] = self._format_duration(duration)
+            self._record_history(work)
+            self._save(work)
+            self._log(log_file, f"AI 增强任务完成: {output}")
+        except Exception as exc:  # noqa: BLE001 - 后台任务必须记录失败原因
+            work["status"] = JobStatus.FAILED.value
+            work["error"] = str(exc)
+            for step in work.get("steps") or []:
+                if step.get("status") == StepStatus.ACTIVE.value:
+                    step["status"] = StepStatus.FAILED.value
+            self._save(work)
+            self._log(log_file, f"AI 增强任务失败: {exc}")
+            self._log(log_file, traceback.format_exc())
 
     def _queue_worker(self) -> None:
         try:

@@ -63,6 +63,31 @@ class _FakeAudio:
         Path(dst).write_bytes(b"monitor")
         return True
 
+    def trim(self, src, _start, _end, dst, sample_rate=44100):
+        del sample_rate
+        Path(dst).parent.mkdir(parents=True, exist_ok=True)
+        Path(dst).write_bytes(Path(src).read_bytes())
+        return True
+
+
+class _FakeEnhancement:
+    available = True
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    @staticmethod
+    def normalize_strength(value, fallback):
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return fallback
+
+    def enhance(self, source, output, **kwargs):
+        self.calls.append((Path(source), Path(output), kwargs))
+        Path(output).write_bytes(Path(source).read_bytes() + b"-enhanced")
+        return Path(output)
+
 
 class AudioEditorWorkflowTests(unittest.TestCase):
     def make_service(self, root: Path) -> tuple[AudioEditorService, ListRepository, _FakeFfmpeg]:
@@ -193,6 +218,85 @@ class AudioEditorWorkflowTests(unittest.TestCase):
             self.assertFalse(owned_cache.exists())
             self.assertTrue(other_cache.exists())
             self.assertTrue(outside.exists())
+
+    def test_ai_enhance_clip_uses_original_song_reference_and_keeps_timeline(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "converted.wav"
+            reference = root / "original.wav"
+            source.write_bytes(b"converted")
+            reference.write_bytes(b"original")
+            service, repo, _ = self.make_service(root)
+            project = self.project(source)
+            project["tracks"][0]["clips"][0]["effects"] = [
+                {"id": "gain", "type": "gain", "enabled": True, "params": {"gain_db": 2}}
+            ]
+            repo.add(project)
+            service._audio = _FakeAudio()
+            enhancement = _FakeEnhancement()
+            service._vocal_enhancement = enhancement
+
+            with patch("application.audio_editor_service.config.EDITOR_DIR", root / "editor"):
+                result = service.enhance_clip(
+                    "project-1",
+                    "track-1",
+                    "clip-1",
+                    str(reference),
+                    {"level": "advanced", "pitch_correction": 0.7},
+                )
+
+            self.assertTrue(result["ok"])
+            clip = result["clip"]
+            self.assertEqual((clip["start"], clip["end"], clip["offset"]), (5.0, 14.0, 0.0))
+            self.assertEqual(clip["effects"][0]["id"], "gain")
+            self.assertTrue(Path(clip["file"]).is_file())
+            self.assertTrue(clip["metadata"]["ai_enhanced"])
+            self.assertEqual(clip["metadata"]["ai_enhancement_reference"], str(reference))
+            self.assertEqual(enhancement.calls[0][2]["reference"].read_bytes(), b"original")
+            self.assertTrue(repo.get("project-1")["history"])
+
+    def test_remove_last_project_clears_shared_editor_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            editor_root = root / "editor"
+            cache_root = editor_root / "cache"
+            project_dir = editor_root / "project-1"
+            project_dir.mkdir(parents=True)
+            cache_root.mkdir(parents=True)
+            (cache_root / "aud_shared.mp3").write_bytes(b"shared")
+            (cache_root / "wf_shared.wav").write_bytes(b"waveform")
+            source = root / "source.wav"
+            source.write_bytes(b"audio")
+            service, repo, _ = self.make_service(root)
+            repo.add(self.project(source))
+
+            with (
+                patch("application.audio_editor_service.config.EDITOR_DIR", editor_root),
+                patch("application.audio_editor_service.config.EDITOR_CACHE_DIR", cache_root),
+            ):
+                self.assertTrue(service.remove("project-1"))
+
+            self.assertFalse(project_dir.exists())
+            self.assertFalse(any(cache_root.iterdir()))
+
+    def test_list_removes_orphan_editor_project_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            editor_root = root / "editor"
+            cache_root = editor_root / "cache"
+            orphan = editor_root / "edt_orphan"
+            orphan.mkdir(parents=True)
+            (orphan / "media.wav").write_bytes(b"orphan")
+            cache_root.mkdir(parents=True)
+            service, _, _ = self.make_service(root)
+
+            with (
+                patch("application.audio_editor_service.config.EDITOR_DIR", editor_root),
+                patch("application.audio_editor_service.config.EDITOR_CACHE_DIR", cache_root),
+            ):
+                self.assertEqual(service.list(), [])
+
+            self.assertFalse(orphan.exists())
 
     def test_remove_project_keeps_record_when_file_cleanup_fails(self) -> None:
         with tempfile.TemporaryDirectory() as td:
