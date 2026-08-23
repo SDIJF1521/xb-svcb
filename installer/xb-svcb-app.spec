@@ -54,6 +54,12 @@ hiddenimports = [
     "uvicorn.protocols.http.h11_impl",
     "uvicorn.protocols.websockets.auto",
     "uvicorn.lifespan.on",
+    # 系统音频变声使用 soundcard 的 WASAPI 后端；system_audio.py 采用
+    # 延迟导入，必须显式收集 Windows 后端及其 numpy 运行时依赖。
+    "soundcard",
+    "soundcard.mediafoundation",
+    "soundcard.coreaudioconstants",
+    "numpy",
 ]
 
 # pywebview（Windows EdgeChromium 后端）+ 其 http server 依赖一并收集；
@@ -94,7 +100,9 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["torch", "librosa", "numpy", "audio_separator", "fairseq"],
+    # AI worker 在安装目录的隔离环境中运行，但桌面进程的系统音频路径
+    # 需要 numpy；不能把 numpy 排除，否则打包版设备枚举会静默返回空列表。
+    excludes=["torch", "librosa", "audio_separator", "fairseq"],
     noarchive=False,
 )
 
