@@ -38,6 +38,20 @@ def _guess_framework(model_type: str | None) -> str:
     return "so-vits-svc"
 
 
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
 @dataclass
 class ModelInfo:
     """一个已导入的声音模型组。
@@ -126,6 +140,8 @@ class InferenceParams:
     reference_audio: str = ""  # SeedVC 目标音色参考音频路径
     ddsp_infer_steps: int = 50  # DDSP-SVC Rectified Flow 采样步数（官方默认质量）
     ddsp_formant_shift: float = 0.0  # DDSP-SVC 共振峰偏移（-2~2 半音）
+    # 高音保护：极高音区域先保共振峰降调，翻唱后再升回原调。
+    auto_high_pitch_guard: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -167,6 +183,10 @@ class InferenceParams:
                         )
                     ),
                 ),
+            ),
+            auto_high_pitch_guard=_coerce_bool(
+                data.get("auto_high_pitch_guard", data.get("autoHighPitchGuard", True)),
+                True,
             ),
         )
 

@@ -259,6 +259,8 @@ export interface InferenceParams {
   ddsp_formant_shift?: number
   /** So-VITS / DDSP-SVC：目标说话人名称或 id。 */
   speaker?: string
+  /** 高音保护：超出模型可靠音域时降调翻唱，再升回原调并补偿响度。 */
+  auto_high_pitch_guard?: boolean
 }
 
 export interface WorkDTO {

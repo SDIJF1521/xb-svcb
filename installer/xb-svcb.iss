@@ -1278,6 +1278,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC worker', PathJoin(InternalDir, 'infrastructure\ddsp_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\vocal_enhancement_worker.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'AI 歌声增强 worker', PathJoin(InternalDir, 'infrastructure\vocal_enhancement_worker.py'));
+  if not FileExists(PathJoin(InternalDir, 'infrastructure\formant_pitch_worker.py')) then
+    Missing := AddMissingRuntimeFile(Missing, '高音保护 worker', PathJoin(InternalDir, 'infrastructure\formant_pitch_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\vocal_tuning_worker.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'AI 对齐/自然修音 worker', PathJoin(InternalDir, 'infrastructure\vocal_tuning_worker.py'));
   if not FileExists(PathJoin(AppDir, 'install\configure_user_env.py')) then
@@ -1442,12 +1444,13 @@ end;
 
 function ValidateVocalRuntime(): Boolean;
 var
-  AppDir, VocalPython, VocalWorker, TuningWorker, VocalReady, Missing: String;
+  AppDir, VocalPython, VocalWorker, TuningWorker, FormantWorker, VocalReady, Missing: String;
 begin
   AppDir := ExpandConstant('{app}');
   VocalPython := PathJoin(AppDir, '.venv-vocal\Scripts\python.exe');
   VocalWorker := PathJoin(AppDir, '_internal\infrastructure\vocal_enhancement_worker.py');
   TuningWorker := PathJoin(AppDir, '_internal\infrastructure\vocal_tuning_worker.py');
+  FormantWorker := PathJoin(AppDir, '_internal\infrastructure\formant_pitch_worker.py');
   VocalReady := PathJoin(AppDir, 'models\vocal-enhancement\runtime.ready');
   Missing := '';
 
@@ -1461,6 +1464,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'AI 歌声增强 worker', VocalWorker);
   if not FileExists(TuningWorker) then
     Missing := AddMissingRuntimeFile(Missing, 'AI 对齐/自然修音 worker', TuningWorker);
+  if not FileExists(FormantWorker) then
+    Missing := AddMissingRuntimeFile(Missing, '高音保护 worker', FormantWorker);
   if not FileExists(VocalReady) then
     Missing := AddMissingRuntimeFile(Missing, 'runtime.ready 标记', VocalReady);
 

@@ -310,6 +310,7 @@ $workerFiles = @(
   "svc_worker.py",
   "f0_worker.py",
   "vocal_tuning_worker.py",
+  "formant_pitch_worker.py",
   "uvr_worker.py",
   "hub_worker.py",
   "rvc_worker.py",

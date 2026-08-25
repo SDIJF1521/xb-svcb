@@ -575,6 +575,7 @@ JOB_CREATE_API_DOC = _api_operation_description(
         ("params.reference_audio", "string", "否", '""', "仅 SeedVC；本机参考音频绝对路径"),
         ("params.ddsp_infer_steps", "integer", "否", "50", "仅 DDSP；采样步数，最小 1，推荐 50~100"),
         ("params.ddsp_formant_shift", "number", "否", "0", "仅 DDSP；共振峰半音偏移，范围 -2~2"),
+        ("params.auto_high_pitch_guard", "boolean", "否", "true", "翻唱/实时变声；极高音先保共振峰降调，翻唱后升回原调并补偿响度"),
         ("vocal_enhancement.enabled", "boolean", "否", "false", "启用自然修音、AI 角色共振峰与歌声增强"),
         ("vocal_enhancement.level", "string", "否", "basic", "basic 或 advanced"),
         ("vocal_enhancement.pitch_correction", "number", "否", "0.45", "自然修音强度，范围 0~1"),
@@ -845,6 +846,10 @@ class InferenceParamsRequest(BaseModel):
             "DDSP-SVC 共振峰偏移，单位为半音，范围 -2~2。负值通常更厚、更暗，"
             "正值通常更薄、更亮；只对使用 pitch augmentation 训练的模型有效。"
         ),
+    )
+    auto_high_pitch_guard: bool = Field(
+        default=True,
+        description="高音保护：极高音先保共振峰降调，经过模型翻唱后再升回原调，并补偿高音响度。",
     )
 
 

@@ -314,6 +314,14 @@
             <div class="field-hint">男声转女声建议 +12，女声转男声建议 -12</div>
           </div>
 
+          <div class="field">
+            <label class="field-block-label">
+              <input v-model="autoHighPitchGuard" type="checkbox" />
+              自动高音保护
+            </label>
+            <div class="field-hint">仅对超出模型音域的高音区域降调翻唱，再升回原调并补偿响度</div>
+          </div>
+
           <div v-if="selectedFramework !== 'seed-vc'" class="field">
             <label class="field-block-label">F0 提取算法</label>
             <div class="seg">
@@ -1010,6 +1018,7 @@ const uvrModel = ref(str(prefs.uvrModel, 'MDX-Net'))
 const f0Method = ref(normalizeF0Method('so-vits-svc', str(prefs.f0Method, 'rmvpe')))
 
 const pitch = ref(num(prefs.pitch, 0))
+const autoHighPitchGuard = ref(prefs.autoHighPitchGuard !== false)
 const formantShift = ref(Math.max(-2, Math.min(2, num(prefs.formantShift, 0))))
 const indexRate = ref(num(prefs.indexRate, 0.75))
 const rmsMix = ref(num(prefs.rmsMix, 0.25))
@@ -1133,6 +1142,7 @@ function paramsForFramework(framework: string, values: ParamValues): InferencePa
     pitch: Math.round(values.pitch),
     uvr_model: uvrModel.value,
     device: values.device,
+    auto_high_pitch_guard: autoHighPitchGuard.value,
   }
   if (framework === 'seed-vc') {
     params.diffusion_ratio = values.diffusionRatio
@@ -1870,7 +1880,7 @@ const alignStatus = computed(() => {
 
 // 任一参数变化即写回 localStorage
 watch(
-  [uvrModel, f0Method, pitch, formantShift, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion, vocalEnhancementEnabled, vocalEnhancementLevel, pitchCorrection, timingAlignment, timbreFocus, aiEq, aiCompressor, aiExciter, stereoWidth, loudnessEnvelope],
+  [uvrModel, f0Method, pitch, autoHighPitchGuard, formantShift, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion, vocalEnhancementEnabled, vocalEnhancementLevel, pitchCorrection, timingAlignment, timbreFocus, aiEq, aiCompressor, aiExciter, stereoWidth, loudnessEnvelope],
   () => {
     try {
       localStorage.setItem(
@@ -1879,6 +1889,7 @@ watch(
           uvrModel: uvrModel.value,
           f0Method: f0Method.value,
           pitch: pitch.value,
+          autoHighPitchGuard: autoHighPitchGuard.value,
           formantShift: formantShift.value,
           indexRate: indexRate.value,
           rmsMix: rmsMix.value,
@@ -2056,6 +2067,7 @@ function applyParams(raw: Record<string, unknown>) {
     : num(raw.diffusion_ratio, diffusionRatio.value)
   const next = {
     pitch: num(raw.pitch, pitch.value),
+    autoHighPitchGuard: raw.auto_high_pitch_guard !== false,
     formantShift: Math.max(-2, Math.min(2, num(raw.ddsp_formant_shift, formantShift.value))),
     f0Method: str(raw.f0_method, f0Method.value),
     indexRate: num(raw.index_rate, indexRate.value),
@@ -2069,6 +2081,7 @@ function applyParams(raw: Record<string, unknown>) {
     referenceAudio: str(raw.reference_audio, seedVcReferenceAudio.value),
   }
   pitch.value = next.pitch
+  autoHighPitchGuard.value = next.autoHighPitchGuard
   formantShift.value = next.formantShift
   f0Method.value = normalizeF0Method(selectedFramework.value, next.f0Method)
   indexRate.value = next.indexRate

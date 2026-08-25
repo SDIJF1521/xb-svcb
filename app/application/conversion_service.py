@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import threading
 import traceback
+import wave
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -79,6 +80,7 @@ def default_steps_ai_enhancement() -> list[dict[str, Any]]:
 
 
 class ConversionService:
+    _HIGH_PITCH_THRESHOLD = 800.0
     def __init__(
         self,
         repo: ListRepository,
@@ -275,6 +277,106 @@ class ConversionService:
             f"推理上限={recommended:.0f}Hz，"
             f"高音={'是' if high_pitch else '否'} / 高频={'是' if high_frequency else '否'}",
         )
+
+    def _prepare_high_pitch_guard(
+        self,
+        source: Path,
+        destination: Path,
+        params: InferenceParams,
+        log_file: Path,
+    ) -> tuple[Path, bool]:
+        """Prepare a selective high-note pitch guard for normal AI covers."""
+        if not params.auto_high_pitch_guard or not source.is_file():
+            return source, False
+        peak_f0 = self._estimate_peak_f0(source)
+        if peak_f0 < self._HIGH_PITCH_THRESHOLD:
+            return source, False
+        if not self._ffmpeg.pitch_shift(
+            source,
+            destination,
+            -12,
+            mask_source=source,
+            loudness_source=source,
+            high_threshold=self._HIGH_PITCH_THRESHOLD,
+        ):
+            self._log(log_file, f"  高音保护降调失败，沿用原始推理输入（峰值 F0={peak_f0:.1f}Hz）")
+            return source, False
+        self._log(
+            log_file,
+            f"  高音保护已启用：仅对高音区域保共振峰降调 -12 半音（峰值 F0={peak_f0:.1f}Hz）",
+        )
+        return destination, True
+
+    def _restore_high_pitch_guard(
+        self,
+        source: Path,
+        destination: Path,
+        original: Path,
+        params: InferenceParams,
+        log_file: Path,
+    ) -> Path:
+        if not params.auto_high_pitch_guard:
+            return source
+        restored = destination
+        if self._ffmpeg.pitch_shift(
+            source,
+            destination,
+            12,
+            mask_source=original,
+            loudness_source=original,
+            high_threshold=self._HIGH_PITCH_THRESHOLD,
+        ):
+            self._log(log_file, "  高音保护完成：翻唱后仅对高音区域升回原调并补偿响度")
+            return restored
+        self._log(log_file, "  高音保护升调失败，沿用模型输出")
+        return source
+
+    @staticmethod
+    def _estimate_peak_f0(source: Path) -> float:
+        try:
+            import numpy as np
+
+            with wave.open(str(source), "rb") as handle:
+                rate = int(handle.getframerate() or 44100)
+                channels = int(handle.getnchannels() or 1)
+                raw = handle.readframes(handle.getnframes())
+            if not raw:
+                return 0.0
+            audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+            audio = audio.reshape(-1, channels).mean(axis=1)
+            target_rate = min(rate, 16000)
+            if rate != target_rate:
+                positions = np.linspace(0, len(audio) - 1, max(1, round(len(audio) * target_rate / rate)))
+                audio = np.interp(positions, np.arange(len(audio)), audio)
+            frame = min(len(audio), max(1024, int(target_rate * 0.08)))
+            if frame < 256:
+                return 0.0
+            min_lag = max(2, int(target_rate / 2000.0))
+            max_lag = min(frame - 1, int(target_rate / 60.0))
+            highest = 0.0
+            for start in range(0, max(1, len(audio) - frame + 1), max(1, frame // 2)):
+                chunk = audio[start : start + frame]
+                if len(chunk) < frame:
+                    chunk = np.pad(chunk, (0, frame - len(chunk)))
+                chunk = chunk - float(np.mean(chunk))
+                if float(np.sqrt(np.mean(chunk * chunk))) < 0.008:
+                    continue
+                corr = np.correlate(chunk, chunk, mode="full")[frame - 1:]
+                if corr[0] <= 0:
+                    continue
+                corr = corr / corr[0]
+                peaks = [
+                    lag for lag in range(min_lag + 1, max_lag)
+                    if corr[lag] >= corr[lag - 1]
+                    and corr[lag] >= corr[lag + 1]
+                    and corr[lag] >= 0.45
+                ]
+                lag = peaks[0] if peaks else min_lag + int(np.argmax(corr[min_lag:max_lag + 1]))
+                if float(corr[lag]) >= 0.35:
+                    highest = max(highest, target_rate / float(lag))
+            return float(highest)
+        except (OSError, ValueError, wave.Error, ImportError):
+            return 0.0
 
     def _enhance_vocal(
         self,
@@ -691,6 +793,7 @@ class ConversionService:
                 if self._ffmpeg.convert(infer_input, wav_input):
                     infer_input = wav_input
             self._log(log_file, f"[3/{pipeline_total}] 推理输入已准备: {infer_input}")
+            original_infer_input = infer_input
             # 真实 F0 提取（rmvpe 等），保存曲线并校验是否检测到人声。
             # F0 探针为 so-vits 专属；其它框架（如 RVC 内部自行处理 F0）跳过该步。
             f0_stats = None
@@ -737,6 +840,12 @@ class ConversionService:
                 f"[4/{pipeline_total}] {fw_label} 推理开始（引擎 {'可用' if getattr(engine, 'available', False) else '降级模式'}）",
             )
             raw_converted = work_dir / "converted_raw.wav"
+            guarded_input, guard_enabled = self._prepare_high_pitch_guard(
+                original_infer_input,
+                work_dir / "infer_input_high_guarded.wav",
+                params,
+                log_file,
+            )
             engine.infer(
                 model={
                     "framework": framework,
@@ -746,12 +855,20 @@ class ConversionService:
                     "diffusion_config_path": work.get("diffusion_config_path", ""),
                     "index_path": work.get("index_path", ""),
                 },
-                vocals=infer_input,
+                vocals=guarded_input,
                 out_path=raw_converted,
                 params=params,
                 duration=duration,
                 log_file=log_file,
             )
+            if guard_enabled:
+                raw_converted = self._restore_high_pitch_guard(
+                    raw_converted,
+                    work_dir / "converted_raw_restored.wav",
+                    original_infer_input,
+                    params,
+                    log_file,
+                )
             self._set_step(work, "infer", StepStatus.DONE.value)
             work["progress"] = 68
             self._save(work)
@@ -1002,6 +1119,7 @@ class ConversionService:
                 wav_input = work_dir / "infer_input.wav"
                 if self._ffmpeg.convert(infer_input, wav_input):
                     infer_input = wav_input
+            original_infer_input = infer_input
             timeline = self._build_timeline(segments_in, duration)
             used_models: list[str] = []
             for s in timeline:
@@ -1041,6 +1159,12 @@ class ConversionService:
                 )
                 seg_engine = self._engines.for_framework(seg_framework)
                 full_raw = work_dir / f"full_{mid}.wav"
+                guarded_input, guard_enabled = self._prepare_high_pitch_guard(
+                    original_infer_input,
+                    work_dir / f"infer_input_{mid}_high_guarded.wav",
+                    seg_params,
+                    log_file,
+                )
                 fw_label = config.MODELHUB_FRAMEWORKS.get(seg_framework, seg_framework)
                 self._log(
                     log_file,
@@ -1057,12 +1181,20 @@ class ConversionService:
                             "diffusion_config_path": model.get("diffusion_config_path", ""),
                             "index_path": model.get("index_path", ""),
                         },
-                        vocals=infer_input,
+                        vocals=guarded_input,
                         out_path=full_raw,
                         params=seg_params,
                         duration=duration,
                         log_file=log_file,
                     )
+                    if guard_enabled:
+                        full_raw = self._restore_high_pitch_guard(
+                            full_raw,
+                            work_dir / f"full_{mid}_restored.wav",
+                            original_infer_input,
+                            seg_params,
+                            log_file,
+                        )
                     # 规整到 44100Hz 且锁定为整曲时长：保证逐句切片与原伴奏精确对齐
                     full_fix = work_dir / f"full_{mid}_fix.wav"
                     if self._ffmpeg.available and self._ffmpeg.pad_or_trim(

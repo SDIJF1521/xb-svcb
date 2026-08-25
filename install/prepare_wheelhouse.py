@@ -558,9 +558,18 @@ _TOOL_PYTHON: Path | None = None
 _UV_EXE: str | None = None
 
 
+def _subprocess_env() -> dict[str, str]:
+    """Keep setuptools/distutils compatible with the bundled Python 3.10."""
+    env = os.environ.copy()
+    env.setdefault("SETUPTOOLS_USE_DISTUTILS", "stdlib")
+    env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+    env.setdefault("PIP_NO_INPUT", "1")
+    return env
+
+
 def _run(cmd: list[str]) -> None:
     print("$ " + " ".join(str(part) for part in cmd))
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=_subprocess_env())
 
 
 def _has_module(py: Path, module: str) -> bool:
@@ -570,6 +579,7 @@ def _has_module(py: Path, module: str) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
+            env=_subprocess_env(),
         ).returncode
         == 0
     )

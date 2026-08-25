@@ -379,6 +379,7 @@ class HttpApiContractTests(unittest.TestCase):
             "reference_audio",
             "ddsp_infer_steps",
             "ddsp_formant_shift",
+            "auto_high_pitch_guard",
         }
 
         self.assertEqual(set(inference), expected_inference_fields)

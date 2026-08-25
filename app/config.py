@@ -335,6 +335,7 @@ def _detect_vocal_enhancement_python() -> Path | None:
 
 VOCAL_ENHANCEMENT_PYTHON = _detect_vocal_enhancement_python()
 VOCAL_ENHANCEMENT_WORKER = BUNDLE_DIR / "infrastructure" / "vocal_enhancement_worker.py"
+FORMANT_PITCH_WORKER = BUNDLE_DIR / "infrastructure" / "formant_pitch_worker.py"
 VOCAL_ENHANCEMENT_MODEL_DIR = ROOT_DIR / "models" / "vocal-enhancement"
 VOCAL_ENHANCEMENT_MARKER = VOCAL_ENHANCEMENT_MODEL_DIR / "runtime.ready"
 

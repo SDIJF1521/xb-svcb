@@ -110,6 +110,12 @@
                 </select>
               </label>
             </div>
+            <div class="pitch-guard-grid">
+              <label class="toggle-field">
+                <input v-model="paramsFor(id).autoHighPitchGuard" type="checkbox" :disabled="sessionActive" />
+                <span><b>自动高音保护</b><small>高音先保共振峰降调，翻唱后升回原调</small></span>
+              </label>
+            </div>
             <div v-if="frameworkOf(id) === 'seed-vc'" class="reference-row">
               <span>目标音色参考</span>
               <button :disabled="sessionActive" @click="pickReference(id)">{{ baseName(paramsFor(id).referenceAudio) || '选择音频' }}</button>
@@ -206,6 +212,7 @@ interface LiveParams {
   protect: number
   filterRadius: number
   rvcVersion: string
+  autoHighPitchGuard: boolean
 }
 
 const modelsStore = useModelsStore()
@@ -297,6 +304,7 @@ function paramsFor(id: string) {
     protect: 0.33,
     filterRadius: 3,
     rvcVersion: 'v2',
+    autoHighPitchGuard: true,
   }
 }
 function seedVcSteps(ratio: number) { return Math.round(4 + Math.max(0, Math.min(1, ratio)) * 6) }
@@ -363,6 +371,7 @@ function inferenceParams(id: string): InferenceParams {
         diffusion_ratio: values.diffusionRatio,
         reference_audio: values.referenceAudio,
         uvr_model: 'MDX-Net',
+        auto_high_pitch_guard: values.autoHighPitchGuard,
       }
     : {
         pitch: Math.round(values.pitch),
@@ -374,6 +383,7 @@ function inferenceParams(id: string): InferenceParams {
         filter_radius: Math.round(values.filterRadius),
         rvc_version: values.rvcVersion,
         uvr_model: 'MDX-Net',
+        auto_high_pitch_guard: values.autoHighPitchGuard,
       }
 }
 
@@ -579,6 +589,12 @@ h1 { margin: 0; font-size: 30px; letter-spacing: 0; } .page-sub { margin: 8px 0 
 .model-item.active { border-color: color-mix(in srgb, var(--accent, #00d5ff) 65%, transparent); background: color-mix(in srgb, var(--accent, #00d5ff) 7%, transparent); }
 .check { color: var(--accent, #00d5ff); } .empty-note, .section-note { margin: 0; color: var(--text-muted, #8f9aaa); font-size: 13px; }
 .model-settings { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border-left: 2px solid var(--accent, #00d5ff); background: color-mix(in srgb, var(--xb-panel, #172033) 88%, transparent); }
+.pitch-guard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); }
+.toggle-field { min-height: 42px; display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid var(--border-color); background: color-mix(in srgb, var(--xb-panel) 72%, transparent); cursor: pointer; }
+.toggle-field input { width: 16px; height: 16px; accent-color: var(--accent); }
+.toggle-field span { display: grid; gap: 2px; }
+.toggle-field small { font-size: 11px; }
+.compact-range { padding: 8px 10px; border: 1px solid var(--border-color); background: color-mix(in srgb, var(--xb-panel) 72%, transparent); }
 .setting-title, .range-row > span, .reference-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .setting-title span { color: var(--text-muted, #8f9aaa); font-size: 11px; } .range-row { display: grid; gap: 7px; font-size: 13px; }
 .param-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px 22px; }
@@ -710,5 +726,5 @@ input[type='range'] { width: 100%; accent-color: var(--accent, #00d5ff); } .refe
 .sync-panel b { color: var(--xb-text, var(--text-primary, #f4f7fb)); font-size: 12px; }
 .sync-panel small { color: var(--xb-muted, var(--text-muted, #8f9aaa)); line-height: 1.45; }
 @media (max-width: 940px) { .layout { grid-template-columns: 1fr; } .monitor { position: static; } }
-@media (max-width: 640px) { .page { margin: 10px 8px 24px; padding: 20px 14px 40px; } .page-head { align-items: flex-start; flex-direction: column; } .model-grid, .control-grid, .param-grid, .select-grid, .source-library-list, .system-audio-setup { grid-template-columns: 1fr; } .system-audio-note { grid-column: auto; } }
+@media (max-width: 640px) { .page { margin: 10px 8px 24px; padding: 20px 14px 40px; } .page-head { align-items: flex-start; flex-direction: column; } .model-grid, .control-grid, .param-grid, .select-grid, .pitch-guard-grid, .source-library-list, .system-audio-setup { grid-template-columns: 1fr; } .system-audio-note { grid-column: auto; } }
 </style>
