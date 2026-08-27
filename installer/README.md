@@ -28,7 +28,7 @@
 
 - 应用、Python 项目、前端包、锁文件、Windows EXE 版本资源和 Inno Setup 版本统一为 `0.0.29`。
 - 前置依赖页检测 VB-CABLE；缺失时显示用户手动安装入口，不会静默安装虚拟声卡驱动，安装完成后可重新检测。
-- 安装目录携带 `release_notes_v029.md`、`README.md` 与 `docs/api.md`；覆盖升级继续保留作品、模型、编辑工程、主题、API 设置和插件数据。
+- 安装目录携带 `docs/release-notes/release_notes_v029.md`、`README.md` 与 `docs/api.md`；覆盖升级继续保留作品、模型、编辑工程、主题、API 设置和插件数据。
 - 实时翻唱系统音频模式使用 Windows 音频回环/虚拟音频线，要求用户将播放器输出切换到 VB-CABLE 或其他虚拟线路，并在软件中选择独立的输出设备。
 - 关闭软件时会停止实时后台服务并清空当前用户数据目录下 `temp` 的生成内容，保留目录本身供下次启动复用。
 
@@ -40,7 +40,7 @@
 - 环境搭建统一验证本机 Python 3.10 和各组件虚拟环境版本，损坏或版本不匹配时自动重建；So-VITS-SVC 会补齐并验证 Matplotlib 导入链。
 - AI 歌声增强环境不再安装会引发 `packaging` 版本冲突的运行期 wheel 包，离线 wheelhouse 继续按组件和 GPU 栈选择。
 - 系统 PATH 没有可用 `ffmpeg` / `ffprobe` 时正常释放安装分卷内置 FFmpeg，不再因安装前检查应用目录而误判资源已存在。
-- 安装目录携带最新 `release_notes_v028.md`、`README.md` 与 `docs/api.md`，覆盖升级保留作品、模型、编辑工程、主题、API 设置和插件数据。
+- 安装目录携带最新 `docs/release-notes/release_notes_v028.md`、`README.md` 与 `docs/api.md`，覆盖升级保留作品、模型、编辑工程、主题、API 设置和插件数据。
 
 ## v0.0.27 安装器行为
 
@@ -48,7 +48,7 @@
 - 安装包内置的 `DeepFilterNet3` 现在同时用于分离干声与翻唱模型输出的双阶段修复；运行时会分析高频和高音域，修复后受控恢复辅音/泛音，无需首次运行再下载模型。原先排除的 `fcpe.pt` 也改为随分卷携带，供 So-VITS/DDSP 极高音 F0 自动切换。
 - 发布构建会把 `uv` 与各 AI 子环境依赖预下载/预构建为 whl，按 `py310/cpu`、`py310/directml`、`py310/cu121`、`py310/cu128` 分组，并对 SVC/RVC py39、DirectML 下 DDSP/Vocal 等 torch 版本冲突环境使用组件子目录；安装/修复环境时根据用户机器的 Python 版本、GPU 栈和组件自动 `--no-index --no-build --find-links` 离线安装对应 whl。
 - Inno Setup 分卷固定为 `1,900,000,000` 字节，发布构建会拒绝任何达到 2 GiB 的数据卷。
-- 安装目录携带最新 `release_notes_v027.md`、`README.md` 与 `docs/api.md`，旧数据目录可继续覆盖升级使用。
+- 安装目录携带最新 `docs/release-notes/release_notes_v027.md`、`README.md` 与 `docs/api.md`，旧数据目录可继续覆盖升级使用。
 - 分卷发布方式、离线模型、内置 FFmpeg、GPU 环境策略和离线 wheelhouse 不要求用户重新下载已有作品或模型。
 
 ## v0.0.26 安装器行为
@@ -56,7 +56,7 @@
 - 应用、Python 项目、前端包、锁文件、Windows EXE 版本资源和 Inno Setup 版本统一为 `0.0.26`。
 - 安装包新增 `vocal_tuning_worker.py`，并在安装前校验 AI 对齐/自然修音 worker 与 AI 歌声增强 worker 均已进入 `_internal/infrastructure`。
 - `.venv-vocal` 新增 `praat-parselmouth==0.4.6`，供参考人声动态对齐、DurationTier 受限时间校正和 PitchTier 自然修音使用；`runtime.ready` 同步记录该依赖。
-- 安装目录携带 `release_notes_v026.md`、`README.md` 与 `docs/api.md`，旧数据目录可继续覆盖升级使用。
+- 安装目录携带 `docs/release-notes/release_notes_v026.md`、`README.md` 与 `docs/api.md`，旧数据目录可继续覆盖升级使用。
 
 ## v0.0.25 安装器行为
 
@@ -90,7 +90,7 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 - 安装包新增 `docs/api.md`，包含安全配置、完整调用流程、Python 示例、SeedVC 参考音频用法、接口清单和状态码。
 - FastAPI 与桌面本体运行在同一 GUI 进程，不新增控制台程序或自动启动项；安装后默认不开放端口。
 - 安装包内的桌面本体与前端新增酷我音乐曲库，包含搜索、后端代理试听、无损音质候选回退、Range 分段下载和内联歌词解析。
-- 发布构建要求根目录存在 `release_notes_v023.md` 与 `docs/api.md`，缺失时不会生成安装器。
+- 发布构建要求 `docs/release-notes/release_notes_v023.md` 与 `docs/api.md` 存在，缺失时不会生成安装器。
 
 ## v0.0.22 安装器行为
 
@@ -108,7 +108,7 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 - 应用启动时的环境探测统一使用 Windows `CREATE_NO_WINDOW`，不会再为 UVR/SVC/RVC/SeedVC/DDSP 探测闪出黑色 CMD 窗口。
 - 五个隔离环境改为并行探测并按环境签名缓存 24 小时；重启应用可直接恢复检测结果，更新环境后自动重新探测。
 - 首页“集成工具”改用自适应网格，长版本号、显卡名称和异常状态不会再把工具名称挤成竖排或溢出卡片。
-- 发布构建要求根目录存在 `release_notes_v022.md`，安装后将其与主 `README.md` 一起释放到应用目录。
+- 发布构建要求 `docs/release-notes/release_notes_v022.md` 存在，安装后将其与主 `README.md` 一起释放到应用目录。
 - `installer/build.ps1 -ValidateOnly` 会检查 v0.0.22 版本一致性、发布文档、内置模型和 Inno Setup/Pascal 脚本。
 
 ## v0.0.21 安装器行为
@@ -118,7 +118,7 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 - JUCE VST3 Host 使用非随主窗口失焦关闭的置顶原生插件窗口，继续随安装包离线释放到 `engines/juce-vst3-host`。
 - 随包 Host 当前仅支持 64 位 Windows VST3 音频效果器；VST2 `.dll`、32 位插件、CLAP、AAX、AU 和需要 MIDI 音符的 VST3i 乐器不受支持。
 - JUCE Host 通过 `AudioDeviceManager` 把目标插件处理结果与其余工程底轨混合后送入声卡；实际设备、缓冲大小和延迟由前端显示，安装器继续携带编译好的 Host。
-- 发布构建要求根目录存在 `release_notes_v021.md`，安装后将其与主 `README.md` 一起释放到应用目录。
+- 发布构建要求 `docs/release-notes/release_notes_v021.md` 存在，安装后将其与主 `README.md` 一起释放到应用目录。
 - 分卷安装方式保持不变：必须共同发布 `XB-SVCB-Setup.exe` 与全部 `XB-SVCB-Setup-*.bin`。
 - `installer/build.ps1 -ValidateOnly` 会检查 v0.0.21 版本一致性、发布文档、内置模型和 Inno Setup/Pascal 脚本。
 
@@ -129,7 +129,7 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 - UVR 与 DDSP-SVC GPU 环境固定使用匹配的 CUDA Torch，并在各自安装结束后验证 `torch.cuda.is_available()`，避免 GPU 选择静默运行在 CPU。
 - PyInstaller 继续打包 `ddsp_worker.py`、`uvr_worker.py` 与当前编辑器/消息中心前端。
 - 安装器内置优化后的主题前端：WebView2 使用原生页面快照完成暗色/亮色过渡，并在动画结束后同步原生窗口外观。
-- 发布构建要求根目录存在 `release_notes_v020.md`，安装后将其与主 `README.md` 一起释放到应用目录。
+- 发布构建要求 `docs/release-notes/release_notes_v020.md` 存在，安装后将其与主 `README.md` 一起释放到应用目录。
 - 分卷安装方式保持不变：必须共同发布 `XB-SVCB-Setup.exe` 与全部 `XB-SVCB-Setup-*.bin`。
 - `installer/build.ps1 -ValidateOnly` 会检查 v0.0.20 版本一致性、发布文档和 Inno Setup/Pascal 脚本。
 - 发布构建会校验 DDSP 声码器权重至少 32 MiB 且 `config.json` 包含 `pc_aug=true`，防止普通 NSF-HiFiGAN 或 LFS 指针误入安装包。
@@ -139,7 +139,7 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 - 应用、Python 项目、前端、锁文件和 Inno Setup 版本统一为 `0.0.19`。
 - PyInstaller 包含播放中效果热更新、精确时间轴定位和妖狐官方歌词响应适配后的当前前端与应用本体。
 - 安装器继续携带全部 SVC / RVC / UVR / SeedVC / Hub workers、SeedVC 离线权重和 JUCE VST3 Host。
-- 发布构建要求根目录存在 `release_notes_v019.md`，安装后将其与主 `README.md` 一起释放到应用目录。
+- 发布构建要求 `docs/release-notes/release_notes_v019.md` 存在，安装后将其与主 `README.md` 一起释放到应用目录。
 - 分卷安装方式保持不变：必须共同发布 `XB-SVCB-Setup.exe` 与全部 `XB-SVCB-Setup-*.bin`。
 - `installer/build.ps1 -ValidateOnly` 会在不重新压缩模型的情况下检查 v0.0.19 版本一致性、发布文档和 Inno Setup/Pascal 脚本。
 
@@ -154,7 +154,7 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 - SeedVC 环境会过滤仅供上游评测使用的 `resemblyzer` / `webrtcvad`，Windows + Python 3.10 无需现场编译该扩展。
 - 安装包预置 SeedVC 所需 RMVPE、CampPlus、Whisper Small 与 BigVGAN；构建时校验权重大小，避免 LFS 指针或残缺快照进入发布包。
 - 提供 `installer/build.ps1 -ValidateOnly`，无需压缩模型即可检查版本、PowerShell 与 Inno Setup/Pascal 脚本。
-- 安装目录包含 `README.md` 与 `release_notes_v018.md`，便于离线查看功能和升级说明。
+- 安装目录包含 `README.md` 与 `docs/release-notes/release_notes_v018.md`，便于离线查看功能和升级说明。
 
 ## v0.0.17 安装器行为
 

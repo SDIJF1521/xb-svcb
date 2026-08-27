@@ -30,4 +30,4 @@
 
 ## 版本记录
 
-历史更新说明仍保留在仓库根目录的 release_notes_v*.md，以兼容已有链接。新增版本建议继续使用同样的命名方式，并在根 README 只链接当前版本。
+历史更新说明集中在 [release-notes/](release-notes/)。新增版本建议继续使用 release_notes_vXYZ.md 命名，并在根 README 只链接当前版本。

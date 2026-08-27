@@ -197,6 +197,6 @@ Python 测试：
 
 ## 版本与许可证
 
-当前代码版本为 v0.0.29。历史版本说明保留在根目录的 release_notes_v*.md 文件中，最新版本请查看 [v0.0.29 更新说明](release_notes_v029.md)。
+当前代码版本为 v0.0.29。历史版本说明集中在 [docs/release-notes/](docs/release-notes/) 中，最新版本请查看 [v0.0.29 更新说明](docs/release-notes/release_notes_v029.md)。
 
 本项目自有代码采用 [GPL-3.0-only](LICENSE)。上游引擎、第三方库、模型和音频资源可能使用不同许可证，使用和再分发时请分别遵守其原始授权条款。

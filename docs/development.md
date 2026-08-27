@@ -70,5 +70,5 @@
 - API 细节只维护在 docs/api.md。
 - 插件内容优先维护在 docs/plugins/，旧版单文件指南仅作兼容和全文搜索。
 - 架构源数据放在 docs/archify/*.json，HTML 是可交付查看产物。
-- 版本更新说明使用根目录 release_notes_vXYZ.md，README 只链接当前版本。
+- 版本更新说明统一放在 docs/release-notes/release_notes_vXYZ.md，README 只链接当前版本。
 - 修改启动流程、目录结构、环境名称或 API 合同时同步更新对应文档。
