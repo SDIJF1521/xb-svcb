@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "XB-SVCB 系统架构",
+    "subtitle": "桌面 UI 与可选 FastAPI 共用 Python 业务核心；重型模型和音频工具在隔离 Worker 中运行。",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "xb-svcb-system.architecture.html",
+    "viewBox": [1450, 900],
+    "repository": {
+      "url": "https://github.com/SDIJF1521/xb-svcb.git",
+      "revision": "04cb657bb940f2b75c169682bf08350ec6183f28"
+    },
+    "views": [
+      {
+        "id": "main-process",
+        "label": "主进程与业务核心",
+        "focus": ["desktop", "facade", "app", "queue", "registry"],
+        "note": "左侧是两种入口，中间是同一个 Api 和应用服务；FastAPI 默认不监听端口。"
+      },
+      {
+        "id": "model-runtime",
+        "label": "模型运行时",
+        "focus": ["app", "queue", "registry", "uvr", "model", "enhance", "ffmpeg"],
+        "note": "查看普通推理如何经过队列、UVR、框架路由、模型 Worker 和 FFmpeg。"
+      },
+      {
+        "id": "data-assets",
+        "label": "数据与资产",
+        "focus": ["app", "model", "uvr", "enhance", "ffmpeg", "data", "assets"],
+        "note": "查看模型记录、作品状态、临时音频和随包 checkpoint 的存储关系。"
+      }
+    ]
+  },
+  "components": [
+    { "id": "user", "type": "external", "label": "桌面用户", "pos": [40, 330], "size": [140, 64] },
+    { "id": "client", "type": "external", "label": "外部客户端", "pos": [40, 120], "size": [140, 64] },
+    { "id": "desktop", "type": "frontend", "label": "pywebview + Vue 3", "pos": [250, 300], "size": [190, 76], "sources": [{ "path": "app/main.py" }, { "path": "web/src/main.ts" }] },
+    { "id": "facade", "type": "backend", "label": "Api Facade", "pos": [500, 300], "size": [180, 76], "sources": [{ "path": "app/api/bridge.py" }] },
+    { "id": "fastapi", "type": "backend", "label": "FastAPI Server", "pos": [500, 120], "size": [180, 64], "sources": [{ "path": "app/api/http_server.py" }] },
+    { "id": "app", "type": "backend", "label": "Application Services", "pos": [740, 300], "size": [220, 82], "sources": [{ "path": "app/application/work_service.py" }, { "path": "app/application/conversion_service.py" }] },
+    { "id": "queue", "type": "messagebus", "label": "串行推理队列", "pos": [1010, 300], "size": [180, 70], "sources": [{ "path": "app/application/conversion_service.py" }] },
+    { "id": "registry", "type": "backend", "label": "EngineRegistry", "pos": [1230, 300], "size": [180, 70], "sources": [{ "path": "app/infrastructure/engine.py" }] },
+    { "id": "uvr", "type": "backend", "label": "UVR Worker", "pos": [1010, 500], "size": [180, 70], "sources": [{ "path": "app/infrastructure/uvr_tool.py" }, { "path": "app/infrastructure/uvr_worker.py" }] },
+    { "id": "model", "type": "backend", "label": "Model Worker", "pos": [1230, 500], "size": [180, 70], "sources": [{ "path": "app/infrastructure/svc_engine.py" }, { "path": "app/infrastructure/rvc_engine.py" }, { "path": "app/infrastructure/seedvc_engine.py" }] },
+    { "id": "enhance", "type": "backend", "label": "Vocal Enhancement", "pos": [1010, 680], "size": [180, 70], "sources": [{ "path": "app/infrastructure/vocal_enhancement.py" }] },
+    { "id": "ffmpeg", "type": "backend", "label": "FFmpeg", "pos": [1230, 680], "size": [180, 70], "sources": [{ "path": "app/infrastructure/ffmpeg_tool.py" }] },
+    { "id": "data", "type": "database", "label": "本地用户数据", "pos": [720, 520], "size": [230, 88], "sources": [{ "path": "app/infrastructure/paths.py" }, { "path": "app/infrastructure/storage.py" }] },
+    { "id": "assets", "type": "database", "label": "离线模型资产", "pos": [720, 700], "size": [230, 74], "sources": [{ "path": "app/config.py" }] }
+  ],
+  "connections": [
+    { "id": "user-desktop", "from": "user", "to": "desktop", "label": "操作", "variant": "emphasis" },
+    { "id": "client-fastapi", "from": "client", "to": "fastapi", "label": "HTTP", "variant": "security" },
+    { "id": "desktop-facade", "from": "desktop", "to": "facade", "label": "Bridge", "variant": "emphasis" },
+    { "id": "fastapi-facade", "from": "fastapi", "to": "facade", "label": "共享 Api", "variant": "security", "labelAt": [590, 198] },
+    { "id": "facade-app", "from": "facade", "to": "app", "label": "用例", "variant": "emphasis" },
+    { "id": "app-queue", "from": "app", "to": "queue", "label": "入队", "variant": "emphasis" },
+    { "id": "queue-registry", "from": "queue", "to": "registry", "label": "路由", "variant": "emphasis" },
+    { "id": "app-uvr", "from": "app", "to": "uvr", "label": "人声分离", "variant": "default", "labelAt": [925, 430] },
+    { "id": "registry-model", "from": "registry", "to": "model", "label": "框架 Worker", "variant": "emphasis", "labelAt": [1320, 384] },
+    { "id": "app-enhance", "from": "app", "to": "enhance", "label": "可选增强", "variant": "dashed", "labelAt": [1060, 620] },
+    { "id": "model-ffmpeg", "from": "model", "to": "ffmpeg", "label": "后处理", "variant": "default", "labelAt": [1390, 600] },
+    { "id": "app-data", "from": "app", "to": "data", "label": "状态 / 文件", "variant": "default", "fromSide": "bottom", "toSide": "top", "via": [[850, 430], [650, 430], [650, 456], [835, 456]] },
+    { "id": "model-assets", "from": "model", "to": "assets", "label": "读取资产", "variant": "dashed", "fromSide": "bottom", "toSide": "bottom", "via": [[1320, 620], [1430, 620], [1430, 820], [835, 820]] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "入口连接", "items": ["外部客户端 → FastAPI：通过 HTTP /api/v1 上传、建任务、查进度和下载成品", "桌面用户 → pywebview + Vue：用户在界面选择音频、模型和参数", "Vue → Api Facade：通过 window.pywebview.api 调用 Python 方法", "FastAPI → Api Facade：HTTP 层复用同一个 Api，不重复实现业务"] },
+    { "dot": "emerald", "title": "核心连接", "items": ["Api Facade → Application Services：把请求分发给 Work / Model / Conversion 等服务", "Application Services → 推理队列：创建任务并串行执行，控制单 GPU 显存峰值", "推理队列 → EngineRegistry：按 model.framework 选择具体推理框架", "Application Services → 本地用户数据：保存模型索引、作品状态、设置和日志"] },
+    { "dot": "rose", "title": "模型连接", "items": ["Application Services → UVR：先分离人声与伴奏，必要时去混响", "EngineRegistry → Model Worker：启动隔离 Worker，由 Worker 加载 checkpoint", "Model Worker → 离线模型资产：读取模型、底模、F0 和声码器等资源", "Model Worker → FFmpeg：把转换人声交给后处理和最终混音；实际由业务服务编排"] },
+    { "dot": "orange", "title": "可选与运行约束", "items": ["Application Services → Vocal Enhancement：可选的人声修复、增强和音频润色", "虚线表示可选能力或资源依赖，不是每次任务都必经", "普通任务通常一次启动 Worker；实时模式使用常驻 UVR 与 RVC/SeedVC Worker", "模型、作品、设置和临时文件位于可迁移的本地数据目录"] }
+  ]
+}

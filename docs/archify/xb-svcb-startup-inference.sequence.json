@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "XB-SVCB Startup and Model Inference",
+    "subtitle": "从 run.ps1 启动桌面后端，到普通单模型任务完成；启动阶段不加载 checkpoint。",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "output": "xb-svcb-startup-inference.sequence.html",
+    "viewBox": [1200, 1450],
+    "views": [
+      {
+        "id": "boot",
+        "label": "启动与装配",
+        "focus": ["launcher", "main", "desktop", "services", "registry"],
+        "note": "从启动脚本进入 Python 主进程，完成前端载入与后端装配。"
+      },
+      {
+        "id": "job",
+        "label": "任务进入队列",
+        "focus": ["user", "desktop", "services", "queue"],
+        "note": "查看桌面操作如何通过 Bridge 创建作品并进入共享串行队列。"
+      },
+      {
+        "id": "inference",
+        "label": "模型推理与收尾",
+        "focus": ["queue", "uvr", "registry", "modelworker", "ffmpeg", "desktop"],
+        "note": "查看分离、框架路由、checkpoint 加载、推理和混音的实际顺序。"
+      }
+    ]
+  },
+  "participants": [
+    { "id": "launcher", "type": "external", "label": "启动脚本" },
+    { "id": "main", "type": "backend", "label": "app/main.py" },
+    { "id": "desktop", "type": "frontend", "label": "桌面壳" },
+    { "id": "services", "type": "backend", "label": "Python API" },
+    { "id": "queue", "type": "messagebus", "label": "推理队列" },
+    { "id": "uvr", "type": "backend", "label": "UVR Worker" },
+    { "id": "registry", "type": "backend", "label": "引擎路由" },
+    { "id": "modelworker", "type": "backend", "label": "模型 Worker" },
+    { "id": "ffmpeg", "type": "backend", "label": "FFmpeg" },
+    { "id": "user", "type": "external", "label": "用户" }
+  ],
+  "segments": [
+    { "from": 150, "to": 515, "label": "启动与装配" },
+    { "from": 555, "to": 780, "label": "创建任务" },
+    { "from": 820, "to": 1325, "label": "后台推理" }
+  ],
+  "messages": [
+    { "id": "launch-main", "from": "launcher", "to": "main", "y": 190, "label": "启动 app/main.py", "variant": "emphasis" },
+    { "id": "resolve-mode", "from": "main", "to": "desktop", "y": 235, "label": "检查单实例 / 模式 / 前端入口", "variant": "default" },
+    { "id": "compose-api", "from": "main", "to": "services", "y": 280, "label": "build_api() 装配 Facade", "variant": "emphasis", "note": "组合根创建 FFmpeg、UVR、四类引擎、仓储和应用服务。" },
+    { "id": "prepare-runtime", "from": "services", "to": "registry", "y": 325, "label": "建目录 + 探测运行时", "variant": "default", "note": "检查 venv、上游仓库、Worker 和模型运行条件；这里只做探测。" },
+    { "id": "register-engines", "from": "services", "to": "registry", "y": 370, "label": "注册四类引擎", "variant": "default", "note": "EngineRegistry 根据 framework 保存 So-VITS-SVC、RVC、SeedVC、DDSP-SVC 的路由。" },
+    { "id": "recover-services", "from": "services", "to": "queue", "y": 415, "label": "恢复 stale 任务状态", "variant": "default", "note": "回收上次进程退出后遗留的处理中任务；不是在这里重新执行模型。" },
+    { "id": "create-window", "from": "main", "to": "desktop", "y": 460, "label": "create_window(js_api=Api)", "variant": "emphasis", "note": "后端 Api 已装配完成后，才注入 pywebview 窗口。" },
+    { "id": "submit", "from": "user", "to": "desktop", "y": 570, "label": "选择音频 / 模型 / 参数", "variant": "emphasis" },
+    { "id": "create-work", "from": "desktop", "to": "services", "y": 615, "label": "createWork(payload)", "variant": "emphasis" },
+    { "id": "enqueue", "from": "services", "to": "queue", "y": 660, "label": "创建任务并入队", "variant": "default", "note": "WorkService 创建作品记录，ConversionService.start 启动后台队列线程。" },
+    { "id": "queue-work", "from": "services", "to": "queue", "y": 730, "label": "写入 works.json，加入串行队列", "variant": "emphasis", "note": "共享队列一次只处理一个普通推理任务，用来控制单 GPU 显存峰值。" },
+    { "id": "separate", "from": "queue", "to": "uvr", "y": 865, "label": "FFmpeg 标准化 + UVR 人声分离", "variant": "emphasis", "note": "可选继续执行 UVR 去混响；产出人声和伴奏两个文件。" },
+    { "id": "separate-result", "from": "uvr", "to": "queue", "y": 920, "label": "vocals + instrumental", "variant": "return" },
+    { "id": "route", "from": "queue", "to": "registry", "y": 975, "label": "按 model.framework 选择引擎", "variant": "emphasis", "note": "So-VITS-SVC 会额外使用 f0_worker；RVC、SeedVC、DDSP-SVC 在各自推理链中处理 F0。" },
+    { "id": "spawn-model", "from": "registry", "to": "modelworker", "y": 1030, "label": "隔离 Python Worker 加载 checkpoint", "variant": "emphasis", "note": "真正的 checkpoint、底模和框架依赖在 .venv-svc/.venv-rvc/.venv-seedvc/.venv-ddsp 内加载。" },
+    { "id": "model-result", "from": "modelworker", "to": "queue", "y": 1090, "label": "输出转换后人声 WAV", "variant": "return" },
+    { "id": "mix", "from": "queue", "to": "ffmpeg", "y": 1145, "label": "修复 / 增强 / 人声 + 伴奏混音", "variant": "default", "note": "输出人声可选经过 DeepFilterNet3 或自然度处理，最后与伴奏合成成品。" },
+    { "id": "done", "from": "ffmpeg", "to": "services", "y": 1200, "label": "写入 output.wav + run.log + done", "variant": "return" },
+    { "id": "poll", "from": "desktop", "to": "services", "y": 1260, "label": "轮询 getWork", "variant": "dashed", "note": "前端不阻塞等待推理，而是读取作品状态、进度、日志和成品路径。" },
+    { "id": "result", "from": "services", "to": "desktop", "y": 1310, "label": "返回进度 / 成品路径", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "main", "from": 185, "to": 535, "type": "backend" },
+    { "participant": "desktop", "from": 450, "to": 1350, "type": "frontend" },
+    { "participant": "services", "from": 320, "to": 1350, "type": "backend" },
+    { "participant": "queue", "from": 725, "to": 1220, "type": "messagebus" },
+    { "participant": "uvr", "from": 860, "to": 935, "type": "backend" },
+    { "participant": "registry", "from": 455, "to": 1045, "type": "backend" },
+    { "participant": "modelworker", "from": 1025, "to": 1105, "type": "backend" },
+    { "participant": "ffmpeg", "from": 1140, "to": 1215, "type": "backend" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "启动阶段", "items": ["run.ps1 / run.bat 只负责找到 app/.venv 并启动 main.py", "生产模式加载 web/dist；开发模式连接 Vite", "build_api() 装配服务，但不等于加载模型权重", "FastAPI 默认关闭，启用后仍复用同一个 Api 和队列"] },
+    { "dot": "emerald", "title": "推理阶段", "items": ["任务先进入共享串行队列", "UVR 先分离人声与伴奏，再按框架路由", "模型 Worker 退出码和输出文件共同决定成功"] },
+    { "dot": "orange", "title": "排错重点", "items": ["环境探测异常看 system status / doctor", "模型异常看模型记录、文件路径和 Worker 日志", "任务卡住优先检查队列前序任务与 works/<id>/run.log"] },
+    { "dot": "violet", "title": "如何读图", "items": ["上半段是进程启动，下半段是一次普通单模型任务", "强调线是主路径，虚线表示轮询或可选阶段", "模型权重在 Worker 内加载，结果通过文件和状态返回"] }
+  ]
+}
