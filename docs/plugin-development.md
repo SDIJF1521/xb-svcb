@@ -1420,12 +1420,12 @@ app.permission(
 
 ## 14. 第三方依赖
 
-宿主只保证 Python 3.10+ 标准库和 `xb_svcb_plugin` SDK。不要假设用户安装了 `requests`、`numpy` 等包。
+宿主使用专用 Python 3.10 运行时，只保证标准库和 `xb_svcb_plugin` SDK。不要假设用户安装了 `requests`、`numpy` 等包。
 
-当前推荐把依赖安装进插件的 `vendor/`：
+在项目根目录的 `requirements.txt` 固定依赖：
 
 ```powershell
-python -m pip install httpx -t .\vendor
+httpx==0.28.1
 ```
 
 插件入口可以直接导入：
@@ -1434,14 +1434,15 @@ python -m pip install httpx -t .\vendor
 import httpx
 ```
 
-Worker 会自动把 `vendor/` 加入 `sys.path`。打包时 `vendor/` 会包含在插件包中。
+使用 `.python('plugin.py', { requirements: 'requirements.txt' })` 或 `.hybrid(...)` 声明依赖文件。`npm run pack` 会在开发机使用 Python 3.10 把依赖装入临时 `vendor/` 后再打包；用户安装和启用插件时不会运行 pip 或联网。Worker 以隔离模式运行，只读取宿主 SDK、插件代码、包内 `vendor/` 和标准库。
 
 发布要求：
 
 - 记录第三方依赖和版本范围；
 - 保留依赖许可证；
 - 不打包平台不兼容的二进制包；
-- 不使用安装时自动执行 `pip install` 的脚本。
+- 不把 `xb-svcb-plugin-sdk` 加入 requirements；SDK 由宿主提供。
+- 不使用安装时自动执行 `pip install` 的脚本；依赖只在发布打包阶段处理。
 
 ## 15. 测试与调试
 

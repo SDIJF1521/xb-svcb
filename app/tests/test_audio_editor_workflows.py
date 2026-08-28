@@ -89,6 +89,42 @@ class _FakeEnhancement:
         return Path(output)
 
 
+class _FakeSeparation:
+    def __init__(self, vocals: Path, instrumental: Path | None = None, simulated: bool = False) -> None:
+        self.vocals = vocals
+        self.instrumental = instrumental
+        self.simulated = simulated
+
+
+class _FakeUvr:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.calls = []
+
+    def separate(self, _src, out_dir, model, device):
+        self.calls.append((model, device))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        vocals = out_dir / "uvr_vocals.wav"
+        instrumental = out_dir / "uvr_instrumental.wav"
+        vocals.write_bytes(b"vocals")
+        instrumental.write_bytes(b"instrumental")
+        return _FakeSeparation(vocals, instrumental)
+
+
+class _FakePymss:
+    available = True
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    def separate(self, _src, out_dir, model, device, purpose=""):
+        self.calls.append((model, device, purpose))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        vocals = out_dir / f"{purpose or 'vocal'}_vocals.wav"
+        vocals.write_bytes(b"pymss-vocals")
+        return _FakeSeparation(vocals)
+
+
 class AudioEditorWorkflowTests(unittest.TestCase):
     def make_service(self, root: Path) -> tuple[AudioEditorService, ListRepository, _FakeFfmpeg]:
         repo = ListRepository(root / "projects.json")
@@ -187,6 +223,45 @@ class AudioEditorWorkflowTests(unittest.TestCase):
             self.assertEqual(reopened["metadata"]["timeline_template_id"], "duet")
             self.assertEqual(reopened["tracks"][0]["metadata"]["role_id"], "role-a")
 
+    def test_separate_clip_supports_pymss_and_optional_harmony(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "voice.wav"
+            source.write_bytes(b"audio")
+            service, repo, _ = self.make_service(root)
+            repo.add(self.project(source))
+            service._audio = _FakeAudio()
+            service._uvr = _FakeUvr(root)
+            service._pymss = _FakePymss()
+
+            with (
+                patch("application.audio_editor_service.config.EDITOR_DIR", root / "editor"),
+                patch("application.audio_editor_service.config.pymss_model_ready", return_value=True),
+            ):
+                result = service.separate_clip_vocals(
+                    "project-1",
+                    "track-1",
+                    "clip-1",
+                    {
+                        "engine": "pymss",
+                        "pymss_model": "voc.ckpt",
+                        "harmony_removal_enabled": True,
+                        "harmony_model": "bve.pth",
+                    },
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["engine"], "pymss")
+            self.assertTrue(result["harmony_removed"])
+            self.assertEqual(
+                [call[2] for call in service._pymss.calls],
+                ["vocal_separation", "harmony_removal"],
+            )
+            vocal_track = result["tracks"][0]
+            self.assertIn("PyMSS", vocal_track["name"])
+            self.assertIn("去和声", vocal_track["name"])
+            self.assertEqual(vocal_track["clips"][0]["metadata"]["harmony_model"], "bve.pth")
+
     def test_remove_project_deletes_project_files_and_owned_cache(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -278,6 +353,39 @@ class AudioEditorWorkflowTests(unittest.TestCase):
 
             self.assertFalse(project_dir.exists())
             self.assertFalse(any(cache_root.iterdir()))
+
+    def test_waveform_prefers_rendered_clip_audio_for_stretch(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "voice.wav"
+            source.write_bytes(b"audio")
+            service, repo, _ = self.make_service(root)
+            audio = _FakeAudio()
+            service._audio = audio
+            project = self.project(source)
+            project["tracks"][0]["clips"][0]["time_stretch"] = 2.0
+            repo.add(project)
+
+            calls: list[tuple[Path, int, float, float | None]] = []
+
+            def fake_compute(src: Path, bins: int, offset: float = 0.0, duration: float | None = None):
+                calls.append((Path(src), bins, offset, duration))
+                return [0.25, 0.75]
+
+            service._compute_waveform = fake_compute  # type: ignore[method-assign]
+
+            with patch("application.audio_editor_service.config.EDITOR_CACHE_DIR", root / "cache"):
+                result = service.waveform("project-1", "clip-1", bins=32)
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["peaks"], [0.25, 0.75])
+            self.assertTrue(calls)
+            self.assertEqual(calls[0][0].parent, root / "cache")
+            self.assertNotEqual(calls[0][0].name, source.name)
+            self.assertEqual((calls[0][1], calls[0][2], calls[0][3]), (32, 0.0, None))
+            self.assertEqual(audio.rendered_project["tracks"][0]["clips"][0]["time_stretch"], 2.0)
+            self.assertEqual(audio.rendered_project["tracks"][0]["clips"][0]["start"], 0.0)
+            self.assertEqual(audio.rendered_project["tracks"][0]["clips"][0]["end"], 9.0)
 
     def test_list_removes_orphan_editor_project_dirs(self) -> None:
         with tempfile.TemporaryDirectory() as td:

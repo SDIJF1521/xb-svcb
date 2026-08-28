@@ -4,10 +4,10 @@ import { api, type HubJob, type HubUploadOptions } from '@/api'
 import { useModelsStore } from './models'
 
 /**
- * 后台传输任务中心：模型上传 / 下载挂后台执行，不阻塞前端操作。
+ * 后台传输任务中心：模型、PyMSS 与音乐下载，以及模型上传统一展示。
  *
- * - 通过 hub_start_download / hub_start_upload 启动后台任务（立即返回 key）。
- * - 一个全局轮询循环（在布局挂载时 start）调 hub_list_jobs 拉取所有任务进度，
+ * - 通过各服务启动后台任务；hub_list_jobs 返回统一任务结构。
+ * - 一个全局轮询循环（在布局挂载时 start）拉取所有任务进度，
  *   因此切换页面也不会丢失进度，可在顶栏「传输」面板随时查看。
  * - 任务由后端内存维护（进程重启即清空），前端只负责展示与触发。
  */

@@ -23,12 +23,13 @@ class _Tensor:
 class _FakeTorch:
     float32 = "float32"
 
-    def __init__(self, cuda: bool = False, hip: str | None = None) -> None:
+    def __init__(self, cuda: bool = False, hip: str | None = None, mps: bool = False) -> None:
         self.version = SimpleNamespace(hip=hip)
         self.cuda = SimpleNamespace(
             is_available=lambda: cuda,
             get_device_name=lambda index: "AMD Radeon ROCm" if hip else "NVIDIA Test GPU",
         )
+        self.backends = SimpleNamespace(mps=SimpleNamespace(is_available=lambda: mps))
 
     @staticmethod
     def device(value: str) -> str:
@@ -80,6 +81,18 @@ def test_explicit_directml_never_silently_falls_back_to_cpu() -> None:
     with patch.dict(sys.modules, {"torch_directml": None}):
         with pytest.raises(RuntimeError, match="DirectML"):
             inference_device.resolve_torch_device("directml", _FakeTorch())
+
+
+def test_explicit_mps_uses_apple_gpu_backend() -> None:
+    resolved = inference_device.resolve_torch_device("mps", _FakeTorch(mps=True))
+
+    assert resolved.backend == "mps"
+    assert resolved.device == "mps"
+
+
+def test_explicit_mps_never_silently_falls_back_to_cpu() -> None:
+    with pytest.raises(RuntimeError, match="MPS"):
+        inference_device.resolve_torch_device("mps", _FakeTorch())
 
 
 def test_directml_checkpoint_load_maps_storage_to_cpu() -> None:
@@ -626,6 +639,41 @@ def test_environment_probe_reuses_persistent_cache(tmp_path: Path) -> None:
         side_effect=AssertionError("persistent cache should avoid a subprocess probe"),
     ):
         assert inference_device.probe_python_environment(python) == payload
+
+
+def test_environment_probe_rechecks_after_signature_change_and_failure(tmp_path: Path) -> None:
+    python = tmp_path / "env" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"placeholder")
+    cache_path = tmp_path / "data" / "inference_devices.json"
+    success = {
+        "ok": True,
+        "torch_version": "2.5.1",
+        "backends": ["cpu"],
+        "devices": [],
+        "preferred": "cpu",
+    }
+    failed = SimpleNamespace(stdout="", stderr="torch import failed")
+    completed = SimpleNamespace(
+        stdout=inference_device.DEVICE_PROBE_MARKER + json.dumps(success) + "\n",
+        stderr="",
+    )
+
+    inference_device._configure_persistent_probe_cache(cache_path)
+    inference_device._probe_cache.clear()
+    with patch.object(
+        inference_device, "_environment_signature", side_effect=["before", "after", "after"]
+    ), patch.object(
+        inference_device.subprocess, "run", side_effect=[failed, completed]
+    ) as run:
+        first = inference_device.probe_python_environment(python)
+        second = inference_device.probe_python_environment(python)
+        third = inference_device.probe_python_environment(python)
+
+    assert first["ok"] is False
+    assert second == success
+    assert third == success
+    assert run.call_count == 2
 
 
 def test_ddsp_directml_is_not_advertised_as_usable(monkeypatch) -> None:

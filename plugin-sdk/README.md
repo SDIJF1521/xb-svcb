@@ -51,6 +51,8 @@ npm run validate   # 类型检查、完整构建、清单校验
 npm run pack       # 生成 .xbplugin
 ```
 
+Python/混合插件把固定版本依赖写入根目录 `requirements.txt`，并在清单中使用 `.python('plugin.py', { requirements: 'requirements.txt' })` 或 `.hybrid(...)`。`npm run pack` 会调用 Python 3.10，把依赖装入待发布包的 `vendor/`；用户安装插件时不会联网或运行 pip。可用 `XB_PLUGIN_BUILD_PYTHON` 指定打包解释器。
+
 ## 定义插件清单
 
 `src/plugin.ts`：

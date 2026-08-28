@@ -38,6 +38,20 @@ def _guess_framework(model_type: str | None) -> str:
     return "so-vits-svc"
 
 
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
 @dataclass
 class ModelInfo:
     """一个已导入的声音模型组。
@@ -116,6 +130,10 @@ class InferenceParams:
     index_rate: float = 0.75
     rms_mix: float = 0.25
     uvr_model: str = "MDX-Net"
+    # 前期人声分离：uvr / pymss；关闭时直接把源音频送入翻唱模型。
+    preprocess_enabled: bool = True
+    preprocess_engine: str = "uvr"
+    pymss_model: str = ""
     diffusion_ratio: float = 0.5
     speaker: str = ""  # 目标说话人，留空则用模型配置中的第一个
     device: str = "auto"  # 推理设备：auto / cuda / rocm / directml / cpu
@@ -126,6 +144,8 @@ class InferenceParams:
     reference_audio: str = ""  # SeedVC 目标音色参考音频路径
     ddsp_infer_steps: int = 50  # DDSP-SVC Rectified Flow 采样步数（官方默认质量）
     ddsp_formant_shift: float = 0.0  # DDSP-SVC 共振峰偏移（-2~2 半音）
+    # 高音保护：极高音区域先保共振峰降调，翻唱后再升回原调。
+    auto_high_pitch_guard: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -139,6 +159,17 @@ class InferenceParams:
             index_rate=float(data.get("index_rate", data.get("indexRate", 0.75))),
             rms_mix=float(data.get("rms_mix", data.get("rmsMix", 0.25))),
             uvr_model=str(data.get("uvr_model", data.get("uvrModel", "MDX-Net"))),
+            preprocess_enabled=_coerce_bool(
+                data.get("preprocess_enabled", data.get("preprocessEnabled", True)),
+                True,
+            ),
+            preprocess_engine=str(
+                data.get("preprocess_engine", data.get("preprocessEngine", "uvr"))
+                or "uvr"
+            ).lower(),
+            pymss_model=str(
+                data.get("pymss_model", data.get("pymssModel", "")) or ""
+            ),
             diffusion_ratio=float(data.get("diffusion_ratio", data.get("diffusionRatio", 0.5))),
             speaker=str(data.get("speaker", data.get("spk", ""))),
             device=str(data.get("device", "auto")),
@@ -168,6 +199,10 @@ class InferenceParams:
                     ),
                 ),
             ),
+            auto_high_pitch_guard=_coerce_bool(
+                data.get("auto_high_pitch_guard", data.get("autoHighPitchGuard", True)),
+                True,
+            ),
         )
 
 
@@ -193,6 +228,8 @@ class Work:
     workflow: str = "auto_mix"
     # 可选 AI 歌声增强：enabled + basic/advanced，两层均在模型推理后执行。
     vocal_enhancement: dict[str, Any] = field(default_factory=dict)
+    # 前期分离设置：enabled=false 时跳过 UVR/PyMSS，直接使用源音频。
+    preprocess: dict[str, Any] = field(default_factory=dict)
     # 翻唱模式：single=单模型；multi=多模型混合（按歌词分句指派模型）
     mode: str = "single"
     # 多模型模式下，每个已指派模型的演唱片段：{start, end, model_id}
@@ -221,6 +258,7 @@ class Work:
             steps=data.get("steps", []) or [],
             workflow=data.get("workflow", "auto_mix"),
             vocal_enhancement=data.get("vocal_enhancement", {}) or {},
+            preprocess=data.get("preprocess", {}) or {},
             mode=data.get("mode", "single"),
             segments=data.get("segments", []) or [],
         )

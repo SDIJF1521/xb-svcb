@@ -17,19 +17,29 @@ from pathlib import Path
 from typing import Any
 
 
-def _load_sdk(sdk_path: str) -> None:
+def _load_sdk(sdk_path: str) -> Path:
     path = Path(sdk_path).resolve()
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
+    return path
 
 
-def _load_module(entry: Path, plugin_root: Path):
+def _load_module(
+    entry: Path,
+    plugin_root: Path,
+    sdk_path: Path,
+    vendor_path: Path | None = None,
+):
     module_dir = entry.parent
-    if str(module_dir) not in sys.path:
-        sys.path.insert(0, str(module_dir))
-    vendor = plugin_root / "vendor"
-    if vendor.is_dir() and str(vendor) not in sys.path:
-        sys.path.insert(0, str(vendor))
+    vendor = vendor_path or (plugin_root / "vendor")
+    # Keep the host SDK first even when a plugin accidentally ships an older
+    # xb_svcb_plugin in vendor/. Then expose both package and legacy sibling
+    # imports without relying on the process working directory.
+    ordered = [sdk_path, module_dir, plugin_root]
+    if vendor.is_dir():
+        ordered.append(vendor)
+    wanted = [str(path) for path in ordered]
+    sys.path[:] = wanted + [path for path in sys.path if path not in wanted]
     package_paths = [str(entry.parent)] if entry.name == "__init__.py" else None
     spec = importlib.util.spec_from_file_location(
         "xb_user_plugin", entry, submodule_search_locations=package_paths
@@ -67,14 +77,18 @@ def _normalise_result(value: Any) -> dict[str, Any]:
 
 
 async def _run(request: dict[str, Any]) -> dict[str, Any]:
-    _load_sdk(str(request["sdk_path"]))
+    sdk_path = _load_sdk(str(request["sdk_path"]))
     from xb_svcb_plugin import PluginContext, get_plugin
 
     entry = Path(str(request["entry"])).resolve()
     plugin_dir = Path(str(request["plugin_dir"])).resolve()
     if plugin_dir not in entry.parents or not entry.is_file():
         raise RuntimeError("Python 入口不在插件目录内或不存在")
-    _load_module(entry, plugin_dir)
+    vendor_raw = str(request.get("vendor_path") or "").strip()
+    vendor = Path(vendor_raw).resolve() if vendor_raw else plugin_dir / "vendor"
+    if plugin_dir not in vendor.parents and vendor != plugin_dir:
+        raise RuntimeError("Python vendor 路径不在插件目录内")
+    _load_module(entry, plugin_dir, sdk_path, vendor)
     plugin = get_plugin()
     expected_id = str(request["plugin_id"])
     if plugin.id != expected_id:
@@ -124,7 +138,14 @@ def main() -> None:
             "error": str(exc),
             "traceback": traceback.format_exc(limit=12),
         }
-    sys.stdout.write(json.dumps(response, ensure_ascii=False))
+    try:
+        encoded = json.dumps(response, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        encoded = json.dumps({
+            "ok": False,
+            "error": f"Python 插件返回值无法序列化：{exc}",
+        }, ensure_ascii=False)
+    sys.stdout.write(encoded)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,8 @@ class EditorClip:
     channel: str = "stereo"
     volume_envelope: list[dict[str, float]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    # 时间拉伸倍率：1.0 为原速；2.0 为时长加倍（更慢），0.5 为半速时长。
+    time_stretch: float = 1.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

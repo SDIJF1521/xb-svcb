@@ -74,8 +74,6 @@ endlocal
 exit /b 0
 
 :RESOLVE_PATHS
-if defined XB_PYTHON_DIR if exist "%XB_PYTHON_DIR%\python.exe" set "XB_PYTHON_EXE=%XB_PYTHON_DIR%\python.exe"
-
 if defined XB_GIT_DIR (
   if exist "%XB_GIT_DIR%\cmd\git.exe" set "XB_GIT_BIN=%XB_GIT_DIR%\cmd"
   if not defined XB_GIT_BIN if exist "%XB_GIT_DIR%\bin\git.exe" set "XB_GIT_BIN=%XB_GIT_DIR%\bin"
@@ -97,7 +95,6 @@ if defined XB_VSBT_DIR (
   if exist "!XB_VSBT_DIR!\VC\Auxiliary\Build\vcvars64.bat" set "XB_VSINSTALLDIR=!XB_VSBT_DIR!\"
 )
 
-if defined XB_PYTHON_EXE set "PATH=%~dp0;%XB_PYTHON_DIR%;%XB_PYTHON_DIR%\Scripts;%PATH%"
 if defined XB_GIT_BIN set "PATH=%XB_GIT_BIN%;%PATH%"
 if defined XB_FFMPEG_BIN set "PATH=%XB_FFMPEG_BIN%;%PATH%"
 if defined XB_CUDA_BIN set "PATH=%XB_CUDA_BIN%;%PATH%"

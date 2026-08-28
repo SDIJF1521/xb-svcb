@@ -51,6 +51,7 @@ import type {
   EditorPluginTransport,
   EditorClipMergeResult,
   EditorRerunResult,
+  EditorSeparationOptions,
   EditorSilenceSplitOptions,
   EditorSilenceSplitResult,
   EditorTrackMutationResult,
@@ -74,6 +75,9 @@ import type {
   RealtimeCoverStatus,
   RealtimeCoverChunk,
   SystemAudioDevice,
+  PymssModel,
+  PymssStatus,
+  PymssDownloadJob,
 } from './types'
 
 export * from './types'
@@ -420,6 +424,32 @@ export const api = {
   listModelFrameworks: () =>
     invoke<ModelFramework[]>('list_model_frameworks', [], () => mock.listModelFrameworks()),
 
+  pymssStatus: (model?: string) =>
+    invoke<PymssStatus>('pymss_status', [model], () => mock.pymssStatus(model)),
+
+  pymssModels: (purpose?: 'vocal_separation' | 'dereverb' | 'harmony_removal') =>
+    invoke<PymssModel[]>('pymss_models', [purpose], () => mock.pymssModels(purpose)),
+
+  pymssDownloadModel: (model: string) =>
+    invoke<{ ok: boolean; error?: string; model?: string; key?: string; already?: boolean }>('pymss_download_model', [model], () =>
+      mock.pymssDownloadModel(model),
+    ),
+
+  deletePymssModel: (model: string) =>
+    invoke<boolean>('delete_pymss_model', [model], () => mock.deletePymssModel(model)),
+
+  pymssDownloadProgress: (key: string) =>
+    invoke<PymssDownloadJob>('pymss_download_progress', [key], () => ({
+      key,
+      model: '',
+      status: 'idle',
+      pct: 0,
+      message: '',
+    })),
+
+  pymssDownloadJobs: () =>
+    invoke<PymssDownloadJob[]>('pymss_download_jobs', [], () => []),
+
   pickModelhubPreviewAudioFile: () =>
     invoke<string | null>('pick_modelhub_preview_audio_file', [], () =>
       mock.pickModelhubPreviewAudioFile(),
@@ -647,7 +677,7 @@ export const api = {
     projectId: string,
     trackId: string,
     clipId: string,
-    options?: Record<string, unknown>,
+    options?: EditorSeparationOptions,
   ) =>
     invoke<EditorSeparationResult>(
       'separate_editor_clip_vocals',

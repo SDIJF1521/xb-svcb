@@ -23,6 +23,7 @@ class SystemService:
         seedvc: Any | None = None,
         ddsp: Any | None = None,
         vocal_enhancement: Any | None = None,
+        pymss: Any | None = None,
     ) -> None:
         self._ffmpeg = ffmpeg
         self._uvr = uvr
@@ -31,38 +32,52 @@ class SystemService:
         self._seedvc = seedvc
         self._ddsp = ddsp
         self._vocal_enhancement = vocal_enhancement
+        self._pymss = pymss
 
     def status(self) -> dict[str, Any]:
         inference_devices = inference_device_capabilities()
         frameworks = inference_devices.get("frameworks", {})
 
-        def runtime_status(framework: str, available: bool) -> tuple[bool, str]:
+        def runtime_status(
+            framework: str,
+            available: bool,
+            missing_status: str = "未安装",
+        ) -> tuple[bool, str]:
             runtime = frameworks.get(framework, {})
             ready = bool(available and runtime.get("ok"))
             if ready:
                 return True, runtime_device_label(runtime, "")
             if available:
-                return False, "环境异常 · 请运行环境修复"
-            return False, "降级模式"
+                error = str(runtime.get("error") or "运行时探测失败").strip()
+                return False, f"环境异常 · {error[:120]}"
+            return False, missing_status
 
-        uvr_ok, uvr_status = runtime_status("uvr", self._uvr.available)
-        svc_ok, svc_status = runtime_status("so-vits-svc", self._svc.available)
+        uvr_available = bool(self._uvr.available)
+        svc_available = bool(self._svc.available)
+        uvr_ok, uvr_status = runtime_status(
+            "uvr", uvr_available, self._uvr.status() or "未安装"
+        )
+        svc_ok, svc_status = runtime_status("so-vits-svc", svc_available)
         tools = [
             {
                 "key": "uvr",
                 "name": "Ultimate Vocal Remover",
                 "desc": "人声 / 伴奏分离引擎，自动提取翻唱所需干声",
                 "version": self._uvr.version() or "未安装",
-                "status": uvr_status if self._uvr.available else self._uvr.status(),
+                "status": uvr_status,
                 "ok": uvr_ok,
+                "required": False,
+                "role": "optional",
             },
             {
                 "key": "ffmpeg",
                 "name": "ffmpeg",
                 "desc": "音频转码 / 重采样 / 剪辑，统一格式与采样率",
                 "version": self._ffmpeg.version() or "未安装",
-                "status": "已就绪" if self._ffmpeg.available else "降级模式",
-                "ok": self._ffmpeg.available,
+                "status": "已就绪" if self._ffmpeg.available else "未安装",
+                "ok": bool(self._ffmpeg.available),
+                "required": True,
+                "role": "core",
             },
             {
                 "key": "svc",
@@ -71,10 +86,30 @@ class SystemService:
                 "version": self._svc.version() or "未安装",
                 "status": svc_status,
                 "ok": svc_ok,
+                "required": False,
+                "role": "engine",
             },
         ]
+        if self._pymss is not None:
+            pymss_status = self._pymss.status()
+            pymss_ok = pymss_status == "已就绪"
+            if pymss_status == "模型未下载":
+                pymss_status = "环境已就绪 · 模型未下载（请在模型管理页下载）"
+            tools.append(
+                {
+                    "key": "pymss",
+                    "name": "PyMSS 人声分离",
+                    "desc": "可选的 PyMSS 音乐源分离引擎，模型可从 PyMSS 模型站下载",
+                    "version": self._pymss.version() or "未安装",
+                    "status": pymss_status,
+                    "ok": pymss_ok,
+                    "required": False,
+                    "role": "optional",
+                }
+            )
         if self._rvc is not None:
-            rvc_ok, rvc_status = runtime_status("rvc", self._rvc.available)
+            rvc_available = bool(self._rvc.available)
+            rvc_ok, rvc_status = runtime_status("rvc", rvc_available)
             tools.append(
                 {
                     "key": "rvc",
@@ -83,10 +118,13 @@ class SystemService:
                     "version": self._rvc.version() or "未安装",
                     "status": rvc_status,
                     "ok": rvc_ok,
+                    "required": False,
+                    "role": "engine",
                 }
             )
         if self._seedvc is not None:
-            seedvc_ok, seedvc_status = runtime_status("seed-vc", self._seedvc.available)
+            seedvc_available = bool(self._seedvc.available)
+            seedvc_ok, seedvc_status = runtime_status("seed-vc", seedvc_available)
             tools.append(
                 {
                     "key": "seedvc",
@@ -95,10 +133,13 @@ class SystemService:
                     "version": self._seedvc.version() or "未安装",
                     "status": seedvc_status,
                     "ok": seedvc_ok,
+                    "required": False,
+                    "role": "engine",
                 }
             )
         if self._ddsp is not None:
-            ddsp_ok, ddsp_status = runtime_status("ddsp-svc", self._ddsp.available)
+            ddsp_available = bool(self._ddsp.available)
+            ddsp_ok, ddsp_status = runtime_status("ddsp-svc", ddsp_available)
             tools.append(
                 {
                     "key": "ddsp",
@@ -107,6 +148,8 @@ class SystemService:
                     "version": self._ddsp.version() or "未安装",
                     "status": ddsp_status,
                     "ok": ddsp_ok,
+                    "required": False,
+                    "role": "engine",
                 }
             )
         if self._vocal_enhancement is not None:
@@ -119,10 +162,21 @@ class SystemService:
                     "version": self._vocal_enhancement.version() or "未安装",
                     "status": "已就绪" if enhancement_ok else "未安装 · 请修复 vocal 环境",
                     "ok": enhancement_ok,
+                    "required": False,
+                    "role": "optional",
                 }
             )
+        core_ready = any(
+            bool(tool.get("ok")) and tool.get("role") == "core" for tool in tools
+        )
+        conversion_ready = any(
+            bool(tool.get("ok")) and tool.get("role") == "engine" for tool in tools
+        )
         return {
-            "ready": True,
+            # A usable app needs FFmpeg and at least one real conversion engine.
+            # UVR/PyMSS/vocal enhancement remain optional because the pipeline
+            # has explicit fallbacks and feature-level guards for them.
+            "ready": core_ready and conversion_ready,
             "tools": tools,
             "inference_devices": inference_devices,
         }

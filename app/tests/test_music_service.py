@@ -1,4 +1,7 @@
 import unittest
+import threading
+import tempfile
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,6 +21,30 @@ class MusicServiceApiCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_content_range_total("bytes 0-4095/33618441"), 33618441)
         self.assertEqual(_content_range_total("bytes */33618441"), 33618441)
         self.assertEqual(_content_range_total(""), 0)
+
+    def test_downloaded_music_listing_is_cached_and_invalidated_on_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            music_dir = Path(td)
+            (music_dir / "first.mp3").write_bytes(b"audio")
+            service = object.__new__(MusicService)
+            service._downloaded_cache_lock = threading.Lock()
+            service._downloaded_cache = None
+            with patch.object(config, "MUSIC_DIR", music_dir), patch.object(
+                config, "AUDIO_EXTS", {".mp3"}
+            ), patch("application.music_service.os.scandir", wraps=os.scandir) as scandir:
+                first = service.list_downloaded()
+                self.assertEqual([item["name"] for item in first], ["first"])
+                self.assertEqual(scandir.call_count, 1)
+                self.assertEqual([item["name"] for item in service.list_downloaded()], ["first"])
+                self.assertEqual(scandir.call_count, 1)
+                (music_dir / "second.mp3").write_bytes(b"audio")
+                os.utime(music_dir, None)
+                self.assertEqual({item["name"] for item in service.list_downloaded()}, {"first", "second"})
+                self.assertEqual(scandir.call_count, 2)
+                self.assertTrue(service.delete_downloaded(str(music_dir / "first.mp3")))
+                self.assertEqual([item["name"] for item in service.list_downloaded()], ["second"])
+                self.assertEqual(scandir.call_count, 3)
+                self.assertEqual(first[0]["name"], "first")
 
     def test_kuwo_download_headers_mimic_browser_audio_request(self) -> None:
         headers = MusicService._download_headers(

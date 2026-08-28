@@ -77,6 +77,9 @@ class _Facade:
     def get_work(self, work_id: str):
         return dict(self.work) if work_id == self.work["id"] else None
 
+    def delete_pymss_model(self, model_name: str):
+        return True
+
     def create_work(self, payload):
         self.created_payload = payload
         return dict(self.work)
@@ -127,6 +130,15 @@ class HttpApiContractTests(unittest.TestCase):
         self.assertEqual(payload["default_id"], "model_svc")
         self.assertNotIn("main_model", payload["items"][0])
         self.assertNotIn("path", str(payload))
+
+    def test_can_delete_pymss_model(self) -> None:
+        response = self.client.delete(
+            "/api/v1/preprocess/pymss/models/bs_roformer_voc_hyperacev2.ckpt",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "id": "bs_roformer_voc_hyperacev2.ckpt"})
 
     def test_upload_can_be_used_to_create_job(self) -> None:
         upload = self.client.post(
@@ -379,6 +391,7 @@ class HttpApiContractTests(unittest.TestCase):
             "reference_audio",
             "ddsp_infer_steps",
             "ddsp_formant_shift",
+            "auto_high_pitch_guard",
         }
 
         self.assertEqual(set(inference), expected_inference_fields)
@@ -427,6 +440,7 @@ class HttpApiContractTests(unittest.TestCase):
             ("/api/v1/models/{model_id}", "get"): "ModelResponse",
             ("/api/v1/uploads", "post"): "UploadResponse",
             ("/api/v1/uploads/{upload_id}", "delete"): "DeleteUploadResponse",
+            ("/api/v1/preprocess/pymss/models/{model_name}", "delete"): "ActionResponse",
             ("/api/v1/jobs", "get"): "JobListResponse",
             ("/api/v1/jobs", "post"): "JobResponse",
             ("/api/v1/jobs/queue", "get"): "QueueResponse",
@@ -481,6 +495,7 @@ class HttpApiContractTests(unittest.TestCase):
             "/api/v1/jobs/batch",
             "/api/v1/jobs/history",
             "/api/v1/jobs/presets",
+            "/api/v1/preprocess/pymss/models/{model_name}",
             "/api/v1/editor/projects",
             "/api/v1/editor/projects/{project_id}/audio",
             "/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/rerun",

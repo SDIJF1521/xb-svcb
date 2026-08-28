@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+import zipfile
 from pathlib import Path
 
 
@@ -119,3 +120,65 @@ def test_uv_pip_install_can_fallback_online_when_wheelhouse_is_non_strict(
     assert "--reinstall" in calls[1]
     assert "--no-index" in calls[1]
     assert "https://mirror.example/simple" in calls[2]
+
+
+def test_repair_broken_wheel_metadata_from_matching_wheelhouse(
+    monkeypatch, tmp_path: Path
+) -> None:
+    installer = _load_installer_module()
+    wheel_root = tmp_path / "wheels"
+    wheel_dir = wheel_root / "py310" / "cu121"
+    wheel_dir.mkdir(parents=True)
+    wheel = wheel_dir / "torch-2.5.1+cu121-cp310-cp310-win_amd64.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "torch-2.5.1+cu121.dist-info/METADATA",
+            "Name: torch\nVersion: 2.5.1+cu121\n",
+        )
+        archive.writestr(
+            "torch-2.5.1+cu121.dist-info/WHEEL",
+            "Wheel-Version: 1.0\n",
+        )
+        archive.writestr("torch-2.5.1+cu121.dist-info/RECORD", "")
+        archive.writestr("torch-2.5.1+cu121.dist-info/INSTALLER", "uv\n")
+
+    venv = tmp_path / ".venv-uvr"
+    dist_info = venv / "Lib" / "site-packages" / "torch-2.5.1+cu121.dist-info"
+    dist_info.mkdir(parents=True)
+    (dist_info / "WHEEL").write_text("Wheel-Version: 1.0\n", encoding="utf-8")
+    monkeypatch.setenv("XB_WHEELHOUSE", str(wheel_root))
+
+    repaired = installer._repair_broken_wheel_metadata(
+        venv,
+        ("torch",),
+        component="uvr",
+        gpu_stack="cu121",
+        python_version="3.10",
+    )
+
+    assert repaired == ["torch"]
+    assert "Version: 2.5.1+cu121" in (dist_info / "METADATA").read_text(encoding="utf-8")
+    assert (dist_info / "RECORD").exists()
+
+
+def test_repair_broken_wheel_metadata_removes_orphan_without_wheel(
+    monkeypatch, tmp_path: Path
+) -> None:
+    installer = _load_installer_module()
+    wheel_root = tmp_path / "wheels"
+    (wheel_root / "py310" / "cu121").mkdir(parents=True)
+    venv = tmp_path / ".venv-uvr"
+    dist_info = venv / "Lib" / "site-packages" / "torch-2.5.1+cu121.dist-info"
+    dist_info.mkdir(parents=True)
+    monkeypatch.setenv("XB_WHEELHOUSE", str(wheel_root))
+
+    repaired = installer._repair_broken_wheel_metadata(
+        venv,
+        ("torch",),
+        component="uvr",
+        gpu_stack="cu121",
+        python_version="3.10",
+    )
+
+    assert repaired == []
+    assert not dist_info.exists()

@@ -89,6 +89,14 @@ export interface FrontendConfig {
   entry?: string
 }
 
+export interface PythonConfig {
+  entry?: string
+  /** Relative requirements file bundled into vendor/ by packPlugin(). */
+  requirements?: string
+  /** Relative dependency directory. Defaults to vendor. */
+  vendor?: string
+}
+
 export interface MessageAction {
   id: string
   label: string
@@ -137,7 +145,7 @@ export interface Manifest {
   description: string
   author: string
   runtime: PluginRuntime
-  python: { entry?: string }
+  python: PythonConfig
   frontend: FrontendConfig
   permissions: PluginPermission[]
   pages: Page[]
@@ -156,8 +164,8 @@ export interface PluginBuilder {
   author(value: string): PluginBuilder
   frontend(config?: string | FrontendConfig): PluginBuilder
   frontendEntry(entry: string, config?: Omit<FrontendConfig, 'entry'>): PluginBuilder
-  python(entry?: string): PluginBuilder
-  hybrid(entry?: string): PluginBuilder
+  python(entry?: string, config?: Omit<PythonConfig, 'entry'>): PluginBuilder
+  hybrid(entry?: string, config?: Omit<PythonConfig, 'entry'>): PluginBuilder
   permission(...values: (PluginPermission | readonly PluginPermission[])[]): PluginBuilder
   page(value: Page): PluginBuilder
   page(id: string, title: string, configure?: PageConfig | PageConfigurator): PluginBuilder
@@ -211,6 +219,7 @@ export declare function pythonAction(
 ): PythonAction
 export declare function plugin(id: string, name: string, version?: string): PluginBuilder
 export declare function validateManifest(input: unknown): ValidationResult
+export declare function validatePluginDirectory(directory: string): Promise<ValidationResult>
 export declare function writeManifest(manifest: Manifest | PluginBuilder, directory: string): Promise<string>
 export declare function packPlugin(directory: string, output?: string): Promise<string>
 export declare function createPlugin(options: {

@@ -575,6 +575,7 @@ JOB_CREATE_API_DOC = _api_operation_description(
         ("params.reference_audio", "string", "否", '""', "仅 SeedVC；本机参考音频绝对路径"),
         ("params.ddsp_infer_steps", "integer", "否", "50", "仅 DDSP；采样步数，最小 1，推荐 50~100"),
         ("params.ddsp_formant_shift", "number", "否", "0", "仅 DDSP；共振峰半音偏移，范围 -2~2"),
+        ("params.auto_high_pitch_guard", "boolean", "否", "true", "翻唱/实时变声；极高音先保共振峰降调，翻唱后升回原调并补偿响度"),
         ("vocal_enhancement.enabled", "boolean", "否", "false", "启用自然修音、AI 角色共振峰与歌声增强"),
         ("vocal_enhancement.level", "string", "否", "basic", "basic 或 advanced"),
         ("vocal_enhancement.pitch_correction", "number", "否", "0.45", "自然修音强度，范围 0~1"),
@@ -846,6 +847,10 @@ class InferenceParamsRequest(BaseModel):
             "正值通常更薄、更亮；只对使用 pitch augmentation 训练的模型有效。"
         ),
     )
+    auto_high_pitch_guard: bool = Field(
+        default=True,
+        description="高音保护：极高音先保共振峰降调，经过模型翻唱后再升回原调，并补偿高音响度。",
+    )
 
 
 class VocalEnhancementRequest(BaseModel):
@@ -913,6 +918,24 @@ class VocalEnhancementRequest(BaseModel):
     )
 
 
+class PreprocessRequest(BaseModel):
+    """翻唱前期人声分离设置。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=True, description="是否执行前期人声分离")
+    engine: Literal["uvr", "pymss"] = Field(default="uvr", description="前期处理引擎")
+    pymss_model: str = Field(default=config.PYMSS_DEFAULT_MODEL, description="PyMSS 模型名")
+    harmony_removal_enabled: bool = Field(
+        default=False,
+        description="兼容旧字段：在人声分离后启用 PyMSS 去混响/人声净化",
+    )
+    harmony_model: str = Field(
+        default=config.PYMSS_DEFAULT_HARMONY_MODEL,
+        description="PyMSS 去混响/人声净化模型名",
+    )
+
+
 class JobCreateRequest(BaseModel):
     """创建单模型或多模型翻唱任务。"""
 
@@ -974,6 +997,10 @@ class JobCreateRequest(BaseModel):
     params: InferenceParamsRequest = Field(
         default_factory=InferenceParamsRequest,
         description="推理参数。展开此对象可查看每个字段的作用、范围、默认值和适用框架。",
+    )
+    preprocess: PreprocessRequest = Field(
+        default_factory=PreprocessRequest,
+        description="可选的前期人声分离设置。",
     )
     vocal_enhancement: VocalEnhancementRequest = Field(
         default_factory=VocalEnhancementRequest,
@@ -1120,11 +1147,27 @@ class EditorLyricsSplitRequest(BaseModel):
 class EditorSeparationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    engine: Literal["uvr", "pymss"] = Field(
+        default="uvr",
+        description="人声分离引擎；pymss 使用独立 PyMSS 环境",
+    )
     model: str | None = Field(default=None, description="UVR 分离模型文件名；省略时使用默认值")
+    pymss_model: str | None = Field(
+        default=None,
+        description="PyMSS 人声分离模型名；engine=pymss 时使用",
+    )
+    harmony_removal_enabled: bool = Field(
+        default=False,
+        description="engine=pymss 时，分离后是否使用 PyMSS 去混响/人声净化模型",
+    )
+    harmony_model: str | None = Field(
+        default=None,
+        description="PyMSS 去混响/人声净化模型名",
+    )
     mute_source: bool = Field(default=True, description="分离成功后是否静音原片段")
     device: Literal["auto", "cuda", "rocm", "directml", "cpu"] = Field(
         default="auto",
-        description="UVR 推理设备",
+        description="分离推理设备；PyMSS 自动解析 CUDA/ROCm/DirectML，显式 cpu 才使用 CPU",
     )
 
 
@@ -1224,6 +1267,10 @@ class JobResponse(BaseModel):
         default=None,
         description="本任务使用的 AI 歌声增强设置",
     )
+    preprocess: PreprocessRequest | None = Field(
+        default=None,
+        description="本任务使用的前期人声处理设置",
+    )
     queue_position: int | None = Field(default=None, description="排队位置；未排队时可能为 null")
     result_url: str | None = Field(
         default=None,
@@ -1311,6 +1358,8 @@ class EditorOperationResponse(BaseModel):
     lines: list[dict[str, Any]] | None = Field(default=None, description="解析后的歌词行")
     timing: str | None = Field(default=None, description="歌词切分方式")
     simulated: bool | None = Field(default=None, description="是否使用了模拟结果")
+    engine: Literal["uvr", "pymss"] | None = Field(default=None, description="使用的人声分离引擎")
+    harmony_removed: bool | None = Field(default=None, description="是否已完成 PyMSS 和声去除")
     removed_track_id: str | None = Field(default=None, description="被删除的音轨 ID")
     merged_clip_ids: list[str] | None = Field(default=None, description="被合并的片段 ID")
 
@@ -1462,6 +1511,7 @@ def _public_work(item: dict[str, Any], base_path: str = "/api/v1") -> dict[str, 
             "steps",
             "workflow",
             "vocal_enhancement",
+            "preprocess",
             "queue_position",
         )
     }
@@ -1744,6 +1794,64 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
         items = [_public_model(item) for item in facade.list_models()]
         return {"items": items, "total": len(items), "default_id": facade.get_default_model()}
 
+    @router.get(
+        "/preprocess/pymss/models",
+        tags=["模型"],
+        summary="列出 PyMSS 前期分离模型",
+        description="method: `GET`\n\n参数:\n\n| 参数名 | 类型 | 必填 | 默认值 | 说明 |\n|---|---|---|---|---|\n| purpose | string | 否 | 空 | vocal_separation 人声分离，或 dereverb 去混响/人声净化；为空返回两类 |\n\n返回: PyMSS 模型列表与运行状态。\n\n响应数据:\n\n| 字段名 | 类型 | 说明 |\n|---|---|---|\n| items | array | PyMSS 模型列表 |\n| status | object | 当前运行状态 |\n\n读取当前 PyMSS 环境中的受支持模型目录，供前期处理选择。",
+    )
+    def list_pymss_models(purpose: str = Query(default="", description="vocal_separation 或 dereverb")) -> dict[str, Any]:
+        return {"items": facade.pymss_models(purpose), "status": facade.pymss_status()}
+
+    @router.post(
+        "/preprocess/pymss/models/{model_name:path}/download",
+        tags=["模型"],
+        summary="下载 PyMSS 前期分离模型",
+        description="method: `POST`\n\n参数: model_name（路径参数，PyMSS catalog 模型名）\n\n| 参数名 | 类型 | 必填 | 默认值 | 说明 |\n|---|---|---|---|---|\n| model_name | string | 是 | - | PyMSS catalog 模型名 |\n\n返回: 下载结果，包含 ok、model 或 error。\n\n响应数据:\n\n| 字段名 | 类型 | 说明 |\n|---|---|---|\n| ok | boolean | 是否成功 |\n| model | string | 模型名 |\n| error | string | 失败原因 |\n\n从 PyMSS 默认 ModelScope 模型站下载指定 catalog 模型。",
+    )
+    def download_pymss_model(model_name: str) -> dict[str, Any]:
+        result = facade.pymss_download_model(model_name)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error") or "PyMSS 模型下载失败")
+        return result
+
+    @router.delete(
+        "/preprocess/pymss/models/{model_name:path}",
+        response_model=ActionResponse,
+        tags=["模型"],
+        summary="删除 PyMSS 前期分离模型",
+        description=_resource_api_doc(
+            "删除指定 PyMSS 模型的本地权重与下载标记。",
+            "DELETE",
+            "/api/v1/preprocess/pymss/models/{model_name}",
+            [("model_name", "string", "是", "-", "PyMSS catalog 模型名")],
+            note="此操作会删除本地文件，无法通过 API 撤销。",
+        ),
+        responses={404: {"model": ErrorResponse, "description": "模型不存在"}},
+    )
+    def delete_pymss_model(model_name: str = ApiPath(..., description="PyMSS catalog 模型名")) -> dict[str, Any]:
+        if not facade.delete_pymss_model(model_name):
+            raise HTTPException(status_code=404, detail="模型不存在")
+        return {"ok": True, "id": model_name}
+
+    @router.get(
+        "/preprocess/pymss/downloads",
+        tags=["模型"],
+        summary="查询 PyMSS 后台下载任务",
+        description="method: `GET`\n\n参数:\n\n| 参数名 | 类型 | 必填 | 默认值 | 说明 |\n|---|---|---|---|---|\n| - | - | 否 | - | 无参数 |\n\n返回: 当前会话中的 PyMSS 模型后台下载任务；任务 key 可用于查询单个任务。\n\n响应数据:\n\n| 字段名 | 类型 | 说明 |\n|---|---|---|\n| items | array | 下载任务列表 |",
+    )
+    def list_pymss_downloads() -> dict[str, Any]:
+        return {"items": facade.pymss_download_jobs()}
+
+    @router.get(
+        "/preprocess/pymss/downloads/{job_key:path}",
+        tags=["模型"],
+        summary="查询 PyMSS 下载进度",
+        description="method: `GET`\n\n参数:\n\n| 参数名 | 类型 | 必填 | 默认值 | 说明 |\n|---|---|---|---|---|\n| job_key | string | 是 | - | 后台任务 key |\n\n返回: 按任务 key 查询 PyMSS 模型后台下载进度。\n\n响应数据:\n\n| 字段名 | 类型 | 说明 |\n|---|---|---|\n| status | string | running、done 或 failed |\n| pct | number | 下载进度百分比 |",
+    )
+    def get_pymss_download(job_key: str) -> dict[str, Any]:
+        return facade.pymss_download_progress(job_key)
+
     @router.post(
         "/models/default",
         response_model=ActionResponse,
@@ -2002,6 +2110,7 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
                 "title": request.title or source.stem,
                 "workflow": request.workflow,
                 "vocal_enhancement": request.vocal_enhancement.model_dump(),
+                "preprocess": request.preprocess.model_dump(),
                 "mode": "multi",
                 "models": models,
                 "segments": segments,
@@ -2030,6 +2139,7 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
             "title": request.title or source.stem,
             "workflow": request.workflow,
             "vocal_enhancement": request.vocal_enhancement.model_dump(),
+            "preprocess": request.preprocess.model_dump(),
             "params": params,
         }
         return payload
@@ -2692,14 +2802,19 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
         tags=["编辑器"],
         summary="分离片段人声与伴奏",
         description=_resource_api_doc(
-            "对选中片段执行 UVR，并创建人声和伴奏音轨。",
+            "对选中片段执行 UVR 或 PyMSS，并创建人声和伴奏音轨；PyMSS 可选在分离后去除和声。",
             "POST",
             "/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/separate",
             [
                 ("project_id", "string", "是", "-", "编辑工程 ID"),
                 ("track_id", "string", "是", "-", "音轨 ID"),
                 ("clip_id", "string", "是", "-", "片段 ID"),
-                ("device", "string", "否", "auto", "UVR 推理设备"),
+                ("engine", "string", "否", "uvr", "uvr 或 pymss"),
+                ("model", "string|null", "否", "软件默认值", "UVR 分离模型"),
+                ("pymss_model", "string|null", "engine=pymss 时建议填写", "软件默认值", "PyMSS 人声分离模型"),
+                ("harmony_removal_enabled", "boolean", "否", "false", "PyMSS 分离后是否去除和声"),
+                ("harmony_model", "string|null", "否", "软件默认值", "PyMSS BVE 和声去除模型"),
+                ("device", "string", "否", "auto", "分离推理设备"),
             ],
         ),
     )

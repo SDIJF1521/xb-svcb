@@ -1,6 +1,6 @@
 # XB-SVCB 安装器
 
-版本：`0.0.29`
+版本：`0.0.30`
 
 安装器由 Inno Setup 读取 `installer/xb-svcb.iss` 构建，负责打包桌面本体、环境搭建脚本、自带模型和文档。
 
@@ -17,12 +17,27 @@
 本地发布构建建议使用 `installer/build.ps1` 作为一键入口。
 `installer/build.ps1` 会校验应用、前端、版本号、全部 worker 和
 `dist/XB-SVCB/engines/juce-vst3-host/xb-juce-vst3-host.exe`，任何一项缺失都不会继续生成安装器。
+如果只需要刷新 `XB-SVCB-Setup.exe` 而保留现有 `XB-SVCB-Setup-*.bin` 不动，可在 `dist` 已有完整分卷的前提下使用 `./installer/build.ps1 -BootstrapperOnly`。
 
 只检查 PowerShell、版本约束和 Inno Setup/Pascal 脚本，不压缩模型：
 
 ```powershell
 ./installer/build.ps1 -ValidateOnly
 ```
+
+## v0.0.30 安装器行为
+
+- 应用、Python 项目、前端包、锁文件、Windows EXE 版本资源和 Inno Setup 版本统一为 `0.0.30`。
+- Python 前置检测必须执行真实的 3.10+ 解释器探测；旧环境变量、WindowsApps 别名和仅存在但不可运行的 `python.exe` 均不会被认定为已安装。
+- 安装完成后的各隔离环境校验会再次执行 Python/Torch 导入检查，并把不可运行的环境标记为失败，避免安装器显示成功而软件启动后降级。
+- 本版本新增 PyMSS 人声处理环境：安装器为其创建独立 `.venv-pymss` 并准备隔离依赖和模型目录；模型站仅允许人声分离与和声去除两类模型，PyMSS 缺失时只标记可选组件不可用，不阻塞其他引擎。
+- PyMSS 固定使用 Torch 2.7.1；Blackwell/其他 NVIDIA 分别使用 `cu128`/`cu126` wheel，依赖放在 `assets\\wheels\\pymss\\py310\\cu126` / `cu128`，不会覆盖其他引擎的 Torch。构建 `--clean` 会同时清理旧 wheelhouse 约束文件。
+- PyMSS worker 在隔离环境内解析 `auto` 设备，优先 CUDA/ROCm/DirectML/MPS；只有明确选择 CPU 才使用 CPU，`mlx` 保持 PyMSS 原生 Apple Silicon 路径。DirectML 仅在隔离环境实际具备兼容的 `torch-directml` 时启用；目前其 Torch 2.4.1 固定版本与 PyMSS 2.0.x 的 Torch 2.7.1 要求冲突，安装器会明确保留 CPU PyMSS，避免误报 GPU 就绪。
+- 音频编辑器波形采用有限并发和区间批量采样；片段新增 `time_stretch`（25%-400%），编辑器会同步调整片段时长，倍率贯穿预览、插件监听、实时混音与导出，旧工程自动按 100% 处理。
+- 编辑器试听和实时预览通过缓存 MP3 传输，降低长音频首播延迟；工程导出与复制格式不变。
+- 编辑器重推理纳入选择性高音保护；实际触发保护且启用 AI 美声时自动降低高频染色参数，避免恢复高音后出现过度合成感。
+- 安装目录携带 `release_notes_v030.md`、`README.md` 与 `docs/api.md`；覆盖升级继续保留作品、模型、编辑工程、主题、API 设置和插件数据。
+- 高音保护、高音域 F0 自适应和 FCPE 失败回退纳入本版本运行环境与安装验证范围。
 
 ## v0.0.29 安装器行为
 
@@ -46,7 +61,7 @@
 
 - 应用、Python 项目、前端包、锁文件、Windows EXE 版本资源和 Inno Setup 版本统一为 `0.0.27`。
 - 安装包内置的 `DeepFilterNet3` 现在同时用于分离干声与翻唱模型输出的双阶段修复；运行时会分析高频和高音域，修复后受控恢复辅音/泛音，无需首次运行再下载模型。原先排除的 `fcpe.pt` 也改为随分卷携带，供 So-VITS/DDSP 极高音 F0 自动切换。
-- 发布构建会把 `uv` 与各 AI 子环境依赖预下载/预构建为 whl，按 `py310/cpu`、`py310/directml`、`py310/cu121`、`py310/cu128` 分组，并对 SVC/RVC py39、DirectML 下 DDSP/Vocal 等 torch 版本冲突环境使用组件子目录；安装/修复环境时根据用户机器的 Python 版本、GPU 栈和组件自动 `--no-index --no-build --find-links` 离线安装对应 whl。
+- 发布构建会把 `uv` 与各 AI 子环境依赖预下载/预构建为 whl，按 `py310/cpu`、`py310/directml`、`py310/cu121`、`py310/cu128` 分组，并对 SVC/RVC py39、DirectML 下 DDSP/Vocal 等 torch 版本冲突环境使用组件子目录；PyMSS 另有独立的 `py310/cu126` / `py310/cu128` 子目录。安装/修复环境时根据用户机器的 Python 版本、GPU 栈和组件自动 `--no-index --no-build --find-links` 离线安装对应 whl。
 - Inno Setup 分卷固定为 `1,900,000,000` 字节，发布构建会拒绝任何达到 2 GiB 的数据卷。
 - 安装目录携带最新 `docs/release-notes/release_notes_v027.md`、`README.md` 与 `docs/api.md`，旧数据目录可继续覆盖升级使用。
 - 分卷发布方式、离线模型、内置 FFmpeg、GPU 环境策略和离线 wheelhouse 不要求用户重新下载已有作品或模型。
@@ -101,7 +116,7 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 - UVR 的 AMD 环境固定使用 `audio-separator[dml]` 与 `onnxruntime-directml`；VR `.pth` 与 MDX `.onnx` 模型分别校验 Torch DirectML 设备和 ONNX DirectML provider。
 - UVR DirectML 安装校验会正常初始化临时 Separator；不再使用会跳过设备初始化的 `info_only=True`，避免把已可用的 Radeon 环境误报为失败。
 - GPU 检测同时使用 `nvidia-smi` 与 `Win32_VideoController` 回退；RTX 4060 等 NVIDIA 显卡不会再因安装器进程的 System32/PATH 视图差异被显示为 CPU。
-- 自动模式把界面确认的 CPU、CUDA 或 DirectML 结果明确传给后续步骤，避免界面显示 CPU、Python 安装阶段却重新检测并改装 CUDA。NVIDIA 模式会填写 CUDA Toolkit `v12.1` / `v12.8` 默认目录。
+- 自动模式把界面确认的 CPU、CUDA 或 DirectML 结果明确传给后续步骤，避免界面显示 CPU、Python 安装阶段却重新检测并改装 CUDA。NVIDIA 模式会填写 CUDA Toolkit `v12.6` / `v12.8` 默认目录。
 - CUDA Toolkit 已拆为独立的 NVIDIA 专用目录页；CPU 与 AMD DirectML 会完全跳过该页，不再因为空 CUDA 路径无法进入下一步。
 - 修复 `Program Files (x86)` 中括号被批处理块误解析导致前置步骤中断；安装结束会真实导入五个隔离环境的 Torch 并校验 CUDA / DirectML，不再仅凭 `python.exe` 存在就误报完成。
 - 用户 PATH 与镜像/CUDA 变量改用 Python `winreg` 一次性写入，避免 `reg.exe` 在 94% 持续占用 CPU；长 PATH、`%变量%` 和括号会保持原样，失败会中止前置步骤并写入日志。
@@ -127,7 +142,7 @@ $env:XB_JUCE_DIR="C:\path\to\JUCE"
 - 应用、Python 项目、前端、两份锁文件和 Inno Setup 版本统一为 `0.0.20`。
 - 新增 DDSP-SVC 6.3 安装步骤，部署 `engines/ddsp-svc`、`.venv-ddsp`、ContentVec、RMVPE 和 PC-NSF-HiFiGAN；PC-NSF-HiFiGAN 2025.02 随安装器离线提供，不再依赖 GitHub Release 下载。
 - UVR 与 DDSP-SVC GPU 环境固定使用匹配的 CUDA Torch，并在各自安装结束后验证 `torch.cuda.is_available()`，避免 GPU 选择静默运行在 CPU。
-- PyInstaller 继续打包 `ddsp_worker.py`、`uvr_worker.py` 与当前编辑器/消息中心前端。
+- PyInstaller 继续打包 `ddsp_worker.py`、`uvr_worker.py`、`pymss_worker.py` 与当前编辑器/消息中心前端。
 - 安装器内置优化后的主题前端：WebView2 使用原生页面快照完成暗色/亮色过渡，并在动画结束后同步原生窗口外观。
 - 发布构建要求 `docs/release-notes/release_notes_v020.md` 存在，安装后将其与主 `README.md` 一起释放到应用目录。
 - 分卷安装方式保持不变：必须共同发布 `XB-SVCB-Setup.exe` 与全部 `XB-SVCB-Setup-*.bin`。

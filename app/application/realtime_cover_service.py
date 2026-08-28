@@ -32,6 +32,7 @@ class RealtimeCoverService:
     """Manage progressive RVC / SeedVC song playback sessions."""
 
     _FRAMEWORKS = {"rvc", "seed-vc"}
+    _HIGH_PITCH_THRESHOLD = 800.0
 
     def __init__(
         self,
@@ -305,6 +306,7 @@ class RealtimeCoverService:
             model = session["models"][0]
             model_id = model["model_id"]
             engine = self._engines.for_framework(model["framework"])
+            model_params = InferenceParams.from_dict(model.get("params") or {})
             opener = getattr(engine, "open_realtime_session", None)
             if callable(opener):
                 self._update(
@@ -328,19 +330,46 @@ class RealtimeCoverService:
                 if not self._ffmpeg.slice(vocals, start, end, raw_vocal):
                     raise RuntimeError(f"无法截取第 {index + 1} 个实时人声块")
 
+                guarded_vocal, guard_shift = self._prepare_pitch_guard(
+                    raw_vocal,
+                    directory / f"vocal_{index:05d}_guarded.wav",
+                    model_params,
+                    length,
+                )
                 raw_render = directory / f"render_{index:05d}_{model_id}.wav"
                 persistent = worker_sessions.get(model_id)
                 if persistent is not None:
-                    persistent.infer(raw_vocal, raw_render)
+                    persistent.infer(guarded_vocal, raw_render)
                 else:
                     engine.infer(
                         model=model,
-                        vocals=raw_vocal,
+                        vocals=guarded_vocal,
                         out_path=raw_render,
-                        params=InferenceParams.from_dict(model.get("params") or {}),
+                        params=model_params,
                         duration=length,
                         log_file=directory / "realtime.log",
                     )
+                if guard_shift:
+                    restored = directory / f"render_{index:05d}_{model_id}_restored.wav"
+                    if self._pitch_shift(
+                        raw_render,
+                        restored,
+                        -guard_shift,
+                        mask_source=raw_vocal,
+                        loudness_source=raw_vocal,
+                    ):
+                        raw_render = restored
+                    else:
+                        self._append_realtime_log(
+                            directory / "realtime.log",
+                            "PITCH_GUARD_RESTORE_FAILED\t保共振峰升调失败，保留模型输出\n",
+                        )
+                if model_params.auto_high_pitch_guard and self._is_nearly_silent(raw_render, guarded_vocal):
+                    self._append_realtime_log(
+                        directory / "realtime.log",
+                        "PITCH_GUARD_FALLBACK\t模型输出接近静音，回退原始人声\n",
+                    )
+                    raw_render = raw_vocal
                 fixed = directory / f"render_{index:05d}_{model_id}_fixed.wav"
                 rendered = fixed if self._ffmpeg.pad_or_trim(raw_render, fixed, length) else raw_render
                 vocal_mix = directory / f"converted_{index:05d}.wav"
@@ -679,11 +708,42 @@ class RealtimeCoverService:
         separated = Path(prepared["separated"])
         accompaniment_stem = Path(prepared["accompaniment"])
         rendered = Path(prepared["rendered"])
-        worker.infer(
+        model_params = InferenceParams.from_dict(
+            (session["models"][0].get("params") or {})
+        )
+        guarded, guard_shift = self._prepare_pitch_guard(
             separated,
+            separated.with_name(separated.stem + "_guarded.wav"),
+            model_params,
+            float(prepared["length"]),
+            sample_rate=int(session["sample_rate"]),
+        )
+        worker.infer(
+            guarded,
             rendered,
             timeout=max(120.0, float(prepared["length"]) * 20.0),
         )
+        if guard_shift:
+            restored = rendered.with_name(rendered.stem + "_restored.wav")
+            if self._pitch_shift(
+                rendered,
+                restored,
+                -guard_shift,
+                mask_source=separated,
+                loudness_source=separated,
+            ):
+                rendered = restored
+            else:
+                self._append_realtime_log(
+                    Path(session["directory"]) / "realtime-system.log",
+                    "PITCH_GUARD_RESTORE_FAILED\t保共振峰升调失败，保留模型输出\n",
+                )
+        if model_params.auto_high_pitch_guard and self._is_nearly_silent(rendered, guarded):
+            self._append_realtime_log(
+                Path(session["directory"]) / "realtime-system.log",
+                "PITCH_GUARD_FALLBACK\t模型输出接近静音，回退原始人声\n",
+            )
+            rendered = separated
         extracted = self._fit_audio(
             self._read_pcm16(separated, session["sample_rate"], frame_count),
             frame_count,
@@ -724,11 +784,156 @@ class RealtimeCoverService:
             prepared["separated"],
             prepared["accompaniment"],
             prepared["rendered"],
+            guarded,
+            rendered if rendered != Path(prepared["rendered"]) else None,
         ):
+            if not path:
+                continue
             try:
                 Path(path).unlink(missing_ok=True)
             except OSError:
                 pass
+
+    @staticmethod
+    def _append_realtime_log(path: Path, message: str) -> None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(message)
+        except OSError:
+            pass
+
+    def _pitch_shift(
+        self,
+        source: Path,
+        destination: Path,
+        semitones: int,
+        *,
+        mask_source: Path | None = None,
+        loudness_source: Path | None = None,
+    ) -> bool:
+        shift = getattr(self._ffmpeg, "pitch_shift", None)
+        if not callable(shift):
+            return False
+        try:
+            return bool(
+                shift(
+                    source,
+                    destination,
+                    int(semitones),
+                    mask_source=mask_source,
+                    loudness_source=loudness_source,
+                    high_threshold=self._HIGH_PITCH_THRESHOLD,
+                )
+            )
+        except TypeError:
+            # Keep compatibility with lightweight test doubles and older tools.
+            return bool(shift(source, destination, int(semitones)))
+
+    def _prepare_pitch_guard(
+        self,
+        source: Path,
+        destination: Path,
+        params: InferenceParams,
+        duration: float,
+        *,
+        sample_rate: int = 44100,
+    ) -> tuple[Path, int]:
+        """Lower only detected extreme-high regions before model inference.
+
+        The model still processes every block. A pitch tier mask leaves normal
+        notes untouched, and a matching inverse shift restores only those high
+        regions after inference.
+        """
+        if not params.auto_high_pitch_guard or duration < 0.12:
+            return source, 0
+        peak_f0 = self._estimate_peak_f0(source, sample_rate)
+        if peak_f0 < self._HIGH_PITCH_THRESHOLD:
+            return source, 0
+        if not self._pitch_shift(source, destination, -12):
+            self._append_realtime_log(
+                source.with_name("realtime.log"),
+                f"PITCH_GUARD_PREP_FAILED\tpeak_f0={peak_f0:.1f}\n",
+            )
+            return source, 0
+        self._append_realtime_log(
+            source.with_name("realtime.log"),
+            f"PITCH_GUARD\tpeak_f0={peak_f0:.1f}\tsemitones=-12\n",
+        )
+        return destination, -12
+
+    @staticmethod
+    def _estimate_peak_f0(source: Path, sample_rate: int = 44100) -> float:
+        """Estimate the highest reliable voiced fundamental in a short block."""
+        try:
+            import numpy as np
+
+            with wave.open(str(source), "rb") as handle:
+                rate = int(handle.getframerate() or sample_rate)
+                channels = int(handle.getnchannels() or 1)
+                frames = handle.readframes(handle.getnframes())
+            if not frames:
+                return 0.0
+            audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32)
+            audio = audio.reshape(-1, channels).mean(axis=1)
+            target_rate = min(rate, 16000)
+            if rate != target_rate and audio.size:
+                positions = np.linspace(0, audio.size - 1, max(1, round(audio.size * target_rate / rate)))
+                audio = np.interp(positions, np.arange(audio.size), audio)
+            if audio.size < max(256, int(target_rate * 0.08)):
+                return 0.0
+            frame = min(audio.size, max(1024, int(target_rate * 0.08)))
+            hop = max(1, frame // 2)
+            min_lag = max(2, int(target_rate / 2000.0))
+            max_lag = min(frame - 1, int(target_rate / 60.0))
+            highest = 0.0
+            for start in range(0, max(1, audio.size - frame + 1), hop):
+                chunk = audio[start : start + frame]
+                if chunk.size < frame:
+                    chunk = np.pad(chunk, (0, frame - chunk.size))
+                chunk = chunk - float(np.mean(chunk))
+                energy = float(np.sqrt(np.mean(chunk * chunk)))
+                if energy < 0.008:
+                    continue
+                corr = np.correlate(chunk, chunk, mode="full")[frame - 1 :]
+                base = float(corr[0])
+                if base <= 0.0:
+                    continue
+                corr = corr / base
+                candidates = [
+                    lag
+                    for lag in range(min_lag + 1, max_lag)
+                    if corr[lag] >= corr[lag - 1]
+                    and corr[lag] >= corr[lag + 1]
+                    and corr[lag] >= 0.45
+                ]
+                lag = candidates[0] if candidates else min_lag + int(np.argmax(corr[min_lag : max_lag + 1]))
+                strength = float(corr[lag])
+                if strength >= 0.35:
+                    highest = max(highest, target_rate / float(lag))
+            return float(highest)
+        except (OSError, ValueError, wave.Error, ImportError):
+            return 0.0
+
+    @staticmethod
+    def _is_nearly_silent(output: Path, source: Path) -> bool:
+        """Detect model collapse without bypassing healthy converted blocks."""
+        try:
+            import numpy as np
+
+            def rms(path: Path) -> float:
+                with wave.open(str(path), "rb") as handle:
+                    raw = handle.readframes(min(handle.getnframes(), handle.getframerate() * 8))
+                if not raw:
+                    return 0.0
+                values = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                return float(np.sqrt(np.mean(values * values)))
+
+            source_rms = rms(source)
+            output_rms = rms(output)
+            return source_rms > 0.002 and output_rms < max(0.001, source_rms * 0.08)
+        except (OSError, ValueError, wave.Error, ImportError):
+            return False
 
     @staticmethod
     def _write_pcm16(path: Path, audio, sample_rate: int) -> None:  # noqa: ANN001

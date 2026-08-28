@@ -8,6 +8,7 @@
   5）验证生成的运行时捆绑包
   6）使用 Inno Setup 的 ISCC 编译 installer/xb-svcb.iss
   7）输出结果：dist/XB-SVCB-Setup.exe + 分割后的 .bin 数据包
+     -BootstrapperOnly 时只刷新 EXE，复用已有的 .bin 分卷，不会重建或删除它们
 
   Prerequisites: Node.js (frontend build), app/.venv with pywebview + pyinstaller,
                  CMake + C++17 compiler + JUCE for the VST3 host,
@@ -19,6 +20,7 @@
     ./installer/build.ps1 -SkipWebBuild     # skip when web/dist already built
     ./installer/build.ps1 -SkipAppBuild     # skip when dist/XB-SVCB already built
     ./installer/build.ps1 -SkipWheelhouse   # skip only when assets/wheels is already prepared
+    ./installer/build.ps1 -BootstrapperOnly # refresh only XB-SVCB-Setup.exe; keep existing .bin slices
     ./installer/build.ps1 -ValidateOnly     # validate scripts without packaging models
 #>
 
@@ -27,6 +29,7 @@ param(
   [switch]$SkipAppBuild,
   [switch]$SkipJuceHostBuild,
   [switch]$SkipWheelhouse,
+  [switch]$BootstrapperOnly,
   [switch]$ValidateOnly
 )
 
@@ -310,7 +313,9 @@ $workerFiles = @(
   "svc_worker.py",
   "f0_worker.py",
   "vocal_tuning_worker.py",
+  "formant_pitch_worker.py",
   "uvr_worker.py",
+  "pymss_worker.py",
   "hub_worker.py",
   "rvc_worker.py",
   "seedvc_worker.py",
@@ -320,7 +325,7 @@ $workerFiles = @(
 foreach ($worker in $workerFiles) {
   Require-File (Join-Path $Root "app\infrastructure\$worker") "Worker source $worker"
 }
-Require-File (Join-Path $Root "docs\release-notes\release_notes_v029.md") "v0.0.29 release notes"
+Require-File (Join-Path $Root "release_notes_v030.md") "v0.0.30 release notes"
 Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
 Require-File (Join-Path $Root "install\detect_python.bat") "Python runtime detector"
@@ -411,6 +416,10 @@ if (-not $SkipWheelhouse) {
   $pythonCmd = Get-Command "python" -ErrorAction SilentlyContinue
   if (-not $pythonCmd) {
     throw "python not found. Install Python 3.10+ or pass -SkipWheelhouse only when assets/wheels is already prepared."
+  }
+  & $pythonCmd.Source -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+  if ($LASTEXITCODE -ne 0) {
+    throw "python found at '$($pythonCmd.Source)' but it is not a runnable Python 3.10+ interpreter."
   }
   & $pythonCmd.Source (Join-Path $Root "install\prepare_wheelhouse.py") --root $Root --clean
   if ($LASTEXITCODE -ne 0) { throw "Wheelhouse preparation failed (exit code $LASTEXITCODE)" }
@@ -518,25 +527,63 @@ if (-not $iscc) {
 Write-Host ("ISCC: {0}" -f $iscc) -ForegroundColor Green
 
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "dist") | Out-Null
-# Never leave an older setup payload next to a newly compiled bootstrapper.
-Get-ChildItem -LiteralPath (Join-Path $Root "dist") -Filter "XB-SVCB-Setup*" -File -ErrorAction SilentlyContinue |
-  Remove-Item -Force
-& $iscc (Join-Path $Root "installer\xb-svcb.iss")
-if ($LASTEXITCODE -ne 0) { throw "ISCC compile failed (exit code $LASTEXITCODE)" }
+$distDir = Join-Path $Root "dist"
+if ($BootstrapperOnly) {
+  $existingSlices = @(Get-ChildItem -LiteralPath $distDir -Filter "XB-SVCB-Setup-*.bin" -File -ErrorAction SilentlyContinue)
+  if ($existingSlices.Count -eq 0) {
+    throw "BootstrapperOnly requires existing XB-SVCB-Setup-*.bin files in dist. Build the full installer once first."
+  }
+  $compileDir = Join-Path $Root ".tmp\installer-bootstrapper"
+  if (Test-Path -LiteralPath $compileDir) {
+    Remove-Item -LiteralPath $compileDir -Recurse -Force
+  }
+  New-Item -ItemType Directory -Force -Path $compileDir | Out-Null
+  try {
+    & $iscc "/O$compileDir" (Join-Path $Root "installer\xb-svcb.iss")
+    if ($LASTEXITCODE -ne 0) { throw "ISCC compile failed (exit code $LASTEXITCODE)" }
 
-$out = Join-Path $Root "dist\XB-SVCB-Setup.exe"
-Require-File $out "Installer bootstrapper"
-$artifacts = Get-ChildItem -LiteralPath (Join-Path $Root "dist") -Filter "XB-SVCB-Setup*" -File |
-  Sort-Object Name
-if (-not ($artifacts | Where-Object { $_.Extension -eq ".bin" })) {
-  throw "Installer payload slices were not generated. Check DiskSpanning in installer/xb-svcb.iss."
-}
-$oversizedArtifacts = $artifacts | Where-Object { $_.Length -ge 2GB }
-if ($oversizedArtifacts) {
-  $names = ($oversizedArtifacts | ForEach-Object { "{0} ({1} bytes)" -f $_.Name, $_.Length }) -join ", "
-  throw "Installer artifacts must each stay below 2 GiB: $names"
-}
-Write-Host "`nInstaller artifacts:" -ForegroundColor Green
-$artifacts | ForEach-Object {
-  Write-Host ("  {0} ({1:N1} MiB)" -f $_.FullName, ($_.Length / 1MB))
+    $tempExe = Join-Path $compileDir "XB-SVCB-Setup.exe"
+    Require-File $tempExe "Installer bootstrapper"
+    Copy-Item -LiteralPath $tempExe -Destination (Join-Path $distDir "XB-SVCB-Setup.exe") -Force
+
+    $artifacts = Get-ChildItem -LiteralPath $compileDir -Filter "XB-SVCB-Setup*" -File |
+      Sort-Object Name
+    if (-not ($artifacts | Where-Object { $_.Extension -eq ".bin" })) {
+      throw "Installer payload slices were not generated. Check DiskSpanning in installer/xb-svcb.iss."
+    }
+    $oversizedArtifacts = $artifacts | Where-Object { $_.Length -ge 2GB }
+    if ($oversizedArtifacts) {
+      $names = ($oversizedArtifacts | ForEach-Object { "{0} ({1} bytes)" -f $_.Name, $_.Length }) -join ", "
+      throw "Installer artifacts must each stay below 2 GiB: $names"
+    }
+    Write-Host "`nInstaller bootstrapper refreshed; existing split volumes left untouched." -ForegroundColor Green
+    Write-Host ("  {0}" -f (Join-Path $distDir "XB-SVCB-Setup.exe")) -ForegroundColor Green
+  } finally {
+    if (Test-Path -LiteralPath $compileDir) {
+      Remove-Item -LiteralPath $compileDir -Recurse -Force
+    }
+  }
+} else {
+  # Never leave an older setup payload next to a newly compiled bootstrapper.
+  Get-ChildItem -LiteralPath $distDir -Filter "XB-SVCB-Setup*" -File -ErrorAction SilentlyContinue |
+    Remove-Item -Force
+  & $iscc (Join-Path $Root "installer\xb-svcb.iss")
+  if ($LASTEXITCODE -ne 0) { throw "ISCC compile failed (exit code $LASTEXITCODE)" }
+
+  $out = Join-Path $distDir "XB-SVCB-Setup.exe"
+  Require-File $out "Installer bootstrapper"
+  $artifacts = Get-ChildItem -LiteralPath $distDir -Filter "XB-SVCB-Setup*" -File |
+    Sort-Object Name
+  if (-not ($artifacts | Where-Object { $_.Extension -eq ".bin" })) {
+    throw "Installer payload slices were not generated. Check DiskSpanning in installer/xb-svcb.iss."
+  }
+  $oversizedArtifacts = $artifacts | Where-Object { $_.Length -ge 2GB }
+  if ($oversizedArtifacts) {
+    $names = ($oversizedArtifacts | ForEach-Object { "{0} ({1} bytes)" -f $_.Name, $_.Length }) -join ", "
+    throw "Installer artifacts must each stay below 2 GiB: $names"
+  }
+  Write-Host "`nInstaller artifacts:" -ForegroundColor Green
+  $artifacts | ForEach-Object {
+    Write-Host ("  {0} ({1:N1} MiB)" -f $_.FullName, ($_.Length / 1MB))
+  }
 }

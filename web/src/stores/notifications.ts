@@ -19,24 +19,28 @@ const CHANNEL_NAME = 'xb-global-notifications'
 export const useNotificationsStore = defineStore('notifications', () => {
   const systemStore = useSystemStore()
   const worksStore = useWorksStore()
-  const { tools, loaded: systemLoaded } = storeToRefs(systemStore)
+  const { tools, ready: systemReady, loaded: systemLoaded } = storeToRefs(systemStore)
   const { works } = storeToRefs(worksStore)
   const seenSignature = ref(readSeenSignature())
   let users = 0
   let channel: BroadcastChannel | null = null
 
   const allReady = computed(
-    () => systemLoaded.value && tools.value.length > 0 && tools.value.every((tool) => tool.ok),
+    () => systemLoaded.value && systemReady.value,
   )
 
   const notifications = computed<GlobalNotification[]>(() => {
     const items: GlobalNotification[] = []
     if (systemLoaded.value && !allReady.value) {
-      const unavailable = tools.value.filter((tool) => !tool.ok).map((tool) => tool.name)
+      const unavailable = tools.value
+        .filter((tool) => tool.required && !tool.ok)
+        .map((tool) => tool.name)
       items.push({
         id: 'env',
         title: '运行环境降级',
-        text: unavailable.length ? `${unavailable.join('、')}不可用` : '部分集成工具不可用，点击查看',
+        text: unavailable.length
+          ? `${unavailable.join('、')}不可用`
+          : '请检查至少一个推理引擎是否可运行',
         time: '',
         tone: 'warn',
         to: '/',

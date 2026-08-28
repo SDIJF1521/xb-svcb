@@ -11,12 +11,14 @@ import base64
 import copy
 import json
 import mimetypes
+import os
 import re
 import shutil
 import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
@@ -33,6 +35,7 @@ _MAX_MANIFEST_BYTES = 512 * 1024
 _MAX_UNPACKED_BYTES = 50 * 1024 * 1024
 _MAX_FRONTEND_ENTRY_BYTES = 2 * 1024 * 1024
 _MAX_FRONTEND_ASSET_BYTES = 10 * 1024 * 1024
+_MAX_PYTHON_ENTRY_BYTES = 2 * 1024 * 1024
 _ALLOWED_COMPONENTS = {"text", "number", "select", "switch", "textarea"}
 _ALLOWED_ACTIONS = {"message", "create_work", "python"}
 _ALLOWED_RUNTIMES = {"frontend", "python", "hybrid"}
@@ -44,6 +47,7 @@ _ALLOWED_PARAMS = {
     "pitch", "f0_method", "index_rate", "rms_mix", "uvr_model", "diffusion_ratio",
     "device", "protect", "filter_radius", "rvc_version", "ddsp_infer_steps",
     "ddsp_formant_shift", "speaker",
+    "auto_high_pitch_guard",
 }
 
 
@@ -76,7 +80,11 @@ class PluginService:
     def list(self) -> list[dict[str, Any]]:
         states = self._states()
         result: list[dict[str, Any]] = []
-        for folder in sorted(config.PLUGINS_DIR.iterdir(), key=lambda item: item.name):
+        try:
+            folders = sorted(config.PLUGINS_DIR.iterdir(), key=lambda item: item.name)
+        except OSError:
+            return result
+        for folder in folders:
             if not folder.is_dir():
                 continue
             manifest = self._read_manifest(folder / _MANIFEST_NAME)
@@ -88,6 +96,8 @@ class PluginService:
                 **manifest,
                 "installed": True,
                 "enabled": bool(state.get("enabled", False)),
+                "runtime_status": self._runtime_status(folder, manifest),
+                "last_error": str(state.get("last_error") or ""),
                 "path": str(folder),
             })
         return result
@@ -105,8 +115,18 @@ class PluginService:
         ):
             lifecycle = self._run_python(plugin, "lifecycle", "on_enable")
             if not lifecycle.get("ok"):
+                states[plugin_id] = {
+                    **states.get(plugin_id, {}),
+                    "enabled": False,
+                    "last_error": str(lifecycle.get("error") or "Python 插件启用失败"),
+                }
+                self._settings.set("plugin_states", states)
                 return False
-        states[plugin_id] = {**states.get(plugin_id, {}), "enabled": enabled}
+        states[plugin_id] = {
+            **states.get(plugin_id, {}),
+            "enabled": enabled,
+            "last_error": "",
+        }
         self._settings.set("plugin_states", states)
         if (
             not enabled
@@ -135,10 +155,12 @@ class PluginService:
                     return {"ok": False, "error": "插件清单格式无效。"}
                 target = config.PLUGINS_DIR / manifest["id"]
                 staging = Path(tempfile.mkdtemp(prefix="xb-plugin-", dir=config.PLUGINS_DIR))
+                backup: Path | None = None
                 try:
                     # 当前规范只读取清单，仍安全解压文档等资源以保留包的可检查性。
                     for member in archive.infolist():
-                        destination = (staging / member.filename).resolve()
+                        member_name = str(member.filename or "").replace("\\", "/")
+                        destination = (staging / member_name).resolve()
                         if staging.resolve() not in destination.parents and destination != staging.resolve():
                             raise ValueError("插件包包含非法路径")
                         if member.is_dir():
@@ -146,26 +168,47 @@ class PluginService:
                         destination.parent.mkdir(parents=True, exist_ok=True)
                         with archive.open(member) as src, destination.open("wb") as dst:
                             shutil.copyfileobj(src, dst)
-                    manifest_path = staging / manifest_member
+                    normalized_manifest_member = manifest_member.replace("\\", "/")
+                    manifest_path = staging / normalized_manifest_member
                     if manifest_path.parent != staging:
                         # 支持单一顶级目录，安装时将其内容规范化到插件根目录。
                         normalized = Path(tempfile.mkdtemp(prefix="xb-plugin-", dir=config.PLUGINS_DIR))
                         shutil.copytree(manifest_path.parent, normalized, dirs_exist_ok=True)
                         shutil.rmtree(staging, ignore_errors=True)
                         staging = normalized
-                    if target.exists():
-                        shutil.rmtree(target)
                     frontend_entry = str(((manifest.get("frontend") or {}).get("entry") or "")).strip()
-                    if frontend_entry and not self._safe_plugin_file(staging, frontend_entry, {".html", ".htm"}):
-                        raise ValueError("插件前端入口不存在或路径非法")
+                    if frontend_entry:
+                        frontend_path = self._safe_plugin_file(staging, frontend_entry, {".html", ".htm"})
+                        if not frontend_path:
+                            raise ValueError("插件前端入口不存在或路径非法")
+                        if frontend_path.stat().st_size > _MAX_FRONTEND_ENTRY_BYTES:
+                            raise ValueError("插件前端入口超过 2 MB 限制")
+                    python_entry = str(((manifest.get("python") or {}).get("entry") or "")).strip()
+                    if python_entry:
+                        python_path = self._safe_plugin_file(staging, python_entry, {".py"})
+                        if not python_path:
+                            raise ValueError("Python 插件入口不存在或路径非法")
+                        if python_path.stat().st_size > _MAX_PYTHON_ENTRY_BYTES:
+                            raise ValueError("Python 插件入口超过 2 MB 限制")
+                    requirements = str(((manifest.get("python") or {}).get("requirements") or "")).strip()
+                    if requirements and not self._safe_plugin_file(staging, requirements, {".txt"}):
+                        raise ValueError("Python 插件 requirements 文件不存在或路径非法")
+                    if target.exists():
+                        backup = Path(tempfile.mkdtemp(prefix="xb-plugin-backup-", dir=config.PLUGINS_DIR))
+                        backup.rmdir()
+                        target.replace(backup)
                     staging.replace(target)
                 except Exception:
+                    if backup and backup.exists() and not target.exists():
+                        backup.replace(target)
                     shutil.rmtree(staging, ignore_errors=True)
                     raise
+                if backup:
+                    shutil.rmtree(backup, ignore_errors=True)
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
             return {"ok": False, "error": f"无法安装插件：{exc}"}
         states = self._states()
-        states[manifest["id"]] = {**states.get(manifest["id"], {}), "enabled": False}
+        states[manifest["id"]] = {**states.get(manifest["id"], {}), "enabled": False, "last_error": ""}
         self._settings.set("plugin_states", states)
         installed = self._plugin(manifest["id"])
         return {
@@ -173,6 +216,38 @@ class PluginService:
             "plugin": installed,
             "message": f"插件已安装到：{installed.get('path') if installed else target}",
         }
+
+    @staticmethod
+    def _runtime_status(folder: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+        """Return cheap, side-effect-free diagnostics for the plugin list UI."""
+        runtime = str(manifest.get("runtime") or "frontend")
+        if runtime not in {"python", "hybrid"}:
+            return {"ready": True, "error": ""}
+        entry = str(((manifest.get("python") or {}).get("entry") or "")).strip()
+        entry_path = PluginService._safe_plugin_file(folder, entry, {".py"})
+        if not entry_path:
+            return {"ready": False, "error": "Python 入口不存在或路径非法"}
+        try:
+            if entry_path.stat().st_size > _MAX_PYTHON_ENTRY_BYTES:
+                return {"ready": False, "error": "Python 入口超过 2 MB 限制"}
+        except OSError:
+            return {"ready": False, "error": "无法读取 Python 入口"}
+        python_config = manifest.get("python") if isinstance(manifest.get("python"), dict) else {}
+        requirements = str(python_config.get("requirements") or "").strip()
+        if requirements and not PluginService._safe_plugin_file(folder, requirements, {".txt"}):
+            return {"ready": False, "error": "Python requirements 文件不存在或路径非法"}
+        vendor = (str(python_config.get("vendor") or "vendor").strip() or "vendor").replace("\\", "/")
+        vendor_path = (folder / vendor).resolve()
+        folder_root = folder.resolve()
+        if folder_root not in vendor_path.parents and vendor_path != folder_root:
+            return {"ready": False, "error": "Python vendor 路径非法"}
+        if vendor_path.exists() and not vendor_path.is_dir():
+            return {"ready": False, "error": "Python vendor 不是目录"}
+        if not config.PLUGIN_WORKER.is_file() or not config.PLUGIN_SDK_DIR.is_dir():
+            return {"ready": False, "error": "宿主 Python Worker 或 SDK 缺失"}
+        if not config.PLUGIN_PYTHON or not config.PLUGIN_PYTHON.is_file():
+            return {"ready": False, "error": "未找到 Python 3.10+ 运行环境"}
+        return {"ready": True, "error": ""}
 
     def install_bundle_bytes(self, name: str, data: bytes) -> dict[str, Any]:
         if not data:
@@ -347,7 +422,11 @@ class PluginService:
 
     @staticmethod
     def _manifest_member(archive: zipfile.ZipFile) -> str | None:
-        matches = [item.filename for item in archive.infolist() if item.filename.rstrip("/").endswith(_MANIFEST_NAME)]
+        matches = []
+        for item in archive.infolist():
+            name = str(item.filename or "").replace("\\", "/").rstrip("/")
+            if name and PurePosixPath(name).name == _MANIFEST_NAME:
+                matches.append(item.filename)
         return matches[0] if len(matches) == 1 else None
 
     def _read_manifest(self, path: Path) -> dict[str, Any] | None:
@@ -383,13 +462,18 @@ class PluginService:
             return None
         if runtime in {"python", "hybrid"}:
             entry = str(python_config.get("entry") or "").strip()
-            if not entry or Path(entry).is_absolute() or ".." in Path(entry).parts or Path(entry).suffix.lower() != ".py":
+            if not self._valid_relative_file(entry, {".py"}):
                 return None
         frontend_entry = str(frontend_config.get("entry") or "").strip()
         if frontend_entry:
-            frontend_path = Path(frontend_entry)
-            if frontend_path.is_absolute() or ".." in frontend_path.parts or frontend_path.suffix.lower() not in {".html", ".htm"}:
+            if not self._valid_relative_file(frontend_entry, {".html", ".htm"}):
                 return None
+        requirements = str(python_config.get("requirements") or "").strip()
+        if requirements and not self._valid_relative_file(requirements, {".txt"}):
+            return None
+        vendor = str(python_config.get("vendor") or "").strip()
+        if vendor and not self._valid_relative_directory(vendor):
+            return None
         if not isinstance(permissions, list) or any(value not in _ALLOWED_PERMISSIONS for value in permissions):
             return None
         if runtime in {"python", "hybrid"} and "python.execute" not in permissions:
@@ -431,28 +515,62 @@ class PluginService:
         values: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if not config.PLUGIN_PYTHON or not config.PLUGIN_PYTHON.exists():
+        if not config.PLUGIN_PYTHON or not config.PLUGIN_PYTHON.is_file():
             return {"ok": False, "error": "未找到 Python 3.10+ 插件运行环境。"}
-        if not config.PLUGIN_WORKER.exists() or not config.PLUGIN_SDK_DIR.exists():
+        if not config.PLUGIN_WORKER.is_file() or not config.PLUGIN_SDK_DIR.is_dir():
             return {"ok": False, "error": "Python 插件 Worker 或 SDK 缺失。"}
         plugin_dir = Path(plugin["path"]).resolve()
         entry = (plugin_dir / str((plugin.get("python") or {}).get("entry") or "")).resolve()
         if plugin_dir not in entry.parents or not entry.is_file():
             return {"ok": False, "error": "Python 插件入口不存在或路径非法。"}
+        try:
+            if entry.stat().st_size > _MAX_PYTHON_ENTRY_BYTES:
+                return {"ok": False, "error": "Python 插件入口超过 2 MB 限制。"}
+        except OSError:
+            return {"ok": False, "error": "无法读取 Python 插件入口。"}
+        python_config = plugin.get("python") if isinstance(plugin.get("python"), dict) else {}
+        requirements = str(python_config.get("requirements") or "").strip()
+        requirements_path = self._safe_plugin_file(plugin_dir, requirements, {".txt"}) if requirements else None
+        if requirements and not requirements_path:
+            return {"ok": False, "error": "Python 插件 requirements 文件不存在或路径非法。"}
+        vendor = (str(python_config.get("vendor") or "vendor").strip() or "vendor").replace("\\", "/")
+        vendor_path = (plugin_dir / vendor).resolve()
+        if plugin_dir not in vendor_path.parents and vendor_path != plugin_dir:
+            return {"ok": False, "error": "Python 插件 vendor 路径非法。"}
+        if vendor_path.exists() and not vendor_path.is_dir():
+            return {"ok": False, "error": "Python 插件 vendor 不是目录。"}
         request = {
             "sdk_path": str(config.PLUGIN_SDK_DIR),
             "plugin_id": plugin["id"],
             "plugin_dir": str(plugin_dir),
             "data_dir": str(config.PLUGIN_DATA_DIR / plugin["id"]),
             "entry": str(entry),
+            "vendor_path": str(vendor_path) if vendor_path.is_dir() else "",
+            "requirements_path": str(requirements_path) if requirements_path else "",
             "operation": operation,
             "name": name,
             "values": values or {},
             "payload": payload or {},
         }
         try:
+            env = os.environ.copy()
+            # Do not let a user's global site-packages change plugin behaviour
+            # between machines. Dependencies must be bundled in vendor/.
+            env.update({
+                "PYTHONNOUSERSITE": "1",
+                "PYTHONUTF8": "1",
+                "PYTHONIOENCODING": "utf-8",
+                "XB_PLUGIN_ID": str(plugin["id"]),
+            })
             completed = subprocess.run(
-                [str(config.PLUGIN_PYTHON), str(config.PLUGIN_WORKER)],
+                [
+                    str(config.PLUGIN_PYTHON),
+                    "-I",
+                    "-S",
+                    "-X",
+                    "utf8",
+                    str(config.PLUGIN_WORKER),
+                ],
                 input=json.dumps(request, ensure_ascii=False),
                 capture_output=True,
                 text=True,
@@ -460,14 +578,18 @@ class PluginService:
                 errors="replace",
                 timeout=30,
                 cwd=plugin_dir,
+                env=env,
                 check=False,
                 **config.subprocess_no_window(),
             )
-            response = json.loads(completed.stdout or "{}")
+            raw_response = (completed.stdout or "").strip()
+            response = json.loads(raw_response or "{}")
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": "Python 插件执行超过 30 秒，已终止。"}
         except (OSError, json.JSONDecodeError) as exc:
-            return {"ok": False, "error": f"Python 插件执行失败：{exc}"}
+            detail = (completed.stderr if "completed" in locals() else "") or str(exc)
+            self._write_plugin_error(plugin["id"], detail)
+            return {"ok": False, "error": f"Python 插件执行失败：{detail.strip()[-500:]}"}
         if not response.get("ok"):
             detail = str(response.get("traceback") or completed.stderr or "")
             self._write_plugin_error(plugin["id"], detail)
@@ -478,7 +600,7 @@ class PluginService:
     @staticmethod
     def _safe_plugin_file(root: Path, relative: str, suffixes: set[str] | None) -> Path | None:
         raw = str(relative or "").strip().replace("\\", "/")
-        if not raw or raw.startswith("/"):
+        if not PluginService._valid_relative_file(raw, suffixes):
             return None
         try:
             candidate = (root / raw).resolve()
@@ -491,6 +613,29 @@ class PluginService:
         if suffixes is not None and candidate.suffix.lower() not in suffixes:
             return None
         return candidate
+
+    @staticmethod
+    def _valid_relative_file(value: str, suffixes: set[str] | None = None) -> bool:
+        raw = str(value or "").strip().replace("\\", "/")
+        if not raw or raw.startswith("/") or "\x00" in raw or re.match(r"^[a-zA-Z]:", raw):
+            return False
+        raw_parts = raw.split("/")
+        if any(part in {"", ".", ".."} for part in raw_parts):
+            return False
+        path = PurePosixPath(raw)
+        if path.is_absolute():
+            return False
+        return suffixes is None or Path(path.name).suffix.lower() in suffixes
+
+    @staticmethod
+    def _valid_relative_directory(value: str) -> bool:
+        raw = str(value or "").strip().replace("\\", "/")
+        if not raw or raw.startswith("/") or "\x00" in raw or re.match(r"^[a-zA-Z]:", raw):
+            return False
+        raw_parts = raw.split("/")
+        if any(part in {"", ".", ".."} for part in raw_parts):
+            return False
+        return not PurePosixPath(raw).is_absolute()
 
     @staticmethod
     def _parse_market_payload(raw: str) -> Any:

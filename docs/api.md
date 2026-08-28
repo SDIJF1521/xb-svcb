@@ -1,6 +1,6 @@
 # XB-SVCB FastAPI 接入文档
 
-适用版本：XB-SVCB 0.0.29
+适用版本：XB-SVCB 0.0.30
 
 ## 启动与安全
 
@@ -33,6 +33,50 @@ FastAPI 服务默认关闭，不会随 XB-SVCB 自动启动。打开软件的“
 5. 成功后请求返回的 `result_url` 下载成品。
 
 任务进入 XB-SVCB 的同一条串行推理队列。软件界面和外部 API 创建的任务会相互可见，并共享当前的 CUDA、DirectML 或 CPU 推理环境。
+
+## PyMSS 人声处理
+
+PyMSS 模型接口只开放两个用途：`vocal_separation`（人声分离）和
+`dereverb`（去混响/人声净化）。先调用模型列表接口查看 catalog，再下载需要的模型：
+
+```http
+GET /api/v1/preprocess/pymss/models?purpose=vocal_separation
+POST /api/v1/preprocess/pymss/models/UVR-DeEcho-DeReverb.pth/download
+DELETE /api/v1/preprocess/pymss/models/UVR-DeEcho-DeReverb.pth
+GET /api/v1/preprocess/pymss/downloads
+```
+
+创建翻唱任务时，把前期处理写入 `preprocess`。去混响净化会在人声分离完成后执行，降低房间反射与残响，输出更干净的干声。为兼容旧项目，字段名 `harmony_removal_enabled` / `harmony_model` 仍可继续使用：
+
+```json
+{
+  "preprocess": {
+    "enabled": true,
+    "engine": "pymss",
+    "pymss_model": "bs_roformer_voc_hyperacev2",
+    "harmony_removal_enabled": true,
+    "harmony_model": "UVR-DeEcho-DeReverb.pth"
+  }
+}
+```
+
+`harmony_removal_enabled` 默认为 `false`。模型下载会立即进入统一传输任务中心，可通过 `GET /api/v1/preprocess/pymss/downloads` 查询进度。模型未下载、PyMSS 环境不可用或模型不属于上述两类用途时，任务会明确失败并提示先到模型站处理。
+
+编辑器选中片段后也可调用同一套前处理能力：
+
+```json
+{
+  "engine": "pymss",
+  "pymss_model": "bs_roformer_voc_hyperacev2.ckpt",
+  "harmony_removal_enabled": true,
+  "harmony_model": "UVR-DeEcho-DeReverb.pth",
+  "mute_source": true,
+  "device": "auto"
+}
+```
+
+请求地址为 `/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/separate`。
+编辑器从翻唱作品创建工程时会保留原任务的 `preprocess` 配置，后续局部分离可继续选择相同引擎和模型。
 
 ## Python 示例
 
@@ -264,6 +308,8 @@ print("成品已保存：", OUTPUT_AUDIO.resolve())
 
 客户端可以把读取到的工程原样修改后提交。`audio_url`、`waveform_url` 和 `render_url` 会在保存时自动丢弃，片段真实文件引用由服务端恢复，外部请求不能覆盖为任意本机路径。
 
+片段的 `time_stretch` 为 `0.25 - 4.0` 的时间拉伸倍率，缺省为 `1.0`；编辑器会据此同步调整片段时长，并让波形区间、试听、插件监听和工程渲染保持一致。局部重推理请求可以传 `auto_high_pitch_guard: true`（默认开启），检测到高音时会选择性降调推理并恢复原调；若同时传入 AI 美声配置，服务端会自动降低高频染色强度。
+
 ## 接口清单
 
 | 方法               | 路径                                                                                     | 说明                                                 |
@@ -303,7 +349,7 @@ print("成品已保存：", OUTPUT_AUDIO.resolve())
 | `GET`            | `/api/v1/editor/projects/{project_id}/clips/{clip_id}/waveform`                        | 读取片段波形                                         |
 | `POST`           | `/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/split/silence` | 静音检测切句                                         |
 | `POST`           | `/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/split/lyrics`  | TXT/LRC 歌词切分                                     |
-| `POST`           | `/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/separate`      | UVR 人声/伴奏分离                                    |
+| `POST`           | `/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/separate`      | UVR / PyMSS 人声分离，可选去除和声                   |
 | `POST`           | `/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/rerun`         | 用声音模型局部重推理                                 |
 | `POST`           | `/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/merge`                   | 渲染合并多个片段                                     |
 

@@ -30,7 +30,11 @@ class AudioEffectsProcessor:
         self._juce_host = juce_host or JuceVst3Host()
 
     def clip_requires_processing(self, clip: dict[str, Any]) -> bool:
-        return bool(self._enabled_effects(clip))
+        try:
+            stretch = float(clip.get("time_stretch", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            stretch = 1.0
+        return bool(self._enabled_effects(clip)) or abs(stretch - 1.0) > 0.0001
 
     def render_clip(
         self,
@@ -137,6 +141,7 @@ class AudioEffectsProcessor:
             "end": clip.get("end"),
             "channel": clip.get("channel"),
             "effects": clip.get("effects"),
+            "time_stretch": clip.get("time_stretch", 1.0),
             "sample_rate": sample_rate,
             "plugin_host": self._juce_host.status(),
         }
@@ -152,8 +157,13 @@ class AudioEffectsProcessor:
         sample_rate: int,
     ) -> bool:
         channel = str(clip.get("channel") or "stereo").strip().lower()
+        try:
+            stretch = max(0.25, min(4.0, float(clip.get("time_stretch", 1.0) or 1.0)))
+        except (TypeError, ValueError):
+            stretch = 1.0
+        source_length = length / stretch
         filters = [
-            f"atrim=start={offset:.3f}:duration={length:.3f}",
+            f"atrim=start={offset:.3f}:duration={source_length:.3f}",
             "asetpts=PTS-STARTPTS",
             f"aresample={sample_rate}",
             "aformat=sample_fmts=s16:channel_layouts=stereo",
@@ -162,6 +172,8 @@ class AudioEffectsProcessor:
             filters.append("pan=stereo|c0=0.5*c0+0.5*c1|c1=0*c0")
         elif channel == "right":
             filters.append("pan=stereo|c0=0*c0|c1=0.5*c0+0.5*c1")
+        if abs(stretch - 1.0) > 0.0001:
+            filters.extend(self._atempo_filters(1.0 / stretch))
         return self._run(
             [
                 str(self.ffmpeg),
@@ -178,6 +190,21 @@ class AudioEffectsProcessor:
             ],
             timeout=300,
         )
+
+    @staticmethod
+    def _atempo_filters(speed: float) -> list[str]:
+        """Split atempo into FFmpeg's supported 0.5..2.0 range."""
+        value = max(0.25, min(4.0, float(speed or 1.0)))
+        filters: list[str] = []
+        while value < 0.5:
+            filters.append("atempo=0.5")
+            value /= 0.5
+        while value > 2.0:
+            filters.append("atempo=2.0")
+            value /= 2.0
+        if abs(value - 1.0) > 0.0001:
+            filters.append(f"atempo={value:.6f}")
+        return filters
 
     def _apply_ffmpeg_filter(
         self,

@@ -57,8 +57,11 @@ import type {
   RealtimeCoverStatus,
   RealtimeCoverChunk,
   SystemAudioDevice,
+  PymssModel,
+  PymssStatus,
   EditorWaveform,
   EditorRerunResult,
+  EditorSeparationOptions,
   EditorSilenceSplitOptions,
   EditorSilenceSplitResult,
   EditorTrackMutationResult,
@@ -349,6 +352,7 @@ const mockHubModels: HubModelItem[] = [
     score: 82,
   },
 ]
+const mockPymssDownloaded = new Set<string>(['bs_roformer_voc_hyperacev2.ckpt'])
 let mockMigrationTimer: ReturnType<typeof setInterval> | null = null
 let mockDataDir = 'D:/XB-SVCB-Data'
 let mockMigrationStatus: DataMigrationProgress = {
@@ -402,9 +406,11 @@ function mockModelOverview(): ModelLibraryOverview {
   }
 }
 
-const baseSteps = (enhancement = false): PipelineStep[] => [
-  { key: 'separate', label: '人声分离', status: 'wait' },
-  { key: 'repair_input', label: '分离人声修复', status: 'wait' },
+const baseSteps = (enhancement = false, preprocess = true): PipelineStep[] => [
+  ...(preprocess ? [
+    { key: 'separate', label: '前期人声分离', status: 'wait' as const },
+    { key: 'repair_input', label: '分离人声修复', status: 'wait' as const },
+  ] : []),
   { key: 'f0', label: 'F0 提取', status: 'wait' },
   { key: 'infer', label: '模型推理', status: 'wait' },
   { key: 'repair_output', label: '输出人声修复', status: 'wait' },
@@ -412,9 +418,11 @@ const baseSteps = (enhancement = false): PipelineStep[] => [
   { key: 'mix', label: '混音合成', status: 'wait' },
 ]
 
-const multiSteps = (enhancement = false): PipelineStep[] => [
-  { key: 'separate', label: '人声分离', status: 'wait' },
-  { key: 'repair_input', label: '分离人声修复', status: 'wait' },
+const multiSteps = (enhancement = false, preprocess = true): PipelineStep[] => [
+  ...(preprocess ? [
+    { key: 'separate', label: '前期人声分离', status: 'wait' as const },
+    { key: 'repair_input', label: '分离人声修复', status: 'wait' as const },
+  ] : []),
   { key: 'split', label: '歌词分割', status: 'wait' },
   { key: 'infer', label: '逐段推理', status: 'wait' },
   { key: 'merge', label: '人声合并', status: 'wait' },
@@ -632,6 +640,7 @@ export const mock = {
       ready: true,
       tools: [
         { key: 'uvr', name: 'Ultimate Vocal Remover', desc: '人声 / 伴奏分离引擎，自动提取翻唱所需干声', version: 'v5.6', status: '已就绪', ok: true },
+        { key: 'pymss', name: 'PyMSS 人声分离', desc: '可选 PyMSS 音乐源分离引擎，模型可从模型站下载', version: '2.0', status: '已就绪', ok: true },
         { key: 'ffmpeg', name: 'ffmpeg', desc: '音频转码 / 重采样 / 剪辑，统一格式与采样率', version: 'v6.1', status: '已就绪', ok: true },
         { key: 'svc', name: 'So-VITS-SVC 推理引擎', desc: '加载用户 So-VITS-SVC 模型进行歌声转换推理', version: 'torch', status: 'cuda', ok: true },
         { key: 'rvc', name: 'RVC 推理引擎', desc: '加载用户 RVC 模型（.pth + 可选 .index）进行歌声转换推理', version: 'rvc-python', status: 'cuda', ok: true },
@@ -905,6 +914,13 @@ export const mock = {
     const enhancement = Boolean(
       payload.vocal_enhancement?.enabled && workflow !== 'manual_vocal_merge',
     )
+    const preprocess = {
+      enabled: payload.preprocess?.enabled !== false,
+      engine: payload.preprocess?.engine === 'pymss' ? 'pymss' as const : 'uvr' as const,
+      pymss_model: payload.preprocess?.pymss_model || 'bs_roformer_voc_hyperacev2',
+      harmony_removal_enabled: Boolean(payload.preprocess?.harmony_removal_enabled),
+      harmony_model: payload.preprocess?.harmony_model || 'UVR-DeEcho-DeReverb.pth',
+    }
     const model = mockModels.find((m) => m.id === (payload.model_id || defaultModelId))
     const rawTitle = payload.title || (payload.source_path ? payload.source_path.split(/[/\\]/).pop()?.replace(/\.[^.]+$/, '') : '') || '未命名翻唱'
     const parent = isEnhancement ? mockWorks.find((item) => item.id === payload.target_work_id) : undefined
@@ -935,9 +951,10 @@ export const mock = {
         stereo_width: Math.max(0, Math.min(1, payload.vocal_enhancement?.stereo_width ?? 0.30)),
         loudness_envelope: Math.max(0, Math.min(1, payload.vocal_enhancement?.loudness_envelope ?? 0.58)),
       },
+      preprocess,
       mode: isMulti ? 'multi' : 'single',
       segments: payload.segments,
-      steps: isEnhancement ? enhancementSteps() : isMulti ? multiSteps(enhancement) : baseSteps(enhancement),
+      steps: isEnhancement ? enhancementSteps() : isMulti ? multiSteps(enhancement, preprocess.enabled) : baseSteps(enhancement, preprocess.enabled),
     }
     mockWorks.unshift(work)
     advance(work)
@@ -1225,6 +1242,62 @@ export const mock = {
   listModelFrameworks(): ModelFramework[] {
     return [...mockFrameworks]
   },
+  pymssStatus(model = 'bs_roformer_voc_hyperacev2'): PymssStatus {
+    const downloaded = mockPymssDownloaded.has(model) || mockPymssDownloaded.has(`${model}.ckpt`)
+    return { ok: downloaded, environment: true, model, status: downloaded ? '已就绪' : '模型未下载', version: '2.0' }
+  },
+  pymssModels(purpose?: 'vocal_separation' | 'dereverb' | 'harmony_removal'): PymssModel[] {
+    const items: PymssModel[] = [
+      { name: 'bs_roformer_voc_hyperacev2.ckpt', architecture: 'bs_roformer', supported: true, category: 'vocal/vocal_extraction', purpose: 'vocal_separation', purpose_label: '人声分离', target_stem: 'vocals', downloaded: mockPymssDownloaded.has('bs_roformer_voc_hyperacev2.ckpt') },
+      { name: 'UVR-DeEcho-DeReverb.pth', architecture: 'vr_deecho_dereverb', supported: true, category: 'legacy_vr/vr_deecho_dereverb', purpose: 'dereverb', purpose_label: '去混响 / 人声净化', target_stem: 'vocals', downloaded: mockPymssDownloaded.has('UVR-DeEcho-DeReverb.pth') },
+    ]
+    return purpose ? items.filter((item) => item.purpose === purpose) : items
+  },
+  pymssDownloadModel(model: string): { ok: boolean; model?: string; key?: string; error?: string } {
+    if (!model) return { ok: false, error: '未指定 PyMSS 模型' }
+    const key = `pymss:${model.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}`
+    mockJobs[key] = {
+      key,
+      kind: 'download',
+      title: `PyMSS · ${model}`,
+      status: 'running',
+      pct: 0,
+      msg: '排队中…',
+      phase: 'pymss-download',
+      created_at: new Date().toISOString(),
+    }
+    mockProgress[key] = 0
+    return { ok: true, model, key }
+  },
+  deletePymssModel(model: string): boolean {
+    if (!model) return false
+    const exact = fileName(model.trim())
+    const stem = fileName(exact).replace(/\.[^.]+$/, '')
+    for (const key of Object.keys(mockJobs)) {
+      const job = mockJobs[key]
+      if (!job || !key.startsWith('pymss:') || job.status !== 'running') continue
+      const jobModel = job.title.replace(/^PyMSS · /, '')
+      const jobStem = fileName(jobModel).replace(/\.[^.]+$/, '')
+      if (jobModel === exact || jobStem === stem) {
+        return false
+      }
+    }
+    let removed = false
+    for (const candidate of [exact, stem, `${stem}.ckpt`, `${stem}.pth`, `${stem}.pt`, `${stem}.safetensors`]) {
+      if (mockPymssDownloaded.delete(candidate)) removed = true
+    }
+    for (const key of Object.keys(mockJobs)) {
+      const job = mockJobs[key]
+      if (!job || !key.startsWith('pymss:')) continue
+      const jobModel = job.title.replace(/^PyMSS · /, '')
+      const jobStem = fileName(jobModel).replace(/\.[^.]+$/, '')
+      if (jobModel === exact || jobStem === stem) {
+        delete mockJobs[key]
+        delete mockProgress[key]
+      }
+    }
+    return removed
+  },
   pickModelhubPreviewAudioFile(): Promise<string | null> {
     return browserPickFile('.mp3,.wav,.flac,.m4a,.ogg,.aac,audio/*')
   },
@@ -1443,6 +1516,10 @@ export const mock = {
       if (cur >= 100) {
         job.status = 'done'
         if (job.kind === 'download') {
+          if (key.startsWith('pymss:')) {
+            mockPymssDownloaded.add(job.title.replace(/^PyMSS · /, ''))
+            continue
+          }
           const m: ModelDTO = {
             id: rid('mdl_'),
             name: job.title.split('/').pop() || job.title,
@@ -1995,7 +2072,7 @@ export const mock = {
     projectId: string,
     trackId: string,
     clipId: string,
-    options?: Record<string, unknown>,
+    options?: EditorSeparationOptions,
   ): EditorSeparationResult {
     const project = mockEditorProjects.find((p) => p.id === projectId)
     if (!project) return { ok: false, error: '工程不存在' }
@@ -2004,6 +2081,12 @@ export const mock = {
     if (!track || !clip) return { ok: false, error: '片段不存在' }
     if (track.locked || clip.locked) return { ok: false, error: '片段已锁定' }
     const muteSource = options?.mute_source !== false
+    const engine = options?.engine === 'pymss' ? 'pymss' : 'uvr'
+    const harmonyRemoved = engine === 'pymss' && options?.harmony_removal_enabled === true
+    const separationModel = engine === 'pymss'
+      ? options?.pymss_model || 'bs_roformer_voc_hyperacev2.ckpt'
+      : options?.model || 'MDX-Net'
+    const harmonyModel = options?.harmony_model || 'UVR-DeEcho-DeReverb.pth'
     const duration = Math.max(0.05, Number(clip.end || 0) - Number(clip.start || 0))
     const vocalClip: EditorClip = {
       ...clip,
@@ -2011,7 +2094,16 @@ export const mock = {
       name: `${clip.name || 'clip'} - 人声`,
       offset: 0,
       file: `C:/mock/stems/${clip.id}/vocals.wav`,
-      metadata: { ...(clip.metadata || {}), source: 'uvr_separation', stem: 'vocals' },
+      metadata: {
+        ...(clip.metadata || {}),
+        source: `${engine}_separation`,
+        stem: 'vocals',
+        separation_engine: engine,
+        uvr_model: engine === 'uvr' ? separationModel : '',
+        pymss_model: engine === 'pymss' ? separationModel : '',
+        harmony_removal_enabled: harmonyRemoved,
+        harmony_model: harmonyRemoved ? harmonyModel : '',
+      },
     }
     const bgmClip: EditorClip = {
       ...clip,
@@ -2019,14 +2111,23 @@ export const mock = {
       name: `${clip.name || 'clip'} - 伴奏`,
       offset: 0,
       file: `C:/mock/stems/${clip.id}/instrumental.wav`,
-      metadata: { ...(clip.metadata || {}), source: 'uvr_separation', stem: 'instrumental' },
+      metadata: {
+        ...(clip.metadata || {}),
+        source: `${engine}_separation`,
+        stem: 'instrumental',
+        separation_engine: engine,
+        uvr_model: engine === 'uvr' ? separationModel : '',
+        pymss_model: engine === 'pymss' ? separationModel : '',
+        harmony_removal_enabled: harmonyRemoved,
+        harmony_model: harmonyRemoved ? harmonyModel : '',
+      },
     }
     vocalClip.end = vocalClip.start + duration
     bgmClip.end = bgmClip.start + duration
     const created: EditorTrack[] = [
       {
         id: rid('trk_'),
-        name: `人声 - ${clip.name || 'clip'}`,
+        name: `人声${engine === 'pymss' ? ' · PyMSS' : ''}${harmonyRemoved ? ' · 去和声' : ''} - ${clip.name || 'clip'}`,
         type: 'vocal',
         volume: 1,
         mute: false,
@@ -2050,7 +2151,15 @@ export const mock = {
     project.tracks.splice(insertAt || project.tracks.length, 0, ...created)
     project.waveform_cache = {}
     project.updated_at = now()
-    return { ok: true, project: cloneProject(project), tracks: created, clips: [vocalClip, bgmClip], simulated: false }
+    return {
+      ok: true,
+      project: cloneProject(project),
+      tracks: created,
+      clips: [vocalClip, bgmClip],
+      simulated: false,
+      engine,
+      harmony_removed: harmonyRemoved,
+    }
   },
   splitEditorClipByLyrics(
     projectId: string,
@@ -2155,6 +2264,7 @@ export const mock = {
       ...(clip.metadata || {}),
       rerun_model_id: modelId,
       rerun_params: { ...(params || {}) },
+      rerun_high_pitch_guard: params?.auto_high_pitch_guard !== false,
       rerun_enhanced: Boolean(enhance?.enabled),
       rerun_enhance_level: enhance?.enabled ? (enhance.level || 'basic') : '',
       rerun_pitch_correction: enhance?.enabled ? (enhance.pitch_correction ?? 0.45) : 0,

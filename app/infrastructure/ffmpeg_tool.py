@@ -446,6 +446,56 @@ class FfmpegTool:
         except (OSError, subprocess.SubprocessError):
             return False
 
+    def pitch_shift(
+        self,
+        src: Path,
+        dst: Path,
+        semitones: int,
+        *,
+        mask_source: Path | None = None,
+        loudness_source: Path | None = None,
+        high_threshold: float = 800.0,
+    ) -> bool:
+        """Pitch-shift only high-note regions while preserving formants.
+
+        The isolated vocal environment owns Parselmouth/Praat, so the main
+        application only schedules the small worker and validates its output.
+        """
+        python = getattr(config, "VOCAL_ENHANCEMENT_PYTHON", None)
+        worker = getattr(config, "FORMANT_PITCH_WORKER", None)
+        if not python or not Path(str(python)).is_file() or not worker or not Path(str(worker)).is_file():
+            return False
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            command = [
+                str(python),
+                str(worker),
+                "--input",
+                str(src),
+                "--output",
+                str(dst),
+                "--semitones",
+                str(int(semitones)),
+                "--high-threshold",
+                str(float(high_threshold)),
+            ]
+            if mask_source:
+                command.extend(["--mask-source", str(mask_source)])
+            if loudness_source:
+                command.extend(["--loudness-source", str(loudness_source)])
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+                **config.subprocess_no_window(),
+            )
+            return result.returncode == 0 and dst.exists()
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return False
+
     def silence(self, dst: Path, duration: float, sample_rate: int = 44100) -> bool:
         """Create a fixed-duration stereo silence file."""
         if not self.ffmpeg:

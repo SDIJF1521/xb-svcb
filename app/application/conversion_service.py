@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import threading
 import traceback
+import wave
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from infrastructure.engine import EngineRegistry
 from infrastructure.ffmpeg_tool import FfmpegTool
 from infrastructure.storage import ListRepository
 from infrastructure.uvr_tool import UvrTool
+from infrastructure.pymss_tool import PymssTool
 from infrastructure.vocal_enhancement import VocalEnhancementProcessor
 
 _VOCAL_OUTPUT_WORKFLOWS = {"auto_vocal_merge", "manual_vocal_merge"}
@@ -30,14 +32,23 @@ def _wants_vocal_output(work: dict[str, Any]) -> bool:
     )
 
 
-def default_steps(enhancement: bool = False) -> list[dict[str, Any]]:
-    steps = [
-        {"key": "separate", "label": "人声分离", "status": StepStatus.WAIT.value},
-        {"key": "repair_input", "label": "分离人声修复", "status": StepStatus.WAIT.value},
+def default_steps(
+    enhancement: bool = False,
+    preprocess: bool = True,
+    harmony_removal: bool = False,
+) -> list[dict[str, Any]]:
+    steps = []
+    if preprocess:
+        steps.extend([
+            {"key": "separate", "label": "前期人声分离", "status": StepStatus.WAIT.value},
+            *([{"key": "harmony", "label": "可选去混响净化", "status": StepStatus.WAIT.value}] if harmony_removal else []),
+            {"key": "repair_input", "label": "分离人声修复", "status": StepStatus.WAIT.value},
+        ])
+    steps.extend([
         {"key": "f0", "label": "F0 提取", "status": StepStatus.WAIT.value},
         {"key": "infer", "label": "模型推理", "status": StepStatus.WAIT.value},
         {"key": "repair_output", "label": "输出人声修复", "status": StepStatus.WAIT.value},
-    ]
+    ])
     if enhancement:
         steps.append(
             {"key": "enhance", "label": "AI 歌声增强", "status": StepStatus.WAIT.value}
@@ -48,16 +59,25 @@ def default_steps(enhancement: bool = False) -> list[dict[str, Any]]:
     return steps
 
 
-def default_steps_multi(enhancement: bool = False) -> list[dict[str, Any]]:
+def default_steps_multi(
+    enhancement: bool = False,
+    preprocess: bool = True,
+    harmony_removal: bool = False,
+) -> list[dict[str, Any]]:
     """多模型混合翻唱的流水线步骤。"""
-    steps = [
-        {"key": "separate", "label": "人声分离", "status": StepStatus.WAIT.value},
-        {"key": "repair_input", "label": "分离人声修复", "status": StepStatus.WAIT.value},
+    steps = []
+    if preprocess:
+        steps.extend([
+            {"key": "separate", "label": "前期人声分离", "status": StepStatus.WAIT.value},
+            *([{"key": "harmony", "label": "可选去混响净化", "status": StepStatus.WAIT.value}] if harmony_removal else []),
+            {"key": "repair_input", "label": "分离人声修复", "status": StepStatus.WAIT.value},
+        ])
+    steps.extend([
         {"key": "split", "label": "歌词分割", "status": StepStatus.WAIT.value},
         {"key": "infer", "label": "逐段推理", "status": StepStatus.WAIT.value},
         {"key": "merge", "label": "人声合并", "status": StepStatus.WAIT.value},
         {"key": "repair_output", "label": "输出人声修复", "status": StepStatus.WAIT.value},
-    ]
+    ])
     if enhancement:
         steps.append(
             {"key": "enhance", "label": "AI 歌声增强", "status": StepStatus.WAIT.value}
@@ -79,6 +99,8 @@ def default_steps_ai_enhancement() -> list[dict[str, Any]]:
 
 
 class ConversionService:
+    _HIGH_PITCH_THRESHOLD = 800.0
+    _HIGH_PITCH_GUARD_SEMITONES = 7
     def __init__(
         self,
         repo: ListRepository,
@@ -86,10 +108,12 @@ class ConversionService:
         uvr: UvrTool,
         engines: EngineRegistry,
         vocal_enhancement: VocalEnhancementProcessor | None = None,
+        pymss: PymssTool | None = None,
     ) -> None:
         self._repo = repo
         self._ffmpeg = ffmpeg
         self._uvr = uvr
+        self._pymss = pymss or PymssTool()
         self._engines = engines
         self._vocal_enhancement = vocal_enhancement or VocalEnhancementProcessor()
         # so-vits 引擎引用：供 F0 探针（仅 so-vits 有意义）使用
@@ -171,7 +195,31 @@ class ConversionService:
             "stereo_width": strength("stereo_width", 0.30),
             "loudness_envelope": strength("loudness_envelope", 0.58),
         }
+        if work.get("high_pitch_guard_applied"):
+            # The guard already restores high harmonics. Tone-shaping controls
+            # stay deliberately lighter so the protected consonants remain natural.
+            controls["timbre_focus"] *= 0.68
+            controls["ai_eq"] *= 0.78
+            controls["ai_compressor"] *= 0.82
+            controls["ai_exciter"] *= 0.45
         return bool(raw.get("enabled")), level, controls
+
+    @staticmethod
+    def _preprocess_settings(work: dict[str, Any]) -> tuple[bool, str, str, bool, str]:
+        raw = work.get("preprocess")
+        if not isinstance(raw, dict):
+            # Legacy records predate the option and retain their UVR behavior.
+            raw = {"enabled": True, "engine": "uvr", "pymss_model": ""}
+        enabled = raw.get("enabled", True) is not False
+        engine = str(raw.get("engine") or "uvr").strip().lower()
+        if engine not in {"uvr", "pymss"}:
+            engine = "uvr"
+        model = str(raw.get("pymss_model") or config.PYMSS_DEFAULT_MODEL).strip()
+        harmony_enabled = bool(enabled and raw.get("harmony_removal_enabled"))
+        harmony_model = str(
+            raw.get("harmony_model") or config.PYMSS_DEFAULT_HARMONY_MODEL
+        ).strip()
+        return bool(enabled), engine, model, harmony_enabled, harmony_model
 
     def _repair_vocal(
         self,
@@ -275,6 +323,106 @@ class ConversionService:
             f"推理上限={recommended:.0f}Hz，"
             f"高音={'是' if high_pitch else '否'} / 高频={'是' if high_frequency else '否'}",
         )
+
+    def _prepare_high_pitch_guard(
+        self,
+        source: Path,
+        destination: Path,
+        params: InferenceParams,
+        log_file: Path,
+    ) -> tuple[Path, bool]:
+        """Prepare a selective high-note pitch guard for normal AI covers."""
+        if not params.auto_high_pitch_guard or not source.is_file():
+            return source, False
+        peak_f0 = self._estimate_peak_f0(source)
+        if peak_f0 < self._HIGH_PITCH_THRESHOLD:
+            return source, False
+        if not self._ffmpeg.pitch_shift(
+            source,
+            destination,
+            -self._HIGH_PITCH_GUARD_SEMITONES,
+            mask_source=source,
+            loudness_source=source,
+            high_threshold=self._HIGH_PITCH_THRESHOLD,
+        ):
+            self._log(log_file, f"  高音保护降调失败，沿用原始推理输入（峰值 F0={peak_f0:.1f}Hz）")
+            return source, False
+        self._log(
+            log_file,
+            f"  高音保护已启用：仅对高音区域保共振峰降调 -{self._HIGH_PITCH_GUARD_SEMITONES} 半音（峰值 F0={peak_f0:.1f}Hz）",
+        )
+        return destination, True
+
+    def _restore_high_pitch_guard(
+        self,
+        source: Path,
+        destination: Path,
+        original: Path,
+        params: InferenceParams,
+        log_file: Path,
+    ) -> Path:
+        if not params.auto_high_pitch_guard:
+            return source
+        restored = destination
+        if self._ffmpeg.pitch_shift(
+            source,
+            destination,
+            self._HIGH_PITCH_GUARD_SEMITONES,
+            mask_source=original,
+            loudness_source=original,
+            high_threshold=self._HIGH_PITCH_THRESHOLD,
+        ):
+            self._log(log_file, "  高音保护完成：翻唱后仅对高音区域升回原调并补偿响度")
+            return restored
+        self._log(log_file, "  高音保护升调失败，沿用模型输出")
+        return source
+
+    @staticmethod
+    def _estimate_peak_f0(source: Path) -> float:
+        try:
+            import numpy as np
+
+            with wave.open(str(source), "rb") as handle:
+                rate = int(handle.getframerate() or 44100)
+                channels = int(handle.getnchannels() or 1)
+                raw = handle.readframes(handle.getnframes())
+            if not raw:
+                return 0.0
+            audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+            audio = audio.reshape(-1, channels).mean(axis=1)
+            target_rate = min(rate, 16000)
+            if rate != target_rate:
+                positions = np.linspace(0, len(audio) - 1, max(1, round(len(audio) * target_rate / rate)))
+                audio = np.interp(positions, np.arange(len(audio)), audio)
+            frame = min(len(audio), max(1024, int(target_rate * 0.08)))
+            if frame < 256:
+                return 0.0
+            min_lag = max(2, int(target_rate / 2000.0))
+            max_lag = min(frame - 1, int(target_rate / 60.0))
+            highest = 0.0
+            for start in range(0, max(1, len(audio) - frame + 1), max(1, frame // 2)):
+                chunk = audio[start : start + frame]
+                if len(chunk) < frame:
+                    chunk = np.pad(chunk, (0, frame - len(chunk)))
+                chunk = chunk - float(np.mean(chunk))
+                if float(np.sqrt(np.mean(chunk * chunk))) < 0.008:
+                    continue
+                corr = np.correlate(chunk, chunk, mode="full")[frame - 1:]
+                if corr[0] <= 0:
+                    continue
+                corr = corr / corr[0]
+                peaks = [
+                    lag for lag in range(min_lag + 1, max_lag)
+                    if corr[lag] >= corr[lag - 1]
+                    and corr[lag] >= corr[lag + 1]
+                    and corr[lag] >= 0.45
+                ]
+                lag = peaks[0] if peaks else min_lag + int(np.argmax(corr[min_lag:max_lag + 1]))
+                if float(corr[lag]) >= 0.35:
+                    highest = max(highest, target_rate / float(lag))
+            return float(highest)
+        except (OSError, ValueError, wave.Error, ImportError):
+            return 0.0
 
     def _enhance_vocal(
         self,
@@ -600,7 +748,8 @@ class ConversionService:
         try:
             params = InferenceParams.from_dict(work.get("params", {}))
             enhancement_enabled, _, _ = self._enhancement_settings(work)
-            pipeline_total = 7 if enhancement_enabled else 6
+            preprocess_enabled, preprocess_engine, pymss_model, harmony_enabled, harmony_model = self._preprocess_settings(work)
+            pipeline_total = (7 if enhancement_enabled else 6) + int(harmony_enabled)
             framework = config.modelhub_normalize_framework(work.get("framework"))
             is_sovits = framework == "so-vits-svc"
             engine = self._engines.for_framework(framework)
@@ -612,32 +761,51 @@ class ConversionService:
             ) or 180.0
             self._log(log_file, f"源文件: {source} | 时长: {duration:.1f}s | 设备: {params.device}")
 
-            # 1) 人声分离（UVR 真实分离出人声 + 伴奏；不可用时降级为原音频）
-            self._set_step(work, "separate", StepStatus.ACTIVE.value)
-            self._save(work)
-            self._log(
-                log_file,
-                f"[1/{pipeline_total}] 人声分离开始（UVR {'可用' if self._uvr.available else '降级模式'}）",
-            )
             instrumental: Path | None = None
-            if source and source.exists():
+            if preprocess_enabled and source and source.exists():
+                self._set_step(work, "separate", StepStatus.ACTIVE.value)
+                self._save(work)
+                if preprocess_engine == "pymss":
+                    tool = self._pymss
+                    available = tool.available
+                    self._log(log_file, f"[1/{pipeline_total}] 人声分离开始（PyMSS {'可用' if available else '未就绪'}）")
+                else:
+                    tool = self._uvr
+                    available = tool.available
+                    self._log(log_file, f"[1/{pipeline_total}] 人声分离开始（UVR {'可用' if available else '降级模式'}）")
                 # 先把源音频统一转码成标准 wav 再分离：在线下载的文件常把 m4a/flac
                 # 误存成 .mp3，mp3 专用解码器会读到「junk」而失败导致分离降级。
                 # ffmpeg 按内容（而非扩展名）解码，可一并纠正这类格式错配。
                 sep_source = self._normalize_source(source, work_dir, log_file)
-                sep_model = params.uvr_model or config.UVR_SEP_MODEL
-                sep = self._uvr.separate(sep_source, work_dir, sep_model, params.device)
+                if preprocess_engine == "pymss" and not available:
+                    raise RuntimeError("已选择 PyMSS，但 PyMSS 环境未就绪，请先安装 PyMSS 并下载模型")
+                sep_model = (
+                    pymss_model if preprocess_engine == "pymss"
+                    else (params.uvr_model or config.UVR_SEP_MODEL)
+                )
+                if preprocess_engine == "pymss" and not config.pymss_model_ready(sep_model):
+                    raise RuntimeError(f"PyMSS 模型未下载: {sep_model}，请先在模型管理页下载")
+                if preprocess_engine == "pymss":
+                    sep = tool.separate(
+                        sep_source,
+                        work_dir,
+                        sep_model,
+                        params.device,
+                        purpose=config.PYMSS_PURPOSE_VOCAL,
+                    )
+                else:
+                    sep = tool.separate(sep_source, work_dir, sep_model, params.device)
                 vocals = sep.vocals
                 instrumental = sep.instrumental
                 if sep.simulated:
                     self._log(log_file, "  分离降级：直接使用源音频作为人声（无伴奏）")
                 else:
-                    self._log(log_file, f"  分离模型: {sep_model}")
+                    self._log(log_file, f"  分离引擎/模型: {preprocess_engine} / {sep_model}")
                     self._log(log_file, f"  分离设备: {sep.device or params.device}")
                     self._log(log_file, f"  人声: {vocals}")
                     self._log(log_file, f"  伴奏: {instrumental}")
                     # 1b) 人声去混响/去回声：去掉混响后再送 SVC，缓解"电音/机械音"
-                    if config.uvr_dereverb_ready():
+                    if preprocess_engine == "uvr" and config.uvr_dereverb_ready():
                         self._log(
                             log_file,
                             f"  去混响中（{config.UVR_DEREVERB_MODEL}）…",
@@ -656,6 +824,31 @@ class ConversionService:
                             self._log(log_file, "  去混响降级：沿用原始人声")
                     else:
                         self._log(log_file, "  跳过去混响：未找到去混响模型")
+                if harmony_enabled:
+                    self._set_step(work, "harmony", StepStatus.ACTIVE.value)
+                    if not self._pymss.available:
+                        raise RuntimeError("已启用去混响净化，但 PyMSS 环境未就绪")
+                    if not config.pymss_model_ready(harmony_model):
+                        raise RuntimeError(
+                            f"去混响模型未下载: {harmony_model}，请先在模型管理页下载"
+                        )
+                    self._log(log_file, f"  去混响净化开始（PyMSS / {harmony_model}）")
+                    harmony = self._pymss.separate(
+                        Path(vocals),
+                        work_dir / "harmony",
+                        harmony_model,
+                        params.device,
+                        purpose=config.PYMSS_PURPOSE_HARMONY,
+                    )
+                    if harmony.vocals.exists():
+                        vocals = harmony.vocals
+                        self._log(log_file, f"  去混响净化后人声: {vocals}")
+                    self._set_step(work, "harmony", StepStatus.DONE.value)
+                self._set_step(work, "separate", StepStatus.DONE.value)
+            elif source and source.exists():
+                # 可选前期处理关闭时，保留原音频作为模型输入，不生成伴奏轨。
+                vocals = self._normalize_source(source, work_dir, log_file)
+                self._log(log_file, f"[1/{pipeline_total}] 跳过前期分离，直接使用源音频: {vocals}")
             else:
                 vocals = work_dir / "placeholder.wav"
             # 保存原始分离结果，再用专用模型修复分离伪影。
@@ -663,19 +856,21 @@ class ConversionService:
                 work["instrumental_path"] = str(instrumental)
             if Path(vocals).exists():
                 work["separated_vocals_path"] = str(vocals)
-            self._set_step(work, "separate", StepStatus.DONE.value)
             work["progress"] = 16
             self._save(work)
 
-            vocals, audio_profile = self._repair_vocal(
-                work,
-                Path(vocals),
-                work_dir / "vocals_repaired.wav",
-                params.device,
-                log_file,
-                stage="separated",
-                progress=32,
-            )
+            if preprocess_enabled:
+                vocals, audio_profile = self._repair_vocal(
+                    work,
+                    Path(vocals),
+                    work_dir / "vocals_repaired.wav",
+                    params.device,
+                    log_file,
+                    stage="separated",
+                    progress=32,
+                )
+            else:
+                audio_profile = {}
             if Path(vocals).exists():
                 work["vocals_path"] = str(vocals)
             work["adaptive_audio_profile"] = audio_profile
@@ -691,6 +886,7 @@ class ConversionService:
                 if self._ffmpeg.convert(infer_input, wav_input):
                     infer_input = wav_input
             self._log(log_file, f"[3/{pipeline_total}] 推理输入已准备: {infer_input}")
+            original_infer_input = infer_input
             # 真实 F0 提取（rmvpe 等），保存曲线并校验是否检测到人声。
             # F0 探针为 so-vits 专属；其它框架（如 RVC 内部自行处理 F0）跳过该步。
             f0_stats = None
@@ -737,6 +933,14 @@ class ConversionService:
                 f"[4/{pipeline_total}] {fw_label} 推理开始（引擎 {'可用' if getattr(engine, 'available', False) else '降级模式'}）",
             )
             raw_converted = work_dir / "converted_raw.wav"
+            guarded_input, guard_enabled = self._prepare_high_pitch_guard(
+                original_infer_input,
+                work_dir / "infer_input_high_guarded.wav",
+                params,
+                log_file,
+            )
+            work["high_pitch_guard_applied"] = bool(guard_enabled)
+            self._save(work)
             engine.infer(
                 model={
                     "framework": framework,
@@ -746,12 +950,20 @@ class ConversionService:
                     "diffusion_config_path": work.get("diffusion_config_path", ""),
                     "index_path": work.get("index_path", ""),
                 },
-                vocals=infer_input,
+                vocals=guarded_input,
                 out_path=raw_converted,
                 params=params,
                 duration=duration,
                 log_file=log_file,
             )
+            if guard_enabled:
+                raw_converted = self._restore_high_pitch_guard(
+                    raw_converted,
+                    work_dir / "converted_raw_restored.wav",
+                    original_infer_input,
+                    params,
+                    log_file,
+                )
             self._set_step(work, "infer", StepStatus.DONE.value)
             work["progress"] = 68
             self._save(work)
@@ -921,7 +1133,8 @@ class ConversionService:
         try:
             base_params = InferenceParams.from_dict(work.get("params", {}))
             enhancement_enabled, _, _ = self._enhancement_settings(work)
-            pipeline_total = 8 if enhancement_enabled else 7
+            preprocess_enabled, preprocess_engine, pymss_model, harmony_enabled, harmony_model = self._preprocess_settings(work)
+            pipeline_total = (8 if enhancement_enabled else 7) + int(harmony_enabled)
             source = Path(work["source_path"]) if work.get("source_path") else None
             duration = (
                 self._ffmpeg.probe_duration(source)
@@ -936,19 +1149,32 @@ class ConversionService:
                 f"演唱句: {len(segments_in)} | 模型: {len(seg_models)}",
             )
 
-            # 1) 人声分离（与单模型一致）
-            self._set_step(work, "separate", StepStatus.ACTIVE.value)
-            self._save(work)
-            self._log(
-                log_file,
-                f"[1/{pipeline_total}] 人声分离（UVR {'可用' if self._uvr.available else '降级模式'}）",
-            )
             instrumental: Path | None = None
-            if source and source.exists():
+            if preprocess_enabled and source and source.exists():
+                self._set_step(work, "separate", StepStatus.ACTIVE.value)
+                self._save(work)
+                tool = self._pymss if preprocess_engine == "pymss" else self._uvr
+                if preprocess_engine == "pymss" and not tool.available:
+                    raise RuntimeError("已选择 PyMSS，但 PyMSS 环境未就绪，请先安装 PyMSS 并下载模型")
+                self._log(
+                    log_file,
+                    f"[1/{pipeline_total}] 人声分离（{preprocess_engine} {'可用' if tool.available else '降级模式'}）",
+                )
                 # 先统一转码成标准 wav（修正在线下载的格式错配，避免分离降级）
                 sep_source = self._normalize_source(source, work_dir, log_file)
-                sep_model = base_params.uvr_model or config.UVR_SEP_MODEL
-                sep = self._uvr.separate(sep_source, work_dir, sep_model, base_params.device)
+                sep_model = pymss_model if preprocess_engine == "pymss" else (base_params.uvr_model or config.UVR_SEP_MODEL)
+                if preprocess_engine == "pymss" and not config.pymss_model_ready(sep_model):
+                    raise RuntimeError(f"PyMSS 模型未下载: {sep_model}，请先在模型管理页下载")
+                if preprocess_engine == "pymss":
+                    sep = tool.separate(
+                        sep_source,
+                        work_dir,
+                        sep_model,
+                        base_params.device,
+                        purpose=config.PYMSS_PURPOSE_VOCAL,
+                    )
+                else:
+                    sep = tool.separate(sep_source, work_dir, sep_model, base_params.device)
                 vocals = sep.vocals
                 instrumental = sep.instrumental
                 if sep.simulated:
@@ -956,7 +1182,7 @@ class ConversionService:
                 else:
                     self._log(log_file, f"  分离设备: {sep.device or base_params.device}")
                     self._log(log_file, f"  人声: {vocals} | 伴奏: {instrumental}")
-                    if config.uvr_dereverb_ready():
+                    if preprocess_engine == "uvr" and config.uvr_dereverb_ready():
                         dr = self._uvr.separate(
                             vocals,
                             work_dir / "dereverb",
@@ -970,25 +1196,51 @@ class ConversionService:
                                 f"  去混响设备: {dr.device or base_params.device}",
                             )
                             self._log(log_file, f"  去混响后人声: {vocals}")
+                if harmony_enabled:
+                    self._set_step(work, "harmony", StepStatus.ACTIVE.value)
+                    if not self._pymss.available:
+                        raise RuntimeError("已启用去混响净化，但 PyMSS 环境未就绪")
+                    if not config.pymss_model_ready(harmony_model):
+                        raise RuntimeError(
+                            f"去混响模型未下载: {harmony_model}，请先在模型管理页下载"
+                        )
+                    self._log(log_file, f"  去混响净化开始（PyMSS / {harmony_model}）")
+                    harmony = self._pymss.separate(
+                        Path(vocals),
+                        work_dir / "harmony",
+                        harmony_model,
+                        base_params.device,
+                        purpose=config.PYMSS_PURPOSE_HARMONY,
+                    )
+                    if harmony.vocals.exists():
+                        vocals = harmony.vocals
+                        self._log(log_file, f"  去混响净化后人声: {vocals}")
+                    self._set_step(work, "harmony", StepStatus.DONE.value)
+            elif source and source.exists():
+                vocals = self._normalize_source(source, work_dir, log_file)
+                self._log(log_file, f"[1/{pipeline_total}] 跳过前期分离，直接使用源音频")
             else:
                 vocals = work_dir / "placeholder.wav"
             if instrumental and Path(instrumental).exists():
                 work["instrumental_path"] = str(instrumental)
             if Path(vocals).exists():
                 work["separated_vocals_path"] = str(vocals)
-            self._set_step(work, "separate", StepStatus.DONE.value)
             work["progress"] = 14
             self._save(work)
 
-            vocals, audio_profile = self._repair_vocal(
-                work,
-                Path(vocals),
-                work_dir / "vocals_repaired.wav",
-                base_params.device,
-                log_file,
-                stage="separated",
-                progress=27,
-            )
+            if preprocess_enabled:
+                self._set_step(work, "separate", StepStatus.DONE.value)
+                vocals, audio_profile = self._repair_vocal(
+                    work,
+                    Path(vocals),
+                    work_dir / "vocals_repaired.wav",
+                    base_params.device,
+                    log_file,
+                    stage="separated",
+                    progress=27,
+                )
+            else:
+                audio_profile = {}
             if Path(vocals).exists():
                 work["vocals_path"] = str(vocals)
             work["adaptive_audio_profile"] = audio_profile
@@ -1002,6 +1254,7 @@ class ConversionService:
                 wav_input = work_dir / "infer_input.wav"
                 if self._ffmpeg.convert(infer_input, wav_input):
                     infer_input = wav_input
+            original_infer_input = infer_input
             timeline = self._build_timeline(segments_in, duration)
             used_models: list[str] = []
             for s in timeline:
@@ -1029,6 +1282,7 @@ class ConversionService:
                 f"[4/{pipeline_total}] 整轨逐模型推理（按各模型框架路由引擎）",
             )
             full_renders: dict[str, Path] = {}
+            high_pitch_guard_any = False
             for n, mid in enumerate(used_models):
                 model = seg_models.get(mid) or {}
                 seg_params = InferenceParams.from_dict(model.get("params", {}))
@@ -1041,6 +1295,13 @@ class ConversionService:
                 )
                 seg_engine = self._engines.for_framework(seg_framework)
                 full_raw = work_dir / f"full_{mid}.wav"
+                guarded_input, guard_enabled = self._prepare_high_pitch_guard(
+                    original_infer_input,
+                    work_dir / f"infer_input_{mid}_high_guarded.wav",
+                    seg_params,
+                    log_file,
+                )
+                high_pitch_guard_any = high_pitch_guard_any or guard_enabled
                 fw_label = config.MODELHUB_FRAMEWORKS.get(seg_framework, seg_framework)
                 self._log(
                     log_file,
@@ -1057,12 +1318,20 @@ class ConversionService:
                             "diffusion_config_path": model.get("diffusion_config_path", ""),
                             "index_path": model.get("index_path", ""),
                         },
-                        vocals=infer_input,
+                        vocals=guarded_input,
                         out_path=full_raw,
                         params=seg_params,
                         duration=duration,
                         log_file=log_file,
                     )
+                    if guard_enabled:
+                        full_raw = self._restore_high_pitch_guard(
+                            full_raw,
+                            work_dir / f"full_{mid}_restored.wav",
+                            original_infer_input,
+                            seg_params,
+                            log_file,
+                        )
                     # 规整到 44100Hz 且锁定为整曲时长：保证逐句切片与原伴奏精确对齐
                     full_fix = work_dir / f"full_{mid}_fix.wav"
                     if self._ffmpeg.available and self._ffmpeg.pad_or_trim(
@@ -1314,6 +1583,10 @@ class ConversionService:
             self._save(work)
 
             raw_full_vocal = Path(full_vocal)
+            # _enhance_vocal reads this flag to reduce synthetic high-frequency
+            # coloration when any segment used the selective pitch guard.
+            work["high_pitch_guard_applied"] = high_pitch_guard_any
+            self._save(work)
             repaired_full_vocal, _ = self._repair_vocal(
                 work,
                 raw_full_vocal,

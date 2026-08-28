@@ -92,6 +92,7 @@ CLI 校验读取已经生成的 `xb-svcb-plugin.json`。当前 SDK 会检查：
 - 插件、页面、字段和动作 ID 的基本格式；
 - `runtime`、字段类型、动作类型和权限是否在允许集合中；
 - Python/混合插件是否声明相对 `.py` 入口和 `python.execute`；
+- 可选 `python.requirements` 与 `python.vendor` 是否是插件内相对路径；
 - `frontend.entry` 是否是插件内相对 HTML 路径；
 - `select` 是否有非空选项；
 - `create_work` 是否有对象形式的 `payload`；
@@ -99,18 +100,17 @@ CLI 校验读取已经生成的 `xb-svcb-plugin.json`。当前 SDK 会检查：
 - 纯前端插件是否错误声明 Python 动作；
 - 静态 `before_create.params` 是否只使用允许字段。
 
-当前 CLI 校验不会检查：
+CLI 还会检查磁盘上的 Python/前端/requirements 入口是否真实存在、入口大小，以及前端 HTML 是否仍引用无法在 `srcdoc` 中加载的相对脚本或 CSS。当前 CLI 不会检查：
 
-- `frontend.entry` 指向的文件是否存在；
-- Python 入口文件是否存在或可以导入；
+- Python 入口是否可以成功导入；
 - `pythonAction()` 的 handler 是否在 `plugin.py` 中注册；
 - 页面引用的动作 ID 是否实际存在；
 - 页面、字段或动作 ID 是否重复；
 - `create_work` 的业务字段组合是否能被作品服务接受；
-- 最终压缩包、解压目录、HTML 或资源是否超过宿主限制；
+- 单个普通资源是否超过宿主限制；
 - Vue 页面是否能通过真实 Bridge 调用宿主。
 
-因此，看到“清单有效”只表示清单通过了当前结构校验。
+因此，看到“插件目录有效”表示结构和关键构建产物存在；真实动作仍需安装测试。
 
 ### 3.4 `xb-plugin pack`
 
@@ -125,7 +125,7 @@ __pycache__/
 *.xbplugin
 ```
 
-测试文件、源代码、README、`package-lock.json`、`dist/` 和 `vendor/` 不在忽略列表中，会被打入包内。当前没有 `.xbpluginignore`。
+测试文件、源代码、README、`package-lock.json`、`dist/` 和 `vendor/` 不在忽略列表中，会被打入包内。声明 `requirements.txt` 时，打包器会用 Python 3.10 在临时目录重建 `vendor/`。当前没有 `.xbpluginignore`。
 
 `xb-plugin pack` 本身不会重新构建页面或清单；脚手架生成的 `npm run pack` 才会先执行 `validate`。直接运行下面的 CLI 时，要先自行保证构建产物是最新的：
 
@@ -133,7 +133,7 @@ __pycache__/
 xb-plugin pack .
 ```
 
-打包器也不会预先执行宿主的 20 MB/50 MB 大小检查。这些限制必须另外检查，并在真实安装时再次确认。
+打包器会预先执行宿主的 20 MB 压缩包和 50 MB 解压大小检查；宿主安装时仍会再次确认。
 
 ### 3.5 宿主安装
 
@@ -145,8 +145,9 @@ xb-plugin pack .
 - 清单 UTF-8 JSON 不超过 512 KB，并能通过宿主清单解析；
 - ZIP 成员不能通过 `..` 等路径逃出安装目录；
 - 已声明的 `frontend.entry` 文件存在、位于插件目录内且扩展名为 `.html` 或 `.htm`。
+- 已声明的 `python.entry` 和 `python.requirements` 文件真实存在且路径安全。
 
-安装阶段不会执行 Python，也不会确认 Python 入口存在、handler 已注册或依赖可以导入。新安装或同 ID 替换安装后，插件都会处于关闭状态。
+安装阶段不会执行 Python，也不会确认 handler 已注册或依赖可以导入。新安装或同 ID 替换安装后，插件都会处于关闭状态；替换校验失败会恢复旧插件文件。
 
 ### 3.6 打开页面、启用 Python 和执行动作
 

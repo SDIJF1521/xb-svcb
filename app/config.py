@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.29"
+APP_VERSION = "0.0.30"
 APP_BG = "#05060d"
 
 
@@ -62,14 +62,14 @@ def _detect_plugin_python() -> Path | None:
     explicit = os.environ.get("XB_PLUGIN_PYTHON") or os.environ.get("XB_PYTHON_EXE")
     if explicit:
         candidate = Path(explicit).expanduser()
-        if candidate.exists():
+        if candidate.is_file():
             return candidate
     dedicated = (
         PLUGIN_VENV_DIR / "Scripts" / "python.exe"
         if os.name == "nt"
         else PLUGIN_VENV_DIR / "bin" / "python"
     )
-    if dedicated.exists():
+    if dedicated.is_file():
         return dedicated
     if not _FROZEN:
         return Path(sys.executable).resolve()
@@ -80,10 +80,10 @@ def _detect_plugin_python() -> Path | None:
             if os.name == "nt"
             else ROOT_DIR / environment / "bin" / "python"
         )
-        if candidate.exists():
+        if candidate.is_file():
             return candidate
     system = shutil.which("python")
-    return Path(system).resolve() if system else None
+    return Path(system).resolve() if system and Path(system).is_file() else None
 
 
 PLUGIN_PYTHON = _detect_plugin_python()
@@ -129,12 +129,34 @@ def _first_existing(candidates: list[Path]) -> Path | None:
     return None
 
 
+def _first_file(candidates: list[Path]) -> Path | None:
+    """Return the first regular file, ignoring stale environment paths."""
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
 def _existing_env_path(name: str) -> Path | None:
     raw = os.environ.get(name)
     if not raw:
         return None
     path = Path(raw).expanduser()
     return path if path.exists() else None
+
+
+def _existing_env_file(name: str) -> Path | None:
+    raw = os.environ.get(name)
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    try:
+        return path if path.is_file() else None
+    except OSError:
+        return None
 
 
 def _venv_python(venv_dir: Path) -> Path:
@@ -178,22 +200,23 @@ SEEDVC_REPO_DIR = ENGINES_DIR / "seed-vc"
 DDSP_REPO_DIR = ENGINES_DIR / "ddsp-svc"
 SVC_VENV_DIR = ROOT_DIR / ".venv-svc"
 UVR_VENV_DIR = ROOT_DIR / ".venv-uvr"
+# PyMSS 使用独立环境，避免与 audio-separator/UVR 的依赖互相覆盖。
+PYMSS_VENV_DIR = ROOT_DIR / ".venv-pymss"
 
 
 def _detect_sovits_repo() -> Path | None:
-    env = os.environ.get("XB_SOVITS_REPO")
+    env = _existing_env_path("XB_SOVITS_REPO")
     if env:
-        return Path(env)
+        return env
     return _first_existing([SOVITS_REPO_DIR])
 
 
 def _detect_svc_python() -> Path | None:
-    env = os.environ.get("XB_SVC_PYTHON")
-    if env:
-        return Path(env)
+    env = _existing_env_file("XB_SVC_PYTHON")
     # 优先项目内安装器创建的 .venv-svc；其次常见 conda 环境名 svc（开发便利）
-    return _first_existing(
+    return _first_file(
         [
+            *([env] if env else []),
             *(_venv_python(root / ".venv-svc") for root in RUNTIME_ROOTS),
             Path.home() / "anaconda3" / "envs" / "svc" / "python.exe",
             Path.home() / "miniconda3" / "envs" / "svc" / "python.exe",
@@ -218,10 +241,10 @@ def svc_engine_ready() -> bool:
     return bool(
         SOVITS_REPO
         and SOVITS_REPO.exists()
-        and (SOVITS_REPO / "inference" / "infer_tool.py").exists()
-        and SVC_WORKER.exists()
+        and (SOVITS_REPO / "inference" / "infer_tool.py").is_file()
+        and SVC_WORKER.is_file()
         and SVC_PYTHON
-        and SVC_PYTHON.exists()
+        and SVC_PYTHON.is_file()
     )
 
 
@@ -232,10 +255,10 @@ RVC_VENV_DIR = ROOT_DIR / ".venv-rvc"
 
 
 def _detect_rvc_python() -> Path | None:
-    env = os.environ.get("XB_RVC_PYTHON")
-    if env:
-        return Path(env)
-    return _first_existing([_venv_python(root / ".venv-rvc") for root in RUNTIME_ROOTS])
+    env = _existing_env_file("XB_RVC_PYTHON")
+    candidates = [env] if env else []
+    candidates.extend(_venv_python(root / ".venv-rvc") for root in RUNTIME_ROOTS)
+    return _first_file(candidates)
 
 
 # 运行 RVC 推理的 Python 解释器（需装有 rvc-python + torch）
@@ -246,7 +269,7 @@ RVC_WORKER = BUNDLE_DIR / "infrastructure" / "rvc_worker.py"
 
 def rvc_engine_ready() -> bool:
     """RVC 推理环境是否齐备：worker 存在、解释器存在。"""
-    return bool(RVC_WORKER.exists() and RVC_PYTHON and RVC_PYTHON.exists())
+    return bool(RVC_WORKER.is_file() and RVC_PYTHON and RVC_PYTHON.is_file())
 
 
 # ---- SeedVC 推理引擎（Seed-VC）----
@@ -256,17 +279,17 @@ SEEDVC_VENV_DIR = ROOT_DIR / ".venv-seedvc"
 
 
 def _detect_seedvc_repo() -> Path | None:
-    env = os.environ.get("XB_SEEDVC_REPO")
+    env = _existing_env_path("XB_SEEDVC_REPO")
     if env:
-        return Path(env)
+        return env
     return _first_existing([root / "engines" / "seed-vc" for root in RUNTIME_ROOTS])
 
 
 def _detect_seedvc_python() -> Path | None:
-    env = os.environ.get("XB_SEEDVC_PYTHON")
-    if env:
-        return Path(env)
-    return _first_existing([_venv_python(root / ".venv-seedvc") for root in RUNTIME_ROOTS])
+    env = _existing_env_file("XB_SEEDVC_PYTHON")
+    candidates = [env] if env else []
+    candidates.extend(_venv_python(root / ".venv-seedvc") for root in RUNTIME_ROOTS)
+    return _first_file(candidates)
 
 
 SEEDVC_REPO = _detect_seedvc_repo()
@@ -279,10 +302,10 @@ def seedvc_engine_ready() -> bool:
     return bool(
         SEEDVC_REPO
         and SEEDVC_REPO.exists()
-        and (SEEDVC_REPO / "inference.py").exists()
-        and SEEDVC_WORKER.exists()
+        and (SEEDVC_REPO / "inference.py").is_file()
+        and SEEDVC_WORKER.is_file()
         and SEEDVC_PYTHON
-        and SEEDVC_PYTHON.exists()
+        and SEEDVC_PYTHON.is_file()
     )
 
 
@@ -291,17 +314,17 @@ DDSP_VENV_DIR = ROOT_DIR / ".venv-ddsp"
 
 
 def _detect_ddsp_repo() -> Path | None:
-    env = os.environ.get("XB_DDSP_REPO")
+    env = _existing_env_path("XB_DDSP_REPO")
     if env:
-        return Path(env)
+        return env
     return _first_existing([DDSP_REPO_DIR])
 
 
 def _detect_ddsp_python() -> Path | None:
-    env = os.environ.get("XB_DDSP_PYTHON")
-    if env:
-        return Path(env)
-    return _first_existing([_venv_python(DDSP_VENV_DIR)])
+    env = _existing_env_file("XB_DDSP_PYTHON")
+    candidates = [env] if env else []
+    candidates.append(_venv_python(DDSP_VENV_DIR))
+    return _first_file(candidates)
 
 
 DDSP_REPO = _detect_ddsp_repo()
@@ -314,10 +337,10 @@ def ddsp_engine_ready() -> bool:
     return bool(
         DDSP_REPO
         and DDSP_REPO.exists()
-        and (DDSP_REPO / "main_reflow.py").exists()
-        and DDSP_WORKER.exists()
+        and (DDSP_REPO / "main_reflow.py").is_file()
+        and DDSP_WORKER.is_file()
         and DDSP_PYTHON
-        and DDSP_PYTHON.exists()
+        and DDSP_PYTHON.is_file()
     )
 
 
@@ -327,14 +350,15 @@ VOCAL_ENHANCEMENT_VENV_DIR = ROOT_DIR / ".venv-vocal"
 
 
 def _detect_vocal_enhancement_python() -> Path | None:
-    env = os.environ.get("XB_VOCAL_ENHANCEMENT_PYTHON")
-    if env:
-        return Path(env)
-    return _first_existing([_venv_python(VOCAL_ENHANCEMENT_VENV_DIR)])
+    env = _existing_env_file("XB_VOCAL_ENHANCEMENT_PYTHON")
+    candidates = [env] if env else []
+    candidates.append(_venv_python(VOCAL_ENHANCEMENT_VENV_DIR))
+    return _first_file(candidates)
 
 
 VOCAL_ENHANCEMENT_PYTHON = _detect_vocal_enhancement_python()
 VOCAL_ENHANCEMENT_WORKER = BUNDLE_DIR / "infrastructure" / "vocal_enhancement_worker.py"
+FORMANT_PITCH_WORKER = BUNDLE_DIR / "infrastructure" / "formant_pitch_worker.py"
 VOCAL_ENHANCEMENT_MODEL_DIR = ROOT_DIR / "models" / "vocal-enhancement"
 VOCAL_ENHANCEMENT_MARKER = VOCAL_ENHANCEMENT_MODEL_DIR / "runtime.ready"
 
@@ -342,9 +366,9 @@ VOCAL_ENHANCEMENT_MARKER = VOCAL_ENHANCEMENT_MODEL_DIR / "runtime.ready"
 def vocal_enhancement_ready() -> bool:
     return bool(
         VOCAL_ENHANCEMENT_PYTHON
-        and VOCAL_ENHANCEMENT_PYTHON.exists()
-        and VOCAL_ENHANCEMENT_WORKER.exists()
-        and VOCAL_ENHANCEMENT_MARKER.exists()
+        and VOCAL_ENHANCEMENT_PYTHON.is_file()
+        and VOCAL_ENHANCEMENT_WORKER.is_file()
+        and VOCAL_ENHANCEMENT_MARKER.is_file()
     )
 
 
@@ -376,10 +400,10 @@ UVR_DEREVERB_MODEL = os.environ.get("XB_UVR_DEREVERB_MODEL", "UVR-DeEcho-DeRever
 
 
 def _detect_uvr_python() -> Path | None:
-    env = _existing_env_path("XB_UVR_PYTHON")
+    env = _existing_env_file("XB_UVR_PYTHON")
     candidates = [env] if env else []
     candidates.append(_venv_python(UVR_VENV_DIR))
-    return _first_existing(candidates)
+    return _first_file(candidates)
 
 
 # UVR 模型默认下载/存放目录（安装器创建）
@@ -413,13 +437,122 @@ UVR_MODEL = UVR_SEP_MODEL
 # 子进程内执行的分离 worker 脚本（由外部 venv 的 Python 读取，需为磁盘上的真实文件）
 UVR_WORKER = BUNDLE_DIR / "infrastructure" / "uvr_worker.py"
 
+# ---- PyMSS 人声分离引擎 ----
+# PyMSS 的模型目录与 UVR 分开保存；模型名使用 PyMSS 官方 catalog 名称。
+PYMSS_MODEL_DIR_DEFAULT = ROOT_DIR / "models" / "pymss"
+PYMSS_DEFAULT_MODEL = os.environ.get(
+    "XB_PYMSS_MODEL", "bs_roformer_voc_hyperacev2"
+)
+PYMSS_DEFAULT_HARMONY_MODEL = os.environ.get(
+    "XB_PYMSS_DEREVERB_MODEL",
+    os.environ.get("XB_PYMSS_HARMONY_MODEL", "UVR-DeEcho-DeReverb.pth"),
+)
+PYMSS_PURPOSE_VOCAL = "vocal_separation"
+PYMSS_PURPOSE_DEREVERB = "dereverb"
+# Compatibility name retained for stored projects and older plugin payloads.
+PYMSS_PURPOSE_HARMONY = PYMSS_PURPOSE_DEREVERB
+PYMSS_PURPOSE_HARMONY_LEGACY = "harmony_removal"
+PYMSS_PURPOSE_LABELS = {
+    PYMSS_PURPOSE_VOCAL: "人声分离",
+    PYMSS_PURPOSE_DEREVERB: "去混响 / 人声净化",
+    PYMSS_PURPOSE_HARMONY_LEGACY: "去混响 / 人声净化",
+}
+PYMSS_ALLOWED_MODEL_CATEGORIES = {
+    PYMSS_PURPOSE_VOCAL: {("vocal", "vocal_extraction")},
+    PYMSS_PURPOSE_DEREVERB: {
+        ("legacy_vr", "vr_deecho"),
+        ("legacy_vr", "vr_deecho_dereverb"),
+        ("legacy_vr", "vr_dereverb"),
+        ("reverb_echo_control", "dereverb"),
+    },
+}
+PYMSS_WORKER = BUNDLE_DIR / "infrastructure" / "pymss_worker.py"
+
+
+def _detect_pymss_python() -> Path | None:
+    env = _existing_env_file("XB_PYMSS_PYTHON")
+    candidates = [env] if env else []
+    candidates.append(_venv_python(PYMSS_VENV_DIR))
+    return _first_file(candidates)
+
+
+def _detect_pymss_model_dir() -> Path | None:
+    env = _existing_env_path("XB_PYMSS_MODEL_DIR")
+    candidates = [env] if env else []
+    candidates.extend([PYMSS_MODEL_DIR_DEFAULT, ROOT_DIR / "all_models"])
+    existing = [c for c in candidates if c.exists()]
+    return existing[0] if existing else PYMSS_MODEL_DIR_DEFAULT
+
+
+PYMSS_PYTHON = _detect_pymss_python()
+PYMSS_MODEL_DIR = _detect_pymss_model_dir()
+
+_PYMSS_MODEL_SUFFIXES = {".ckpt", ".th", ".pth", ".chpt", ".safetensors", ".pt"}
+
+
+def pymss_environment_ready() -> bool:
+    """PyMSS worker 与 Python 环境是否已安装。"""
+    return bool(PYMSS_PYTHON and PYMSS_PYTHON.is_file() and PYMSS_WORKER.is_file())
+
+
+def pymss_model_ready(model: str = "") -> bool:
+    """指定 PyMSS catalog 模型的权重是否已下载。"""
+    if not PYMSS_MODEL_DIR or not PYMSS_MODEL_DIR.exists():
+        return False
+    name = str(model or "").strip()
+    if not name:
+        return pymss_any_model_ready()
+    # PyMSS 目录结构由 catalog 决定，先按常见文件名快速检查；worker 会做最终校验。
+    stem = Path(name).stem.lower()
+    try:
+        return any(
+            p.is_file()
+            and p.suffix.lower() in _PYMSS_MODEL_SUFFIXES
+            and not p.name.lower().endswith(".pymss_state_dict.pt")
+            and stem in p.stem.lower()
+            for p in PYMSS_MODEL_DIR.rglob("*")
+        )
+    except OSError:
+        return False
+
+
+def pymss_any_model_ready() -> bool:
+    """Return whether the PyMSS cache contains at least one downloaded model."""
+    if not PYMSS_MODEL_DIR or not PYMSS_MODEL_DIR.exists():
+        return False
+    try:
+        return any(
+            path.is_file()
+            and path.suffix.lower() in _PYMSS_MODEL_SUFFIXES
+            and not path.name.lower().endswith(".pymss_state_dict.pt")
+            for path in PYMSS_MODEL_DIR.rglob("*")
+        )
+    except OSError:
+        return False
+
+
+def pymss_ready(model: str = "") -> bool:
+    return pymss_environment_ready() and pymss_model_ready(model)
+
+
+def pymss_status(model: str = "") -> str:
+    if not PYMSS_PYTHON or not PYMSS_PYTHON.is_file():
+        return "未找到 .venv-pymss"
+    if not PYMSS_WORKER.is_file():
+        return "应用 worker 缺失"
+    if not PYMSS_MODEL_DIR or not PYMSS_MODEL_DIR.exists():
+        return "模型目录未就绪"
+    if not pymss_model_ready(model):
+        return "模型未下载"
+    return "已就绪"
+
 
 def uvr_environment_ready() -> bool:
     """UVR 运行环境是否已安装：解释器与 worker 可用。"""
     return bool(
         UVR_PYTHON
-        and UVR_PYTHON.exists()
-        and UVR_WORKER.exists()
+        and UVR_PYTHON.is_file()
+        and UVR_WORKER.is_file()
         and UVR_MODEL_DIR
         and UVR_MODEL_DIR.exists()
     )
@@ -437,9 +570,9 @@ def uvr_ready() -> bool:
 
 def uvr_status() -> str:
     """返回更细粒度的 UVR 状态，便于界面和日志区分“未安装 / 模型未就绪 / 已就绪”。"""
-    if not UVR_PYTHON or not UVR_PYTHON.exists():
+    if not UVR_PYTHON or not UVR_PYTHON.is_file():
         return "未找到 .venv-uvr"
-    if not UVR_WORKER.exists():
+    if not UVR_WORKER.is_file():
         return "应用 worker 缺失"
     if not UVR_MODEL_DIR or not UVR_MODEL_DIR.exists():
         return "模型目录未就绪"
@@ -460,10 +593,10 @@ HUB_VENV_DIR = ROOT_DIR / ".venv-hub"
 
 
 def _detect_hub_python() -> Path | None:
-    env = os.environ.get("XB_HUB_PYTHON")
-    if env:
-        return Path(env)
-    return _first_existing([_venv_python(HUB_VENV_DIR)])
+    env = _existing_env_file("XB_HUB_PYTHON")
+    candidates = [env] if env else []
+    candidates.append(_venv_python(HUB_VENV_DIR))
+    return _first_file(candidates)
 
 
 # 运行 modelscope 上传的 Python 解释器（需装有 modelscope SDK）
@@ -477,7 +610,7 @@ def modelhub_upload_ready() -> bool:
 
     仅「上传」需要；搜索与下载不依赖该组件。
     """
-    return bool(HUB_PYTHON and HUB_PYTHON.exists() and HUB_WORKER.exists())
+    return bool(HUB_PYTHON and HUB_PYTHON.is_file() and HUB_WORKER.is_file())
 
 # 用户数据目录（模型 / 作品 / 缓存 / 配置均保存在本地）
 # 优先级：

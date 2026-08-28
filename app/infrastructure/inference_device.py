@@ -25,7 +25,7 @@ DEVICE_PROBE_MARKER = "XB_DEVICE_PROBE "
 _AMD_TOKENS = ("amd", "radeon")
 _PROBE_TTL_SECONDS = 300.0
 _PERSISTENT_CACHE_MAX_AGE_SECONDS = 24 * 60 * 60
-_probe_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_probe_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
 _probe_lock = threading.Lock()
 _persistent_probe_path: Optional[Path] = None
 _persistent_probe_entries: dict[str, dict[str, Any]] = {}
@@ -382,6 +382,22 @@ def _directml_device(torch: Any) -> Optional[ResolvedDevice]:
         return None
 
 
+def _mps_device(torch: Any) -> Optional[ResolvedDevice]:
+    """Resolve Apple's PyTorch MPS backend when running a macOS build."""
+    try:
+        backends = getattr(torch, "backends", None)
+        mps = getattr(backends, "mps", None)
+        if mps is None or not bool(mps.is_available()):
+            return None
+        device = torch.device("mps")
+        # Allocate once so an installed-but-unusable MPS runtime is not marked
+        # ready by the environment detector.
+        torch.zeros(1, dtype=torch.float32, device=device)
+        return ResolvedDevice(device=device, backend="mps", name="Apple MPS")
+    except Exception:
+        return None
+
+
 def resolve_torch_device(requested: str = "auto", torch_module: Any = None) -> ResolvedDevice:
     torch = torch_module
     if torch is None:
@@ -409,6 +425,15 @@ def resolve_torch_device(requested: str = "auto", torch_module: Any = None) -> R
             raise RuntimeError("已选择 AMD DirectML，但当前推理环境未安装 torch-directml 或驱动不可用")
         return resolved
 
+    if normalized == "mps":
+        resolved = _mps_device(torch)
+        if resolved is None:
+            raise RuntimeError("已选择 Apple MPS，但当前 PyTorch 环境没有可用的 MPS 设备")
+        return resolved
+
+    # MLX is a separate PyMSS backend and has no torch.device equivalent. The
+    # PyMSS worker handles it natively; keep the shared resolver strict here.
+
     if normalized not in {"", "auto"}:
         raise RuntimeError(f"不支持的推理设备: {requested}")
 
@@ -416,6 +441,9 @@ def resolve_torch_device(requested: str = "auto", torch_module: Any = None) -> R
     if resolved is not None:
         return resolved
     resolved = _directml_device(torch)
+    if resolved is not None:
+        return resolved
+    resolved = _mps_device(torch)
     if resolved is not None:
         return resolved
     return ResolvedDevice(torch.device("cpu"), "cpu", "CPU")
@@ -725,7 +753,7 @@ def runtime_probe() -> dict[str, Any]:
 
 
 def probe_python_environment(python: Optional[Path]) -> dict[str, Any]:
-    if not python or not python.exists():
+    if not python or not python.is_file():
         return {
             "ok": False,
             "torch_version": "",
@@ -739,12 +767,17 @@ def probe_python_environment(python: Optional[Path]) -> dict[str, Any]:
     now = time.monotonic()
     with _probe_lock:
         cached = _probe_cache.get(key)
-        if cached and now - cached[0] < _PROBE_TTL_SECONDS:
-            return dict(cached[1])
+        if (
+            cached
+            and cached[1] == signature
+            and cached[2].get("ok")
+            and now - cached[0] < _PROBE_TTL_SECONDS
+        ):
+            return dict(cached[2])
     persistent = _persistent_probe_result(key, signature)
     if persistent is not None:
         with _probe_lock:
-            _probe_cache[key] = (now, dict(persistent))
+            _probe_cache[key] = (now, signature, dict(persistent))
         return persistent
     try:
         proc = subprocess.run(
@@ -778,7 +811,10 @@ def probe_python_environment(python: Optional[Path]) -> dict[str, Any]:
             "error": str(exc),
         }
     with _probe_lock:
-        _probe_cache[key] = (now, dict(payload))
+        # Do not retain failures: an environment may be mid-repair while the
+        # UI polls status, and the next poll should be allowed to recover.
+        if payload.get("ok"):
+            _probe_cache[key] = (now, signature, dict(payload))
     _store_persistent_probe_result(key, signature, payload)
     return payload
 

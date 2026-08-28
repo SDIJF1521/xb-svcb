@@ -246,6 +246,22 @@
             <span>音量</span>
             <el-slider v-model="selectedClip.volume" :disabled="!selectedClipEditable" :min="0" :max="2" :step="0.01" @pointerdown="pushHistory" @input="queueLiveControlSave" @change="flushLiveControlSave" />
           </div>
+          <div class="slider-row stretch-row">
+            <span>时间拉伸</span>
+            <div class="stretch-control">
+              <el-slider
+                :model-value="selectedClip.time_stretch"
+                :disabled="!selectedClipEditable"
+                :min="0.25"
+                :max="4"
+                :step="0.01"
+                @pointerdown="pushHistory"
+                @update:model-value="setClipTimeStretch"
+                @change="flushLiveControlSave"
+              />
+              <b>{{ Math.round(Number(selectedClip.time_stretch || 1) * 100) }}%</b>
+            </div>
+          </div>
           <div class="slider-row">
             <span>淡入</span>
             <el-slider v-model="selectedClip.fade_in" :disabled="!selectedClipEditable" :min="0" :max="2" :step="0.01" @pointerdown="pushHistory" @input="queueLiveControlSave" @change="flushLiveControlSave" />
@@ -422,15 +438,77 @@
           </div>
 
           <div v-if="activeInspectorPanel === 'vocal'" class="stem-box">
-            <label>人声编辑</label>
+            <div class="stem-head">
+              <label>人声编辑</label>
+              <span class="stem-engine-badge">{{ separationEngine === 'pymss' ? 'PyMSS' : 'UVR' }}</span>
+            </div>
+            <div class="editor-separation-panel">
+              <div class="editor-separation-label">分离引擎</div>
+              <div class="editor-separation-engines">
+                <button
+                  type="button"
+                  :class="{ active: separationEngine === 'uvr' }"
+                  @click="setSeparationEngine('uvr')"
+                >
+                  <span class="editor-engine-mark">U</span>
+                  <span>UVR</span>
+                  <small>通用</small>
+                </button>
+                <button
+                  type="button"
+                  :class="{ active: separationEngine === 'pymss' }"
+                  @click="setSeparationEngine('pymss')"
+                >
+                  <span class="editor-engine-mark">P</span>
+                  <span>PyMSS</span>
+                  <small>高质量</small>
+                </button>
+              </div>
+              <template v-if="separationEngine === 'pymss'">
+                <div class="editor-separation-field">
+                  <div class="editor-field-head">
+                    <span>人声分离模型</span>
+                    <router-link to="/models?tab=pymss">模型站 <el-icon><Right /></el-icon></router-link>
+                  </div>
+                  <select v-model="separationPymssModel" :disabled="!downloadedSeparationPymssModels.length">
+                    <option value="">选择已下载的模型</option>
+                    <option v-for="item in downloadedSeparationPymssModels" :key="item.name" :value="item.name">
+                      {{ item.name }}
+                    </option>
+                  </select>
+                  <span class="editor-separation-status" :class="{ ready: separationPymssStatus?.ok }">
+                    <i></i>{{ separationStatusText }}
+                  </span>
+                </div>
+                <label class="editor-harmony-toggle">
+                  <input v-model="separationHarmonyEnabled" type="checkbox" :disabled="!separationPymssModel" />
+                  <span>分离后去混响 / 净化人声</span>
+                  <small>PyMSS Dereverb</small>
+                </label>
+                <div v-if="separationHarmonyEnabled" class="editor-separation-field harmony-field">
+                  <div class="editor-field-head">
+                    <span>去混响 / 人声净化模型</span>
+                    <router-link to="/models?tab=pymss">下载模型 <el-icon><Right /></el-icon></router-link>
+                  </div>
+                  <select v-model="separationHarmonyModel" :disabled="!downloadedSeparationHarmonyModels.length">
+                    <option value="">选择已下载的模型</option>
+                    <option v-for="item in downloadedSeparationHarmonyModels" :key="item.name" :value="item.name">
+                      {{ item.name }}
+                    </option>
+                  </select>
+                  <span v-if="!downloadedSeparationHarmonyModels.length" class="editor-separation-status">请先在模型站下载去混响模型</span>
+                </div>
+              </template>
+              <span v-if="separationEngine === 'uvr'" class="editor-separation-hint">使用编辑器默认 UVR 模型，可在翻唱工作台调整详细配置。</span>
+            </div>
             <el-button
-              :disabled="!selectedClipEditable || separating"
+              :disabled="!selectedClipEditable || separating || !separationReady"
               :loading="separating"
               round
               class="ghost-btn mini"
               @click="separateSelectedClip"
             >
-              <el-icon class="el-icon--left"><MagicStick /></el-icon>分离人声
+              <el-icon class="el-icon--left"><MagicStick /></el-icon>{{ separationEngine === 'pymss' ? '用 PyMSS 分离' : '用 UVR 分离' }}
             </el-button>
             <div class="lyric-source-tabs">
               <button
@@ -624,6 +702,11 @@
                   </select>
                 </div>
               </div>
+              <label class="rerun-enhance-toggle high-pitch-toggle">
+                <input v-model="rerunHighPitchGuard" type="checkbox" />
+                <span>高音保护</span>
+                <small>选择性降调/复原，减少高音失真</small>
+              </label>
               <label class="rerun-enhance-toggle">
                 <input v-model="rerunEnhanceEnabled" type="checkbox" />
                 <span>重推理后自动美声</span>
@@ -904,6 +987,7 @@ import {
   Plus,
   RefreshLeft,
   RefreshRight,
+  Right,
   Scissor,
   SwitchButton,
   VideoPause,
@@ -931,6 +1015,9 @@ import type {
   EditorTrack,
   EditorVolumeEnvelopePoint,
   InferenceParams,
+  EditorSeparationOptions,
+  PymssModel,
+  PymssStatus,
 } from '@/api'
 
 defineOptions({ name: 'AudioEditorPage' })
@@ -971,6 +1058,13 @@ interface RerunPrefs {
   aiExciter?: number
   stereoWidth?: number
   loudnessEnvelope?: number
+  autoHighPitchGuard?: boolean
+}
+interface SeparationPrefs {
+  engine?: 'uvr' | 'pymss'
+  pymssModel?: string
+  harmonyEnabled?: boolean
+  harmonyModel?: string
 }
 interface EffectControl {
   key: string
@@ -1014,6 +1108,12 @@ const rerunning = ref(false)
 const enhancingClip = ref(false)
 const silenceSplitting = ref(false)
 const separating = ref(false)
+const separationEngine = ref<'uvr' | 'pymss'>('uvr')
+const separationPymssModels = ref<PymssModel[]>([])
+const separationPymssModel = ref('')
+const separationHarmonyEnabled = ref(false)
+const separationHarmonyModel = ref('')
+const separationPymssStatus = ref<PymssStatus | null>(null)
 const lyricSplitting = ref(false)
 const lyricSplitText = ref('')
 const lyricTimeMode = ref<'project' | 'clip'>('project')
@@ -1072,6 +1172,9 @@ let pluginStateSyncInFlight = false
 let pluginSafetyWarningShown = false
 let waveformZoomTimer: ReturnType<typeof setTimeout> | null = null
 const waveformLoading = new Set<string>()
+const waveformQueue: Array<{ clip: EditorClip; key: string; projectId: string; resolve: () => void }> = []
+let waveformWorkers = 0
+const MAX_WAVEFORM_WORKERS = 3
 
 const fallbackPeaks = Array.from({ length: 56 }, (_, i) => 0.18 + Math.abs(Math.sin(i * 0.33)) * 0.5)
 const MIN_RERUN_CLIP_SECONDS = 1
@@ -1081,6 +1184,7 @@ const LIVE_CONTROL_SAVE_DEBOUNCE_MS = 120
 const MIX_CROSSFADE_MS = 90
 const PLUGIN_STATE_SYNC_INTERVAL_MS = 120
 const RERUN_PREFS_KEY = 'xb-editor-rerun-params'
+const SEPARATION_PREFS_KEY = 'xb-editor-separation-params'
 const rerunFramework = () => models.value.find((m) => m.id === rerunModelId.value)?.framework || 'so-vits-svc'
 const rerunF0Methods = computed(() => f0MethodsForFramework(rerunFramework()))
 const deviceOptions = computed(() => systemStore.optionsForFramework(rerunFramework()))
@@ -1270,6 +1374,14 @@ function loadRerunPrefs(): RerunPrefs {
     return {}
   }
 }
+function loadSeparationPrefs(): SeparationPrefs {
+  try {
+    const raw = localStorage.getItem(SEPARATION_PREFS_KEY)
+    return raw ? JSON.parse(raw) as SeparationPrefs : {}
+  } catch {
+    return {}
+  }
+}
 function prefNum(value: unknown, fallback: number, min: number, max: number) {
   const n = typeof value === 'number' && Number.isFinite(value) ? value : fallback
   return Math.max(min, Math.min(max, n))
@@ -1279,6 +1391,11 @@ function prefStr(value: unknown, fallback: string, allowed?: string[]) {
   return allowed && !allowed.includes(next) ? fallback : next
 }
 const rerunPrefs = loadRerunPrefs()
+const separationPrefs = loadSeparationPrefs()
+separationEngine.value = separationPrefs.engine === 'pymss' ? 'pymss' : 'uvr'
+separationPymssModel.value = separationPrefs.pymssModel || ''
+separationHarmonyEnabled.value = separationPrefs.harmonyEnabled === true
+separationHarmonyModel.value = separationPrefs.harmonyModel || ''
 const rerunPitch = ref(prefNum(rerunPrefs.pitch, 0, -12, 12))
 const rerunFormantShift = ref(prefNum(rerunPrefs.formantShift, 0, -2, 2))
 const rerunF0Method = ref(normalizeF0Method('so-vits-svc', prefStr(rerunPrefs.f0Method, 'rmvpe')))
@@ -1290,6 +1407,7 @@ const rerunProtect = ref(prefNum(rerunPrefs.protect, 0.33, 0, 0.5))
 const rerunFilterRadius = ref(prefNum(rerunPrefs.filterRadius, 3, 0, 7))
 const rerunRvcVersion = ref(prefStr(rerunPrefs.rvcVersion, 'v2', rvcVersions))
 const rerunReferenceAudio = ref(prefStr(rerunPrefs.referenceAudio, ''))
+const rerunHighPitchGuard = ref(rerunPrefs.autoHighPitchGuard !== false)
 const editorEnhanceReference = ref('')
 const rerunEnhanceEnabled = ref(Boolean(rerunPrefs.enhanceEnabled))
 const rerunEnhanceLevel = ref<'basic' | 'advanced'>(
@@ -1341,6 +1459,27 @@ const exportLabel = computed(() =>
 const selectedClipDuration = computed(() => {
   const clip = selectedClip.value
   return clip ? Math.max(0, clip.end - clip.start) : 0
+})
+const downloadedSeparationPymssModels = computed(() =>
+  separationPymssModels.value.filter((item) => item.purpose === 'vocal_separation' && item.downloaded),
+)
+const downloadedSeparationHarmonyModels = computed(() =>
+  separationPymssModels.value.filter((item) => (item.purpose === 'dereverb' || item.purpose === 'harmony_removal') && item.downloaded),
+)
+const separationReady = computed(() =>
+  separationEngine.value === 'uvr'
+    || (
+      downloadedSeparationPymssModels.value.some((item) => item.name === separationPymssModel.value)
+      && separationPymssStatus.value?.ok === true
+      && (!separationHarmonyEnabled.value
+        || downloadedSeparationHarmonyModels.value.some((item) => item.name === separationHarmonyModel.value))
+    ),
+)
+const separationStatusText = computed(() => {
+  if (separationEngine.value === 'uvr') return '使用现有 UVR 分离配置'
+  if (!separationPymssModel.value) return '请先在模型站下载人声分离模型'
+  if (!separationPymssStatus.value) return '正在检查 PyMSS 环境'
+  return separationPymssStatus.value.status
 })
 const selectedClipEditable = computed(() => {
   const clip = selectedClip.value
@@ -1425,6 +1564,7 @@ function currentRerunParams(): InferenceParams {
   const params: InferenceParams = {
     pitch: Math.round(rerunPitch.value),
     device: rerunDevice.value,
+    auto_high_pitch_guard: rerunHighPitchGuard.value,
   }
   if (isSeedVcRerunModel.value) {
     params.diffusion_ratio = Number(rerunDiffusionRatio.value.toFixed(3))
@@ -1459,6 +1599,7 @@ function resetRerunParams() {
   rerunFilterRadius.value = 3
   rerunRvcVersion.value = 'v2'
   rerunReferenceAudio.value = ''
+  rerunHighPitchGuard.value = true
   rerunPitchCorrection.value = 0.45
   rerunTimingAlignment.value = 0.45
   rerunTimbreFocus.value = 0.60
@@ -1493,12 +1634,27 @@ function applyProject(next: EditorProject | null) {
   if (!next) return
   ensureEditorProjectStructure(next)
   project.value = next
+  syncSeparationPrefsFromProject(next)
+  waveformQueue.splice(0).forEach((task) => task.resolve())
   waveformMap.value = {}
   waveformLoading.clear()
   selected.value = keepSelection(next)
   router.replace({ path: '/editor', query: { project: next.id } })
   nextTick(loadWaveforms)
   requestLiveMixRefresh()
+}
+
+function syncSeparationPrefsFromProject(next: EditorProject) {
+  const raw = next.metadata?.preprocess
+  if (!raw || typeof raw !== 'object') return
+  const settings = raw as Record<string, unknown>
+  if (settings.engine === 'uvr' || settings.engine === 'pymss') {
+    separationEngine.value = settings.engine
+  }
+  if (typeof settings.pymss_model === 'string') separationPymssModel.value = settings.pymss_model
+  if (typeof settings.harmony_model === 'string') separationHarmonyModel.value = settings.harmony_model
+  separationHarmonyEnabled.value = settings.harmony_removal_enabled === true
+  void refreshSeparationStatus()
 }
 
 function ensureEditorProjectStructure(next: EditorProject) {
@@ -1514,6 +1670,7 @@ function ensureEditorProjectStructure(next: EditorProject) {
     for (const clip of track.clips) {
       clip.metadata = clip.metadata || {}
       clip.effects = sanitizeClipEffects(clip.effects)
+      clip.time_stretch = clamp(Number(clip.time_stretch || 1), 0.25, 4)
       clip.volume_envelope = sanitizeVolumeEnvelope(clip.volume_envelope, clipDuration(clip))
     }
   }
@@ -1772,10 +1929,11 @@ function keepSelection(next: EditorProject): Selection | null {
 }
 
 async function loadInitial() {
-  await modelsStore.load()
-  if (!systemStore.loaded) {
-    void systemStore.load().catch(() => undefined)
-  }
+  await Promise.all([
+    modelsStore.load().catch(() => undefined),
+    loadSeparationModels(),
+    systemStore.loaded ? Promise.resolve() : systemStore.load().catch(() => undefined),
+  ])
   const projectId = typeof route.query.project === 'string' ? route.query.project : ''
   const workId = typeof route.query.work === 'string' ? route.query.work : ''
   if (projectId) {
@@ -1790,6 +1948,56 @@ async function loadInitial() {
   }
   await router.replace('/editor/projects')
 }
+
+async function loadSeparationModels() {
+  try {
+    separationPymssModels.value = await api.pymssModels()
+    if (!downloadedSeparationPymssModels.value.some((item) => item.name === separationPymssModel.value)) {
+      separationPymssModel.value = downloadedSeparationPymssModels.value[0]?.name || separationPymssModel.value
+    }
+    if (!downloadedSeparationHarmonyModels.value.some((item) => item.name === separationHarmonyModel.value)) {
+      separationHarmonyModel.value = downloadedSeparationHarmonyModels.value[0]?.name || separationHarmonyModel.value
+    }
+    await refreshSeparationStatus()
+  } catch {
+    separationPymssModels.value = []
+    separationPymssStatus.value = null
+  }
+}
+
+async function refreshSeparationStatus() {
+  if (separationEngine.value !== 'pymss' || !separationPymssModel.value) {
+    separationPymssStatus.value = null
+    return
+  }
+  try {
+    separationPymssStatus.value = await api.pymssStatus(separationPymssModel.value)
+  } catch {
+    separationPymssStatus.value = null
+  }
+}
+
+function setSeparationEngine(engine: 'uvr' | 'pymss') {
+  separationEngine.value = engine
+  if (engine !== 'pymss') separationHarmonyEnabled.value = false
+  void refreshSeparationStatus()
+}
+
+watch(
+  [separationEngine, separationPymssModel, separationHarmonyEnabled, separationHarmonyModel],
+  () => {
+    localStorage.setItem(
+      SEPARATION_PREFS_KEY,
+      JSON.stringify({
+        engine: separationEngine.value,
+        pymssModel: separationPymssModel.value,
+        harmonyEnabled: separationHarmonyEnabled.value,
+        harmonyModel: separationHarmonyModel.value,
+      } satisfies SeparationPrefs),
+    )
+  },
+)
+watch(separationPymssModel, () => { void refreshSeparationStatus() })
 
 async function importAudio() {
   const path = await api.pickAudioFile()
@@ -1911,7 +2119,10 @@ function queueLiveControlSave() {
   if (liveControlSaveTimer) clearTimeout(liveControlSaveTimer)
   liveControlSaveTimer = setTimeout(() => {
     liveControlSaveTimer = null
-    void saveProject()
+    void (async () => {
+      await saveProject()
+      await refreshSelectedClipWaveform()
+    })()
   }, LIVE_CONTROL_SAVE_DEBOUNCE_MS)
 }
 
@@ -1921,6 +2132,7 @@ async function flushLiveControlSave() {
     liveControlSaveTimer = null
   }
   await saveProject()
+  await refreshSelectedClipWaveform()
 }
 
 function saveProject(): Promise<void> {
@@ -2024,7 +2236,12 @@ function onDragMove(e: PointerEvent) {
     clip.start = start
     clip.offset = Math.max(0, d.original.offset + shift)
   } else {
-    clip.end = snapTime(Math.max(d.original.start + minDur, d.original.end + dt), d.clipId)
+    // 右边缘调整大小会保持源切片，并将其拉伸或压缩以适应。
+    const sourceDuration = clipSourceDuration(d.original)
+    const rawEnd = snapTime(Math.max(d.original.start + minDur, d.original.end + dt), d.clipId)
+    const nextDuration = clamp(rawEnd - d.original.start, sourceDuration * 0.25, sourceDuration * 4)
+    clip.end = d.original.start + nextDuration
+    clip.time_stretch = clamp(nextDuration / sourceDuration, 0.25, 4)
   }
   project.value.duration = calcDuration(project.value)
 }
@@ -2101,6 +2318,12 @@ function clipDuration(clip: EditorClip) {
   return Math.max(0.05, Number(clip.end || 0) - Number(clip.start || 0))
 }
 
+function clipSourceDuration(clip: EditorClip) {
+  const duration = clipDuration(clip)
+  const stretch = clamp(Number(clip.time_stretch || 1), 0.25, 4)
+  return Math.max(0.05, duration / stretch)
+}
+
 function clipPixelWidth(clip: EditorClip) {
   return Math.max(30, clipDuration(clip) * zoom.value)
 }
@@ -2113,7 +2336,8 @@ function waveformBins(clip: EditorClip) {
 function waveformKey(clip: EditorClip) {
   const duration = clipDuration(clip).toFixed(3)
   const offset = Number(clip.offset || 0).toFixed(3)
-  return [clip.id, clip.file || '', offset, duration, waveformBins(clip)].join('|')
+  const stretch = Number(clip.time_stretch || 1).toFixed(3)
+  return [clip.id, clip.file || '', offset, duration, stretch, waveformBins(clip)].join('|')
 }
 
 function fallbackWaveform(clip: EditorClip) {
@@ -2943,11 +3167,20 @@ async function separateSelectedClip() {
   separating.value = true
   try {
     await saveProject()
+    const options: EditorSeparationOptions = {
+      engine: separationEngine.value,
+      mute_source: true,
+    }
+    if (separationEngine.value === 'pymss') {
+      options.pymss_model = separationPymssModel.value || undefined
+      options.harmony_removal_enabled = separationHarmonyEnabled.value
+      options.harmony_model = separationHarmonyModel.value || undefined
+    }
     const res = await api.separateEditorClipVocals(
       project.value.id,
       current.trackId,
       current.clipId,
-      { mute_source: true },
+      options,
     )
     if (!res.ok || !res.project) {
       ElMessage.error(res.error || '人声分离失败')
@@ -2959,7 +3192,13 @@ async function separateSelectedClip() {
     applyProject(res.project)
     const first = res.tracks?.[0]?.clips?.[0]
     if (res.tracks?.[0] && first) selected.value = { trackId: res.tracks[0].id, clipId: first.id }
-    ElMessage.success(res.simulated ? '已创建人声轨（UVR 降级模式）' : '人声与伴奏已加入时间线')
+    if (res.simulated) {
+      ElMessage.success('已创建人声轨（UVR 降级模式）')
+    } else if (res.harmony_removed) {
+      ElMessage.success('人声、伴奏已加入时间线，并已完成去混响净化')
+    } else {
+      ElMessage.success(res.engine === 'pymss' ? 'PyMSS 人声与伴奏已加入时间线' : '人声与伴奏已加入时间线')
+    }
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '人声分离失败')
   } finally {
@@ -3110,6 +3349,23 @@ async function setClipNumber(field: 'start' | 'end' | 'offset', e: Event) {
   loadWaveform(clip)
 }
 
+function setClipTimeStretch(value: number | number[]) {
+  const clip = selectedClip.value
+  if (!clip || !selectedClipEditable.value) return
+  const raw = Array.isArray(value) ? value[0] : value
+  const next = clamp(Number(raw || 1), 0.25, 4)
+  const current = clamp(Number(clip.time_stretch || 1), 0.25, 4)
+  if (Math.abs(next - current) < 1e-6) return
+  pushHistory()
+  const previousKey = waveformKey(clip)
+  const baseDuration = clipSourceDuration(clip)
+  clip.time_stretch = next
+  clip.end = clip.start + Math.max(0.05, baseDuration * next)
+  if (project.value) project.value.duration = calcDuration(project.value)
+  dropWaveformKey(previousKey)
+  queueLiveControlSave()
+}
+
 function claimPlayToggle() {
   const now = Date.now()
   if (now - lastPlayToggleAt < PLAY_TOGGLE_DEBOUNCE_MS) return false
@@ -3139,6 +3395,7 @@ function mixRenderSignature(value: EditorProject) {
         fadeIn: clip.fade_in,
         fadeOut: clip.fade_out,
         channel: clip.channel,
+        timeStretch: clip.time_stretch,
         envelope: clip.volume_envelope,
         effects: clip.effects,
       })),
@@ -3366,12 +3623,13 @@ async function playSelectedClip() {
   el.currentTime = 0
   await el.play()
   playing.value = true
+  const previewDuration = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : Math.max(0, clip.end - clip.start)
   clipStopTimer = setTimeout(() => {
     el.pause()
     clipPlaybackClipId = ''
     playing.value = false
     playbackMode.value = 'none'
-  }, Math.max(80, (clip.end - clip.start) * 1000))
+  }, Math.max(80, previewDuration * 1000))
 }
 
 async function exportMix(fmt: string) {
@@ -3535,27 +3793,84 @@ function onAudioTimeUpdate(event: Event) {
 
 async function loadWaveforms() {
   if (!project.value) return
-  for (const track of project.value.tracks) {
-    for (const clip of track.clips) {
-      loadWaveform(clip)
+  const selectedId = selected.value?.clipId
+  const clips = project.value.tracks.flatMap((track) => track.clips)
+  clips.sort((a, b) => Number(b.id === selectedId) - Number(a.id === selectedId))
+  const projectId = project.value.id
+  const needed = new Set(clips.map((clip) => waveformKey(clip)))
+  // Zooming or editing changes the key. Drop queued work for old keys so a
+  // large project cannot spend its worker budget rendering obsolete waveforms.
+  for (let index = waveformQueue.length - 1; index >= 0; index -= 1) {
+    const task = waveformQueue[index]
+    if (!task || task.projectId !== projectId || !needed.has(task.key)) {
+      waveformQueue.splice(index, 1)
+      if (task) {
+        waveformLoading.delete(task.key)
+        task.resolve()
+      }
     }
   }
+  clips.forEach((clip) => { void loadWaveform(clip) })
 }
-async function loadWaveform(input: EditorClip | string) {
-  if (!project.value) return
+
+function dropWaveformKey(key: string) {
+  if (!project.value || !key) return
+  if (waveformMap.value[key]) {
+    waveformMap.value = { ...waveformMap.value }
+    delete waveformMap.value[key]
+  }
+  waveformLoading.delete(key)
+  for (let index = waveformQueue.length - 1; index >= 0; index -= 1) {
+    const task = waveformQueue[index]
+    if (!task || task.projectId !== project.value.id || task.key !== key) continue
+    waveformQueue.splice(index, 1)
+    waveformLoading.delete(task.key)
+    task.resolve()
+  }
+}
+
+function loadWaveform(input: EditorClip | string, force = false): Promise<void> {
+  if (!project.value) return Promise.resolve()
   const clip = typeof input === 'string' ? findClipById(input) : input
-  if (!clip) return
+  if (!clip) return Promise.resolve()
   const key = waveformKey(clip)
-  if (waveformMap.value[key]?.length || waveformLoading.has(key)) return
+  if (force) {
+    dropWaveformKey(key)
+  }
+  if (waveformMap.value[key]?.length || waveformLoading.has(key)) return Promise.resolve()
   waveformLoading.add(key)
-  try {
-    const bins = waveformBins(clip)
-    const wf = await api.getEditorWaveform(project.value.id, clip.id, bins)
-    if (wf.ok && wf.peaks.length && waveformKey(clip) === key) {
-      waveformMap.value = { ...waveformMap.value, [key]: wf.peaks }
-    }
-  } finally {
-    waveformLoading.delete(key)
+  const projectId = project.value.id
+  return new Promise((resolve) => {
+    waveformQueue.push({ clip, key, projectId, resolve })
+    void drainWaveformQueue()
+  })
+}
+
+async function refreshSelectedClipWaveform() {
+  const clip = selectedClip.value
+  if (!project.value || !clip) return
+  await loadWaveform(clip, true)
+}
+async function drainWaveformQueue() {
+  while (waveformWorkers < MAX_WAVEFORM_WORKERS && waveformQueue.length) {
+    const task = waveformQueue.shift()
+    if (!task) return
+    waveformWorkers += 1
+    void (async () => {
+      try {
+        if (project.value?.id === task.projectId) {
+          const wf = await api.getEditorWaveform(task.projectId, task.clip.id, waveformBins(task.clip))
+          if (wf.ok && wf.peaks.length && project.value?.id === task.projectId && waveformKey(task.clip) === task.key) {
+            waveformMap.value = { ...waveformMap.value, [task.key]: wf.peaks }
+          }
+        }
+      } finally {
+        waveformLoading.delete(task.key)
+        waveformWorkers -= 1
+        task.resolve()
+        void drainWaveformQueue()
+      }
+    })()
   }
 }
 
@@ -3580,6 +3895,7 @@ watch(
     rerunFilterRadius,
     rerunRvcVersion,
     rerunReferenceAudio,
+    rerunHighPitchGuard,
     rerunEnhanceEnabled,
     rerunEnhanceLevel,
     rerunPitchCorrection,
@@ -3607,6 +3923,7 @@ watch(
           filterRadius: rerunFilterRadius.value,
           rvcVersion: rerunRvcVersion.value,
           referenceAudio: rerunReferenceAudio.value,
+          autoHighPitchGuard: rerunHighPitchGuard.value,
           enhanceEnabled: rerunEnhanceEnabled.value,
           enhanceLevel: rerunEnhanceLevel.value,
           pitchCorrection: rerunPitchCorrection.value,
@@ -3851,6 +4168,17 @@ onUnmounted(() => {
   color: var(--xb-muted);
   font-size: 13px;
 }
+.stretch-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 8px;
+}
+.stretch-control b {
+  color: var(--xb-primary);
+  font-size: 11px;
+  text-align: right;
+}
 .channel-row,
 .role-row {
   margin-top: 12px;
@@ -3993,6 +4321,151 @@ onUnmounted(() => {
   display: grid;
   gap: 10px;
   margin-top: 18px;
+}
+.stem-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.stem-head label { margin: 0; }
+.stem-engine-badge {
+  padding: 3px 7px;
+  border: 1px solid rgba(var(--xb-primary-rgb), .3);
+  border-radius: 999px;
+  color: var(--xb-primary);
+  background: rgba(var(--xb-primary-rgb), .1);
+  font-size: 10px;
+  font-weight: 800;
+}
+.editor-separation-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(var(--xb-primary-rgb), .16);
+  border-radius: 9px;
+  background: rgba(var(--xb-fill-rgb), .025);
+}
+.editor-separation-label,
+.editor-field-head {
+  color: var(--xb-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.editor-separation-engines {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.editor-separation-engines button {
+  min-width: 0;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--xb-border);
+  border-radius: 7px;
+  background: rgba(var(--xb-fill-rgb), .025);
+  color: var(--xb-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.editor-separation-engines button:hover,
+.editor-separation-engines button.active {
+  border-color: var(--xb-primary);
+  color: var(--xb-primary);
+  background: rgba(var(--xb-primary-rgb), .1);
+}
+.editor-separation-engines button small {
+  margin-left: auto;
+  color: var(--xb-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+.editor-separation-engines button.active small { color: var(--xb-primary); }
+.editor-engine-mark {
+  width: 19px;
+  height: 19px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--xb-on-primary);
+  background: var(--xb-brand-gradient);
+  font-size: 10px;
+  font-weight: 900;
+}
+.editor-separation-field {
+  display: grid;
+  gap: 6px;
+  padding-top: 2px;
+}
+.editor-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.editor-field-head a {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--xb-primary);
+  font-size: 11px;
+  text-decoration: none;
+}
+.editor-field-head a:hover { color: var(--xb-text); }
+.editor-separation-field select { height: 32px; font-size: 12px; }
+.editor-separation-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--xb-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.editor-separation-status.ready { color: var(--xb-success); }
+.editor-separation-status i {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+.editor-harmony-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin-top: 2px;
+  color: var(--xb-text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.editor-harmony-toggle input {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--xb-primary);
+}
+.editor-harmony-toggle small {
+  margin-left: auto;
+  color: var(--xb-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+.editor-separation-hint {
+  color: var(--xb-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.harmony-field {
+  padding-top: 8px;
+  border-top: 1px solid rgba(var(--xb-primary-rgb), .12);
 }
 .clip-block .stem-box,
 .clip-block .rerun-box,
@@ -4298,6 +4771,12 @@ onUnmounted(() => {
   height: 16px;
   cursor: pointer;
   accent-color: var(--xb-accent, #00f0ff);
+}
+.high-pitch-toggle small {
+  margin-left: auto;
+  color: var(--xb-muted);
+  font-size: 11px;
+  font-weight: 500;
 }
 .rerun-enhance-level {
   display: grid;
