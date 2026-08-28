@@ -694,6 +694,10 @@ class Api:
         tool = getattr(self, "_pymss", None) or PymssTool()
         return tool.start_download_model(model)
 
+    def delete_pymss_model(self, model: str = "") -> bool:
+        tool = getattr(self, "_pymss", None) or PymssTool()
+        return tool.delete_model(model)
+
     def pymss_download_progress(self, key: str = "") -> dict[str, Any]:
         tool = getattr(self, "_pymss", None) or PymssTool()
         return tool.download_progress(key)

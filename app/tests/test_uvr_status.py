@@ -1,3 +1,4 @@
+import json
 import tempfile
 import time
 import unittest
@@ -203,6 +204,43 @@ class UvrStatusTests(unittest.TestCase):
             )
             with patch.object(config, "PYMSS_MODEL_DIR", model_dir):
                 self.assertFalse(config.pymss_model_ready("bs_roformer_voc_hyperacev2"))
+
+    def test_pymss_delete_model_removes_downloaded_files_and_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            model_dir = Path(td) / "models" / "pymss"
+            marker_dir = model_dir / ".xb-downloaded"
+            nested_dir = model_dir / "nested"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            marker_dir.mkdir(parents=True, exist_ok=True)
+            nested_dir.mkdir(parents=True, exist_ok=True)
+            target = model_dir / "bs_roformer_voc_hyperacev2.ckpt"
+            nested = nested_dir / "bs_roformer_voc_hyperacev2.yaml"
+            other = model_dir / "other-model.ckpt"
+            target.write_bytes(b"weights")
+            nested.write_text("config", encoding="utf-8")
+            other.write_bytes(b"keep")
+            (marker_dir / "bs_roformer_voc_hyperacev2.json").write_text(
+                json.dumps(
+                    {
+                        "model": "bs_roformer_voc_hyperacev2.ckpt",
+                        "source": "modelscope",
+                        "files": [
+                            "bs_roformer_voc_hyperacev2.ckpt",
+                            "nested/bs_roformer_voc_hyperacev2.yaml",
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(config, "PYMSS_MODEL_DIR", model_dir):
+                self.assertTrue(PymssTool().delete_model("bs_roformer_voc_hyperacev2.ckpt"))
+
+            self.assertFalse(target.exists())
+            self.assertFalse(nested.exists())
+            self.assertTrue(other.exists())
+            self.assertFalse((marker_dir / "bs_roformer_voc_hyperacev2.json").exists())
 
     def test_cuda_selection_is_forwarded_and_actual_device_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as td:

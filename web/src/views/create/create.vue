@@ -2390,7 +2390,11 @@ function pickDownloaded(d: DownloadedMusic) {
 }
 
 async function loadDownloaded() {
-  downloaded.value = await api.listMusic()
+  try {
+    downloaded.value = await api.listMusic()
+  } catch {
+    /* keep the current list if refresh fails */
+  }
 }
 
 let timer: ReturnType<typeof setInterval> | null = null
@@ -2572,6 +2576,7 @@ watch(trackEl, (el) => {
 })
 
 onMounted(async () => {
+  void loadDownloaded()
   await modelsStore.load()
   try {
     pymssModels.value = await api.pymssModels()
@@ -2601,7 +2606,6 @@ onMounted(async () => {
   if (selectedModel.value && selectedMulti.value.length === 0) {
     togglePick(selectedModel.value)
   }
-  await loadDownloaded()
   // 加载歌词曲库选项（与「资源获取」共用妖狐 API 来源）
   try {
     const [srcList, curSource] = await Promise.all([

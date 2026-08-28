@@ -438,6 +438,18 @@
             <el-button round size="small" class="cta-btn" :loading="pymssDownloading === item.name" @click="downloadPymss(item)">
               <el-icon v-if="pymssDownloading !== item.name" class="el-icon--left"><Download /></el-icon>{{ item.downloaded ? '重新下载' : '下载模型' }}
             </el-button>
+            <el-button
+              v-if="item.downloaded"
+              round
+              size="small"
+              type="danger"
+              plain
+              :loading="pymssDeleting === item.name"
+              :disabled="pymssDownloading === item.name || pymssJob(item.name)?.status === 'running'"
+              @click="deletePymss(item)"
+            >
+              <el-icon v-if="pymssDeleting !== item.name" class="el-icon--left"><Delete /></el-icon>删除
+            </el-button>
           </div>
         </div>
         <div v-if="!filteredPymssItems.length && !pymssLoading" class="empty small"><span>未读取到该用途的 PyMSS 模型，请先安装 PyMSS 环境。</span></div>
@@ -893,6 +905,7 @@ const upgradingId = ref('')
 const pymssItems = ref<PymssModel[]>([])
 const pymssLoading = ref(false)
 const pymssDownloading = ref('')
+const pymssDeleting = ref('')
 const pymssJobs = ref<Record<string, PymssDownloadJob>>({})
 const pymssRuntime = ref<PymssStatus | null>(null)
 const pymssPurpose = ref<'vocal_separation' | 'dereverb' | 'harmony_removal'>('vocal_separation')
@@ -936,6 +949,36 @@ async function downloadPymss(item: PymssModel) {
     }
   } finally {
     pymssDownloading.value = ''
+  }
+}
+
+async function deletePymss(item: PymssModel) {
+  if (pymssDeleting.value || pymssDownloading.value === item.name || pymssJob(item.name)?.status === 'running') {
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`确定删除「${item.name}」吗？本地文件会一并删除。`, '删除 PyMSS 模型', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  pymssDeleting.value = item.name
+  try {
+    const ok = await api.deletePymssModel(item.name)
+    if (!ok) {
+      ElMessage.error('删除失败')
+      return
+    }
+    delete pymssJobs.value[item.name]
+    await loadPymssModels()
+    ElMessage.success(`已删除 ${item.name}`)
+  } catch {
+    ElMessage.error('删除 PyMSS 模型失败')
+  } finally {
+    pymssDeleting.value = ''
   }
 }
 

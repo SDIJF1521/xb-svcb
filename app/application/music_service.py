@@ -44,7 +44,6 @@ _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
-_DOWNLOADED_CACHE_TTL = 1.5
 
 
 class _AsyncRateLimiter:
@@ -249,7 +248,7 @@ class MusicService:
         self._settings = settings
         self._limiter = _AsyncRateLimiter(config.MUSIC_API_QPS)
         self._downloaded_cache_lock = threading.Lock()
-        self._downloaded_cache: tuple[float, list[dict[str, Any]]] | None = None
+        self._downloaded_cache: tuple[int, list[dict[str, Any]]] | None = None
         self._download_jobs_lock = threading.Lock()
         self._download_jobs: dict[str, dict[str, Any]] = {}
         # 独立事件循环线程：让同步的 pywebview 桥接方法可以驱动 httpx 异步请求
@@ -403,16 +402,27 @@ class MusicService:
         )
 
     def list_downloaded(self) -> list[dict[str, Any]]:
-        now = time.monotonic()
+        music_dir = config.MUSIC_DIR
+        if not music_dir.exists():
+            paths.ensure_dirs()
         with self._downloaded_cache_lock:
             cached = self._downloaded_cache
-            if cached and now - cached[0] < _DOWNLOADED_CACHE_TTL:
+            try:
+                dir_mtime = music_dir.stat().st_mtime_ns
+            except OSError:
+                dir_mtime = -1
+            if cached and cached[0] == dir_mtime:
                 return [dict(item) for item in cached[1]]
 
-        paths.ensure_dirs()
+        if not music_dir.exists():
+            paths.ensure_dirs()
+        try:
+            dir_mtime = music_dir.stat().st_mtime_ns
+        except OSError:
+            dir_mtime = -1
         rows: list[tuple[float, dict[str, Any]]] = []
         try:
-            with os.scandir(config.MUSIC_DIR) as entries:
+            with os.scandir(music_dir) as entries:
                 for entry in entries:
                     if not entry.is_file() or Path(entry.name).suffix.lower() not in config.AUDIO_EXTS:
                         continue
@@ -429,7 +439,7 @@ class MusicService:
             rows = []
         items = [item for _, item in sorted(rows, key=lambda row: row[0], reverse=True)]
         with self._downloaded_cache_lock:
-            self._downloaded_cache = (time.monotonic(), items)
+            self._downloaded_cache = (dir_mtime, items)
         return items
 
     def _invalidate_downloaded_cache(self) -> None:

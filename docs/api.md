@@ -42,6 +42,7 @@ PyMSS 模型接口只开放两个用途：`vocal_separation`（人声分离）�
 ```http
 GET /api/v1/preprocess/pymss/models?purpose=vocal_separation
 POST /api/v1/preprocess/pymss/models/UVR-DeEcho-DeReverb.pth/download
+DELETE /api/v1/preprocess/pymss/models/UVR-DeEcho-DeReverb.pth
 GET /api/v1/preprocess/pymss/downloads
 ```
 

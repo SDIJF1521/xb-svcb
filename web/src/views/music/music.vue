@@ -423,7 +423,11 @@ async function downloadAndCreate(item: MusicSearchItem) {
 
 /* ----- 已下载 ----- */
 async function refreshDownloaded() {
-  downloaded.value = await api.listMusic()
+  try {
+    downloaded.value = await api.listMusic()
+  } catch {
+    /* keep the current list if refresh fails */
+  }
 }
 
 function gotoCreate(d: DownloadedMusic, item?: MusicSearchItem) {
@@ -485,6 +489,7 @@ async function saveKey() {
 }
 
 onMounted(async () => {
+  void refreshDownloaded()
   const [key, srcList, curSource] = await Promise.all([
     api.getMusicApiKey(),
     api.listMusicSources(),
@@ -494,7 +499,6 @@ onMounted(async () => {
   if (srcList.length) sources.value = srcList
   if (srcList.some((s) => s.id === curSource)) source.value = curSource
   resultSource.value = source.value
-  await refreshDownloaded()
 })
 </script>
 

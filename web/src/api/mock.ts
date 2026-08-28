@@ -1269,6 +1269,35 @@ export const mock = {
     mockProgress[key] = 0
     return { ok: true, model, key }
   },
+  deletePymssModel(model: string): boolean {
+    if (!model) return false
+    const exact = fileName(model.trim())
+    const stem = fileName(exact).replace(/\.[^.]+$/, '')
+    for (const key of Object.keys(mockJobs)) {
+      const job = mockJobs[key]
+      if (!job || !key.startsWith('pymss:') || job.status !== 'running') continue
+      const jobModel = job.title.replace(/^PyMSS · /, '')
+      const jobStem = fileName(jobModel).replace(/\.[^.]+$/, '')
+      if (jobModel === exact || jobStem === stem) {
+        return false
+      }
+    }
+    let removed = false
+    for (const candidate of [exact, stem, `${stem}.ckpt`, `${stem}.pth`, `${stem}.pt`, `${stem}.safetensors`]) {
+      if (mockPymssDownloaded.delete(candidate)) removed = true
+    }
+    for (const key of Object.keys(mockJobs)) {
+      const job = mockJobs[key]
+      if (!job || !key.startsWith('pymss:')) continue
+      const jobModel = job.title.replace(/^PyMSS · /, '')
+      const jobStem = fileName(jobModel).replace(/\.[^.]+$/, '')
+      if (jobModel === exact || jobStem === stem) {
+        delete mockJobs[key]
+        delete mockProgress[key]
+      }
+    }
+    return removed
+  },
   pickModelhubPreviewAudioFile(): Promise<string | null> {
     return browserPickFile('.mp3,.wav,.flac,.m4a,.ogg,.aac,audio/*')
   },

@@ -205,8 +205,21 @@ class PymssTool:
         try:
             marker_dir.mkdir(parents=True, exist_ok=True)
             marker = marker_dir / f"{Path(name).stem.lower()}.json"
+            downloaded_files: list[str] = []
+            output = (proc.stdout or "").strip()
+            if output:
+                try:
+                    payload = json.loads(output.splitlines()[-1])
+                except json.JSONDecodeError:
+                    payload = {}
+                files = payload.get("files") if isinstance(payload, dict) else None
+                if isinstance(files, list):
+                    downloaded_files = [str(entry) for entry in files if str(entry or "").strip()]
+            marker_data: dict[str, Any] = {"model": name, "source": "modelscope"}
+            if downloaded_files:
+                marker_data["files"] = downloaded_files
             marker.write_text(
-                json.dumps({"model": name, "source": "modelscope"}, ensure_ascii=False),
+                json.dumps(marker_data, ensure_ascii=False),
                 encoding="utf-8",
             )
         except OSError:
@@ -265,6 +278,122 @@ class PymssTool:
     def download_jobs(self) -> list[dict[str, Any]]:
         with self._download_lock:
             return [dict(job) for job in self._download_jobs.values()]
+
+    @staticmethod
+    def _download_marker_path(model_dir: Path, model: str) -> Path:
+        stem = Path(str(model or "")).stem.lower()
+        return model_dir / ".xb-downloaded" / f"{stem}.json"
+
+    @staticmethod
+    def _normalize_cache_path(model_dir: Path, raw: str) -> Path | None:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            path = model_dir / path
+        try:
+            resolved = path.resolve(strict=False)
+            root = model_dir.resolve(strict=False)
+            if resolved == root or root in resolved.parents:
+                return resolved
+        except OSError:
+            return None
+        return None
+
+    @staticmethod
+    def _matches_model_artifact(path: Path, stem: str) -> bool:
+        if not stem:
+            return False
+        name = path.name.casefold()
+        stem_name = path.stem.casefold()
+        if name == f"{stem}.json" and path.parent.name.casefold() == ".xb-downloaded":
+            return True
+        if name == f"{stem}.pymss_state_dict.pt":
+            return True
+        if stem_name == stem:
+            return True
+        if stem_name.startswith(f"{stem}.") or stem_name.startswith(f"{stem}-") or stem_name.startswith(f"{stem}_"):
+            return True
+        return path.parent.name.casefold() == stem
+
+    def delete_model(self, model: str) -> bool:
+        model_name = str(model or "").strip()
+        if not model_name:
+            return False
+        model_dir = config.PYMSS_MODEL_DIR
+        if not model_dir or not model_dir.exists():
+            return False
+        stem = Path(model_name).stem.casefold()
+        if not stem:
+            return False
+
+        with self._download_lock:
+            running = [
+                job
+                for job in self._download_jobs.values()
+                if job.get("status") == "running"
+                and Path(str(job.get("model") or "")).stem.casefold() == stem
+            ]
+        if running:
+            return False
+        with self._download_lock:
+            for key, job in list(self._download_jobs.items()):
+                if Path(str(job.get("model") or "")).stem.casefold() == stem and job.get("status") != "running":
+                    del self._download_jobs[key]
+
+        marker = self._download_marker_path(model_dir, model_name)
+        candidates: list[Path] = []
+        if marker.is_file():
+            candidates.append(marker)
+            try:
+                payload = json.loads(marker.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, TypeError):
+                payload = {}
+            files = payload.get("files") if isinstance(payload, dict) else None
+            if isinstance(files, list):
+                for entry in files:
+                    resolved = self._normalize_cache_path(model_dir, str(entry))
+                    if resolved and resolved not in candidates:
+                        candidates.append(resolved)
+
+        try:
+            for path in model_dir.rglob("*"):
+                if path.is_file() and self._matches_model_artifact(path, stem):
+                    if path not in candidates:
+                        candidates.append(path)
+        except OSError:
+            return False
+
+        deleted = False
+        for path in sorted({candidate.resolve(strict=False) for candidate in candidates}, key=lambda item: len(item.parts), reverse=True):
+            if not path.exists():
+                continue
+            try:
+                path.unlink()
+                deleted = True
+            except OSError:
+                return False
+
+        try:
+            for path in sorted(
+                (candidate for candidate in model_dir.rglob("*") if candidate.is_dir()),
+                key=lambda item: len(item.parts),
+                reverse=True,
+            ):
+                if path == model_dir:
+                    continue
+                try:
+                    next(path.iterdir())
+                except StopIteration:
+                    try:
+                        path.rmdir()
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+
+        return deleted
 
     def clear_download_job(self, key: str) -> bool:
         """Remove a finished/failed PyMSS download task from the session list."""

@@ -435,6 +435,9 @@ export const api = {
       mock.pymssDownloadModel(model),
     ),
 
+  deletePymssModel: (model: string) =>
+    invoke<boolean>('delete_pymss_model', [model], () => mock.deletePymssModel(model)),
+
   pymssDownloadProgress: (key: string) =>
     invoke<PymssDownloadJob>('pymss_download_progress', [key], () => ({
       key,

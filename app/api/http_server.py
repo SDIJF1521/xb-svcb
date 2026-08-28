@@ -1815,6 +1815,25 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
             raise HTTPException(status_code=400, detail=result.get("error") or "PyMSS 模型下载失败")
         return result
 
+    @router.delete(
+        "/preprocess/pymss/models/{model_name:path}",
+        response_model=ActionResponse,
+        tags=["模型"],
+        summary="删除 PyMSS 前期分离模型",
+        description=_resource_api_doc(
+            "删除指定 PyMSS 模型的本地权重与下载标记。",
+            "DELETE",
+            "/api/v1/preprocess/pymss/models/{model_name}",
+            [("model_name", "string", "是", "-", "PyMSS catalog 模型名")],
+            note="此操作会删除本地文件，无法通过 API 撤销。",
+        ),
+        responses={404: {"model": ErrorResponse, "description": "模型不存在"}},
+    )
+    def delete_pymss_model(model_name: str = ApiPath(..., description="PyMSS catalog 模型名")) -> dict[str, Any]:
+        if not facade.delete_pymss_model(model_name):
+            raise HTTPException(status_code=404, detail="模型不存在")
+        return {"ok": True, "id": model_name}
+
     @router.get(
         "/preprocess/pymss/downloads",
         tags=["模型"],

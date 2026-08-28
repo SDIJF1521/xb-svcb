@@ -17,7 +17,8 @@
 ;  FFmpeg 由安装包分卷内置（检测到系统 ffmpeg 时跳过释放）；uv 会在 Python 可用后
 ;  自动安装到用户目录；其他依赖提供跳转官方/可信下载页面的按钮。
 ;  JUCE VST3 Host 是发布包内置的原生组件，不在用户机现场编译。
-;  CUDA 栈可自动检测，也可手动指定 40 系及以下 cu121 / 50 系 cu128。
+;  NVIDIA 前置 CUDA 版本固定：50 系使用 CUDA 12.8，50 系以下使用 CUDA 12.6；
+;  AMD/CPU 不显示 CUDA 前置项。PyTorch/PyMSS wheel 的内部栈名与此显示版本分开管理。
 ;  应用界面本身由 exe 自带，无需 Node / Python。
 ; ============================================================
 
@@ -125,6 +126,12 @@ Type: filesandordirs; Name: "{app}\tools"
 Type: filesandordirs; Name: "{app}\models"
 
 [Code]
+const
+  CudaToolkitPreBlackwellVersion = '12.6';
+  CudaToolkitBlackwellVersion = '12.8';
+  CudaToolkitPreBlackwellUrl = 'https://developer.nvidia.com/cuda-12-6-0-download-archive';
+  CudaToolkitBlackwellUrl = 'https://developer.nvidia.com/cuda-12-8-0-download-archive';
+
 var
   DataDirPage: TInputDirWizardPage;
   PrereqPage: TInputOptionWizardPage;
@@ -531,11 +538,22 @@ end;
 
 function CudaToolkitVersionForStack(const Stack: String): String;
 begin
-  { 主栈仍按 cu121 / cu128 运行，这里只管前置 CUDA 工具链推荐版本。 }
+  { 这里必须只返回固定的推荐版本，不能从系统 nvcc 输出推导版本。 }
   if Stack = 'cu128' then
-    Result := '12.8'
+    Result := CudaToolkitBlackwellVersion
   else if Stack = 'cu121' then
-    Result := '12.6'
+    Result := CudaToolkitPreBlackwellVersion
+  else
+    Result := '';
+end;
+
+function CudaToolkitDownloadUrlForStack(const Stack: String): String;
+begin
+  { 下载链接同样固定，不能跟随系统已安装的 CUDA 版本变化。 }
+  if Stack = 'cu128' then
+    Result := CudaToolkitBlackwellUrl
+  else if Stack = 'cu121' then
+    Result := CudaToolkitPreBlackwellUrl
   else
     Result := '';
 end;
@@ -567,9 +585,9 @@ end;
 function GpuStackLabel(const Stack: String): String;
 begin
   if Stack = 'cu128' then
-    Result := 'NVIDIA 50 系 / Blackwell，使用 CUDA 12.8 与 cu128 torch'
+    Result := 'NVIDIA 50 系 / Blackwell，固定使用 CUDA 12.8（cu128 torch）'
   else if Stack = 'cu121' then
-    Result := 'NVIDIA 40 系及以下兼容显卡，使用 CUDA 12.1 与 cu121 torch'
+    Result := 'NVIDIA 50 系以下兼容显卡，固定使用 CUDA 12.6（PyMSS 使用 cu126）'
   else if Stack = 'directml' then
     Result := 'AMD Radeon，使用 DirectML 与 torch-directml'
   else
@@ -664,11 +682,12 @@ begin
 end;
 
 procedure CudaDownloadClick(Sender: TObject);
+var
+  Url: String;
 begin
-  if DetectedGpuStackName() = 'cu128' then
-    OpenDownloadUrl('https://developer.nvidia.com/cuda-12-8-0-download-archive')
-  else if DetectedGpuStackName() = 'cu121' then
-    OpenDownloadUrl('https://developer.nvidia.com/cuda-12-6-0-download-archive');
+  Url := CudaToolkitDownloadUrlForStack(DetectedGpuStackName());
+  if Url <> '' then
+    OpenDownloadUrl(Url);
 end;
 
 procedure VbCableDownloadClick(Sender: TObject);
@@ -761,7 +780,7 @@ begin
     CudaVersion := DetectedCudaVersion();
     CudaDownloadButton.Caption := '下载 CUDA ' + CudaVersion;
     if CudaToolkitAvailable(CudaVersion, CudaPathPage.Values[0]) then
-      CudaStatusLabel.Caption := 'CUDA Toolkit ' + CudaVersion + '：已检测到';
+      CudaStatusLabel.Caption := 'CUDA Toolkit ' + CudaVersion + '：已检测到'
     else
       CudaStatusLabel.Caption := 'CUDA Toolkit ' + CudaVersion + '：未检测到';
   end
@@ -791,9 +810,9 @@ begin
     not (CmdAvailable('cl') or
       FileExists(ExpandConstant('{pf32}\Microsoft Visual Studio\Installer\vswhere.exe')));
   if DetectedGpuStackName() = 'cu128' then
-    Result := Result or (not CudaToolkitAvailable('12.8', CudaPathPage.Values[0]))
+    Result := Result or (not CudaToolkitAvailable(CudaToolkitBlackwellVersion, CudaPathPage.Values[0]))
   else if DetectedGpuStackName() = 'cu121' then
-    Result := Result or (not CudaToolkitAvailable('12.6', CudaPathPage.Values[0]));
+    Result := Result or (not CudaToolkitAvailable(CudaToolkitPreBlackwellVersion, CudaPathPage.Values[0]));
 end;
 
 procedure SetEnvProgress(Position: Integer; const Detail: String);
@@ -966,8 +985,8 @@ begin
   );
   GpuStackPage.Add('自动检测（推荐）');
   GpuStackPage.Add('CPU 模式');
-  GpuStackPage.Add('NVIDIA 40 系及以下：cu121');
-  GpuStackPage.Add('NVIDIA 50 系 Blackwell：cu128');
+  GpuStackPage.Add('NVIDIA 50 系以下：CUDA 12.6（PyMSS cu126）');
+  GpuStackPage.Add('NVIDIA 50 系 Blackwell：CUDA 12.8（cu128）');
   GpuStackPage.Add('AMD Radeon：DirectML');
   GpuStackPage.Values[0] := True;
 
@@ -1031,7 +1050,8 @@ begin
     PrereqPathPage.ID,
     'NVIDIA CUDA Toolkit',
     '选择 CUDA Toolkit 安装位置或已有目录',
-    '此页面只对 NVIDIA cu121 / cu128 显示；PyTorch wheel 已包含推理运行库，Toolkit 用于配套工具链。',
+    '此页面只对 NVIDIA 显卡显示：50 系固定推荐 CUDA 12.8，50 系以下固定推荐 CUDA 12.6；'
+    + 'PyTorch wheel 已包含推理运行库，Toolkit 用于配套工具链。',
     False,
     ''
   );
@@ -1155,9 +1175,9 @@ begin
        ContainsText(CudaPathPage.Values[0], '\NVIDIA GPU Computing Toolkit\CUDA\v12.') then
     begin
       if DetectedGpuStackName() = 'cu128' then
-        CudaPathPage.Values[0] := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.8')
+        CudaPathPage.Values[0] := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v' + CudaToolkitBlackwellVersion)
       else
-        CudaPathPage.Values[0] := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.6');
+        CudaPathPage.Values[0] := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v' + CudaToolkitPreBlackwellVersion);
     end;
   end;
   if CurPageID = wpFinished then
