@@ -328,7 +328,7 @@ uv pip install --python <安装目录>\.venv-svc\Scripts\python.exe "setuptools<
 - 作品分类、视频导出和歌词视频能力；
 - Intel GPU、CPU 性能和多 GPU 调度优化。
 
-完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.0.30 更新说明](release_notes_v030.md)。
+完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.0.30 更新说明](docs/release-notes/release_notes_v030.md)。
 
 ## 进一步阅读
 
