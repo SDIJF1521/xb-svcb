@@ -28,29 +28,6 @@
 
 <sub>用户交流 / 反馈 QQ 群：**1038366109**</sub>
 
-</div>
-<a id="features"></a>
-
----
-
-#### 开箱即用的桌面级 AI 翻唱工作站
-
-导入歌曲、分离人声、AI 歌声转换、混合翻唱、音频编辑，一站完成。
-
-[![License](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release&color=ff6b9d)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#)
-[![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10-3776AB?logo=python&logoColor=white)](#)
-[![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
-
-### ⬇️ [下载安装器 · XB-SVCB-Setup.exe](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-
-Windows 一键安装 · 内置前端与底模 · 支持 NVIDIA CUDA、AMD DirectML 和 CPU
-
-用户交流 / 反馈 QQ 群：**1038366109**
-
-</div>
-
 ---
 
 ## 项目简介
