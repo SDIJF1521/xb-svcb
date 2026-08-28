@@ -42,8 +42,9 @@
       <div class="section-head"><div class="section-title"><span class="section-kicker">03</span><div><h2>已安装插件</h2><p>每个插件都需要单独授权后才能运行</p></div></div><span class="section-note">LOCAL RUNTIME</span></div>
       <div v-if="plugins.length" class="plugin-grid">
         <article v-for="plugin in plugins" :key="plugin.id" class="plugin-card glass">
-          <div class="plugin-title"><div class="plugin-identity"><div class="plugin-avatar" :class="plugin.runtime"><el-icon><component :is="plugin.runtime === 'frontend' ? Grid : Cpu" /></el-icon></div><div><h3>{{ plugin.name }}</h3><span>{{ plugin.id }} · v{{ plugin.version }}</span></div></div><el-switch :model-value="plugin.enabled" inline-prompt active-text="开" inactive-text="关" @change="togglePlugin(plugin, $event)" /></div>
+          <div class="plugin-title"><div class="plugin-identity"><div class="plugin-avatar" :class="plugin.runtime"><el-icon><component :is="plugin.runtime === 'frontend' ? Grid : Cpu" /></el-icon></div><div><h3>{{ plugin.name }}</h3><span>{{ plugin.id }} · v{{ plugin.version }}</span></div></div><el-switch :model-value="plugin.enabled" :disabled="plugin.runtime_status?.ready === false" inline-prompt active-text="开" inactive-text="关" @change="togglePlugin(plugin, $event)" /></div>
           <div class="runtime-row"><span class="runtime-tag" :class="plugin.runtime">{{ runtimeLabel(plugin.runtime) }}</span><span v-if="plugin.permissions.length" class="permission-text">{{ permissionSummary(plugin.permissions) }}</span></div>
+          <div v-if="pluginError(plugin)" class="plugin-error" :title="pluginError(plugin)"><el-icon><WarningFilled /></el-icon><span>{{ pluginError(plugin) }}</span></div>
           <p>{{ plugin.description || '暂无说明' }}</p>
           <footer>
             <span class="author">{{ plugin.author || '未知作者' }}</span>
@@ -61,7 +62,7 @@ import { onMounted, ref } from 'vue'
 import 'element-plus/es/components/notification/style/css'
 import 'element-plus/es/components/message-box/style/css'
 import { ElMessageBox, ElNotification } from 'element-plus'
-import { ArrowRight, CircleCheck, Cpu, Grid, Upload } from '@element-plus/icons-vue'
+import { ArrowRight, CircleCheck, Cpu, Grid, Upload, WarningFilled } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { api, type PluginInfo, type PluginInstallResult, type PluginMarketItem, type PluginStatus } from '@/api'
 
@@ -249,8 +250,14 @@ async function togglePlugin(plugin: PluginInfo, value: string | number | boolean
     } catch { return }
   }
   try {
-    if (await api.setPluginEnabled(plugin.id, next)) plugin.enabled = next
-    else notifyError(next ? '插件入口加载失败，未启用。请检查 Python 版本和插件日志。' : '更新插件状态失败')
+    if (await api.setPluginEnabled(plugin.id, next)) {
+      plugin.enabled = next
+      plugin.last_error = ''
+    } else {
+      await load()
+      const current = plugins.value.find((item) => item.id === plugin.id)
+      notifyError(current?.last_error || (next ? '插件入口加载失败，未启用。请检查 Python 版本和插件日志。' : '更新插件状态失败'))
+    }
   } catch (error) {
     notifyError(errorMessage(error, next ? '启用插件失败' : '禁用插件失败'))
   }
@@ -260,6 +267,9 @@ function runtimeLabel(runtime: PluginInfo['runtime']) {
 }
 function permissionSummary(permissions: string[]) {
   return permissions.includes('python.execute') ? '包含可执行代码' : `${permissions.length} 项权限`
+}
+function pluginError(plugin: PluginInfo) {
+  return plugin.last_error || (plugin.runtime_status?.ready === false ? plugin.runtime_status.error : '')
 }
 function openPlugin(plugin: PluginInfo) {
   const page = plugin.pages[0]
@@ -292,5 +302,6 @@ onMounted(load)
 .glass { background: var(--xb-panel); border: 1px solid var(--xb-border); border-radius: 8px; backdrop-filter: blur(15px); }.settings { padding: 22px; }.section { margin-top: 30px; }.section-head { margin-bottom: 15px; }.section-title { display: flex; align-items: center; gap: 11px; }.section-kicker { color: var(--xb-primary); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }.section-head h2 { margin-bottom: 5px; font-size: 18px; }.security { color: var(--xb-muted); font-size: 12px; line-height: 1.5; margin: 18px 0 0; padding: 11px 13px; background: rgba(var(--xb-success-rgb), .07); border-left: 3px solid var(--xb-success); }.market-row { margin-top: 18px; }.market-row label { min-width: 108px; color: var(--xb-text); font-size: 12px; font-weight: 650; }.market-row :deep(.el-input) { flex: 1; }.market-row :deep(.el-input__wrapper) { min-height: 40px; background: rgba(var(--xb-fill-rgb), .045); box-shadow: 0 0 0 1px var(--xb-border) inset; }.local-row { justify-content: flex-start; margin-top: 15px; color: var(--xb-muted); font-size: 12px; }.plugin-file-input { display: none; }.install-btn { background: rgba(var(--xb-primary-rgb), .1) !important; border-color: rgba(var(--xb-primary-rgb), .35) !important; color: var(--xb-primary) !important; }.dev-path { display: inline-flex; align-items: center; gap: 9px; min-width: 0; }.dev-path > span { color: var(--xb-muted); }.dev-path code { max-width: 560px; overflow: hidden; color: var(--xb-primary); text-overflow: ellipsis; white-space: nowrap; }code { color: var(--xb-primary); overflow-wrap: anywhere; }.plugin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; }.plugin-card { position: relative; min-height: 188px; padding: 19px; display: flex; flex-direction: column; gap: 15px; overflow: hidden; transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease; }.plugin-card::before { content: ''; position: absolute; inset: 0 0 auto; height: 2px; background: linear-gradient(90deg, var(--xb-primary), transparent 70%); opacity: .65; }.plugin-card:hover { border-color: rgba(var(--xb-primary-rgb), .48); transform: translateY(-2px); box-shadow: 0 10px 26px rgba(0, 0, 0, .14); }.plugin-title h3 { margin-bottom: 4px; font-size: 16px; }.plugin-title span, footer { color: var(--xb-muted); font-size: 11px; }.plugin-identity { display: flex; align-items: center; gap: 11px; min-width: 0; }.plugin-avatar { width: 37px; height: 37px; display: grid; place-items: center; flex-shrink: 0; border: 1px solid rgba(var(--xb-primary-rgb), .3); border-radius: 9px; color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), .1); font-size: 18px; }.plugin-avatar.market { color: var(--xb-accent); border-color: rgba(var(--xb-accent-rgb), .3); background: rgba(var(--xb-accent-rgb), .1); }.tag { padding: 4px 7px; color: var(--xb-primary) !important; border: 1px solid rgba(var(--xb-primary-rgb), .25); border-radius: 5px; background: rgba(var(--xb-primary-rgb), .08); font-size: 10px !important; }.plugin-card p { font-size: 13px; line-height: 1.6; flex: 1; }.plugin-card footer { padding-top: 12px; border-top: 1px solid rgba(var(--xb-fill-rgb), .08); }.author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.card-actions { display: flex; gap: 8px; }.card-actions :deep(.el-button), .plugin-card footer :deep(.el-button) { display: inline-flex; align-items: center; gap: 5px; }.empty { padding: 42px 24px; color: var(--xb-muted); text-align: center; }
 .market-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: -4px; }
 .runtime-row { display: flex; align-items: center; gap: 8px; margin-top: -5px; }.runtime-tag { padding: 3px 7px; border: 1px solid var(--xb-border); border-radius: 5px; color: var(--xb-muted); background: rgba(var(--xb-fill-rgb), .045); font-size: 10px; }.runtime-tag.python, .runtime-tag.hybrid { color: var(--xb-warn); border-color: rgba(var(--xb-warn-rgb), .32); background: rgba(var(--xb-warn-rgb), .08); }.plugin-avatar.python, .plugin-avatar.hybrid { color: var(--xb-warn); border-color: rgba(var(--xb-warn-rgb), .3); background: rgba(var(--xb-warn-rgb), .1); }.permission-text { color: var(--xb-muted); font-size: 10px; }
+.plugin-error { display: flex; align-items: flex-start; gap: 7px; margin-top: -4px; padding: 8px 10px; color: var(--xb-warn); border-left: 3px solid var(--xb-warn); background: rgba(var(--xb-warn-rgb), .08); font-size: 11px; line-height: 1.45; }.plugin-error .el-icon { margin-top: 2px; flex-shrink: 0; }.plugin-error span { display: -webkit-box; overflow: hidden; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 @media (max-width: 720px) { .page { padding: 24px 15px 52px; }.page-head, .market-row { align-items: stretch; flex-direction: column; }.master-control { justify-content: space-between; }.status-banner { align-items: flex-start; }.status-count { display: none; }.local-row { align-items: flex-start; flex-direction: column; }.dev-path { width: 100%; align-items: flex-start; flex-direction: column; gap: 4px; }.dev-path code { max-width: 100%; }.section-note { display: none; } }
 </style>

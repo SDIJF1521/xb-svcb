@@ -1,35 +1,5 @@
 <div align="center">
 
-# 🎤 XB-SVCB · AI 翻唱工具
-
-#### 开箱即用的桌面级 AI 翻唱工作站
-
-**🎵 导入歌曲 ｜ 🎚️ 人声分离 ｜ 🌫️ 去混响 ｜ 🗣️ AI 歌声转换 ｜ 🎧 AI 歌声增强 ｜ 🎼 合并伴奏 ｜ 🎤 成品翻唱**
-
-一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **实时系统音频变声** · **AI 歌声增强工程** · **在线曲库** · **模型站** · **音频编辑器**
-
-<br/>
-
-[![License](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release&color=ff6b9d)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/SDIJF1521/xb-svcb/total?color=brightgreen&label=downloads)](https://github.com/SDIJF1521/xb-svcb/releases)
-[![Stars](https://img.shields.io/github/stars/SDIJF1521/xb-svcb?style=flat&color=yellow)](https://github.com/SDIJF1521/xb-svcb/stargazers)
-
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#)
-[![Python](https://img.shields.io/badge/python-3.9%20|%203.10-3776AB?logo=python&logoColor=white)](#)
-[![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
-[![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
-
-<br/>
-
-### ⬇️ [**点此下载安装器 · XB-SVCB-Setup.exe**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-
-<sub>Windows 一键安装 · 内置前端与底模 · 无需手动配置 Python / Node</sub>
-
-<sub>用户交流 / 反馈 QQ 群：**1038366109**</sub>
-
-</div>
-
 <a id="features"></a>
 
 ---
@@ -46,6 +16,7 @@
 - 🎵 **在线资源获取（可播放校验）** —— 内置 **网易云 / QQ音乐 / 酷我音乐** 曲库的搜索、试听、下载（QQ 可填会员 Cookie 取高品质音频）；酷我支持无损音质候选回退、后端代理试听、Range 分段下载及内联歌词。下载前统一校验资源可播放性（魔数 / Content-Type / ffprobe），VIP / 无版权 / 失效链接不可下载；下载素材可一键进入翻唱。
 - 🎬 **作品音乐播放页** —— 从作品库进入带过渡动画的独立播放器，支持进度 / 音量控制、歌词逐句跟随和点击跳转；歌词可导入 LRC，或选择网易云、QQ、酷我曲库并从多个搜索结果中指定歌曲序号通过 API 获取；每首作品还可关联图片或 MP4 MV 画面并持久化恢复。
 - 🌐 **模型站（魔搭社区 · 后台传输）** —— 基于 **ModelScope** 一键**上传/下载**声音模型：填自己的访问令牌即可发布到自有公开仓库，按关键词**模糊搜索**（**分页加载**）社区模型并直接导入；带**架构标签**（So-VITS-SVC / RVC / SeedVC / DDSP-SVC）与**清单防污染**校验；上传/下载**挂后台执行、不阻塞操作**，大模型支持断点续传和重试，下载完成后立即进入可选模型列表。
+- 🎚️ **可选前期处理** —— 翻唱创建页可关闭人声分离，或在 UVR 与 **PyMSS** 之间切换；PyMSS 模型站只提供人声分离与和声去除两类模型，已下载模型可直接选择，并支持分离后可选去除和声。
 - 🎼 **专业人声分离与双阶段修复** —— `5_HP-Karaoke-UVR` 分离 + `UVR-DeEcho-DeReverb` 去混响后，使用安装包内置的专用 `DeepFilterNet3` 模型修复分离伪影；修复前会分析 6 kHz 以上高频占比和人声音域，神经修复后只在有效人声窗口受控恢复高频辅音与高音泛音。翻唱模型输出还会再经过一次独立修复，再进入可选美声与混音。
 - 🎧 **AI 歌声增强工程** —— 可调的 **AI 对齐**（默认 45%）先根据停顿切分并单调匹配原唱与 AI 人声句段，再用去音色化倒谱/动态特征执行带约束声学音素 DTW，生成间距约 300 ms 的高置信度时间锚点。密集锚点只负责参考 F0 的字音对应；只有同一句内至少三个相邻锚点方向一致、原始偏差超过 25 ms、按当前强度应用后仍达到 8 ms 时，才通过受限 Praat DurationTier 校正波形节奏，避免持续元音产生“电风扇”式周期调制，整轨时长始终不变。随后在同一次 PSOLA 重合成中执行自然修音（默认 45%）：参考映射后的原唱 F0，过滤误检、弱化半音吸附、限制最大修正并在乐句边缘渐入渐出，以保留颤音、滑音和清辅音；PSOLA 只覆盖连续人声区域，长数字静音恢复原始样本，0.45 秒以内句内空隙保持连续。AI 角色共振峰（默认 60%）只分析转换后目标声音自身在 250 Hz–4.5 kHz 的稳定宽带峰，不复制原唱的中频身份。另有独立可调的 **AI EQ**（默认 55%，宽带频谱自适应校正）、**AI Compressor**（默认 45%，按有效人声动态自动设阈值并补偿响度）、**AI Exciter**（默认 25%，带齿音保护的高频谐波增强）、**Stereo**（默认 30%，低频居中、单声道兼容的中侧扩展）和 **AI 响度包络**（默认 58%，从 AI 人声自身恢复局部响度起伏）。所有滑块只定义处理上限：引擎会先按整首素材推导高通、body、harsh、presence、air、压缩参数与 wet 上限，再按 20 ms 人声窗口动态收放角色共振峰、EQ、压缩、激励、声场、响度包络和并行母带；静音、弱呼吸与清辅音保留更多原声，高频占比突增时 Exciter 和 Stereo 自动退让。响度包络在效果链末端以约 70 ms 平滑轮廓执行最多 ±3 dB 的受限校正，并避开停顿和底噪。basic 的动态 wet 上限通常在 57%–72%，advanced 通常在 69%–84%，而不是固定比例。vocalfloor 对 0.5 秒以内句内停顿保持开启且最大只衰减 6 dB；advanced 额外保护最多 8% 的高频辅音/呼吸细节，并只做最大 ±1.25 dB 的参考宽带倾斜校正。美声任务的最终混音会测量人声与伴奏的 EBU R128 有效响度，让人声保持在伴奏下方约 2.5 dB，并用低比例并行总线压缩收拢共同峰值；增益始终受限，最终以 -1.5 dBFS 采样峰值限幅，为真峰值保留余量。
 - ⚡ **GPU / CPU 自由切换** —— 自动识别 NVIDIA CUDA 与 AMD Radeon DirectML（含 **50 系/Blackwell 自动走 cu128 + torch 2.7**），长音频自动分段避免显存溢出。
@@ -53,10 +24,10 @@
 - 🎨 **主题系统与自定义主题** —— 暗色 / 亮色 / 自定义主题一键切换并记忆，切换时从主题按钮触发基于原生页面快照的圆形扩散动画；自定义主题支持调色、背景图片 / MP4 动态壁纸和动态粒子，默认提供亮色「晴空花园」示例，连 pywebview **原生窗口标题栏/边框**也会在动画结束后自然同步。
 - 👤 **个性化** —— 自定义头像与昵称、内置全局消息通知中心；切换页面后仍持续同步任务进度与失败原因，已读状态可在多个前端窗口间同步。
 - 📦 **开箱即用** —— 安装后通过 `XB-SVCB.exe` 启动完整桌面应用（自带应用图标与前端资源），打开界面无需另装 Python / Node。
-- 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-seedvc` / `.venv-ddsp` / `.venv-uvr` / `.venv-vocal`），互不污染。
+- 🧩 **环境隔离** —— 重型 AI 任务跑在独立子环境（`.venv-svc` / `.venv-rvc` / `.venv-seedvc` / `.venv-ddsp` / `.venv-uvr` / `.venv-pymss` / `.venv-vocal`），互不污染。
 - 🎧 **作品库** —— 试听 / 导出成品，单独试听伴奏与干声，失败任务一键查日志；删除作品同步真实清理本地生成文件。
 
-> **最新版本 v0.0.29**：新增真实实时翻唱与系统音频变声，支持 VB-CABLE/WASAPI 回环输入、单模型 RVC/SeedVC、伴奏保持、流式处理和块间交叉淡化；新增独立 AI 增强工程与编辑器片段增强；退出时清空当前用户数据目录的 `temp` 临时内容；安装器增加 VB-CABLE 检测和手动安装引导。详见 [v0.0.29 更新说明](release_notes_v029.md)、[v0.0.28 更新说明](release_notes_v028.md)、[API 接入文档](docs/api.md)。
+> **最新版本 v0.0.30**：新增 PyMSS 独立人声分离引擎与模型管理，使用 `.venv-pymss` 隔离依赖并可在创建页和 UVR 切换；统一应用与安装器环境检测，真实验证 Python/Torch/worker 可运行性，修复旧路径和 WindowsApps 假 Python 误报；环境状态按基础能力、转换引擎和可选组件分层，设备探测失败可及时恢复；高音保护增加高音区域受限降调、升回原调与响度补偿，并支持高音域 F0 自适应和 FCPE 失败回退。**重要：PyMSS 的 NVIDIA CUDA 栈在 50 系以下从 cu121 调整为 cu126，50 系 Blackwell 仍使用 cu128。** 详见 [v0.0.30 更新说明](release_notes_v030.md)、[v0.0.29 更新说明](release_notes_v029.md)、[API 接入文档](docs/api.md)。
 
 > v0.0.28：新增完整插件中心、NoneBot2 风格 GitHub 插件市场、前端/Python/混合运行时、TypeScript/Python SDK 和自定义页面宿主 API；页面配置支持按插件持久化，插件与软件窗口支持全屏，并为妖狐 M3U8 提供受限宿主播放器。安装器同时修复 Python 环境识别、So-VITS-SVC Matplotlib 依赖、Vocal packaging 冲突、特殊路径转义和系统缺少 FFmpeg 时的随包释放。详见 [v0.0.28 更新说明](release_notes_v028.md)、[插件开发文档](docs/plugins/README.md) 与 [API 接入文档](docs/api.md)。
 
@@ -113,7 +84,9 @@
 
 ## 🏗️ 架构一览
 
-XB-SVCB 采用“**桌面与 HTTP 共用业务核心，重型引擎和插件在独立进程运行**”的结构。安装版以 `XB-SVCB.exe` 为统一进程，内含 Vue 前端、pywebview Bridge、可选 FastAPI 服务、Python 业务代码与 worker 脚本；So-VITS-SVC、RVC、SeedVC、DDSP-SVC、UVR、模型站组件、VST3 插件和 Python 插件分别通过隔离环境或原生 Host 执行，插件前端则在受限 iframe 中通过宿主 Bridge 调用能力，避免依赖与插件崩溃相互污染。实时翻唱在同一业务核心中增加文件流和系统音频两条路径：系统路径由回环/虚拟声卡采集混音，常驻 UVR 与单个 RVC/SeedVC Worker 处理人声，再由播放线程以重叠块交叉淡化输出。
+XB-SVCB 采用“**桌面与 HTTP 共用业务核心，重型引擎和插件在独立进程运行**”的结构。安装版以 `XB-SVCB.exe` 为统一进程，内含 Vue 前端、pywebview Bridge、可选 FastAPI 服务、Python 业务代码与 worker 脚本；So-VITS-SVC、RVC、SeedVC、DDSP-SVC、UVR、PyMSS、模型站组件、VST3 插件和 Python 插件分别通过隔离环境或原生 Host 执行，插件前端则在受限 iframe 中通过宿主 Bridge 调用能力，避免依赖与插件崩溃相互污染。实时翻唱在同一业务核心中增加文件流和系统音频两条路径：系统路径由回环/虚拟声卡采集混音，常驻 UVR 与单个 RVC/SeedVC Worker 处理人声，再由播放线程以重叠块交叉淡化输出。
+
+> **重要**：v0.0.30 起，PyMSS 独立环境在 50 系以下 NVIDIA 使用 `cu126`，Blackwell 仍使用 `cu128`；这不会把主安装栈的 `cu121` 全局改掉，只影响 PyMSS 专属 wheelhouse 和 worker。
 
 ```mermaid
 flowchart TB
@@ -162,6 +135,7 @@ flowchart TB
     subgraph RUNTIME["隔离运行时与原生进程"]
         direction LR
         UVR["UVR worker<br/>.venv-uvr"]
+        PYMSS["PyMSS worker<br/>.venv-pymss<br/>NVIDIA cu126 (50 系以下) / cu128 (Blackwell)"]
         SVC["So-VITS-SVC worker<br/>.venv-svc"]
         RVC["RVC worker<br/>.venv-rvc"]
         SEED["SeedVC worker + inference.py<br/>.venv-seedvc"]
@@ -209,6 +183,7 @@ flowchart TB
     PWORKER <--> DATA
     PWORKER --> YAOHU
     APP --> UVR
+    APP --> PYMSS
     APP --> FFMPEG
     REALTIME --> STREAM
     REALTIME --> AUDIO_IO
@@ -223,6 +198,7 @@ flowchart TB
     ROUTER --> DDSP
     EDITOR --> FFMPEG
     EDITOR --> JUCE
+    EDITOR -. PyMSS 分离 / 去和声 .-> PYMSS
     EDITOR -. 局部重推理 .-> ROUTER
     APP -. 歌声增强 .-> VOCAL
     EDITOR -. 重推理后增强 .-> VOCAL
@@ -231,6 +207,7 @@ flowchart TB
     CONNECT <--> MUSIC
     CONNECT -. 酷我代理试听 .-> FFMPEG
     ASSETS -. 本地优先 .-> UVR
+    ASSETS -. 本地优先 .-> PYMSS
     ASSETS -. 本地优先 .-> SVC
     ASSETS -. 本地优先 .-> RVC
     ASSETS -. 本地优先 .-> SEED
@@ -254,17 +231,17 @@ flowchart TB
 - **数据与程序分离**：模型、作品、下载素材、编辑工程、API 上传、缓存、设置及 `theme/media` 都写入可迁移的 `.xb_svcb`，覆盖升级不会替换用户数据。
 - **离线资产优先**：安装包预置关键底模；worker 优先解析本地文件，仅在缺失时使用镜像或上游服务。
 
-| 层 / 进程         | 主要实现                                                  | 职责与边界                                                     |
-| ----------------- | --------------------------------------------------------- | -------------------------------------------------------------- |
-| 交互与接入层      | pywebview + Vue 3 + FastAPI                               | 桌面交互、API Key 鉴权、OpenAPI、流式上传及受控文件下载        |
-| 插件平台层        | PluginService + iframe Host + Plugin SDK + Python Worker | 插件安装、开关、GitHub 市场、页面 Bridge、动作与生命周期执行 |
-| API 与业务层      | `api` + `application` + `domain`                    | 桌面/HTTP 共用契约、任务队列、模型/作品/曲库/编辑工程业务编排  |
-| 实时音频层        | `RealtimeCoverService` + `SystemAudioReader/Writer` | 文件流与系统混音变声；常驻 UVR/RVC/SeedVC、预缓冲、块级对齐和交叉淡化 |
-| 基础设施层        | `infrastructure` + `EngineRegistry` + FFmpeg          | 路径、仓储、下载、音频处理和多框架引擎适配                     |
-| AI 与模型站子进程 | SVC / RVC / SeedVC / DDSP-SVC / UVR / Vocal / Hub workers | 在独立`.venv-*` 中执行重型任务，隔离 Python、CUDA 与平台依赖 |
-| 原生插件进程      | C++ / JUCE VST3 Host                                      | 插件检查、原生 GUI、实时播放、参数 state 回写与离线渲染        |
-| 持久化层          | `.xb_svcb` + `assets/models`                          | 用户数据与 API 上传可迁移保存；随包资产优先供各 worker 使用    |
-| 在线集成          | 妖狐音乐 API + 酷我 CDN + ModelScope                      | 三曲库/歌词、酷我代理试听与分段下载、模型搜索、上传和断点下载  |
+| 层 / 进程         | 主要实现                                                          | 职责与边界                                                            |
+| ----------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------- |
+| 交互与接入层      | pywebview + Vue 3 + FastAPI                                       | 桌面交互、API Key 鉴权、OpenAPI、流式上传及受控文件下载               |
+| 插件平台层        | PluginService + iframe Host + Plugin SDK + Python Worker          | 插件安装、开关、GitHub 市场、页面 Bridge、动作与生命周期执行          |
+| API 与业务层      | `api` + `application` + `domain`                            | 桌面/HTTP 共用契约、任务队列、模型/作品/曲库/编辑工程业务编排         |
+| 实时音频层        | `RealtimeCoverService` + `SystemAudioReader/Writer`           | 文件流与系统混音变声；常驻 UVR/RVC/SeedVC、预缓冲、块级对齐和交叉淡化 |
+| 基础设施层        | `infrastructure` + `EngineRegistry` + FFmpeg                  | 路径、仓储、下载、音频处理和多框架引擎适配                            |
+| AI 与模型站子进程 | SVC / RVC / SeedVC / DDSP-SVC / UVR / PyMSS / Vocal / Hub workers | 在独立`.venv-*` 中执行重型任务，隔离 Python、CUDA 与平台依赖        |
+| 原生插件进程      | C++ / JUCE VST3 Host                                              | 插件检查、原生 GUI、实时播放、参数 state 回写与离线渲染               |
+| 持久化层          | `.xb_svcb` + `assets/models`                                  | 用户数据与 API 上传可迁移保存；随包资产优先供各 worker 使用           |
+| 在线集成          | 妖狐音乐 API + 酷我 CDN + ModelScope                              | 三曲库/歌词、酷我代理试听与分段下载、模型搜索、上传和断点下载         |
 
 ### 实时翻唱数据流
 
@@ -328,16 +305,16 @@ flowchart LR
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | **Python 3.10.5**            | [https://www.python.org/downloads/release/python-3105/](https://www.python.org/downloads/release/python-3105/)                           |
 | **Git**                      | [https://git-scm.com/downloads](https://git-scm.com/downloads)                                                                           |
-| **CUDA Toolkit 12.1 / 12.8** | [https://developer.nvidia.com/cuda-toolkit-archive](https://developer.nvidia.com/cuda-toolkit-archive)                                   |
+| **CUDA Toolkit 12.6 / 12.8** | [https://developer.nvidia.com/cuda-toolkit-archive](https://developer.nvidia.com/cuda-toolkit-archive)                                   |
 | **ffmpeg**（仅源码安装）     | [https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip](https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip)     |
 | **Node.js LTS**              | [https://nodejs.org/](https://nodejs.org/)                                                                                               |
 | **C++ Build Tools**          | [https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/) |
 | **CMake**                    | [https://cmake.org/download/](https://cmake.org/download/)                                                                               |
 | **JUCE**                     | [https://github.com/juce-framework/JUCE](https://github.com/juce-framework/JUCE)                                                         |
 
-> 💡 **关于 CUDA**：安装器会先复核实际显卡，40 系及以下兼容 NVIDIA 使用 **cu121**，50 系 Blackwell 使用 **cu128**；CPU 或不兼容显卡会跳过 CUDA 并安装 CPU 版 torch。PyTorch wheel 已内置对应 CUDA 运行库，通常只需匹配的新 NVIDIA 驱动，完整 CUDA Toolkit 仅用于本地编译/工具链。
+> 💡 **关于 CUDA**：主安装栈会先复核实际显卡，40 系及以下兼容 NVIDIA 使用 **cu121**，50 系 Blackwell 使用 **cu128**；PyMSS 独立环境使用 Torch 2.7.1，40 系及以下 NVIDIA 改用 **cu126**，50 系使用 **cu128**。NVIDIA 显卡最低支持 **GTX 1060 6GB**。CPU 或不兼容显卡会跳过 CUDA 并安装 CPU 版 torch。PyTorch wheel 已内置对应 CUDA 运行库，通常只需匹配的新 NVIDIA 驱动，完整 CUDA Toolkit 仅用于本地编译/工具链。
 
-> 图形安装器会同时使用 `nvidia-smi` 与 `Win32_VideoController` 检测 NVIDIA：RTX 4060 应显示为 **cu121**，CUDA Toolkit 默认目录为 `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1`；RTX 50 系显示为 **cu128**，默认目录为 `...\CUDA\v12.8`。CPU / AMD DirectML 会明确跳过 CUDA，不会在后续安装阶段重新改成 CUDA。
+> 图形安装器会同时使用 `nvidia-smi` 与 `Win32_VideoController` 检测 NVIDIA：RTX 4060 的 CUDA Toolkit 应显示为 **12.6**，默认目录为 `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6`；RTX 50 系显示为 **cu128**，默认目录为 `...\CUDA\v12.8`。CPU / AMD DirectML 会明确跳过 CUDA，不会在后续安装阶段重新改成 CUDA。
 
 > 🔴 **关于 AMD**：Windows 下检测到 AMD Radeon 时，UVR、So-VITS-SVC、RVC 与 SeedVC 安装 **DirectML + torch 2.4.1**；DDSP-SVC 暂时使用 CPU Torch，因为实机确认其完整 DirectML 图可能无异常返回却产生小声、静音或电流杂音。RVC/SeedVC 的 RMVPE 使用 CPU 稳定路径，其他受支持的神经网络仍由 AMD GPU 加速。**SeedVC 在 AMD/CPU 环境属于兼容路径，不建议非 NVIDIA 用户优先选择；AMD 用户推荐优先使用 So-VITS-SVC 或 RVC。**
 >
@@ -356,7 +333,7 @@ flowchart LR
 python -m pip install --user --upgrade uv
 ```
 
-3. 按显卡型号安装 CUDA：RTX 50 系显卡安装 [CUDA Toolkit 12.8](https://developer.nvidia.com/cuda-toolkit-archive)，RTX 40 系及以下安装 [CUDA Toolkit 12.1](https://developer.nvidia.com/cuda-toolkit-archive)；CPU 用户可跳过 CUDA。
+3. 按显卡型号安装 CUDA：RTX 50 系显卡安装 [CUDA Toolkit 12.8](https://developer.nvidia.com/cuda-toolkit-archive)，RTX 40 系及以下安装 [CUDA Toolkit 12.6](https://developer.nvidia.com/cuda-toolkit-archive)；CPU 用户可跳过 CUDA。
 4. 确认安装目录下存在 `tools\ffmpeg\bin\ffmpeg.exe`；图形安装器会自动把该目录加入用户 `PATH`，无需另行下载。系统已有 ffmpeg 时此步骤会自动跳过。
 5. 安装 [C++ Build Tools](https://visualstudio.microsoft.com/zh-hans/visual-cpp-build-tools/)，使用这个安装器安装 C++ 环境，建议勾选 **Desktop development with C++**。
 6. 打开 XB-SVCB 软件安装路径文件夹，按住 `Shift` 右键，选择「在此处打开终端」，然后按显卡类型运行：
@@ -365,7 +342,7 @@ python -m pip install --user --upgrade uv
 rem 50 系显卡（cu128）
 python install\install.py --root "D:\XB-SVCB" --skip-app --skip-web --cu128 --only uvr svc rvc seedvc ddsp vocal hub models
 
-rem 40 系及以下 NVIDIA 显卡（cu121）
+rem 40 系及以下 NVIDIA 显卡（主栈 cu121）
 python install\install.py --root "D:\XB-SVCB" --skip-app --skip-web --no-cu128 --only uvr svc rvc seedvc ddsp vocal hub models
 ```
 
@@ -501,7 +478,7 @@ npm run pack
 
 **市场与安全边界**
 
-插件市场使用 GitHub 上的 `market.json` / `plugins.json5` 索引，索引项指向 GitHub Release 中的 `.xbplugin` 包。当前市场不做签名、哈希校验、依赖解析、版本比较、自动更新或失败回滚；发布者需要在 Release 中写清楚兼容版本、权限、依赖和变更，用户也应只安装可信来源。
+插件市场使用 GitHub 上的 `market.json` / `plugins.json5` 索引，索引项指向 GitHub Release 中的 `.xbplugin` 包。SDK 会在发布打包阶段校验 Python/前端入口，并把 `requirements.txt` 依赖固化进包内 `vendor/`；用户安装时不联网解析依赖。当前市场仍不做签名、哈希校验、版本比较或自动更新，发布者需要在 Release 中写清楚兼容版本、权限、依赖和变更，用户也应只安装可信来源。
 
 自定义页面运行在 `sandbox="allow-scripts"` iframe 中，不能直接读取宿主 DOM，只能通过宿主 Client API 调用受控能力。Python 和混合插件会以当前用户权限执行真实代码；独立 Worker 只提供崩溃隔离，不是权限沙箱。当前硬限制包括：插件包最大 20 MB、解压后最大 50 MB、清单最大 512 KB、自定义页面入口 HTML 最大 2 MB、单个插件资源最大 10 MB、页面请求和 Python Worker 单次调用默认 30 秒。
 
@@ -1000,8 +977,8 @@ flowchart LR
     APP --> HOST["CMake + JUCE<br/>VST3 Host"]
     HOST --> STAGE["发布目录完整性校验<br/>应用 / 前端 / workers / Host / 安装脚本"]
 
-    ASSETS["assets/models 离线资产<br/>UVR / SVC / RVC / SeedVC / DDSP / DeepFilterNet"] --> ISCC["Inno Setup 6<br/>分卷打包"]
-    WHEELS["assets/wheels 离线 whl<br/>py310/py39 + CPU/DirectML/cu121/cu128"] --> ISCC
+    ASSETS["assets/models 离线资产<br/>UVR / SVC / RVC / SeedVC / DDSP / DeepFilterNet/pymss"] --> ISCC["Inno Setup 6<br/>分卷打包"]
+    WHEELS["assets/wheels 离线 whl<br/>py310/py39 + CPU/DirectML/cu121/cu126/cu128"] --> ISCC
     STAGE --> ISCC
 
     ISCC --> EXE["XB-SVCB-Setup.exe<br/>安装引导程序"]
@@ -1027,7 +1004,7 @@ flowchart LR
 - PyInstaller 运行目录内包含当前 `web/dist` 与 SVC / RVC / SeedVC / DDSP-SVC / UVR / Vocal / Hub workers，最终用户无需安装 Node.js。
 - 安装器携带预构建的 `xb-juce-vst3-host.exe`；开发者仅在确认已有正确产物时使用 `-SkipJuceHostBuild`。
 - `assets/models/` 包含 UVR、SVC/RVC 底模、SeedVC 所需 RMVPE、CampPlus、Whisper Small、BigVGAN，以及 AI 歌声增强所需的 DeepFilterNet3 权重；缺少或疑似 LFS 指针时构建直接失败（DeepFilterNet 权重校验阈值 8 MB）。
-- `assets/wheels/` 包含 `uv` bootstrap wheel，以及按 `py310/cpu`、`py310/directml`、`py310/cu121`、`py310/cu128` 分组的 Python 依赖；对 SVC/RVC 的 py39 和 DirectML 下 DDSP/Vocal 这类 torch 版本冲突环境，会额外使用组件子目录；安装器会写入 `XB_WHEELHOUSE_STRICT=1`，缺 whl 时直接报错，避免在用户机器临时解析/编译。
+- `assets/wheels/` 包含 `uv` bootstrap wheel，以及按 `py310/cpu`、`py310/directml`、`py310/cu121`、`py310/cu128` 分组的 Python 依赖；PyMSS 另有独立的 `py310/cu126` / `py310/cu128` 子目录。对 SVC/RVC 的 py39 和 DirectML 下 DDSP/Vocal 这类 torch 版本冲突环境，会额外使用组件子目录；安装器会写入 `XB_WHEELHOUSE_STRICT=1`，缺 whl 时直接报错，避免在用户机器临时解析/编译。
 - Inno Setup 使用 `DiskSpanning` 生成小于 2GB 的 `.bin` 分卷。EXE 不是完整离线包，发布和安装时都不能遗漏任何分卷。
 - 安装完成后会复核应用组件、UVR、SeedVC、DDSP-SVC 与 AI 歌声增强的 Python、worker 和上游推理入口；失败时给出修复命令和日志位置。
 - 卸载时清理安装目录内生成的 `.venv-*`、`engines/` 和 `models/`；可迁移的 `.xb_svcb` 用户数据默认保留。

@@ -18,6 +18,8 @@ import asyncio
 import os
 import re
 import threading
+import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -42,6 +44,7 @@ _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
+_DOWNLOADED_CACHE_TTL = 1.5
 
 
 class _AsyncRateLimiter:
@@ -245,6 +248,10 @@ class MusicService:
     def __init__(self, settings: SettingsStore) -> None:
         self._settings = settings
         self._limiter = _AsyncRateLimiter(config.MUSIC_API_QPS)
+        self._downloaded_cache_lock = threading.Lock()
+        self._downloaded_cache: tuple[float, list[dict[str, Any]]] | None = None
+        self._download_jobs_lock = threading.Lock()
+        self._download_jobs: dict[str, dict[str, Any]] = {}
         # 独立事件循环线程：让同步的 pywebview 桥接方法可以驱动 httpx 异步请求
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
@@ -331,9 +338,46 @@ class MusicService:
         source: str | None = None,
         song_id: str | None = None,
     ) -> dict[str, Any]:
-        return self._submit(
-            self._download(msg, n, self._normalize_source(source), song_id=song_id)
-        )
+        source_name = self._normalize_source(source)
+        key = f"music:{source_name}:{n}:{time.time_ns()}"
+        self._set_download_job(key, msg or f"歌曲 {n}", "running", 5, "正在获取音频…")
+        try:
+            result = self._submit(self._download(msg, n, source_name, song_id=song_id))
+            ok = bool(isinstance(result, dict) and result.get("ok"))
+            self._set_download_job(
+                key,
+                str(result.get("name") or msg or f"歌曲 {n}"),
+                "done" if ok else "failed",
+                100 if ok else 5,
+                "下载完成" if ok else "下载失败",
+                None if ok else str(result.get("error") or "下载失败"),
+            )
+            return result
+        except Exception as exc:
+            self._set_download_job(key, msg or f"歌曲 {n}", "failed", 5, "下载失败", str(exc))
+            raise
+
+    def _set_download_job(
+        self, key: str, title: str, status: str, pct: int, msg: str, error: str | None = None
+    ) -> None:
+        with self._download_jobs_lock:
+            self._download_jobs[key] = {
+                "key": key, "kind": "download", "title": title,
+                "status": status, "pct": pct, "msg": msg, "phase": "music-download",
+                "error": error,
+            }
+
+    def download_jobs(self) -> list[dict[str, Any]]:
+        with self._download_jobs_lock:
+            return [dict(job) for job in self._download_jobs.values()]
+
+    def clear_download_job(self, key: str) -> bool:
+        with self._download_jobs_lock:
+            job = self._download_jobs.get(str(key or ""))
+            if not job or job.get("status") == "running":
+                return False
+            del self._download_jobs[str(key)]
+            return True
 
     def preview(
         self,
@@ -359,23 +403,41 @@ class MusicService:
         )
 
     def list_downloaded(self) -> list[dict[str, Any]]:
+        now = time.monotonic()
+        with self._downloaded_cache_lock:
+            cached = self._downloaded_cache
+            if cached and now - cached[0] < _DOWNLOADED_CACHE_TTL:
+                return [dict(item) for item in cached[1]]
+
         paths.ensure_dirs()
-        items: list[dict[str, Any]] = []
+        rows: list[tuple[float, dict[str, Any]]] = []
         try:
-            files = [p for p in config.MUSIC_DIR.iterdir() if p.is_file()]
+            with os.scandir(config.MUSIC_DIR) as entries:
+                for entry in entries:
+                    if not entry.is_file() or Path(entry.name).suffix.lower() not in config.AUDIO_EXTS:
+                        continue
+                    try:
+                        stat = entry.stat()
+                    except OSError:
+                        continue
+                    path = Path(entry.path)
+                    rows.append((
+                        stat.st_mtime,
+                        {"name": path.stem, "path": str(path), "size": paths.file_size_label(path)},
+                    ))
         except OSError:
-            return []
-        for p in sorted(files, key=lambda x: x.stat().st_mtime, reverse=True):
-            if p.suffix.lower() in config.AUDIO_EXTS:
-                items.append(
-                    {"name": p.stem, "path": str(p), "size": paths.file_size_label(p)}
-                )
+            rows = []
+        items = [item for _, item in sorted(rows, key=lambda row: row[0], reverse=True)]
+        with self._downloaded_cache_lock:
+            self._downloaded_cache = (time.monotonic(), items)
         return items
+
+    def _invalidate_downloaded_cache(self) -> None:
+        with self._downloaded_cache_lock:
+            self._downloaded_cache = None
 
     def delete_downloaded(self, path: str) -> bool:
         """删除一首已下载歌曲（限定在音乐目录内，避免任意路径删除）。"""
-        from pathlib import Path
-
         if not path:
             return False
         try:
@@ -387,6 +449,7 @@ class MusicService:
             return False
         try:
             target.unlink()
+            self._invalidate_downloaded_cache()
             return True
         except OSError:
             return False
@@ -799,6 +862,7 @@ class MusicService:
                 pass
             return {"ok": False, "error": f"保存文件失败：{exc}"}
 
+        self._invalidate_downloaded_cache()
         return {
             "ok": True,
             "path": str(dest),

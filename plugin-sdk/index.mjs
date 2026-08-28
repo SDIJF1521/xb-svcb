@@ -1,6 +1,6 @@
-import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { access, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createWriteStream } from 'node:fs'
-import { dirname, join, resolve, basename } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative as relativePath, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 
@@ -17,6 +17,13 @@ const allowedParams = new Set([
 
 const clean = (value, fallback = '') => String(value ?? fallback).trim()
 const clone = value => JSON.parse(JSON.stringify(value))
+const validRelativePath = (value, suffix) => {
+  const raw = clean(value).replaceAll('\\', '/')
+  if (!raw || raw.startsWith('/') || raw.includes('\0') || /^[a-zA-Z]:/.test(raw)) return false
+  const parts = raw.split('/')
+  if (parts.some(part => !part || part === '.' || part === '..')) return false
+  return !suffix || suffix.test(parts.at(-1))
+}
 const normalizeFrontend = value => {
   if (!value) return {}
   if (typeof value === 'string') return { entry: value }
@@ -58,8 +65,8 @@ export function plugin(id, name, version = '1.0.0') {
     author(value) { manifest.author = value; return api },
     frontend(config) { manifest.runtime = 'frontend'; manifest.python = {}; manifest.frontend = normalizeFrontend(config); return api },
     frontendEntry(entry, config = {}) { manifest.frontend = { ...config, entry }; return api },
-    python(entry = 'plugin.py') { manifest.runtime = 'python'; manifest.python = { entry }; api.permission('python.execute'); return api },
-    hybrid(entry = 'plugin.py') { manifest.runtime = 'hybrid'; manifest.python = { entry }; api.permission('python.execute'); return api },
+    python(entry = 'plugin.py', config = {}) { manifest.runtime = 'python'; manifest.python = { ...config, entry }; api.permission('python.execute'); return api },
+    hybrid(entry = 'plugin.py', config = {}) { manifest.runtime = 'hybrid'; manifest.python = { ...config, entry }; api.permission('python.execute'); return api },
     permission(...values) { for (const value of values.flat()) if (!manifest.permissions.includes(value)) manifest.permissions.push(value); return api },
     page(value, title, configure) {
       manifest.pages.push(typeof value === 'object' ? value : page(value, title, configure))
@@ -97,13 +104,21 @@ export function validateManifest(input) {
     if (!runtimeTypes.has(manifest.runtime || 'frontend')) errors.push(`runtime 不支持：${manifest.runtime}`)
     if (['python', 'hybrid'].includes(manifest.runtime)) {
       const entry = clean(manifest.python?.entry)
-      if (!entry || !entry.toLowerCase().endsWith('.py') || entry.includes('..') || entry.startsWith('/') || entry.startsWith('\\') || /^[a-zA-Z]:/.test(entry)) {
+      if (!validRelativePath(entry, /\.py$/i)) {
         errors.push('Python 插件必须提供插件目录内的 .py 入口')
+      }
+      const requirements = clean(manifest.python?.requirements)
+      if (requirements && !validRelativePath(requirements, /\.txt$/i)) {
+        errors.push('python.requirements 必须指向插件目录内的 .txt 文件')
+      }
+      const vendor = clean(manifest.python?.vendor)
+      if (vendor && !validRelativePath(vendor)) {
+        errors.push('python.vendor 必须是插件目录内的相对目录')
       }
       if (!manifest.permissions?.includes('python.execute')) errors.push('Python 插件必须声明 python.execute 权限')
     }
     const frontendEntry = clean(manifest.frontend?.entry)
-    if (frontendEntry && (!/\.html?$/i.test(frontendEntry) || frontendEntry.includes('..') || frontendEntry.startsWith('/') || frontendEntry.startsWith('\\') || /^[a-zA-Z]:/.test(frontendEntry))) {
+    if (frontendEntry && !validRelativePath(frontendEntry, /\.html?$/i)) {
       errors.push('frontend.entry 必须指向插件目录内的 .html 文件')
     }
     if (!Array.isArray(manifest.permissions)) errors.push('permissions 必须是数组')
@@ -138,6 +153,70 @@ export async function writeManifest(manifestOrBuilder, directory) {
   return file
 }
 
+async function ensureFile(source, relative, label) {
+  const target = resolve(source, clean(relative).replaceAll('\\', '/'))
+  const fromRoot = relativePath(source, target)
+  const parentPrefix = `..${process.platform === 'win32' ? '\\' : '/'}`
+  if (!fromRoot || fromRoot === '..' || fromRoot.startsWith(parentPrefix) || isAbsolute(fromRoot)) {
+    throw new Error(`${label}路径非法：${relative}`)
+  }
+  let fileStat
+  try {
+    fileStat = await stat(target)
+  } catch {
+    throw new Error(`${label}不存在：${relative}`)
+  }
+  if (!fileStat.isFile()) throw new Error(`${label}不是文件：${relative}`)
+  return { target, stat: fileStat }
+}
+
+/** Validate the on-disk build output before it is distributed to users. */
+export async function validatePluginDirectory(directory) {
+  const source = resolve(directory)
+  const manifestPath = join(source, 'xb-svcb-plugin.json')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  const result = validateManifest(manifest)
+  if (!result.ok) return result
+  const errors = []
+  if (['python', 'hybrid'].includes(manifest.runtime)) {
+    try {
+      const { stat } = await ensureFile(source, manifest.python.entry, 'Python 入口')
+      if (stat.size > 2 * 1024 * 1024) errors.push('Python 入口超过 2 MB')
+    } catch (error) { errors.push(error.message) }
+    if (manifest.python.requirements) {
+      try { await ensureFile(source, manifest.python.requirements, 'Python requirements 文件') }
+      catch (error) { errors.push(error.message) }
+    }
+    if (manifest.python.vendor) {
+      try {
+        const vendor = await stat(resolve(source, manifest.python.vendor.replaceAll('\\', '/')))
+        if (!vendor.isDirectory()) errors.push(`Python vendor 不是目录：${manifest.python.vendor}`)
+      } catch (error) {
+        if (error?.code !== 'ENOENT') errors.push(`无法读取 Python vendor：${manifest.python.vendor}`)
+      }
+    }
+  }
+  const frontendEntry = clean(manifest.frontend?.entry)
+  if (frontendEntry) {
+    try {
+      const { target, stat } = await ensureFile(source, frontendEntry, '前端入口')
+      if (stat.size > 2 * 1024 * 1024) errors.push('前端入口超过 2 MB')
+      const html = await readFile(target, 'utf8')
+      // The host loads HTML through srcdoc. Unbundled local scripts/styles
+      // resolve against the host page and fail on another machine.
+      const assetPatterns = [
+        /<(?:script|img|audio|video|source|iframe)[^>]+src\s*=\s*["'](?!https?:|data:|blob:|\/\/|#)([^"']+)/i,
+        /<link[^>]+href\s*=\s*["'](?!https?:|data:|blob:|\/\/|#)([^"']+)/i,
+        /<object[^>]+data\s*=\s*["'](?!https?:|data:|blob:|\/\/|#)([^"']+)/i,
+        /url\(\s*["']?(?!https?:|data:|blob:|\/\/|#)([^)'"\s]+)/i,
+      ]
+      const localAsset = assetPatterns.map(pattern => pattern.exec(html)).find(Boolean)
+      if (localAsset) errors.push(`前端入口仍引用外部本地资源：${localAsset[1]}，请使用 vite-plugin-singlefile 构建`)
+    } catch (error) { errors.push(error.message) }
+  }
+  return { ok: errors.length === 0, errors, manifest: clone(manifest) }
+}
+
 async function zipDirectory(source, output) {
   const command = process.platform === 'win32' ? 'powershell.exe' : 'zip'
   const requestedOutput = resolve(output)
@@ -155,12 +234,94 @@ async function zipDirectory(source, output) {
   if (archiveOutput !== requestedOutput) await rename(archiveOutput, requestedOutput)
 }
 
+async function commandSucceeds(command, args) {
+  return new Promise(resolvePromise => {
+    const child = spawn(command, args, { stdio: 'ignore', shell: false })
+    child.on('error', () => resolvePromise(false))
+    child.on('exit', code => resolvePromise(code === 0))
+  })
+}
+
+async function python310Command() {
+  const explicit = clean(process.env.XB_PLUGIN_BUILD_PYTHON)
+  const candidates = [
+    ...(explicit ? [{ command: explicit, prefix: [] }] : []),
+    ...(process.platform === 'win32' ? [{ command: 'py', prefix: ['-3.10'] }] : []),
+    { command: 'python3.10', prefix: [] },
+    { command: 'python', prefix: [] },
+  ]
+  for (const candidate of candidates) {
+    const probe = [
+      ...candidate.prefix,
+      '-c',
+      'import sys;raise SystemExit(0 if sys.version_info[:2] == (3, 10) else 1)',
+    ]
+    if (await commandSucceeds(candidate.command, probe)) return candidate
+  }
+  throw new Error('打包 Python 依赖需要 Python 3.10；可通过 XB_PLUGIN_BUILD_PYTHON 指定解释器')
+}
+
+function hasRequirements(content) {
+  return content.split(/\r?\n/).some(line => {
+    const value = line.trim()
+    return value && !value.startsWith('#')
+  })
+}
+
+async function bundlePythonRequirements(source, staging, manifest) {
+  if (!['python', 'hybrid'].includes(manifest.runtime)) return
+  let requirements = clean(manifest.python?.requirements)
+  if (!requirements) {
+    try {
+      await access(join(source, 'requirements.txt'))
+      requirements = 'requirements.txt'
+    } catch { return }
+  }
+  const requirementsPath = resolve(source, requirements.replaceAll('\\', '/'))
+  const content = await readFile(requirementsPath, 'utf8')
+  if (!hasRequirements(content)) return
+  if (/^\s*xb[-_]svcb[-_]plugin[-_]sdk(?:\s|[<=>@;]|$)/im.test(content)) {
+    throw new Error('requirements 中不能包含 xb-svcb-plugin-sdk；运行时 SDK 由宿主提供')
+  }
+  const vendor = clean(manifest.python?.vendor, 'vendor') || 'vendor'
+  const target = resolve(staging, vendor.replaceAll('\\', '/'))
+  await rm(target, { recursive: true, force: true })
+  await mkdir(target, { recursive: true })
+  const python = await python310Command()
+  const args = [
+    ...python.prefix,
+    '-m', 'pip', 'install',
+    '--disable-pip-version-check',
+    '--no-compile',
+    '--upgrade',
+    '--target', target,
+    '--requirement', requirementsPath,
+  ]
+  await new Promise((resolvePromise, reject) => {
+    const child = spawn(python.command, args, { cwd: source, stdio: 'inherit', shell: false })
+    child.on('error', reject)
+    child.on('exit', code => code === 0
+      ? resolvePromise()
+      : reject(new Error(`Python 依赖打包失败，pip 退出码 ${code}`)))
+  })
+}
+
+async function directorySize(directory) {
+  let total = 0
+  const entries = await readdir(directory, { withFileTypes: true })
+  for (const entry of entries) {
+    const path = join(directory, entry.name)
+    if (entry.isDirectory()) total += await directorySize(path)
+    else if (entry.isFile()) total += (await stat(path)).size
+  }
+  return total
+}
+
 export async function packPlugin(directory, output = `${resolve(directory)}.xbplugin`) {
   const source = resolve(directory)
-  const manifestPath = join(source, 'xb-svcb-plugin.json')
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
-  const result = validateManifest(manifest)
+  const result = await validatePluginDirectory(source)
   if (!result.ok) throw new Error(`插件清单校验失败：\n- ${result.errors.join('\n- ')}`)
+  const manifest = result.manifest
   await mkdir(dirname(resolve(output)), { recursive: true })
   const temporary = await mkdtemp(join(tmpdir(), 'xb-plugin-pack-'))
   const staging = join(temporary, 'plugin')
@@ -173,7 +334,17 @@ export async function packPlugin(directory, output = `${resolve(directory)}.xbpl
         return !ignored.has(name) && !name.toLowerCase().endsWith('.xbplugin')
       },
     })
+    await bundlePythonRequirements(source, staging, manifest)
+    const unpackedBytes = await directorySize(staging)
+    if (unpackedBytes > 50 * 1024 * 1024) {
+      throw new Error(`插件解压后约 ${(unpackedBytes / 1024 / 1024).toFixed(1)} MB，超过 50 MB 限制`)
+    }
     await zipDirectory(staging, resolve(output))
+    const bundleBytes = (await stat(resolve(output))).size
+    if (bundleBytes > 20 * 1024 * 1024) {
+      await rm(resolve(output), { force: true })
+      throw new Error(`插件包约 ${(bundleBytes / 1024 / 1024).toFixed(1)} MB，超过 20 MB 限制`)
+    }
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }

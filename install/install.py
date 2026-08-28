@@ -3,7 +3,9 @@
 为「AI 翻唱工具」搭建开箱即用的运行环境，全部组件落在项目目录内、互不污染：
 
   app/.venv      —— 主程序环境（pywebview，桌面壳）
+  .venv-plugins/ —— Python 插件轻量运行环境（插件依赖随插件包携带）
   .venv-uvr/     —— 人声分离环境（audio-separator）
+  .venv-pymss/   —— 可选 PyMSS 人声分离环境
   .venv-svc/     —— so-vits-svc 4.1 推理环境（torch + fairseq 等）
   .venv-rvc/     —— RVC 推理环境（rvc-python；40 系及以下 cu121，50 系 cu128，CPU 版）
   .venv-seedvc/  —— SeedVC 推理环境（官方 Seed-VC；推理时提供参考音频）
@@ -34,7 +36,7 @@
   python install/install.py --only seedvc  # 只装 SeedVC 推理环境（.venv-seedvc）
   python install/install.py --only ddsp    # 只装 DDSP-SVC 推理环境（.venv-ddsp）
   python install/install.py --only vocal   # 只装 AI 歌声增强环境（.venv-vocal）
-  python install/install.py --only models  # 只跑某一步：app/web/uvr/svc/rvc/seedvc/ddsp/vocal/hub/models
+  python install/install.py --only models  # 只跑某一步：app/plugins/web/uvr/pymss/svc/rvc/seedvc/ddsp/vocal/hub/models
 """
 
 from __future__ import annotations
@@ -97,6 +99,8 @@ SEEDVC_DIR = ENGINES_DIR / "seed-vc"
 DDSP_DIR = ENGINES_DIR / "ddsp-svc"
 PRETRAIN_DIR = SOVITS_DIR / "pretrain"
 UVR_VENV = ROOT / ".venv-uvr"
+PLUGIN_VENV = ROOT / ".venv-plugins"
+PYMSS_VENV = ROOT / ".venv-pymss"
 SVC_VENV = ROOT / ".venv-svc"
 HUB_VENV = ROOT / ".venv-hub"
 RVC_VENV = ROOT / ".venv-rvc"
@@ -116,7 +120,7 @@ ASSETS_WHEELS_DIR = ASSETS_DIR / "wheels"
 def _derive_paths(root: Path) -> None:
     """以 root 为基准重新计算所有产物路径（供 --root 覆盖）。"""
     global ROOT, APP_DIR, WEB_DIR, ENGINES_DIR, SOVITS_DIR, SEEDVC_DIR, DDSP_DIR, PRETRAIN_DIR
-    global UVR_VENV, SVC_VENV, HUB_VENV, RVC_VENV, SEEDVC_VENV, DDSP_VENV, VOCAL_VENV
+    global UVR_VENV, PLUGIN_VENV, PYMSS_VENV, SVC_VENV, HUB_VENV, RVC_VENV, SEEDVC_VENV, DDSP_VENV, VOCAL_VENV
     global UVR_MODELS_DIR, VOCAL_MODELS_DIR
     ROOT = root
     APP_DIR = root / "app"
@@ -127,6 +131,8 @@ def _derive_paths(root: Path) -> None:
     DDSP_DIR = ENGINES_DIR / "ddsp-svc"
     PRETRAIN_DIR = SOVITS_DIR / "pretrain"
     UVR_VENV = root / ".venv-uvr"
+    PLUGIN_VENV = root / ".venv-plugins"
+    PYMSS_VENV = root / ".venv-pymss"
     SVC_VENV = root / ".venv-svc"
     HUB_VENV = root / ".venv-hub"
     RVC_VENV = root / ".venv-rvc"
@@ -167,6 +173,18 @@ TORCH_RVC_CUDA_INDEX = TORCH_CUDA_INDEX
 TORCH_BLACKWELL_INDEX = "https://download.pytorch.org/whl/cu128"
 TORCH_BLACKWELL_VER = "2.7.1"  # cp39/cp310 均有 win 轮子；统一钉此版本以求确定性
 TORCHAUDIO_BLACKWELL_VER = "2.7.1"
+# PyMSS 2.0.x requires Torch 2.7.1. PyTorch publishes that pair on cu126 for
+# pre-Blackwell NVIDIA cards and on cu128 for Blackwell, so keep the isolated
+# PyMSS wheelhouse aligned to the actual runtime stack.
+TORCH_PYMSS_CUDA_INDEX = "https://download.pytorch.org/whl/cu126"
+
+# PyMSS 2.0.x requires torch>=2.7.1. Keep its runtime pinned and isolated from
+# the older torch stacks used by UVR/RVC/SVC. NVIDIA cards use cu126 for
+# pre-Blackwell and cu128 for Blackwell; DirectML remains CPU because
+# torch-directml pins 2.4.1.
+PYMSS_VERSION = "2.0.18"
+PYMSS_TORCH_VER = "2.7.1"
+PYMSS_TORCHAUDIO_VER = "2.7.1"
 
 # ---- AMD / Windows DirectML stack ----
 # torch-directml 0.2.5 is the latest published Windows runtime and pins torch
@@ -423,6 +441,113 @@ def _wheelhouse_args(
     return args
 
 
+def _normalized_dist_name(name: str) -> str:
+    """Normalize a distribution name as specified by the wheel metadata rules."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _find_wheel_for_package(package: str, directories: list[Path]) -> Path | None:
+    normalized = _normalized_dist_name(package)
+    for directory in directories:
+        try:
+            wheels = sorted(directory.glob("*.whl"), key=lambda item: item.name.lower())
+        except OSError:
+            continue
+        for wheel in wheels:
+            prefix = wheel.name.split("-", 1)[0]
+            if _normalized_dist_name(prefix) == normalized:
+                return wheel
+    return None
+
+
+def _repair_broken_wheel_metadata(
+    venv_dir: Path,
+    packages: tuple[str, ...],
+    *,
+    component: str,
+    gpu_stack: str,
+    python_version: str,
+) -> list[str]:
+    """Restore interrupted wheel installs without replacing locked binaries.
+
+    uv reads every installed ``*.dist-info/METADATA`` before resolving a new
+    request. An interrupted install can leave the package files intact while
+    that metadata file is absent, causing uv to enter a reinstall path which
+    may fail to replace a DLL still loaded by the running application.
+    """
+    site_packages = venv_dir / "Lib" / "site-packages"
+    if not site_packages.is_dir():
+        candidates = sorted(venv_dir.glob("lib/python*/site-packages"))
+        site_packages = candidates[0] if candidates else site_packages
+    if not site_packages.is_dir():
+        return []
+
+    directories = _wheelhouse_dirs(
+        component=component,
+        gpu_stack=gpu_stack,
+        python_version=python_version,
+    )
+    repaired: list[str] = []
+    for package in packages:
+        normalized = _normalized_dist_name(package)
+        try:
+            dist_infos = sorted(
+                (
+                    path
+                    for path in site_packages.glob("*.dist-info")
+                    if _normalized_dist_name(
+                        path.name.removesuffix(".dist-info").rsplit("-", 1)[0]
+                    )
+                    == normalized
+                ),
+                key=lambda item: item.name.lower(),
+            )
+        except OSError:
+            continue
+        for dist_info in dist_infos:
+            try:
+                missing = []
+                for filename in ("METADATA", "WHEEL", "RECORD"):
+                    target = dist_info / filename
+                    if not target.is_file() or target.stat().st_size == 0:
+                        missing.append(filename)
+                if not missing:
+                    continue
+            except OSError:
+                continue
+
+            wheel = _find_wheel_for_package(package, directories)
+            if wheel is None:
+                print(c("y", f"    {package} 元数据损坏且 wheelhouse 中无匹配轮子，将重新安装 …"))
+                shutil.rmtree(dist_info, ignore_errors=True)
+                continue
+
+            try:
+                with zipfile.ZipFile(wheel) as archive:
+                    members = {
+                        Path(member).name.upper(): member
+                        for member in archive.namelist()
+                        if ".dist-info/" in member
+                    }
+                    for filename in ("METADATA", "WHEEL", "RECORD", "INSTALLER"):
+                        target = dist_info / filename
+                        if (
+                            filename not in members
+                            or (target.is_file() and target.stat().st_size > 0)
+                        ):
+                            continue
+                        target.write_bytes(archive.read(members[filename]))
+            except (OSError, KeyError, zipfile.BadZipFile) as exc:
+                print(c("y", f"    {package} wheel 元数据修复失败：{exc}"))
+                continue
+
+            metadata = dist_info / "METADATA"
+            if metadata.is_file() and metadata.stat().st_size > 0:
+                repaired.append(package)
+                print(c("y", f"    已修复 {package} 的中断安装元数据，跳过 DLL 重装"))
+    return repaired
+
+
 def _uv_bootstrap_wheelhouse_args() -> list[str]:
     root = _wheelhouse_root()
     if root is None:
@@ -615,7 +740,7 @@ def find_nvidia_smi() -> str | None:
 
 
 def detect_gpu_stack() -> str:
-    """Return cpu, directml, cu121 or cu128 for the local Windows adapter."""
+    """Return cpu, directml, cu121 or cu128 based on the detected GPU."""
     smi = find_nvidia_smi()
     caps: list[float] = []
     if smi:
@@ -1128,13 +1253,28 @@ def seed_rvc_base_models(py: Path) -> None:
 
 # ---------- 各安装步骤 ----------
 def step_app(uv: str) -> None:
-    hr("1/10 主程序环境 app/.venv")
+    hr("1/12 主程序环境 app/.venv")
     uv_sync(uv, APP_DIR)
     print(c("g", "主程序环境就绪"))
 
 
+def step_plugins(uv: str) -> None:
+    """Create the small, dependency-free runtime used by Python plugins.
+
+    Third-party packages are bundled into each plugin's ``vendor`` directory
+    by the SDK. Keeping a dedicated interpreter avoids depending on whichever
+    AI environment happens to be installed on the target machine.
+    """
+    hr("2/12 Python 插件运行环境 .venv-plugins")
+    ensure_venv(uv, PLUGIN_VENV, PYTHON_FOR_ENGINES)
+    py = venv_python(PLUGIN_VENV)
+    if not py.exists():
+        raise RuntimeError(f"插件 Python 环境创建失败：{py}")
+    print(c("g", "Python 插件运行环境就绪"))
+
+
 def step_web() -> None:
-    hr("2/10 前端构建 web/dist")
+    hr("3/12 前端构建 web/dist")
     if not have("npm"):
         raise RuntimeError("未检测到 npm，请先安装 Node.js LTS 后重试（或 --skip-web）")
     # 优先 npm ci（依赖 lock）；无 lock 时回退 npm install
@@ -1147,7 +1287,7 @@ def step_web() -> None:
 
 
 def step_uvr(uv: str, gpu_stack: str) -> None:
-    hr("3/10 人声分离环境 .venv-uvr（audio-separator）")
+    hr("4/12 人声分离环境 .venv-uvr（audio-separator）")
     use_blackwell = gpu_stack == "cu128"
     use_cuda = gpu_stack in {"cu121", "cu128"}
     use_directml = gpu_stack == "directml"
@@ -1156,6 +1296,13 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
     pip = make_pip(
         uv,
         py,
+        component="uvr",
+        gpu_stack=gpu_stack,
+        python_version=PYTHON_FOR_ENGINES,
+    )
+    _repair_broken_wheel_metadata(
+        UVR_VENV,
+        ("torch", "torchaudio", "torchvision", "torch-directml"),
         component="uvr",
         gpu_stack=gpu_stack,
         python_version=PYTHON_FOR_ENGINES,
@@ -1230,6 +1377,51 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
     else:
         pip(f"audio-separator[cpu]=={AUDIO_SEPARATOR_VER}")
     print(c("g", "分离环境就绪"))
+
+
+def step_pymss(uv: str, gpu_stack: str) -> None:
+    """Install optional PyMSS in its own environment.
+
+    PyMSS models are intentionally downloaded later from the model page so the
+    user can choose a catalog model instead of consuming disk space up front.
+    """
+    hr("5/12 可选 PyMSS 分离环境 .venv-pymss")
+    ensure_venv(uv, PYMSS_VENV, PYTHON_FOR_ENGINES)
+    py = str(venv_python(PYMSS_VENV))
+    # PyMSS 2.0.x requires Torch 2.7.1. Pre-Blackwell NVIDIA uses cu126 and
+    # Blackwell uses cu128; keep the component wheelhouse aligned with the
+    # actual runtime stack so offline installs stay deterministic.
+    if gpu_stack == "cu128":
+        pymss_stack = "cu128"
+    elif gpu_stack in {"cu121", "cu126"}:
+        pymss_stack = "cu126"
+    else:
+        pymss_stack = gpu_stack
+    pip = make_pip(
+        uv,
+        py,
+        component="pymss",
+        gpu_stack=pymss_stack,
+        python_version=PYTHON_FOR_ENGINES,
+    )
+    if pymss_stack == "cu128":
+        torch_index = TORCH_BLACKWELL_INDEX
+    elif pymss_stack == "cu126":
+        torch_index = TORCH_PYMSS_CUDA_INDEX
+    else:
+        torch_index = TORCH_CPU_INDEX
+    # A CPU build with the same Torch version satisfies ``torch==...`` in uv
+    # and would otherwise be kept when switching an existing PyMSS venv to CUDA.
+    # Remove the provider first so the selected cu126/cu128 wheel is installed.
+    if Path(py).is_file():
+        run(uv_cmd(uv, "pip", "uninstall", "--python", py, "torch", "torchaudio", "torchvision"))
+    pip(
+        f"torch=={PYMSS_TORCH_VER}",
+        f"torchaudio=={PYMSS_TORCHAUDIO_VER}",
+        index=torch_index,
+    )
+    pip(f"pymss=={PYMSS_VERSION}")
+    print(c("g", "PyMSS 环境就绪；请在模型管理页选择并下载分离模型"))
 
 
 def fetch_sovits() -> None:
@@ -1452,7 +1644,7 @@ def _venv_pyver(py: Path) -> str | None:
 
 
 def step_svc(uv: str, gpu_stack: str) -> None:
-    hr("4/10 推理引擎 so-vits-svc + .venv-svc")
+    hr("6/12 推理引擎 so-vits-svc + .venv-svc")
     fetch_sovits()
 
     use_blackwell = gpu_stack == "cu128"
@@ -1910,7 +2102,7 @@ def _patch_fairseq_weights_only(py: Path) -> None:
 
 
 def step_rvc(uv: str, gpu_stack: str) -> None:
-    hr("5/10 RVC 推理环境 .venv-rvc（rvc-python）")
+    hr("7/12 RVC 推理环境 .venv-rvc（rvc-python）")
     use_blackwell = gpu_stack == "cu128"
     use_gpu = gpu_stack in {"cu121", "cu128"}
     use_directml = gpu_stack == "directml"
@@ -2023,7 +2215,7 @@ DEEPFILTER_CHECKPOINT_MIN_BYTES = 8 * 1024 * 1024
 
 
 def step_seedvc(uv: str, gpu_stack: str) -> None:
-    hr("6/10 SeedVC 推理环境 engines/seed-vc + .venv-seedvc")
+    hr("8/12 SeedVC 推理环境 engines/seed-vc + .venv-seedvc")
     fetch_seedvc()
 
     use_blackwell = gpu_stack == "cu128"
@@ -2104,7 +2296,7 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
 
 
 def step_ddsp(uv: str, gpu_stack: str) -> None:
-    hr("7/10 DDSP-SVC 推理环境 engines/ddsp-svc + .venv-ddsp")
+    hr("9/12 DDSP-SVC 推理环境 engines/ddsp-svc + .venv-ddsp")
     fetch_ddsp()
 
     use_blackwell = gpu_stack == "cu128"
@@ -2224,7 +2416,7 @@ def _prepare_vocal_deepfilter_model(py: str) -> Path:
 
 
 def step_vocal(uv: str, gpu_stack: str) -> None:
-    hr("8/10 AI 歌声增强环境 .venv-vocal")
+    hr("10/12 AI 歌声增强环境 .venv-vocal")
     ensure_venv(uv, VOCAL_VENV, PYTHON_FOR_ENGINES)
     py = str(venv_python(VOCAL_VENV))
     pip = make_pip(
@@ -2285,7 +2477,7 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
 
 
 def step_hub(uv: str, gpu_stack: str) -> None:
-    hr("9/10 模型上传组件 .venv-hub（modelscope）")
+    hr("11/12 模型上传组件 .venv-hub（modelscope）")
     # 仅「分享到模型站（上传）」需要 modelscope SDK；搜索 / 下载走纯 HTTP，不依赖本环境。
     # 用 3.10（与 UVR 一致），装 modelscope hub 能力即可（上传用 upload_folder，无需本地 git）。
     ensure_venv(uv, HUB_VENV, PYTHON_FOR_ENGINES)
@@ -2306,7 +2498,7 @@ def step_hub(uv: str, gpu_stack: str) -> None:
 
 
 def step_models(uv: str) -> None:
-    hr("10/10 底模 + UVR 模型（自带优先，缺失才联网下载）")
+    hr("12/12 底模 + UVR 模型（自带优先，缺失才联网下载）")
     PRETRAIN_DIR.mkdir(parents=True, exist_ok=True)
     if ASSETS_MODELS_DIR.exists():
         print(c("g", f"  检测到自带模型目录：{ASSETS_MODELS_DIR}"))
@@ -2409,8 +2601,10 @@ def step_models(uv: str) -> None:
 
 STEPS = {
     "app": lambda uv, stack: step_app(uv),
+    "plugins": lambda uv, stack: step_plugins(uv),
     "web": lambda uv, stack: step_web(),
     "uvr": lambda uv, stack: step_uvr(uv, stack),
+    "pymss": lambda uv, stack: step_pymss(uv, stack),
     "svc": lambda uv, stack: step_svc(uv, stack),
     "rvc": lambda uv, stack: step_rvc(uv, stack),
     "seedvc": lambda uv, stack: step_seedvc(uv, stack),
@@ -2419,7 +2613,7 @@ STEPS = {
     "hub": lambda uv, stack: step_hub(uv, stack),
     "models": lambda uv, stack: step_models(uv),
 }
-ORDER = ["app", "web", "uvr", "svc", "rvc", "seedvc", "ddsp", "vocal", "hub", "models"]
+ORDER = ["app", "plugins", "web", "uvr", "pymss", "svc", "rvc", "seedvc", "ddsp", "vocal", "hub", "models"]
 
 
 def installer_progress(percent: int, message: str) -> None:
@@ -2455,7 +2649,7 @@ def main() -> int:
         "--only",
         choices=ORDER,
         nargs="+",
-        help="只执行指定步骤（可多选）：app web uvr svc rvc seedvc ddsp vocal hub models",
+        help="只执行指定步骤（可多选）：app plugins web uvr pymss svc rvc seedvc ddsp vocal hub models",
     )
     for s in ORDER:
         p.add_argument(f"--skip-{s}", action="store_true", help=f"跳过 {s} 步骤")
@@ -2480,10 +2674,8 @@ def main() -> int:
     detected_stack = "cpu" if args.cpu else "directml" if args.directml else detect_gpu_stack()
     if args.gpu and detected_stack == "cpu":
         print(c("y", "未检测到兼容 NVIDIA/AMD 显卡，已改用 CPU 版 torch。"))
-    if args.cu128 and detected_stack == "cu121":
-        print(c("y", "当前显卡不是 50 系，忽略 cu128 请求，改用 cu121 栈。"))
     if args.no_cu128 and detected_stack == "cu128":
-        print(c("y", "检测到 50 系/Blackwell，忽略老 CUDA 栈请求，改用 cu128。"))
+        print(c("y", "检测到 NVIDIA 显卡，忽略旧 CUDA 栈请求，统一改用 cu128。"))
     installer_progress(8, "Checking GPU runtime")
     if detected_stack == "cu128":
         mode = c("g", "CUDA · Blackwell/50系 (cu128 + torch" + TORCH_BLACKWELL_VER + ")")
@@ -2499,7 +2691,7 @@ def main() -> int:
     elif detected_stack in {"cu121", "cu128"} and not args.gpu:
         print("（检测到 NVIDIA 显卡，自动选择 CUDA；如需 CPU 请加 --cpu）")
     if detected_stack == "cu128" and not args.cu128:
-        print("（检测到 50 系/Blackwell，自动切换 cu128 栈）")
+        print("（检测到 NVIDIA 显卡，自动使用统一 cu128 栈）")
     wheelhouse = _wheelhouse_root()
     if wheelhouse:
         print(c("g", f"自带 whl 目录: {wheelhouse}"))

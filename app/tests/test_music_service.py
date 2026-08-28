@@ -1,4 +1,6 @@
 import unittest
+import threading
+import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,6 +20,24 @@ class MusicServiceApiCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_content_range_total("bytes 0-4095/33618441"), 33618441)
         self.assertEqual(_content_range_total("bytes */33618441"), 33618441)
         self.assertEqual(_content_range_total(""), 0)
+
+    def test_downloaded_music_listing_is_cached_and_invalidated_on_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            music_dir = Path(td)
+            (music_dir / "first.mp3").write_bytes(b"audio")
+            service = object.__new__(MusicService)
+            service._downloaded_cache_lock = threading.Lock()
+            service._downloaded_cache = None
+            with patch.object(config, "MUSIC_DIR", music_dir), patch.object(
+                config, "AUDIO_EXTS", {".mp3"}
+            ):
+                first = service.list_downloaded()
+                (music_dir / "second.mp3").write_bytes(b"audio")
+                # The short-lived cache avoids rescanning while the create page mounts.
+                self.assertEqual([item["name"] for item in service.list_downloaded()], ["first"])
+                self.assertTrue(service.delete_downloaded(str(music_dir / "first.mp3")))
+                self.assertEqual([item["name"] for item in service.list_downloaded()], ["second"])
+                self.assertEqual(first[0]["name"], "first")
 
     def test_kuwo_download_headers_mimic_browser_audio_request(self) -> None:
         headers = MusicService._download_headers(

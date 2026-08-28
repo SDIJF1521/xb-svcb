@@ -23,6 +23,9 @@
       <button class="tab" :class="{ on: tab === 'hub' }" @click="tab = 'hub'">
         <el-icon><Connection /></el-icon>模型站
       </button>
+      <button class="tab" :class="{ on: tab === 'pymss' }" @click="tab = 'pymss'">
+        <el-icon><Operation /></el-icon>PyMSS 分离模型
+      </button>
     </div>
 
     <!-- ===================== 本地模型 ===================== -->
@@ -276,7 +279,7 @@
     </template>
 
     <!-- ===================== 模型站 ===================== -->
-    <template v-else>
+    <template v-else-if="tab === 'hub'">
       <div v-if="!hasToken" class="notice glass">
         <el-icon class="notice-ic"><Key /></el-icon>
         <div class="notice-main">
@@ -400,6 +403,44 @@
       </div>
       <div v-else-if="!hubSearched" class="empty glass small">
         <span>点击「搜索」浏览模型站中的社区翻唱模型。</span>
+      </div>
+    </template>
+
+    <!-- ===================== PyMSS 前期分离模型站 ===================== -->
+    <template v-else>
+      <div class="notice glass">
+        <el-icon class="notice-ic"><Connection /></el-icon>
+        <div class="notice-main">
+          <div class="notice-title">PyMSS 音乐源分离模型站</div>
+          <div class="notice-sub">仅提供人声分离与去混响 / 人声净化模型。下载后可在翻唱页「前期人声处理」中选择。</div>
+        </div>
+        <el-button round class="ghost-btn" :loading="pymssLoading" @click="loadPymssModels">刷新</el-button>
+      </div>
+      <div class="pymss-purpose-tabs">
+        <button class="tab" :class="{ on: pymssPurpose === 'vocal_separation' }" @click="pymssPurpose = 'vocal_separation'">人声分离</button>
+        <button class="tab" :class="{ on: pymssPurpose === 'dereverb' }" @click="pymssPurpose = 'dereverb'">去混响 / 人声净化</button>
+        <el-input v-model="pymssQuery" class="pymss-search" clearable placeholder="搜索模型名称，例如 dereverb_mel_band_roformer_anvuew" />
+      </div>
+      <div class="list glass">
+        <div v-for="item in filteredPymssItems" :key="item.name" class="row">
+          <div class="row-cover hub"><el-icon><Operation /></el-icon></div>
+          <div class="row-main">
+            <div class="row-title">{{ item.name }} <span class="fw-tag">{{ item.architecture || 'PyMSS' }}</span></div>
+            <div class="row-sub"><span class="purpose-label">{{ item.purpose_label || (item.purpose === 'dereverb' || item.purpose === 'harmony_removal' ? '去混响 / 人声净化' : '人声分离') }}</span> · 目标音轨 {{ item.target_stem || 'vocals' }}</div>
+            <div v-if="pymssJob(item.name)?.status === 'running'" class="row-prog">
+              <el-progress :percentage="Math.round(pymssJob(item.name)?.pct || 0)" :stroke-width="5" :show-text="false" striped striped-flow />
+              <span class="prog-msg">{{ pymssJob(item.name)?.message || '下载中…' }}</span>
+            </div>
+            <div v-else-if="pymssJob(item.name)?.status === 'failed'" class="row-prog failed"><span class="prog-msg">{{ pymssJob(item.name)?.error || '下载失败，可重试' }}</span></div>
+          </div>
+          <div class="row-ops">
+            <span class="health-tag" :class="item.downloaded ? 'ok' : 'error'">{{ item.downloaded ? '已下载' : '未下载' }}</span>
+            <el-button round size="small" class="cta-btn" :loading="pymssDownloading === item.name" @click="downloadPymss(item)">
+              <el-icon v-if="pymssDownloading !== item.name" class="el-icon--left"><Download /></el-icon>{{ item.downloaded ? '重新下载' : '下载模型' }}
+            </el-button>
+          </div>
+        </div>
+        <div v-if="!filteredPymssItems.length && !pymssLoading" class="empty small"><span>未读取到该用途的 PyMSS 模型，请先安装 PyMSS 环境。</span></div>
       </div>
     </template>
 
@@ -589,21 +630,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
 import {
   Setting, FolderOpened, Connection, Document, Plus, Microphone, Star, Delete,
   Upload, Search, Close, Download, Key, Link, InfoFilled, CircleCheck, WarningFilled,
-  Loading, Headset, Picture, RefreshRight,
+  Loading, Headset, Picture, RefreshRight, Operation,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, type HubModelItem, type HubModelUpdateItem, type ModelFramework } from '@/api'
+import { api, type HubModelItem, type HubModelUpdateItem, type ModelFramework, type PymssDownloadJob, type PymssModel, type PymssStatus } from '@/api'
 import { useModelsStore, type ModelVM } from '@/stores/models'
 import { useTransfersStore } from '@/stores/transfers'
 
 defineOptions({ name: 'ModelsPage' })
 
 const modelsStore = useModelsStore()
-const tab = ref<'local' | 'hub'>('local')
+const route = useRoute()
+const tab = ref<'local' | 'hub' | 'pymss'>('local')
 const localFramework = ref('')
 const localQuery = ref('')
 
@@ -845,6 +888,71 @@ const hubSort = ref<'score' | 'downloads' | 'recent'>('score')
 const modelUpdates = ref<HubModelUpdateItem[]>([])
 const firstUpdate = computed(() => modelUpdates.value[0] || null)
 const upgradingId = ref('')
+
+/* ---------- PyMSS 前期分离模型站 ---------- */
+const pymssItems = ref<PymssModel[]>([])
+const pymssLoading = ref(false)
+const pymssDownloading = ref('')
+const pymssJobs = ref<Record<string, PymssDownloadJob>>({})
+const pymssRuntime = ref<PymssStatus | null>(null)
+const pymssPurpose = ref<'vocal_separation' | 'dereverb' | 'harmony_removal'>('vocal_separation')
+const pymssQuery = ref('')
+const filteredPymssItems = computed(() => {
+  const query = pymssQuery.value.trim().toLowerCase()
+  return pymssItems.value.filter((item) => {
+    if (item.purpose !== pymssPurpose.value) return false
+    if (!query) return true
+    return [item.name, item.architecture, item.category].some((value) => String(value || '').toLowerCase().includes(query))
+  })
+})
+
+async function loadPymssModels() {
+  pymssLoading.value = true
+  try {
+    pymssItems.value = await api.pymssModels()
+    pymssRuntime.value = await api.pymssStatus(pymssItems.value[0]?.name)
+  } finally {
+    pymssLoading.value = false
+  }
+}
+
+async function downloadPymss(item: PymssModel) {
+  pymssDownloading.value = item.name
+  try {
+    const result = await api.pymssDownloadModel(item.name)
+    if (!result.ok) {
+      ElMessage.error(result.error || 'PyMSS 模型下载失败')
+      return
+    }
+    if (result.key) {
+      pymssJobs.value[item.name] = {
+        key: result.key, model: item.name, status: 'running', pct: 1, message: '已加入后台下载',
+      }
+      void refreshPymssJobs()
+      ElMessage.success(`已加入后台下载：${item.name}`)
+    } else {
+      item.downloaded = true
+      ElMessage.success(`已下载 ${item.name}`)
+    }
+  } finally {
+    pymssDownloading.value = ''
+  }
+}
+
+function pymssJob(model: string) { return pymssJobs.value[model] }
+let pymssTimer: ReturnType<typeof setInterval> | null = null
+async function refreshPymssJobs() {
+  const jobs = await api.pymssDownloadJobs()
+  for (const job of jobs) pymssJobs.value[job.model] = job
+  const active = jobs.some((job) => job.status === 'running')
+  if (active && !pymssTimer) {
+    pymssTimer = setInterval(() => void refreshPymssJobs(), 800)
+  } else if (!active && pymssTimer) {
+    clearInterval(pymssTimer)
+    pymssTimer = null
+  }
+  if (jobs.some((job) => job.status === 'done')) await loadPymssModels()
+}
 
 const hubAudioEl = ref<HTMLAudioElement | null>(null)
 const hubPlayingRepo = ref('')
@@ -1110,6 +1218,7 @@ async function confirmUpload() {
 }
 
 onMounted(async () => {
+  if (route.query.tab === 'pymss') tab.value = 'pymss'
   await modelsStore.load()
   const [token, ready, fws] = await Promise.all([
     api.getModelscopeToken(),
@@ -1120,6 +1229,15 @@ onMounted(async () => {
   uploadReady.value = ready
   frameworks.value = fws
   void refreshUpdates()
+  void loadPymssModels()
+  void refreshPymssJobs()
+})
+
+onUnmounted(() => {
+  if (pymssTimer) {
+    clearInterval(pymssTimer)
+    pymssTimer = null
+  }
 })
 </script>
 
@@ -1129,6 +1247,11 @@ onMounted(async () => {
 .eyebrow { color: var(--xb-primary); font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 14px; margin: 0 0 8px; }
 .page-head h1 { font-size: 30px; font-weight: 800; margin: 0 0 8px; }
 .page-sub { color: var(--xb-muted); font-size: 15px; margin: 0; }
+.pymss-purpose-tabs { display: flex; gap: 8px; margin: 18px 0 10px; }
+.pymss-purpose-tabs .tab { min-height: 36px; padding: 0 16px; }
+.pymss-search { max-width: 420px; margin-left: auto; }
+.purpose-label { color: var(--xb-primary); font-weight: 700; }
+@media (max-width: 760px) { .pymss-purpose-tabs { flex-wrap: wrap; } .pymss-search { max-width: none; width: 100%; margin-left: 0; } }
 
 .glass { position: relative; background: var(--xb-panel); border: 1px solid var(--xb-border); backdrop-filter: blur(16px); }
 .cta-btn { background: linear-gradient(135deg, var(--xb-primary), var(--xb-primary-2)) !important; border: none !important; color: var(--xb-on-primary) !important; font-weight: 700; box-shadow: 0 0 18px rgba(var(--xb-primary-rgb), 0.35); }

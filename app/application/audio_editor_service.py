@@ -21,6 +21,7 @@ from infrastructure.audio_engine import FFmpegEngine
 from infrastructure.clipboard import audio_files_from_clipboard, copy_file_to_clipboard
 from infrastructure.ffmpeg_tool import FfmpegTool
 from infrastructure.juce_vst3_host import JuceVst3Host
+from infrastructure.pymss_tool import PymssTool
 from infrastructure.storage import ListRepository
 from infrastructure.uvr_tool import UvrTool
 from infrastructure.vocal_enhancement import VocalEnhancementProcessor
@@ -33,7 +34,9 @@ class AudioEditorService:
 
     _HISTORY_LIMIT = 60
     _MIN_RERUN_DURATION = 1.0
-    _RENDER_VERSION = "channel-route-v7-effects-envelope-juce"
+    _RENDER_VERSION = "channel-route-v8-effects-envelope-juce-stretch"
+    _HIGH_PITCH_THRESHOLD = 800.0
+    _HIGH_PITCH_GUARD_SEMITONES = 7
 
     def __init__(
         self,
@@ -44,12 +47,14 @@ class AudioEditorService:
         uvr: UvrTool,
         engines: Any,
         vocal_enhancement: VocalEnhancementProcessor | None = None,
+        pymss: PymssTool | None = None,
     ) -> None:
         self._repo = repo
         self._works_repo = works_repo
         self._models = models
         self._ffmpeg = ffmpeg
         self._uvr = uvr
+        self._pymss = pymss or PymssTool()
         self._audio = FFmpegEngine(ffmpeg)
         self._plugin_host = JuceVst3Host()
         self._plugin_sessions: dict[str, dict[str, str]] = {}
@@ -434,9 +439,27 @@ class AudioEditorService:
             return {"ok": False, "error": "片段太短，无法分离人声"}
 
         opts = options if isinstance(options, dict) else {}
+        engine = str(opts.get("engine") or "uvr").strip().lower()
+        if engine not in {"uvr", "pymss"}:
+            engine = "uvr"
         model = str(opts.get("model") or config.UVR_SEP_MODEL)
+        pymss_model = str(
+            opts.get("pymss_model") or opts.get("model") or config.PYMSS_DEFAULT_MODEL
+        ).strip()
+        harmony_enabled = bool(engine == "pymss" and opts.get("harmony_removal_enabled"))
+        harmony_model = str(
+            opts.get("harmony_model") or config.PYMSS_DEFAULT_HARMONY_MODEL
+        ).strip()
         device = str(opts.get("device") or "auto")
         mute_source = opts.get("mute_source", True) is not False
+        if engine == "pymss":
+            pymss = getattr(self, "_pymss", None) or PymssTool()
+            if not pymss.available:
+                return {"ok": False, "error": "PyMSS 环境未就绪，请先安装 PyMSS 前置环境"}
+            if not config.pymss_model_ready(pymss_model):
+                return {"ok": False, "error": f"PyMSS 人声分离模型未下载: {pymss_model}"}
+            if harmony_enabled and not config.pymss_model_ready(harmony_model):
+                return {"ok": False, "error": f"PyMSS 去混响模型未下载: {harmony_model}"}
         out_dir = self._project_dir(project_id) / "stems" / f"{clip_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         dry = out_dir / "input.wav"
         if not self._audio.trim(
@@ -448,11 +471,42 @@ class AudioEditorService:
         ):
             return {"ok": False, "error": "片段裁剪失败"}
 
-        sep = self._uvr.separate(dry, out_dir, model, device)
+        try:
+            if engine == "pymss":
+                pymss = getattr(self, "_pymss", None) or PymssTool()
+                sep = pymss.separate(
+                    dry,
+                    out_dir,
+                    pymss_model,
+                    device,
+                    purpose=config.PYMSS_PURPOSE_VOCAL,
+                )
+            else:
+                sep = self._uvr.separate(dry, out_dir, model, device)
+        except Exception as exc:  # noqa: BLE001 - 将子进程错误转成编辑器可读提示
+            return {"ok": False, "error": str(exc) or "人声分离失败"}
         vocals = Path(sep.vocals)
         instrumental = Path(sep.instrumental) if sep.instrumental else None
         if not vocals.exists():
             return {"ok": False, "error": "人声分离失败"}
+
+        harmony_result = None
+        if harmony_enabled:
+            try:
+                pymss = getattr(self, "_pymss", None) or PymssTool()
+                harmony_result = pymss.separate(
+                    vocals,
+                    out_dir / "harmony",
+                    harmony_model,
+                    device,
+                    purpose=config.PYMSS_PURPOSE_HARMONY_LEGACY,
+                )
+            except Exception as exc:  # noqa: BLE001 - 可选阶段失败时明确阻止写入半成品
+                return {"ok": False, "error": str(exc) or "和声去除失败"}
+            harmony_vocals = Path(harmony_result.vocals)
+            if not harmony_vocals.exists():
+                return {"ok": False, "error": "和声去除未生成有效人声"}
+            vocals = harmony_vocals
 
         next_project = copy.deepcopy(project)
         next_track, next_idx, next_clip = self._find_clip_ref(next_project, track_id, clip_id)
@@ -479,11 +533,15 @@ class AudioEditorService:
                 fade_out=float(clip.get("fade_out") or 0.0),
                 channel=str(clip.get("channel") or "stereo"),
                 metadata={
-                    "source": "uvr_separation",
+                    "source": f"{engine}_separation",
                     "source_clip_id": clip_id,
                     "source_track_id": track_id,
                     "stem": kind,
-                    "uvr_model": model,
+                    "separation_engine": engine,
+                    "uvr_model": model if engine == "uvr" else "",
+                    "pymss_model": pymss_model if engine == "pymss" else "",
+                    "harmony_removal_enabled": harmony_enabled,
+                    "harmony_model": harmony_model if harmony_enabled else "",
                     "simulated": bool(sep.simulated),
                 },
             ).to_dict()
@@ -497,7 +555,12 @@ class AudioEditorService:
                 volume=1.0,
             ).to_dict()
 
-        created_tracks = [make_track("vocals", "人声", vocals)]
+        vocal_label = "人声"
+        if engine == "pymss":
+            vocal_label += " · PyMSS"
+        if harmony_enabled:
+            vocal_label += " · 去和声"
+        created_tracks = [make_track("vocals", vocal_label, vocals)]
         if instrumental and instrumental.exists():
             created_tracks.append(make_track("instrumental", "伴奏", instrumental))
         tracks[insert_at:insert_at] = created_tracks
@@ -510,6 +573,8 @@ class AudioEditorService:
             "tracks": created_tracks,
             "clips": created_clips,
             "simulated": bool(sep.simulated),
+            "engine": engine,
+            "harmony_removed": bool(harmony_result),
         }
 
     def split_clip_by_lyrics(
@@ -951,6 +1016,8 @@ class AudioEditorService:
                 "mode": "from_work",
                 "workflow": workflow,
                 "export_mode": "vocal" if vocal_export else "mix",
+                # 保留翻唱任务的前期处理配置，编辑器后续分离/重做时继续使用同一套设置。
+                "preprocess": copy.deepcopy(work.get("preprocess") or {}),
             },
             created_at=now,
             updated_at=now,
@@ -1011,7 +1078,10 @@ class AudioEditorService:
         return self._public(next_record)
 
     def clip_audio(self, project_id: str, clip_id: str) -> str:
-        dst = self._render_clip_file(project_id, clip_id, "flac", cache=True)
+        # WebView playback only needs a compact transport format. Keep lossless
+        # WAV/FLAC available for copy/export, but avoid pushing large FLAC
+        # payloads through the pywebview bridge for every clip audition.
+        dst = self._render_clip_file(project_id, clip_id, "mp3", cache=True)
         return self._audio_data(dst, exact=True) if dst and dst.exists() else ""
 
     def copy_clip_audio(
@@ -1443,7 +1513,9 @@ class AudioEditorService:
         return self._public(project)
 
     def render_preview(self, project_id: str) -> str:
-        path = self.render(project_id, "flac")
+        # Preview is streamed as a data URI by the desktop bridge; MP3 keeps
+        # first-play latency and bridge memory bounded for long projects.
+        path = self.render(project_id, "mp3")
         return self._audio_data(path, exact=True) if path else ""
 
     def render(self, project_id: str, output_format: str = "wav") -> Path | None:
@@ -1565,27 +1637,36 @@ class AudioEditorService:
         clip = self._find_clip(project, clip_id) if project else None
         if not project or not clip:
             return {"ok": False, "peaks": []}
-        cache_key = self._waveform_key(clip, bins)
+        rendered = None
+        if self._waveform_should_render(clip):
+            rendered = self._render_clip_file(project_id, clip_id, "wav", cache=True)
+        waveform_src = rendered if rendered and rendered.exists() else Path(str(clip.get("file") or ""))
+        cache_key = self._waveform_key(clip, bins, waveform_src)
         cache = dict(project.get("waveform_cache") or {})
         if cache_key in cache:
             return {"ok": True, **cache[cache_key]}
-        try:
-            duration = max(
-                0.01,
-                float(clip.get("end") or 0.0) - float(clip.get("start") or 0.0),
+        if rendered and rendered.exists():
+            peaks = self._compute_waveform(rendered, bins)
+        else:
+            try:
+                timeline_duration = max(
+                    0.01,
+                    float(clip.get("end") or 0.0) - float(clip.get("start") or 0.0),
+                )
+            except (TypeError, ValueError):
+                timeline_duration = 0.01
+            stretch = self._clip_stretch(clip)
+            duration = timeline_duration / stretch
+            try:
+                offset = max(0.0, float(clip.get("offset") or 0.0))
+            except (TypeError, ValueError):
+                offset = 0.0
+            peaks = self._compute_waveform(
+                Path(str(clip.get("file") or "")),
+                bins,
+                offset=offset,
+                duration=duration,
             )
-        except (TypeError, ValueError):
-            duration = 0.01
-        try:
-            offset = max(0.0, float(clip.get("offset") or 0.0))
-        except (TypeError, ValueError):
-            offset = 0.0
-        peaks = self._compute_waveform(
-            Path(str(clip.get("file") or "")),
-            bins,
-            offset=offset,
-            duration=duration,
-        )
         payload = {"clip_id": clip_id, "bins": bins, "peaks": peaks}
         cache[cache_key] = payload
         project["waveform_cache"] = cache
@@ -1835,6 +1916,62 @@ class AudioEditorService:
             "silences": silences,
         }
 
+    @staticmethod
+    def _estimate_peak_f0(source: Path) -> float:
+        """Reuse the conversion pipeline's pitch probe without constructing it."""
+        try:
+            from application.conversion_service import ConversionService
+
+            return float(ConversionService._estimate_peak_f0(source))
+        except (ImportError, OSError, ValueError, wave.Error):
+            return 0.0
+
+    def _prepare_high_pitch_guard(
+        self,
+        source: Path,
+        destination: Path,
+        params: InferenceParams,
+    ) -> tuple[Path, bool]:
+        if not params.auto_high_pitch_guard or not source.is_file():
+            return source, False
+        peak_f0 = self._estimate_peak_f0(source)
+        if peak_f0 < self._HIGH_PITCH_THRESHOLD:
+            return source, False
+        pitch_shift = getattr(self._ffmpeg, "pitch_shift", None)
+        if not callable(pitch_shift):
+            return source, False
+        ok = pitch_shift(
+            source,
+            destination,
+            -self._HIGH_PITCH_GUARD_SEMITONES,
+            mask_source=source,
+            loudness_source=source,
+            high_threshold=self._HIGH_PITCH_THRESHOLD,
+        )
+        return (destination, True) if ok and destination.is_file() else (source, False)
+
+    def _restore_high_pitch_guard(
+        self,
+        source: Path,
+        destination: Path,
+        original: Path,
+        params: InferenceParams,
+    ) -> Path:
+        if not params.auto_high_pitch_guard:
+            return source
+        pitch_shift = getattr(self._ffmpeg, "pitch_shift", None)
+        if not callable(pitch_shift):
+            return source
+        ok = pitch_shift(
+            source,
+            destination,
+            self._HIGH_PITCH_GUARD_SEMITONES,
+            mask_source=original,
+            loudness_source=original,
+            high_threshold=self._HIGH_PITCH_THRESHOLD,
+        )
+        return destination if ok and destination.is_file() else source
+
     def rerun_clip(
         self,
         project_id: str,
@@ -1884,10 +2021,24 @@ class AudioEditorService:
             return {"ok": False, "error": "片段裁剪失败"}
         model_payload = self._model_payload(model)
         engine = self._engines.for_model(model_payload)
+        guarded_input, guard_applied = self._prepare_high_pitch_guard(
+            dry,
+            out_dir / f"{clip_id}_{rerun_key}_high_guarded.wav",
+            infer_params,
+        )
         try:
-            engine.infer(model_payload, dry, out, infer_params, duration)
+            engine.infer(model_payload, guarded_input, out, infer_params, duration)
         except Exception as exc:  # noqa: BLE001 - 需要把推理错误回传给前端
             return {"ok": False, "error": str(exc)}
+        if guard_applied:
+            restored = self._restore_high_pitch_guard(
+                out,
+                out_dir / f"{clip_id}_{model_id}_{rerun_key}_high_restored.wav",
+                dry,
+                infer_params,
+            )
+            if restored != out:
+                out = restored
 
         # 可选增强：以裁剪出的原始干声保护高级层的辅音、呼吸和宽带平衡。
         enhance_used = False
@@ -1920,6 +2071,13 @@ class AudioEditorService:
             loudness_envelope = self._vocal_enhancement.normalize_strength(
                 enhance_cfg.get("loudness_envelope", 0.58), 0.58
             )
+            if guard_applied:
+                # High-note restoration already protects upper harmonics. Keep
+                # the optional beauty pass conservative to avoid synthetic sheen.
+                timbre_focus *= 0.68
+                ai_eq *= 0.78
+                ai_compressor *= 0.82
+                ai_exciter *= 0.45
             enhanced_out = out_dir / f"{clip_id}_{model_id}_{rerun_key}_enhanced.wav"
             try:
                 enhanced_out.unlink(missing_ok=True)
@@ -1970,6 +2128,8 @@ class AudioEditorService:
                 "rerun_source_file": str(src),
                 "rerun_dry_effects": True,
                 "rerun_enhanced": enhance_used,
+                "rerun_high_pitch_guard": guard_applied,
+                "rerun_beauty_compensation": guard_applied and enhance_used,
                 "rerun_enhance_level": enhance_level if enhance_used else "",
                 "rerun_pitch_correction": pitch_correction if enhance_used else 0.0,
                 "rerun_timing_alignment": timing_alignment if enhance_used else 0.0,
@@ -2314,6 +2474,7 @@ class AudioEditorService:
             for clip in track.get("clips", []) or []:
                 channel = str(clip.get("channel") or "stereo").strip().lower()
                 clip["channel"] = channel if channel in {"stereo", "left", "right"} else "stereo"
+                clip["time_stretch"] = AudioEditorService._clip_stretch(clip)
                 clip["effects"] = AudioEditorService._clean_effects(clip.get("effects"))
                 try:
                     clip_duration = max(
@@ -2513,11 +2674,16 @@ class AudioEditorService:
             }
         )
 
-    def _waveform_key(self, clip: dict[str, Any], bins: int) -> str:
-        path = Path(str(clip.get("file") or ""))
+    def _waveform_key(
+        self,
+        clip: dict[str, Any],
+        bins: int,
+        source: Path | None = None,
+    ) -> str:
+        path = source if source and source.exists() else Path(str(clip.get("file") or ""))
         try:
             st = path.stat()
-            stat = (str(path), st.st_size, int(st.st_mtime))
+            stat = (str(path), st.st_size, int(st.st_mtime_ns))
         except OSError:
             stat = (str(path), 0, 0)
         try:
@@ -2537,9 +2703,37 @@ class AudioEditorService:
                 "stat": stat,
                 "offset": round(offset, 3),
                 "duration": round(duration, 3),
+                "time_stretch": round(self._clip_stretch(clip), 4),
                 "bins": bins,
             }
         )
+
+    def _waveform_should_render(self, clip: dict[str, Any]) -> bool:
+        try:
+            if abs(self._clip_stretch(clip) - 1.0) > 0.0001:
+                return True
+            if float(clip.get("volume", 1.0) or 1.0) != 1.0:
+                return True
+            if float(clip.get("fade_in", 0.0) or 0.0) > 0.0:
+                return True
+            if float(clip.get("fade_out", 0.0) or 0.0) > 0.0:
+                return True
+        except (TypeError, ValueError):
+            return True
+        if str(clip.get("channel") or "stereo").strip().lower() != "stereo":
+            return True
+        if clip.get("effects"):
+            return True
+        if clip.get("volume_envelope"):
+            return True
+        return False
+
+    @staticmethod
+    def _clip_stretch(clip: dict[str, Any]) -> float:
+        try:
+            return max(0.25, min(4.0, float(clip.get("time_stretch", 1.0) or 1.0)))
+        except (TypeError, ValueError):
+            return 1.0
 
     def _compute_waveform(
         self,
@@ -2582,35 +2776,42 @@ class AudioEditorService:
                 if available <= 0:
                     return []
                 target_bins = max(16, min(900, int(bins or 160), span))
-                peaks: list[float] = []
-                fmt = {1: "B", 2: "h", 4: "i"}[width]
-                max_val = 128.0 if width == 1 else float((2 ** (width * 8 - 1)) - 1)
-                current = start_frame
                 wf.setpos(start_frame)
-                for idx in range(target_bins):
-                    end_frame = start_frame + round((idx + 1) * span / target_bins)
-                    to_read = max(1, min(frames - current, end_frame - current))
-                    raw = wf.readframes(to_read)
-                    current += to_read
-                    if not raw:
-                        peaks.append(0.0)
-                        break
-                    count = len(raw) // width
-                    if count <= 0:
-                        peaks.append(0.0)
-                        continue
-                    samples = struct.unpack("<" + fmt * count, raw)
-                    cur_peak = 0.0
-                    for i in range(0, len(samples), channels):
-                        if width == 1:
-                            peak = max(abs(int(s) - 128) for s in samples[i : i + channels]) / max_val
-                        else:
-                            peak = max(abs(s) for s in samples[i : i + channels]) / max_val
-                        cur_peak = max(cur_peak, min(1.0, peak))
-                    peaks.append(round(cur_peak, 4))
-                if len(peaks) < target_bins:
-                    peaks.extend([0.0] * (target_bins - len(peaks)))
-                return peaks[:target_bins]
+                raw = wf.readframes(span)
+                if not raw:
+                    return []
+                # NumPy is present in the application environment; keep a small
+                # struct fallback for portable/headless test environments.
+                try:
+                    import numpy as np
+
+                    dtype = {1: np.uint8, 2: np.int16, 4: np.int32}[width]
+                    samples = np.frombuffer(raw, dtype=dtype)
+                    usable = (len(samples) // channels) * channels
+                    samples = samples[:usable].reshape(-1, channels)
+                    if width == 1:
+                        frame_peaks = np.max(np.abs(samples.astype(np.int16) - 128), axis=1) / 128.0
+                    else:
+                        frame_peaks = np.max(np.abs(samples.astype(np.float32)), axis=1) / float(2 ** (width * 8 - 1) - 1)
+                    edges = np.linspace(0, len(frame_peaks), target_bins + 1, dtype=np.int64)
+                    peaks = [
+                        round(float(np.max(frame_peaks[edges[index] : max(edges[index] + 1, edges[index + 1])])), 4)
+                        if edges[index] < len(frame_peaks) else 0.0
+                        for index in range(target_bins)
+                    ]
+                    return [max(0.0, min(1.0, value)) for value in peaks]
+                except (ImportError, TypeError, ValueError):
+                    fmt = {1: "B", 2: "h", 4: "i"}[width]
+                    max_val = 128.0 if width == 1 else float((2 ** (width * 8 - 1)) - 1)
+                    samples = struct.unpack("<" + fmt * (len(raw) // width), raw[: (len(raw) // width) * width])
+                    peaks: list[float] = []
+                    for idx in range(target_bins):
+                        first = round(idx * len(samples) / target_bins)
+                        last = max(first + channels, round((idx + 1) * len(samples) / target_bins))
+                        frame = samples[first:last]
+                        values = [abs(int(item) - 128) if width == 1 else abs(item) for item in frame]
+                        peaks.append(round(min(1.0, max(values or [0]) / max_val), 4))
+                    return peaks
         except (OSError, EOFError, wave.Error, struct.error):
             return []
 

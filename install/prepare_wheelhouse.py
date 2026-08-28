@@ -1,10 +1,9 @@
-"""Prepare the bundled Python wheelhouse for the Windows installer.
-
-The runtime installer uses shared ``assets/wheels/<py tag>/<stack>`` folders
-plus component folders like ``assets/wheels/rvc/py39/cu121`` when two runtimes
-need incompatible torch versions. This script runs on the release builder,
-downloads or builds Windows wheels for every supported Python/GPU combination,
-and writes a manifest that Inno Setup packages alongside the models.
+"""运行时安装程序在两个运行时需要不兼容的 PyTorch 版本时，
+会使用共享的 ``assets/wheels/<py tag>/<stack>`` 文件夹，
+以及组件文件夹（如 ``assets/wheels/rvc/py39/cu121`` 或
+``assets/wheels/pymss/py310/cu126``）。
+此脚本在发布构建器上运行，下载或构建每种支持的 Python/GPU
+组合对应的 Windows 轮子，并生成一个清单文件，与模型一起打包到 Inno Setup 中。
 """
 
 from __future__ import annotations
@@ -135,6 +134,8 @@ def _torch_specs(installer, stack: str, version: str) -> tuple[tuple[str, ...], 
     packages = (f"torch=={version}", f"torchaudio=={version}")
     if stack == "cu128":
         return packages, installer.TORCH_BLACKWELL_INDEX
+    if stack == "cu126":
+        return packages, installer.TORCH_PYMSS_CUDA_INDEX
     if stack == "cu121":
         return packages, installer.TORCH_CUDA_INDEX
     return packages, installer.TORCH_CPU_INDEX
@@ -201,6 +202,54 @@ def _directml_constraints(installer) -> tuple[str, ...]:
         torchvision="0.19.1",
         extra=(f"torch-directml=={installer.TORCH_DIRECTML_VER}",),
     )
+
+
+def _pymss_batches(root: Path, installer, stack: str) -> list[DownloadBatch]:
+    """Build PyMSS in a component wheelhouse with its compatible torch pair."""
+    py = installer.PYTHON_FOR_ENGINES
+    dest = _component_wheelhouse_dir(root, "pymss", py, stack)
+    # PyMSS 2.0.x requires Torch 2.7.1. Pre-Blackwell NVIDIA uses cu126 and
+    # Blackwell uses cu128; keep the wheelhouse aligned to the actual runtime
+    # stack so offline installs stay deterministic.
+    if stack == "cu128":
+        runtime_stack = "cu128"
+    elif stack == "cu126":
+        runtime_stack = "cu126"
+    else:
+        runtime_stack = "cpu"
+    constraints = _constraints(
+        torch=installer.PYMSS_TORCH_VER,
+        torchaudio=installer.PYMSS_TORCHAUDIO_VER,
+    )
+    torch_packages, torch_index = _torch_specs(
+        installer,
+        runtime_stack,
+        installer.PYMSS_TORCH_VER,
+    )
+    return [
+        DownloadBatch(
+            f"pymss {stack} py310 setuptools",
+            dest,
+            py,
+            ("setuptools<81", "wheel"),
+            constraints=constraints,
+        ),
+        DownloadBatch(
+            f"pymss {stack} torch",
+            dest,
+            py,
+            torch_packages,
+            index=torch_index,
+            constraints=constraints,
+        ),
+        DownloadBatch(
+            f"pymss {stack} package",
+            dest,
+            py,
+            (f"pymss=={installer.PYMSS_VERSION}",),
+            constraints=constraints,
+        ),
+    ]
 
 
 def _base_batches(root: Path, installer) -> list[DownloadBatch]:
@@ -354,6 +403,7 @@ def _py310_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
             boot("hub directml py310 setuptools", hub_dest, common_constraints),
             DownloadBatch("hub directml deps", hub_dest, py, ("modelscope", "requests", "tqdm"), constraints=common_constraints),
         ]
+        batches += _pymss_batches(root, installer, stack)
         return batches
 
     if stack == "cu128":
@@ -376,6 +426,7 @@ def _py310_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
             constraints=torch_constraints,
         ),
     ]
+    batches += _pymss_batches(root, installer, stack)
     if stack == "cu128":
         batches += [
             DownloadBatch("svc cu128 torch", dest, py, torch_packages, index=torch_index, constraints=torch_constraints),
@@ -531,6 +582,17 @@ def build_plan(root: Path, stacks: set[str] | None = None) -> list[DownloadBatch
     for stack in ("cpu", "cu121"):
         if stack in requested:
             batches += _py39_batches(root, installer, reqs, stack)
+    pymss_stacks: list[str] = []
+    if "cpu" in requested:
+        pymss_stacks.append("cpu")
+    if "directml" in requested:
+        pymss_stacks.append("directml")
+    if requested & {"cu121", "cu126"}:
+        pymss_stacks.append("cu126")
+    if "cu128" in requested:
+        pymss_stacks.append("cu128")
+    for stack in pymss_stacks:
+        batches += _pymss_batches(root, installer, stack)
     return batches
 
 
@@ -639,7 +701,7 @@ def _venv_python(venv: Path) -> Path:
     return venv / "Scripts" / "python.exe" if os.name == "nt" else venv / "bin" / "python"
 
 
-def _ensure_tool_python(root: Path, installer) -> Path:
+def _ensure_tool_python(root: Path, _installer) -> Path:
     global _TOOL_PYTHON
     if _TOOL_PYTHON and _TOOL_PYTHON.exists():
         return _TOOL_PYTHON
@@ -649,22 +711,8 @@ def _ensure_tool_python(root: Path, installer) -> Path:
         venv.parent.mkdir(parents=True, exist_ok=True)
         _run([sys.executable, "-m", "venv", str(venv)])
     _ensure_pip(py)
-    _run(
-        [
-            str(py),
-            "-m",
-            "pip",
-            "install",
-            "--upgrade",
-            "pip==24.0",
-            "setuptools<81",
-            "wheel",
-            "Cython<3",
-            "numpy==1.23.5",
-            "--disable-pip-version-check",
-            *_pip_index_args(installer, None),
-        ]
-    )
+    # 工具环境只负责下载器 / uv 自举，不安装编译用大包，避免 wheelhouse
+    # 准备阶段在这里重复下载和导入 numpy、Cython、wheel 等依赖。
     _TOOL_PYTHON = py
     return py
 
@@ -760,7 +808,9 @@ def _build_wheels(root: Path, installer, batch: DownloadBatch) -> None:
 def _download_batch(root: Path, installer, batch: DownloadBatch) -> None:
     if not batch.packages and batch.requirements is None:
         return
-    if batch.build_source:
+    # Requirement sets can contain transitive source-only packages (SeedVC
+    # currently reaches argbind and jieba), so binary-only download is unsafe.
+    if batch.build_source or batch.requirements is not None:
         print(f"\n==== {batch.label} ====")
         _build_wheels(root, installer, batch)
         return
@@ -850,7 +900,7 @@ def main() -> int:
     parser.add_argument(
         "--stack",
         action="append",
-        choices=("cpu", "directml", "cu121", "cu128"),
+        choices=("cpu", "directml", "cu121", "cu126", "cu128"),
         help="prepare only selected stack(s); default prepares all",
     )
     parser.add_argument("--dry-run", action="store_true", help="print the plan without downloading")
@@ -858,6 +908,16 @@ def main() -> int:
     args = parser.parse_args()
 
     root = args.root.expanduser().resolve()
+    if args.clean and not args.dry_run:
+        wheelhouse = root / "assets" / "wheels"
+        if wheelhouse.exists():
+            shutil.rmtree(wheelhouse)
+        # Constraints are generated from the current component/runtime plan.
+        # Remove stale files before build_plan creates the filtered requirements.
+        stale_requirements = root / ".tmp" / "wheelhouse-requirements"
+        if stale_requirements.exists():
+            shutil.rmtree(stale_requirements)
+
     installer = _load_installer(root)
     batches = build_plan(root, set(args.stack or []))
     if args.dry_run:
@@ -879,8 +939,6 @@ def main() -> int:
         return 0
 
     wheelhouse = root / "assets" / "wheels"
-    if args.clean and wheelhouse.exists():
-        shutil.rmtree(wheelhouse)
     wheelhouse.mkdir(parents=True, exist_ok=True)
     for batch in batches:
         _download_batch(root, installer, batch)

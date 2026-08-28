@@ -1,6 +1,6 @@
 # XB-SVCB 应用本体
 
-版本：`0.0.29`
+版本：`0.0.30`
 
 这里包含打包进 `XB-SVCB.exe` 的桌面应用壳、本地 API 桥接、领域服务和基础设施适配层。
 
@@ -8,7 +8,14 @@
 
 - `app/main.py` 启动 pywebview 桌面壳。
 - `app/config.py` 提供应用元信息、路径与运行环境位置。
-- 重型 AI 依赖不打进应用本体，由安装器放到 `.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-uvr`、`.venv-hub` 等隔离环境中。
+- 重型 AI 依赖不打进应用本体，由安装器放到 `.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-uvr`、`.venv-pymss`、`.venv-vocal`、`.venv-hub` 等隔离环境中。
+
+## v0.0.30 重点
+
+- 环境检测统一验证真实可运行的 Python、Torch 和隔离 worker；失效环境变量会自动回退，不再把 WindowsApps 假 Python 或旧路径当作已安装。
+- 新增 PyMSS 独立人声处理引擎：使用 `.venv-pymss` 和专用模型目录，仅允许人声分离与和声去除两类 catalog 模型；翻唱任务支持在人声分离后可选执行和声相减，模型选择与处理阶段写入任务持久化记录和日志。
+- 全局环境状态按 FFmpeg、可用转换引擎和可选组件分层，PyMSS/歌声增强缺失不会误报整套软件降级；首页按任一已下载 PyMSS 模型显示状态，创建任务仍校验当前模型；设备探测失败不会长时间缓存。
+- 高音保护对超出模型可靠音域的区域执行受限降调翻唱，再升回原调并补偿响度；高音域素材自动选择更适合的 F0 路径，FCPE 失败时安全回退。
 
 ## v0.0.29 重点
 

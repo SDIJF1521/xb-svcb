@@ -195,19 +195,29 @@ class FFmpegEngine:
             start = max(0.0, float(clip.get("start") or 0.0))
             end = max(start, float(clip.get("end") or start))
             length = max(0.01, end - start)
+            try:
+                stretch = max(0.25, min(4.0, float(clip.get("time_stretch", 1.0) or 1.0)))
+            except (TypeError, ValueError):
+                stretch = 1.0
+            speed = 1.0 / stretch
+            source_length = length * speed
             offset = 0.0 if meta.get("prepared") else max(0.0, float(clip.get("offset") or 0.0))
+            if meta.get("prepared"):
+                source_length = length
             gain = max(0.0, float(track.get("volume", 1.0)) * float(clip.get("volume", 1.0)))
             fade_in = max(0.0, min(float(clip.get("fade_in") or 0.0), length / 2.0))
             fade_out = max(0.0, min(float(clip.get("fade_out") or 0.0), length / 2.0))
             channel = str(clip.get("channel") or "stereo").strip().lower()
             delay_ms = max(0, int(round(start * 1000)))
             chain = (
-                f"[{idx}:a]atrim=start={offset:.3f}:duration={length:.3f},"
+                f"[{idx}:a]atrim=start={offset:.3f}:duration={source_length:.3f},"
                 "asetpts=PTS-STARTPTS,"
                 f"aresample={sample_rate},"
                 "aformat=sample_fmts=s16:channel_layouts=stereo,"
                 f"volume={gain:.4f}"
             )
+            if not meta.get("prepared") and abs(stretch - 1.0) > 0.0001:
+                chain += "," + ",".join(self._atempo_filters(speed))
             envelope = self._volume_envelope_filter(clip.get("volume_envelope"), length)
             if envelope:
                 chain += f",{envelope}"
@@ -250,6 +260,20 @@ class FFmpegEngine:
             str(dst),
         ]
         return self._run(cmd, timeout=900)
+
+    @staticmethod
+    def _atempo_filters(speed: float) -> list[str]:
+        value = max(0.25, min(4.0, float(speed or 1.0)))
+        filters: list[str] = []
+        while value < 0.5:
+            filters.append("atempo=0.5")
+            value /= 0.5
+        while value > 2.0:
+            filters.append("atempo=2.0")
+            value /= 2.0
+        if abs(value - 1.0) > 0.0001:
+            filters.append(f"atempo={value:.6f}")
+        return filters
 
     @staticmethod
     def cache_key(payload: Any) -> str:

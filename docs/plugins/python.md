@@ -948,20 +948,32 @@ Worker 对名为 `__init__.py` 的入口建立包加载上下文，所以 `.rule
 
 ## 14. 打包第三方依赖到 `vendor`
 
-宿主不会读取 `requirements.txt`，不会在安装插件时运行 `pip install`，也不会使用插件的 `.venv`。第三方依赖必须放进插件根目录下的 `vendor`。
+宿主运行插件时不会访问网络、不会执行 `pip install`，也不会使用插件的 `.venv`。新版 SDK 脚手架会创建 `requirements.txt`，并在 `npm run pack` 时使用 Python 3.10 把其中的依赖安装到临时打包目录的 `vendor/`。最终用户拿到的 `.xbplugin` 已经包含依赖。
 
-例如：
+在 `requirements.txt` 中固定依赖版本：
 
 ```powershell
-python -m pip install --target .\vendor "httpx==0.28.1"
+httpx==0.28.1
 ```
+
+清单同时声明依赖文件：
+
+```ts
+.python('plugin.py', { requirements: 'requirements.txt' })
+// 混合插件使用 .hybrid('plugin.py', { requirements: 'requirements.txt' })
+```
+
+然后正常运行 `npm run validate` 和 `npm run pack`。需要指定打包解释器时设置 `XB_PLUGIN_BUILD_PYTHON`；解释器必须是 Python 3.10，以匹配正式插件运行时。旧项目也可以保留手工生成的 `vendor/`，没有依赖清单时打包器会原样包含它。
 
 运行时 Worker 会把以下位置加入模块搜索路径：
 
-1. `vendor`；
+1. 宿主提供的 Python SDK 目录；
 2. Python 入口所在目录；
-3. 宿主提供的 Python SDK 目录；
-4. 宿主 Python 的标准搜索路径。
+3. 插件根目录；
+4. `vendor`；
+5. Python 标准库。
+
+Worker 使用隔离模式启动，不读取用户的 `PYTHONPATH`、用户 site-packages 或宿主 AI 环境中的第三方包。因此未进入 `vendor/` 的依赖会在开发机和用户机上一致失败，不会再被开发机全局环境意外掩盖。
 
 因此插件代码可以直接导入：
 
@@ -972,7 +984,7 @@ import httpx
 ### 14.1 依赖规则
 
 - 固定依赖版本，保证构建可复现；
-- 不要把 `xb_svcb_plugin` 安装进 `vendor`，否则可能覆盖宿主 SDK；
+- 不要把 `xb_svcb_plugin` 或 `xb-svcb-plugin-sdk` 写入依赖清单；运行时 SDK 由宿主提供；
 - 删除不需要的测试、缓存和文档文件以控制包大小；
 - 含 `.pyd` 或其他本机二进制的依赖必须匹配宿主 Python 版本、Windows 架构和平台；
 - 不要假定宿主已经安装某个 PyPI 包；标准库之外的依赖都应自行打包；
@@ -1531,7 +1543,7 @@ ActionResult(
 - 宿主没有找到 Python 3.10+ 插件运行环境；
 - 宿主附带的 Worker 或 SDK 文件缺失。
 
-查看 `error.log`。安装成功只说明清单和压缩包结构通过校验，不代表 Python 入口已经执行成功。
+查看 `error.log`。安装阶段会确认入口文件存在，但不会执行入口；启用成功才代表入口和生命周期能够运行。
 
 ### 20.5 “插件返回值必须是 dict、str、ActionResult 或 None”
 
@@ -1558,13 +1570,13 @@ json.dumps(result.to_dict() if hasattr(result, "to_dict") else result)
 
 ### 20.8 本地能运行，宿主提示缺少模块
 
-本地虚拟环境中的依赖不会进入插件包。使用：
+本地虚拟环境中的依赖不会自动成为运行时依赖。把固定版本写入 `requirements.txt`：
 
 ```powershell
-python -m pip install --target .\vendor package-name
+package-name==1.2.3
 ```
 
-重新打包，并检查 `.xbplugin` 内是否存在 `vendor`。
+然后运行 `npm run pack`，并检查 `.xbplugin` 内是否存在 `vendor`。Worker 不读取开发机或用户机的全局 site-packages。
 
 ### 20.9 配置修改没有保存
 

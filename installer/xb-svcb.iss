@@ -23,7 +23,7 @@
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.29"
+#define MyAppVersion "0.0.30"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 
@@ -96,7 +96,7 @@ Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubd
 Source: "..\assets\wheels\*"; DestDir: "{app}\assets\wheels"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\release_notes_v029.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release_notes_v030.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docs\api.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 #endif
 
@@ -114,6 +114,7 @@ Filename: "{app}\{#MyAppExe}"; Description: "立即启动 {#MyAppShort}"; \
 [UninstallDelete]
 ; 卸载时清理安装目录内生成的环境与下载物（用户数据在 .xb_svcb，保留）
 Type: filesandordirs; Name: "{app}\.venv-uvr"
+Type: filesandordirs; Name: "{app}\.venv-plugins"
 Type: filesandordirs; Name: "{app}\.venv-svc"
 Type: filesandordirs; Name: "{app}\.venv-rvc"
 Type: filesandordirs; Name: "{app}\.venv-seedvc"
@@ -288,6 +289,44 @@ begin
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
 end;
 
+function CommandOutput(const CommandLine: String): String; forward;
+
+function PythonPathCommandAvailable(const CommandName: String): Boolean;
+var
+  Output, Line, LowerLine: String;
+  NewLinePos: Integer;
+begin
+  Result := False;
+  if not CmdAvailable(CommandName) then
+    Exit;
+  Output := CommandOutput('where ' + CommandName);
+  { Test every PATH result. WindowsApps aliases are deliberately skipped. }
+  while Output <> '' do
+  begin
+    NewLinePos := Pos(#13, Output);
+    if NewLinePos = 0 then
+    begin
+      Line := Trim(Output);
+      Output := '';
+    end
+    else
+    begin
+      Line := Trim(Copy(Output, 1, NewLinePos - 1));
+      Output := Copy(Output, NewLinePos + 1, Length(Output));
+      if (Output <> '') and (Output[1] = #10) then
+        Output := Copy(Output, 2, Length(Output));
+    end;
+    LowerLine := LowerCase(Line);
+    if (Line <> '') and FileExists(Line) and
+       (Pos('\windowsapps\', LowerLine) = 0) and
+       PythonFileAvailable(Line) then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
 function PythonAvailable(const CustomDir: String): Boolean;
 begin
   Result := False;
@@ -301,14 +340,13 @@ begin
     Result := True;
     Exit;
   end;
-  if CommandSucceeds(
+  if CmdAvailable('py') and CommandSucceeds(
       'py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"') then
   begin
     Result := True;
     Exit;
   end;
-  Result := CommandSucceeds(
-    'python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"');
+  Result := PythonPathCommandAvailable('python');
 end;
 
 function SystemFfmpegAvailable(): Boolean;
@@ -491,6 +529,41 @@ begin
   DetectedGpuStackCache := Result;
 end;
 
+function CudaToolkitVersionForStack(const Stack: String): String;
+begin
+  { 主栈仍按 cu121 / cu128 运行，这里只管前置 CUDA 工具链推荐版本。 }
+  if Stack = 'cu128' then
+    Result := '12.8'
+  else if Stack = 'cu121' then
+    Result := '12.6'
+  else
+    Result := '';
+end;
+
+function CudaNvccPath(const Version: String): String;
+begin
+  Result := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v' + Version + '\bin\nvcc.exe');
+end;
+
+function CudaNvccMatchesVersion(const NvccPath, Version: String): Boolean;
+var
+  Output: String;
+begin
+  Result := False;
+  if (NvccPath = '') or (not FileExists(NvccPath)) then
+    Exit;
+  Output := CommandOutput(CmdPath(NvccPath) + ' --version 2>&1');
+  Result := ContainsText(Output, 'release ' + Version);
+end;
+
+function CudaToolkitAvailable(const Version, ToolkitDir: String): Boolean;
+begin
+  Result :=
+    CudaNvccMatchesVersion(CudaNvccPath(Version), Version) or
+    ((ToolkitDir <> '') and CudaNvccMatchesVersion(ToolkitDir + '\bin\nvcc.exe', Version)) or
+    (CmdAvailable('nvcc') and ContainsText(CommandOutput('nvcc --version 2>&1'), 'release ' + Version));
+end;
+
 function GpuStackLabel(const Stack: String): String;
 begin
   if Stack = 'cu128' then
@@ -513,12 +586,7 @@ end;
 
 function DetectedCudaVersion(): String;
 begin
-  if DetectedGpuStackName() = 'cu128' then
-    Result := '12.8'
-  else if DetectedGpuStackName() = 'cu121' then
-    Result := '12.1'
-  else
-    Result := '';
+  Result := CudaToolkitVersionForStack(DetectedGpuStackName());
 end;
 
 function ShowInstallDetails(): Boolean;
@@ -557,7 +625,7 @@ begin
     '  uv：' + StatusText(CmdAvailable('uv')) + '（Python 可用后自动安装）' + #13#10;
   if (DetectedStack = 'cu121') or (DetectedStack = 'cu128') then
     Result := Result + '  CUDA Toolkit ' + DetectedCudaVersion() + '：' +
-      StatusText(CmdAvailable('nvcc')) + #13#10;
+      StatusText(CudaToolkitAvailable(DetectedCudaVersion(), '')) + #13#10;
   Result := Result +
     '  VB-CABLE：' + StatusText(VbCableAvailable()) + '（系统音频变声可选，未安装时请手动安装）' + #13#10 +
     '  JUCE VST3 Host：随安装包内置，安装后检查' + #13#10 +
@@ -600,7 +668,7 @@ begin
   if DetectedGpuStackName() = 'cu128' then
     OpenDownloadUrl('https://developer.nvidia.com/cuda-12-8-0-download-archive')
   else if DetectedGpuStackName() = 'cu121' then
-    OpenDownloadUrl('https://developer.nvidia.com/cuda-12-1-0-download-archive');
+    OpenDownloadUrl('https://developer.nvidia.com/cuda-12-6-0-download-archive');
 end;
 
 procedure VbCableDownloadClick(Sender: TObject);
@@ -651,7 +719,7 @@ end;
 procedure RefreshPrereqDownloadStatus;
 var
   IsNvidia, IsDirectml, PythonReady: Boolean;
-  DetectedStack, CudaVersion, GitPath, CudaPath: String;
+  DetectedStack, CudaVersion, GitPath: String;
   UserProfilePath, UvStandalonePath, UvPythonScriptsPath, UvUserScriptsPath: String;
 begin
   GitPath := ExpandConstant('{localappdata}\Programs\Git\cmd\git.exe');
@@ -692,12 +760,10 @@ begin
   begin
     CudaVersion := DetectedCudaVersion();
     CudaDownloadButton.Caption := '下载 CUDA ' + CudaVersion;
-    CudaPath := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v' + CudaVersion + '\bin\nvcc.exe');
-    CudaStatusLabel.Caption := 'CUDA Toolkit ' + CudaVersion + '：' +
-      StatusText(CmdAvailable('nvcc') or FileExists(CudaPath) or
-        FileExists(CudaPathPage.Values[0] + '\bin\nvcc.exe'));
-    if FileExists(CudaPath) or FileExists(CudaPathPage.Values[0] + '\bin\nvcc.exe') then
+    if CudaToolkitAvailable(CudaVersion, CudaPathPage.Values[0]) then
       CudaStatusLabel.Caption := 'CUDA Toolkit ' + CudaVersion + '：已检测到';
+    else
+      CudaStatusLabel.Caption := 'CUDA Toolkit ' + CudaVersion + '：未检测到';
   end
   else
   begin
@@ -725,13 +791,9 @@ begin
     not (CmdAvailable('cl') or
       FileExists(ExpandConstant('{pf32}\Microsoft Visual Studio\Installer\vswhere.exe')));
   if DetectedGpuStackName() = 'cu128' then
-    Result := Result or ((not CmdAvailable('nvcc')) and
-      (not FileExists(ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin\nvcc.exe'))) and
-      (not FileExists(CudaPathPage.Values[0] + '\bin\nvcc.exe')))
+    Result := Result or (not CudaToolkitAvailable('12.8', CudaPathPage.Values[0]))
   else if DetectedGpuStackName() = 'cu121' then
-    Result := Result or ((not CmdAvailable('nvcc')) and
-      (not FileExists(ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.1\bin\nvcc.exe'))) and
-      (not FileExists(CudaPathPage.Values[0] + '\bin\nvcc.exe')));
+    Result := Result or (not CudaToolkitAvailable('12.6', CudaPathPage.Values[0]));
 end;
 
 procedure SetEnvProgress(Position: Integer; const Detail: String);
@@ -1095,7 +1157,7 @@ begin
       if DetectedGpuStackName() = 'cu128' then
         CudaPathPage.Values[0] := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.8')
       else
-        CudaPathPage.Values[0] := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.1');
+        CudaPathPage.Values[0] := ExpandConstant('{autopf}\NVIDIA GPU Computing Toolkit\CUDA\v12.6');
     end;
   end;
   if CurPageID = wpFinished then
@@ -1266,8 +1328,14 @@ begin
     Missing := AddMissingRuntimeFile(Missing, '应用本体', PathJoin(AppDir, '{#MyAppExe}'));
   if not FileExists(PathJoin(InternalDir, 'web\dist\index.html')) then
     Missing := AddMissingRuntimeFile(Missing, '前端入口', PathJoin(InternalDir, 'web\dist\index.html'));
+  if not FileExists(PathJoin(InternalDir, 'infrastructure\plugin_worker.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'Python 插件 worker', PathJoin(InternalDir, 'infrastructure\plugin_worker.py'));
+  if not FileExists(PathJoin(InternalDir, 'plugin_sdk_python\xb_svcb_plugin\__init__.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'Python 插件 SDK', PathJoin(InternalDir, 'plugin_sdk_python\xb_svcb_plugin\__init__.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\uvr_worker.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'UVR worker', PathJoin(InternalDir, 'infrastructure\uvr_worker.py'));
+  if not FileExists(PathJoin(InternalDir, 'infrastructure\pymss_worker.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'PyMSS worker', PathJoin(InternalDir, 'infrastructure\pymss_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\svc_worker.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'SVC worker', PathJoin(InternalDir, 'infrastructure\svc_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\rvc_worker.py')) then
@@ -1325,6 +1393,43 @@ begin
   end;
 end;
 
+function ValidatePluginRuntime(): Boolean;
+var
+  AppDir, InternalDir, PluginPython, PluginWorker, PluginSdk, Missing: String;
+begin
+  AppDir := ExpandConstant('{app}');
+  InternalDir := PathJoin(AppDir, '_internal');
+  PluginPython := PathJoin(AppDir, '.venv-plugins\Scripts\python.exe');
+  PluginWorker := PathJoin(InternalDir, 'infrastructure\plugin_worker.py');
+  PluginSdk := PathJoin(InternalDir, 'plugin_sdk_python\xb_svcb_plugin\__init__.py');
+  Missing := '';
+
+  AppendInstallValidation('');
+  AppendInstallValidation('------------------------------------------------------------');
+  AppendInstallValidation('Python 插件运行环境最终校验');
+
+  if not FileExists(PluginPython) then
+    Missing := AddMissingRuntimeFile(Missing, '.venv-plugins Python', PluginPython);
+  if FileExists(PluginPython) and not PythonFileAvailable(PluginPython) then
+    Missing := AddMissingRuntimeFile(Missing, '.venv-plugins Python 不可运行', PluginPython);
+  if not FileExists(PluginWorker) then
+    Missing := AddMissingRuntimeFile(Missing, 'Python 插件 worker', PluginWorker);
+  if not FileExists(PluginSdk) then
+    Missing := AddMissingRuntimeFile(Missing, 'Python 插件 SDK', PluginSdk);
+
+  Result := Missing = '';
+  if Result then
+    AppendInstallValidation('[ok] Python 与混合插件运行环境可被软件识别。')
+  else
+  begin
+    AppendInstallValidation('[fail] Python 插件运行环境不完整：');
+    AppendInstallValidation(Missing);
+    AppendInstallValidation('建议：在安装目录执行 setup_env.bat --only plugins。');
+    MsgBox('Python 插件运行环境最终校验失败。' + #13#10 + Missing + #13#10#13#10 +
+      '可稍后在安装目录执行：setup_env.bat --only plugins', mbError, MB_OK);
+  end;
+end;
+
 function ValidateUvrRuntime(): Boolean;
 var
   AppDir, UvrPython, UvrWorker, UvrModel, Missing: String;
@@ -1342,6 +1447,8 @@ begin
 
   if not FileExists(UvrPython) then
     Missing := AddMissingRuntimeFile(Missing, '.venv-uvr Python', UvrPython);
+  if FileExists(UvrPython) and not PythonFileAvailable(UvrPython) then
+    Missing := AddMissingRuntimeFile(Missing, '.venv-uvr Python 不可运行', UvrPython);
   if not FileExists(UvrWorker) then
     Missing := AddMissingRuntimeFile(Missing, 'UVR worker', UvrWorker);
   if not FileExists(UvrModel) then
@@ -1384,6 +1491,8 @@ begin
 
   if not FileExists(SeedPython) then
     Missing := AddMissingRuntimeFile(Missing, '.venv-seedvc Python', SeedPython);
+  if FileExists(SeedPython) and not PythonFileAvailable(SeedPython) then
+    Missing := AddMissingRuntimeFile(Missing, '.venv-seedvc Python 不可运行', SeedPython);
   if not FileExists(SeedWorker) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC worker', SeedWorker);
   if not FileExists(SeedInference) then
@@ -1424,6 +1533,8 @@ begin
 
   if not FileExists(DdspPython) then
     Missing := AddMissingRuntimeFile(Missing, '.venv-ddsp Python', DdspPython);
+  if FileExists(DdspPython) and not PythonFileAvailable(DdspPython) then
+    Missing := AddMissingRuntimeFile(Missing, '.venv-ddsp Python 不可运行', DdspPython);
   if not FileExists(DdspWorker) then
     Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC worker', DdspWorker);
   if not FileExists(DdspInference) then
@@ -1460,6 +1571,8 @@ begin
 
   if not FileExists(VocalPython) then
     Missing := AddMissingRuntimeFile(Missing, '.venv-vocal Python', VocalPython);
+  if FileExists(VocalPython) and not PythonFileAvailable(VocalPython) then
+    Missing := AddMissingRuntimeFile(Missing, '.venv-vocal Python 不可运行', VocalPython);
   if not FileExists(VocalWorker) then
     Missing := AddMissingRuntimeFile(Missing, 'AI 歌声增强 worker', VocalWorker);
   if not FileExists(TuningWorker) then
@@ -1544,7 +1657,7 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   DataDir, Payload: String;
   SetupProgressStart: Integer;
-  PrereqsReady, UvrReady, SeedVcReady, DdspReady, VocalReady, InferenceReady: Boolean;
+  PrereqsReady, PluginReady, UvrReady, SeedVcReady, DdspReady, VocalReady, InferenceReady: Boolean;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -1577,12 +1690,13 @@ begin
       if BuildEnvSelected() and PrereqsReady and
          RunSetupBatch('setup_env.bat', GpuInstallArgs(), '正在搭建运行环境（创建子环境、复制模型、安装 Python 依赖）…', SetupProgressStart, 100) then
       begin
+        PluginReady := ValidatePluginRuntime();
         UvrReady := ValidateUvrRuntime();
         SeedVcReady := ValidateSeedVcRuntime();
         DdspReady := ValidateDdspRuntime();
         VocalReady := ValidateVocalRuntime();
         InferenceReady := ValidateAllInferenceRuntimes();
-        if (not UvrReady) or (not SeedVcReady) or (not DdspReady) or (not VocalReady) or
+        if (not PluginReady) or (not UvrReady) or (not SeedVcReady) or (not DdspReady) or (not VocalReady) or
            (not InferenceReady) then
           SetEnvProgress(100, '部分运行环境校验失败，请查看安装详情日志');
       end;

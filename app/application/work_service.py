@@ -275,6 +275,7 @@ class WorkService:
         source_path = payload.get("source_path")
         workflow = self._workflow(payload, mode="single")
         vocal_enhancement = self._vocal_enhancement(payload, workflow)
+        preprocess = self._preprocess(payload)
 
         title = payload.get("title")
         if not title:
@@ -296,9 +297,14 @@ class WorkService:
             created_at=datetime.now().isoformat(timespec="seconds"),
             source_path=source_path,
             params=payload.get("params", {}) or {},
-            steps=default_steps(vocal_enhancement["enabled"]),
+            steps=default_steps(
+                vocal_enhancement["enabled"],
+                preprocess["enabled"],
+                preprocess["harmony_removal_enabled"],
+            ),
             workflow=workflow,
             vocal_enhancement=vocal_enhancement,
+            preprocess=preprocess,
         )
         record = work.to_dict()
         record.update(self._resolve_model_paths(model))
@@ -373,6 +379,7 @@ class WorkService:
         # 收集本次用到的模型及其各自参数（解析为可推理的本地路径）
         workflow = self._workflow(payload, mode="multi")
         vocal_enhancement = self._vocal_enhancement(payload, workflow)
+        preprocess = self._preprocess(payload)
         seg_models: dict[str, Any] = {}
         for entry in payload.get("models", []) or []:
             mid = entry.get("model_id")
@@ -433,9 +440,14 @@ class WorkService:
             created_at=datetime.now().isoformat(timespec="seconds"),
             source_path=source_path,
             params=base_params,
-            steps=default_steps_multi(vocal_enhancement["enabled"]),
+            steps=default_steps_multi(
+                vocal_enhancement["enabled"],
+                preprocess["enabled"],
+                preprocess["harmony_removal_enabled"],
+            ),
             workflow=workflow,
             vocal_enhancement=vocal_enhancement,
+            preprocess=preprocess,
             mode="multi",
             segments=segments,
         )
@@ -490,6 +502,28 @@ class WorkService:
         }
 
     @staticmethod
+    def _preprocess(payload: dict[str, Any] | None) -> dict[str, Any]:
+        raw = (payload or {}).get("preprocess") or {}
+        if not isinstance(raw, dict):
+            raw = {}
+        enabled = raw.get("enabled", True) is not False
+        engine = str(raw.get("engine") or "uvr").strip().lower()
+        if engine not in {"uvr", "pymss"}:
+            engine = "uvr"
+        model = str(raw.get("pymss_model") or config.PYMSS_DEFAULT_MODEL).strip()
+        harmony_enabled = bool(enabled and raw.get("harmony_removal_enabled"))
+        harmony_model = str(
+            raw.get("harmony_model") or config.PYMSS_DEFAULT_HARMONY_MODEL
+        ).strip()
+        return {
+            "enabled": bool(enabled),
+            "engine": engine,
+            "pymss_model": model,
+            "harmony_removal_enabled": harmony_enabled,
+            "harmony_model": harmony_model,
+        }
+
+    @staticmethod
     def _resolve_model_paths(model: dict[str, Any] | None) -> dict[str, str]:
         """从模型记录提取推理所需的文件路径与框架标识。
 
@@ -530,13 +564,18 @@ class WorkService:
         enhancement_enabled = bool(
             (work.get("vocal_enhancement") or {}).get("enabled")
         )
+        preprocess_record = work.get("preprocess") or {}
+        preprocess_enabled = bool(preprocess_record.get("enabled", True))
+        harmony_enabled = bool(
+            preprocess_enabled and preprocess_record.get("harmony_removal_enabled")
+        )
         if work.get("workflow") == "ai_enhancement":
             work["steps"] = default_steps_ai_enhancement()
         else:
             work["steps"] = (
-                default_steps_multi(enhancement_enabled)
+                default_steps_multi(enhancement_enabled, preprocess_enabled, harmony_enabled)
                 if work.get("mode") == "multi"
-                else default_steps(enhancement_enabled)
+                else default_steps(enhancement_enabled, preprocess_enabled, harmony_enabled)
             )
         self._repo.update(work_id, work)
         self._conversion.start(work_id)

@@ -144,6 +144,34 @@ class PluginServiceTests(unittest.TestCase):
         result = self.service.install_bundle(str(bundle))
         self.assertFalse(result["ok"])
 
+    def test_python_entry_must_exist_when_installing(self):
+        bundle = Path(self.temp.name) / "missing-python.xbplugin"
+        with zipfile.ZipFile(bundle, "w") as archive:
+            archive.writestr("xb-svcb-plugin.json", json.dumps(HYBRID_MANIFEST))
+        result = self.service.install_bundle(str(bundle))
+        self.assertFalse(result["ok"])
+        self.assertIn("Python 插件入口不存在", result["error"])
+
+    def test_failed_python_update_keeps_previous_plugin_files(self):
+        valid = Path(self.temp.name) / "valid-python.xbplugin"
+        with zipfile.ZipFile(valid, "w") as archive:
+            archive.writestr("xb-svcb-plugin.json", json.dumps(HYBRID_MANIFEST))
+            archive.writestr(
+                "plugin.py",
+                "from xb_svcb_plugin import Plugin\nplugin = Plugin('example.hybrid-plugin')\n",
+            )
+        self.assertTrue(self.service.install_bundle(str(valid))["ok"])
+
+        broken = Path(self.temp.name) / "broken-update.xbplugin"
+        with zipfile.ZipFile(broken, "w") as archive:
+            archive.writestr("xb-svcb-plugin.json", json.dumps(HYBRID_MANIFEST))
+        result = self.service.install_bundle(str(broken))
+
+        self.assertFalse(result["ok"])
+        installed_entry = self.plugins / "example.hybrid-plugin" / "plugin.py"
+        self.assertTrue(installed_entry.is_file())
+        self.assertIn("Plugin('example.hybrid-plugin')", installed_entry.read_text(encoding="utf-8"))
+
     def test_fetch_market_accepts_nonebot2_style_json5(self):
         self.settings.set(
             "plugin_market_url",
@@ -249,6 +277,52 @@ def add_defaults(ctx, payload):
         self.assertTrue(self.service.set_enabled("example.package-plugin", True))
         result = self.service.run_action("example.package-plugin", "hello", {})
         self.assertEqual(result.get("message"), "package works")
+
+    def test_python_plugin_loads_bundled_vendor_dependency(self):
+        manifest = {
+            **HYBRID_MANIFEST,
+            "id": "example.vendor-plugin",
+            "python": {
+                "entry": "backend/__init__.py",
+                "requirements": "requirements.txt",
+                "vendor": "vendor",
+            },
+        }
+        bundle = Path(self.temp.name) / "vendor.xbplugin"
+        with zipfile.ZipFile(bundle, "w") as archive:
+            archive.writestr("xb-svcb-plugin.json", json.dumps(manifest))
+            archive.writestr("requirements.txt", "portable-dependency==1.0\n")
+            archive.writestr("vendor/portable_dependency.py", "VALUE = 'bundled works'\n")
+            archive.writestr(
+                "backend/__init__.py",
+                "from xb_svcb_plugin import Plugin\n"
+                "from portable_dependency import VALUE\n"
+                "plugin = Plugin('example.vendor-plugin')\n"
+                "@plugin.action('hello')\ndef hello(ctx, values): return VALUE\n",
+            )
+        self.assertTrue(self.service.install_bundle(str(bundle))["ok"])
+        self.service.configure({"enabled": True})
+        self.assertTrue(self.service.set_enabled("example.vendor-plugin", True))
+        result = self.service.run_action("example.vendor-plugin", "hello", {})
+        self.assertEqual(result.get("message"), "bundled works")
+
+    def test_python_plugin_cannot_borrow_host_site_packages(self):
+        manifest = {**HYBRID_MANIFEST, "id": "example.ambient-plugin"}
+        bundle = Path(self.temp.name) / "ambient.xbplugin"
+        with zipfile.ZipFile(bundle, "w") as archive:
+            archive.writestr("xb-svcb-plugin.json", json.dumps(manifest))
+            archive.writestr(
+                "plugin.py",
+                "import httpx\n"
+                "from xb_svcb_plugin import Plugin\n"
+                "plugin = Plugin('example.ambient-plugin')\n",
+            )
+        self.assertTrue(self.service.install_bundle(str(bundle))["ok"])
+        self.service.configure({"enabled": True})
+        self.assertFalse(self.service.set_enabled("example.ambient-plugin", True))
+        item = next(item for item in self.service.list() if item["id"] == "example.ambient-plugin")
+        self.assertFalse(item["enabled"])
+        self.assertIn("httpx", item["last_error"])
 
 
 if __name__ == "__main__":

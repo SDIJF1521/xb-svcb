@@ -10,6 +10,8 @@ export interface ToolStatus {
   version: string
   status: string
   ok: boolean
+  required?: boolean
+  role?: 'core' | 'engine' | 'optional'
 }
 
 export type InferenceDeviceBackend = 'auto' | 'cuda' | 'rocm' | 'directml' | 'cpu'
@@ -243,6 +245,11 @@ export interface InferenceParams {
   index_rate?: number
   rms_mix?: number
   uvr_model?: string
+  preprocess_enabled?: boolean
+  preprocess_engine?: 'uvr' | 'pymss'
+  pymss_model?: string
+  harmony_removal_enabled?: boolean
+  harmony_model?: string
   diffusion_ratio?: number
   device?: string
   /** RVC：清辅音/呼吸保护 (0~0.5)。 */
@@ -287,6 +294,7 @@ export interface WorkDTO {
   mode?: 'single' | 'multi'
   workflow?: CreateWorkflow
   vocal_enhancement?: VocalEnhancementOptions
+  preprocess?: PreprocessOptions
   segments?: BlendSegment[]
   queue_position?: number
   history?: InferenceHistoryItem[]
@@ -338,6 +346,8 @@ export interface CreateWorkPayload {
   model_id?: string
   source_path?: string | null
   params?: InferenceParams
+  /** 翻唱前期人声分离；默认启用 UVR，可切换 PyMSS 或关闭。 */
+  preprocess?: PreprocessOptions
   workflow?: CreateWorkflow
   /** 模型推理后的可选 AI 美声/歌声增强流程。 */
   vocal_enhancement?: VocalEnhancementOptions
@@ -353,6 +363,46 @@ export interface CreateWorkPayload {
   original_audio_path?: string
   /** 独立 AI 增强：用户直接导入的待增强翻唱音频。 */
   target_audio_path?: string
+}
+
+export interface PreprocessOptions {
+  enabled: boolean
+  engine: 'uvr' | 'pymss'
+  pymss_model?: string
+  harmony_removal_enabled?: boolean
+  harmony_model?: string
+}
+
+export type PymssPurpose = 'vocal_separation' | 'dereverb' | 'harmony_removal'
+
+export interface PymssModel {
+  name: string
+  architecture?: string
+  supported?: boolean
+  category?: string
+  purpose?: PymssPurpose
+  purpose_label?: string
+  target_stem?: string
+  size_bytes?: number
+  downloaded?: boolean
+}
+
+export interface PymssStatus {
+  ok: boolean
+  environment: boolean
+  model: string
+  status: string
+  version?: string | null
+}
+
+export interface PymssDownloadJob {
+  key: string
+  model: string
+  status: 'running' | 'done' | 'failed' | 'idle'
+  pct: number
+  message?: string
+  error?: string | null
+  result?: { ok?: boolean; model?: string; error?: string }
 }
 
 export interface CreateBatchWorkPayload extends CreateWorkPayload {
@@ -595,6 +645,11 @@ export interface PluginInfo {
   actions: PluginAction[]
   enabled: boolean
   installed: boolean
+  runtime_status?: {
+    ready: boolean
+    error: string
+  }
+  last_error?: string
   path: string
 }
 
@@ -896,6 +951,8 @@ export interface EditorClip {
   fade_out: number
   channel?: EditorClipChannel
   volume_envelope?: EditorVolumeEnvelopePoint[]
+  /** 片段时间拉伸倍率；1 为原速，2 为时长加倍。旧工程缺省为 1。 */
+  time_stretch?: number
   metadata: Record<string, unknown>
 }
 
@@ -1026,6 +1083,16 @@ export interface EditorRerunResult {
   clip?: EditorClip
 }
 
+export interface EditorSeparationOptions {
+  engine?: 'uvr' | 'pymss'
+  model?: string
+  pymss_model?: string
+  harmony_removal_enabled?: boolean
+  harmony_model?: string
+  mute_source?: boolean
+  device?: 'auto' | 'cuda' | 'rocm' | 'directml' | 'cpu'
+}
+
 export interface EditorSilenceSplitOptions {
   threshold_db?: number
   noise_db?: number
@@ -1073,6 +1140,8 @@ export interface EditorSeparationResult {
   tracks?: EditorTrack[]
   clips?: EditorClip[]
   simulated?: boolean
+  engine?: 'uvr' | 'pymss'
+  harmony_removed?: boolean
 }
 
 export interface EditorLyricSplitOptions {

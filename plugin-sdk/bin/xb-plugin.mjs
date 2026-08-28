@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { plugin, writeManifest, packPlugin, validateManifest } from '../index.mjs'
+import { plugin, writeManifest, packPlugin, validatePluginDirectory } from '../index.mjs'
 
 const args = process.argv.slice(2)
 const command = args.shift()
@@ -28,7 +28,9 @@ try {
     const frontendEntry = language === 'ts' ? 'dist/frontend/index.html' : 'frontend/index.html'
     const runtime = type === 'frontend'
       ? `frontend('${frontendEntry}')`
-      : type === 'python' ? "python('plugin.py')" : `hybrid('plugin.py')\n  .frontendEntry('${frontendEntry}')`
+      : type === 'python'
+        ? "python('plugin.py', { requirements: 'requirements.txt' })"
+        : `hybrid('plugin.py', { requirements: 'requirements.txt' })\n  .frontendEntry('${frontendEntry}')`
     const actionLine = type === 'frontend'
       ? ".message('hello', '打招呼', '你好，{{name}}！')"
       : type === 'hybrid' ? ".pythonAction('hello', '运行 Python', 'hello')" : ''
@@ -326,11 +328,16 @@ export default defineConfig({
     if (type !== 'frontend') {
       const python = `from xb_svcb_plugin import ActionResult, Plugin, PluginContext\n\nplugin = Plugin(${JSON.stringify(id)})\n\n@plugin.action("hello")\ndef hello(ctx: PluginContext, values: dict):\n    return ActionResult.message_result(f"你好，{values.get('name') or '朋友'}！")\n\n@plugin.before_create\ndef before_create(ctx: PluginContext, payload: dict):\n    payload.setdefault("params", {}).setdefault("f0_method", "rmvpe")\n    return payload\n`
       await writeFile(join(target, 'plugin.py'), python, 'utf8')
+      await writeFile(
+        join(target, 'requirements.txt'),
+        '# Add pinned third-party dependencies here, one per line.\n',
+        'utf8',
+      )
     }
     const definition = plugin(id, name, version).author(author)
     if (type === 'frontend') definition.frontend(frontendEntry).message('hello', '打招呼', '你好，{{name}}！')
-    if (type === 'python') definition.python('plugin.py')
-    if (type === 'hybrid') definition.hybrid('plugin.py').frontendEntry(frontendEntry).pythonAction('hello', '运行 Python', 'hello')
+    if (type === 'python') definition.python('plugin.py', { requirements: 'requirements.txt' })
+    if (type === 'hybrid') definition.hybrid('plugin.py', { requirements: 'requirements.txt' }).frontendEntry(frontendEntry).pythonAction('hello', '运行 Python', 'hello')
     await writeManifest(definition, target)
     console.log(`已创建插件：${resolve(directory)}`)
     const editable = language === 'ts' ? 'src/plugin.ts' : 'build.mjs'
@@ -340,14 +347,13 @@ export default defineConfig({
       else if (language === 'ts') editableFiles.push('frontend/index.html', 'frontend/src/main.ts')
       else editableFiles.push('frontend/index.html')
     }
-    if (type !== 'frontend') editableFiles.push('plugin.py')
+    if (type !== 'frontend') editableFiles.push('plugin.py', 'requirements.txt')
     const typecheckHint = language === 'ts' ? '、npm run typecheck' : ''
     console.log(`下一步：编辑 ${editableFiles.join('、')}，然后运行 npm install${typecheckHint}、npm run validate、npm run pack。`)
   } else if (command === 'validate') {
-    const file = join(resolve(args[0] || '.'), 'xb-svcb-plugin.json')
-    const manifest = JSON.parse(await (await import('node:fs/promises')).readFile(file, 'utf8'))
-    const result = validateManifest(manifest)
-    if (!result.ok) { console.error(result.errors.map(item => `- ${item}`).join('\n')); process.exitCode = 1 } else console.log(`清单有效：${file}`)
+    const directory = resolve(args[0] || '.')
+    const result = await validatePluginDirectory(directory)
+    if (!result.ok) { console.error(result.errors.map(item => `- ${item}`).join('\n')); process.exitCode = 1 } else console.log(`插件目录有效：${file}`)
   } else if (command === 'pack') {
     const output = await packPlugin(args[0] || '.', args[1])
     console.log(`已打包：${output}`)

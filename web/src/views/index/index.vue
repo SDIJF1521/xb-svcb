@@ -158,6 +158,13 @@
               <el-icon><component :is="t.ok ? CircleCheckFilled : WarningFilled" /></el-icon>
               <span class="tool-status-text">{{ t.status }}</span>
             </span>
+            <router-link
+              v-if="t.key === 'pymss' && !t.ok"
+              class="tool-action"
+              :to="{ path: '/models', query: { tab: 'pymss' } }"
+            >
+              <el-icon><FolderOpened /></el-icon>模型管理
+            </router-link>
           </div>
         </div>
       </div>
@@ -267,7 +274,7 @@ const systemStore = useSystemStore()
 const modelsStore = useModelsStore()
 const worksStore = useWorksStore()
 
-const { tools } = storeToRefs(systemStore)
+const { tools, ready: systemReady, loaded: systemLoaded } = storeToRefs(systemStore)
 const { models } = storeToRefs(modelsStore)
 const { works } = storeToRefs(worksStore)
 
@@ -278,7 +285,7 @@ const dataStorage = ref<DataStorageStatus | null>(null)
 const migrationProgress = ref<DataMigrationProgress | null>(null)
 let migrationPollTimer: ReturnType<typeof window.setInterval> | null = null
 
-const allReady = computed(() => tools.value.length > 0 && tools.value.every((t) => t.ok))
+const allReady = computed(() => systemLoaded.value && systemReady.value)
 const displayModels = computed(() => models.value.slice(0, 5))
 const recentWorks = computed(() => works.value.slice(0, 5))
 
@@ -1039,6 +1046,18 @@ onUnmounted(() => {
 }
 .tool-status.ok { color: var(--xb-success); background: rgba(var(--xb-success-rgb), 0.12); }
 .tool-status.warn { color: var(--xb-warn); background: rgba(var(--xb-warn-rgb), 0.12); }
+.tool-action {
+  width: fit-content;
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--xb-primary);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.tool-action:hover { text-decoration: underline; }
 
 /* 最近作品 */
 .works {

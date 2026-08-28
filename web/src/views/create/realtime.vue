@@ -603,7 +603,7 @@ h1 { margin: 0; font-size: 30px; letter-spacing: 0; } .page-sub { margin: 8px 0 
 .direct-music small { color: var(--text-muted); }
 .select-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .select-field { min-width: 0; display: grid; gap: 6px; color: var(--text-muted, #8f9aaa); font-size: 12px; }
-.select-field select { width: 100%; height: 34px; padding: 0 9px; border: 1px solid var(--xb-border, var(--border-color, #344151)); border-radius: 4px; background: var(--xb-panel, color-mix(in srgb, var(--app-bg, #0c1118) 92%, #fff)); color: var(--xb-text, var(--text-primary, #f4f7fb)); color-scheme: light dark; }
+.select-field select { width: 100%; height: 34px; padding: 0 9px; border: 1px solid var(--xb-border, var(--border-color, #344151)); border-radius: 4px; background: var(--xb-panel, color-mix(in srgb, var(--app-bg, #0c1118) 92%, #fff)); color: var(--xb-text, var(--text-primary, #f4f7fb)); }
 .select-field select option { background: var(--xb-panel, #171c25); color: var(--xb-text, #f4f7fb); }
 input[type='range'] { width: 100%; accent-color: var(--accent, #00d5ff); } .reference-row { font-size: 13px; }
 .reference-row button { border: 1px solid var(--border-color, #344151); background: transparent; color: inherit; padding: 7px 10px; cursor: pointer; }

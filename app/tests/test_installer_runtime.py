@@ -85,6 +85,37 @@ def test_python_detector_rejects_an_executable_that_is_not_python(
     assert str(not_python) not in result.stdout
 
 
+def test_python_detector_does_not_trust_a_stale_exported_path(tmp_path: Path) -> None:
+    wrapper = tmp_path / "run_detector_stale.bat"
+    wrapper.write_text(
+        "@echo off\n"
+        "chcp 65001 >nul\n"
+        f'call "{DETECTOR}"\n'
+        'set "DETECT_RC=%ERRORLEVEL%"\n'
+        'echo EXE=%XB_PYTHON_EXE%\n'
+        'exit /b %DETECT_RC%\n',
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PATH"] = str(Path(os.environ["SystemRoot"]) / "System32")
+    env["LOCALAPPDATA"] = str(tmp_path / "empty-local-app-data")
+    env["XB_PYTHON_EXE"] = str(tmp_path / "old" / "python.exe")
+    env["XB_PYTHON_DIR"] = str(Path(sys.executable).resolve().parent)
+
+    result = subprocess.run(
+        ["cmd.exe", "/d", "/c", str(wrapper)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"EXE={Path(sys.executable).resolve()}" in result.stdout
+
+
 def test_ffmpeg_bin_is_added_to_user_path_once() -> None:
     current = r"C:\Windows\System32;C:\Tools"
     ffmpeg_bin = r"C:\Apps\XB-SVCB\tools\ffmpeg\bin"
@@ -98,9 +129,15 @@ def test_ffmpeg_bin_is_added_to_user_path_once() -> None:
 
 def test_installer_explicitly_packages_and_validates_python_detector() -> None:
     script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    prereqs = (ROOT / "install_prereqs.bat").read_text(encoding="utf-8")
 
     assert 'Source: "..\\install\\detect_python.bat"' in script
     assert "install\\detect_python.bat')) then" in script
+    assert "function PythonPathCommandAvailable" in script
+    assert "\\windowsapps\\" in script
+    assert ".venv-plugins Python 不可运行" in script
+    assert ".venv-uvr Python 不可运行" in script
+    assert 'if defined XB_PYTHON_DIR if exist "%XB_PYTHON_DIR%\\python.exe" set "XB_PYTHON_EXE=' not in prereqs
 
 
 def test_installer_detects_vbcable_and_provides_manual_official_download() -> None:
@@ -129,9 +166,15 @@ def test_installer_entrypoints_suppress_uv_cross_drive_hardlink_warning() -> Non
 
 def test_pyinstaller_packages_python_plugin_worker_and_sdk() -> None:
     spec = (ROOT / "installer" / "xb-svcb-app.spec").read_text(encoding="utf-8")
+    installer = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    setup = (ROOT / "install" / "install.py").read_text(encoding="utf-8")
 
     assert '"plugin_sdk_python/xb_svcb_plugin"' in spec
     assert '"plugin_worker.py"' in spec
+    assert 'PLUGIN_VENV = ROOT / ".venv-plugins"' in setup
+    assert '"plugins": lambda uv, stack: step_plugins(uv)' in setup
+    assert "function ValidatePluginRuntime(): Boolean;" in installer
+    assert ".venv-plugins\\Scripts\\python.exe" in installer
 
 
 def test_ffmpeg_file_check_does_not_expand_app_before_directory_initialization() -> None:
@@ -302,6 +345,31 @@ def test_wheelhouse_binary_download_uses_managed_tool_python(
     assert commands[0][:4] == [str(tool_py), "-m", "pip", "download"]
 
 
+def test_wheelhouse_tool_python_only_bootstraps_pip(
+    tmp_path: Path, monkeypatch
+) -> None:
+    wheelhouse = _load_wheelhouse_module()
+    tool_py = tmp_path / ".tmp" / "wheelhouse-tools" / "Scripts" / "python.exe"
+    tool_py.parent.mkdir(parents=True, exist_ok=True)
+    tool_py.write_bytes(b"")
+    ensured: list[Path] = []
+    commands: list[list[str]] = []
+
+    class Installer:
+        PYPI_MIRROR = ""
+        PYPI_FALLBACK_INDEX = "https://example.invalid/simple"
+
+    monkeypatch.setattr(wheelhouse, "_TOOL_PYTHON", None)
+    monkeypatch.setattr(wheelhouse, "_ensure_pip", lambda py: ensured.append(py))
+    monkeypatch.setattr(wheelhouse, "_run", lambda cmd: commands.append(cmd))
+
+    result = wheelhouse._ensure_tool_python(tmp_path, Installer)
+
+    assert result == tool_py
+    assert ensured == [tool_py]
+    assert commands == []
+
+
 def test_wheelhouse_download_can_skip_dependency_resolution(tmp_path: Path, monkeypatch) -> None:
     wheelhouse = _load_wheelhouse_module()
     tool_py = tmp_path / "tools" / "Scripts" / "python.exe"
@@ -325,6 +393,168 @@ def test_wheelhouse_download_can_skip_dependency_resolution(tmp_path: Path, monk
 
     assert commands
     assert "--no-deps" in commands[0]
+
+
+def test_wheelhouse_requirements_always_use_wheel_builder(
+    tmp_path: Path, monkeypatch
+) -> None:
+    wheelhouse = _load_wheelhouse_module()
+    requirements = tmp_path / "seedvc.txt"
+    requirements.write_text("funasr==1.1.5\n", encoding="utf-8")
+    built: list[object] = []
+
+    monkeypatch.setattr(
+        wheelhouse,
+        "_build_wheels",
+        lambda root, installer, batch: built.append(batch),
+    )
+
+    def unexpected_binary_download(root, installer):
+        raise AssertionError("requirements used binary-only download")
+
+    monkeypatch.setattr(
+        wheelhouse,
+        "_ensure_tool_python",
+        unexpected_binary_download,
+    )
+
+    batch = wheelhouse.DownloadBatch(
+        "seedvc requirements",
+        tmp_path / "assets" / "wheels" / "py310" / "cpu",
+        "3.10",
+        requirements=requirements,
+    )
+    wheelhouse._download_batch(tmp_path, object(), batch)
+
+    assert built == [batch]
+
+
+def test_wheelhouse_clean_runs_before_generating_requirements(
+    tmp_path: Path, monkeypatch
+) -> None:
+    wheelhouse = _load_wheelhouse_module()
+    old_wheel = tmp_path / "assets" / "wheels" / "old.whl"
+    old_wheel.parent.mkdir(parents=True)
+    old_wheel.write_bytes(b"stale")
+    old_requirements = tmp_path / ".tmp" / "wheelhouse-requirements" / "seedvc.txt"
+    old_requirements.parent.mkdir(parents=True)
+    old_requirements.write_text("stale\n", encoding="utf-8")
+
+    fresh_requirements = old_requirements
+
+    def fake_build_plan(root, stacks):
+        fresh_requirements.parent.mkdir(parents=True, exist_ok=True)
+        fresh_requirements.write_text("fresh\n", encoding="utf-8")
+        return []
+
+    monkeypatch.setattr(wheelhouse, "_load_installer", lambda root: object())
+    monkeypatch.setattr(wheelhouse, "build_plan", fake_build_plan)
+    monkeypatch.setattr(wheelhouse, "_write_manifest", lambda root, batches: None)
+    monkeypatch.setattr(
+        wheelhouse.sys,
+        "argv",
+        ["prepare_wheelhouse.py", "--root", str(tmp_path), "--clean"],
+    )
+
+    assert wheelhouse.main() == 0
+    assert not old_wheel.exists()
+    assert fresh_requirements.read_text(encoding="utf-8") == "fresh\n"
+
+
+def test_pymss_wheelhouse_is_isolated_with_a_compatible_torch_pair() -> None:
+    installer = _load_install_module()
+    wheelhouse = _load_wheelhouse_module()
+    expected_constraints = (
+        "setuptools<81",
+        "torch==2.7.1",
+        "torchaudio==2.7.1",
+    )
+
+    for stack in ("cpu", "directml", "cu121", "cu126", "cu128"):
+        plan = wheelhouse.build_plan(ROOT, {stack})
+        expected_stack = "cu126" if stack in {"cu121", "cu126"} else stack
+        dest = ROOT / "assets" / "wheels" / "pymss" / "py310" / expected_stack
+        package = next(batch for batch in plan if batch.label == f"pymss {expected_stack} package")
+        torch = next(batch for batch in plan if batch.label == f"pymss {expected_stack} torch")
+
+        assert package.dest == dest
+        assert package.packages == ("pymss==2.0.18",)
+        assert package.constraints == expected_constraints
+        assert torch.dest == dest
+        assert torch.packages == ("torch==2.7.1", "torchaudio==2.7.1")
+        expected_index = (
+            installer.TORCH_BLACKWELL_INDEX
+            if expected_stack == "cu128"
+            else installer.TORCH_PYMSS_CUDA_INDEX
+            if expected_stack == "cu126"
+            else installer.TORCH_CPU_INDEX
+        )
+        assert torch.index == expected_index
+
+
+def test_pymss_installer_uses_the_same_isolated_runtime(
+    tmp_path: Path, monkeypatch
+) -> None:
+    installer = _load_install_module()
+    pip_calls: list[tuple[tuple[str, ...], str | None]] = []
+    make_pip_calls: list[dict[str, str]] = []
+
+    def fake_pip(*packages: str, index: str | None = None) -> None:
+        pip_calls.append((packages, index))
+
+    def fake_make_pip(uv: str, py: str, **kwargs: str):
+        make_pip_calls.append(kwargs)
+        return fake_pip
+
+    monkeypatch.setattr(installer, "PYMSS_VENV", tmp_path / ".venv-pymss")
+    monkeypatch.setattr(installer, "ensure_venv", lambda *args, **kwargs: None)
+    monkeypatch.setattr(installer, "venv_python", lambda path: path / "Scripts" / "python.exe")
+    monkeypatch.setattr(installer, "make_pip", fake_make_pip)
+    monkeypatch.setattr(installer, "hr", lambda message: None)
+
+    for stack in ("cpu", "directml", "cu121", "cu126", "cu128"):
+        pip_calls.clear()
+        make_pip_calls.clear()
+        installer.step_pymss("uv", stack)
+
+        expected_pymss_stack = "cu126" if stack in {"cu121", "cu126"} else stack
+        assert make_pip_calls == [
+            {
+                "component": "pymss",
+                "gpu_stack": expected_pymss_stack,
+                "python_version": "3.10",
+            }
+        ]
+        expected_index = (
+            installer.TORCH_BLACKWELL_INDEX
+            if expected_pymss_stack == "cu128"
+            else installer.TORCH_PYMSS_CUDA_INDEX
+            if expected_pymss_stack == "cu126"
+            else installer.TORCH_CPU_INDEX
+        )
+        assert pip_calls == [
+            (("torch==2.7.1", "torchaudio==2.7.1"), expected_index),
+            (("pymss==2.0.18",), None),
+        ]
+
+
+def test_install_gpu_detection_distinguishes_blackwell_from_older_nvidia(monkeypatch) -> None:
+    installer = _load_install_module()
+    outputs = iter(("6.1\n", "12.0\n"))
+
+    monkeypatch.setattr(installer, "find_nvidia_smi", lambda: "nvidia-smi")
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ["nvidia-smi"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if cmd == ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=next(outputs), stderr="")
+        raise AssertionError(f"unexpected command: {cmd!r}")
+
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+
+    assert installer.detect_gpu_stack() == "cu121"
+    assert installer.detect_gpu_stack() == "cu128"
 
 
 def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torch() -> None:

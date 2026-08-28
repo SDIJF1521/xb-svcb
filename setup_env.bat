@@ -47,7 +47,7 @@ echo [XB-SVCB] Using verified Python 3.10+: %XB_PYTHON_EXE%
 echo [XB-SVCB] Building runtime environment, this may take a while...
 echo.
 rem App UI ships as XB-SVCB.exe, so the app/web build steps are not needed here;
-rem only the heavy AI envs (uvr/svc/rvc/seedvc/ddsp) and models are set up.
+rem only the plugin runtime, AI envs, and models are set up.
 rem --root pins all deps (engines/.venv-svc/.venv-uvr/models) to THIS install folder.
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 0 正在执行运行环境安装脚本
 "%XB_PYTHON_EXE%" "install\install.py" --root "%CD%" --skip-app --skip-web %*

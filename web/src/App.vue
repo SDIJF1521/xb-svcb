@@ -140,6 +140,55 @@ html[data-theme='custom'] {
   --xb-particle-size: 3.2px;
 }
 
+/* Element Plus 默认变量定义在 :root；使用更高优先级覆盖，避免控件回到白底默认主题。 */
+html:root,
+html[data-theme] {
+  --el-color-primary: var(--xb-primary);
+  --el-color-primary-rgb: var(--xb-primary-rgb);
+  --el-color-primary-light-3: color-mix(in srgb, var(--xb-primary) 70%, #fff);
+  --el-color-primary-light-5: color-mix(in srgb, var(--xb-primary) 55%, #fff);
+  --el-color-primary-light-7: color-mix(in srgb, var(--xb-primary) 35%, #fff);
+  --el-color-primary-light-8: color-mix(in srgb, var(--xb-primary) 22%, #fff);
+  --el-color-primary-light-9: color-mix(in srgb, var(--xb-primary) 12%, var(--xb-bg-2));
+  --el-color-primary-dark-2: color-mix(in srgb, var(--xb-primary) 78%, #000);
+  --el-color-success: var(--xb-success);
+  --el-color-success-rgb: var(--xb-success-rgb);
+  --el-color-warning: var(--xb-warn);
+  --el-color-warning-rgb: var(--xb-warn-rgb);
+  --el-color-danger: var(--xb-accent);
+  --el-color-danger-rgb: var(--xb-accent-rgb);
+  --el-color-error: var(--xb-accent);
+  --el-color-error-rgb: var(--xb-accent-rgb);
+  --el-color-info: var(--xb-muted);
+  --el-color-info-rgb: var(--xb-fill-rgb);
+  --el-bg-color: var(--xb-bg);
+  --el-bg-color-page: var(--xb-bg);
+  --el-bg-color-overlay: var(--xb-bg-2);
+  --el-text-color-primary: var(--xb-text);
+  --el-text-color-regular: var(--xb-text);
+  --el-text-color-secondary: var(--xb-muted);
+  --el-text-color-placeholder: var(--xb-muted);
+  --el-text-color-disabled: var(--xb-muted);
+  --el-border-color: var(--xb-border);
+  --el-border-color-light: var(--xb-border);
+  --el-border-color-lighter: var(--xb-border);
+  --el-border-color-extra-light: var(--xb-border);
+  --el-border-color-hover: var(--xb-primary);
+  --el-fill-color: rgba(var(--xb-fill-rgb), 0.06);
+  --el-fill-color-light: rgba(var(--xb-fill-rgb), 0.09);
+  --el-fill-color-lighter: rgba(var(--xb-fill-rgb), 0.05);
+  --el-fill-color-extra-light: rgba(var(--xb-fill-rgb), 0.035);
+  --el-fill-color-dark: rgba(var(--xb-fill-rgb), 0.13);
+  --el-fill-color-darker: rgba(var(--xb-fill-rgb), 0.18);
+  --el-fill-color-blank: var(--xb-bg-2);
+  --el-disabled-bg-color: rgba(var(--xb-fill-rgb), 0.08);
+  --el-disabled-text-color: var(--xb-muted);
+  --el-disabled-border-color: var(--xb-border);
+  --el-box-shadow: 0 12px 32px rgba(var(--xb-bg-rgb), 0.28);
+  --el-box-shadow-light: 0 12px 28px rgba(var(--xb-bg-rgb), 0.32);
+  --el-box-shadow-lighter: 0 6px 16px rgba(var(--xb-bg-rgb), 0.24);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -174,6 +223,137 @@ html {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--xb-scroll-thumb-hover);
+}
+
+/* Element Plus 弹层会 teleport 到 body，必须在全局统一主题。 */
+.el-popper.is-light,
+.el-select__popper.el-popper,
+.el-dropdown__popper.el-popper {
+  --el-bg-color: var(--xb-bg-2);
+  --el-bg-color-overlay: var(--xb-bg-2);
+  --el-text-color-primary: var(--xb-text);
+  --el-text-color-regular: var(--xb-muted);
+  --el-text-color-secondary: var(--xb-muted);
+  --el-border-color-light: var(--xb-border);
+  --el-border-color-lighter: var(--xb-border);
+  --el-fill-color-light: rgba(var(--xb-primary-rgb), 0.1);
+  --el-fill-color-lighter: rgba(var(--xb-primary-rgb), 0.06);
+  background: var(--xb-bg-2) !important;
+  border-color: var(--xb-border) !important;
+  color: var(--xb-text);
+  box-shadow: 0 16px 40px rgba(var(--xb-bg-rgb), 0.35), 0 0 0 1px rgba(var(--xb-primary-rgb), 0.08);
+}
+.el-select-dropdown,
+.el-dropdown-menu {
+  background: transparent !important;
+  border: 0;
+}
+.el-select-dropdown__item,
+.el-dropdown-menu__item {
+  color: var(--xb-text) !important;
+  background: transparent !important;
+}
+.el-select-dropdown__item.hover,
+.el-select-dropdown__item:hover,
+.el-dropdown-menu__item:not(.is-disabled):hover,
+.el-dropdown-menu__item:focus {
+  color: var(--xb-primary) !important;
+  background: rgba(var(--xb-primary-rgb), 0.12) !important;
+}
+.el-select-dropdown__item.is-selected {
+  color: var(--xb-primary) !important;
+  background: rgba(var(--xb-primary-rgb), 0.16) !important;
+  font-weight: 700;
+}
+.el-select-dropdown__item.is-disabled,
+.el-select-dropdown__empty,
+.el-select-group__title {
+  color: var(--xb-muted) !important;
+}
+.el-dropdown-menu__item.is-disabled {
+  color: var(--xb-muted) !important;
+  opacity: 0.55;
+}
+.el-dropdown-menu__item--divided::before,
+.el-dropdown-menu__item--divided {
+  border-top-color: var(--xb-border) !important;
+}
+.el-popper__arrow::before {
+  background: var(--xb-bg-2) !important;
+  border-color: var(--xb-border) !important;
+}
+
+/* Element Plus 2.x 选择器关闭态使用 __wrapper，而不是旧版 __input。 */
+.el-select__wrapper,
+.el-input__wrapper,
+.el-textarea__inner {
+  background-color: var(--xb-bg-2) !important;
+  color: var(--xb-text) !important;
+  box-shadow: 0 0 0 1px var(--xb-border) inset !important;
+}
+.el-select__wrapper:hover,
+.el-input__wrapper:hover {
+  box-shadow: 0 0 0 1px var(--xb-primary) inset !important;
+}
+.el-select__wrapper.is-focused,
+.el-input__wrapper.is-focus,
+.el-input__wrapper:focus-within {
+  box-shadow: 0 0 0 1px var(--xb-primary) inset, 0 0 0 3px rgba(var(--xb-primary-rgb), 0.12) !important;
+}
+.el-select__placeholder,
+.el-input__inner::placeholder,
+.el-textarea__inner::placeholder {
+  color: var(--xb-muted) !important;
+}
+.el-select__selected-item,
+.el-input__inner,
+.el-textarea__inner {
+  color: var(--xb-text) !important;
+}
+.el-select__caret,
+.el-select__suffix,
+.el-input__icon {
+  color: var(--xb-muted) !important;
+}
+.el-select__wrapper.is-disabled,
+.el-input.is-disabled .el-input__wrapper,
+.el-textarea.is-disabled .el-textarea__inner {
+  background-color: rgba(var(--xb-fill-rgb), 0.08) !important;
+  color: var(--xb-muted) !important;
+  box-shadow: 0 0 0 1px var(--xb-border) inset !important;
+}
+
+/* 开关默认关闭态是 Element Plus 灰色，改为主题表面；启用态沿用主色。 */
+.el-switch {
+  --el-switch-off-color: rgba(var(--xb-fill-rgb), 0.24);
+  --el-switch-on-color: var(--xb-primary);
+  --el-switch-border-color: var(--xb-border);
+}
+.el-switch__core {
+  border-color: var(--el-switch-border-color) !important;
+  background: var(--el-switch-off-color) !important;
+}
+.el-switch.is-checked .el-switch__core {
+  border-color: var(--xb-primary) !important;
+  background: var(--xb-primary) !important;
+}
+.el-switch.is-disabled .el-switch__core {
+  border-color: var(--xb-border) !important;
+  background: rgba(var(--xb-fill-rgb), 0.12) !important;
+}
+
+/* 原生下拉框的关闭态与可见选项也使用当前主题；系统 popup 是否支持 hover 由浏览器决定。 */
+select {
+  background-color: var(--xb-bg-2);
+  color: var(--xb-text);
+}
+select option {
+  background-color: var(--xb-bg-2);
+  color: var(--xb-text);
+}
+select option:checked {
+  background: var(--xb-primary);
+  color: var(--xb-on-primary);
 }
 
 .xb-notification-center.el-notification {

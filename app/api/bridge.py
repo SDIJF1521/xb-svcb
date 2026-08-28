@@ -42,6 +42,7 @@ from infrastructure.seedvc_engine import SeedVcEngine
 from infrastructure.storage import ListRepository, SettingsStore
 from infrastructure.svc_engine import SvcEngine
 from infrastructure.uvr_tool import UvrTool
+from infrastructure.pymss_tool import PymssTool
 from infrastructure.vocal_enhancement import VocalEnhancementProcessor
 
 
@@ -66,6 +67,7 @@ class Api:
         settings: SettingsStore,
         plugins: PluginService,
         realtime_cover: RealtimeCoverService,
+        pymss: PymssTool | None = None,
     ) -> None:
         self._system = system
         self._models = models
@@ -79,6 +81,7 @@ class Api:
         self._settings = settings
         self._plugins = plugins
         self._realtime_cover = realtime_cover
+        self._pymss = pymss or PymssTool()
         self._window = None
         self._migration_lock = threading.Lock()
         self._migration = self._empty_migration_status()
@@ -670,6 +673,35 @@ class Api:
         """可选的模型架构标签（so-vits-svc / rvc …）。"""
         return self._hub.list_frameworks()
 
+    # ---- PyMSS 前期分离模型 ----
+    def pymss_status(self, model: str = "") -> dict[str, Any]:
+        tool = getattr(self, "_pymss", None) or PymssTool()
+        selected = str(model or "").strip()
+        ready = config.pymss_any_model_ready() if not selected else config.pymss_model_ready(selected)
+        return {
+            "ok": bool(tool.available and ready),
+            "environment": bool(tool.available),
+            "model": selected or "*",
+            "status": tool.status(selected),
+            "version": tool.version(),
+        }
+
+    def pymss_models(self, purpose: str = "") -> list[dict[str, Any]]:
+        tool = getattr(self, "_pymss", None) or PymssTool()
+        return tool.list_models(purpose=purpose)
+
+    def pymss_download_model(self, model: str = "") -> dict[str, Any]:
+        tool = getattr(self, "_pymss", None) or PymssTool()
+        return tool.start_download_model(model)
+
+    def pymss_download_progress(self, key: str = "") -> dict[str, Any]:
+        tool = getattr(self, "_pymss", None) or PymssTool()
+        return tool.download_progress(key)
+
+    def pymss_download_jobs(self) -> list[dict[str, Any]]:
+        tool = getattr(self, "_pymss", None) or PymssTool()
+        return tool.download_jobs()
+
     def hub_search_models(
         self,
         query: str = "",
@@ -730,10 +762,33 @@ class Api:
 
     def hub_list_jobs(self) -> list[dict[str, Any]]:
         """列出全部上传/下载后台任务（含实时进度）。"""
-        return self._hub.list_jobs()
+        jobs = list(self._hub.list_jobs())
+        # 统一把 PyMSS 模型下载投影到传输中心，确保切换页面后仍能看到进度。
+        for item in self._pymss.download_jobs():
+            jobs.append(
+                {
+                    "key": item.get("key", ""),
+                    "kind": "download",
+                    "title": f"PyMSS · {item.get('model', '模型')}",
+                    "status": item.get("status", "failed"),
+                    "error": item.get("error"),
+                    "result": item.get("result"),
+                    "created_at": item.get("created_at"),
+                    "pct": item.get("pct", 0),
+                    "msg": item.get("message", ""),
+                    "phase": "pymss-download",
+                }
+            )
+        # 音乐曲库下载同样纳入传输中心，避免下载大文件时界面没有反馈。
+        jobs.extend(self._music.download_jobs())
+        return jobs
 
     def hub_clear_job(self, key: str) -> bool:
         """清理一条已完成/失败的传输任务记录。"""
+        if str(key or "").startswith("pymss:"):
+            return self._pymss.clear_download_job(key)
+        if str(key or "").startswith("music:"):
+            return self._music.clear_download_job(key)
         return self._hub.clear_job(key or "")
 
     # ---- 作品 / 翻唱 ----
@@ -1669,6 +1724,7 @@ def build_api() -> Api:
     # 基础设施
     ffmpeg = FfmpegTool()
     uvr = UvrTool()
+    pymss = PymssTool()
     svc = SvcEngine()
     rvc = RvcEngine()
     seedvc = SeedVcEngine()
@@ -1684,17 +1740,17 @@ def build_api() -> Api:
 
     # 应用服务
     system_service = SystemService(
-        ffmpeg, uvr, svc, rvc, seedvc, ddsp, vocal_enhancement
+        ffmpeg, uvr, svc, rvc, seedvc, ddsp, vocal_enhancement, pymss
     )
     model_service = ModelService(models_repo, settings)
     conversion_service = ConversionService(
-        works_repo, ffmpeg, uvr, engines, vocal_enhancement
+        works_repo, ffmpeg, uvr, engines, vocal_enhancement, pymss
     )
     work_service = WorkService(works_repo, conversion_service, model_service, settings)
     music_service = MusicService(settings)
     hub_service = ModelHubService(settings, model_service)
     editor_service = AudioEditorService(
-        editor_repo, works_repo, model_service, ffmpeg, uvr, engines, vocal_enhancement
+        editor_repo, works_repo, model_service, ffmpeg, uvr, engines, vocal_enhancement, pymss
     )
     plugin_service = PluginService(settings)
     realtime_cover_service = RealtimeCoverService(model_service, ffmpeg, uvr, engines)
@@ -1715,4 +1771,5 @@ def build_api() -> Api:
         settings,
         plugin_service,
         realtime_cover_service,
+        pymss,
     )

@@ -130,6 +130,10 @@ class InferenceParams:
     index_rate: float = 0.75
     rms_mix: float = 0.25
     uvr_model: str = "MDX-Net"
+    # 前期人声分离：uvr / pymss；关闭时直接把源音频送入翻唱模型。
+    preprocess_enabled: bool = True
+    preprocess_engine: str = "uvr"
+    pymss_model: str = ""
     diffusion_ratio: float = 0.5
     speaker: str = ""  # 目标说话人，留空则用模型配置中的第一个
     device: str = "auto"  # 推理设备：auto / cuda / rocm / directml / cpu
@@ -155,6 +159,17 @@ class InferenceParams:
             index_rate=float(data.get("index_rate", data.get("indexRate", 0.75))),
             rms_mix=float(data.get("rms_mix", data.get("rmsMix", 0.25))),
             uvr_model=str(data.get("uvr_model", data.get("uvrModel", "MDX-Net"))),
+            preprocess_enabled=_coerce_bool(
+                data.get("preprocess_enabled", data.get("preprocessEnabled", True)),
+                True,
+            ),
+            preprocess_engine=str(
+                data.get("preprocess_engine", data.get("preprocessEngine", "uvr"))
+                or "uvr"
+            ).lower(),
+            pymss_model=str(
+                data.get("pymss_model", data.get("pymssModel", "")) or ""
+            ),
             diffusion_ratio=float(data.get("diffusion_ratio", data.get("diffusionRatio", 0.5))),
             speaker=str(data.get("speaker", data.get("spk", ""))),
             device=str(data.get("device", "auto")),
@@ -213,6 +228,8 @@ class Work:
     workflow: str = "auto_mix"
     # 可选 AI 歌声增强：enabled + basic/advanced，两层均在模型推理后执行。
     vocal_enhancement: dict[str, Any] = field(default_factory=dict)
+    # 前期分离设置：enabled=false 时跳过 UVR/PyMSS，直接使用源音频。
+    preprocess: dict[str, Any] = field(default_factory=dict)
     # 翻唱模式：single=单模型；multi=多模型混合（按歌词分句指派模型）
     mode: str = "single"
     # 多模型模式下，每个已指派模型的演唱片段：{start, end, model_id}
@@ -241,6 +258,7 @@ class Work:
             steps=data.get("steps", []) or [],
             workflow=data.get("workflow", "auto_mix"),
             vocal_enhancement=data.get("vocal_enhancement", {}) or {},
+            preprocess=data.get("preprocess", {}) or {},
             mode=data.get("mode", "single"),
             segments=data.get("segments", []) or [],
         )

@@ -153,22 +153,22 @@ npm run validate
 
 ## 6. Python 依赖发布
 
-宿主只保证 Python 3.10+ 标准库和 `xb_svcb_plugin`。其他 Python 依赖需要放入插件根目录的 `vendor/`：
+宿主使用专用 Python 3.10 运行时，只保证标准库和 `xb_svcb_plugin`。其他 Python 依赖写入固定版本的 `requirements.txt`：
 
 ```powershell
-python -m pip install httpx -t .\vendor
+httpx==0.28.1
 ```
 
 发布前确认：
 
 - 依赖及其传递依赖允许再分发；
 - 仓库和插件包保留要求的许可证或版权声明；
-- 二进制 wheel 与目标 Windows、Python 版本和架构兼容；
+- `npm run pack` 使用 Python 3.10 成功生成包内 `vendor/`；
 - 没有把开发机 `.venv` 整体复制到 `vendor/`；
 - 没有安装时自动执行 `pip install` 的脚本；
 - `vendor/` 加入后仍满足 20 MB/50 MB 限制。
 
-当前宿主不会解析 `requirements.txt`，也不会自动安装缺失依赖。市场同样没有依赖管理或插件间依赖声明。
+SDK 只在发布者执行 `npm run pack` 时解析 `requirements.txt`；宿主和市场安装时不会联网安装缺失依赖，也没有插件间依赖声明。
 
 ## 7. GitHub Release
 
@@ -319,11 +319,11 @@ Get-FileHash .\my-plugin-1.0.0.xbplugin -Algorithm SHA256
 
 ### 10.5 没有依赖解析
 
-市场不会安装 npm 依赖、Python requirements、系统工具或其他插件。发布包必须自带运行所需前端 bundle 和允许再分发的 Python `vendor/` 内容。
+市场不会安装 npm 依赖、Python requirements、系统工具或其他插件。SDK 打包结果必须自带运行所需前端 bundle 和允许再分发的 Python `vendor/` 内容。
 
 ### 10.6 没有自动回滚
 
-替换安装失败时，宿主不保证自动恢复旧插件代码。发布者应保留旧 Release，用户需要时可手工重新安装旧包。插件数据是否能被旧版本读取由插件作者负责。
+替换安装若在入口或文件校验阶段失败，宿主会恢复旧插件代码。启用后才暴露的业务错误仍需要作者发布修复版本；插件数据是否能被旧版本读取由插件作者负责。
 
 ## 11. 更新、回退与数据
 

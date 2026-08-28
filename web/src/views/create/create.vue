@@ -238,21 +238,112 @@
           </div>
         </section>
 
-        <!-- 人声分离 -->
-        <section class="card glass">
-          <div class="card-head">
+        <!-- 可选前期处理 -->
+        <section class="card glass preprocess-card">
+          <div class="card-head preprocess-card-head">
             <span class="step-no">03</span>
-            <h2>人声分离 (UVR)</h2>
+            <div class="preprocess-title-wrap">
+              <h2>前期人声处理</h2>
+              <span>先提取干净人声，再交给翻唱模型</span>
+            </div>
           </div>
-          <p class="field-tip">由 Ultimate Vocal Remover 自动分离人声与伴奏</p>
-          <div class="seg">
-            <button
-              v-for="u in uvrModels"
-              :key="u"
-              class="seg-item"
-              :class="{ active: uvrModel === u }"
-              @click="uvrModel = u"
-            >{{ u }}</button>
+          <div class="preprocess-head preprocess-toggle-row">
+            <label class="switch-label preprocess-switch">
+              <input v-model="preprocessEnabled" type="checkbox" />
+              <span class="switch-control" aria-hidden="true"><i></i></span>
+              <span class="switch-copy">
+                <strong>启用前期人声分离</strong>
+                <small>关闭后直接使用源音频进入翻唱模型</small>
+              </span>
+            </label>
+            <span class="preprocess-state" :class="{ off: !preprocessEnabled }">
+              <span class="state-dot"></span>{{ preprocessEnabled ? '已启用' : '已关闭' }}
+            </span>
+          </div>
+          <div v-if="preprocessEnabled" class="preprocess-section">
+            <div class="preprocess-label-row">
+              <span class="preprocess-label">分离引擎</span>
+              <span class="preprocess-label-hint">选择适合当前设备的前置处理器</span>
+            </div>
+            <div class="seg preprocess-engines">
+              <button
+                class="seg-item"
+                :class="{ active: preprocessEngine === 'uvr' }"
+                @click="preprocessEngine = 'uvr'"
+              >
+                <span class="engine-mark">U</span><span>UVR</span><small>通用</small>
+              </button>
+              <button
+                class="seg-item"
+                :class="{ active: preprocessEngine === 'pymss' }"
+                @click="preprocessEngine = 'pymss'"
+              >
+                <span class="engine-mark">P</span><span>PyMSS</span><small>高质量</small>
+              </button>
+            </div>
+          </div>
+          <div v-if="preprocessEnabled && preprocessEngine === 'uvr'" class="preprocess-model-block">
+            <div class="preprocess-label-row">
+              <span class="preprocess-label">UVR 模型</span>
+              <span class="preprocess-label-hint">兼容现有 UVR 模型与去混响流程</span>
+            </div>
+            <div class="seg">
+              <button
+                v-for="u in uvrModels"
+                :key="u"
+                class="seg-item"
+                :class="{ active: uvrModel === u }"
+                @click="uvrModel = u"
+              >{{ u }}</button>
+            </div>
+          </div>
+          <div v-if="preprocessEnabled && preprocessEngine === 'pymss'" class="preprocess-model-block">
+            <div class="preprocess-label-row">
+              <span class="preprocess-label">PyMSS 人声分离模型</span>
+              <router-link to="/models?tab=pymss" class="head-link preprocess-link">打开模型站 <el-icon><Right /></el-icon></router-link>
+            </div>
+            <div class="pymss-picker">
+              <el-select v-model="pymssModel" class="pymss-select" placeholder="选择已下载的人声分离模型">
+                <el-option
+                  v-for="item in downloadedPymssVocalModels"
+                  :key="item.name"
+                  :label="item.name"
+                  :value="item.name"
+                />
+              </el-select>
+              <span class="preprocess-status" :class="{ ready: pymssStatus?.ok }"><span class="state-dot"></span>{{ pymssStatus?.status || '正在检查 PyMSS 环境' }}</span>
+            </div>
+          </div>
+          <div v-if="preprocessEnabled" class="harmony-picker">
+            <div class="harmony-heading">
+              <div class="harmony-icon"><el-icon><Connection /></el-icon></div>
+              <div class="harmony-copy">
+                <div class="harmony-title-row">
+                  <strong>分离后去混响 / 净化人声</strong>
+                  <span class="optional-tag">可选</span>
+                </div>
+                <span>使用 PyMSS 去混响模型，降低房间反射与残响，让干声更清晰自然</span>
+              </div>
+              <label class="switch-label preprocess-switch harmony-switch">
+                <input v-model="harmonyRemovalEnabled" type="checkbox" />
+                <span class="switch-control" aria-hidden="true"><i></i></span>
+              </label>
+            </div>
+            <div v-if="harmonyRemovalEnabled" class="pymss-picker">
+              <div class="preprocess-label-row harmony-model-label">
+                <span class="preprocess-label">去混响 / 人声净化模型</span>
+                <router-link to="/models?tab=pymss" class="head-link preprocess-link">下载模型 <el-icon><Right /></el-icon></router-link>
+              </div>
+              <el-select v-model="harmonyModel" class="pymss-select" placeholder="选择已下载的去混响模型">
+                <el-option
+                  v-for="item in downloadedPymssHarmonyModels"
+                  :key="item.name"
+                  :label="item.name"
+                  :value="item.name"
+                />
+              </el-select>
+              <span class="preprocess-status" :class="{ ready: downloadedPymssHarmonyModels.length }"><span class="state-dot"></span>{{ downloadedPymssHarmonyModels.length ? '模型已就绪' : '请先下载去混响模型' }}</span>
+            </div>
           </div>
         </section>
 
@@ -974,6 +1065,8 @@ import {
   type InferencePreset,
   type InferenceQueueStatus,
   type VocalEnhancementLevel,
+  type PymssModel,
+  type PymssStatus,
 } from '@/api'
 import { useModelsStore } from '@/stores/models'
 import { useSystemStore } from '@/stores/system'
@@ -1014,6 +1107,45 @@ const selectedModel = ref<string>('')
 
 const uvrModels = ['MDX-Net', 'Demucs v4', 'VR Arch']
 const uvrModel = ref(str(prefs.uvrModel, 'MDX-Net'))
+const preprocessEnabled = ref(prefs.preprocessEnabled !== false)
+const preprocessEngine = ref<'uvr' | 'pymss'>(prefs.preprocessEngine === 'pymss' ? 'pymss' : 'uvr')
+const pymssModel = ref(str(prefs.pymssModel, 'bs_roformer_voc_hyperacev2'))
+const pymssModels = ref<PymssModel[]>([])
+const downloadedPymssVocalModels = computed(() => pymssModels.value.filter((item) => item.purpose === 'vocal_separation' && item.downloaded))
+const downloadedPymssHarmonyModels = computed(() => pymssModels.value.filter((item) => (item.purpose === 'dereverb' || item.purpose === 'harmony_removal') && item.downloaded))
+const harmonyRemovalEnabled = ref(Boolean(prefs.harmonyRemovalEnabled))
+const harmonyModel = ref(str(prefs.harmonyModel, 'UVR-DeEcho-DeReverb.pth'))
+const pymssStatus = ref<PymssStatus | null>(null)
+const pymssDownloading = ref(false)
+
+async function refreshPymssStatus() {
+  try {
+    pymssStatus.value = await api.pymssStatus(pymssModel.value)
+  } catch {
+    pymssStatus.value = null
+  }
+}
+
+async function downloadPymssModel() {
+  if (!pymssModel.value) return
+  pymssDownloading.value = true
+  try {
+    const result = await api.pymssDownloadModel(pymssModel.value)
+    if (!result.ok) {
+      ElMessage.error(result.error || 'PyMSS 模型下载失败')
+      return
+    }
+    const row = pymssModels.value.find((item) => item.name === pymssModel.value)
+    if (row) row.downloaded = true
+    await refreshPymssStatus()
+    ElMessage.success('PyMSS 模型已下载')
+  } finally {
+    pymssDownloading.value = false
+  }
+}
+
+watch(pymssModel, () => { void refreshPymssStatus() })
+watch(harmonyModel, () => { void refreshPymssStatus() })
 
 const f0Method = ref(normalizeF0Method('so-vits-svc', str(prefs.f0Method, 'rmvpe')))
 
@@ -1141,6 +1273,9 @@ function paramsForFramework(framework: string, values: ParamValues): InferencePa
   const params: InferenceParams = {
     pitch: Math.round(values.pitch),
     uvr_model: uvrModel.value,
+    preprocess_enabled: preprocessEnabled.value,
+    preprocess_engine: preprocessEngine.value,
+    pymss_model: pymssModel.value,
     device: values.device,
     auto_high_pitch_guard: autoHighPitchGuard.value,
   }
@@ -1880,13 +2015,18 @@ const alignStatus = computed(() => {
 
 // 任一参数变化即写回 localStorage
 watch(
-  [uvrModel, f0Method, pitch, autoHighPitchGuard, formantShift, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion, vocalEnhancementEnabled, vocalEnhancementLevel, pitchCorrection, timingAlignment, timbreFocus, aiEq, aiCompressor, aiExciter, stereoWidth, loudnessEnvelope],
+  [uvrModel, preprocessEnabled, preprocessEngine, pymssModel, harmonyRemovalEnabled, harmonyModel, f0Method, pitch, autoHighPitchGuard, formantShift, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion, vocalEnhancementEnabled, vocalEnhancementLevel, pitchCorrection, timingAlignment, timbreFocus, aiEq, aiCompressor, aiExciter, stereoWidth, loudnessEnvelope],
   () => {
     try {
       localStorage.setItem(
         PREFS_KEY,
         JSON.stringify({
           uvrModel: uvrModel.value,
+          preprocessEnabled: preprocessEnabled.value,
+          preprocessEngine: preprocessEngine.value,
+          pymssModel: pymssModel.value,
+          harmonyRemovalEnabled: harmonyRemovalEnabled.value,
+          harmonyModel: harmonyModel.value,
           f0Method: f0Method.value,
           pitch: pitch.value,
           autoHighPitchGuard: autoHighPitchGuard.value,
@@ -1923,7 +2063,8 @@ const isPlaying = ref(false)
 const currentWork = ref<WorkDTO | null>(null)
 
 const stepMeta: Record<string, string> = {
-  separate: 'UVR 提取干声与伴奏',
+  separate: '提取干声与伴奏（UVR / PyMSS）',
+  harmony: '使用 PyMSS BVE 模型移除伴唱，仅保留主唱',
   repair_input: 'DeepFilterNet3 清理分离伪影并保护高频细节',
   f0: '分析音高曲线',
   infer: '加载模型进行歌声转换',
@@ -1935,6 +2076,7 @@ const stepMeta: Record<string, string> = {
 }
 const singlePipeline: PipelineStep[] = [
   { key: 'separate', label: '人声分离', status: 'wait' },
+  { key: 'harmony', label: '去混响净化', status: 'wait' },
   { key: 'repair_input', label: '分离人声修复', status: 'wait' },
   { key: 'f0', label: 'F0 提取', status: 'wait' },
   { key: 'infer', label: '模型推理', status: 'wait' },
@@ -1943,6 +2085,7 @@ const singlePipeline: PipelineStep[] = [
 ]
 const multiPipeline: PipelineStep[] = [
   { key: 'separate', label: '人声分离', status: 'wait' },
+  { key: 'harmony', label: '去混响净化', status: 'wait' },
   { key: 'repair_input', label: '分离人声修复', status: 'wait' },
   { key: 'split', label: '歌词分割', status: 'wait' },
   { key: 'infer', label: '逐段推理', status: 'wait' },
@@ -1953,7 +2096,10 @@ const multiPipeline: PipelineStep[] = [
 
 const pipeline = computed<PipelineStep[]>(() => {
   if (currentWork.value?.steps) return currentWork.value.steps
-  const steps = (mode.value === 'multi' ? multiPipeline : singlePipeline).map((step) => ({ ...step }))
+  const steps = (mode.value === 'multi' ? multiPipeline : singlePipeline)
+    .filter((step) => preprocessEnabled.value || !['separate', 'harmony', 'repair_input'].includes(step.key))
+    .filter((step) => harmonyRemovalEnabled.value || step.key !== 'harmony')
+    .map((step) => ({ ...step }))
   if (vocalEnhancementEnabled.value && enhancementWorkflowAllowed.value) {
     steps.splice(-1, 0, { key: 'enhance', label: 'AI 歌声增强', status: 'wait' })
   }
@@ -2060,6 +2206,16 @@ function currentVocalEnhancement() {
   }
 }
 
+function currentPreprocess() {
+  return {
+    enabled: preprocessEnabled.value,
+    engine: preprocessEngine.value,
+    pymss_model: pymssModel.value,
+    harmony_removal_enabled: Boolean(preprocessEnabled.value && harmonyRemovalEnabled.value),
+    harmony_model: harmonyModel.value,
+  } as const
+}
+
 function applyParams(raw: Record<string, unknown>) {
   const ddspSteps = raw.ddsp_infer_steps
   const savedQuality = typeof ddspSteps === 'number'
@@ -2087,6 +2243,11 @@ function applyParams(raw: Record<string, unknown>) {
   indexRate.value = next.indexRate
   rmsMix.value = next.rmsMix
   uvrModel.value = next.uvrModel
+  preprocessEnabled.value = raw.preprocess_enabled !== false
+  preprocessEngine.value = raw.preprocess_engine === 'pymss' ? 'pymss' : 'uvr'
+  pymssModel.value = str(raw.pymss_model, pymssModel.value)
+  harmonyRemovalEnabled.value = Boolean(raw.harmony_removal_enabled)
+  harmonyModel.value = str(raw.harmony_model, harmonyModel.value)
   diffusionRatio.value = next.diffusionRatio
   device.value = next.device
   protect.value = next.protect
@@ -2311,6 +2472,7 @@ const generate = async () => {
       models: blendModels,
       segments: outSegments,
       params: blendModels[0]?.params,
+      preprocess: currentPreprocess(),
       vocal_enhancement: currentVocalEnhancement(),
     })
     currentWork.value = work
@@ -2329,6 +2491,7 @@ const generate = async () => {
     workflow: currentWorkflow,
     source_path: song.value.path,
     params: currentParams(),
+    preprocess: currentPreprocess(),
     vocal_enhancement: currentVocalEnhancement(),
   })
   currentWork.value = work
@@ -2349,6 +2512,7 @@ async function batchGenerate() {
     model_id: selectedModel.value,
     workflow: normalizeWorkflowForMode(workflow.value, 'single'),
     params: currentParams(),
+    preprocess: currentPreprocess(),
     vocal_enhancement: currentVocalEnhancement(),
   })
   queueStatus.value = await api.getInferenceQueue()
@@ -2409,6 +2573,22 @@ watch(trackEl, (el) => {
 
 onMounted(async () => {
   await modelsStore.load()
+  try {
+    pymssModels.value = await api.pymssModels()
+    const vocalModels = pymssModels.value.filter((item) => item.purpose === 'vocal_separation')
+    const harmonyModels = pymssModels.value.filter((item) => item.purpose === 'dereverb' || item.purpose === 'harmony_removal')
+    const downloadedVocal = vocalModels.filter((item) => item.downloaded)
+    const downloadedHarmony = harmonyModels.filter((item) => item.downloaded)
+    if (!downloadedVocal.some((item) => item.name === pymssModel.value)) {
+      pymssModel.value = downloadedVocal[0]?.name || ''
+    }
+    if (!downloadedHarmony.some((item) => item.name === harmonyModel.value)) {
+      harmonyModel.value = downloadedHarmony[0]?.name || ''
+    }
+    await refreshPymssStatus()
+  } catch {
+    /* PyMSS is optional; UVR and disabled preprocessing remain available. */
+  }
   if (systemStore.loaded) {
     normalizeDeviceSelections()
   } else {
@@ -2730,6 +2910,137 @@ onUnmounted(() => {
 .mode-desc { font-size: 12px; color: var(--xb-muted); margin-top: 2px; }
 
 .workflow-card { padding-top: 18px; }
+.preprocess-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.switch-label { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; cursor: pointer; }
+.switch-label input { width: 16px; height: 16px; accent-color: var(--xb-primary); }
+.preprocess-engines { margin-bottom: 10px; }
+.preprocess-card {
+  padding: 24px;
+  overflow: hidden;
+  border-color: rgba(var(--xb-primary-rgb), .24);
+  background:
+    linear-gradient(145deg, rgba(var(--xb-primary-rgb), .055), transparent 42%),
+    var(--xb-panel);
+  box-shadow: 0 14px 34px rgba(var(--xb-primary-rgb), .06);
+}
+.preprocess-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, var(--xb-primary), var(--xb-primary-2));
+  opacity: .9;
+}
+.preprocess-card-head { align-items: flex-start; margin-bottom: 22px; }
+.preprocess-title-wrap { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.preprocess-title-wrap h2 { font-size: 19px; letter-spacing: 0; }
+.preprocess-title-wrap > span { color: var(--xb-muted); font-size: 12px; font-weight: 500; }
+.preprocess-toggle-row {
+  justify-content: space-between;
+  margin: 0 0 20px;
+  padding: 14px 16px;
+  border: 1px solid rgba(var(--xb-primary-rgb), .16);
+  border-radius: 11px;
+  background: rgba(var(--xb-fill-rgb), .035);
+}
+.preprocess-switch { position: relative; gap: 11px; }
+.preprocess-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.switch-control {
+  width: 40px;
+  height: 23px;
+  flex: 0 0 auto;
+  position: relative;
+  border-radius: 999px;
+  background: rgba(var(--xb-fill-rgb), .15);
+  border: 1px solid var(--xb-border);
+  transition: background .2s ease, border-color .2s ease;
+}
+.switch-control i {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--xb-muted);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, .16);
+  transition: transform .2s ease, background .2s ease;
+}
+.preprocess-switch input:checked + .switch-control {
+  background: rgba(var(--xb-primary-rgb), .25);
+  border-color: rgba(var(--xb-primary-rgb), .7);
+}
+.preprocess-switch input:checked + .switch-control i {
+  transform: translateX(17px);
+  background: var(--xb-primary);
+}
+.preprocess-switch:focus-within .switch-control { box-shadow: 0 0 0 3px rgba(var(--xb-primary-rgb), .14); }
+.switch-copy { display: flex; flex-direction: column; gap: 3px; }
+.switch-copy strong { color: var(--xb-text); font-size: 14px; line-height: 1.25; }
+.switch-copy small { color: var(--xb-muted); font-size: 12px; font-weight: 500; line-height: 1.35; }
+.preprocess-state, .preprocess-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--xb-success);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.preprocess-state.off, .preprocess-status:not(.ready) { color: var(--xb-muted); }
+.state-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 15%, transparent); }
+.preprocess-section, .preprocess-model-block { margin-top: 16px; }
+.preprocess-label-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+.preprocess-label { color: var(--xb-text); font-size: 13px; font-weight: 750; }
+.preprocess-label-hint { color: var(--xb-muted); font-size: 12px; }
+.preprocess-link { margin-left: auto; color: var(--xb-primary); font-weight: 650; }
+.preprocess-engines { gap: 9px; }
+.preprocess-engines .seg-item {
+  min-width: 116px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 13px;
+  border-radius: 9px;
+  background: rgba(var(--xb-fill-rgb), .025);
+}
+.preprocess-engines .seg-item small { margin-left: auto; color: var(--xb-muted); font-size: 11px; font-weight: 500; }
+.preprocess-engines .seg-item.active small { color: var(--xb-primary); }
+.engine-mark {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--xb-on-primary);
+  background: linear-gradient(135deg, var(--xb-primary), var(--xb-primary-2));
+  font-size: 11px;
+  font-weight: 850;
+}
+.pymss-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-top: 0; }
+.pymss-picker > .preprocess-label-row { grid-column: 1 / -1; width: 100%; }
+.pymss-select { width: 100%; min-width: 0; }
+.pymss-picker :deep(.el-select) { width: 100%; min-width: 0; }
+.pymss-picker :deep(.el-input__wrapper) { min-height: 42px; border-radius: 9px; background: rgba(var(--xb-fill-rgb), .035); box-shadow: 0 0 0 1px rgba(var(--xb-primary-rgb), .16) inset !important; }
+.pymss-picker :deep(.el-input__wrapper.is-focus) { box-shadow: 0 0 0 1px var(--xb-primary) inset, 0 0 0 3px rgba(var(--xb-primary-rgb), .12) !important; }
+.harmony-picker {
+  margin-top: 22px;
+  padding: 16px;
+  border: 1px solid rgba(var(--xb-secondary-rgb), .22);
+  border-radius: 11px;
+  background: linear-gradient(135deg, rgba(var(--xb-secondary-rgb), .08), rgba(var(--xb-fill-rgb), .025));
+}
+.harmony-heading { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.harmony-icon { width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 9px; color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), .13); }
+.harmony-icon .el-icon { font-size: 18px; }
+.harmony-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.harmony-copy > span { color: var(--xb-muted); font-size: 12px; line-height: 1.4; }
+.harmony-title-row { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.harmony-title-row strong { color: var(--xb-text); font-size: 14px; }
+.optional-tag { padding: 2px 7px; border-radius: 999px; color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), .12); font-size: 10px; font-weight: 750; }
+.harmony-switch { margin-left: auto; }
+.harmony-picker > .pymss-picker { margin-top: 15px; padding-top: 14px; border-top: 1px solid rgba(var(--xb-secondary-rgb), .16); }
+.harmony-model-label { margin-bottom: 0; }
 .workflow-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3699,6 +4010,24 @@ input[type='range'] {
   .enhancement-level { border-right: 0; border-bottom: 1px solid var(--xb-border); }
   .enhancement-level:last-child { border-bottom: 0; }
   .enhancement-controls { grid-template-columns: 1fr; gap: 10px; }
+}
+@media (max-width: 560px) {
+  .preprocess-card { padding: 18px 16px; }
+  .preprocess-card-head { margin-bottom: 17px; }
+  .preprocess-title-wrap h2 { font-size: 17px; }
+  .preprocess-toggle-row { align-items: flex-start; padding: 12px; }
+  .preprocess-state { padding-top: 3px; }
+  .preprocess-label-row { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .preprocess-link { align-self: flex-end; margin-top: -20px; }
+  .preprocess-engines .seg-item { flex: 1; min-width: 0; }
+  .pymss-picker { grid-template-columns: 1fr; }
+  .preprocess-status { grid-column: 1; }
+  .harmony-picker { padding: 13px; }
+  .harmony-heading { align-items: flex-start; }
+  .harmony-switch { margin-top: 3px; }
+  .harmony-copy > span { max-width: 230px; }
+  .harmony-picker > .pymss-picker { grid-template-columns: 1fr; }
+  .harmony-picker > .pymss-picker .preprocess-label-row { grid-column: 1; }
 }
 </style>
 
