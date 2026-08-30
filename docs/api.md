@@ -183,6 +183,8 @@ SeedVC 需要额外的目标音色参考音频。先通过上传接口分别上�
 
 多模型工作流可使用 `auto_mix`、`auto_vocal_merge`、`manual_vocal_merge`、`auto_then_editor` 和 `full_manual_editor`。`auto_vocal_merge`、`manual_vocal_merge` 不适用于单模型模式。
 
+`models[].params.auto_high_pitch_guard` 控制该模型的高音保护，默认开启。检测到超过可靠音域的高音时，服务会只对对应高音区域先降调推理，完成后恢复原调；因此合唱片段中的每个模型都可以独立设置保护开关。旧请求也可以在顶层 `params.auto_high_pitch_guard` 提供回退值。
+
 ### 完整 Python 示例
 
 下面的示例使用两个非 SeedVC 模型完成一首多模型翻唱：前 `20` 秒由模型 A 演唱，`20-40` 秒由模型 B 演唱，`40-60` 秒由两个模型合唱。运行前请在 `GET /api/v1/models` 的响应或软件模型页中找到模型 ID，并修改歌曲路径、API Key、模型 ID 和时间段。

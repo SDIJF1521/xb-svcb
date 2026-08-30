@@ -380,6 +380,13 @@ class WorkService:
         workflow = self._workflow(payload, mode="multi")
         vocal_enhancement = self._vocal_enhancement(payload, workflow)
         preprocess = self._preprocess(payload)
+        shared_params = payload.get("params")
+        shared_guard: Any = None
+        if isinstance(shared_params, dict):
+            for key in ("auto_high_pitch_guard", "autoHighPitchGuard"):
+                if key in shared_params:
+                    shared_guard = shared_params[key]
+                    break
         seg_models: dict[str, Any] = {}
         for entry in payload.get("models", []) or []:
             mid = entry.get("model_id")
@@ -388,9 +395,21 @@ class WorkService:
             model = self._models.get(mid)
             if not model:
                 continue
+            model_params = entry.get("params")
+            model_params = dict(model_params) if isinstance(model_params, dict) else {}
+            # Multi-model requests own parameters per model.  Keep the legacy
+            # top-level switch as a fallback, then make the default explicit so
+            # every model follows the same high-pitch protection contract.
+            if (
+                "auto_high_pitch_guard" not in model_params
+                and "autoHighPitchGuard" not in model_params
+            ):
+                model_params["auto_high_pitch_guard"] = (
+                    True if shared_guard is None else shared_guard
+                )
             seg_models[mid] = {
                 "name": model.get("name", mid),
-                "params": entry.get("params", {}) or {},
+                "params": model_params,
                 **self._resolve_model_paths(model),
             }
 

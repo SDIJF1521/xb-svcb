@@ -185,6 +185,11 @@
                   <label>变调 {{ mp(m.id).pitch > 0 ? '+' + mp(m.id).pitch : mp(m.id).pitch }}</label>
                   <input type="range" min="-12" max="12" step="1" v-model.number="mp(m.id).pitch" />
                 </div>
+                <label class="mp-guard">
+                  <input v-model="mp(m.id).autoHighPitchGuard" type="checkbox" />
+                  <span>自动高音保护</span>
+                  <small>高音区域先降调翻唱，完成后恢复原调</small>
+                </label>
                 <template v-if="frameworkOf(m.id) !== 'rvc'">
                   <div class="mp-row">
                     <label v-if="frameworkOf(m.id) === 'seed-vc'">扩散步数 {{ qualitySteps(mp(m.id).diffusionRatio) }}</label>
@@ -1265,6 +1270,7 @@ type MultiParams = {
   filterRadius: number
   rvcVersion: string
   referenceAudio: string
+  autoHighPitchGuard: boolean
 }
 
 type ParamValues = MultiParams
@@ -1277,7 +1283,7 @@ function paramsForFramework(framework: string, values: ParamValues): InferencePa
     preprocess_engine: preprocessEngine.value,
     pymss_model: pymssModel.value,
     device: values.device,
-    auto_high_pitch_guard: autoHighPitchGuard.value,
+    auto_high_pitch_guard: values.autoHighPitchGuard,
   }
   if (framework === 'seed-vc') {
     params.diffusion_ratio = values.diffusionRatio
@@ -1389,6 +1395,7 @@ function defaultParams(framework: string): MultiParams {
     filterRadius: filterRadius.value,
     rvcVersion: rvcVersion.value,
     referenceAudio: '',
+    autoHighPitchGuard: autoHighPitchGuard.value,
   }
 }
 function mp(id: string): MultiParams {
@@ -2184,6 +2191,7 @@ function currentParams() {
     filterRadius: filterRadius.value,
     rvcVersion: rvcVersion.value,
     referenceAudio: selectedFramework.value === 'seed-vc' ? seedVcReferenceAudio.value : '',
+    autoHighPitchGuard: autoHighPitchGuard.value,
   })
 }
 
@@ -2266,6 +2274,7 @@ function applyParams(raw: Record<string, unknown>) {
     p.protect = next.protect
     p.filterRadius = next.filterRadius
     p.rvcVersion = next.rvcVersion
+    p.autoHighPitchGuard = next.autoHighPitchGuard
     if (frameworkOf(id) === 'seed-vc') p.referenceAudio = next.referenceAudio
   }
 }
@@ -2465,6 +2474,7 @@ const generate = async () => {
           filterRadius: p.filterRadius,
           rvcVersion: p.rvcVersion,
           referenceAudio: framework === 'seed-vc' ? p.referenceAudio : '',
+          autoHighPitchGuard: p.autoHighPitchGuard,
         }),
       }
     })
@@ -3246,6 +3256,16 @@ onUnmounted(() => {
 }
 .mp-row { display: flex; flex-direction: column; gap: 6px; }
 .mp-row label { font-size: 12.5px; color: var(--xb-muted); }
+.mp-guard {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  color: var(--xb-text);
+  font-size: 12.5px;
+}
+.mp-guard input { accent-color: var(--xb-primary); }
+.mp-guard small { flex-basis: 100%; color: var(--xb-muted); font-size: 11.5px; }
 .mp-inline { display: flex; gap: 10px; }
 .mp-mini { flex: 1; display: flex; align-items: center; gap: 6px; }
 .mp-mini span { font-size: 12.5px; color: var(--xb-muted); }

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import struct
 import subprocess
 import sys
+import wave
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import config
 from infrastructure.ffmpeg_tool import FfmpegTool
+
+
+def _write_test_wav(path: Path, amplitude: int) -> None:
+    samples = [int(amplitude)] * 8000
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(8000)
+        handle.writeframes(struct.pack(f"<{len(samples)}h", *samples))
 
 
 def test_bundled_ffmpeg_is_added_when_system_command_is_missing(
@@ -149,3 +160,27 @@ def test_mix_can_apply_light_parallel_glue(tmp_path: Path, monkeypatch) -> None:
     assert "acompressor=threshold=0.251189:ratio=1.180" in filter_graph
     assert "detection=rms:mix=0.55[glue]" in filter_graph
     assert "[glue]alimiter=limit=0.841395" in filter_graph
+
+
+def test_pitch_shift_rejects_collapsed_worker_output(
+    tmp_path: Path, monkeypatch
+) -> None:
+    tool = FfmpegTool()
+    source = tmp_path / "source.wav"
+    output = tmp_path / "output.wav"
+    worker_python = tmp_path / "python.exe"
+    worker_script = tmp_path / "formant_pitch_worker.py"
+    worker_python.write_bytes(b"")
+    worker_script.write_bytes(b"")
+    _write_test_wav(source, 12000)
+    monkeypatch.setattr(config, "VOCAL_ENHANCEMENT_PYTHON", worker_python)
+    monkeypatch.setattr(config, "FORMANT_PITCH_WORKER", worker_script)
+
+    def fake_run(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        target = Path(command[command.index("--output") + 1])
+        _write_test_wav(target, 0)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("infrastructure.ffmpeg_tool.subprocess.run", fake_run)
+
+    assert not tool.pitch_shift(source, output, -7)
