@@ -16,6 +16,7 @@ import type {
   SystemStatus,
   HttpApiScope,
   HttpApiStatus,
+  HttpApiKeyListResult,
   HttpApiTestResult,
   WorkDTO,
   MusicSearchResult,
@@ -112,17 +113,29 @@ export const api = {
   getHttpApiStatus: () =>
     invoke<HttpApiStatus>('get_http_api_status', [], () => mock.getHttpApiStatus()),
 
-  configureHttpApi: (payload: { scope: HttpApiScope; port: number }) =>
+  configureHttpApi: (payload: { scope: HttpApiScope; port: number; public_ip?: string; public_domain?: string }) =>
     invoke<HttpApiStatus>('configure_http_api', [payload], () =>
       mock.configureHttpApi(payload),
     ),
 
-  regenerateHttpApiKey: () =>
-    invoke<HttpApiStatus>('regenerate_http_api_key', [], () =>
-      mock.regenerateHttpApiKey(),
+  regenerateHttpApiKey: (keyId?: string) =>
+    invoke<HttpApiStatus>('regenerate_http_api_key', [keyId], () =>
+      mock.regenerateHttpApiKey(keyId),
     ),
 
-  startHttpApi: (payload: { scope: HttpApiScope; port: number }) =>
+  listHttpApiKeys: () =>
+    invoke<HttpApiKeyListResult>('list_http_api_keys', [], () => mock.listHttpApiKeys()),
+
+  addHttpApiKey: (payload: { name?: string; expires_at?: string | null; key?: string; enabled?: boolean }) =>
+    invoke<HttpApiStatus>('add_http_api_key', [payload], () => mock.addHttpApiKey(payload)),
+
+  updateHttpApiKey: (keyId: string, payload: { name?: string; expires_at?: string | null; enabled?: boolean; key?: string }) =>
+    invoke<HttpApiStatus>('update_http_api_key', [keyId, payload], () => mock.updateHttpApiKey(keyId, payload)),
+
+  deleteHttpApiKey: (keyId: string) =>
+    invoke<HttpApiStatus>('delete_http_api_key', [keyId], () => mock.deleteHttpApiKey(keyId)),
+
+  startHttpApi: (payload: { scope: HttpApiScope; port: number; public_ip?: string; public_domain?: string }) =>
     invoke<HttpApiStatus>('start_http_api', [payload], () => mock.startHttpApi(payload)),
 
   stopHttpApi: () =>

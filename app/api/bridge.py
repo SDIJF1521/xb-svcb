@@ -104,8 +104,22 @@ class Api:
     def configure_http_api(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._http_api.configure(payload or {})
 
-    def regenerate_http_api_key(self) -> dict[str, Any]:
-        return self._http_api.regenerate_key()
+    def regenerate_http_api_key(self, key_id: str | None = None) -> dict[str, Any]:
+        # API Key 支持按 key_id 重新生成；未传 key_id 时兼容重新生成第一个 Key。
+        return self._http_api.regenerate_key(key_id)
+
+    def list_http_api_keys(self) -> dict[str, Any]:
+        # 列出 API 模块当前配置的全部 Key，不返回其他敏感配置。
+        return self._http_api.list_keys()
+
+    def add_http_api_key(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._http_api.add_key(payload or {})
+
+    def update_http_api_key(self, key_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._http_api.update_key(key_id, payload or {})
+
+    def delete_http_api_key(self, key_id: str) -> dict[str, Any]:
+        return self._http_api.delete_key(key_id)
 
     def start_http_api(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._http_api.start(payload or {})

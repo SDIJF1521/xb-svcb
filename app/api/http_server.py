@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import copy
+import ipaddress
+import re
 import secrets
 import socket
 import threading
 import time
+from datetime import datetime, timezone
 import uuid
 import webbrowser
 from pathlib import Path
@@ -1712,7 +1715,52 @@ def _resolve_upload(upload_id: str) -> Path:
     return matches[0]
 
 
-def create_http_app(facade: "Api", api_key: str) -> FastAPI:
+def _normalize_api_keys(value: str | list[dict[str, Any]] | dict[str, Any]) -> list[dict[str, Any]]:
+    """将旧版单 Key 或新版 Key 数组统一为鉴权记录列表。"""
+    if isinstance(value, str):
+        return [{"key": value, "enabled": True, "expires_at": None}]
+    if isinstance(value, dict):
+        value = [value]
+    records: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict) and str(item.get("key") or ""):
+            records.append(
+                {
+                    "key": str(item["key"]),
+                    "enabled": bool(item.get("enabled", True)),
+                    "expires_at": item.get("expires_at"),
+                }
+            )
+    return records
+
+
+def _is_key_record_current(record: dict[str, Any], now: datetime | None = None) -> bool:
+    """检查 Key 是否启用且未过期；时间统一按 UTC 处理。"""
+    if not bool(record.get("enabled", True)):
+        return False
+    expiry = record.get("expires_at")
+    if not expiry:
+        return True
+    try:
+        parsed = datetime.fromisoformat(str(expiry).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc) > (now or datetime.now(timezone.utc))
+
+def _is_valid_api_key(value: str | None, records: list[dict[str, Any]]) -> bool:
+    if not value:
+        return False
+    return any(
+        record.get("key")
+        and secrets.compare_digest(value, str(record["key"]))
+        and _is_key_record_current(record)
+        for record in records
+    )
+
+
+def create_http_app(facade: "Api", api_key: str | list[dict[str, Any]] | dict[str, Any]) -> FastAPI:
     """构建 HTTP 应用；与桌面桥复用同一个业务服务实例。"""
     app = FastAPI(
         title="XB-SVCB API",
@@ -1742,10 +1790,12 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
     )
 
     api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+    # HTTP 服务启动后固定当前 Key 快照；修改 Key 前必须先停止服务，避免鉴权状态不一致。
+    configured_keys = _normalize_api_keys(api_key)
 
     def require_api_key(value: str | None = Security(api_key_header)) -> None:
-        if not value or not secrets.compare_digest(value, api_key):
-            raise HTTPException(status_code=401, detail="API Key 无效")
+        if not _is_valid_api_key(value, configured_keys):
+            raise HTTPException(status_code=401, detail="API Key 无效、已禁用或已过期")
 
     @app.get(
         "/health",
@@ -2919,6 +2969,9 @@ class HttpApiServer:
     """在当前 GUI 进程的后台线程运行 Uvicorn，不创建控制台子进程。"""
 
     SETTINGS_KEY = "http_api"
+    DEFAULT_PORT = 8765
+    DEFAULT_PUBLIC_IP = ""
+    DEFAULT_PUBLIC_DOMAIN = ""
 
     def __init__(self, facade: "Api", settings: SettingsStore) -> None:
         self._facade = facade
@@ -2929,22 +2982,178 @@ class HttpApiServer:
         self._last_error = ""
         self._ensure_config()
 
+    @staticmethod
+    def _utc_now() -> datetime:
+        return datetime.now(timezone.utc)
+
+    @classmethod
+    def _new_key_record(
+        cls,
+        *,
+        name: str = "默认 API Key",
+        key: str | None = None,
+        enabled: bool = True,
+        expires_at: str | None = None,
+        key_id: str | None = None,
+        created_at: str | None = None,
+    ) -> dict[str, Any]:
+        """创建 Key 记录；expires_at 为 UTC ISO 8601，None 表示永久有效。"""
+        return {
+            "id": key_id or f"key_{uuid.uuid4().hex}",
+            "name": (name or "API Key").strip()[:80] or "API Key",
+            "key": key or secrets.token_urlsafe(32),
+            "enabled": bool(enabled),
+            "expires_at": expires_at,
+            "created_at": created_at or cls._utc_now().isoformat().replace("+00:00", "Z"),
+        }
+
+    @staticmethod
+    def _normalize_expiry(value: Any) -> str | None:
+        """将有效期规范化为 UTC ISO 8601；空值表示永久有效。"""
+        if value in (None, ""):
+            return None
+        text = str(value).strip()
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("expires_at 必须是 ISO 8601 时间") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    @classmethod
+    def _normalize_key_record(cls, value: Any, index: int = 0) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        key = str(value.get("key") or "").strip()
+        if len(key) < 16:
+            return None
+        try:
+            expires_at = cls._normalize_expiry(value.get("expires_at"))
+        except ValueError:
+            expires_at = None
+        return cls._new_key_record(
+            name=str(value.get("name") or f"API Key {index + 1}"),
+            key=key,
+            enabled=bool(value.get("enabled", True)),
+            expires_at=expires_at,
+            key_id=str(value.get("id") or f"key_{uuid.uuid4().hex}"),
+            created_at=str(value.get("created_at") or cls._utc_now().isoformat().replace("+00:00", "Z")),
+        )
+
+    @classmethod
+    def _normalize_keys_from_config(cls, current: dict[str, Any]) -> list[dict[str, Any]]:
+        """将旧版 api_key 自动迁移到新版 api_keys 数组。"""
+        raw_keys = current.get("api_keys")
+        records: list[dict[str, Any]] = []
+        if isinstance(raw_keys, list):
+            for index, value in enumerate(raw_keys):
+                record = cls._normalize_key_record(value, index)
+                if record:
+                    records.append(record)
+        if not records:
+            legacy = str(current.get("api_key") or "").strip()
+            records.append(
+                cls._new_key_record(
+                    name="默认 API Key",
+                    key=legacy if len(legacy) >= 16 else None,
+                    enabled=True,
+                    expires_at=None,
+                    key_id="key_default",
+                )
+            )
+        return records
+
+    @classmethod
+    def _detect_public_ip(cls) -> str:
+        """自动获取公网 IPv4；网络不可用时回退到本机局域网 IPv4。"""
+        # 公网 IP 仅用于生成外部访问地址，不作为 Uvicorn 的监听地址。
+        for endpoint in ("https://api.ipify.org", "https://ifconfig.me/ip"):
+            try:
+                response = httpx.get(endpoint, timeout=1.5, follow_redirects=True)
+                candidate = response.text.strip()
+                ipaddress.ip_address(candidate)
+                return candidate
+            except (httpx.HTTPError, ValueError, OSError):
+                continue
+        try:
+            for row in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+                candidate = str(row[4][0])
+                if not candidate.startswith("127."):
+                    ipaddress.ip_address(candidate)
+                    return candidate
+        except OSError:
+            pass
+        return ""
+
+    @staticmethod
+    def _normalize_domain(value: Any) -> str:
+        """规范化可选域名，不允许空格、路径或非法标签。"""
+        text = str(value or "").strip().lower().rstrip(".")
+        if not text:
+            return ""
+        text = re.sub(r"^https?://", "", text).split("/", 1)[0].split(":", 1)[0]
+        pattern = r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+        if not re.fullmatch(pattern, text):
+            raise ValueError("绑定域名格式无效")
+        return text
+
+    @staticmethod
+    def _normalize_public_ip(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        try:
+            return str(ipaddress.ip_address(text))
+        except ValueError as exc:
+            raise ValueError("公网 IP 格式无效") from exc
+
     def _ensure_config(self) -> dict[str, Any]:
         current = self._settings.get(self.SETTINGS_KEY, {}) or {}
+        if not isinstance(current, dict):
+            current = {}
         scope = current.get("scope") if current.get("scope") in ("local", "lan") else "local"
         try:
-            port = int(current.get("port", 8765))
+            port = int(current.get("port", self.DEFAULT_PORT))
         except (TypeError, ValueError):
-            port = 8765
+            port = self.DEFAULT_PORT
         if not 1024 <= port <= 65535:
-            port = 8765
-        api_key = str(current.get("api_key") or "")
-        if len(api_key) < 16:
-            api_key = secrets.token_urlsafe(32)
-        normalized = {"scope": scope, "port": port, "api_key": api_key}
+            port = self.DEFAULT_PORT
+        records = self._normalize_keys_from_config(current)
+        raw_public_ip = str(current.get("public_ip") or "").strip()
+        try:
+            public_ip = self._normalize_public_ip(raw_public_ip) if raw_public_ip else self._detect_public_ip()
+        except ValueError:
+            public_ip = self._detect_public_ip()
+        try:
+            public_domain = self._normalize_domain(current.get("public_domain"))
+        except ValueError:
+            public_domain = ""
+        normalized = {
+            "scope": scope,
+            "port": port,
+            # 保留旧 api_key 字段，兼容已有调用；真正鉴权数据保存在 api_keys。
+            "api_key": records[0]["key"],
+            "api_keys": records,
+            "public_ip": public_ip,
+            "public_ip_custom": bool(current.get("public_ip_custom", bool(raw_public_ip))),
+            "public_domain": public_domain,
+        }
         if normalized != current:
             self._settings.set(self.SETTINGS_KEY, normalized)
         return normalized
+
+    @staticmethod
+    def _public_key_record(record: dict[str, Any]) -> dict[str, Any]:
+        # 桌面端设置页需要显示完整 Key；HTTP 对外接口没有暴露配置状态接口。
+        return dict(record)
+
+    @staticmethod
+    def _active_key(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+        for record in records:
+            if record.get("enabled") and _is_key_record_current(record):
+                return record
+        return records[0] if records else None
 
     def configure(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._lock:
@@ -2961,18 +3170,116 @@ class HttpApiServer:
                 port = 0
             if not 1024 <= port <= 65535:
                 return {**self.status(), "ok": False, "error": "端口必须在 1024 到 65535 之间"}
-            updated = {**current, "scope": scope, "port": port}
+            try:
+                # 公网地址只用于生成外部访问地址；未提交该字段时保持原有的自动/自定义模式。
+                if "public_ip" in payload:
+                    public_ip_input = payload.get("public_ip")
+                    public_ip_custom = bool(str(public_ip_input or "").strip())
+                    public_ip = self._normalize_public_ip(public_ip_input) if public_ip_custom else self._detect_public_ip()
+                else:
+                    public_ip = current.get("public_ip", "")
+                    public_ip_custom = bool(current.get("public_ip_custom", False))
+                public_domain = self._normalize_domain(payload.get("public_domain", current.get("public_domain", "")))
+            except ValueError as exc:
+                return {**self.status(), "ok": False, "error": str(exc)}
+            updated = {
+                **current,
+                "scope": scope,
+                "port": port,
+                "public_ip": public_ip,
+                "public_ip_custom": public_ip_custom,
+                "public_domain": public_domain,
+            }
             self._settings.set(self.SETTINGS_KEY, updated)
             return {**self.status(), "ok": True}
 
-    def regenerate_key(self) -> dict[str, Any]:
+    def list_keys(self) -> dict[str, Any]:
+        with self._lock:
+            current = self._ensure_config()
+            return {"ok": True, "items": [self._public_key_record(item) for item in current["api_keys"]], "total": len(current["api_keys"])}
+
+    def add_key(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._lock:
             if self._is_running():
-                return {**self.status(), "ok": False, "error": "请先停止 API 服务再更新密钥"}
+                return {**self.status(), "ok": False, "error": "请先停止 API 服务再新增 Key"}
+            payload = payload or {}
+            try:
+                expires_at = self._normalize_expiry(payload.get("expires_at"))
+            except ValueError as exc:
+                return {**self.status(), "ok": False, "error": str(exc)}
             current = self._ensure_config()
-            current["api_key"] = secrets.token_urlsafe(32)
+            requested_key = str(payload.get("key") or "").strip()
+            if requested_key and len(requested_key) < 16:
+                return {**self.status(), "ok": False, "error": "API Key 长度至少为 16 个字符"}
+            if requested_key and any(secrets.compare_digest(requested_key, item["key"]) for item in current["api_keys"]):
+                return {**self.status(), "ok": False, "error": "API Key 不能重复"}
+            record = self._new_key_record(
+                name=str(payload.get("name") or f"API Key {len(current['api_keys']) + 1}"),
+                key=requested_key or None,
+                enabled=bool(payload.get("enabled", True)),
+                expires_at=expires_at,
+            )
+            current["api_keys"].append(record)
+            current["api_key"] = current["api_keys"][0]["key"]
             self._settings.set(self.SETTINGS_KEY, current)
-            return {**self.status(), "ok": True}
+            return {**self.status(), "ok": True, "created": self._public_key_record(record)}
+
+    def update_key(self, key_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        with self._lock:
+            if self._is_running():
+                return {**self.status(), "ok": False, "error": "请先停止 API 服务再修改 Key"}
+            current = self._ensure_config()
+            record = next((item for item in current["api_keys"] if item["id"] == key_id), None)
+            if record is None:
+                return {**self.status(), "ok": False, "error": "API Key 不存在"}
+            payload = payload or {}
+            try:
+                expires_at = self._normalize_expiry(payload["expires_at"]) if "expires_at" in payload else record.get("expires_at")
+            except ValueError as exc:
+                return {**self.status(), "ok": False, "error": str(exc)}
+            if "name" in payload:
+                record["name"] = str(payload.get("name") or "API Key").strip()[:80] or "API Key"
+            if "enabled" in payload:
+                record["enabled"] = bool(payload["enabled"])
+            if "key" in payload and str(payload.get("key") or "").strip():
+                key = str(payload["key"]).strip()
+                if len(key) < 16:
+                    return {**self.status(), "ok": False, "error": "API Key 长度至少为 16 个字符"}
+                if any(item["id"] != key_id and secrets.compare_digest(key, item["key"]) for item in current["api_keys"]):
+                    return {**self.status(), "ok": False, "error": "API Key 不能重复"}
+                record["key"] = key
+            record["expires_at"] = expires_at
+            current["api_key"] = current["api_keys"][0]["key"]
+            self._settings.set(self.SETTINGS_KEY, current)
+            return {**self.status(), "ok": True, "updated": self._public_key_record(record)}
+
+    def delete_key(self, key_id: str) -> dict[str, Any]:
+        with self._lock:
+            if self._is_running():
+                return {**self.status(), "ok": False, "error": "请先停止 API 服务再删除 Key"}
+            current = self._ensure_config()
+            if len(current["api_keys"]) <= 1:
+                return {**self.status(), "ok": False, "error": "至少保留一个 API Key"}
+            before = len(current["api_keys"])
+            current["api_keys"] = [item for item in current["api_keys"] if item["id"] != key_id]
+            if len(current["api_keys"]) == before:
+                return {**self.status(), "ok": False, "error": "API Key 不存在"}
+            current["api_key"] = current["api_keys"][0]["key"]
+            self._settings.set(self.SETTINGS_KEY, current)
+            return {**self.status(), "ok": True, "deleted_id": key_id}
+
+    def regenerate_key(self, key_id: str | None = None) -> dict[str, Any]:
+        with self._lock:
+            if self._is_running():
+                return {**self.status(), "ok": False, "error": "请先停止 API 服务再重新生成 Key"}
+            current = self._ensure_config()
+            record = next((item for item in current["api_keys"] if item["id"] == key_id), None) if key_id else current["api_keys"][0]
+            if record is None:
+                return {**self.status(), "ok": False, "error": "API Key 不存在"}
+            record["key"] = secrets.token_urlsafe(32)
+            current["api_key"] = current["api_keys"][0]["key"]
+            self._settings.set(self.SETTINGS_KEY, current)
+            return {**self.status(), "ok": True, "updated": self._public_key_record(record)}
 
     def start(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._lock:
@@ -2983,6 +3290,9 @@ class HttpApiServer:
                 if not configured.get("ok"):
                     return configured
             current = self._ensure_config()
+            valid_keys = [item for item in current["api_keys"] if item.get("enabled") and _is_key_record_current(item)]
+            if not valid_keys:
+                return {**self.status(), "ok": False, "error": "没有可用 API Key，请启用或新增未过期 Key"}
             host = "0.0.0.0" if current["scope"] == "lan" else "127.0.0.1"
             port = int(current["port"])
             try:
@@ -2991,8 +3301,7 @@ class HttpApiServer:
             except OSError as exc:
                 self._last_error = f"端口 {port} 无法使用：{exc}"
                 return {**self.status(), "ok": False, "error": self._last_error}
-
-            app = create_http_app(self._facade, current["api_key"])
+            app = create_http_app(self._facade, current["api_keys"])
             uvicorn_config = uvicorn.Config(
                 app,
                 host=host,
@@ -3069,11 +3378,14 @@ class HttpApiServer:
         status = self.status()
         if not status["running"]:
             return {"ok": False, "error": "请先启动 API 服务"}
+        active = self._active_key(status.get("api_keys", []))
+        if not active:
+            return {"ok": False, "error": "没有可用 API Key"}
         started = time.perf_counter()
         try:
             response = httpx.get(
                 f"http://127.0.0.1:{status['port']}/api/v1/models",
-                headers={"X-API-Key": status["api_key"]},
+                headers={"X-API-Key": active["key"]},
                 timeout=5.0,
             )
             response.raise_for_status()
@@ -3106,12 +3418,23 @@ class HttpApiServer:
                     url = f"http://{address}:{port}"
                     if url not in urls:
                         urls.append(url)
+                # 公网 IP 和域名只作为外部访问提示，不改变监听地址。
+                for address in (current.get("public_ip", ""), current.get("public_domain", "")):
+                    if address:
+                        url = f"http://{address}:{port}"
+                        if url not in urls:
+                            urls.append(url)
+            active = self._active_key(current["api_keys"])
             return {
                 "running": running,
                 "scope": current["scope"],
                 "host": "0.0.0.0" if current["scope"] == "lan" else "127.0.0.1",
                 "port": port,
-                "api_key": current["api_key"],
+                "api_key": active["key"] if active else "",
+                "api_keys": [self._public_key_record(item) for item in current["api_keys"]],
+                "public_ip": current.get("public_ip", ""),
+                "public_ip_custom": bool(current.get("public_ip_custom", False)),
+                "public_domain": current.get("public_domain", ""),
                 "base_urls": urls,
                 "docs_url": f"{local_url}/docs",
                 "redoc_url": f"{local_url}/redoc",
@@ -3122,12 +3445,7 @@ class HttpApiServer:
         self.stop()
 
     def _is_running(self) -> bool:
-        return bool(
-            self._server
-            and self._server.started
-            and self._thread
-            and self._thread.is_alive()
-        )
+        return bool(self._server and self._server.started and self._thread and self._thread.is_alive())
 
     @staticmethod
     def _lan_addresses() -> list[str]:

@@ -66,23 +66,70 @@
           <small>防火墙或其他程序占用端口时，请更换端口。</small>
         </label>
 
-        <div class="field-group key-field">
-          <span>API Key</span>
-          <div class="input-actions">
-            <el-input v-model="status.api_key" readonly show-password />
-            <el-button title="复制 API Key" @click="copyText(status.api_key, 'API Key')">
-              <el-icon><CopyDocument /></el-icon>
-            </el-button>
-            <el-button
-              title="重新生成 API Key"
-              :disabled="status.running"
-              :loading="busy === 'key'"
-              @click="regenerateKey"
-            >
-              <el-icon><Refresh /></el-icon>
-            </el-button>
+        <label class="field-group">
+          <span>公网 IP</span>
+          <el-input v-model="draft.public_ip" clearable :disabled="status.running" placeholder="留空自动获取公网 IP" />
+          <small>如需固定公网地址，可填写 103.85.84.147；留空则自动探测。</small>
+        </label>
+
+        <label class="field-group">
+          <span>绑定域名</span>
+          <el-input v-model="draft.public_domain" clearable :disabled="status.running" placeholder="例如 test.juzidc.cn" />
+          <small>可选。用于生成对外访问地址，不改变本机监听地址。</small>
+        </label>
+      </div>
+
+      <div class="key-manager">
+        <div class="section-title key-manager-head">
+          <div>
+            <h3>API Key 管理</h3>
+            <p>可添加多个 Key，并为每个 Key 设置独立有效期；调用时使用任意有效 Key。</p>
           </div>
-          <small>调用受保护接口时通过 <code>X-API-Key</code> 请求头发送。</small>
+          <el-button type="primary" plain :disabled="status.running" :loading="busy === 'key'" @click="addKey">
+            <el-icon><Plus /></el-icon>添加 API Key
+          </el-button>
+        </div>
+        <div class="key-add-row">
+          <el-input v-model="newKeyName" placeholder="Key 名称（可选）" :disabled="status.running" />
+          <el-date-picker
+            v-model="newKeyExpiresAt"
+            type="datetime"
+            value-format="YYYY-MM-DDTHH:mm:ss"
+            format="YYYY-MM-DD HH:mm"
+            clearable
+            placeholder="选择有效期"
+            :disabled="status.running"
+          />
+          <el-button type="primary" :disabled="status.running" :loading="busy === 'key'" @click="addKey">添加 Key</el-button>
+        </div>
+        <div v-if="status.api_keys.length" class="key-list">
+          <div v-for="item in status.api_keys" :key="item.id" class="key-row">
+            <div class="key-meta">
+              <el-input v-model="item.name" :disabled="status.running" @change="updateKey(item)" />
+              <span class="key-status" :class="{ disabled: !item.enabled, expired: isKeyExpired(item) }">
+                {{ !item.enabled ? '已禁用' : isKeyExpired(item) ? '已过期' : '有效' }}
+              </span>
+            </div>
+            <div class="key-value">
+              <el-input v-model="item.key" readonly show-password />
+              <el-button title="复制 API Key" @click="copyText(item.key, 'API Key')"><el-icon><CopyDocument /></el-icon></el-button>
+              <el-button title="重新生成 Key" :disabled="status.running" :loading="busy === 'key'" @click="regenerateKey(item.id)"><el-icon><Refresh /></el-icon></el-button>
+            </div>
+            <div class="key-actions">
+              <el-switch v-model="item.enabled" active-text="启用" inactive-text="停用" :disabled="status.running" @change="updateKey(item)" />
+              <el-date-picker
+                v-model="item.expires_at"
+                type="datetime"
+                value-format="YYYY-MM-DDTHH:mm:ss"
+                format="YYYY-MM-DD HH:mm"
+                clearable
+                placeholder="永久有效"
+                :disabled="status.running"
+                @change="updateKey(item)"
+              />
+              <el-button type="danger" link :disabled="status.running || status.api_keys.length <= 1" @click="deleteKey(item.id)"><el-icon><Delete /></el-icon>删除</el-button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -182,7 +229,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   CircleCheck,
   Connection,
@@ -197,8 +244,10 @@ import {
   UploadFilled,
   VideoPlay,
   WarningFilled,
+  Plus,
+  Delete,
 } from '@element-plus/icons-vue'
-import { api, type HttpApiScope, type HttpApiStatus, type HttpApiTestResult } from '@/api'
+import { api, type HttpApiKey, type HttpApiScope, type HttpApiStatus, type HttpApiTestResult } from '@/api'
 
 defineOptions({ name: 'ApiAccess' })
 
@@ -208,14 +257,20 @@ const emptyStatus: HttpApiStatus = {
   host: '127.0.0.1',
   port: 8765,
   api_key: '',
+  api_keys: [],
+  public_ip: '103.85.84.147',
+  public_ip_custom: false,
+  public_domain: '',
   base_urls: ['http://127.0.0.1:8765'],
   docs_url: 'http://127.0.0.1:8765/docs',
   redoc_url: 'http://127.0.0.1:8765/redoc',
 }
 
 const status = reactive<HttpApiStatus>({ ...emptyStatus })
-const draft = reactive<{ scope: HttpApiScope; port: number }>({ scope: 'local', port: 8765 })
+const draft = reactive<{ scope: HttpApiScope; port: number; public_ip: string; public_domain: string }>({ scope: 'local', port: 8765, public_ip: '', public_domain: '' })
 const busy = ref<'start' | 'stop' | 'save' | 'test' | 'key' | ''>('')
+const newKeyName = ref('')
+const newKeyExpiresAt = ref<string | null>(null)
 const testResult = ref<HttpApiTestResult | null>(null)
 const sampleLanguage = ref<'python' | 'powershell'>('python')
 const sampleOptions = [
@@ -328,6 +383,8 @@ function applyStatus(next: HttpApiStatus, syncDraft = true) {
   if (syncDraft) {
     draft.scope = next.scope
     draft.port = next.port
+    draft.public_ip = next.public_ip_custom ? next.public_ip : ''
+    draft.public_domain = next.public_domain || ''
   }
 }
 
@@ -378,15 +435,61 @@ async function stopServer() {
   }
 }
 
-async function regenerateKey() {
+async function regenerateKey(keyId?: string) {
   busy.value = 'key'
   try {
-    const result = await api.regenerateHttpApiKey()
+    const result = await api.regenerateHttpApiKey(keyId)
     applyStatus(result)
-    result.ok ? ElMessage.success('已生成新的 API Key') : ElMessage.error(result.error || '更新失败')
+    result.ok ? ElMessage.success('已重新生成 API Key') : ElMessage.error(result.error || '重新生成失败')
   } finally {
     busy.value = ''
   }
+}
+
+async function addKey() {
+  busy.value = 'key'
+  try {
+    const result = await api.addHttpApiKey({
+      name: newKeyName.value.trim() || undefined,
+      expires_at: newKeyExpiresAt.value || null,
+    })
+    applyStatus(result)
+    if (result.ok) {
+      newKeyName.value = ''
+      newKeyExpiresAt.value = null
+      ElMessage.success('API Key 已添加')
+    } else {
+      ElMessage.error(result.error || '添加失败')
+    }
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function updateKey(item: HttpApiKey) {
+  if (status.running) return
+  const result = await api.updateHttpApiKey(item.id, {
+    name: item.name,
+    enabled: item.enabled,
+    expires_at: item.expires_at,
+  })
+  applyStatus(result, false)
+  if (!result.ok) ElMessage.error(result.error || 'Key 更新失败')
+}
+
+async function deleteKey(keyId: string) {
+  try {
+    await ElMessageBox.confirm('确定删除此 Key？删除后使用该 Key 的 API 调用将失效。', '删除 API Key', { type: 'warning' })
+  } catch {
+    return
+  }
+  const result = await api.deleteHttpApiKey(keyId)
+  applyStatus(result, false)
+  result.ok ? ElMessage.success('API Key 已删除') : ElMessage.error(result.error || '删除失败')
+}
+
+function isKeyExpired(item: HttpApiKey): boolean {
+  return !!item.expires_at && Date.parse(item.expires_at) <= Date.now()
 }
 
 async function testServer() {
@@ -550,6 +653,24 @@ h2 { margin: 0; font-size: 17px; letter-spacing: 0; }
 .test-result code { margin-left: auto; color: inherit; }
 .last-error { margin: 14px 0 0; color: var(--xb-accent); font-size: 12px; }
 
+.key-manager {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--xb-border);
+}
+.key-manager-head { align-items: flex-start; }
+.key-manager-head h3 { margin: 0; font-size: 15px; }
+.key-manager-head p { margin: 6px 0 0; color: var(--xb-muted); font-size: 12px; }
+.key-add-row { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(190px, 0.8fr) auto; gap: 8px; margin-top: 14px; }
+.key-list { display: grid; gap: 9px; margin-top: 12px; }
+.key-row { display: grid; grid-template-columns: minmax(130px, 0.7fr) minmax(260px, 1.3fr) auto; gap: 10px; align-items: center; padding: 10px; border: 1px solid var(--xb-border); border-radius: 5px; background: rgba(var(--xb-fill-rgb), 0.035); }
+.key-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.key-status { flex-shrink: 0; color: var(--xb-success); font-size: 11px; }
+.key-status.disabled, .key-status.expired { color: var(--xb-accent); }
+.key-value { display: flex; gap: 6px; min-width: 0; }
+.key-value :deep(.el-input) { min-width: 0; }
+.key-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.key-actions :deep(.el-date-editor) { width: 178px; }
 .docs-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.75fr); gap: 18px; }
 .code-panel, .endpoint-panel { min-width: 0; overflow: hidden; border: 1px solid var(--xb-border); border-radius: 6px; background: rgba(4, 6, 12, 0.74); }
 .code-head, .endpoint-head { display: flex; align-items: center; justify-content: space-between; height: 42px; padding: 0 13px; border-bottom: 1px solid var(--xb-border); color: var(--xb-muted); font-size: 12px; }
@@ -594,6 +715,9 @@ pre code { font-family: Consolas, 'Courier New', monospace; }
   .section-title { align-items: flex-start; flex-direction: column; }
   .settings-grid { grid-template-columns: 1fr; }
   .key-field { grid-column: auto; }
+  .key-add-row, .key-row { grid-template-columns: 1fr; }
+  .key-actions, .key-value { justify-content: flex-start; flex-wrap: wrap; }
+  .key-actions :deep(.el-date-editor) { width: 100%; }
   .input-actions { display: grid; grid-template-columns: minmax(0, 1fr) 36px 36px; width: 100%; }
   .input-actions :deep(.el-input) { width: 100%; }
   .address-block { flex-direction: column; }

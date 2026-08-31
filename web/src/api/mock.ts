@@ -96,6 +96,17 @@ let mockHttpApi: HttpApiStatus = {
   host: '127.0.0.1',
   port: 8765,
   api_key: 'xb_mock_api_key_0123456789abcdef',
+  api_keys: [{
+    id: 'key_default',
+    name: '默认 API Key',
+    key: 'xb_mock_api_key_0123456789abcdef',
+    enabled: true,
+    expires_at: null,
+    created_at: new Date().toISOString(),
+  }],
+  public_ip: '103.85.84.147',
+  public_ip_custom: false,
+  public_domain: '',
   base_urls: ['http://127.0.0.1:8765'],
   docs_url: 'http://127.0.0.1:8765/docs',
   redoc_url: 'http://127.0.0.1:8765/redoc',
@@ -109,14 +120,19 @@ let mockPluginStatus: PluginStatus = {
 }
 const mockPlugins: PluginInfo[] = []
 
-function updateMockHttpApi(scope: HttpApiScope, port: number): HttpApiStatus {
+function updateMockHttpApi(scope: HttpApiScope, port: number, publicIp = mockHttpApi.public_ip, publicDomain = mockHttpApi.public_domain): HttpApiStatus {
   const local = `http://127.0.0.1:${port}`
   mockHttpApi = {
     ...mockHttpApi,
     scope,
     host: scope === 'lan' ? '0.0.0.0' : '127.0.0.1',
     port,
-    base_urls: scope === 'lan' ? [local, `http://192.168.1.20:${port}`] : [local],
+    public_ip: publicIp,
+    public_ip_custom: !!publicIp && publicIp !== '103.85.84.147',
+    public_domain: publicDomain,
+    base_urls: scope === 'lan'
+      ? [local, ...(publicIp ? [`http://${publicIp}:${port}`] : []), ...(publicDomain ? [`http://${publicDomain}:${port}`] : [])]
+      : [local],
     docs_url: `${local}/docs`,
     redoc_url: `${local}/redoc`,
   }
@@ -670,15 +686,45 @@ export const mock = {
   getHttpApiStatus(): HttpApiStatus {
     return { ...mockHttpApi, base_urls: [...mockHttpApi.base_urls] }
   },
-  configureHttpApi(payload: { scope: HttpApiScope; port: number }): HttpApiStatus {
-    return { ...updateMockHttpApi(payload.scope, payload.port), ok: true }
+  configureHttpApi(payload: { scope: HttpApiScope; port: number; public_ip?: string; public_domain?: string }): HttpApiStatus {
+    return { ...updateMockHttpApi(payload.scope, payload.port, payload.public_ip ?? mockHttpApi.public_ip, payload.public_domain ?? mockHttpApi.public_domain), ok: true }
   },
-  regenerateHttpApiKey(): HttpApiStatus {
-    mockHttpApi.api_key = `xb_mock_${Math.random().toString(36).slice(2)}_${Date.now()}`
-    return { ...mockHttpApi, ok: true }
+  regenerateHttpApiKey(keyId?: string): HttpApiStatus {
+    const target = mockHttpApi.api_keys.find((item) => item.id === keyId) || mockHttpApi.api_keys[0]
+    if (target) {
+      target.key = `xb_mock_${Math.random().toString(36).slice(2)}_${Date.now()}`
+      mockHttpApi.api_key = mockHttpApi.api_keys[0]?.key || ''
+    }
+    return { ...mockHttpApi, ok: true, api_keys: [...mockHttpApi.api_keys] }
   },
-  startHttpApi(payload: { scope: HttpApiScope; port: number }): HttpApiStatus {
-    updateMockHttpApi(payload.scope, payload.port)
+  listHttpApiKeys() {
+    return { ok: true, items: mockHttpApi.api_keys.map((item) => ({ ...item })), total: mockHttpApi.api_keys.length }
+  },
+  addHttpApiKey(payload: { name?: string; expires_at?: string | null; key?: string; enabled?: boolean }): HttpApiStatus {
+    const record = {
+      id: `key_${Date.now()}`,
+      name: payload.name || `API Key ${mockHttpApi.api_keys.length + 1}`,
+      key: payload.key || `xb_mock_${Math.random().toString(36).slice(2)}_${Date.now()}`,
+      enabled: payload.enabled ?? true,
+      expires_at: payload.expires_at ?? null,
+      created_at: new Date().toISOString(),
+    }
+    mockHttpApi.api_keys.push(record)
+    return { ...mockHttpApi, api_keys: [...mockHttpApi.api_keys], ok: true }
+  },
+  updateHttpApiKey(keyId: string, payload: { name?: string; expires_at?: string | null; enabled?: boolean }): HttpApiStatus {
+    const record = mockHttpApi.api_keys.find((item) => item.id === keyId)
+    if (record) Object.assign(record, payload)
+    return { ...mockHttpApi, api_keys: [...mockHttpApi.api_keys], ok: !!record }
+  },
+  deleteHttpApiKey(keyId: string): HttpApiStatus {
+    if (mockHttpApi.api_keys.length <= 1) return { ...mockHttpApi, ok: false, error: '至少保留一个 API Key' }
+    mockHttpApi.api_keys = mockHttpApi.api_keys.filter((item) => item.id !== keyId)
+    mockHttpApi.api_key = mockHttpApi.api_keys[0]?.key || ''
+    return { ...mockHttpApi, api_keys: [...mockHttpApi.api_keys], ok: true }
+  },
+  startHttpApi(payload: { scope: HttpApiScope; port: number; public_ip?: string; public_domain?: string }): HttpApiStatus {
+    updateMockHttpApi(payload.scope, payload.port, payload.public_ip, payload.public_domain)
     mockHttpApi.running = true
     return { ...mockHttpApi, ok: true, message: 'API 服务已启动' }
   },

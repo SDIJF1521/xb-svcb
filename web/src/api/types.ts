@@ -57,18 +57,39 @@ export interface SystemStatus {
 
 export type HttpApiScope = 'local' | 'lan'
 
+// API Key 列表；expires_at 使用 UTC ISO 8601，null 表示永久有效。
+export interface HttpApiKey {
+  id: string
+  name: string
+  key: string
+  enabled: boolean
+  expires_at: string | null
+  created_at: string
+}
+
 export interface HttpApiStatus {
   running: boolean
   scope: HttpApiScope
   host: string
   port: number
   api_key: string
+  api_keys: HttpApiKey[]
+  public_ip: string
+  public_ip_custom: boolean
+  public_domain: string
   base_urls: string[]
   docs_url: string
   redoc_url: string
   last_error?: string
   ok?: boolean
   message?: string
+  error?: string
+}
+
+export interface HttpApiKeyListResult {
+  ok: boolean
+  items: HttpApiKey[]
+  total: number
   error?: string
 }
 
