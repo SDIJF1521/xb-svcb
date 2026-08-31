@@ -104,7 +104,7 @@ let mockHttpApi: HttpApiStatus = {
     expires_at: null,
     created_at: new Date().toISOString(),
   }],
-  public_ip: '103.85.84.147',
+  public_ip: '',
   public_ip_custom: false,
   public_domain: '',
   base_urls: ['http://127.0.0.1:8765'],
@@ -122,19 +122,22 @@ const mockPlugins: PluginInfo[] = []
 
 function updateMockHttpApi(scope: HttpApiScope, port: number, publicIp = mockHttpApi.public_ip, publicDomain = mockHttpApi.public_domain): HttpApiStatus {
   const local = `http://127.0.0.1:${port}`
+  // IPv6 地址放入 URL 时需要方括号；域名和 IPv4 不做额外处理。
+  const formatHost = (host: string) => host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
+  const makeUrl = (host: string) => `http://${formatHost(host)}:${port}`
+  const publicUrls = [publicIp, publicDomain].filter(Boolean).map(makeUrl)
+  const preferred = scope === 'lan' && publicDomain ? makeUrl(publicDomain) : local
   mockHttpApi = {
     ...mockHttpApi,
     scope,
     host: scope === 'lan' ? '0.0.0.0' : '127.0.0.1',
     port,
     public_ip: publicIp,
-    public_ip_custom: !!publicIp && publicIp !== '103.85.84.147',
+    public_ip_custom: !!publicIp,
     public_domain: publicDomain,
-    base_urls: scope === 'lan'
-      ? [local, ...(publicIp ? [`http://${publicIp}:${port}`] : []), ...(publicDomain ? [`http://${publicDomain}:${port}`] : [])]
-      : [local],
-    docs_url: `${local}/docs`,
-    redoc_url: `${local}/redoc`,
+    base_urls: scope === 'lan' ? [local, ...publicUrls] : [local],
+    docs_url: `${preferred}/docs`,
+    redoc_url: `${preferred}/redoc`,
   }
   return { ...mockHttpApi }
 }

@@ -69,13 +69,13 @@
         <label class="field-group">
           <span>公网 IP</span>
           <el-input v-model="draft.public_ip" clearable :disabled="status.running" placeholder="留空自动获取公网 IP" />
-          <small>如需固定公网地址，可填写 103.85.84.147；留空则自动探测。</small>
+          <small>可填写你的公网 IPv4/IPv6；留空则自动探测。</small>
         </label>
 
         <label class="field-group">
           <span>绑定域名</span>
-          <el-input v-model="draft.public_domain" clearable :disabled="status.running" placeholder="例如 test.juzidc.cn" />
-          <small>可选。用于生成对外访问地址，不改变本机监听地址。</small>
+          <el-input v-model="draft.public_domain" clearable :disabled="status.running" placeholder="例如 api.example.com" />
+          <small>可选；配置后文档和调用示例优先使用该域名。需先完成 DNS 解析和端口转发。</small>
         </label>
       </div>
 
@@ -258,7 +258,7 @@ const emptyStatus: HttpApiStatus = {
   port: 8765,
   api_key: '',
   api_keys: [],
-  public_ip: '103.85.84.147',
+  public_ip: '',
   public_ip_custom: false,
   public_domain: '',
   base_urls: ['http://127.0.0.1:8765'],

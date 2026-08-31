@@ -112,18 +112,56 @@ class HttpApiSettingsTests(unittest.TestCase):
                     {
                         "scope": "lan",
                         "port": 8765,
-                        "public_ip": "103.85.84.147",
-                        "public_domain": "https://test.juzidc.cn/",
+                        "public_ip": "198.51.100.10",
+                        "public_domain": "https://api.example.test/",
                     }
                 )
             self.assertTrue(result["ok"], result)
             self.assertEqual(result["host"], "0.0.0.0")
-            self.assertEqual(result["public_ip"], "103.85.84.147")
+            self.assertEqual(result["public_ip"], "198.51.100.10")
             self.assertTrue(result["public_ip_custom"])
-            self.assertEqual(result["public_domain"], "test.juzidc.cn")
-            self.assertIn("http://103.85.84.147:8765", result["base_urls"])
-            self.assertIn("http://test.juzidc.cn:8765", result["base_urls"])
+            self.assertEqual(result["public_domain"], "api.example.test")
+            self.assertIn("http://198.51.100.10:8765", result["base_urls"])
+            self.assertIn("http://api.example.test:8765", result["base_urls"])
+            self.assertEqual(result["docs_url"], "http://api.example.test:8765/docs")
+            self.assertEqual(result["redoc_url"], "http://api.example.test:8765/redoc")
             self.assertNotEqual(result["host"], result["public_ip"])
+
+    def test_docs_fall_back_without_domain_and_local_scope_stays_local(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            settings = SettingsStore(Path(temp) / "settings.json")
+            with patch.object(HttpApiServer, "_detect_public_ip", return_value="192.0.2.10"):
+                server = self._server(settings)
+                without_domain = server.configure(
+                    {"scope": "lan", "port": 8760, "public_ip": "198.51.100.10", "public_domain": ""}
+                )
+                self.assertEqual(without_domain["docs_url"], "http://127.0.0.1:8760/docs")
+                local = server.configure(
+                    {"scope": "local", "port": 8761, "public_ip": "198.51.100.10", "public_domain": "api.example.test"}
+                )
+                self.assertEqual(local["docs_url"], "http://127.0.0.1:8761/docs")
+                self.assertEqual(local["redoc_url"], "http://127.0.0.1:8761/redoc")
+
+    def test_ipv6_public_url_is_formatted_for_browsers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            settings = SettingsStore(Path(temp) / "settings.json")
+            server = self._server(settings)
+            status = server.configure(
+                {"scope": "lan", "port": 8762, "public_ip": "2001:db8::10", "public_domain": ""}
+            )
+            self.assertIn("http://[2001:db8::10]:8762", status["base_urls"])
+            self.assertEqual(status["docs_url"], "http://127.0.0.1:8762/docs")
+
+    def test_open_docs_uses_configured_domain(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            settings = SettingsStore(Path(temp) / "settings.json")
+            server = self._server(settings)
+            server.configure({"scope": "lan", "port": 8763, "public_domain": "api.example.test"})
+            with patch.object(server, "_is_running", return_value=True), patch(
+                "api.http_server.webbrowser.open", return_value=True
+            ) as open_browser:
+                self.assertTrue(server.open_docs("docs"))
+            open_browser.assert_called_once_with("http://api.example.test:8763/docs")
 
     def test_requested_ports_can_start_and_answer_locally(self) -> None:
         """Check that the requested ports bind and answer locally."""
@@ -135,8 +173,8 @@ class HttpApiSettingsTests(unittest.TestCase):
                     {
                         "scope": "lan",
                         "port": port,
-                        "public_ip": "103.85.84.147",
-                        "public_domain": "test.juzidc.cn",
+                        "public_ip": "198.51.100.10",
+                        "public_domain": "api.example.test",
                     }
                 )
                 try:

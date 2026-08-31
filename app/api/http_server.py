@@ -81,7 +81,7 @@ from pathlib import Path
 
 import requests
 
-BASE_URL = "http://127.0.0.1:8765"
+BASE_URL = "http://127.0.0.1:<API_PORT>"
 API_KEY = "替换为软件 API 接入页显示的密钥"
 SOURCE_AUDIO = Path("song.wav")
 REFERENCE_AUDIO = Path("reference.wav")  # 只有 SeedVC 需要
@@ -495,7 +495,7 @@ UPLOAD_API_DOC = _api_operation_description(
         ("size", "integer", "已接收的文件字节数"),
     ],
     '{"upload_id": "0123456789abcdef0123456789abcdef", "filename": "song.wav", "size": 48203144}',
-    request_example='curl -X POST "http://127.0.0.1:8765/api/v1/uploads" -H "X-API-Key: YOUR_KEY" -F "file=@song.wav"',
+    request_example='curl -X POST "http://127.0.0.1:<API_PORT>/api/v1/uploads" -H "X-API-Key: YOUR_KEY" -F "file=@song.wav"',
     request_example_language="bash",
     note="接口没有固定文件大小上限，实际容量取决于磁盘剩余空间；调用方应关闭请求超时或设置足够长的超时。",
 )
@@ -3108,6 +3108,22 @@ class HttpApiServer:
         except ValueError as exc:
             raise ValueError("公网 IP 格式无效") from exc
 
+    @staticmethod
+    def _format_url_host(host: str) -> str:
+        """为 IPv6 URL 添加方括号；域名和 IPv4 保持原样。"""
+        text = str(host or "").strip()
+        try:
+            address = ipaddress.ip_address(text)
+        except ValueError:
+            return text
+        return f"[{text}]" if address.version == 6 else text
+
+    @classmethod
+    def _http_url(cls, host: str, port: int, path: str = "") -> str:
+        """按当前配置拼接访问地址，不把任何测试地址写死。"""
+        suffix = f"/{path.lstrip('/')}" if path else ""
+        return f"http://{cls._format_url_host(host)}:{int(port)}{suffix}"
+
     def _ensure_config(self) -> dict[str, Any]:
         current = self._settings.get(self.SETTINGS_KEY, {}) or {}
         if not isinstance(current, dict):
@@ -3404,26 +3420,36 @@ class HttpApiServer:
         status = self.status()
         if not status["running"]:
             return False
-        return bool(webbrowser.open(f"http://127.0.0.1:{status['port']}/{path}"))
+        # 域名已配置且服务监听局域网时，文档按钮直接打开域名入口。
+        url_key = "redoc_url" if path == "redoc" else "docs_url"
+        return bool(webbrowser.open(status[url_key]))
 
     def status(self) -> dict[str, Any]:
         with self._lock:
             current = self._ensure_config()
             running = self._is_running()
             port = int(current["port"])
-            local_url = f"http://127.0.0.1:{port}"
+            local_url = self._http_url("127.0.0.1", port)
             urls = [local_url]
             if current["scope"] == "lan":
                 for address in self._lan_addresses():
-                    url = f"http://{address}:{port}"
+                    url = self._http_url(address, port)
                     if url not in urls:
                         urls.append(url)
-                # 公网 IP 和域名只作为外部访问提示，不改变监听地址。
+                # 公网 IP 和域名仅用于生成外部访问提示，不改变监听地址。
                 for address in (current.get("public_ip", ""), current.get("public_domain", "")):
                     if address:
-                        url = f"http://{address}:{port}"
+                        url = self._http_url(address, port)
                         if url not in urls:
                             urls.append(url)
+            # 只有显式配置域名时才将文档入口切换到域名；
+            # 未配置域名始终使用本机地址，避免自动探测 IP 不可达时误导用户。
+            public_domain = current.get("public_domain", "")
+            preferred_url = (
+                self._http_url(public_domain, port)
+                if current["scope"] == "lan" and public_domain
+                else local_url
+            )
             active = self._active_key(current["api_keys"])
             return {
                 "running": running,
@@ -3436,8 +3462,8 @@ class HttpApiServer:
                 "public_ip_custom": bool(current.get("public_ip_custom", False)),
                 "public_domain": current.get("public_domain", ""),
                 "base_urls": urls,
-                "docs_url": f"{local_url}/docs",
-                "redoc_url": f"{local_url}/redoc",
+                "docs_url": f"{preferred_url}/docs",
+                "redoc_url": f"{preferred_url}/redoc",
                 "last_error": self._last_error,
             }
 
