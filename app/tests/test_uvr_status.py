@@ -16,6 +16,12 @@ from infrastructure.pymss_tool import PymssTool
 
 
 class UvrStatusTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Legacy discovery tests must not depend on a developer's runtime.json.
+        manifest = patch.object(config, "_RUNTIME_MANIFEST", {})
+        manifest.start()
+        self.addCleanup(manifest.stop)
+
     def test_pymss_catalog_is_limited_to_two_processing_purposes(self) -> None:
         self.assertEqual(
             PymssTool._purpose_for_categories("vocal", "vocal_extraction"),

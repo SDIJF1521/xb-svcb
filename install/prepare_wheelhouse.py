@@ -67,19 +67,29 @@ def _component_wheelhouse_dir(root: Path, component: str, python_version: str, s
 
 
 def _copy_filtered_req(installer, source: Path, name: str, **kwargs) -> Path:
-    generated = installer._filter_requirements(source, **kwargs)  # noqa: SLF001
-    TMP_REQS.mkdir(parents=True, exist_ok=True)
-    dest = TMP_REQS / f"{name}.txt"
-    dest.write_text(generated.read_text(encoding="utf-8"), encoding="utf-8")
-    return dest
+    # Keep planning isolated from both upstream sources and other build roots.
+    destination = installer.ROOT / ".tmp" / "wheelhouse-requirements" / f"{name}.txt"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return installer._filter_requirements(source, output=destination, **kwargs)  # noqa: SLF001
+
+
+def missing_engine_requirements(root: Path) -> dict[str, tuple[Path, ...]]:
+    candidates = {
+        "so-vits-svc": (root / "engines/so-vits-svc/requirements_win.txt",
+                        root / "engines/so-vits-svc/requirements.txt"),
+        "seed-vc": (root / "engines/seed-vc/requirements.txt",),
+        "ddsp-svc": (root / "engines/ddsp-svc/requirements.txt",),
+    }
+    return {name: paths for name, paths in candidates.items() if not any(p.is_file() for p in paths)}
 
 
 def _existing_req(installer, *candidates: Path) -> Path:
     for candidate in candidates:
-        if candidate.exists():
+        if candidate.is_file():
             return candidate
     raise RuntimeError(
-        "Missing engine requirements file. Stage bundled engine sources before preparing wheels."
+        "Missing engine requirements file. Stage bundled engine sources before preparing wheels. "
+        "Searched: " + ", ".join(str(path) for path in candidates)
     )
 
 

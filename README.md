@@ -113,6 +113,10 @@ python install\install.py --cpu
 python install\install.py --directml
 ~~~
 
+`--consolidated` 目前仅供实验。上游原始依赖存在 NumPy/protobuf 冲突；本分支的 cu128 配方使用 NumPy 2.2.6、protobuf 7.36.0、TensorBoardX 2.6.5 和本地 AudioTools 兼容 wheel，已通过整体依赖解析和关键运行检查，但真实音频验收暂缓。当前 RTX 50 系主环境位于 `runtimes/core-cu128`，复现固定版本使用 `--core-profile core-cu128`，并加 `--preflight-only` 只解析、不安装；需先备齐配方所列本地 wheel。`--core-compat-wheel` 仅保留用于开发候选配方。旧安装仍兼容 `.venv-uvr`，新安装不再把它作为当前共享环境。详见 [固定配方及回滚材料](install/runtime_profiles/core-cu128/README.md) 和 [运行环境整合记录](docs/runtime-consolidation.md)。
+
+安装器部署大体积只读底模时优先尝试硬链接，跨卷时回退为复制；已有同尺寸权重只有 SHA-256 一致才会去重。硬链接共享内容，训练或修改权重前须另存副本。此机制不负责删除旧环境。
+
 ### 启动应用
 
 生产模式会加载已构建的 <code>web/dist</code>：
@@ -284,12 +288,13 @@ xb-svcb/
 
 ## 测试与开发
 
-后端测试：
+后端测试（项目根目录）：
 
 ~~~bat
-cd app
-uv run pytest
+uv run --project app --with pytest --with scipy==1.13.1 pytest app/tests -q -rs
 ~~~
+
+运行时、安装器、离线打包和真实推理的分组与前置条件见 [测试说明](docs/testing.md)。
 
 前端检查和测试：
 

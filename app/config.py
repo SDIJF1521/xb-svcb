@@ -33,7 +33,7 @@ def subprocess_no_window() -> dict:
 
 # ---- 运行基准目录（兼容源码运行与 PyInstaller 打包后的 exe）----
 #   BASE_DIR   外部环境/数据的根：打包后为 exe 所在目录（= 安装目录，旁边就是
-#              engines/.venv-svc/.venv-uvr/models）；源码运行时为项目根。
+#              engines/runtimes/models）；源码运行时为项目根。
 #   BUNDLE_DIR 随程序一起分发的只读资源根：打包后为 PyInstaller 解包目录
 #              （_internal，内含 web/dist 与 worker 脚本）；源码运行时为 app/ 目录。
 _FROZEN = bool(getattr(sys, "frozen", False))
@@ -46,6 +46,44 @@ else:
 
 # 项目根目录（外部引擎/环境的定位基准）
 ROOT_DIR = BASE_DIR
+
+# Optional runtime layout emitted by the installer.  Older installations do
+# not have this file and continue using the legacy .venv-* discovery below.
+RUNTIME_MANIFEST_FILE = Path(
+    os.environ.get("XB_RUNTIME_MANIFEST", str(ROOT_DIR / "runtime.json"))
+).expanduser()
+if not RUNTIME_MANIFEST_FILE.is_absolute():
+    RUNTIME_MANIFEST_FILE = ROOT_DIR / RUNTIME_MANIFEST_FILE
+
+
+def _load_runtime_manifest() -> dict:
+    try:
+        payload = json.loads(RUNTIME_MANIFEST_FILE.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        return {}
+    return payload
+
+
+_RUNTIME_MANIFEST = _load_runtime_manifest()
+
+
+def _manifest_python(component: str) -> Path | None:
+    """Resolve a component interpreter from runtime.json, if it is usable."""
+    mapping = _RUNTIME_MANIFEST.get("python")
+    if not isinstance(mapping, dict):
+        return None
+    raw = mapping.get(component)
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = RUNTIME_MANIFEST_FILE.parent / candidate
+        return candidate if candidate.is_file() else None
+    except (OSError, ValueError, RuntimeError):
+        return None
 
 # ---- Python 插件运行时 ----
 # 安装版优先使用专用环境；源码模式直接使用当前解释器。也可由用户/安装器显式覆盖。
@@ -71,10 +109,13 @@ def _detect_plugin_python() -> Path | None:
     )
     if dedicated.is_file():
         return dedicated
+    manifest = _manifest_python("plugins")
+    if manifest:
+        return manifest
     if not _FROZEN:
         return Path(sys.executable).resolve()
     # 安装器必备的 AI 子环境也都是标准 CPython，可承载零依赖插件 SDK。
-    for environment in (".venv-uvr", ".venv-svc", ".venv-rvc"):
+    for environment in ("runtimes/core-cu128", ".venv-uvr", ".venv-svc", ".venv-rvc"):
         candidate = (
             ROOT_DIR / environment / "Scripts" / "python.exe"
             if os.name == "nt"
@@ -199,6 +240,9 @@ SOVITS_REPO_DIR = ENGINES_DIR / "so-vits-svc"
 SEEDVC_REPO_DIR = ENGINES_DIR / "seed-vc"
 DDSP_REPO_DIR = ENGINES_DIR / "ddsp-svc"
 SVC_VENV_DIR = ROOT_DIR / ".venv-svc"
+# Current consolidated NVIDIA runtime. The manifest remains authoritative;
+# this path is the fallback for older launchers or a missing/invalid manifest.
+CORE_VENV_DIR = ROOT_DIR / "runtimes" / "core-cu128"
 UVR_VENV_DIR = ROOT_DIR / ".venv-uvr"
 # PyMSS 使用独立环境，避免与 audio-separator/UVR 的依赖互相覆盖。
 PYMSS_VENV_DIR = ROOT_DIR / ".venv-pymss"
@@ -213,10 +257,12 @@ def _detect_sovits_repo() -> Path | None:
 
 def _detect_svc_python() -> Path | None:
     env = _existing_env_file("XB_SVC_PYTHON")
+    manifest = _manifest_python("svc")
     # 优先项目内安装器创建的 .venv-svc；其次常见 conda 环境名 svc（开发便利）
     return _first_file(
         [
             *([env] if env else []),
+            *([manifest] if manifest else []),
             *(_venv_python(root / ".venv-svc") for root in RUNTIME_ROOTS),
             Path.home() / "anaconda3" / "envs" / "svc" / "python.exe",
             Path.home() / "miniconda3" / "envs" / "svc" / "python.exe",
@@ -257,6 +303,9 @@ RVC_VENV_DIR = ROOT_DIR / ".venv-rvc"
 def _detect_rvc_python() -> Path | None:
     env = _existing_env_file("XB_RVC_PYTHON")
     candidates = [env] if env else []
+    manifest = _manifest_python("rvc")
+    if manifest:
+        candidates.append(manifest)
     candidates.extend(_venv_python(root / ".venv-rvc") for root in RUNTIME_ROOTS)
     return _first_file(candidates)
 
@@ -288,7 +337,11 @@ def _detect_seedvc_repo() -> Path | None:
 def _detect_seedvc_python() -> Path | None:
     env = _existing_env_file("XB_SEEDVC_PYTHON")
     candidates = [env] if env else []
+    manifest = _manifest_python("seedvc")
+    if manifest:
+        candidates.append(manifest)
     candidates.extend(_venv_python(root / ".venv-seedvc") for root in RUNTIME_ROOTS)
+    candidates.append(_venv_python(ROOT_DIR / "runtimes" / "core-cu128"))
     return _first_file(candidates)
 
 
@@ -323,7 +376,11 @@ def _detect_ddsp_repo() -> Path | None:
 def _detect_ddsp_python() -> Path | None:
     env = _existing_env_file("XB_DDSP_PYTHON")
     candidates = [env] if env else []
+    manifest = _manifest_python("ddsp")
+    if manifest:
+        candidates.append(manifest)
     candidates.append(_venv_python(DDSP_VENV_DIR))
+    candidates.append(_venv_python(ROOT_DIR / "runtimes" / "core-cu128"))
     return _first_file(candidates)
 
 
@@ -352,6 +409,9 @@ VOCAL_ENHANCEMENT_VENV_DIR = ROOT_DIR / ".venv-vocal"
 def _detect_vocal_enhancement_python() -> Path | None:
     env = _existing_env_file("XB_VOCAL_ENHANCEMENT_PYTHON")
     candidates = [env] if env else []
+    manifest = _manifest_python("vocal")
+    if manifest:
+        candidates.append(manifest)
     candidates.append(_venv_python(VOCAL_ENHANCEMENT_VENV_DIR))
     return _first_file(candidates)
 
@@ -402,7 +462,11 @@ UVR_DEREVERB_MODEL = os.environ.get("XB_UVR_DEREVERB_MODEL", "UVR-DeEcho-DeRever
 def _detect_uvr_python() -> Path | None:
     env = _existing_env_file("XB_UVR_PYTHON")
     candidates = [env] if env else []
+    manifest = _manifest_python("uvr")
+    if manifest:
+        candidates.append(manifest)
     candidates.append(_venv_python(UVR_VENV_DIR))
+    candidates.append(_venv_python(ROOT_DIR / "runtimes" / "core-cu128"))
     return _first_file(candidates)
 
 
@@ -472,6 +536,9 @@ PYMSS_WORKER = BUNDLE_DIR / "infrastructure" / "pymss_worker.py"
 def _detect_pymss_python() -> Path | None:
     env = _existing_env_file("XB_PYMSS_PYTHON")
     candidates = [env] if env else []
+    manifest = _manifest_python("pymss")
+    if manifest:
+        candidates.append(manifest)
     candidates.append(_venv_python(PYMSS_VENV_DIR))
     return _first_file(candidates)
 
@@ -571,7 +638,7 @@ def uvr_ready() -> bool:
 def uvr_status() -> str:
     """返回更细粒度的 UVR 状态，便于界面和日志区分“未安装 / 模型未就绪 / 已就绪”。"""
     if not UVR_PYTHON or not UVR_PYTHON.is_file():
-        return "未找到 .venv-uvr"
+        return "未找到共享/UVR 推理环境"
     if not UVR_WORKER.is_file():
         return "应用 worker 缺失"
     if not UVR_MODEL_DIR or not UVR_MODEL_DIR.exists():
@@ -595,6 +662,9 @@ HUB_VENV_DIR = ROOT_DIR / ".venv-hub"
 def _detect_hub_python() -> Path | None:
     env = _existing_env_file("XB_HUB_PYTHON")
     candidates = [env] if env else []
+    manifest = _manifest_python("hub")
+    if manifest:
+        candidates.append(manifest)
     candidates.append(_venv_python(HUB_VENV_DIR))
     return _first_file(candidates)
 

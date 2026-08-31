@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import os
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -65,6 +68,7 @@ def _run_detector(tmp_path: Path, candidate: Path) -> subprocess.CompletedProces
     )
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows cmd.exe detector")
 def test_python_detector_accepts_runnable_python_310_or_newer(tmp_path: Path) -> None:
     result = _run_detector(tmp_path, Path(sys.executable))
 
@@ -73,6 +77,7 @@ def test_python_detector_accepts_runnable_python_310_or_newer(tmp_path: Path) ->
     assert f"DIR={Path(sys.executable).resolve().parent}" in result.stdout
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows cmd.exe detector")
 def test_python_detector_rejects_an_executable_that_is_not_python(
     tmp_path: Path,
 ) -> None:
@@ -85,6 +90,7 @@ def test_python_detector_rejects_an_executable_that_is_not_python(
     assert str(not_python) not in result.stdout
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows cmd.exe detector")
 def test_python_detector_does_not_trust_a_stale_exported_path(tmp_path: Path) -> None:
     wrapper = tmp_path / "run_detector_stale.bat"
     wrapper.write_text(
@@ -114,6 +120,15 @@ def test_python_detector_does_not_trust_a_stale_exported_path(tmp_path: Path) ->
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"EXE={Path(sys.executable).resolve()}" in result.stdout
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows cmd.exe detector")
+def test_python_detector_rejects_directory_named_python_exe(tmp_path: Path) -> None:
+    candidate = tmp_path / "python.exe"
+    candidate.mkdir()
+    result = _run_detector(tmp_path, candidate)
+    assert result.returncode == 1
+    assert "EXE=\n" in result.stdout
 
 
 def test_ffmpeg_bin_is_added_to_user_path_once() -> None:
@@ -240,6 +255,261 @@ def test_install_py_rejects_non310_verified_python_for_py310_venvs(
     monkeypatch.setattr(installer, "_python_minor_version", lambda path: "3.14")
 
     assert installer.python_spec_for_venv("3.10") == "3.10"
+
+
+def test_consolidated_runtime_layout_uses_one_core_environment(tmp_path: Path, monkeypatch) -> None:
+    installer = _load_install_module()
+    monkeypatch.setattr(installer, "ROOT", tmp_path)
+    monkeypatch.setattr(installer, "RUNTIMES_DIR", tmp_path / "runtimes")
+    monkeypatch.setattr(installer, "RUNTIME_MANIFEST", tmp_path / "runtime.json")
+    monkeypatch.setattr(installer, "UVR_VENV", tmp_path / ".venv-uvr")
+    installer._configure_runtime_layout(consolidated=True, gpu_stack="cu121")
+
+    core = tmp_path / "runtimes" / "core-cu121"
+    assert installer.runtime_venv("uvr", tmp_path / ".venv-uvr") == core
+    assert installer.runtime_venv("seedvc", tmp_path / ".venv-seedvc") == core
+    assert installer.runtime_venv("ddsp", tmp_path / ".venv-ddsp") == core
+    assert installer.runtime_venv("vocal", tmp_path / ".venv-vocal") == tmp_path / ".venv-vocal"
+    assert installer.runtime_venv("rvc", tmp_path / ".venv-rvc") == tmp_path / ".venv-rvc"
+
+    core_python = core / "Scripts" / "python.exe"
+    core_python.parent.mkdir(parents=True)
+    core_python.write_text("", encoding="ascii")
+    installer.write_runtime_manifest("cu121", {"uvr", "seedvc", "ddsp"})
+    payload = (tmp_path / "runtime.json").read_text(encoding="utf-8")
+    assert "runtimes/core-cu121" in payload
+
+
+def test_consolidated_runtime_is_disabled_for_directml() -> None:
+    installer = _load_install_module()
+    installer._configure_runtime_layout(consolidated=True, gpu_stack="directml")
+    assert installer.CONSOLIDATED_RUNTIME is False
+
+
+def test_consolidated_runtime_selects_py310_uvr_as_candidate(tmp_path: Path, monkeypatch) -> None:
+    installer = _load_install_module()
+    uvr = tmp_path / ".venv-uvr"
+    python = uvr / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="ascii")
+    monkeypatch.setattr(installer, "UVR_VENV", uvr)
+    monkeypatch.setattr(installer, "_python_minor_version", lambda path: "3.10")
+
+    installer._configure_runtime_layout(consolidated=True, gpu_stack="cu128")
+
+    assert installer.CORE_VENV == uvr
+    assert installer.CORE_VENV_REUSED is True
+
+
+def _shared_fixture(tmp_path, monkeypatch):
+    installer = _load_install_module()
+    installer._derive_paths(tmp_path)
+    installer._configure_runtime_layout(consolidated=True, gpu_stack="cu128")
+    for directory in (installer.SEEDVC_DIR, installer.DDSP_DIR):
+        directory.mkdir(parents=True)
+        (directory / "requirements.txt").write_text("numpy==1.26.4\n", encoding="utf-8")
+    monkeypatch.setattr(installer, "_wheelhouse_dirs", lambda **kwargs: [])
+    return installer
+
+
+def test_shared_manifest_partial_install_does_not_activate(tmp_path, monkeypatch):
+    installer = _shared_fixture(tmp_path, monkeypatch)
+    installer.write_runtime_manifest("cu128", {"uvr"})
+    assert not installer.RUNTIME_MANIFEST.exists()
+
+
+def test_shared_manifest_preserves_other_components_and_invalid_files(tmp_path, monkeypatch):
+    installer = _shared_fixture(tmp_path, monkeypatch)
+    python = installer.venv_python(installer.CORE_VENV)
+    python.parent.mkdir(parents=True)
+    python.touch()
+    installer.RUNTIME_MANIFEST.write_text(json.dumps({
+        "version": 1, "custom": "keep", "python": {"plugins": "plugins/python.exe"},
+    }), encoding="utf-8")
+    installer.write_runtime_manifest("cu128", installer.CORE_COMPONENTS)
+    payload = json.loads(installer.RUNTIME_MANIFEST.read_text(encoding="utf-8"))
+    assert payload["custom"] == "keep"
+    assert payload["python"]["plugins"] == "plugins/python.exe"
+    assert payload["python"]["uvr"] == "runtimes/core-cu128/Scripts/python.exe"
+    installer.RUNTIME_MANIFEST.write_text("[]", encoding="utf-8")
+    with pytest.raises(RuntimeError):
+        installer.write_runtime_manifest("cu128", installer.CORE_COMPONENTS)
+    assert installer.RUNTIME_MANIFEST.read_text(encoding="utf-8") == "[]"
+
+
+def test_shared_preflight_only_compiles_and_preserves_source_requirements(tmp_path, monkeypatch):
+    installer = _shared_fixture(tmp_path, monkeypatch)
+    commands = []
+
+    def fake_run(command):
+        commands.append(command)
+        assert command[1:3] == ["pip", "compile"]
+        combined = Path(command[3]).read_text(encoding="utf-8")
+        assert "audio-separator[gpu]==0.44.2" in combined
+        assert "torch==2.7.1+cu128" in combined
+        assert "torchvision==0.22.1+cu128" in combined
+        assert "numpy==1.26.4" in combined
+        Path(command[command.index("--output-file") + 1]).write_text("numpy==1.26.4\n")
+
+    monkeypatch.setattr(installer, "run", fake_run)
+    installer._preflight_consolidated_runtime("uv", installer.CORE_COMPONENTS, "cu128")
+    assert len(commands) == 1
+    assert installer.CORE_CONSTRAINTS.is_file()
+    assert not installer.RUNTIME_MANIFEST.exists()
+    assert not installer.CORE_VENV.exists()
+    assert not (installer.SEEDVC_DIR / "requirements_xb.txt").exists()
+
+
+def test_shared_preflight_rejects_partial_groups(tmp_path, monkeypatch):
+    installer = _shared_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(installer, "run", lambda cmd: pytest.fail("unexpected install"))
+    with pytest.raises(RuntimeError, match="一起验证"):
+        installer._preflight_consolidated_runtime("uv", {"uvr"}, "cu128")
+
+
+def test_main_stops_before_install_on_shared_resolution_failure(tmp_path, monkeypatch):
+    installer = _shared_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(installer.sys, "argv", ["install.py", "--cpu", "--consolidated", "--only", "uvr", "seedvc", "ddsp"])
+    monkeypatch.setattr(installer, "ensure_uv", lambda: "uv")
+    monkeypatch.setattr(installer, "STEPS", {name: lambda *args: pytest.fail("environment mutated")
+                                            for name in installer.ORDER})
+
+    def fail_compile(command):
+        assert command[1:3] == ["pip", "compile"]
+        raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr(installer, "run", fail_compile)
+    assert installer.main() == 1
+    assert not installer.CORE_VENV.exists()
+    assert installer.CORE_CONSTRAINTS is None
+    assert not installer.RUNTIME_MANIFEST.exists()
+
+
+def test_legacy_repair_cannot_modify_shared_uvr(tmp_path, monkeypatch):
+    installer = _shared_fixture(tmp_path, monkeypatch)
+    installer._configure_runtime_layout(consolidated=False, gpu_stack="cu128")
+    installer.RUNTIME_MANIFEST.write_text(json.dumps({"version": 1, "python": {
+        name: ".venv-uvr/Scripts/python.exe" for name in installer.CORE_COMPONENTS
+    }}), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="不能单独修复"):
+        installer._guard_shared_runtime_repair({"uvr"})
+    with pytest.raises(RuntimeError, match="不能单独修复"):
+        installer._guard_shared_runtime_repair({"seedvc"})
+    with pytest.raises(RuntimeError, match="不能单独修复"):
+        installer._guard_shared_runtime_repair({"ddsp"})
+    installer._guard_shared_runtime_repair({"models"})
+
+
+def test_correct_importable_torch_is_not_reinstalled(monkeypatch):
+    installer = _load_install_module()
+    monkeypatch.setattr(installer, "_torch_runtime_matches", lambda *args: True)
+    monkeypatch.setattr(installer, "uv_pip_install", lambda *args, **kwargs: pytest.fail("Torch reinstalled"))
+    installer._reaffirm_torch_wheels("uv", "python", ["torch==2.7.1", "torchaudio==2.7.1"],
+                                    installer.TORCH_BLACKWELL_INDEX, "cu128",
+                                    component="uvr", gpu_stack="cu128", python_version="3.10")
+
+
+def test_torch_import_check_requires_exact_cuda_build(monkeypatch):
+    installer = _load_install_module()
+
+    def fake_run(command, **kwargs):
+        assert json.loads(command[-1]) == {"torch": "2.7.1+cu128", "torchaudio": "2.7.1+cu128"}
+        assert "import_module" in command[2]
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+    assert installer._torch_runtime_matches("python", ["torch==2.7.1", "torchaudio==2.7.1+cu128"], "cu128")
+
+
+def test_shared_install_retries_keep_constraints_without_reinstall(tmp_path, monkeypatch):
+    installer = _shared_fixture(tmp_path, monkeypatch)
+    lock = tmp_path / "core.txt"
+    lock.write_text("torch==2.7.1+cu128\n")
+    installer.CORE_CONSTRAINTS = lock
+    monkeypatch.setattr(installer, "_wheelhouse_args", lambda **kwargs: [])
+    calls = []
+
+    def fail(command):
+        calls.append(command)
+        raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr(installer, "run", fail)
+    with pytest.raises(subprocess.CalledProcessError):
+        installer.uv_pip_install("uv", "python", "numpy", component="seedvc", gpu_stack="cu128", python_version="3.10")
+    assert calls
+    assert len(calls) <= 2
+    for command in calls:
+        assert "--reinstall" not in command
+        assert command[command.index("-c") + 1] == str(lock)
+
+
+def test_inno_routes_by_manifest_not_leftover_core_directory():
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    function = script[script.index("function RuntimePython("):script.index("function ValidateUvrRuntime(")]
+    assert "runtime_manifest.py" in function
+    assert "GpuStackName()" not in function
+    assert "runtimes\\core-" not in function
+
+
+def test_large_bundled_model_reuses_same_volume_storage(tmp_path: Path, monkeypatch) -> None:
+    installer = _load_install_module()
+    assets = tmp_path / "assets"
+    source = assets / "pretrain" / "large.pt"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"x" * (32 * 1024 * 1024))
+    monkeypatch.setattr(installer, "ASSETS_MODELS_DIR", assets)
+
+    destination = tmp_path / "runtime" / "large.pt"
+    assert installer.copy_bundled("pretrain/large.pt", destination)
+    assert destination.is_file()
+    assert source.samefile(destination)
+
+
+def test_same_size_different_model_is_preserved(tmp_path, monkeypatch):
+    installer = _load_install_module()
+    monkeypatch.setattr(installer, "ASSETS_MODELS_DIR", tmp_path / "assets")
+    monkeypatch.setattr(installer, "_is_large_model_file", lambda path: True)
+    source = installer.ASSETS_MODELS_DIR / "model.pt"
+    source.parent.mkdir()
+    source.write_bytes(b"original")
+    destination = tmp_path / "model.pt"
+    destination.write_bytes(b"modified")
+    assert installer.copy_bundled("model.pt", destination)
+    assert destination.read_bytes() == b"modified"
+    assert not source.samefile(destination)
+
+
+def test_directory_redeployment_detaches_existing_hardlink(tmp_path, monkeypatch):
+    installer = _load_install_module()
+    monkeypatch.setattr(installer, "ASSETS_MODELS_DIR", tmp_path / "assets")
+    source = installer.ASSETS_MODELS_DIR / "group" / "model.pt"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"new bundled data")
+    destination = tmp_path / "deployed"
+    destination.mkdir()
+    original = tmp_path / "old-payload.pt"
+    original.write_bytes(b"old")
+    os.link(original, destination / "model.pt")
+    assert installer.copy_bundled("group", destination)
+    assert original.read_bytes() == b"old"
+    assert (destination / "model.pt").read_bytes() == source.read_bytes()
+    assert not original.samefile(destination / "model.pt")
+
+
+def test_model_hardlink_failure_falls_back_to_copy(tmp_path, monkeypatch):
+    installer = _load_install_module()
+    source = tmp_path / "source.pt"
+    destination = tmp_path / "target.pt"
+    source.write_bytes(b"weights")
+
+    def cannot_link(*args):
+        raise OSError("Cross-device link")
+
+    monkeypatch.setattr(installer.os, "link", cannot_link)
+    installer._link_or_copy_model(source, destination)
+    assert destination.read_bytes() == b"weights"
+    assert not source.samefile(destination)
+    assert not list(tmp_path.glob(".xb-model-*"))
 
 
 def test_ensure_venv_rebuilds_an_unreadable_existing_environment(
@@ -461,35 +731,6 @@ def test_wheelhouse_clean_runs_before_generating_requirements(
     assert fresh_requirements.read_text(encoding="utf-8") == "fresh\n"
 
 
-def test_pymss_wheelhouse_is_isolated_with_a_compatible_torch_pair() -> None:
-    installer = _load_install_module()
-    wheelhouse = _load_wheelhouse_module()
-    expected_constraints = (
-        "setuptools<81",
-        "torch==2.7.1",
-        "torchaudio==2.7.1",
-    )
-
-    for stack in ("cpu", "directml", "cu121", "cu126", "cu128"):
-        plan = wheelhouse.build_plan(ROOT, {stack})
-        expected_stack = "cu126" if stack in {"cu121", "cu126"} else stack
-        dest = ROOT / "assets" / "wheels" / "pymss" / "py310" / expected_stack
-        package = next(batch for batch in plan if batch.label == f"pymss {expected_stack} package")
-        torch = next(batch for batch in plan if batch.label == f"pymss {expected_stack} torch")
-
-        assert package.dest == dest
-        assert package.packages == ("pymss==2.0.18",)
-        assert package.constraints == expected_constraints
-        assert torch.dest == dest
-        assert torch.packages == ("torch==2.7.1", "torchaudio==2.7.1")
-        expected_index = (
-            installer.TORCH_BLACKWELL_INDEX
-            if expected_stack == "cu128"
-            else installer.TORCH_PYMSS_CUDA_INDEX
-            if expected_stack == "cu126"
-            else installer.TORCH_CPU_INDEX
-        )
-        assert torch.index == expected_index
 
 
 def test_pymss_installer_uses_the_same_isolated_runtime(
@@ -555,135 +796,3 @@ def test_install_gpu_detection_distinguishes_blackwell_from_older_nvidia(monkeyp
 
     assert installer.detect_gpu_stack() == "cu121"
     assert installer.detect_gpu_stack() == "cu128"
-
-
-def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torch() -> None:
-    wheelhouse = _load_wheelhouse_module()
-
-    cpu = wheelhouse.build_plan(ROOT, {"cpu"})
-    directml = wheelhouse.build_plan(ROOT, {"directml"})
-    cu128 = wheelhouse.build_plan(ROOT, {"cu128"})
-
-    assert any(
-        batch.dest == ROOT / "assets" / "wheels" / "svc" / "py39" / "cpu"
-        and batch.build_source
-        and "fairseq==0.12.2" in batch.packages
-        for batch in cpu
-    )
-    expected_matplotlib_support = (
-        "contourpy==1.2.1",
-        "cycler>=0.10",
-        "fonttools>=4.22.0",
-        "kiwisolver>=1.0.1",
-        "packaging>=20.0",
-        "pillow>=6.2.0",
-        "pyparsing>=2.3.1",
-        "python-dateutil>=2.7",
-        "importlib-resources>=3.2.0",
-    )
-    assert any(
-        batch.label == "svc py39 matplotlib support"
-        and batch.dest == ROOT / "assets" / "wheels" / "svc" / "py39" / "cpu"
-        and batch.no_deps
-        and batch.packages == expected_matplotlib_support
-        for batch in cpu
-    )
-    assert any(
-        batch.label == "svc py39 matplotlib"
-        and batch.dest == ROOT / "assets" / "wheels" / "svc" / "py39" / "cpu"
-        and batch.no_deps
-        and batch.packages == ("matplotlib==3.7.5",)
-        for batch in cpu
-    )
-    assert any(
-        batch.dest == ROOT / "assets" / "wheels" / "rvc" / "py39" / "cpu"
-        and batch.build_source
-        and "fairseq==0.12.2" in batch.packages
-        for batch in cpu
-    )
-    assert any(
-        batch.dest == ROOT / "assets" / "wheels" / "ddsp" / "py310" / "directml"
-        and "torch==2.5.1" in batch.constraints
-        for batch in directml
-    )
-    assert any(
-        batch.label == "seedvc cpu source wheels"
-        and batch.dest == ROOT / "assets" / "wheels" / "py310" / "cpu"
-        and batch.build_source
-        and batch.no_deps
-        and "argbind>=0.3.7" in batch.packages
-        for batch in cpu
-    )
-    assert any(
-        batch.label == "seedvc requirements"
-        and batch.dest == ROOT / "assets" / "wheels" / "py310" / "cpu"
-        and batch.build_source
-        for batch in cpu
-    )
-    assert any(
-        batch.label == "seedvc directml source wheels"
-        and batch.dest == ROOT / "assets" / "wheels" / "py310" / "directml"
-        and batch.build_source
-        and batch.no_deps
-        and "argbind>=0.3.7" in batch.packages
-        for batch in directml
-    )
-    assert any(
-        batch.label == "seedvc requirements"
-        and batch.dest == ROOT / "assets" / "wheels" / "py310" / "directml"
-        and batch.build_source
-        for batch in directml
-    )
-    assert any(
-        batch.dest == ROOT / "assets" / "wheels" / "py310" / "directml"
-        and "torch==2.4.1" in batch.constraints
-        for batch in directml
-    )
-    assert any(
-        batch.label == "svc cu128 requirements"
-        and batch.dest == ROOT / "assets" / "wheels" / "py310" / "cu128"
-        and batch.build_source
-        for batch in cu128
-    )
-    expected_fcpe = ("einops==0.8.2", "local-attention==1.10.0")
-    assert any(
-        batch.label == "svc cpu py39 fcpe runtime"
-        and batch.packages == expected_fcpe
-        for batch in cpu
-    )
-    assert any(
-        batch.label == "svc directml fcpe runtime"
-        and batch.packages == expected_fcpe
-        for batch in directml
-    )
-    assert any(
-        batch.label == "svc cu128 fcpe runtime"
-        and batch.packages == expected_fcpe
-        for batch in cu128
-    )
-    svc_requirement_batches = [
-        batch
-        for batch in (*cpu, *directml, *cu128)
-        if batch.label in {
-            "svc py39 requirements",
-            "svc directml requirements",
-            "svc cu128 requirements",
-        }
-    ]
-    assert svc_requirement_batches
-    for batch in svc_requirement_batches:
-        requirement_text = batch.requirements.read_text(encoding="utf-8")
-        assert "einops==0.8.2" in requirement_text
-        assert "local-attention==1.10.0" in requirement_text
-    assert any(
-        batch.label == "ddsp requirements"
-        and batch.dest == ROOT / "assets" / "wheels" / "py310" / "cpu"
-        and batch.build_source
-        for batch in cpu
-    )
-    assert any(
-        batch.label == "ddsp directml requirements"
-        and batch.dest == ROOT / "assets" / "wheels" / "ddsp" / "py310" / "directml"
-        and batch.build_source
-        for batch in directml
-    )

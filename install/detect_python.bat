@@ -48,7 +48,8 @@ exit /b 0
 :TRY_PYTHON
 if "%~1"=="" exit /b 1
 if not exist "%~1" exit /b 1
-if exist "%~1\" exit /b 1
+rem A trailing slash is not a reliable directory test on Windows: it can
+rem also match a runnable python.exe. The execution probe rejects directories.
 "%~1" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>&1
 if errorlevel 1 exit /b 1
 set "XB_PYTHON_DETECTED=%~f1"

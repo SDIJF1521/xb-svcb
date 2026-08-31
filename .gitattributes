@@ -2,3 +2,4 @@
 *.pth filter=lfs diff=lfs merge=lfs -text
 assets/models/** filter=lfs diff=lfs merge=lfs -text
 *.bat text eol=crlf
+install/runtime_profiles/** text eol=lf

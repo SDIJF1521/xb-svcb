@@ -36,12 +36,15 @@
   python install/install.py --only seedvc  # 只装 SeedVC 推理环境（.venv-seedvc）
   python install/install.py --only ddsp    # 只装 DDSP-SVC 推理环境（.venv-ddsp）
   python install/install.py --only vocal   # 只装 AI 歌声增强环境（.venv-vocal）
+  python install/install.py --consolidated # 实验性合并预检，当前依赖冲突会停止
   python install/install.py --only models  # 只跑某一步：app/plugins/web/uvr/pymss/svc/rvc/seedvc/ddsp/vocal/hub/models
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -107,6 +110,11 @@ RVC_VENV = ROOT / ".venv-rvc"
 SEEDVC_VENV = ROOT / ".venv-seedvc"
 DDSP_VENV = ROOT / ".venv-ddsp"
 VOCAL_VENV = ROOT / ".venv-vocal"
+RUNTIMES_DIR = ROOT / "runtimes"
+# Current consolidated NVIDIA runtime. The stack-specific path is selected by
+# _configure_runtime_layout; this default keeps imported helpers meaningful.
+CORE_VENV = RUNTIMES_DIR / "core-cu128"
+RUNTIME_MANIFEST = ROOT / "runtime.json"
 UVR_MODELS_DIR = ROOT / "models" / "uvr"
 VOCAL_MODELS_DIR = ROOT / "models" / "vocal-enhancement"
 
@@ -121,6 +129,7 @@ def _derive_paths(root: Path) -> None:
     """以 root 为基准重新计算所有产物路径（供 --root 覆盖）。"""
     global ROOT, APP_DIR, WEB_DIR, ENGINES_DIR, SOVITS_DIR, SEEDVC_DIR, DDSP_DIR, PRETRAIN_DIR
     global UVR_VENV, PLUGIN_VENV, PYMSS_VENV, SVC_VENV, HUB_VENV, RVC_VENV, SEEDVC_VENV, DDSP_VENV, VOCAL_VENV
+    global RUNTIMES_DIR, CORE_VENV, RUNTIME_MANIFEST
     global UVR_MODELS_DIR, VOCAL_MODELS_DIR
     ROOT = root
     APP_DIR = root / "app"
@@ -139,6 +148,9 @@ def _derive_paths(root: Path) -> None:
     SEEDVC_VENV = root / ".venv-seedvc"
     DDSP_VENV = root / ".venv-ddsp"
     VOCAL_VENV = root / ".venv-vocal"
+    RUNTIMES_DIR = root / "runtimes"
+    CORE_VENV = RUNTIMES_DIR / "core-cu128"
+    RUNTIME_MANIFEST = root / "runtime.json"
     UVR_MODELS_DIR = root / "models" / "uvr"
     VOCAL_MODELS_DIR = root / "models" / "vocal-enhancement"
 
@@ -173,6 +185,7 @@ TORCH_RVC_CUDA_INDEX = TORCH_CUDA_INDEX
 TORCH_BLACKWELL_INDEX = "https://download.pytorch.org/whl/cu128"
 TORCH_BLACKWELL_VER = "2.7.1"  # cp39/cp310 均有 win 轮子；统一钉此版本以求确定性
 TORCHAUDIO_BLACKWELL_VER = "2.7.1"
+TORCHVISION_BLACKWELL_VER = "0.22.1"
 # PyMSS 2.0.x requires Torch 2.7.1. PyTorch publishes that pair on cu126 for
 # pre-Blackwell NVIDIA cards and on cu128 for Blackwell, so keep the isolated
 # PyMSS wheelhouse aligned to the actual runtime stack.
@@ -266,6 +279,242 @@ PYTHON_FOR_RVC = "3.9"
 # pyworld 等在 3.10 也有可用 wheel；3.9 老栈在新 torch 上易出哑音。
 PYTHON_FOR_SVC_BLACKWELL = "3.10"
 PYTHON_FOR_RVC_BLACKWELL = "3.10"
+
+# Consolidated runtime is deliberately opt-in for the first migration pass.
+# Matching Python/Torch is necessary but NOT sufficient: all upstream
+# requirements must resolve together before touching an existing environment.
+# The currently pinned UVR and SeedVC/DDSP NumPy/protobuf sets conflict.
+CONSOLIDATED_RUNTIME = False
+CONSOLIDATED_STACK = ""
+CORE_COMPONENTS = {"uvr", "seedvc", "ddsp"}
+CORE_VENV_REUSED = False
+CORE_CONSTRAINTS: Path | None = None
+CORE_COMPAT_WHEEL: Path | None = None
+CORE_PROFILE: dict | None = None
+CORE_PROFILE_PINS: dict[str, str] = {}
+# Experimental, locally tested candidate. Never applied to isolated runtimes.
+CORE_COMPAT_PACKAGES = (
+    "numpy==2.2.6", "protobuf==7.36.0", "tensorboardX==2.6.5",
+    "tensorboard==2.20.0", "onnx-weekly==1.23.0.dev20260824",
+)
+
+
+def _core_requirement_overrides(component: str) -> dict[str, str]:
+    overrides = dict(DDSP_REQ_OVERRIDES) if component == "ddsp" else {}
+    if CONSOLIDATED_RUNTIME and CORE_COMPAT_WHEEL is not None:
+        overrides["numpy"] = "numpy==2.2.6"
+    return overrides
+
+
+def _recipe_module():
+    # Load the sibling file even when embedded/imported outside the repo root.
+    # Do not rely on another test or caller having modified sys.path.
+    spec = importlib.util.spec_from_file_location("xb_installer_core_recipe", Path(__file__).with_name("core_recipe.py"))
+    recipe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(recipe)
+    return recipe
+
+
+def _configure_core_profile(name: str | None) -> None:
+    global CORE_PROFILE, CORE_PROFILE_PINS, CORE_COMPAT_WHEEL
+    CORE_PROFILE, CORE_PROFILE_PINS = None, {}
+    if name is None:
+        return
+    recipe = _recipe_module()
+    profile, pins = recipe.load_profile()
+    if name != profile["id"]:
+        raise ValueError("Unknown core profile")
+    recipe.verify_artifacts(ROOT, profile, {"compat"})
+    CORE_COMPAT_WHEEL = recipe.contained(ROOT, profile["compatibility_wheel"])
+    CORE_PROFILE, CORE_PROFILE_PINS = profile, pins
+
+
+def _validate_core_compat_wheel(path: Path) -> None:
+    from email.parser import Parser
+
+    with zipfile.ZipFile(path) as wheel:
+        metadata = Parser().parsestr(wheel.read(
+            "descript_audiotools-0.7.2+xb1.dist-info/METADATA").decode("utf-8"))
+    required = metadata.get_all("Requires-Dist", [])
+    if (metadata.get("Name") != "descript-audiotools" or metadata.get("Version") != "0.7.2+xb1"
+            or "protobuf ==7.36.0" not in required or "tensorboard ==2.20.0" not in required):
+        raise ValueError("AudioTools 兼容 wheel 不匹配已验证的实验配方")
+
+
+def _configure_runtime_layout(*, consolidated: bool, gpu_stack: str) -> None:
+    """Select the environment layout used by installation steps."""
+    global CONSOLIDATED_RUNTIME, CONSOLIDATED_STACK, CORE_VENV, CORE_VENV_REUSED
+    CONSOLIDATED_RUNTIME = bool(consolidated and gpu_stack in {"cpu", "cu121", "cu128"})
+    CONSOLIDATED_STACK = gpu_stack if CONSOLIDATED_RUNTIME else ""
+    CORE_VENV_REUSED = False
+    if CONSOLIDATED_RUNTIME:
+        # Candidate only: the preflight and post-install checks below must pass
+        # before this directory can be advertised as a shared runtime.
+        existing_uvr = venv_python(UVR_VENV)
+        if _path_exists(existing_uvr) and _python_minor_version(existing_uvr) == PYTHON_FOR_ENGINES:
+            CORE_VENV = UVR_VENV
+            CORE_VENV_REUSED = True
+        else:
+            CORE_VENV = RUNTIMES_DIR / f"core-{gpu_stack}"
+
+
+def runtime_venv(component: str, legacy: Path) -> Path:
+    """Return the selected venv path for an installer component."""
+    if CONSOLIDATED_RUNTIME and component in CORE_COMPONENTS:
+        return CORE_VENV
+    return legacy
+
+
+def write_runtime_manifest(gpu_stack: str, installed: set[str]) -> None:
+    """Persist relative interpreter paths so the app can discover shared envs."""
+    if not CONSOLIDATED_RUNTIME or not CORE_COMPONENTS.issubset(installed):
+        return
+    py = str(venv_python(CORE_VENV))
+    # Never activate a half-installed or incompatible shared environment.
+    if not Path(py).is_file():
+        raise RuntimeError("共享运行时缺少 Python，未更新 runtime.json")
+    payload = {}
+    if RUNTIME_MANIFEST.exists():
+        payload = json.loads(RUNTIME_MANIFEST.read_text(encoding="utf-8-sig"))
+        if not isinstance(payload, dict) or payload.get("version") != 1 or not isinstance(payload.get("python", {}), dict):
+            raise RuntimeError("runtime.json 格式无效，拒绝覆盖")
+    components = {
+        component: venv_python(runtime_venv(component, Path(f".venv-{component}")))
+        for component in sorted(CORE_COMPONENTS)
+    }
+    # Keep paths portable across install locations; config resolves them from ROOT_DIR.
+    payload.update({
+        "version": 1,
+        "layout": "consolidated",
+        "stack": gpu_stack,
+        "python": {
+            **payload.get("python", {}),
+            **{component: str(path.relative_to(ROOT)).replace("\\", "/")
+               for component, path in components.items()},
+        },
+    })
+    if CORE_COMPAT_WHEEL is not None:
+        payload["compatibility"] = {"experimental": True, "profile": "numpy2-protobuf7-xb1"}
+    if CORE_PROFILE is not None:
+        payload["compatibility"].update({"profile": CORE_PROFILE["id"],
+                                         "lock_sha256": CORE_PROFILE["lock_sha256"]})
+    RUNTIME_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=RUNTIME_MANIFEST.parent,
+                                     prefix="runtime-", suffix=".json.tmp", delete=False) as handle:
+        temporary = Path(handle.name)
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    try:
+        temporary.replace(RUNTIME_MANIFEST)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _shared_torch_specs(gpu_stack: str) -> list[str]:
+    if gpu_stack == "cu128":
+        versions = (TORCH_BLACKWELL_VER, TORCHAUDIO_BLACKWELL_VER, TORCHVISION_BLACKWELL_VER)
+    elif gpu_stack in {"cpu", "cu121"}:
+        versions = ("2.5.1", "2.5.1", "0.20.1")
+    else:
+        raise RuntimeError("共享环境暂不支持此设备栈")
+    return [f"{name}=={version}+{gpu_stack}" for name, version in
+            zip(("torch", "torchaudio", "torchvision"), versions)]
+
+
+def _preflight_consolidated_runtime(uv: str, selected: set[str], gpu_stack: str) -> None:
+    """Resolve the entire group without installing anything or fetching models."""
+    global CORE_CONSTRAINTS
+    CORE_CONSTRAINTS = None
+    if not CONSOLIDATED_RUNTIME or not selected.intersection(CORE_COMPONENTS):
+        return
+    if not CORE_COMPONENTS.issubset(selected):
+        raise RuntimeError("共享环境必须一起验证：--only uvr seedvc ddsp；不允许部分安装后切换路由")
+    sources = (SEEDVC_DIR / "requirements.txt", DDSP_DIR / "requirements.txt")
+    if any(not source.is_file() for source in sources):
+        raise RuntimeError("缺少 SeedVC/DDSP 源码 requirements；先准备源码，预检不会下载或删除引擎目录")
+    compatibility = []
+    if CORE_COMPAT_WHEEL is not None:
+        if gpu_stack != "cu128":
+            raise RuntimeError("NumPy 2/protobuf 7 实验配方目前仅验证 cu128，不自动应用到 CPU/cu121/DirectML")
+        _validate_core_compat_wheel(CORE_COMPAT_WHEEL)
+        compatibility = [*CORE_COMPAT_PACKAGES, f"descript-audiotools @ {CORE_COMPAT_WHEEL.resolve().as_uri()}"]
+    scratch = ROOT / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    # Stage inputs separately and adopt only a successfully compiled lock.
+    with tempfile.TemporaryDirectory(prefix="core-preflight-", dir=scratch) as work:
+        stage = Path(work)
+        seed_req = _filter_requirements(sources[0], extra_deny=SEEDVC_REQ_DENY,
+                                       overrides=_core_requirement_overrides("seedvc"),
+                                       output=stage / "seedvc.txt")
+        ddsp_req = _filter_requirements(sources[1], extra_deny=DDSP_REQ_DENY,
+                                       overrides=_core_requirement_overrides("ddsp"), output=stage / "ddsp.txt")
+        extra = "cpu" if gpu_stack == "cpu" else "gpu"
+        requirements = stage / "core.in"
+        requirements.write_text("\n".join([
+            f"audio-separator[{extra}]=={AUDIO_SEPARATOR_VER}",
+            "setuptools<81", "wheel", *_shared_torch_specs(gpu_stack),
+            *compatibility,
+            *[f"{name}=={version}" for name, version in CORE_PROFILE_PINS.items()
+              if name != "descript-audiotools"],
+            seed_req.read_text(encoding="utf-8"), ddsp_req.read_text(encoding="utf-8"),
+        ]) + "\n", encoding="utf-8")
+        locked = stage / "core.txt"
+        index = {"cpu": TORCH_CPU_INDEX, "cu121": TORCH_CUDA_INDEX, "cu128": TORCH_BLACKWELL_INDEX}[gpu_stack]
+        directories = []
+        for component in sorted(CORE_COMPONENTS):
+            directories.extend(_wheelhouse_dirs(component=component, gpu_stack=gpu_stack, python_version="3.10"))
+        # Do not let the Torch index shadow unrelated PyPI packages (e.g.
+        # setuptools/packaging). uv's backend routing is package-specific.
+        indices = (pypi_index_args(use_mirror=False) + ["--torch-backend", "cu128"]
+                   if CORE_PROFILE is not None else pypi_index_args(index, use_mirror=False))
+        if directories and _wheelhouse_strict():
+            indices = ["--no-index"]
+            for directory in dict.fromkeys(directories):
+                indices.extend(["--find-links", str(directory)])
+        if CORE_COMPAT_WHEEL is not None:
+            # Source-only packages (argbind/randomname/etc.) can be staged
+            # beside the compatibility wheel without allowing source builds
+            # or build-time downloads into this preflight.
+            indices.extend(["--find-links", str(CORE_COMPAT_WHEEL.parent)])
+        command = uv_cmd(uv, "pip", "compile", str(requirements), "--python-version", "3.10",
+                         "--python-platform", "windows", "--no-python-downloads", "--no-build",
+                         "--output-file", str(locked), *indices)
+        # Compilation may retrieve package metadata, but never installs into
+        # the venv. Do not retry resolution failures using --reinstall.
+        try:
+            run(command)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError("共享依赖整体解析失败，未安装任何包，请查看上方解析/网络错误；不会通过重装或忽略约束继续") from exc
+        if CORE_PROFILE is not None:
+            _recipe_module().verify_resolution(locked, CORE_PROFILE_PINS)
+        destination = scratch / f"core-{gpu_stack}.constraints.txt"
+        shutil.copyfile(locked, destination)
+        CORE_CONSTRAINTS = destination
+
+
+def _guard_shared_runtime_repair(selected: set[str]) -> None:
+    """Don't repair one legacy path that currently hosts several components."""
+    if CONSOLIDATED_RUNTIME or not selected.intersection(CORE_COMPONENTS) or not RUNTIME_MANIFEST.exists():
+        return
+    payload = json.loads(RUNTIME_MANIFEST.read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        raise RuntimeError("runtime.json 格式无效，拒绝修改运行时")
+    mapping = payload.get("python", {})
+    if not isinstance(mapping, dict):
+        raise RuntimeError("runtime.json 格式无效，拒绝修改运行时")
+    targets: dict[Path, set[str]] = {}
+    for component, raw in mapping.items():
+        if not isinstance(raw, str):
+            continue
+        path = Path(raw)
+        path = path if path.is_absolute() else ROOT / path
+        targets.setdefault(path.resolve(), set()).add(component)
+    for component in selected.intersection(CORE_COMPONENTS):
+        path = venv_python(ROOT / f".venv-{component}").resolve()
+        shares_route = any(component in components and len(components) > 1
+                           for components in targets.values())
+        if shares_route or len(targets.get(path, set())) > 1:
+            raise RuntimeError(f"{component} 的解释器路由与其他组件共用；不能单独修复 {component}，请先检查/拆分 runtime.json 路由")
 
 
 def _svc_python_for_stack(gpu_stack: str) -> str:
@@ -923,6 +1172,11 @@ def uv_pip_install(
     重新下载并覆盖，绕过损坏的旧元数据。国内镜像偶发 403/残缺 wheel 时
     先切官方 PyPI，避免重复撞同一个失效镜像。
     """
+    shared = CONSOLIDATED_RUNTIME and component in CORE_COMPONENTS
+    if shared:
+        if CORE_CONSTRAINTS is None or not CORE_CONSTRAINTS.is_file():
+            raise RuntimeError("共享依赖尚未通过整体解析，拒绝修改环境")
+        args = ("-c", str(CORE_CONSTRAINTS), *args)
     local_args = _wheelhouse_args(
         component=component,
         gpu_stack=gpu_stack,
@@ -940,7 +1194,12 @@ def uv_pip_install(
             cmd += local_args
         cmd += list(args)
         if not use_wheelhouse:
-            cmd += pypi_index_args(index, use_mirror=use_mirror)
+            if shared and CORE_PROFILE is not None:
+                cmd += pypi_index_args(use_mirror=use_mirror) + ["--torch-backend", "cu128"]
+            else:
+                cmd += pypi_index_args(index, use_mirror=use_mirror)
+        if shared and CORE_COMPAT_WHEEL is not None:
+            cmd += ["--find-links", str(CORE_COMPAT_WHEEL.parent)]
         return cmd
 
     if local_args:
@@ -948,6 +1207,8 @@ def uv_pip_install(
             run(build(reinstall=False, use_wheelhouse=True))
             return
         except subprocess.CalledProcessError as exc:
+            if shared:
+                raise
             print(c("y", "    自带 whl 安装失败，尝试 --reinstall 修复旧环境 …"))
             try:
                 run(build(reinstall=True, use_wheelhouse=True))
@@ -961,6 +1222,14 @@ def uv_pip_install(
     try:
         run(build(reinstall=False))
     except subprocess.CalledProcessError:
+        if shared:
+            # A conflict is not fixed by replacing the entire environment.
+            # Retry the same locked set on the fallback index only once.
+            if PYPI_MIRROR == PYPI_FALLBACK_INDEX:
+                raise
+            warn_pypi_fallback()
+            run(build(reinstall=False, use_mirror=False))
+            return
         if PYPI_MIRROR != PYPI_FALLBACK_INDEX:
             warn_pypi_fallback()
             try:
@@ -1071,7 +1340,7 @@ def extract_zip(zip_path: Path, dest_dir: Path) -> None:
 
 
 def copy_bundled(rel: str, dest: Path) -> bool:
-    """若自带模型目录里有该资源（文件或目录），就本地复制到 dest。
+    """若自带模型目录里有该资源（文件或目录），就部署到 dest。
 
     复制成功返回 True；自带目录缺失该资源返回 False（交由调用方回退联网下载）。
     """
@@ -1084,37 +1353,73 @@ def copy_bundled(rel: str, dest: Path) -> bool:
         # 若跳过会导致真正的 model/config.json 不被放入，推理时报 FileNotFoundError。
         dest.mkdir(parents=True, exist_ok=True)
         print(f"    自带模型，本地复制目录 {src.name}/ …")
-        shutil.copytree(src, dest, dirs_exist_ok=True)
+        # Use the same atomic file deployment below. copytree overwrites files
+        # in place, which would also modify the source of an existing hardlink.
+        for child in src.iterdir():
+            copy_bundled(str(Path(rel) / child.name), dest / child.name)
         print(c("g", f"    复制完成：{dest.name}/"))
         return True
-    # 文件：仅当目标已存在且大小与自带文件完全一致才跳过；大小不符（残缺/损坏）则重新复制覆盖。
+    # 文件：大小相同时先保留；只有内容也一致的大权重才允许去重。
     # 这能自愈旧安装器下载到的残缺底模（如 16.5MB 的 ContentVec 应为 1268MB）。
     if dest.exists() and dest.is_file() and dest.stat().st_size == src.stat().st_size:
-        print(c("g", f"    已存在且完整，跳过：{dest.name}"))
+        if _is_large_model_file(src):
+            try:
+                already_linked = os.path.samefile(src, dest)
+            except OSError:
+                already_linked = False
+            if not already_linked:
+                if _file_sha256(src) != _file_sha256(dest):
+                    print(c("y", f"    同名权重内容不同，保留现有文件且不去重：{dest.name}"))
+                    return True
+                _link_or_copy_model(src, dest)
+                print(c("g", f"    已复用自带权重存储：{dest.name}"))
+                return True
+        print(c("g", f"    已存在且大小一致，跳过：{dest.name}"))
         return True
     dest.parent.mkdir(parents=True, exist_ok=True)
-    print(f"    自带模型，本地复制 {src.name} …")
-    shutil.copyfile(src, dest)
-    print(c("g", f"    复制完成：{dest.name}"))
+    print(f"    自带模型，本地部署 {src.name} …")
+    # Large immutable weights can share storage with the installer payload on
+    # the same volume.  Fall back to a normal copy for cross-volume installs.
+    if _is_large_model_file(src):
+        _link_or_copy_model(src, dest)
+    else:
+        _atomic_copy_model(src, dest)
+    print(c("g", f"    部署完成：{dest.name}"))
     return True
 
 
 def _is_large_model_file(path: Path) -> bool:
     try:
-        return path.is_file() and path.stat().st_size >= 32 * 1024 * 1024
+        return (path.suffix.lower() in {".pt", ".pth", ".ckpt", ".onnx", ".safetensors", ".bin"}
+                and path.is_file() and path.stat().st_size >= 32 * 1024 * 1024)
     except OSError:
         return False
 
 
-def _link_or_copy_model(src: Path, dest: Path) -> None:
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _atomic_copy_model(src: Path, dest: Path, *, link: bool = False) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(dest.name + ".xbtmp")
-    tmp.unlink(missing_ok=True)
-    try:
-        os.link(src, tmp)
-    except OSError:
-        shutil.copy2(src, tmp)
-    tmp.replace(dest)
+    with tempfile.TemporaryDirectory(prefix=".xb-model-", dir=dest.parent) as work:
+        temporary = Path(work) / "payload"
+        if link:
+            try:
+                os.link(src, temporary)
+            except OSError:
+                shutil.copy2(src, temporary)
+        else:
+            shutil.copy2(src, temporary)
+        temporary.replace(dest)
+
+
+def _link_or_copy_model(src: Path, dest: Path) -> None:
+    _atomic_copy_model(src, dest, link=True)
 
 
 def _normalize_rvc_rmvpe_checkpoint(py: Path, src: Path, dest: Path) -> bool:
@@ -1287,12 +1592,13 @@ def step_web() -> None:
 
 
 def step_uvr(uv: str, gpu_stack: str) -> None:
-    hr("4/12 人声分离环境 .venv-uvr（audio-separator）")
+    hr("4/12 共享人声分离环境 runtimes/core-*（audio-separator）")
     use_blackwell = gpu_stack == "cu128"
     use_cuda = gpu_stack in {"cu121", "cu128"}
     use_directml = gpu_stack == "directml"
-    ensure_venv(uv, UVR_VENV, PYTHON_FOR_ENGINES)
-    py = str(venv_python(UVR_VENV))
+    venv = runtime_venv("uvr", UVR_VENV)
+    ensure_venv(uv, venv, PYTHON_FOR_ENGINES)
+    py = str(venv_python(venv))
     pip = make_pip(
         uv,
         py,
@@ -1301,7 +1607,7 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
         python_version=PYTHON_FOR_ENGINES,
     )
     _repair_broken_wheel_metadata(
-        UVR_VENV,
+        venv,
         ("torch", "torchaudio", "torchvision", "torch-directml"),
         component="uvr",
         gpu_stack=gpu_stack,
@@ -1321,12 +1627,13 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
         torch_specs = [
             f"torch=={TORCH_BLACKWELL_VER}",
             f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
+            f"torchvision=={TORCHVISION_BLACKWELL_VER}",
         ]
         torch_index = TORCH_BLACKWELL_INDEX
         torch_label = "cu128"
         pip(*torch_specs, index=torch_index)
     elif use_cuda:
-        torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
+        torch_specs = ["torch==2.5.1", "torchaudio==2.5.1", "torchvision==0.20.1"]
         torch_index = TORCH_CUDA_INDEX
         torch_label = "cu121"
         pip(*torch_specs, index=torch_index)
@@ -1352,7 +1659,32 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
     # audio-separator 的不同 extra 分别部署 CUDA / DirectML / CPU provider。
     if use_cuda:
         # 安装 audio-separator 时也带上 PyTorch wheel 源，避免依赖解析把 CUDA torch 换成 PyPI CPU 版。
-        pip(f"audio-separator[gpu]=={AUDIO_SEPARATOR_VER}", index=torch_index)
+        # onnx2torch-py313 declares a broad torchvision range; without constraints
+        # uv may select a newer torchvision whose metadata forces a newer,
+        # multi-gigabyte Torch download. Pin the already validated local wheels.
+        constraint_file = ROOT / ".tmp" / f"uvr-torch-{gpu_stack}.constraints.txt"
+        constraint_file.parent.mkdir(parents=True, exist_ok=True)
+        local_suffix = "+cu128" if use_blackwell else "+cu121"
+        constraint_file.write_text(
+            "\n".join(
+                (
+                    f"torch=={TORCH_BLACKWELL_VER}{local_suffix}" if use_blackwell else "torch==2.5.1+cu121",
+                    f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}{local_suffix}" if use_blackwell else "torchaudio==2.5.1+cu121",
+                    f"torchvision=={TORCHVISION_BLACKWELL_VER}{local_suffix}" if use_blackwell else "torchvision==0.20.1+cu121",
+                )
+            )
+            + "\n",
+            encoding="ascii",
+        )
+        try:
+            pip(
+                "-c",
+                str(constraint_file),
+                f"audio-separator[gpu]=={AUDIO_SEPARATOR_VER}",
+                index=torch_index,
+            )
+        finally:
+            constraint_file.unlink(missing_ok=True)
         _reaffirm_torch_wheels(
             uv,
             py,
@@ -1785,6 +2117,8 @@ def _filter_requirements(
     src: Path,
     extra_deny: set[str] | None = None,
     overrides: dict[str, str] | None = None,
+    *,
+    output: Path | None = None,
 ) -> Path:
     """剔除推理用不到/装不上的包（见 REQ_DENYLIST），生成精简 requirements。
 
@@ -1792,7 +2126,7 @@ def _filter_requirements(
     overrides：包名 -> 整行 requirement 覆盖（如 numpy 升到 3.10 兼容版本）；命中即替换原行，
                未在原文件出现的覆盖项会在末尾追加。
     """
-    out = src.parent / "requirements_xb.txt"
+    out = output if output is not None else src.parent / "requirements_xb.txt"
     deny = set(REQ_DENYLIST)
     if extra_deny:
         deny |= {d.replace("_", "-").lower() for d in extra_deny}
@@ -1967,6 +2301,30 @@ def _verify_ddsp_hubert(py: str) -> None:
         ) from exc
 
 
+def _torch_runtime_matches(py: str, torch_specs: list[str], label: str) -> bool:
+    """Check imported binary versions, not just dist-info, without reinstalling."""
+    expected = {}
+    for spec in torch_specs:
+        name, separator, version = spec.partition("==")
+        if not separator or name not in {"torch", "torchaudio", "torchvision"}:
+            return False
+        expected[name] = version if "+" in version else f"{version}+{label}"
+    if not expected:
+        return False
+    code = (
+        "import importlib,json,sys; expected=json.loads(sys.argv[1]); "
+        "actual={name:importlib.import_module(name).__version__ for name in expected}; "
+        "assert actual == expected, (actual,expected)"
+    )
+    try:
+        proc = subprocess.run([py, "-c", code, json.dumps(expected)],
+                              capture_output=True, timeout=45,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return proc.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _reaffirm_torch_wheels(
     uv: str,
     py: str,
@@ -1978,7 +2336,7 @@ def _reaffirm_torch_wheels(
     gpu_stack: str,
     python_version: str,
 ) -> None:
-    """兜底：强制把指定 PyTorch wheel 源里的 torch/torchaudio 重新装回来。
+    """保留可导入且匹配的 PyTorch；仅修复损坏或错误构建。
 
     audio-separator / fairseq / rvc-python 等依赖在解析时可能把 CUDA torch 换成
     PyPI 默认的「同版本号 CPU 版」，导致 torch.cuda.is_available()=False，
@@ -1986,12 +2344,18 @@ def _reaffirm_torch_wheels(
     torch.cuda.is_available() is False"。普通 install 因版本号相同会判定已满足而不覆盖，
     这里用 --reinstall-package 只强制重装 torch/torchaudio（不动其它包）。
     """
+    if _torch_runtime_matches(py, torch_specs, label):
+        print(c("g", f"    {label} Torch 版本匹配且可导入，跳过重装"))
+        return
+    # Include the local CUDA version: public-version equality also accepts CPU
+    # wheels and is not sufficient for deterministic provider selection.
+    exact_specs = [spec if "+" in spec else f"{spec}+{label}" for spec in torch_specs]
     try:
         uv_pip_install(
             uv,
             py,
             "--reinstall-package", "torch", "--reinstall-package", "torchaudio",
-            *torch_specs,
+            *exact_specs,
             index=index,
             component=component,
             gpu_stack=gpu_stack,
@@ -2000,6 +2364,7 @@ def _reaffirm_torch_wheels(
         print(c("g", f"    已校正 {label} torch（防止被依赖替换成 CPU 版）"))
     except subprocess.CalledProcessError:
         print(c("y", f"    {label} torch 校正失败，请检查网络/驱动后重跑该步"))
+        raise
 
 
 def _reaffirm_blackwell_torch(
@@ -2223,8 +2588,9 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
     use_directml = gpu_stack == "directml"
 
     target_py = PYTHON_FOR_ENGINES
-    ensure_venv(uv, SEEDVC_VENV, target_py)
-    py = str(venv_python(SEEDVC_VENV))
+    venv = runtime_venv("seedvc", SEEDVC_VENV)
+    ensure_venv(uv, venv, target_py)
+    py = str(venv_python(venv))
     pip = make_pip(
         uv,
         py,
@@ -2255,12 +2621,13 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
 
     req = SEEDVC_DIR / "requirements.txt"
     if req.exists():
-        filtered = _filter_requirements(req, extra_deny=SEEDVC_REQ_DENY)
+        filtered = _filter_requirements(req, extra_deny=SEEDVC_REQ_DENY,
+                                        overrides=_core_requirement_overrides("seedvc"))
         pip("-r", str(filtered))
     else:
         print(c("r", "    未找到 SeedVC requirements.txt，跳过依赖安装（请检查仓库）"))
 
-    seed_seedvc_base_models(venv_python(SEEDVC_VENV))
+    seed_seedvc_base_models(venv_python(venv))
 
     if use_directml:
         _reaffirm_directml_runtime(
@@ -2308,8 +2675,9 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
     amd_cpu_stable = gpu_stack == "directml"
 
     target_py = PYTHON_FOR_ENGINES
-    ensure_venv(uv, DDSP_VENV, target_py)
-    py = str(venv_python(DDSP_VENV))
+    venv = runtime_venv("ddsp", DDSP_VENV)
+    ensure_venv(uv, venv, target_py)
+    py = str(venv_python(venv))
     pip = make_pip(
         uv,
         py,
@@ -2345,7 +2713,7 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
         filtered = _filter_requirements(
             requirements,
             extra_deny=DDSP_REQ_DENY | (DIRECTML_EXTRA_DENY if amd_cpu_stable else set()),
-            overrides=DDSP_REQ_OVERRIDES,
+            overrides=_core_requirement_overrides("ddsp"),
         )
         pip("-r", str(filtered))
     else:
@@ -2417,8 +2785,9 @@ def _prepare_vocal_deepfilter_model(py: str) -> Path:
 
 def step_vocal(uv: str, gpu_stack: str) -> None:
     hr("10/12 AI 歌声增强环境 .venv-vocal")
-    ensure_venv(uv, VOCAL_VENV, PYTHON_FOR_ENGINES)
-    py = str(venv_python(VOCAL_VENV))
+    venv = runtime_venv("vocal", VOCAL_VENV)
+    ensure_venv(uv, venv, PYTHON_FOR_ENGINES)
+    py = str(venv_python(venv))
     pip = make_pip(
         uv,
         py,
@@ -2574,7 +2943,7 @@ def step_models(uv: str) -> None:
             missing.append(name)
 
     if missing:
-        uvr_py = venv_python(UVR_VENV)
+        uvr_py = venv_python(runtime_venv("uvr", UVR_VENV))
         if uvr_py.exists():
             print(c("y", f"    以下模型无自带，联网下载：{', '.join(missing)}"))
             dl = (
@@ -2595,7 +2964,7 @@ def step_models(uv: str) -> None:
                 )
                 run([str(uvr_py), "-c", dl2, str(UVR_MODELS_DIR), *missing])
         else:
-            print(c("r", "    .venv-uvr 不存在且无自带模型，跳过（请先跑 uvr 步骤或放置自带模型）"))
+            print(c("r", "    共享 UVR 环境不存在且无自带模型，跳过（请先跑 uvr 步骤或放置自带模型）"))
     print(c("g", "模型就绪"))
 
 
@@ -2625,6 +2994,7 @@ def installer_progress(percent: int, message: str) -> None:
 
 
 def main() -> int:
+    global CORE_COMPAT_WHEEL
     p = argparse.ArgumentParser(description="XB-SVCB 一键安装器")
     p.add_argument(
         "--root",
@@ -2646,6 +3016,17 @@ def main() -> int:
         help="请求使用 40 系及以下的 cu121 老栈；50 系会被复核并改回 cu128",
     )
     p.add_argument(
+        "--consolidated",
+        action="store_true",
+        help="实验性共享运行时；先整体解析 UVR/SeedVC/DDSP 依赖，当前版本存在冲突会停止",
+    )
+    p.add_argument("--core-compat-wheel", type=Path,
+                   help="实验性 NumPy 2/protobuf 7 配方使用的本地 AudioTools 0.7.2+xb1 wheel；必须与 --consolidated 一起使用")
+    p.add_argument("--core-profile", choices=["core-cu128"],
+                   help="使用已固定版本和本地 wheel 哈希的实验配方；与 --core-compat-wheel 互斥")
+    p.add_argument("--preflight-only", action="store_true",
+                   help="仅解析共享依赖并生成约束，不安装包/模型或更新路由；可用 UV_OFFLINE=1 禁止联网")
+    p.add_argument(
         "--only",
         choices=ORDER,
         nargs="+",
@@ -2654,10 +3035,21 @@ def main() -> int:
     for s in ORDER:
         p.add_argument(f"--skip-{s}", action="store_true", help=f"跳过 {s} 步骤")
     args = p.parse_args()
+    if (args.core_compat_wheel or args.core_profile or args.preflight_only) and not args.consolidated:
+        p.error("--core-compat-wheel / --core-profile / --preflight-only 必须与 --consolidated 一起使用")
+    if args.core_profile and args.core_compat_wheel:
+        p.error("--core-profile 与 --core-compat-wheel 不能同时使用")
+    CORE_COMPAT_WHEEL = args.core_compat_wheel.expanduser().resolve() if args.core_compat_wheel else None
+    selected = args.only if args.only else [s for s in ORDER if not getattr(args, f"skip_{s}")]
 
     installer_progress(2, "Resolving runtime root")
     if args.root:
         _derive_paths(Path(args.root).expanduser().resolve())
+    try:
+        _configure_core_profile(args.core_profile)
+    except (OSError, ValueError, KeyError) as exc:
+        print(c("r", str(exc)))
+        return 1
 
     hr("XB-SVCB 安装器")
     print(f"安装根目录: {ROOT}")
@@ -2692,18 +3084,43 @@ def main() -> int:
         print("（检测到 NVIDIA 显卡，自动选择 CUDA；如需 CPU 请加 --cpu）")
     if detected_stack == "cu128" and not args.cu128:
         print("（检测到 NVIDIA 显卡，自动使用统一 cu128 栈）")
+    _configure_runtime_layout(consolidated=args.consolidated, gpu_stack=detected_stack)
+    if args.consolidated and not CONSOLIDATED_RUNTIME:
+        print(c("r", "DirectML 不支持此共享运行时；未修改环境。"))
+        return 2
+    elif CONSOLIDATED_RUNTIME:
+        if CORE_VENV_REUSED:
+            print(c("y", f"待验证的共享运行时候选（现有 UVR）：{CORE_VENV}"))
+        else:
+            print(c("y", f"待验证的共享运行时候选：{CORE_VENV}"))
     wheelhouse = _wheelhouse_root()
     if wheelhouse:
         print(c("g", f"自带 whl 目录: {wheelhouse}"))
     else:
         print(c("y", "未检测到自带 whl 目录，依赖安装将使用在线 PyPI/torch 源。"))
 
+    try:
+        _guard_shared_runtime_repair(set(selected))
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(c("r", str(exc)))
+        return 1
     installer_progress(12, "Preparing uv package manager")
     uv = ensure_uv()
     print(f"uv: {uv}")
     installer_progress(18, "uv package manager is ready")
 
-    selected = args.only if args.only else [s for s in ORDER if not getattr(args, f"skip_{s}")]
+    try:
+        _preflight_consolidated_runtime(uv, set(selected), detected_stack)
+    except (OSError, ValueError, RuntimeError, KeyError, zipfile.BadZipFile) as exc:
+        print(c("r", str(exc)))
+        installer_progress(100, "Shared runtime preflight failed; environment unchanged")
+        return 1
+    if args.preflight_only:
+        if CORE_CONSTRAINTS is None:
+            print(c("r", "未选择共享组件，未执行共享依赖预检"))
+            return 2
+        print(c("g", f"共享依赖预检通过；未安装环境、下载模型或更新路由。约束：{CORE_CONSTRAINTS}"))
+        return 0
     selected_count = max(1, len(selected))
     completed_count = 0
 
@@ -2719,6 +3136,9 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 - 单步失败不阻断其余步骤
             print(c("r", f"[{s}] 失败: {exc}"))
             results.append((s, "fail"))
+            if CONSOLIDATED_RUNTIME and s in CORE_COMPONENTS:
+                # One failure can affect every component sharing this venv.
+                break
         completed_count += 1
         installer_progress(18 + (completed_count * 76) // selected_count, f"Finished runtime step: {s}")
 
@@ -2728,10 +3148,32 @@ def main() -> int:
         print(f"  {s:<8} {label[st]}")
 
     if any(st == "fail" for _, st in results):
-        print(c("y", "\n有步骤失败。可单独重试，例如: python install/install.py --only svc"))
+        if CONSOLIDATED_RUNTIME and CORE_COMPONENTS.intersection(selected):
+            print(c("y", "\n共享环境可能已部分修改；不要单独修复组件。请用原 GPU 参数、同一配方一起重试 UVR/SeedVC/DDSP。"))
+        else:
+            print(c("y", "\n有步骤失败。可单独重试，例如: python install/install.py --only svc"))
         print(c("y", "失败项的手动补救方式见 install/README 或项目根 README。"))
         installer_progress(100, "Runtime environment finished with errors")
         return 1
+
+    if CONSOLIDATED_RUNTIME and CORE_COMPONENTS.intersection(selected):
+        try:
+            run(uv_cmd(uv, "pip", "check", "--python", str(venv_python(CORE_VENV))))
+            if CORE_PROFILE is not None:
+                recipe_check = _recipe_module().check_environment(
+                    venv_python(CORE_VENV), CORE_PROFILE, CORE_PROFILE_PINS)
+                if not recipe_check["ok"]:
+                    raise RuntimeError("共享环境偏离固定配方：" + json.dumps(recipe_check, ensure_ascii=False))
+            run([str(venv_python(CORE_VENV)), str(Path(__file__).with_name("audit_runtime.py")),
+                 "--root", str(ROOT), *(["--require-cuda"] if detected_stack != "cpu" else [])])
+            if CORE_COMPAT_WHEEL is not None:
+                run([str(venv_python(CORE_VENV)), str(Path(__file__).with_name("probe_core_compat.py")),
+                     "--root", str(ROOT), "--output", str(ROOT / ".tmp" / "core-compat-installed-probes.json")])
+            write_runtime_manifest(detected_stack, {name for name, status in results if status == "ok"})
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            print(c("r", f"共享运行时最终校验失败，未更新 runtime.json：{exc}"))
+            installer_progress(100, "Shared runtime validation failed")
+            return 1
 
     installer_progress(100, "Runtime environment complete")
     hr("全部完成")

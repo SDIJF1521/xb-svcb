@@ -76,6 +76,14 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "..\dist\XB-SVCB\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; 环境搭建脚本（纯 batch + Python，安装过程不涉及 PowerShell）
 Source: "..\install\install.py"; DestDir: "{app}\install"; Flags: ignoreversion
+Source: "..\install\audit_runtime.py"; DestDir: "{app}\install"; Flags: ignoreversion
+Source: "..\install\runtime_manifest.py"; DestDir: "{app}\install"; Flags: ignoreversion
+Source: "..\install\build_core_compat.py"; DestDir: "{app}\install"; Flags: ignoreversion
+Source: "..\install\probe_core_compat.py"; DestDir: "{app}\install"; Flags: ignoreversion
+Source: "..\install\core_recipe.py"; DestDir: "{app}\install"; Flags: ignoreversion
+Source: "..\install\runtime_profiles\*"; DestDir: "{app}\install\runtime_profiles"; Flags: recursesubdirs createallsubdirs ignoreversion
+; Optional local compatibility artifacts; never activates the experimental profile by itself.
+Source: "..\assets\runtime\*"; DestDir: "{app}\assets\runtime"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression skipifsourcedoesntexist
 Source: "..\install\configure_user_env.py"; DestDir: "{app}\install"; Flags: ignoreversion
 Source: "..\install\detect_python.bat"; DestDir: "{app}\install"; Flags: ignoreversion
 Source: "..\setup_env.bat"; DestDir: "{app}"; Flags: ignoreversion
@@ -121,6 +129,8 @@ Type: filesandordirs; Name: "{app}\.venv-rvc"
 Type: filesandordirs; Name: "{app}\.venv-seedvc"
 Type: filesandordirs; Name: "{app}\.venv-ddsp"
 Type: filesandordirs; Name: "{app}\.venv-hub"
+Type: filesandordirs; Name: "{app}\runtimes"
+Type: files; Name: "{app}\runtime.json"
 Type: filesandordirs; Name: "{app}\engines"
 Type: filesandordirs; Name: "{app}\tools"
 Type: filesandordirs; Name: "{app}\models"
@@ -1450,12 +1460,34 @@ begin
   end;
 end;
 
+function RuntimePython(const AppDir, Component, LegacyRelative: String): String;
+var
+  HelperPython, Resolver, Resolved: String;
+begin
+  Result := PathJoin(AppDir, LegacyRelative);
+  Resolver := PathJoin(AppDir, 'install\runtime_manifest.py');
+  HelperPython := PathJoin(AppDir, '.venv-plugins\Scripts\python.exe');
+  if not PythonFileAvailable(HelperPython) then
+    HelperPython := PathJoin(AppDir, '.venv-uvr\Scripts\python.exe');
+  if not PythonFileAvailable(HelperPython) then
+    HelperPython := Result;
+  if not FileExists(Resolver) or not PythonFileAvailable(HelperPython) then
+    Exit;
+  { Match app routing: explicit override, manifest, then legacy. Never infer
+    activation from a leftover core directory or the currently detected GPU. }
+  Resolved := Trim(CommandOutput(CmdPath(HelperPython) + ' ' + CmdPath(Resolver) +
+    ' --root ' + CmdPath(AppDir) + ' --component ' + Component +
+    ' --legacy ' + CmdPath(LegacyRelative)));
+  if (Resolved <> '') and FileExists(Resolved) then
+    Result := Resolved;
+end;
+
 function ValidateUvrRuntime(): Boolean;
 var
   AppDir, UvrPython, UvrWorker, UvrModel, Missing: String;
 begin
   AppDir := ExpandConstant('{app}');
-  UvrPython := PathJoin(AppDir, '.venv-uvr\Scripts\python.exe');
+  UvrPython := RuntimePython(AppDir, 'uvr', '.venv-uvr\Scripts\python.exe');
   UvrWorker := PathJoin(AppDir, '_internal\infrastructure\uvr_worker.py');
   UvrModel := PathJoin(AppDir, 'models\uvr\5_HP-Karaoke-UVR.pth');
   Missing := '';
@@ -1500,7 +1532,7 @@ var
   AppDir, SeedPython, SeedWorker, SeedInference, Missing: String;
 begin
   AppDir := ExpandConstant('{app}');
-  SeedPython := PathJoin(AppDir, '.venv-seedvc\Scripts\python.exe');
+  SeedPython := RuntimePython(AppDir, 'seedvc', '.venv-seedvc\Scripts\python.exe');
   SeedWorker := PathJoin(AppDir, '_internal\infrastructure\seedvc_worker.py');
   SeedInference := PathJoin(AppDir, 'engines\seed-vc\inference.py');
   Missing := '';
@@ -1542,7 +1574,7 @@ var
   AppDir, DdspPython, DdspWorker, DdspInference, Missing: String;
 begin
   AppDir := ExpandConstant('{app}');
-  DdspPython := PathJoin(AppDir, '.venv-ddsp\Scripts\python.exe');
+  DdspPython := RuntimePython(AppDir, 'ddsp', '.venv-ddsp\Scripts\python.exe');
   DdspWorker := PathJoin(AppDir, '_internal\infrastructure\ddsp_worker.py');
   DdspInference := PathJoin(AppDir, 'engines\ddsp-svc\main_reflow.py');
   Missing := '';
@@ -1653,15 +1685,15 @@ begin
   AppendInstallValidation('------------------------------------------------------------');
   AppendInstallValidation('六个 AI 隔离环境真实 Torch 校验');
 
-  CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-uvr\Scripts\python.exe'), 'UVR');
+  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'uvr', '.venv-uvr\Scripts\python.exe'), 'UVR');
   Result := Result and CurrentReady;
   CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-svc\Scripts\python.exe'), 'So-VITS-SVC');
   Result := Result and CurrentReady;
   CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-rvc\Scripts\python.exe'), 'RVC');
   Result := Result and CurrentReady;
-  CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-seedvc\Scripts\python.exe'), 'SeedVC');
+  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'seedvc', '.venv-seedvc\Scripts\python.exe'), 'SeedVC');
   Result := Result and CurrentReady;
-  CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-ddsp\Scripts\python.exe'), 'DDSP-SVC');
+  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'ddsp', '.venv-ddsp\Scripts\python.exe'), 'DDSP-SVC');
   Result := Result and CurrentReady;
   CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-vocal\Scripts\python.exe'), 'AI 歌声增强');
   Result := Result and CurrentReady;
