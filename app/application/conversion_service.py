@@ -286,6 +286,13 @@ class ConversionService:
         log_file: Path,
         framework: str = "",
     ) -> None:
+        # The guard switch is also the opt-out for every automatic high-range
+        # adjustment.  Previously disabling the selective pitch pass still
+        # switched F0 extractors and tightened RVC protection, which could
+        # produce a metallic/vibrato result even though the guard was off.
+        if not params.auto_high_pitch_guard:
+            self._log(log_file, "  高音保护已关闭：保留手动 F0、滤波半径和辅音保护参数")
+            return
         high_pitch = bool(profile.get("high_pitch"))
         high_frequency = bool(profile.get("high_frequency"))
         recommended = max(
@@ -1108,6 +1115,30 @@ class ConversionService:
             timeline.append({"start": cursor, "end": duration, "model_ids": []})
         return timeline
 
+    @staticmethod
+    def _multi_model_params(
+        model: dict[str, Any], fallback: dict[str, Any] | None = None
+    ) -> InferenceParams:
+        """Normalize one mixed-cover model's params, including the guard switch.
+
+        Older records only stored a shared ``params`` object.  Preserve that
+        value when a model-specific switch is absent, while keeping protection
+        enabled by default for newly created or incomplete records.
+        """
+        raw = model.get("params")
+        params = dict(raw) if isinstance(raw, dict) else {}
+        if (
+            "auto_high_pitch_guard" not in params
+            and "autoHighPitchGuard" not in params
+        ):
+            shared = fallback if isinstance(fallback, dict) else {}
+            guard = shared.get(
+                "auto_high_pitch_guard",
+                shared.get("autoHighPitchGuard", True),
+            )
+            params["auto_high_pitch_guard"] = guard
+        return InferenceParams.from_dict(params)
+
     def _run_multi(self, work_id: str) -> None:
         work = self._repo.get(work_id)
         if not work:
@@ -1285,7 +1316,7 @@ class ConversionService:
             high_pitch_guard_any = False
             for n, mid in enumerate(used_models):
                 model = seg_models.get(mid) or {}
-                seg_params = InferenceParams.from_dict(model.get("params", {}))
+                seg_params = self._multi_model_params(model, work.get("params"))
                 seg_framework = config.modelhub_normalize_framework(model.get("framework"))
                 self._adapt_high_range(
                     seg_params,

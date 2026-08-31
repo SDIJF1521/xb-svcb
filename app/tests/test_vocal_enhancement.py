@@ -15,8 +15,9 @@ import config
 from application.conversion_service import ConversionService, default_steps, default_steps_multi
 from application.work_service import WorkService
 from domain import InferenceParams
+from infrastructure.storage import ListRepository, SettingsStore
 from infrastructure.vocal_enhancement import VocalEnhancementProcessor
-from infrastructure import vocal_enhancement_worker, vocal_tuning_worker
+from infrastructure import formant_pitch_worker, vocal_enhancement_worker, vocal_tuning_worker
 
 
 def test_optional_pipeline_step_is_inserted_before_mix() -> None:
@@ -110,6 +111,56 @@ def test_work_service_normalizes_levels_and_disables_manual_merge() -> None:
     }
 
 
+def test_multi_model_high_pitch_guard_is_carried_per_model(tmp_path: Path, monkeypatch) -> None:
+    class _QueuedConversion:
+        def start(self, _work_id: str) -> None:
+            return
+
+    class _Models:
+        items = {
+            "model_a": {"id": "model_a", "name": "A", "framework": "rvc"},
+            "model_b": {"id": "model_b", "name": "B", "framework": "so-vits-svc"},
+        }
+
+        def get(self, model_id: str):
+            return self.items.get(model_id)
+
+    monkeypatch.setattr(config, "WORKS_DIR", tmp_path / "works")
+    repo = ListRepository(tmp_path / "works.json")
+    service = WorkService(
+        repo,
+        _QueuedConversion(),
+        _Models(),
+        SettingsStore(tmp_path / "settings.json"),
+    )
+
+    work = service.create(
+        {
+            "mode": "multi",
+            "source_path": str(tmp_path / "song.wav"),
+            "params": {"auto_high_pitch_guard": False},
+            "models": [
+                {"model_id": "model_a", "params": {"auto_high_pitch_guard": True}},
+                {"model_id": "model_b", "params": {}},
+            ],
+            "segments": [
+                {"start": 0, "end": 4, "model_ids": ["model_a", "model_b"]},
+            ],
+        }
+    )
+
+    assert work["seg_models"]["model_a"]["params"]["auto_high_pitch_guard"] is True
+    # A model without its own switch inherits the legacy top-level value.
+    assert work["seg_models"]["model_b"]["params"]["auto_high_pitch_guard"] is False
+    assert (
+        ConversionService._multi_model_params(
+            {"params": {}}, {"auto_high_pitch_guard": False}
+        ).auto_high_pitch_guard
+        is False
+    )
+    assert ConversionService._multi_model_params({}).auto_high_pitch_guard is True
+
+
 def test_conversion_service_reads_all_enhancement_controls() -> None:
     enabled, level, controls = ConversionService._enhancement_settings(
         {
@@ -170,6 +221,35 @@ def test_high_range_profile_adapts_f0_and_transient_protection(tmp_path: Path) -
     assert getattr(params, "adaptive_f0_max") == 1480.0
 
 
+def test_high_range_adaptation_is_noop_when_guard_disabled(tmp_path: Path) -> None:
+    params = InferenceParams(
+        f0_method="harvest",
+        protect=0.33,
+        filter_radius=5,
+        auto_high_pitch_guard=False,
+    )
+    logger = types.SimpleNamespace(_log=lambda *_args: None)
+
+    ConversionService._adapt_high_range(
+        logger,
+        params,
+        {
+            "high_pitch": True,
+            "high_frequency": True,
+            "p95_f0_hz": 980.0,
+            "high_band_ratio": 0.12,
+            "recommended_f0_max": 1480.0,
+        },
+        tmp_path / "run.log",
+        "rvc",
+    )
+
+    assert params.f0_method == "harvest"
+    assert params.filter_radius == 5
+    assert params.protect == 0.33
+    assert not hasattr(params, "adaptive_f0_max")
+
+
 def test_audio_profile_detects_high_pitch_and_high_band() -> None:
     sample_rate = 24000
     time_axis = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
@@ -183,6 +263,51 @@ def test_audio_profile_detects_high_pitch_and_high_band() -> None:
     assert profile["high_pitch"] is True
     assert profile["high_frequency"] is True
     assert float(profile["recommended_f0_max"]) > 1100.0
+
+
+def test_formant_guard_ignores_isolated_pitch_tracker_spikes() -> None:
+    assert formant_pitch_worker._high_intervals(
+        [(0.50, 920.0)], 800.0, 0.0, 1.0
+    ) == []
+    intervals = formant_pitch_worker._high_intervals(
+        [(0.50, 920.0), (0.54, 940.0)], 800.0, 0.0, 1.0
+    )
+    assert intervals
+    assert intervals[0][0] < 0.50 < intervals[0][1]
+
+
+def test_formant_guard_rejects_collapsed_render(tmp_path: Path, monkeypatch) -> None:
+    import wave
+
+    def write_wav(path: Path, values: np.ndarray) -> None:
+        pcm = np.asarray(np.clip(values, -1.0, 1.0) * 32767.0, dtype="<i2")
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(16000)
+            handle.writeframes(pcm.tobytes())
+
+    def read_wav(path: str, always_2d: bool, dtype: str):
+        with wave.open(path, "rb") as handle:
+            channels = handle.getnchannels()
+            rate = handle.getframerate()
+            raw = handle.readframes(handle.getnframes())
+        values = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+        values = values.reshape(-1, channels) if always_2d else values
+        return values.astype(dtype), rate
+
+    monkeypatch.setitem(sys.modules, "soundfile", types.SimpleNamespace(read=read_wav))
+
+    source = tmp_path / "source.wav"
+    rendered = tmp_path / "rendered.wav"
+    signal = np.sin(np.linspace(0.0, np.pi * 8.0, 16000, dtype=np.float32)) * 0.4
+    write_wav(source, signal)
+    write_wav(rendered, np.zeros_like(signal))
+
+    valid, reason = formant_pitch_worker._validate_render(source, rendered)
+
+    assert valid is False
+    assert "能量" in reason
 
 
 def test_worker_basic_and_advanced_layers_use_expected_order(tmp_path: Path) -> None:

@@ -2067,6 +2067,8 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
                 raise HTTPException(status_code=422, detail="multi 模式需要 models 和 segments")
             models: list[dict[str, Any]] = []
             selected_ids: set[str] = set()
+            shared_guard_explicit = "auto_high_pitch_guard" in request.params.model_fields_set
+            shared_guard = request.params.auto_high_pitch_guard
             for entry in request.models:
                 if entry.model_id in selected_ids:
                     raise HTTPException(status_code=422, detail=f"models 中模型重复：{entry.model_id}")
@@ -2074,6 +2076,15 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
                 if not model:
                     raise HTTPException(status_code=404, detail=f"模型不存在：{entry.model_id}")
                 params = entry.params.model_dump()
+                # Pydantic fills omitted model fields with their defaults.  If
+                # the caller supplied the legacy top-level switch, propagate it
+                # to model entries that did not explicitly override the switch;
+                # otherwise a default ``true`` would silently defeat ``false``.
+                if (
+                    shared_guard_explicit
+                    and "auto_high_pitch_guard" not in entry.params.model_fields_set
+                ):
+                    params["auto_high_pitch_guard"] = shared_guard
                 if entry.reference_upload_id:
                     params["reference_audio"] = str(_resolve_upload(entry.reference_upload_id))
                 if str(model.get("framework") or "") == "seed-vc" and not params.get(
@@ -2111,6 +2122,10 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
                 "workflow": request.workflow,
                 "vocal_enhancement": request.vocal_enhancement.model_dump(),
                 "preprocess": request.preprocess.model_dump(),
+                # Keep the top-level params for compatibility with older
+                # clients; WorkService uses its high-pitch guard switch as a
+                # fallback when a model entry does not provide one.
+                "params": request.params.model_dump(),
                 "mode": "multi",
                 "models": models,
                 "segments": segments,
