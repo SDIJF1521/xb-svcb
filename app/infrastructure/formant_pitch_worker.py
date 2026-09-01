@@ -37,6 +37,7 @@ def _high_intervals(
     threshold: float,
     xmin: float,
     xmax: float,
+    allowed_regions: list[tuple[float, float]] | None = None,
 ) -> list[tuple[float, float]]:
     """Turn *stable* high voiced pitch points into expanded time regions.
 
@@ -45,41 +46,75 @@ def _high_intervals(
     like vibrato/electronic noise, so require two nearby high points before
     enabling a region.
     """
-    anchors = sorted(
-        (float(time), float(frequency))
-        for time, frequency in points
-        if frequency >= threshold and xmin <= time <= xmax
-    )
-    if len(anchors) < 2:
-        return []
-    # Keep notes whose F0 briefly dips below the boundary in one region. Two
-    # true high-note anchors are still required, so isolated pitch spikes do
-    # not activate PSOLA.
     hysteresis = max(35.0, float(threshold) * 0.08)
-    high_points = sorted(
-        (float(time), float(frequency))
-        for time, frequency in points
-        if frequency >= max(100.0, threshold - hysteresis)
-        and xmin <= time <= xmax
+    scoped_regions = sorted(
+        (max(float(start), xmin), min(float(end), xmax))
+        for start, end in (allowed_regions or [])
+        if float(end) > float(start)
+        and min(float(end), xmax) > max(float(start), xmin)
     )
-    groups: list[list[tuple[float, float]]] = [[high_points[0]]]
-    for point in high_points[1:]:
-        if point[0] - groups[-1][-1][0] <= 0.12:
-            groups[-1].append(point)
-        else:
-            groups.append([point])
-    padding = 0.06
-    intervals: list[tuple[float, float]] = []
-    for group in groups:
-        if sum(1 for _, frequency in group if frequency >= threshold) < 2:
-            continue
-        start = max(xmin, group[0][0] - padding)
-        end = min(xmax, group[-1][0] + padding)
-        if intervals and start <= intervals[-1][1] + 0.01:
-            intervals[-1] = (intervals[-1][0], max(intervals[-1][1], end))
-        else:
-            intervals.append((start, end))
-    return intervals
+    def build(anchor_threshold: float) -> list[tuple[float, float]]:
+        anchors = sorted(
+            (float(time), float(frequency))
+            for time, frequency in points
+            if frequency >= anchor_threshold and xmin <= time <= xmax
+        )
+        if len(anchors) < 2:
+            return []
+        # Keep notes whose F0 briefly dips below the boundary in one region.
+        high_points = sorted(
+            (float(time), float(frequency))
+            for time, frequency in points
+            if frequency >= max(100.0, threshold - hysteresis)
+            and xmin <= time <= xmax
+        )
+        if not high_points:
+            return []
+        groups: list[list[tuple[float, float]]] = [[high_points[0]]]
+        for point in high_points[1:]:
+            if point[0] - groups[-1][-1][0] <= 0.12:
+                groups[-1].append(point)
+            else:
+                groups.append([point])
+        padding = 0.06
+        intervals: list[tuple[float, float]] = []
+        for group in groups:
+            if sum(1 for _, frequency in group if frequency >= anchor_threshold) < 2:
+                continue
+            start = max(xmin, group[0][0] - padding)
+            end = min(xmax, group[-1][0] + padding)
+            if intervals and start <= intervals[-1][1] + 0.01:
+                intervals[-1] = (intervals[-1][0], max(intervals[-1][1], end))
+            else:
+                intervals.append((start, end))
+        return intervals
+
+    # Always prefer the strict high-note boundary. A lower hysteresis retry is
+    # considered only when a confirmed dropout scope contains no strict note.
+    intervals = build(float(threshold))
+    if not scoped_regions:
+        return intervals
+
+    def clip_to_scope(source: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        clipped: list[tuple[float, float]] = []
+        context = _REGION_FADE_SECONDS
+        for start, end in source:
+            for scope_start, scope_end in scoped_regions:
+                left = max(start, scope_start - context)
+                right = min(end, scope_end + context)
+                if right <= left:
+                    continue
+                if clipped and left <= clipped[-1][1] + 0.01:
+                    clipped[-1] = (clipped[-1][0], max(clipped[-1][1], right))
+                else:
+                    clipped.append((left, right))
+        return clipped
+
+    strict_scoped = clip_to_scope(intervals)
+    if strict_scoped:
+        return strict_scoped
+    relaxed_threshold = max(100.0, float(threshold) - max(70.0, hysteresis))
+    return clip_to_scope(build(relaxed_threshold))
 
 
 def _region_mask(
@@ -281,6 +316,7 @@ def shift(
     high_threshold: float = 800.0,
     mask_source: Path | None = None,
     loudness_source: Path | None = None,
+    allowed_regions: list[tuple[float, float]] | None = None,
 ) -> list[tuple[float, float]]:
     import numpy as np
     import parselmouth
@@ -317,6 +353,7 @@ def shift(
         max(100.0, float(high_threshold)),
         sound.xmin,
         sound.xmax,
+        allowed_regions=allowed_regions,
     )
 
     # Do not run an unnecessary PSOLA resynthesis when the output has no
@@ -422,6 +459,11 @@ def main() -> int:
     parser.add_argument("--mask-source", default="")
     parser.add_argument("--loudness-source", default="")
     parser.add_argument(
+        "--regions-json",
+        default="",
+        help="仅处理 JSON 中列出的已确认失配区间",
+    )
+    parser.add_argument(
         "--report-json",
         default="",
         help="可选：将实际处理的高音区间写入 JSON",
@@ -430,6 +472,25 @@ def main() -> int:
     source = Path(args.input)
     destination = Path(args.output)
     try:
+        allowed_regions: list[tuple[float, float]] | None = None
+        if args.regions_json:
+            raw_regions = json.loads(Path(args.regions_json).read_text(encoding="utf-8"))
+            if isinstance(raw_regions, list):
+                parsed_regions: list[tuple[float, float]] = []
+                for item in raw_regions:
+                    if isinstance(item, dict):
+                        start, end = item.get("start"), item.get("end")
+                    elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                        start, end = item[0], item[1]
+                    else:
+                        continue
+                    try:
+                        left, right = float(start), float(end)
+                    except (TypeError, ValueError):
+                        continue
+                    if right > left:
+                        parsed_regions.append((left, right))
+                allowed_regions = parsed_regions or None
         intervals = shift(
             source,
             destination,
@@ -437,6 +498,7 @@ def main() -> int:
             high_threshold=args.high_threshold,
             mask_source=Path(args.mask_source) if args.mask_source else None,
             loudness_source=Path(args.loudness_source) if args.loudness_source else None,
+            allowed_regions=allowed_regions,
         )
         if args.report_json:
             report_path = Path(args.report_json)

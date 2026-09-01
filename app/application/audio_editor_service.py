@@ -1932,6 +1932,7 @@ class AudioEditorService:
         destination: Path,
         params: InferenceParams,
         model: dict[str, Any] | None = None,
+        only_regions: list[tuple[float, float]] | None = None,
     ) -> tuple[Path, bool]:
         if not params.auto_high_pitch_guard or not source.is_file():
             return source, False
@@ -1942,14 +1943,19 @@ class AudioEditorService:
         pitch_shift = getattr(self._ffmpeg, "pitch_shift", None)
         if not callable(pitch_shift):
             return source, False
-        ok = pitch_shift(
-            source,
-            destination,
-            -self._HIGH_PITCH_GUARD_SEMITONES,
-            mask_source=source,
-            loudness_source=source,
-            high_threshold=high_threshold,
-        )
+        try:
+            kwargs: dict[str, Any] = {
+                "mask_source": source,
+                "loudness_source": source,
+                "high_threshold": high_threshold,
+            }
+            if only_regions:
+                kwargs["regions"] = only_regions
+            ok = pitch_shift(source, destination, -self._HIGH_PITCH_GUARD_SEMITONES, **kwargs)
+        except TypeError:
+            if only_regions:
+                return source, False
+            ok = pitch_shift(source, destination, -self._HIGH_PITCH_GUARD_SEMITONES)
         return (destination, True) if ok and destination.is_file() else (source, False)
 
     def _restore_high_pitch_guard(
@@ -1959,20 +1965,26 @@ class AudioEditorService:
         original: Path,
         params: InferenceParams,
         model: dict[str, Any] | None = None,
+        only_regions: list[tuple[float, float]] | None = None,
     ) -> Path:
         if not params.auto_high_pitch_guard:
             return source
         pitch_shift = getattr(self._ffmpeg, "pitch_shift", None)
         if not callable(pitch_shift):
             return source
-        ok = pitch_shift(
-            source,
-            destination,
-            self._HIGH_PITCH_GUARD_SEMITONES,
-            mask_source=original,
-            loudness_source=original,
-            high_threshold=self._model_high_pitch_threshold(params, model),
-        )
+        try:
+            kwargs = {
+                "mask_source": original,
+                "loudness_source": original,
+                "high_threshold": self._model_high_pitch_threshold(params, model),
+            }
+            if only_regions:
+                kwargs["regions"] = only_regions
+            ok = pitch_shift(source, destination, self._HIGH_PITCH_GUARD_SEMITONES, **kwargs)
+        except TypeError:
+            if only_regions:
+                return source
+            ok = pitch_shift(source, destination, self._HIGH_PITCH_GUARD_SEMITONES)
         return destination if ok and destination.is_file() else source
 
     def _infer_with_dropout_recovery(
@@ -1997,6 +2009,7 @@ class AudioEditorService:
         history: list[dict[str, Any]] = []
         guard_applied_any = False
         rendered = output
+        guard_regions: list[tuple[float, float]] | None = None
         for attempt in range(attempts):
             raw_target = output if attempt == 0 else output.with_name(
                 f"{output.stem}_dropout_retry{attempt}.wav"
@@ -2009,6 +2022,7 @@ class AudioEditorService:
                     output.with_name(f"{output.stem}_guarded_retry{attempt}.wav"),
                     params,
                     profile,
+                    guard_regions,
                 )
             guard_applied_any = guard_applied_any or guard_applied
             engine.infer(model, guarded, raw_target, params, duration)
@@ -2021,6 +2035,7 @@ class AudioEditorService:
                     source,
                     params,
                     profile,
+                    guard_regions,
                 )
                 if candidate != raw_target:
                     rendered = candidate
@@ -2040,6 +2055,13 @@ class AudioEditorService:
                 "issue": issue,
             }
             history.append(entry)
+            if issue and issue.get("bad_regions"):
+                guard_regions = [
+                    (float(item.get("start", 0.0)), float(item.get("end", 0.0)))
+                    for item in (issue.get("bad_regions") or [])
+                    if isinstance(item, dict)
+                    and float(item.get("end", 0.0)) > float(item.get("start", 0.0))
+                ] or guard_regions
             if issue is None:
                 return rendered, history, guard_applied_any
             next_threshold = ConversionService._next_dropout_threshold(threshold, issue)

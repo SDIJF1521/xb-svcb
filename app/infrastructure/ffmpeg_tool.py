@@ -457,6 +457,7 @@ class FfmpegTool:
         loudness_source: Path | None = None,
         high_threshold: float = 800.0,
         report_path: Path | None = None,
+        regions: list[tuple[float, float]] | None = None,
     ) -> bool:
         """Pitch-shift only high-note regions while preserving formants.
 
@@ -468,6 +469,7 @@ class FfmpegTool:
         if not python or not Path(str(python)).is_file() or not worker or not Path(str(worker)).is_file():
             return False
         dst.parent.mkdir(parents=True, exist_ok=True)
+        scope_path: Path | None = None
         try:
             command = [
                 str(python),
@@ -487,6 +489,20 @@ class FfmpegTool:
                 command.extend(["--loudness-source", str(loudness_source)])
             if report_path:
                 command.extend(["--report-json", str(report_path)])
+            if regions:
+                scope_path = dst.with_suffix(".scope.json")
+                scope_path.write_text(
+                    json.dumps(
+                        [
+                            {"start": float(start), "end": float(end)}
+                            for start, end in regions
+                            if float(end) > float(start)
+                        ],
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                command.extend(["--regions-json", str(scope_path)])
             result = subprocess.run(
                 command,
                 capture_output=True,
@@ -556,6 +572,12 @@ class FfmpegTool:
             return True
         except (OSError, subprocess.SubprocessError, ValueError):
             return False
+        finally:
+            if scope_path:
+                try:
+                    scope_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def silence(self, dst: Path, duration: float, sample_rate: int = 44100) -> bool:
         """Create a fixed-duration stereo silence file."""

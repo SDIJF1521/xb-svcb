@@ -691,6 +691,7 @@ class RealtimeCoverService:
         attempts = 1 + guard_rounds if params.auto_high_pitch_guard else 1
         history: list[dict[str, Any]] = []
         rendered = output
+        guard_regions: list[tuple[float, float]] | None = None
         for attempt in range(attempts):
             raw_target = output if attempt == 0 else output.with_name(
                 f"{output.stem}_dropout_retry{attempt}.wav"
@@ -704,6 +705,7 @@ class RealtimeCoverService:
                     params,
                     self._duration(source),
                     model=model,
+                    only_regions=guard_regions,
                 )
             infer(guarded, raw_target)
             rendered = raw_target
@@ -716,6 +718,7 @@ class RealtimeCoverService:
                     mask_source=source,
                     loudness_source=source,
                     high_threshold=threshold,
+                    only_regions=guard_regions,
                 ):
                     rendered = restored
                 else:
@@ -739,6 +742,13 @@ class RealtimeCoverService:
                 "issue": issue,
             }
             history.append(entry)
+            if issue and issue.get("bad_regions"):
+                guard_regions = [
+                    (float(item.get("start", 0.0)), float(item.get("end", 0.0)))
+                    for item in (issue.get("bad_regions") or [])
+                    if isinstance(item, dict)
+                    and float(item.get("end", 0.0)) > float(item.get("start", 0.0))
+                ] or guard_regions
             if issue is None:
                 return rendered, history
             next_threshold = ConversionService._next_dropout_threshold(threshold, issue)
@@ -906,22 +916,23 @@ class RealtimeCoverService:
         mask_source: Path | None = None,
         loudness_source: Path | None = None,
         high_threshold: float | None = None,
+        only_regions: list[tuple[float, float]] | None = None,
     ) -> bool:
         shift = getattr(self._ffmpeg, "pitch_shift", None)
         if not callable(shift):
             return False
         try:
-            return bool(
-                shift(
-                    source,
-                    destination,
-                    int(semitones),
-                    mask_source=mask_source,
-                    loudness_source=loudness_source,
-                    high_threshold=float(high_threshold or self._HIGH_PITCH_THRESHOLD),
-                )
-            )
+            kwargs: dict[str, Any] = {
+                "mask_source": mask_source,
+                "loudness_source": loudness_source,
+                "high_threshold": float(high_threshold or self._HIGH_PITCH_THRESHOLD),
+            }
+            if only_regions:
+                kwargs["regions"] = only_regions
+            return bool(shift(source, destination, int(semitones), **kwargs))
         except TypeError:
+            if only_regions:
+                return False
             # Keep compatibility with lightweight test doubles and older tools.
             return bool(shift(source, destination, int(semitones)))
 
@@ -934,6 +945,7 @@ class RealtimeCoverService:
         *,
         sample_rate: int = 44100,
         model: dict[str, Any] | None = None,
+        only_regions: list[tuple[float, float]] | None = None,
     ) -> tuple[Path, int]:
         """Lower only detected extreme-high regions before model inference.
 
@@ -947,7 +959,13 @@ class RealtimeCoverService:
         high_threshold = self._model_high_pitch_threshold(params, model)
         if peak_f0 < high_threshold:
             return source, 0
-        if not self._pitch_shift(source, destination, -12, high_threshold=high_threshold):
+        if not self._pitch_shift(
+            source,
+            destination,
+            -12,
+            high_threshold=high_threshold,
+            only_regions=only_regions,
+        ):
             self._append_realtime_log(
                 source.with_name("realtime.log"),
                 f"PITCH_GUARD_PREP_FAILED\tpeak_f0={peak_f0:.1f}\n",

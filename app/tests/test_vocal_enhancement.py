@@ -758,6 +758,23 @@ def test_formant_guard_ignores_isolated_pitch_tracker_spikes() -> None:
     assert intervals[0][0] < 0.50 < intervals[0][1]
 
 
+def test_formant_guard_accepts_notes_in_detector_hysteresis_band() -> None:
+    intervals = formant_pitch_worker._high_intervals(
+        [(0.50, 670.0), (0.54, 690.0)],
+        720.0,
+        0.0,
+        1.0,
+        allowed_regions=[(0.45, 0.60)],
+    )
+    assert intervals
+
+
+def test_formant_guard_keeps_hysteresis_notes_untouched_without_scope() -> None:
+    assert formant_pitch_worker._high_intervals(
+        [(0.50, 670.0), (0.54, 690.0)], 720.0, 0.0, 1.0
+    ) == []
+
+
 def test_formant_guard_rejects_collapsed_render(tmp_path: Path, monkeypatch) -> None:
     import wave
 

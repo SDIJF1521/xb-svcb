@@ -440,6 +440,7 @@ class ConversionService:
         params: InferenceParams,
         log_file: Path,
         threshold: float | None = None,
+        only_regions: list[tuple[float, float]] | None = None,
     ) -> tuple[Path, bool]:
         """Prepare a selective high-note pitch guard for normal AI covers."""
         if not params.auto_high_pitch_guard or not source.is_file():
@@ -458,8 +459,12 @@ class ConversionService:
                 loudness_source=source,
                 high_threshold=high_threshold,
                 report_path=report_path,
+                regions=only_regions,
             )
         except TypeError:
+            if only_regions:
+                self._log(log_file, "  当前高音保护组件不支持失配区间限制，跳过本次保护以保留原始结果")
+                return source, False
             # Keep compatibility with older in-process tool doubles and
             # installations whose frozen ffmpeg wrapper predates region reports.
             guard_ok = self._ffmpeg.pitch_shift(
@@ -509,6 +514,7 @@ class ConversionService:
         params: InferenceParams,
         log_file: Path,
         threshold: float | None = None,
+        only_regions: list[tuple[float, float]] | None = None,
     ) -> Path:
         if not params.auto_high_pitch_guard:
             return source
@@ -522,8 +528,12 @@ class ConversionService:
                 loudness_source=original,
                 high_threshold=float(threshold or getattr(params, "high_pitch_threshold", 0.0) or self._HIGH_PITCH_THRESHOLD),
                 report_path=destination.with_suffix(".regions.json"),
+                regions=only_regions,
             )
         except TypeError:
+            if only_regions:
+                self._log(log_file, "  当前高音恢复组件不支持失配区间限制，跳过恢复以保留模型输出")
+                return source
             restore_ok = self._ffmpeg.pitch_shift(
                 source,
                 destination,
@@ -960,6 +970,7 @@ class ConversionService:
         history: list[dict[str, Any]] = []
         guard_applied_any = False
         rendered = output
+        guard_regions: list[tuple[float, float]] | None = None
 
         def run_inference(vocals: Path, target: Path) -> None:
             if infer is None:
@@ -1014,6 +1025,12 @@ class ConversionService:
             # old boundary can leave a 700-800 Hz syllable unprotected.
             threshold = self._next_dropout_threshold(threshold, issue)
             params.high_pitch_threshold = threshold
+            guard_regions = [
+                (float(item.get("start", 0.0)), float(item.get("end", 0.0)))
+                for item in (issue.get("bad_regions") or [])
+                if isinstance(item, dict)
+                and float(item.get("end", 0.0)) > float(item.get("start", 0.0))
+            ] or None
             if issue.get("bad_regions") and not params.manual_params_enabled:
                 attempts = max(attempts, self._DROPOUT_RECOVERY_OFFLINE_MAX_ATTEMPTS)
 
@@ -1034,6 +1051,7 @@ class ConversionService:
                 params,
                 log_file,
                 threshold,
+                guard_regions,
             )
             guard_applied_any = guard_applied_any or guard_applied
             run_inference(guarded, raw_target)
@@ -1047,6 +1065,7 @@ class ConversionService:
                     params,
                     log_file,
                     threshold,
+                    guard_regions,
                 )
                 if baseline_first and rendered != output:
                     merged_target = output.with_name(f"{output.stem}_guarded_merged_retry{attempt}.wav")
