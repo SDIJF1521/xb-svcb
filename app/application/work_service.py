@@ -382,10 +382,20 @@ class WorkService:
         preprocess = self._preprocess(payload)
         shared_params = payload.get("params")
         shared_guard: Any = None
+        shared_guard_rounds: Any = None
+        shared_manual: Any = None
         if isinstance(shared_params, dict):
             for key in ("auto_high_pitch_guard", "autoHighPitchGuard"):
                 if key in shared_params:
                     shared_guard = shared_params[key]
+                    break
+            for key in ("high_pitch_guard_rounds", "highPitchGuardRounds"):
+                if key in shared_params:
+                    shared_guard_rounds = shared_params[key]
+                    break
+            for key in ("manual_params_enabled", "manualParamsEnabled"):
+                if key in shared_params:
+                    shared_manual = shared_params[key]
                     break
         seg_models: dict[str, Any] = {}
         for entry in payload.get("models", []) or []:
@@ -407,6 +417,21 @@ class WorkService:
                 model_params["auto_high_pitch_guard"] = (
                     True if shared_guard is None else shared_guard
                 )
+            if (
+                "manual_params_enabled" not in model_params
+                and "manualParamsEnabled" not in model_params
+            ):
+                # New UI payloads carry the switch at the shared level; legacy
+                # payloads keep their historical manual tuning semantics.
+                model_params["manual_params_enabled"] = (
+                    True if shared_manual is None else shared_manual
+                )
+            if (
+                "high_pitch_guard_rounds" not in model_params
+                and "highPitchGuardRounds" not in model_params
+                and shared_guard_rounds is not None
+            ):
+                model_params["high_pitch_guard_rounds"] = shared_guard_rounds
             seg_models[mid] = {
                 "name": model.get("name", mid),
                 "params": model_params,
@@ -543,7 +568,7 @@ class WorkService:
         }
 
     @staticmethod
-    def _resolve_model_paths(model: dict[str, Any] | None) -> dict[str, str]:
+    def _resolve_model_paths(model: dict[str, Any] | None) -> dict[str, Any]:
         """从模型记录提取推理所需的文件路径与框架标识。
 
         返回含 ``framework``（路由引擎用）、so-vits / SeedVC 的 main/config 路径、
@@ -557,6 +582,7 @@ class WorkService:
                 "diffusion_model_path": "",
                 "diffusion_config_path": "",
                 "index_path": "",
+                "model_metadata": {},
             }
         framework = config.modelhub_normalize_framework(
             model.get("framework") or config.modelhub_guess_framework(model.get("type"))
@@ -568,6 +594,7 @@ class WorkService:
             "diffusion_model_path": (model.get("diffusion_model") or {}).get("path", ""),
             "diffusion_config_path": (model.get("diffusion_config") or {}).get("path", ""),
             "index_path": (model.get("index_file") or {}).get("path", ""),
+            "model_metadata": model.get("metadata") or {},
         }
 
     def retry(self, work_id: str) -> bool:

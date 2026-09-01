@@ -32,7 +32,7 @@
       </div>
     </header>
 
-    <section class="control-band">
+    <section class="control-band" data-guide="api-service">
       <div class="section-title">
         <div>
           <h2>服务配置</h2>
@@ -124,7 +124,7 @@
       <p v-if="status.last_error && !status.running" class="last-error">{{ status.last_error }}</p>
     </section>
 
-    <section class="docs-band">
+    <section class="docs-band" data-guide="api-docs">
       <div class="section-title">
         <div>
           <h2>调用文档</h2>

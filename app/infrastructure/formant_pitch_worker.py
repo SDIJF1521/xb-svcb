@@ -8,7 +8,12 @@ changed; the spectral envelope/formants remain in the source sound.
 from __future__ import annotations
 
 import argparse
+import json
+import math
 from pathlib import Path
+
+
+_REGION_FADE_SECONDS = 0.08
 
 
 def _pitch_points(tier, call) -> list[tuple[float, float]]:  # noqa: ANN001
@@ -40,23 +45,33 @@ def _high_intervals(
     like vibrato/electronic noise, so require two nearby high points before
     enabling a region.
     """
-    high_points = sorted(
+    anchors = sorted(
         (float(time), float(frequency))
         for time, frequency in points
         if frequency >= threshold and xmin <= time <= xmax
     )
-    if len(high_points) < 2:
+    if len(anchors) < 2:
         return []
+    # Keep notes whose F0 briefly dips below the boundary in one region. Two
+    # true high-note anchors are still required, so isolated pitch spikes do
+    # not activate PSOLA.
+    hysteresis = max(35.0, float(threshold) * 0.08)
+    high_points = sorted(
+        (float(time), float(frequency))
+        for time, frequency in points
+        if frequency >= max(100.0, threshold - hysteresis)
+        and xmin <= time <= xmax
+    )
     groups: list[list[tuple[float, float]]] = [[high_points[0]]]
     for point in high_points[1:]:
-        if point[0] - groups[-1][-1][0] <= 0.08:
+        if point[0] - groups[-1][-1][0] <= 0.12:
             groups[-1].append(point)
         else:
             groups.append([point])
-    padding = 0.035
+    padding = 0.06
     intervals: list[tuple[float, float]] = []
     for group in groups:
-        if len(group) < 2:
+        if sum(1 for _, frequency in group if frequency >= threshold) < 2:
             continue
         start = max(xmin, group[0][0] - padding)
         end = min(xmax, group[-1][0] + padding)
@@ -77,7 +92,7 @@ def _region_mask(
     mask = np.zeros(max(0, count), dtype=np.float64)
     if not intervals or count <= 0:
         return mask
-    fade = max(1, int(round(sample_rate * 0.035)))
+    fade = max(1, int(round(sample_rate * _REGION_FADE_SECONDS)))
     for start, end in intervals:
         left = max(0, int(round(start * sample_rate)))
         right = min(count, int(round(end * sample_rate)))
@@ -93,6 +108,35 @@ def _region_mask(
             phase = np.linspace(np.pi / 2.0, 0.0, right_edge - right, endpoint=False)
             mask[right:right_edge] = np.maximum(mask[right:right_edge], np.sin(phase) ** 2)
     return mask
+
+
+def _region_weight_at(
+    time: float,
+    intervals: list[tuple[float, float]],
+    fade: float = _REGION_FADE_SECONDS,
+) -> float:
+    """Return a smooth 0..1 pitch-shift amount at one pitch-tier point.
+
+    The audio blend already fades at the same boundary.  Applying that fade to
+    the pitch tier as well avoids an instantaneous frequency jump inside Praat
+    PSOLA, which otherwise sounds like a dropped frame at every high-note edge.
+    """
+    point = float(time)
+    edge = max(0.01, float(fade))
+    weight = 0.0
+    for start, end in intervals:
+        start = float(start)
+        end = float(end)
+        if start <= point <= end:
+            weight = max(weight, 1.0)
+            continue
+        if start - edge < point < start:
+            phase = (point - (start - edge)) / edge
+            weight = max(weight, math.sin(phase * math.pi / 2.0) ** 2)
+        elif end < point < end + edge:
+            phase = (point - end) / edge
+            weight = max(weight, math.cos(phase * math.pi / 2.0) ** 2)
+    return min(1.0, max(0.0, weight))
 
 
 def _blend_regions(
@@ -141,6 +185,95 @@ def _restore_region_loudness(
     return output_audio
 
 
+def _processing_chunks(
+    intervals: list[tuple[float, float]],
+    duration: float,
+    context: float,
+) -> list[tuple[float, float]]:
+    """Group nearby guarded regions into short PSOLA processing windows."""
+    expanded: list[tuple[float, float]] = []
+    for start, end in intervals:
+        left = max(0.0, float(start) - context)
+        right = min(float(duration), float(end) + context)
+        if right <= left:
+            continue
+        if expanded and left <= expanded[-1][1]:
+            expanded[-1] = (expanded[-1][0], max(expanded[-1][1], right))
+        else:
+            expanded.append((left, right))
+    return expanded
+
+
+def _selective_mono_psola(
+    mono: object,
+    sample_rate: float,
+    source_points: list[tuple[float, float]],
+    intervals: list[tuple[float, float]],
+    ratio: float,
+) -> object:
+    """Render only guarded windows and leave every other sample untouched.
+
+    Running Praat over a multi-minute track can add a phase/noise floor to
+    unrelated material even when the pitch tier is unchanged.  Short windows
+    keep the expensive PSOLA operation inside the selected high-note regions;
+    the resulting mono delta is reused for every channel to preserve stereo
+    phase.
+    """
+    import numpy as np
+    import parselmouth
+    from parselmouth.praat import call
+
+    source_audio = np.asarray(mono, dtype=np.float64).reshape(-1)
+    rendered_audio = source_audio.copy()
+    if not source_audio.size or not intervals or sample_rate <= 0:
+        return rendered_audio
+    total_duration = source_audio.size / float(sample_rate)
+    mask = _region_mask(intervals, sample_rate, source_audio.size)
+    context = _REGION_FADE_SECONDS + 0.08
+    chunks = _processing_chunks(intervals, total_duration, context)
+    for chunk_start, chunk_end in chunks:
+        left = max(0, int(round(chunk_start * sample_rate)))
+        right = min(source_audio.size, int(round(chunk_end * sample_rate)))
+        if right - left < max(256, int(sample_rate * 0.08)):
+            continue
+        segment = source_audio[left:right]
+        segment_sound = parselmouth.Sound(segment, sampling_frequency=sample_rate)
+        manipulation = call(segment_sound, "To Manipulation", 0.005, 55.0, 4000.0)
+        segment_xmin = left / float(sample_rate)
+        points = [
+            (float(time) - segment_xmin, float(frequency))
+            for time, frequency in source_points
+            if segment_xmin <= float(time) <= right / float(sample_rate)
+            and float(frequency) > 0.0
+        ]
+        if not points:
+            # A malformed/empty tier must never replace the original segment.
+            continue
+        selective = call(
+            "Create PitchTier",
+            "Selective high pitch window",
+            segment_sound.xmin,
+            segment_sound.xmax,
+        )
+        for local_time, frequency in points:
+            blend = _region_weight_at(local_time + segment_xmin, intervals)
+            shifted_frequency = frequency * (1.0 + blend * (ratio - 1.0))
+            call(selective, "Add point", local_time, shifted_frequency)
+        call([selective, manipulation], "Replace pitch tier")
+        rendered = call(manipulation, "Get resynthesis (overlap-add)")
+        segment_output = np.asarray(rendered.values, dtype=np.float64).reshape(-1)
+        expected = right - left
+        if segment_output.size > expected:
+            segment_output = segment_output[:expected]
+        elif segment_output.size < expected:
+            segment_output = np.pad(segment_output, (0, expected - segment_output.size))
+        segment_mask = mask[left:right]
+        rendered_audio[left:right] = (
+            segment * (1.0 - segment_mask) + segment_output * segment_mask
+        )
+    return rendered_audio
+
+
 def shift(
     source: Path,
     destination: Path,
@@ -148,7 +281,7 @@ def shift(
     high_threshold: float = 800.0,
     mask_source: Path | None = None,
     loudness_source: Path | None = None,
-) -> None:
+) -> list[tuple[float, float]]:
     import numpy as np
     import parselmouth
     import soundfile as sf
@@ -161,11 +294,11 @@ def shift(
     mono = np.mean(values, axis=0)
     mono_sound = parselmouth.Sound(mono, sampling_frequency=sound.sampling_frequency)
     ratio = 2.0 ** (float(semitones) / 12.0)
-    mask_tier = call(
+    pitch_tier = call(
         call(mono_sound, "To Manipulation", 0.005, 55.0, 4000.0),
         "Extract pitch tier",
     )
-    source_tier = mask_tier
+    mask_tier = pitch_tier
     if mask_source and mask_source.is_file():
         mask_sound = parselmouth.Sound(str(mask_source))
         mask_values = np.asarray(mask_sound.values, dtype=np.float64)
@@ -173,9 +306,14 @@ def shift(
             mask_values = np.mean(mask_values, axis=0)
         mask_mono = parselmouth.Sound(mask_values, sampling_frequency=mask_sound.sampling_frequency)
         mask_manipulation = call(mask_mono, "To Manipulation", 0.005, 55.0, 4000.0)
-        source_tier = call(mask_manipulation, "Extract pitch tier")
+        mask_tier = call(mask_manipulation, "Extract pitch tier")
+    # The source audio owns the pitch contour being shifted.  ``mask_source``
+    # only supplies region boundaries; using its tier here during restoration
+    # would shift the original F0 a second time and overshoot the model output.
+    source_points = _pitch_points(pitch_tier, call)
+    mask_points = _pitch_points(mask_tier, call)
     intervals = _high_intervals(
-        _pitch_points(source_tier, call),
+        mask_points,
         max(100.0, float(high_threshold)),
         sound.xmin,
         sound.xmax,
@@ -198,7 +336,7 @@ def shift(
             int(round(sound.sampling_frequency)),
             subtype="PCM_16",
         )
-        return
+        return []
 
     loudness_reference = mono
     if loudness_source and loudness_source.is_file():
@@ -207,54 +345,26 @@ def shift(
         if reference_values.ndim > 1:
             reference_values = np.mean(reference_values, axis=0)
         loudness_reference = reference_values
-    rendered_channels: list[np.ndarray] = []
-    expected = values.shape[1]
-    for channel in values:
-        channel_sound = parselmouth.Sound(
-            channel,
-            sampling_frequency=sound.sampling_frequency,
-        )
-        manipulation = call(channel_sound, "To Manipulation", 0.005, 55.0, 4000.0)
-        tier = call(manipulation, "Extract pitch tier")
-        channel_points = _pitch_points(tier, call)
-        if not channel_points:
-            # A silent/phase-cancelled side channel has no valid tier.  Keep it
-            # untouched instead of asking Praat to replace an empty tier.
-            rendered_channels.append(channel.copy())
-            continue
-        selective = call(
-            "Create PitchTier",
-            "Selective high pitch",
-            channel_sound.xmin,
-            channel_sound.xmax,
-        )
-        for point_time, frequency in channel_points:
-            active = any(start <= point_time <= end for start, end in intervals)
-            call(
-                selective,
-                "Add point",
-                point_time,
-                frequency * ratio if active else frequency,
-            )
-        call([selective, manipulation], "Replace pitch tier")
-        rendered = call(manipulation, "Get resynthesis (overlap-add)")
-        channel_output = np.asarray(rendered.values, dtype=np.float64).reshape(-1)
-        if channel_output.size > expected:
-            channel_output = channel_output[:expected]
-        elif channel_output.size < expected:
-            channel_output = np.pad(channel_output, (0, expected - channel_output.size))
-        rendered_channels.append(channel_output)
-    # Blend only the selected regions; outside them the source remains bitwise
-    # unchanged, avoiding full-track PSOLA artifacts in consonants and lows.
+    # Render a single mono delta in short windows.  Reusing that delta for both
+    # channels prevents stereo phase drift and guarantees non-high regions are
+    # copied from the original input.
+    rendered_mono = _selective_mono_psola(
+        mono,
+        float(sound.sampling_frequency),
+        source_points,
+        intervals,
+        ratio,
+    )
+    mono_delta = np.asarray(rendered_mono, dtype=np.float64) - mono
     output = np.vstack(
         [
             _restore_region_loudness(
                 loudness_reference,
-                _blend_regions(source_channel, channel, intervals, sound.sampling_frequency),
+                np.asarray(source_channel, dtype=np.float64) + mono_delta,
                 intervals,
                 sound.sampling_frequency,
             )
-            for source_channel, channel in zip(values, rendered_channels)
+            for source_channel in values
         ]
     )
     output = np.clip(
@@ -264,6 +374,7 @@ def shift(
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(destination), output, int(round(sound.sampling_frequency)), subtype="PCM_16")
+    return intervals
 
 
 def _validate_render(source: Path, destination: Path) -> tuple[bool, str]:
@@ -310,17 +421,58 @@ def main() -> int:
     parser.add_argument("--high-threshold", type=float, default=800.0)
     parser.add_argument("--mask-source", default="")
     parser.add_argument("--loudness-source", default="")
+    parser.add_argument(
+        "--report-json",
+        default="",
+        help="可选：将实际处理的高音区间写入 JSON",
+    )
     args = parser.parse_args()
     source = Path(args.input)
     destination = Path(args.output)
     try:
-        shift(
+        intervals = shift(
             source,
             destination,
             args.semitones,
             high_threshold=args.high_threshold,
             mask_source=Path(args.mask_source) if args.mask_source else None,
             loudness_source=Path(args.loudness_source) if args.loudness_source else None,
+        )
+        if args.report_json:
+            report_path = Path(args.report_json)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "threshold_hz": float(args.high_threshold),
+                        "semitones": float(args.semitones),
+                        "region_count": len(intervals),
+                        "processed_seconds": round(
+                            sum(end - start for start, end in intervals), 3
+                        ),
+                        "regions": [
+                            {
+                                "start": round(start, 3),
+                                "end": round(end, 3),
+                                "duration": round(end - start, 3),
+                            }
+                            for start, end in intervals
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        preview = ",".join(
+            f"{start:.2f}-{end:.2f}s" for start, end in intervals[:8]
+        )
+        if len(intervals) > 8:
+            preview += ",..."
+        print(
+            f"FORMANT_PITCH_REGIONS\t{len(intervals)}\t"
+            f"{sum(end - start for start, end in intervals):.3f}s\t{preview}",
+            flush=True,
         )
         quality_ok, quality_reason = _validate_render(source, destination)
         if not quality_ok:

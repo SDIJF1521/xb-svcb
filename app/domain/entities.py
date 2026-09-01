@@ -123,6 +123,8 @@ class InferenceParams:
     SeedVC：``reference_audio``（本次推理使用的目标音色参考音频）。
     DDSP-SVC：``ddsp_infer_steps``（Rectified Flow 采样步数）、
     ``ddsp_formant_shift``（共振峰偏移，半音）、``speaker``（说话人 id）。
+    通用高级控制：``high_pitch_guard_rounds``、``f0_filter_threshold``；
+    ``manual_params_enabled`` 关闭时恢复软件默认调参值。
     """
 
     pitch: int = 0
@@ -144,6 +146,16 @@ class InferenceParams:
     reference_audio: str = ""  # SeedVC 目标音色参考音频路径
     ddsp_infer_steps: int = 50  # DDSP-SVC Rectified Flow 采样步数（官方默认质量）
     ddsp_formant_shift: float = 0.0  # DDSP-SVC 共振峰偏移（-2~2 半音）
+    # 0 means automatic model-specific detection.
+    # Legacy/API compatibility only. The full-parameter UI controls retry
+    # rounds instead; conversion services use this as internal boundary state.
+    high_pitch_threshold: float = 0.0
+    # Number of guarded recovery retries after the initial model inference.
+    high_pitch_guard_rounds: int = 3
+    # F0 过滤阈值（0~1），由 F0 提取器用于过滤低置信度候选。
+    f0_filter_threshold: float = 0.05
+    # 关闭时忽略手动调参，使用各引擎的软件默认值。
+    manual_params_enabled: bool = False
     # 高音保护：极高音区域先保共振峰降调，翻唱后再升回原调。
     auto_high_pitch_guard: bool = True
 
@@ -153,7 +165,15 @@ class InferenceParams:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "InferenceParams":
         data = data or {}
-        return cls(
+        manual_present = "manual_params_enabled" in data or "manualParamsEnabled" in data
+        f0_filter_value = data.get("f0_filter_threshold", data.get("f0FilterThreshold", 0.05))
+        guard_rounds_value = data.get(
+            "high_pitch_guard_rounds",
+            data.get("highPitchGuardRounds", 3),
+        )
+        if guard_rounds_value is None:
+            guard_rounds_value = 3
+        params = cls(
             pitch=int(data.get("pitch", 0)),
             f0_method=str(data.get("f0_method", data.get("f0Method", "rmvpe"))),
             index_rate=float(data.get("index_rate", data.get("indexRate", 0.75))),
@@ -199,11 +219,44 @@ class InferenceParams:
                     ),
                 ),
             ),
+            high_pitch_threshold=max(
+                0.0,
+                min(
+                    2000.0,
+                    float(data.get("high_pitch_threshold", data.get("highPitchThreshold", 0.0)) or 0.0),
+                ),
+            ),
+            high_pitch_guard_rounds=max(
+                0,
+                min(
+                    8,
+                    int(guard_rounds_value),
+                ),
+            ),
+            f0_filter_threshold=max(
+                0.0,
+                min(
+                    1.0,
+                    float(f0_filter_value if f0_filter_value is not None else 0.05),
+                ),
+            ),
+            manual_params_enabled=_coerce_bool(
+                data.get("manual_params_enabled", data.get("manualParamsEnabled", False)),
+                False,
+            ),
             auto_high_pitch_guard=_coerce_bool(
                 data.get("auto_high_pitch_guard", data.get("autoHighPitchGuard", True)),
                 True,
             ),
         )
+        # An explicit OFF only suppresses advanced manual fields.  The ordinary
+        # inference controls remain user-adjustable in the default workflow.
+        if manual_present and not params.manual_params_enabled:
+            params.speaker = ""
+            params.high_pitch_threshold = 0.0
+            params.f0_filter_threshold = 0.05
+            params.high_pitch_guard_rounds = 3
+        return params
 
 
 @dataclass

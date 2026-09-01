@@ -23,7 +23,7 @@
       </header>
 
       <main class="player-layout">
-        <section class="visual-stage" :class="{ 'has-media': !!mediaData, 'has-video': hasVideo }" :style="stageStyle">
+        <section class="visual-stage" data-guide="player-visual" :class="{ 'has-media': !!mediaData, 'has-video': hasVideo }" :style="stageStyle">
           <div v-if="mediaData" class="stage-media" :class="`is-${mediaKind}`" aria-hidden="true">
             <video
               v-if="mediaKind === 'video'"
@@ -60,7 +60,7 @@
           </div>
         </section>
 
-        <section class="lyrics-panel">
+        <section class="lyrics-panel" data-guide="player-lyrics">
           <div class="panel-head">
             <div>
               <p class="eyebrow">LYRICS</p>
@@ -135,7 +135,7 @@
         </section>
       </main>
 
-      <section class="transport glass">
+      <section class="transport glass" data-guide="player-transport">
         <audio
           ref="audioEl"
           :src="audioSrc"
@@ -162,7 +162,7 @@
       </section>
     </template>
 
-    <div v-else class="not-found glass">
+    <div v-else class="not-found glass" data-guide="player-empty">
       <el-icon><Headset /></el-icon>
       <h2>找不到这首作品</h2>
       <p>它可能已被删除，或仍在生成中。</p>

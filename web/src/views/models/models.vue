@@ -227,7 +227,7 @@
             </button>
           </div>
         </div>
-        <div v-if="filteredLocalModels.length" class="list glass">
+        <div v-if="filteredLocalModels.length" class="list glass" data-guide="model-list">
           <div class="row" v-for="m in filteredLocalModels" :key="m.id">
             <div class="row-cover" :style="{ background: m.color }"><el-icon><Microphone /></el-icon></div>
             <div class="row-main">
@@ -251,6 +251,9 @@
               </button>
               <button class="op" title="检测并修复元数据" @click="inspectModel(m, true)">
                 <el-icon><WarningFilled /></el-icon>
+              </button>
+              <button class="op" data-guide="model-rename" title="重命名模型" @click="renameModel(m)">
+                <el-icon><EditPen /></el-icon>
               </button>
               <el-button
                 v-if="m.id !== modelsStore.defaultId"
@@ -647,7 +650,7 @@ import { useRoute } from 'vue-router'
 import {
   Setting, FolderOpened, Connection, Document, Plus, Microphone, Star, Delete,
   Upload, Search, Close, Download, Key, Link, InfoFilled, CircleCheck, WarningFilled,
-  Loading, Headset, Picture, RefreshRight, Operation,
+  Loading, Headset, Picture, RefreshRight, Operation, EditPen,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, type HubModelItem, type HubModelUpdateItem, type ModelFramework, type PymssDownloadJob, type PymssModel, type PymssStatus } from '@/api'
@@ -820,6 +823,26 @@ async function inspectModel(m: ModelVM, repair: boolean) {
     ElMessage.success(repair ? '模型元数据已检测并修复' : '模型检测通过')
   } else {
     ElMessage.warning((res.issues || []).map((i) => i.message).join('；') || '模型需要修复')
+  }
+}
+
+async function renameModel(m: ModelVM) {
+  try {
+    const { value } = await ElMessageBox.prompt('输入新的模型显示名称', '重命名模型', {
+      inputValue: m.name,
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValidator: (value: string) => {
+        const normalized = value.trim().replace(/\s+/g, ' ')
+        return normalized && normalized.length <= 120 ? true : '名称不能为空且不能超过 120 个字符'
+      },
+    })
+    const normalized = value.trim().replace(/\s+/g, ' ')
+    if (normalized === m.name) return
+    if (await modelsStore.rename(m.id, normalized)) ElMessage.success('模型名称已更新')
+    else ElMessage.error('重命名失败')
+  } catch {
+    /* cancelled */
   }
 }
 
@@ -1594,6 +1617,9 @@ onUnmounted(() => {
   .update-banner { align-items: flex-start; flex-direction: column; }
   .asset-pickers, .detail-hero, .detail-grid { grid-template-columns: 1fr; }
   .row-ops .el-button span { display: none; }
+  .row { align-items: flex-start; flex-wrap: wrap; }
+  .row-main { flex-basis: calc(100% - 68px); }
+  .row-ops { width: 100%; justify-content: flex-end; }
 }
 @media (min-width: 721px) and (max-width: 1080px) {
   .framework-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

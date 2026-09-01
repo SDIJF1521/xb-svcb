@@ -1931,11 +1931,13 @@ class AudioEditorService:
         source: Path,
         destination: Path,
         params: InferenceParams,
+        model: dict[str, Any] | None = None,
     ) -> tuple[Path, bool]:
         if not params.auto_high_pitch_guard or not source.is_file():
             return source, False
         peak_f0 = self._estimate_peak_f0(source)
-        if peak_f0 < self._HIGH_PITCH_THRESHOLD:
+        high_threshold = self._model_high_pitch_threshold(params, model)
+        if peak_f0 < high_threshold:
             return source, False
         pitch_shift = getattr(self._ffmpeg, "pitch_shift", None)
         if not callable(pitch_shift):
@@ -1946,7 +1948,7 @@ class AudioEditorService:
             -self._HIGH_PITCH_GUARD_SEMITONES,
             mask_source=source,
             loudness_source=source,
-            high_threshold=self._HIGH_PITCH_THRESHOLD,
+            high_threshold=high_threshold,
         )
         return (destination, True) if ok and destination.is_file() else (source, False)
 
@@ -1956,6 +1958,7 @@ class AudioEditorService:
         destination: Path,
         original: Path,
         params: InferenceParams,
+        model: dict[str, Any] | None = None,
     ) -> Path:
         if not params.auto_high_pitch_guard:
             return source
@@ -1968,9 +1971,128 @@ class AudioEditorService:
             self._HIGH_PITCH_GUARD_SEMITONES,
             mask_source=original,
             loudness_source=original,
-            high_threshold=self._HIGH_PITCH_THRESHOLD,
+            high_threshold=self._model_high_pitch_threshold(params, model),
         )
         return destination if ok and destination.is_file() else source
+
+    def _infer_with_dropout_recovery(
+        self,
+        *,
+        model: dict[str, Any],
+        profile_model: dict[str, Any] | None = None,
+        engine: Any,
+        source: Path,
+        output: Path,
+        params: InferenceParams,
+        duration: float,
+    ) -> tuple[Path, list[dict[str, Any]], bool]:
+        """Retry an editor clip only when the converted high note collapses."""
+        from application.conversion_service import ConversionService
+
+        profile = profile_model or model
+        threshold = self._model_high_pitch_threshold(params, profile)
+        params.high_pitch_threshold = threshold
+        guard_rounds = ConversionService._high_pitch_guard_rounds(params)
+        attempts = 1 + guard_rounds if params.auto_high_pitch_guard else 1
+        history: list[dict[str, Any]] = []
+        guard_applied_any = False
+        rendered = output
+        for attempt in range(attempts):
+            raw_target = output if attempt == 0 else output.with_name(
+                f"{output.stem}_dropout_retry{attempt}.wav"
+            )
+            if attempt == 0:
+                guarded, guard_applied = source, False
+            else:
+                guarded, guard_applied = self._prepare_high_pitch_guard(
+                    source,
+                    output.with_name(f"{output.stem}_guarded_retry{attempt}.wav"),
+                    params,
+                    profile,
+                )
+            guard_applied_any = guard_applied_any or guard_applied
+            engine.infer(model, guarded, raw_target, params, duration)
+            rendered = raw_target
+            if guard_applied:
+                restored = output.with_name(f"{output.stem}_restored_retry{attempt}.wav")
+                candidate = self._restore_high_pitch_guard(
+                    raw_target,
+                    restored,
+                    source,
+                    params,
+                    profile,
+                )
+                if candidate != raw_target:
+                    rendered = candidate
+            issue = (
+                ConversionService._detect_model_dropout(
+                    source,
+                    rendered,
+                    threshold,
+                    int(getattr(params, "pitch", 0) or 0),
+                )
+                if params.auto_high_pitch_guard and guard_rounds > 0
+                else None
+            )
+            entry: dict[str, Any] = {
+                "attempt": attempt + 1,
+                "threshold": round(threshold, 1),
+                "issue": issue,
+            }
+            history.append(entry)
+            if issue is None:
+                return rendered, history, guard_applied_any
+            next_threshold = ConversionService._next_dropout_threshold(threshold, issue)
+            entry["next_threshold"] = next_threshold
+            if next_threshold >= threshold - 10.0 or attempt >= attempts - 1:
+                return rendered, history, guard_applied_any
+            threshold = next_threshold
+            params.high_pitch_threshold = threshold
+        return rendered, history, guard_applied_any
+
+    @staticmethod
+    def _model_high_pitch_threshold(
+        params: InferenceParams, model: dict[str, Any] | None = None
+    ) -> float:
+        explicit = float(getattr(params, "high_pitch_threshold", 0.0) or 0.0)
+        if explicit > 0:
+            return max(300.0, min(2000.0, explicit))
+        if not bool(getattr(params, "manual_params_enabled", False)):
+            return AudioEditorService._HIGH_PITCH_THRESHOLD
+        model = model or {}
+        metadata = model.get("metadata") or model.get("model_metadata") or {}
+        profile = metadata.get("inference_profile") if isinstance(metadata, dict) else None
+        values = []
+        for source in (metadata, profile if isinstance(profile, dict) else {}):
+            values.extend([source.get("high_pitch_threshold"), source.get("f0_max_hz"), source.get("f0_max")])
+        config_path = str((model.get("main_config") or {}).get("path") or model.get("main_config_path") or "")
+        if config_path:
+            try:
+                raw = Path(config_path).read_text(encoding="utf-8")
+                try:
+                    parsed = json.loads(raw)
+                    def visit(value: Any) -> None:
+                        if isinstance(value, dict):
+                            for key, child in value.items():
+                                if str(key).lower() in {"f0_max", "f0_max_hz", "max_f0"}:
+                                    values.append(child)
+                                visit(child)
+                        elif isinstance(value, list):
+                            for child in value:
+                                visit(child)
+                    visit(parsed)
+                except (TypeError, ValueError):
+                    for key in ("f0_max", "f0_max_hz", "max_f0"):
+                        match = re.search(rf"(?:^|\n)\s*{key}\s*:\s*([0-9]+(?:\.[0-9]+)?)", raw, re.I)
+                        if match: values.append(match.group(1))
+            except OSError:
+                pass
+        for value in values:
+            try: number = float(value)
+            except (TypeError, ValueError): continue
+            if 300.0 <= number <= 2000.0: return number
+        framework = config.modelhub_normalize_framework(model.get("framework"))
+        return {"rvc": 760.0, "seed-vc": 980.0, "ddsp-svc": 1040.0, "so-vits-svc": 1120.0}.get(framework, 1000.0)
 
     def rerun_clip(
         self,
@@ -2021,24 +2143,18 @@ class AudioEditorService:
             return {"ok": False, "error": "片段裁剪失败"}
         model_payload = self._model_payload(model)
         engine = self._engines.for_model(model_payload)
-        guarded_input, guard_applied = self._prepare_high_pitch_guard(
-            dry,
-            out_dir / f"{clip_id}_{rerun_key}_high_guarded.wav",
-            infer_params,
-        )
         try:
-            engine.infer(model_payload, guarded_input, out, infer_params, duration)
+            out, dropout_recovery, guard_applied = self._infer_with_dropout_recovery(
+                model=model_payload,
+                profile_model=model,
+                engine=engine,
+                source=dry,
+                output=out,
+                params=infer_params,
+                duration=duration,
+            )
         except Exception as exc:  # noqa: BLE001 - 需要把推理错误回传给前端
             return {"ok": False, "error": str(exc)}
-        if guard_applied:
-            restored = self._restore_high_pitch_guard(
-                out,
-                out_dir / f"{clip_id}_{model_id}_{rerun_key}_high_restored.wav",
-                dry,
-                infer_params,
-            )
-            if restored != out:
-                out = restored
 
         # 可选增强：以裁剪出的原始干声保护高级层的辅音、呼吸和宽带平衡。
         enhance_used = False
@@ -2129,6 +2245,7 @@ class AudioEditorService:
                 "rerun_dry_effects": True,
                 "rerun_enhanced": enhance_used,
                 "rerun_high_pitch_guard": guard_applied,
+                "rerun_dropout_recovery": dropout_recovery,
                 "rerun_beauty_compensation": guard_applied and enhance_used,
                 "rerun_enhance_level": enhance_level if enhance_used else "",
                 "rerun_pitch_correction": pitch_correction if enhance_used else 0.0,

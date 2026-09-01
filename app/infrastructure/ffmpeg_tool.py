@@ -456,6 +456,7 @@ class FfmpegTool:
         mask_source: Path | None = None,
         loudness_source: Path | None = None,
         high_threshold: float = 800.0,
+        report_path: Path | None = None,
     ) -> bool:
         """Pitch-shift only high-note regions while preserving formants.
 
@@ -484,6 +485,8 @@ class FfmpegTool:
                 command.extend(["--mask-source", str(mask_source)])
             if loudness_source:
                 command.extend(["--loudness-source", str(loudness_source)])
+            if report_path:
+                command.extend(["--report-json", str(report_path)])
             result = subprocess.run(
                 command,
                 capture_output=True,

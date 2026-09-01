@@ -396,6 +396,10 @@ class HttpApiContractTests(unittest.TestCase):
             "ddsp_infer_steps",
             "ddsp_formant_shift",
             "auto_high_pitch_guard",
+            "high_pitch_guard_rounds",
+            "high_pitch_threshold",
+            "f0_filter_threshold",
+            "manual_params_enabled",
         }
 
         self.assertEqual(set(inference), expected_inference_fields)

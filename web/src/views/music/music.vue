@@ -25,7 +25,7 @@
     </div>
 
     <!-- 搜索栏 -->
-    <div class="toolbar glass">
+    <div class="toolbar glass" data-guide="music-search">
       <div class="source-field">
         <el-select v-model="source" class="source-select" @change="onSourceChange">
           <el-option v-for="s in sources" :key="s.id" :label="s.name" :value="s.id" />
@@ -54,7 +54,7 @@
         <h2>搜索结果</h2>
         <span class="muted">{{ resultSourceName }} ·「{{ resultKeyword }}」· {{ results.length }} 首</span>
       </div>
-      <div class="list glass">
+      <div class="list glass" data-guide="music-results">
         <div class="row" v-for="r in results" :key="r.n">
           <span class="row-no">{{ r.n }}</span>
           <button
@@ -114,7 +114,7 @@
         <h2>已下载素材</h2>
         <span class="muted">{{ downloaded.length }} 首 · 可在翻唱页选用</span>
       </div>
-      <div v-if="downloaded.length" class="list glass">
+      <div v-if="downloaded.length" class="list glass" data-guide="music-downloads">
         <div class="row" v-for="d in downloaded" :key="d.path">
           <div class="row-cover"><el-icon><Headset /></el-icon></div>
           <div class="row-main">

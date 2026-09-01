@@ -15,7 +15,7 @@
     </div>
 
     <!-- 工具条 -->
-    <div class="toolbar">
+    <div class="toolbar" data-guide="works-filter">
       <div class="seg">
         <button
           v-for="t in tabs"
@@ -35,7 +35,7 @@
     </div>
 
     <!-- 作品列表 -->
-    <div v-if="filteredWorks.length" class="works glass">
+    <div v-if="filteredWorks.length" class="works glass" data-guide="works-list">
       <div class="works-th">
         <span class="col-title">作品</span>
         <span class="col-model">使用模型</span>

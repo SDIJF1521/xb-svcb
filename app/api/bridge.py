@@ -654,6 +654,9 @@ class Api:
     def toggle_model_favorite(self, model_id: str) -> dict[str, Any] | None:
         return self._models.toggle_favorite(model_id)
 
+    def rename_model(self, model_id: str, name: str) -> bool:
+        return self._models.rename(model_id, name) is not None
+
     # ---- 模型站（ModelScope 魔搭社区）----
     def get_modelscope_token(self) -> str:
         return self._hub.get_token()
@@ -817,6 +820,29 @@ class Api:
             ),
         )
         return list(result or [])
+
+    def import_audio_data(self, name: str, data: str) -> str | None:
+        """Persist a browser/drag-and-drop audio payload for a pending work."""
+        raw = str(data or "")
+        if raw.startswith("data:") and "," in raw:
+            raw = raw.split(",", 1)[1]
+        try:
+            content = base64.b64decode(raw, validate=True)
+        except Exception:
+            return None
+        if not content or len(content) > 50 * 1024 * 1024:
+            return None
+        suffix = Path(str(name or "audio.wav")).suffix.lower()
+        if suffix not in {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".opus", ".wma"}:
+            return None
+        target_dir = config.TEMP_DIR / "dropped-audio"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / f"{paths.new_id('drop_')}{suffix}"
+        try:
+            target.write_bytes(content)
+        except OSError:
+            return None
+        return str(target)
 
     def pick_lyrics_file(self) -> dict[str, Any]:
         result = self._open_dialog(
