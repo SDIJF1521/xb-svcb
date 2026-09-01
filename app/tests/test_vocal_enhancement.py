@@ -577,6 +577,18 @@ def test_high_pitch_guard_rounds_are_opt_in_and_clamped() -> None:
     )
 
 
+def test_guard_drop_escalates_only_after_high_note_retry_still_exceeds_range() -> None:
+    assert ConversionService._guard_semitones_for_retry(
+        730.0, {"source_f0_hz": 747.0}
+    ) == 7
+    assert ConversionService._guard_semitones_for_retry(
+        670.0, {"source_f0_hz": 760.0}
+    ) == 9
+    assert ConversionService._guard_semitones_for_retry(
+        620.0, {"source_f0_hz": 900.0}
+    ) == 12
+
+
 def test_dropout_recovery_uses_guard_only_after_verified_failure_and_falls_back(
     tmp_path: Path,
 ) -> None:
@@ -639,6 +651,71 @@ def test_dropout_recovery_uses_guard_only_after_verified_failure_and_falls_back(
     assert history[0]["input"] == "original"
     assert history[-1]["issue"] is not None
     assert guard_applied is False
+
+
+def test_dropout_recovery_stops_when_retry_detects_failure_outside_guard_scope(
+    tmp_path: Path,
+) -> None:
+    from domain import InferenceParams
+
+    service = ConversionService.__new__(ConversionService)
+    source = tmp_path / "source.wav"
+    output = tmp_path / "converted_raw.wav"
+    source.write_bytes(b"source")
+    first_issue = {
+        "start": 1.0,
+        "end": 1.3,
+        "source_f0_hz": 920.0,
+        "source_rms": 0.2,
+        "output_rms": 0.01,
+        "bad_frames": 30,
+        "bad_regions": [{"start": 1.0, "end": 1.3}],
+    }
+    outside_issue = {
+        "start": 5.0,
+        "end": 5.2,
+        "source_f0_hz": 701.0,
+        "source_rms": 0.2,
+        "output_rms": 0.01,
+        "bad_frames": 10,
+        "bad_regions": [{"start": 5.0, "end": 5.2}],
+    }
+    detections = iter([first_issue, outside_issue])
+    calls: list[tuple[Path, Path]] = []
+
+    def infer(vocals: Path, target: Path) -> None:
+        calls.append((vocals, target))
+        target.write_bytes(b"render")
+
+    def prepare(src: Path, destination: Path, *_args) -> tuple[Path, bool]:
+        destination.write_bytes(b"guarded-input")
+        return destination, True
+
+    def restore(_src: Path, destination: Path, *_args) -> Path:
+        destination.write_bytes(b"restored-render")
+        return destination
+
+    service._log = lambda *_args: None
+    service._detect_model_dropout = lambda *_args: next(detections)
+    service._prepare_high_pitch_guard = prepare
+    service._restore_high_pitch_guard = restore
+
+    rendered, history, guard_applied = service._infer_with_dropout_recovery(
+        engine=types.SimpleNamespace(),
+        model={},
+        source=source,
+        output=output,
+        params=InferenceParams(high_pitch_threshold=800.0),
+        duration=2.0,
+        log_file=tmp_path / "run.log",
+        allow_recovery=True,
+        infer=infer,
+    )
+
+    assert rendered.name == "converted_raw_restored_retry1.wav"
+    assert guard_applied is True
+    assert len(history) == 2
+    assert len(calls) == 2
 
 
 def test_guarded_retry_merge_preserves_non_high_baseline_audio(tmp_path: Path) -> None:
@@ -773,6 +850,19 @@ def test_formant_guard_keeps_hysteresis_notes_untouched_without_scope() -> None:
     assert formant_pitch_worker._high_intervals(
         [(0.50, 670.0), (0.54, 690.0)], 720.0, 0.0, 1.0
     ) == []
+
+
+def test_formant_guard_applies_hysteresis_fallback_per_scope() -> None:
+    intervals = formant_pitch_worker._high_intervals(
+        [(0.50, 800.0), (0.54, 820.0), (0.80, 670.0), (0.84, 690.0)],
+        720.0,
+        0.0,
+        1.0,
+        allowed_regions=[(0.45, 0.60), (0.75, 0.90)],
+    )
+    assert len(intervals) == 2
+    assert intervals[0][0] < 0.50 < intervals[0][1]
+    assert intervals[1][0] < 0.80 < intervals[1][1]
 
 
 def test_formant_guard_rejects_collapsed_render(tmp_path: Path, monkeypatch) -> None:

@@ -1933,6 +1933,7 @@ class AudioEditorService:
         params: InferenceParams,
         model: dict[str, Any] | None = None,
         only_regions: list[tuple[float, float]] | None = None,
+        semitones: int | None = None,
     ) -> tuple[Path, bool]:
         if not params.auto_high_pitch_guard or not source.is_file():
             return source, False
@@ -1951,11 +1952,12 @@ class AudioEditorService:
             }
             if only_regions:
                 kwargs["regions"] = only_regions
-            ok = pitch_shift(source, destination, -self._HIGH_PITCH_GUARD_SEMITONES, **kwargs)
+            shift_semitones = int(semitones or self._HIGH_PITCH_GUARD_SEMITONES)
+            ok = pitch_shift(source, destination, -shift_semitones, **kwargs)
         except TypeError:
             if only_regions:
                 return source, False
-            ok = pitch_shift(source, destination, -self._HIGH_PITCH_GUARD_SEMITONES)
+            ok = pitch_shift(source, destination, -int(semitones or self._HIGH_PITCH_GUARD_SEMITONES))
         return (destination, True) if ok and destination.is_file() else (source, False)
 
     def _restore_high_pitch_guard(
@@ -1966,6 +1968,7 @@ class AudioEditorService:
         params: InferenceParams,
         model: dict[str, Any] | None = None,
         only_regions: list[tuple[float, float]] | None = None,
+        semitones: int | None = None,
     ) -> Path:
         if not params.auto_high_pitch_guard:
             return source
@@ -1980,11 +1983,12 @@ class AudioEditorService:
             }
             if only_regions:
                 kwargs["regions"] = only_regions
-            ok = pitch_shift(source, destination, self._HIGH_PITCH_GUARD_SEMITONES, **kwargs)
+            shift_semitones = int(semitones or self._HIGH_PITCH_GUARD_SEMITONES)
+            ok = pitch_shift(source, destination, shift_semitones, **kwargs)
         except TypeError:
             if only_regions:
                 return source
-            ok = pitch_shift(source, destination, self._HIGH_PITCH_GUARD_SEMITONES)
+            ok = pitch_shift(source, destination, int(semitones or self._HIGH_PITCH_GUARD_SEMITONES))
         return destination if ok and destination.is_file() else source
 
     def _infer_with_dropout_recovery(
@@ -2010,6 +2014,7 @@ class AudioEditorService:
         guard_applied_any = False
         rendered = output
         guard_regions: list[tuple[float, float]] | None = None
+        guard_semitones = self._HIGH_PITCH_GUARD_SEMITONES
         for attempt in range(attempts):
             raw_target = output if attempt == 0 else output.with_name(
                 f"{output.stem}_dropout_retry{attempt}.wav"
@@ -2023,6 +2028,7 @@ class AudioEditorService:
                     params,
                     profile,
                     guard_regions,
+                    guard_semitones,
                 )
             guard_applied_any = guard_applied_any or guard_applied
             engine.infer(model, guarded, raw_target, params, duration)
@@ -2036,6 +2042,7 @@ class AudioEditorService:
                     params,
                     profile,
                     guard_regions,
+                    guard_semitones,
                 )
                 if candidate != raw_target:
                     rendered = candidate
@@ -2062,12 +2069,27 @@ class AudioEditorService:
                     if isinstance(item, dict)
                     and float(item.get("end", 0.0)) > float(item.get("start", 0.0))
                 ] or guard_regions
+                guard_semitones = ConversionService._guard_semitones_for_retry(
+                    threshold,
+                    issue,
+                    source,
+                    guard_regions,
+                )
             if issue is None:
                 return rendered, history, guard_applied_any
             next_threshold = ConversionService._next_dropout_threshold(threshold, issue)
             entry["next_threshold"] = next_threshold
             if next_threshold >= threshold - 10.0 or attempt >= attempts - 1:
                 return rendered, history, guard_applied_any
+            guard_semitones = max(
+                guard_semitones,
+                ConversionService._guard_semitones_for_retry(
+                    next_threshold,
+                    issue,
+                    source,
+                    guard_regions,
+                ),
+            )
             threshold = next_threshold
             params.high_pitch_threshold = threshold
         return rendered, history, guard_applied_any

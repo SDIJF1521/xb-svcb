@@ -110,11 +110,33 @@ def _high_intervals(
                     clipped.append((left, right))
         return clipped
 
-    strict_scoped = clip_to_scope(intervals)
-    if strict_scoped:
-        return strict_scoped
     relaxed_threshold = max(100.0, float(threshold) - max(70.0, hysteresis))
-    return clip_to_scope(build(relaxed_threshold))
+    relaxed_intervals = build(relaxed_threshold)
+    # Resolve each confirmed scope independently. One strict high note must
+    # not suppress the hysteresis fallback for a neighboring lower note.
+    scoped: list[tuple[float, float]] = []
+    context = _REGION_FADE_SECONDS
+    for scope_start, scope_end in scoped_regions:
+        strict_matches = [
+            item
+            for item in intervals
+            if item[1] > scope_start and item[0] < scope_end
+        ]
+        candidates = strict_matches or [
+            item
+            for item in relaxed_intervals
+            if item[1] > scope_start and item[0] < scope_end
+        ]
+        for start, end in candidates:
+            left = max(start, scope_start - context)
+            right = min(end, scope_end + context)
+            if right <= left:
+                continue
+            if scoped and left <= scoped[-1][1] + 0.01:
+                scoped[-1] = (scoped[-1][0], max(scoped[-1][1], right))
+            else:
+                scoped.append((left, right))
+    return scoped
 
 
 def _region_mask(

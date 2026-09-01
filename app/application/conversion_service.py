@@ -129,6 +129,45 @@ class ConversionService:
         except (TypeError, ValueError):
             configured = default_rounds
         return max(0, min(cls._MAX_HIGH_PITCH_GUARD_ROUNDS, configured))
+
+    @classmethod
+    def _guard_semitones_for_retry(
+        cls,
+        threshold: float,
+        issue: dict[str, Any] | None = None,
+        source: Path | None = None,
+        regions: list[tuple[float, float]] | None = None,
+    ) -> int:
+        """Increase the protective drop only when a retry still misses high notes."""
+        source_f0 = float((issue or {}).get("source_f0_hz") or 0.0)
+        if source and regions:
+            try:
+                import numpy as np
+
+                sidecar = source.with_name("f0.npy")
+                if sidecar.is_file() and sidecar.stat().st_mtime >= source.stat().st_mtime - 120.0:
+                    curve = np.asarray(np.load(str(sidecar), allow_pickle=False)).reshape(-1)
+                    if curve.size >= 4:
+                        with wave.open(str(source), "rb") as handle:
+                            duration = handle.getnframes() / float(handle.getframerate() or 1)
+                        times = np.linspace(0.0, duration, curve.size)
+                        peaks: list[float] = []
+                        for start, end in regions:
+                            values = curve[(times >= start) & (times <= end)]
+                            values = values[np.isfinite(values) & (values > 0.0)]
+                            if values.size:
+                                peaks.append(float(np.max(values)))
+                        if peaks:
+                            source_f0 = max(source_f0, max(peaks))
+            except (OSError, ValueError, TypeError, ImportError):
+                pass
+        excess = source_f0 - float(threshold or cls._HIGH_PITCH_THRESHOLD)
+        if source_f0 >= 950.0 or excess >= 220.0:
+            return 12
+        if source_f0 >= 780.0 or excess >= 80.0:
+            return 9
+        return cls._HIGH_PITCH_GUARD_SEMITONES
+
     def __init__(
         self,
         repo: ListRepository,
@@ -441,6 +480,7 @@ class ConversionService:
         log_file: Path,
         threshold: float | None = None,
         only_regions: list[tuple[float, float]] | None = None,
+        semitones: int | None = None,
     ) -> tuple[Path, bool]:
         """Prepare a selective high-note pitch guard for normal AI covers."""
         if not params.auto_high_pitch_guard or not source.is_file():
@@ -450,11 +490,12 @@ class ConversionService:
         if peak_f0 < high_threshold:
             return source, False
         report_path = destination.with_suffix(".regions.json")
+        shift_semitones = int(semitones or self._HIGH_PITCH_GUARD_SEMITONES)
         try:
             guard_ok = self._ffmpeg.pitch_shift(
                 source,
                 destination,
-                -self._HIGH_PITCH_GUARD_SEMITONES,
+                -shift_semitones,
                 mask_source=source,
                 loudness_source=source,
                 high_threshold=high_threshold,
@@ -470,7 +511,7 @@ class ConversionService:
             guard_ok = self._ffmpeg.pitch_shift(
                 source,
                 destination,
-                -self._HIGH_PITCH_GUARD_SEMITONES,
+                -shift_semitones,
                 mask_source=source,
                 loudness_source=source,
                 high_threshold=high_threshold,
@@ -501,7 +542,7 @@ class ConversionService:
         self._log(
             log_file,
             f"  高音保护已启用：仅处理 {region_count} 个高音区，共 {processed_seconds:.2f}s "
-            f"（阈值 {high_threshold:.0f}Hz，降调 -{self._HIGH_PITCH_GUARD_SEMITONES} 半音；"
+            f"（阈值 {high_threshold:.0f}Hz，降调 -{shift_semitones} 半音；"
             f"区间 {region_preview}）",
         )
         return destination, True
@@ -515,15 +556,17 @@ class ConversionService:
         log_file: Path,
         threshold: float | None = None,
         only_regions: list[tuple[float, float]] | None = None,
+        semitones: int | None = None,
     ) -> Path:
         if not params.auto_high_pitch_guard:
             return source
         restored = destination
+        shift_semitones = int(semitones or self._HIGH_PITCH_GUARD_SEMITONES)
         try:
             restore_ok = self._ffmpeg.pitch_shift(
                 source,
                 destination,
-                self._HIGH_PITCH_GUARD_SEMITONES,
+                shift_semitones,
                 mask_source=original,
                 loudness_source=original,
                 high_threshold=float(threshold or getattr(params, "high_pitch_threshold", 0.0) or self._HIGH_PITCH_THRESHOLD),
@@ -537,7 +580,7 @@ class ConversionService:
             restore_ok = self._ffmpeg.pitch_shift(
                 source,
                 destination,
-                self._HIGH_PITCH_GUARD_SEMITONES,
+                shift_semitones,
                 mask_source=original,
                 loudness_source=original,
                 high_threshold=float(threshold or getattr(params, "high_pitch_threshold", 0.0) or self._HIGH_PITCH_THRESHOLD),
@@ -971,6 +1014,7 @@ class ConversionService:
         guard_applied_any = False
         rendered = output
         guard_regions: list[tuple[float, float]] | None = None
+        guard_semitones = self._HIGH_PITCH_GUARD_SEMITONES
 
         def run_inference(vocals: Path, target: Path) -> None:
             if infer is None:
@@ -1031,6 +1075,12 @@ class ConversionService:
                 if isinstance(item, dict)
                 and float(item.get("end", 0.0)) > float(item.get("start", 0.0))
             ] or None
+            guard_semitones = self._guard_semitones_for_retry(
+                threshold,
+                issue,
+                source,
+                guard_regions,
+            )
             if issue.get("bad_regions") and not params.manual_params_enabled:
                 attempts = max(attempts, self._DROPOUT_RECOVERY_OFFLINE_MAX_ATTEMPTS)
 
@@ -1052,6 +1102,7 @@ class ConversionService:
                 log_file,
                 threshold,
                 guard_regions,
+                guard_semitones,
             )
             guard_applied_any = guard_applied_any or guard_applied
             run_inference(guarded, raw_target)
@@ -1066,6 +1117,7 @@ class ConversionService:
                     log_file,
                     threshold,
                     guard_regions,
+                    guard_semitones,
                 )
                 if baseline_first and rendered != output:
                     merged_target = output.with_name(f"{output.stem}_guarded_merged_retry{attempt}.wav")
@@ -1112,6 +1164,20 @@ class ConversionService:
                     best_render = rendered
                     best_bad_frames = candidate_bad_frames
                     best_guard_applied = guard_applied
+                if guard_regions and issue.get("bad_regions"):
+                    overlaps_scope = any(
+                        float(item.get("end", 0.0)) > start
+                        and float(item.get("start", 0.0)) < end
+                        for item in (issue.get("bad_regions") or [])
+                        if isinstance(item, dict)
+                        for start, end in guard_regions
+                    )
+                    if not overlaps_scope:
+                        self._log(
+                            log_file,
+                            "  新检测到的哑音位于本轮保护范围外，停止继续降低阈值并保留当前最佳结果",
+                        )
+                        return best_render, history, best_guard_applied
             next_threshold = self._next_dropout_threshold(threshold, issue)
             entry["next_threshold"] = next_threshold
             if next_threshold >= threshold - 10.0 or guard_attempt >= guard_attempts - 1:
@@ -1145,6 +1211,15 @@ class ConversionService:
                 f"源 F0 {issue['source_f0_hz']:.0f}Hz / "
                 f"输出 F0 {float(issue.get('output_f0_hz') or 0.0):.0f}Hz，"
                 f"高音保护起点 {threshold:.0f}Hz → {next_threshold:.0f}Hz，重新推理",
+            )
+            guard_semitones = max(
+                guard_semitones,
+                self._guard_semitones_for_retry(
+                    next_threshold,
+                    issue,
+                    source,
+                    guard_regions,
+                ),
             )
             threshold = next_threshold
             params.high_pitch_threshold = threshold
