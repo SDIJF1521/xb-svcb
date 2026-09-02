@@ -702,6 +702,8 @@ def test_installer_packages_and_uses_bundled_wheelhouse() -> None:
     assert "install\\prepare_wheelhouse.py" in build
     assert "installer\\stage_wheelhouse.py" in build
     assert '"/DXB_PACKAGE_STACK=$packageStack"' in build
+    assert '$selectedStacks = @(' in build
+    assert '$selectedStacks = if (' not in build
     assert '[string]($selectedStacks[0])' in build
     assert '[string]$selectedStacks[0]' not in build
     assert '[string]($outputBaseNames[$packageStack])' in build

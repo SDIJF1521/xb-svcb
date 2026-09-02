@@ -44,13 +44,13 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot   # repo root
 Set-Location -Path $Root
 
-$selectedStacks = if ($PSBoundParameters.ContainsKey('Stacks')) {
-  @($Stacks | Select-Object -Unique)
-} elseif ($ValidateOnly) {
-  @()
-} else {
-  @('cu128')
-}
+$selectedStacks = @(
+  if ($PSBoundParameters.ContainsKey('Stacks')) {
+    $Stacks | Select-Object -Unique
+  } elseif (-not $ValidateOnly) {
+    'cu128'
+  }
+)
 if ($selectedStacks.Count -gt 1) {
   throw "Dedicated installers must be built one stack at a time. Pass exactly one of: cpu, directml, cu126, cu128."
 }
