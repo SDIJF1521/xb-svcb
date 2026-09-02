@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -25,6 +26,10 @@ class VocalEnhancementProcessor:
     DEFAULT_AI_EXCITER = 0.25
     DEFAULT_STEREO_WIDTH = 0.30
     DEFAULT_LOUDNESS_ENVELOPE = 0.58
+    # Large Praat resynthesis or local timing offsets create a periodic
+    # fan-like artifact. Keep normal tuning results, but reject unstable ones.
+    MAX_SAFE_TUNING_PSOLA_PERCENT = 75.0
+    MAX_SAFE_TUNING_ALIGNMENT_MS = 60.0
 
     @property
     def available(self) -> bool:
@@ -354,10 +359,49 @@ class VocalEnhancementProcessor:
             return False
         self._append_log(log_file, cmd, proc, "Praat AI 对齐/自然修音")
         if proc.returncode == 0 and output.is_file():
+            accepted, reason = self._accept_natural_tuning(proc.stdout)
+            if not accepted:
+                self._append_message(
+                    log_file,
+                    f"AI 对齐/自然修音结果不稳定，已回退原始人声：{reason}",
+                )
+                return False
             return True
         detail = self._error_tail(proc.stdout, proc.stderr)
         self._append_message(log_file, f"AI 对齐/自然修音失败，继续原始增强：{detail}")
         return False
+
+    @classmethod
+    def _accept_natural_tuning(cls, stdout: str | None) -> tuple[bool, str]:
+        """Reject only tuning renders likely to contain a fan-like PSOLA artifact."""
+        text = str(stdout or "")
+        if "VOCAL_TUNE_OK" not in text:
+            # Older workers did not expose quality statistics; retain compatibility.
+            return True, ""
+
+        def metric(name: str) -> float | None:
+            match = re.search(
+                rf"\b{re.escape(name)}=([0-9]+(?:\.[0-9]+)?)",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if not match:
+                return None
+            try:
+                return float(match.group(1))
+            except ValueError:
+                return None
+
+        psola_percent = metric("psola")
+        alignment_ms = metric("align_max")
+        if (
+            psola_percent is not None
+            and psola_percent > cls.MAX_SAFE_TUNING_PSOLA_PERCENT
+        ):
+            return False, f"PSOLA 重合成占比 {psola_percent:.0f}%"
+        if alignment_ms is not None and alignment_ms > cls.MAX_SAFE_TUNING_ALIGNMENT_MS:
+            return False, f"局部对齐偏移 {alignment_ms:.0f}ms"
+        return True, ""
 
     @staticmethod
     def _append_log(
