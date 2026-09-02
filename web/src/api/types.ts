@@ -268,6 +268,12 @@ export interface InferenceParams {
   speaker?: string
   /** 高音保护：超出模型可靠音域时降调翻唱，再升回原调并补偿响度。 */
   auto_high_pitch_guard?: boolean
+  /** 高音保护重试轮次。 */
+  high_pitch_guard_rounds?: number
+  /** F0 过滤阈值（0~1）。 */
+  f0_filter_threshold?: number
+  /** 是否启用全参数手动调整；关闭时使用软件默认值。 */
+  manual_params_enabled?: boolean
 }
 
 export interface WorkDTO {

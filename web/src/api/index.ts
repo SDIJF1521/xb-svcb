@@ -260,11 +260,17 @@ export const api = {
       mock.toggleModelFavorite(id),
     ),
 
+  renameModel: (id: string, name: string) =>
+    invoke<boolean>('rename_model', [id, name], () => mock.renameModel(id, name)),
+
   pickAudioFile: () =>
     invoke<string | null>('pick_audio_file', [], () => mock.pickAudioFile()),
 
   pickAudioFiles: () =>
     invoke<string[]>('pick_audio_files', [], () => mock.pickAudioFiles()),
+
+  importAudioData: (name: string, data: string) =>
+    invoke<string | null>('import_audio_data', [name, data], () => mock.importAudioData(name, data)),
 
   pickLyricsFile: () =>
     invoke<LyricsFileResult>('pick_lyrics_file', [], () => mock.pickLyricsFile()),

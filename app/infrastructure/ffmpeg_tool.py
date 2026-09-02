@@ -10,6 +10,7 @@ import json
 import math
 import re
 import shutil
+import struct
 import subprocess
 import wave
 from pathlib import Path
@@ -455,6 +456,8 @@ class FfmpegTool:
         mask_source: Path | None = None,
         loudness_source: Path | None = None,
         high_threshold: float = 800.0,
+        report_path: Path | None = None,
+        regions: list[tuple[float, float]] | None = None,
     ) -> bool:
         """Pitch-shift only high-note regions while preserving formants.
 
@@ -466,6 +469,7 @@ class FfmpegTool:
         if not python or not Path(str(python)).is_file() or not worker or not Path(str(worker)).is_file():
             return False
         dst.parent.mkdir(parents=True, exist_ok=True)
+        scope_path: Path | None = None
         try:
             command = [
                 str(python),
@@ -483,6 +487,22 @@ class FfmpegTool:
                 command.extend(["--mask-source", str(mask_source)])
             if loudness_source:
                 command.extend(["--loudness-source", str(loudness_source)])
+            if report_path:
+                command.extend(["--report-json", str(report_path)])
+            if regions:
+                scope_path = dst.with_suffix(".scope.json")
+                scope_path.write_text(
+                    json.dumps(
+                        [
+                            {"start": float(start), "end": float(end)}
+                            for start, end in regions
+                            if float(end) > float(start)
+                        ],
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                command.extend(["--regions-json", str(scope_path)])
             result = subprocess.run(
                 command,
                 capture_output=True,
@@ -492,9 +512,72 @@ class FfmpegTool:
                 timeout=300,
                 **config.subprocess_no_window(),
             )
-            return result.returncode == 0 and dst.exists()
+            if result.returncode != 0 or not dst.exists():
+                return False
+
+            # Praat can occasionally return a syntactically valid but empty or
+            # collapsed render (especially on noisy/unvoiced material).  Do not
+            # treat that file as a successful guard pass: callers will then keep
+            # the original audio instead of feeding a muted signal downstream.
+            try:
+                with wave.open(str(src), "rb") as source_wave:
+                    source_frames = int(source_wave.getnframes())
+                    source_rate = int(source_wave.getframerate())
+                    source_width = int(source_wave.getsampwidth())
+                    source_channels = int(source_wave.getnchannels())
+                    source_raw = source_wave.readframes(
+                        min(source_frames, max(1, source_rate * 2))
+                    )
+                with wave.open(str(dst), "rb") as output_wave:
+                    output_frames = int(output_wave.getnframes())
+                    output_rate = int(output_wave.getframerate())
+                    output_width = int(output_wave.getsampwidth())
+                    output_channels = int(output_wave.getnchannels())
+                    output_raw = output_wave.readframes(
+                        min(output_frames, max(1, output_rate * 2))
+                    )
+                if (
+                    source_frames <= 0
+                    or output_frames <= 0
+                    or source_rate <= 0
+                    or output_rate <= 0
+                    or source_channels <= 0
+                    or output_channels <= 0
+                ):
+                    return False
+                source_duration = source_frames / float(source_rate)
+                output_duration = output_frames / float(output_rate)
+                if abs(output_duration - source_duration) > max(0.12, source_duration * 0.04):
+                    return False
+                if source_width == output_width == 2:
+                    source_values = struct.unpack(
+                        f"<{len(source_raw) // 2}h", source_raw[: len(source_raw) // 2 * 2]
+                    )
+                    output_values = struct.unpack(
+                        f"<{len(output_raw) // 2}h", output_raw[: len(output_raw) // 2 * 2]
+                    )
+                    if source_values and output_values:
+                        source_rms = math.sqrt(
+                            sum(float(value) * value for value in source_values)
+                            / len(source_values)
+                        )
+                        output_rms = math.sqrt(
+                            sum(float(value) * value for value in output_values)
+                            / len(output_values)
+                        )
+                        if source_rms > 256.0 and output_rms < source_rms * 0.05:
+                            return False
+            except (OSError, EOFError, struct.error, ValueError, wave.Error):
+                return False
+            return True
         except (OSError, subprocess.SubprocessError, ValueError):
             return False
+        finally:
+            if scope_path:
+                try:
+                    scope_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def silence(self, dst: Path, duration: float, sample_rate: int = 44100) -> bool:
         """Create a fixed-duration stereo silence file."""

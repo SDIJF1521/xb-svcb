@@ -142,6 +142,8 @@ class SvcEngine:
                     min(1800.0, float(getattr(params, "adaptive_f0_max", 1100.0))),
                 )
             ),
+            "--f0-threshold",
+            str(max(0.0, min(1.0, float(getattr(params, "f0_filter_threshold", 0.05))))),
             "--device",
             params.device or "auto",
         ]
@@ -227,6 +229,8 @@ class SvcEngine:
                     min(1800.0, float(getattr(params, "adaptive_f0_max", 1100.0))),
                 )
             ),
+            "--f0-threshold",
+            str(max(0.0, min(1.0, float(getattr(params, "f0_filter_threshold", 0.05))))),
             "--k-step",
             str(self._ratio_to_kstep(params.diffusion_ratio)),
             "--diffusion-ratio",

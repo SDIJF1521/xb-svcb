@@ -13,15 +13,15 @@
       <!-- 左侧：配置 -->
       <div class="config">
         <!-- 翻唱模式 -->
-        <section class="card glass mode-card">
-          <button class="mode-item" :class="{ active: mode === 'single' }" @click="mode = 'single'">
+        <section class="card glass mode-card" data-guide="cover-mode">
+          <button class="mode-item" data-guide="single-mode" :class="{ active: mode === 'single' }" @click="mode = 'single'">
             <el-icon><Microphone /></el-icon>
             <div class="mode-text">
               <div class="mode-name">单模型翻唱</div>
               <div class="mode-desc">整首歌用一个模型</div>
             </div>
           </button>
-          <button class="mode-item" :class="{ active: mode === 'multi' }" @click="mode = 'multi'">
+          <button class="mode-item" data-guide="multi-mode" :class="{ active: mode === 'multi' }" @click="mode = 'multi'">
             <el-icon><Operation /></el-icon>
             <div class="mode-text">
               <div class="mode-name">多模型混合</div>
@@ -30,7 +30,7 @@
           </button>
         </section>
 
-        <section class="card glass workflow-card">
+        <section class="card glass workflow-card" data-guide="cover-workflow">
           <div class="card-head">
             <span class="step-no">ADV</span>
             <h2>高级功能</h2>
@@ -58,15 +58,25 @@
         </section>
 
         <!-- 上传歌曲 -->
-        <section class="card glass">
+        <section class="card glass" data-guide="cover-upload">
           <div class="card-head">
             <span class="step-no">01</span>
             <h2>上传歌曲</h2>
           </div>
-          <div v-if="!song" class="dropzone" @click="onPickSong">
+          <div
+            v-if="!song"
+            class="dropzone"
+            :class="{ 'is-dragover': songDragActive }"
+            @click="onPickSong"
+            @dragenter.prevent="songDragActive = true"
+            @dragover.prevent="songDragActive = true"
+            @dragleave.prevent="songDragActive = false"
+            @drop.prevent="onSongDrop"
+          >
             <el-icon class="dz-icon"><UploadFilled /></el-icon>
-            <p class="dz-main">点击选择音频文件</p>
+            <p class="dz-main">点击选择或拖拽音频文件</p>
             <p class="dz-sub">支持 MP3 / WAV / FLAC，单文件 ≤ 50MB</p>
+            <input ref="songInput" type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aac" hidden @change="onSongFileChange" />
           </div>
           <div v-else class="song-file">
             <div class="song-cover"><el-icon><Headset /></el-icon></div>
@@ -101,7 +111,7 @@
         </section>
 
         <!-- 选择模型（单模型） -->
-        <section v-if="mode === 'single'" class="card glass">
+        <section v-if="mode === 'single'" class="card glass guide-model-select" data-guide="model-select">
           <div class="card-head">
             <span class="step-no">02</span>
             <h2>选择你的模型</h2>
@@ -141,11 +151,16 @@
         </section>
 
         <!-- 选择模型（多模型 + 各自参数） -->
-        <section v-else class="card glass">
+        <section v-else class="card glass guide-model-select" data-guide="model-select">
           <div class="card-head">
             <span class="step-no">02</span>
             <h2>选择参与模型</h2>
             <router-link to="/models" class="head-link">管理模型 <el-icon><Right /></el-icon></router-link>
+            <label class="manual-param-switch" data-guide="manual-switch">
+              <input v-model="manualParamsEnabled" type="checkbox" />
+              <span>全参数手动调整</span>
+              <small>{{ manualParamsEnabled ? '已启用' : '基础可调 · 高级默认' }}</small>
+            </label>
           </div>
           <p class="field-tip">勾选本次要混合的模型（可跨框架：So-VITS-SVC / RVC / SeedVC 同曲混用），每个模型可单独展开设置参数</p>
           <div v-if="availableFrameworks.length > 1" class="model-filter">
@@ -180,13 +195,26 @@
                 <el-icon v-if="isPicked(m.id)" class="model-check"><Select /></el-icon>
               </button>
 
-              <div v-if="isPicked(m.id)" class="mp-params">
+              <div v-if="isPicked(m.id)" class="mp-params" data-guide="multi-model-params">
                 <div class="mp-row">
                   <label>变调 {{ mp(m.id).pitch > 0 ? '+' + mp(m.id).pitch : mp(m.id).pitch }}</label>
                   <input type="range" min="-12" max="12" step="1" v-model.number="mp(m.id).pitch" />
                 </div>
+                <label class="mp-guard high-pitch-toggle-field" data-guide="high-pitch-toggle">
+                  <input v-model="mp(m.id).autoHighPitchGuard" type="checkbox" />
+                  <span>自动高音保护</span>
+                  <small>确认高音失配时按轮次重试</small>
+                </label>
+                <div v-if="manualParamsEnabled && mp(m.id).autoHighPitchGuard" class="mp-row mp-threshold">
+                  <label>保护轮次 {{ mp(m.id).highPitchGuardRounds }} 轮</label>
+                  <input v-model.number="mp(m.id).highPitchGuardRounds" type="range" min="0" max="8" step="1" :disabled="!manualParamsEnabled" />
+                </div>
+                <div v-if="manualParamsEnabled" class="mp-row mp-threshold">
+                  <label>F0 过滤阈值 {{ mp(m.id).f0FilterThreshold.toFixed(2) }}</label>
+                  <input v-model.number="mp(m.id).f0FilterThreshold" type="range" min="0" max="1" step="0.01" :disabled="!manualParamsEnabled" />
+                </div>
                 <template v-if="frameworkOf(m.id) !== 'rvc'">
-                  <div class="mp-row">
+                  <div class="mp-row" data-guide="ratio-control">
                     <label v-if="frameworkOf(m.id) === 'seed-vc'">扩散步数 {{ qualitySteps(mp(m.id).diffusionRatio) }}</label>
                     <label v-else-if="frameworkOf(m.id) === 'ddsp-svc'">采样步数 {{ ddspQualitySteps(mp(m.id).diffusionRatio) }}</label>
                     <label v-else>扩散占比 {{ Math.round(mp(m.id).diffusionRatio * 100) }}%</label>
@@ -214,6 +242,10 @@
                   </div>
                 </template>
                 <div class="mp-inline">
+                  <div v-if="manualParamsEnabled && (frameworkOf(m.id) === 'so-vits-svc' || frameworkOf(m.id) === 'ddsp-svc')" class="mp-mini mp-speaker">
+                    <span>说话人</span>
+                    <input v-model="mp(m.id).speaker" type="text" placeholder="默认" />
+                  </div>
                   <div v-if="frameworkOf(m.id) !== 'seed-vc'" class="mp-mini">
                     <span>F0</span>
                     <select v-model="mp(m.id).f0Method">
@@ -239,7 +271,7 @@
         </section>
 
         <!-- 可选前期处理 -->
-        <section class="card glass preprocess-card">
+        <section class="card glass preprocess-card" data-guide="preprocess">
           <div class="card-head preprocess-card-head">
             <span class="step-no">03</span>
             <div class="preprocess-title-wrap">
@@ -265,7 +297,7 @@
               <span class="preprocess-label">分离引擎</span>
               <span class="preprocess-label-hint">选择适合当前设备的前置处理器</span>
             </div>
-            <div class="seg preprocess-engines">
+            <div class="seg preprocess-engines" data-guide="preprocess-engine">
               <button
                 class="seg-item"
                 :class="{ active: preprocessEngine === 'uvr' }"
@@ -348,10 +380,15 @@
         </section>
 
         <!-- 推理参数（单模型） -->
-        <section v-if="mode === 'single'" class="card glass">
+        <section v-if="mode === 'single'" class="card glass" data-guide="inference-params">
           <div class="card-head">
             <span class="step-no">04</span>
             <h2>推理参数</h2>
+            <label class="manual-param-switch" data-guide="manual-switch">
+              <input v-model="manualParamsEnabled" type="checkbox" />
+              <span>全参数手动调整</span>
+              <small>{{ manualParamsEnabled ? '已启用' : '基础可调 · 高级默认' }}</small>
+            </label>
           </div>
 
           <div class="fw-banner">
@@ -367,7 +404,7 @@
             <div class="field-hint">建议使用 1-30 秒干净人声；这不是模型文件，每次推理可以单独更换</div>
           </div>
 
-          <div v-if="selectedFramework !== 'rvc'" class="field">
+          <div v-if="selectedFramework !== 'rvc'" class="field" data-guide="ratio-control">
             <div class="field-row">
               <label>{{ selectedFramework === 'seed-vc' ? 'SeedVC 推理质量' : selectedFramework === 'ddsp-svc' ? 'DDSP-SVC 推理质量' : '主模型 / 扩散模型 比例' }}</label>
               <span class="field-val">
@@ -405,12 +442,36 @@
             <div class="field-hint">男声转女声建议 +12，女声转男声建议 -12</div>
           </div>
 
+          <div v-if="manualParamsEnabled && (selectedFramework === 'so-vits-svc' || selectedFramework === 'ddsp-svc')" class="field">
+            <label class="field-block-label">目标说话人 / 音色 ID</label>
+            <input v-model="speaker" class="text-input" type="text" placeholder="留空使用模型默认说话人" />
+            <div class="field-hint">不同模型的说话人命名可能不同，按模型配置填写名称或数字 ID</div>
+          </div>
+
           <div class="field">
-            <label class="field-block-label">
+            <label class="field-block-label high-pitch-toggle-field" data-guide="high-pitch-toggle">
               <input v-model="autoHighPitchGuard" type="checkbox" />
               自动高音保护
             </label>
-            <div class="field-hint">仅对超出模型音域的高音区域降调翻唱，再升回原调并补偿响度</div>
+            <div class="field-hint">检测到模型高音失配时按轮次重试</div>
+          </div>
+
+          <div v-if="manualParamsEnabled && autoHighPitchGuard" class="field">
+            <div class="field-row">
+              <label>高音保护轮次</label>
+              <span class="field-val">{{ highPitchGuardRounds }} 轮</span>
+            </div>
+            <input type="range" min="0" max="8" step="1" v-model.number="highPitchGuardRounds" />
+            <div class="field-hint">每轮失败后会根据实际哑音位置自动降低内部保护起点</div>
+          </div>
+
+          <div v-if="manualParamsEnabled" class="field">
+            <div class="field-row">
+              <label>F0 过滤阈值</label>
+              <span class="field-val">{{ f0FilterThreshold.toFixed(2) }}</span>
+            </div>
+            <input type="range" min="0" max="1" step="0.01" v-model.number="f0FilterThreshold" />
+            <div class="field-hint">过滤低置信度基频候选；数值越高越严格</div>
           </div>
 
           <div v-if="selectedFramework !== 'seed-vc'" class="field">
@@ -492,7 +553,7 @@
         </section>
 
         <!-- 歌词与分句指派（多模型） -->
-        <section v-else class="card glass">
+        <section v-else class="card glass" data-guide="multi-lyrics">
           <div class="card-head">
             <span class="step-no">04</span>
             <h2>歌词分句指派</h2>
@@ -548,7 +609,7 @@
           </div>
 
           <!-- 可视化时间轴（缩略预览，编辑在弹窗中进行，避免撑破内联布局）-->
-          <div v-if="segments.length && pickedModels.length" class="timeline-wrap">
+          <div v-if="segments.length && pickedModels.length" class="timeline-wrap" data-guide="multi-timeline">
             <div class="timeline-head">
               <span class="tl-title"><el-icon><Operation /></el-icon> 时间轴</span>
               <div class="tl-tools">
@@ -612,7 +673,7 @@
             </div>
             <!-- 横向可滚动的缩放视口：trackEl 量取的是固定宽度的外层视口，
                  与内部会随缩放变宽的 .tl-inner 彻底解耦，避免 ResizeObserver 自反馈把轨道越撑越大 -->
-            <div ref="trackEl" class="tl-viewport">
+            <div ref="trackEl" class="tl-viewport" data-guide="multi-timeline-dialog">
               <div class="tl-scroll tl-scroll-lg">
                 <div class="tl-inner" :style="{ width: innerPx + 'px' }">
                 <!-- 时间刻度 -->
@@ -766,7 +827,7 @@
           </div>
         </section>
 
-        <section class="card glass enhancement-card">
+        <section class="card glass enhancement-card" data-guide="cover-enhancement">
           <div class="card-head enhancement-head">
             <span class="step-no">05</span>
             <div class="enhancement-title">
@@ -777,12 +838,13 @@
               >{{ vocalEnhancementReady ? '引擎就绪' : '环境未安装' }}</span>
             </div>
             <el-switch
+              data-guide="enhancement-toggle"
               v-model="vocalEnhancementEnabled"
               :disabled="!vocalEnhancementReady || !enhancementWorkflowAllowed"
               aria-label="启用 AI 歌声增强"
             />
           </div>
-          <div v-if="vocalEnhancementEnabled && enhancementWorkflowAllowed" class="enhancement-levels">
+          <div v-if="vocalEnhancementEnabled && enhancementWorkflowAllowed" class="enhancement-levels" data-guide="enhancement-levels">
             <button
               type="button"
               class="enhancement-level"
@@ -810,7 +872,7 @@
               <el-icon v-if="vocalEnhancementLevel === 'advanced'" class="level-check"><Select /></el-icon>
             </button>
           </div>
-          <div v-if="vocalEnhancementEnabled && enhancementWorkflowAllowed" class="enhancement-controls">
+          <div v-if="vocalEnhancementEnabled && enhancementWorkflowAllowed" class="enhancement-controls" data-guide="enhancement-controls">
             <div class="enhancement-control">
               <div class="enhancement-control-label">
                 <span>自然修音</span>
@@ -892,7 +954,7 @@
           <p v-else-if="!enhancementWorkflowAllowed" class="enhancement-note">手动人声合并将在编辑器导出后处理</p>
         </section>
 
-        <section class="card glass infer-tools">
+        <section class="card glass infer-tools" data-guide="cover-ecosystem">
           <div class="card-head">
             <span class="step-no">ECO</span>
             <h2>推理生态</h2>
@@ -920,6 +982,7 @@
         </section>
 
         <el-button
+          data-guide="cover-generate"
           size="large"
           round
           class="cta-btn generate-btn"
@@ -933,7 +996,7 @@
 
       <!-- 右侧：预览 / 进度 -->
       <div class="preview">
-        <section class="card glass result-card">
+        <section class="card glass result-card" data-guide="cover-output">
           <div class="corner tl"></div>
           <div class="corner tr"></div>
           <div class="corner bl"></div>
@@ -963,6 +1026,10 @@
                 <el-icon class="el-icon--left"><Operation /></el-icon>进入编辑器
               </el-button>
             </div>
+            <div class="preview-seek" data-guide="preview-seek">
+              <input v-model.number="previewCurrentTime" type="range" min="0" :max="previewDuration || 0" step="0.01" :disabled="!done || !previewDuration" @input="seekPreview" />
+              <span>{{ formatPreviewTime(previewCurrentTime) }} / {{ formatPreviewTime(previewDuration) }}</span>
+            </div>
           </div>
           <audio
             ref="audioEl"
@@ -970,6 +1037,8 @@
             @play="isPlaying = true"
             @pause="isPlaying = false"
             @ended="isPlaying = false"
+            @loadedmetadata="onPreviewMetadata"
+            @timeupdate="onPreviewTimeUpdate"
           />
         </section>
 
@@ -1053,6 +1122,7 @@ import {
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   api,
+  isDesktop,
   type WorkDTO,
   type PipelineStep,
   type DownloadedMusic,
@@ -1072,6 +1142,7 @@ import { useModelsStore } from '@/stores/models'
 import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
 import { f0MethodsForFramework, normalizeF0Method } from '@/utils/f0'
+import { takePendingAudio } from '@/utils/pendingAudio'
 
 defineOptions({ name: 'CreatePage' })
 
@@ -1103,6 +1174,8 @@ const num = (v: unknown, d: number) => (typeof v === 'number' ? v : d)
 const str = (v: unknown, d: string) => (typeof v === 'string' ? v : d)
 
 const song = ref<Song | null>(null)
+const songInput = ref<HTMLInputElement | null>(null)
+const songDragActive = ref(false)
 const selectedModel = ref<string>('')
 
 const uvrModels = ['MDX-Net', 'Demucs v4', 'VR Arch']
@@ -1150,7 +1223,11 @@ watch(harmonyModel, () => { void refreshPymssStatus() })
 const f0Method = ref(normalizeF0Method('so-vits-svc', str(prefs.f0Method, 'rmvpe')))
 
 const pitch = ref(num(prefs.pitch, 0))
+const manualParamsEnabled = ref(prefs.manualParamsEnabled === true)
+const speaker = ref(str(prefs.speaker, ''))
 const autoHighPitchGuard = ref(prefs.autoHighPitchGuard !== false)
+const highPitchGuardRounds = ref(Math.max(0, Math.min(8, Math.round(num(prefs.highPitchGuardRounds, 3)))))
+const f0FilterThreshold = ref(Math.max(0, Math.min(1, num(prefs.f0FilterThreshold, 0.05))))
 const formantShift = ref(Math.max(-2, Math.min(2, num(prefs.formantShift, 0))))
 const indexRate = ref(num(prefs.indexRate, 0.75))
 const rmsMix = ref(num(prefs.rmsMix, 0.25))
@@ -1255,6 +1332,7 @@ function normalizeDeviceSelections() {
 /* ===== 多模型混合翻唱 ===== */
 type MultiParams = {
   pitch: number
+  speaker: string
   formantShift: number
   diffusionRatio: number
   f0Method: string
@@ -1265,37 +1343,53 @@ type MultiParams = {
   filterRadius: number
   rvcVersion: string
   referenceAudio: string
+  autoHighPitchGuard: boolean
+  highPitchGuardRounds: number
+  f0FilterThreshold: number
 }
 
 type ParamValues = MultiParams
 
 function paramsForFramework(framework: string, values: ParamValues): InferenceParams {
+  const manual = manualParamsEnabled.value
+  const effective: ParamValues = manual
+    ? values
+    : {
+        ...values,
+        speaker: '',
+        highPitchGuardRounds: 3,
+        f0FilterThreshold: 0.05,
+      }
   const params: InferenceParams = {
-    pitch: Math.round(values.pitch),
+    pitch: Math.round(effective.pitch),
+    speaker: (effective.speaker || '').trim(),
     uvr_model: uvrModel.value,
     preprocess_enabled: preprocessEnabled.value,
     preprocess_engine: preprocessEngine.value,
     pymss_model: pymssModel.value,
-    device: values.device,
-    auto_high_pitch_guard: autoHighPitchGuard.value,
+    device: effective.device,
+    auto_high_pitch_guard: effective.autoHighPitchGuard,
+    high_pitch_guard_rounds: Math.max(0, Math.min(8, Math.round(Number(effective.highPitchGuardRounds ?? 3)))),
+    f0_filter_threshold: Math.max(0, Math.min(1, Number(effective.f0FilterThreshold ?? 0.05))),
+    manual_params_enabled: manual,
   }
   if (framework === 'seed-vc') {
-    params.diffusion_ratio = values.diffusionRatio
+    params.diffusion_ratio = effective.diffusionRatio
     params.reference_audio = values.referenceAudio
   } else if (framework === 'rvc') {
-    params.f0_method = normalizeF0Method(framework, values.f0Method)
-    params.index_rate = values.indexRate
-    params.rms_mix = values.rmsMix
-    params.protect = values.protect
-    params.filter_radius = Math.round(values.filterRadius)
-    params.rvc_version = values.rvcVersion
+    params.f0_method = normalizeF0Method(framework, effective.f0Method)
+    params.index_rate = effective.indexRate
+    params.rms_mix = effective.rmsMix
+    params.protect = effective.protect
+    params.filter_radius = Math.round(effective.filterRadius)
+    params.rvc_version = effective.rvcVersion
   } else if (framework === 'ddsp-svc') {
-    params.f0_method = normalizeF0Method(framework, values.f0Method)
-    params.ddsp_infer_steps = ddspQualitySteps(values.diffusionRatio)
-    params.ddsp_formant_shift = Number(Math.max(-2, Math.min(2, values.formantShift)).toFixed(2))
+    params.f0_method = normalizeF0Method(framework, effective.f0Method)
+    params.ddsp_infer_steps = ddspQualitySteps(effective.diffusionRatio)
+    params.ddsp_formant_shift = Number(Math.max(-2, Math.min(2, effective.formantShift)).toFixed(2))
   } else {
-    params.f0_method = normalizeF0Method(framework, values.f0Method)
-    params.diffusion_ratio = values.diffusionRatio
+    params.f0_method = normalizeF0Method(framework, effective.f0Method)
+    params.diffusion_ratio = effective.diffusionRatio
   }
   return params
 }
@@ -1379,6 +1473,7 @@ function timelineModelColor(index: number): string {
 function defaultParams(framework: string): MultiParams {
   return {
     pitch: pitch.value,
+    speaker: speaker.value,
     formantShift: formantShift.value,
     diffusionRatio: diffusionRatio.value,
     f0Method: normalizeF0Method(framework, f0Method.value),
@@ -1389,6 +1484,9 @@ function defaultParams(framework: string): MultiParams {
     filterRadius: filterRadius.value,
     rvcVersion: rvcVersion.value,
     referenceAudio: '',
+    autoHighPitchGuard: autoHighPitchGuard.value,
+    highPitchGuardRounds: highPitchGuardRounds.value,
+    f0FilterThreshold: f0FilterThreshold.value,
   }
 }
 function mp(id: string): MultiParams {
@@ -1783,6 +1881,114 @@ function onTlClosed() {
   zoom.value = 1
 }
 
+/* 首次使用引导的演示状态：只在引导期间临时准备多模型时间轴 / AI 增强，离开后完整恢复。 */
+type GuideDemoKind = 'multi' | 'multi-timeline' | 'enhancement'
+interface GuideDemoSnapshot {
+  mode: 'single' | 'multi'
+  workflow: CreateWorkflow
+  manualParamsEnabled: boolean
+  selectedMulti: string[]
+  modelParams: Record<string, MultiParams>
+  lyrics: LyricLine[]
+  segments: EditSegment[]
+  lyricTried: boolean
+  audioDuration: number
+  tlDialog: boolean
+  vocalEnhancementEnabled: boolean
+}
+let guideDemoSnapshot: GuideDemoSnapshot | null = null
+const activeGuideDemoKind = ref<GuideDemoKind | null>(null)
+
+function cloneGuideValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
+function beginGuideDemo() {
+  if (guideDemoSnapshot) return
+  guideDemoSnapshot = {
+    mode: mode.value,
+    workflow: workflow.value,
+    manualParamsEnabled: manualParamsEnabled.value,
+    selectedMulti: [...selectedMulti.value],
+    modelParams: cloneGuideValue(modelParams),
+    lyrics: cloneGuideValue(lyrics.value),
+    segments: cloneGuideValue(segments.value),
+    lyricTried: lyricTried.value,
+    audioDuration: audioDuration.value,
+    tlDialog: tlDialog.value,
+    vocalEnhancementEnabled: vocalEnhancementEnabled.value,
+  }
+}
+
+function restoreGuideDemo() {
+  const saved = guideDemoSnapshot
+  if (!saved) return
+  mode.value = saved.mode
+  workflow.value = saved.workflow
+  manualParamsEnabled.value = saved.manualParamsEnabled
+  selectedMulti.value = [...saved.selectedMulti]
+  for (const key of Object.keys(modelParams)) delete modelParams[key]
+  Object.assign(modelParams, cloneGuideValue(saved.modelParams))
+  lyrics.value = cloneGuideValue(saved.lyrics)
+  segments.value = cloneGuideValue(saved.segments)
+  lyricTried.value = saved.lyricTried
+  audioDuration.value = saved.audioDuration
+  tlDialog.value = saved.tlDialog
+  vocalEnhancementEnabled.value = saved.vocalEnhancementEnabled
+  guideDemoSnapshot = null
+  activeGuideDemoKind.value = null
+}
+
+function prepareGuideDemo(kind: GuideDemoKind) {
+  beginGuideDemo()
+  if (kind === 'enhancement') {
+    // 强制使用可展示增强控件的普通工作流；结束时会恢复用户原选择。
+    if (!enhancementWorkflowAllowed.value) workflow.value = 'auto_mix'
+    vocalEnhancementEnabled.value = true
+    return
+  }
+
+  mode.value = 'multi'
+  manualParamsEnabled.value = true
+  if (workflow.value === 'full_manual_editor') workflow.value = 'auto_mix'
+  const ids = models.value.slice(0, 2).map((item) => item.id)
+  selectedMulti.value = ids.length ? ids : selectedMulti.value
+  for (const id of selectedMulti.value) if (!modelParams[id]) modelParams[id] = defaultParams(frameworkOf(id))
+
+  if (kind === 'multi-timeline') {
+    const modelA = selectedMulti.value[0] || ''
+    const modelB = selectedMulti.value[1] || modelA
+    lyrics.value = [
+      { time: 0.8, text: '欢迎来到多模型时间轴' },
+      { time: 4.2, text: '每一句都可以选择不同音色' },
+      { time: 8.1, text: '多选模型即可制作合唱' },
+      { time: 12.3, text: '拖动边界完成精细对齐' },
+    ]
+    lyricTried.value = true
+    audioDuration.value = 17
+    segments.value = [
+      { id: newSegId(), start: 0.8, end: 4.2, modelIds: modelA ? [modelA] : [], text: '欢迎来到多模型时间轴' },
+      { id: newSegId(), start: 4.2, end: 8.1, modelIds: modelB ? [modelB] : [], text: '每一句都可以选择不同音色' },
+      { id: newSegId(), start: 8.1, end: 12.3, modelIds: modelA && modelB ? [modelA, modelB] : (modelA ? [modelA] : []), text: '多选模型即可制作合唱' },
+      { id: newSegId(), start: 12.3, end: 16.6, modelIds: [], text: '拖动边界完成精细对齐' },
+    ]
+    tlDialog.value = true
+  }
+}
+
+function onGuideDemo(event: Event) {
+  const detail = (event as CustomEvent<{ action?: string; kind?: GuideDemoKind }>).detail || {}
+  if (detail.action === 'restore') {
+    restoreGuideDemo()
+    return
+  }
+  if (detail.action === 'prepare' && detail.kind) {
+    activeGuideDemoKind.value = detail.kind
+    prepareGuideDemo(detail.kind)
+  }
+}
+window.addEventListener('xb-guide-demo', onGuideDemo)
+
 /* ---- 时间轴总览 ---- */
 /** 拖动期间冻结的总时长：拖动时锁定，避免「拖长片段→总时长变大→整轴重新缩放→边缘跑飞」的自反馈。 */
 const frozenDur = ref(0)
@@ -2015,8 +2221,9 @@ const alignStatus = computed(() => {
 
 // 任一参数变化即写回 localStorage
 watch(
-  [uvrModel, preprocessEnabled, preprocessEngine, pymssModel, harmonyRemovalEnabled, harmonyModel, f0Method, pitch, autoHighPitchGuard, formantShift, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion, vocalEnhancementEnabled, vocalEnhancementLevel, pitchCorrection, timingAlignment, timbreFocus, aiEq, aiCompressor, aiExciter, stereoWidth, loudnessEnvelope],
+  [uvrModel, preprocessEnabled, preprocessEngine, pymssModel, harmonyRemovalEnabled, harmonyModel, f0Method, pitch, speaker, highPitchGuardRounds, f0FilterThreshold, manualParamsEnabled, autoHighPitchGuard, formantShift, indexRate, rmsMix, diffusionRatio, seedVcReferenceAudio, device, mode, workflow, protect, filterRadius, rvcVersion, vocalEnhancementEnabled, vocalEnhancementLevel, pitchCorrection, timingAlignment, timbreFocus, aiEq, aiCompressor, aiExciter, stereoWidth, loudnessEnvelope],
   () => {
+    if (activeGuideDemoKind.value) return
     try {
       localStorage.setItem(
         PREFS_KEY,
@@ -2029,6 +2236,10 @@ watch(
           harmonyModel: harmonyModel.value,
           f0Method: f0Method.value,
           pitch: pitch.value,
+          manualParamsEnabled: manualParamsEnabled.value,
+          highPitchGuardRounds: highPitchGuardRounds.value,
+          f0FilterThreshold: f0FilterThreshold.value,
+          speaker: speaker.value,
           autoHighPitchGuard: autoHighPitchGuard.value,
           formantShift: formantShift.value,
           indexRate: indexRate.value,
@@ -2140,6 +2351,21 @@ const canGenerate = computed(() => {
 
 const audioEl = ref<HTMLAudioElement | null>(null)
 const audioLoadedFor = ref<string | null>(null)
+const previewCurrentTime = ref(0)
+const previewDuration = ref(0)
+function formatPreviewTime(value: number) {
+  const total = Math.max(0, Math.floor(Number(value) || 0))
+  return `${Math.floor(total / 60).toString().padStart(2, '0')}:${(total % 60).toString().padStart(2, '0')}`
+}
+function onPreviewMetadata() {
+  previewDuration.value = Number.isFinite(audioEl.value?.duration || 0) ? Number(audioEl.value?.duration || 0) : 0
+}
+function onPreviewTimeUpdate() {
+  previewCurrentTime.value = Number(audioEl.value?.currentTime || 0)
+}
+function seekPreview() {
+  if (audioEl.value) audioEl.value.currentTime = previewCurrentTime.value
+}
 const editorOpenedFor = ref<string | null>(null)
 
 async function onTogglePlay() {
@@ -2154,6 +2380,8 @@ async function onTogglePlay() {
     }
     el.src = data
     audioLoadedFor.value = work.id
+    previewCurrentTime.value = 0
+    previewDuration.value = 0
   }
   if (el.paused) await el.play()
   else el.pause()
@@ -2174,6 +2402,9 @@ async function openLog() {
 function currentParams() {
   return paramsForFramework(selectedFramework.value, {
     pitch: pitch.value,
+    highPitchGuardRounds: highPitchGuardRounds.value,
+    f0FilterThreshold: f0FilterThreshold.value,
+    speaker: speaker.value,
     formantShift: formantShift.value,
     f0Method: f0Method.value,
     indexRate: indexRate.value,
@@ -2184,6 +2415,7 @@ function currentParams() {
     filterRadius: filterRadius.value,
     rvcVersion: rvcVersion.value,
     referenceAudio: selectedFramework.value === 'seed-vc' ? seedVcReferenceAudio.value : '',
+    autoHighPitchGuard: autoHighPitchGuard.value,
   })
 }
 
@@ -2223,6 +2455,9 @@ function applyParams(raw: Record<string, unknown>) {
     : num(raw.diffusion_ratio, diffusionRatio.value)
   const next = {
     pitch: num(raw.pitch, pitch.value),
+    speaker: str(raw.speaker, speaker.value),
+    highPitchGuardRounds: Math.max(0, Math.min(8, Math.round(num(raw.high_pitch_guard_rounds, highPitchGuardRounds.value)))),
+    f0FilterThreshold: Math.max(0, Math.min(1, num(raw.f0_filter_threshold, f0FilterThreshold.value))),
     autoHighPitchGuard: raw.auto_high_pitch_guard !== false,
     formantShift: Math.max(-2, Math.min(2, num(raw.ddsp_formant_shift, formantShift.value))),
     f0Method: str(raw.f0_method, f0Method.value),
@@ -2237,6 +2472,9 @@ function applyParams(raw: Record<string, unknown>) {
     referenceAudio: str(raw.reference_audio, seedVcReferenceAudio.value),
   }
   pitch.value = next.pitch
+  speaker.value = next.speaker
+  highPitchGuardRounds.value = next.highPitchGuardRounds
+  f0FilterThreshold.value = next.f0FilterThreshold
   autoHighPitchGuard.value = next.autoHighPitchGuard
   formantShift.value = next.formantShift
   f0Method.value = normalizeF0Method(selectedFramework.value, next.f0Method)
@@ -2257,6 +2495,9 @@ function applyParams(raw: Record<string, unknown>) {
   for (const id of selectedMulti.value) {
     const p = mp(id)
     p.pitch = next.pitch
+    p.speaker = next.speaker
+    p.highPitchGuardRounds = next.highPitchGuardRounds
+    p.f0FilterThreshold = next.f0FilterThreshold
     p.formantShift = next.formantShift
     p.f0Method = normalizeF0Method(frameworkOf(id), next.f0Method)
     p.indexRate = next.indexRate
@@ -2266,6 +2507,7 @@ function applyParams(raw: Record<string, unknown>) {
     p.protect = next.protect
     p.filterRadius = next.filterRadius
     p.rvcVersion = next.rvcVersion
+    p.autoHighPitchGuard = next.autoHighPitchGuard
     if (frameworkOf(id) === 'seed-vc') p.referenceAudio = next.referenceAudio
   }
 }
@@ -2365,10 +2607,64 @@ const overallState = computed(() => {
 })
 
 async function onPickSong() {
+  // Native bridge returns an absolute path on desktop; the hidden input keeps
+  // the same workflow available when the page is opened in a normal browser.
+  if (!isDesktop()) {
+    songInput.value?.click()
+    return
+  }
   const path = await api.pickAudioFile()
   if (!path) return
   const name = path.split(/[/\\]/).pop() || path
   song.value = { name, path, hint: '本地音频已选择' }
+  void api.getAudioDuration(path).then((value) => { audioDuration.value = value })
+}
+
+function readFileDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('无法读取拖入的音频文件'))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function setSongFromFile(file: File | undefined) {
+  if (!file) return
+  if (file.size > 50 * 1024 * 1024) {
+    ElMessage.warning('音频文件不能超过 50MB')
+    return
+  }
+  const ext = file.name.split('.').pop()?.toLowerCase() || ''
+  const allowed = ['mp3', 'wav', 'flac', 'm4a', 'ogg', 'aac', 'opus', 'wma']
+  if (!allowed.includes(ext) && !file.type.startsWith('audio/')) {
+    ElMessage.warning('请选择 MP3、WAV、FLAC 等音频文件')
+    return
+  }
+  let desktopPath = String((file as File & { path?: string }).path || '').trim()
+  if (!desktopPath && isDesktop()) {
+    try {
+      desktopPath = String(await api.importAudioData(file.name, await readFileDataUrl(file)) || '').trim()
+    } catch {
+      ElMessage.error('无法导入拖入的音频文件')
+      return
+    }
+  }
+  song.value = {
+    name: file.name,
+    path: desktopPath || file.name,
+    hint: desktopPath ? '已拖入本地音频' : '已拖入文件；桌面应用会使用其本地路径',
+  }
+}
+
+function onSongFileChange(event: Event) {
+  void setSongFromFile((event.target as HTMLInputElement).files?.[0])
+  ;(event.target as HTMLInputElement).value = ''
+}
+
+function onSongDrop(event: DragEvent) {
+  songDragActive.value = false
+  void setSongFromFile(event.dataTransfer?.files?.[0])
 }
 
 async function pickSeedVcReference() {
@@ -2455,6 +2751,7 @@ const generate = async () => {
         model_id: pm.id,
         params: paramsForFramework(framework, {
           pitch: p.pitch,
+          speaker: p.speaker,
           formantShift: p.formantShift,
           f0Method: p.f0Method,
           indexRate: p.indexRate,
@@ -2465,6 +2762,9 @@ const generate = async () => {
           filterRadius: p.filterRadius,
           rvcVersion: p.rvcVersion,
           referenceAudio: framework === 'seed-vc' ? p.referenceAudio : '',
+          autoHighPitchGuard: p.autoHighPitchGuard,
+          highPitchGuardRounds: p.highPitchGuardRounds,
+          f0FilterThreshold: p.f0FilterThreshold,
         }),
       }
     })
@@ -2606,6 +2906,16 @@ onMounted(async () => {
   if (selectedModel.value && selectedMulti.value.length === 0) {
     togglePick(selectedModel.value)
   }
+  const pendingAudio = takePendingAudio()
+  if (pendingAudio) {
+    song.value = {
+      name: pendingAudio.name,
+      path: pendingAudio.path,
+      hint: pendingAudio.hint || '首页拖入音频',
+    }
+    songQuery.value = pendingAudio.name.replace(/\.[^.]+$/, '')
+    void api.getAudioDuration(pendingAudio.path).then((value) => { audioDuration.value = value })
+  }
   // 加载歌词曲库选项（与「资源获取」共用妖狐 API 来源）
   try {
     const [srcList, curSource] = await Promise.all([
@@ -2641,7 +2951,14 @@ watch(
 watch(selectedFramework, (framework) => {
   f0Method.value = normalizeF0Method(framework, f0Method.value)
 })
+watch(models, (items) => {
+  if (activeGuideDemoKind.value && activeGuideDemoKind.value !== 'enhancement' && items.length) {
+    prepareGuideDemo(activeGuideDemoKind.value)
+  }
+}, { deep: true })
 onUnmounted(() => {
+  restoreGuideDemo()
+  window.removeEventListener('xb-guide-demo', onGuideDemo)
   stopPolling()
   trackRO?.disconnect()
   window.removeEventListener('pointermove', onDragMove)
@@ -2701,6 +3018,22 @@ onUnmounted(() => {
   margin-bottom: 18px;
 }
 .card-head h2 { font-size: 17px; font-weight: 700; margin: 0; }
+.manual-param-switch {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--xb-primary) 30%, var(--xb-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--xb-primary) 7%, transparent);
+  color: var(--xb-text);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.manual-param-switch input { accent-color: var(--xb-primary); }
+.manual-param-switch small { color: var(--xb-muted); }
 .step-no {
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
   font-size: 13px;
@@ -2775,6 +3108,7 @@ onUnmounted(() => {
   cursor: pointer;
 }
 .dropzone:hover { border-color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.07); }
+.dropzone.is-dragover { border-color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.13); box-shadow: 0 0 0 2px rgba(var(--xb-primary-rgb), .14); }
 .dz-icon { font-size: 42px; color: var(--xb-primary); margin-bottom: 10px; }
 .dz-main { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
 .dz-sub { font-size: 12.5px; color: var(--xb-muted); margin: 0; }
@@ -3246,6 +3580,33 @@ onUnmounted(() => {
 }
 .mp-row { display: flex; flex-direction: column; gap: 6px; }
 .mp-row label { font-size: 12.5px; color: var(--xb-muted); }
+.mp-guard {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--xb-primary) 24%, var(--xb-border));
+  border-left: 3px solid var(--xb-primary);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--xb-primary) 6%, transparent);
+  color: var(--xb-text);
+  font-size: 12.5px;
+}
+.mp-guard input { accent-color: var(--xb-primary); }
+.mp-guard small { flex-basis: 100%; color: var(--xb-muted); font-size: 11.5px; }
+.high-pitch-toggle-field { cursor: pointer; }
+.field-block-label.high-pitch-toggle-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--xb-primary) 24%, var(--xb-border));
+  border-left: 3px solid var(--xb-primary);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--xb-primary) 6%, transparent);
+}
+.field-block-label.high-pitch-toggle-field input { accent-color: var(--xb-primary); }
 .mp-inline { display: flex; gap: 10px; }
 .mp-mini { flex: 1; display: flex; align-items: center; gap: 6px; }
 .mp-mini span { font-size: 12.5px; color: var(--xb-muted); }
@@ -3259,6 +3620,17 @@ onUnmounted(() => {
   outline: none;
   font-size: 13px;
 }
+.mp-mini input, .text-input {
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--xb-border);
+  border-radius: 8px;
+  outline: none;
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-text);
+}
+.mp-mini input { flex: 1; width: 90px; }
+.text-input { width: 100%; box-sizing: border-box; }
 
 /* 歌词获取 */
 .lyric-fetch { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
@@ -3936,6 +4308,9 @@ input[type='range'] {
   justify-content: center;
   gap: 14px;
 }
+.preview-seek { display: flex; align-items: center; gap: 10px; margin-top: 18px; color: var(--xb-muted); font: 11px ui-monospace, monospace; }
+.preview-seek input { flex: 1; min-width: 0; accent-color: var(--xb-primary); cursor: pointer; }
+.preview-seek span { white-space: nowrap; }
 .play-main {
   width: 48px; height: 48px;
   border-radius: 50%;
@@ -4016,6 +4391,8 @@ input[type='range'] {
   .enhancement-controls { grid-template-columns: 1fr; gap: 10px; }
 }
 @media (max-width: 560px) {
+  .card-head { flex-wrap: wrap; }
+  .manual-param-switch { width: 100%; margin-left: 0; white-space: normal; }
   .preprocess-card { padding: 18px 16px; }
   .preprocess-card-head { margin-bottom: 17px; }
   .preprocess-title-wrap h2 { font-size: 17px; }

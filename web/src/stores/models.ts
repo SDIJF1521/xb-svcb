@@ -21,6 +21,7 @@ export interface ModelVM {
   indexFile: string
   favorite: boolean
   health: 'ok' | 'warn' | 'error' | 'unknown'
+  metadata?: Record<string, unknown>
 }
 
 function guessFramework(type: string): string {
@@ -49,6 +50,7 @@ function toVM(m: ModelDTO): ModelVM {
     indexFile: m.index_file?.name || '—',
     favorite: !!m.favorite,
     health: m.metadata?.valid === true ? 'ok' : m.metadata?.valid === false ? 'error' : 'unknown',
+    metadata: m.metadata,
   }
 }
 
@@ -98,6 +100,12 @@ export const useModelsStore = defineStore('models', () => {
     return updated
   }
 
+  async function rename(id: string, name: string) {
+    const ok = await api.renameModel(id, name)
+    if (ok) await load()
+    return ok
+  }
+
   async function inspect(id: string, repair = false) {
     const res = await api.inspectModel(id, repair)
     if (repair && res.model) await load()
@@ -118,6 +126,7 @@ export const useModelsStore = defineStore('models', () => {
     setDefault,
     remove,
     toggleFavorite,
+    rename,
     inspect,
   }
 })

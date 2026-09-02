@@ -13,7 +13,7 @@
 
     <div class="workspace">
       <div class="configuration">
-        <section class="panel glass">
+        <section class="panel glass" data-guide="enhancement-target">
           <div class="panel-head">
             <span class="step-no">01</span>
             <div>
@@ -62,7 +62,7 @@
           </button>
         </section>
 
-        <section class="panel glass">
+        <section class="panel glass" data-guide="enhancement-original">
           <div class="panel-head">
             <span class="step-no">02</span>
             <div>
@@ -110,7 +110,7 @@
           </div>
         </section>
 
-        <section class="panel glass">
+        <section class="panel glass" data-guide="enhancement-controls">
           <div class="panel-head">
             <span class="step-no">03</span>
             <div>
@@ -139,7 +139,7 @@
         </section>
       </div>
 
-      <aside class="monitor glass">
+      <aside class="monitor glass" data-guide="enhancement-run">
         <div class="monitor-head">
           <span class="monitor-icon"><el-icon><MagicStick /></el-icon></span>
           <div><p>AI ENHANCEMENT</p><h2>增强任务</h2></div>

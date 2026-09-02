@@ -243,6 +243,7 @@ class HttpApiContractTests(unittest.TestCase):
                 "source_upload_id": source["upload_id"],
                 "mode": "multi",
                 "workflow": "auto_vocal_merge",
+                "params": {"auto_high_pitch_guard": False},
                 "models": [
                     {"model_id": "model_svc", "params": {"pitch": 1}},
                     {
@@ -264,6 +265,9 @@ class HttpApiContractTests(unittest.TestCase):
         payload = self.facade.created_payload
         self.assertEqual(payload["mode"], "multi")
         self.assertEqual(payload["workflow"], "auto_vocal_merge")
+        self.assertFalse(payload["params"]["auto_high_pitch_guard"])
+        self.assertFalse(payload["models"][0]["params"]["auto_high_pitch_guard"])
+        self.assertFalse(payload["models"][1]["params"]["auto_high_pitch_guard"])
         self.assertEqual(payload["segments"][0]["model_ids"], ["model_svc", "model_seed"])
         self.assertTrue(Path(payload["models"][1]["params"]["reference_audio"]).is_file())
         self.assertNotIn("source_path", response.json())
@@ -392,6 +396,10 @@ class HttpApiContractTests(unittest.TestCase):
             "ddsp_infer_steps",
             "ddsp_formant_shift",
             "auto_high_pitch_guard",
+            "high_pitch_guard_rounds",
+            "high_pitch_threshold",
+            "f0_filter_threshold",
+            "manual_params_enabled",
         }
 
         self.assertEqual(set(inference), expected_inference_fields)

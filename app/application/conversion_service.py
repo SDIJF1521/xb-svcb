@@ -8,6 +8,8 @@ from __future__ import annotations
 import threading
 import traceback
 import wave
+import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -101,6 +103,111 @@ def default_steps_ai_enhancement() -> list[dict[str, Any]]:
 class ConversionService:
     _HIGH_PITCH_THRESHOLD = 800.0
     _HIGH_PITCH_GUARD_SEMITONES = 7
+    _DROPOUT_RECOVERY_MAX_ATTEMPTS = 4
+    # Offline full-track recovery can afford one extra pass after a real
+    # regional detector result; realtime/editor keep the lower shared limit.
+    _DROPOUT_RECOVERY_OFFLINE_MAX_ATTEMPTS = 5
+    _DROPOUT_RECOVERY_MIN_THRESHOLD = 300.0
+    _DROPOUT_RECOVERY_MIN_DURATION = 0.12
+    _MAX_HIGH_PITCH_GUARD_ROUNDS = 8
+    # Include the attack/release around a confirmed bad syllable. This lets a
+    # high-note phrase be guarded continuously without broadening protection
+    # to unrelated parts of the song.
+    _HIGH_PITCH_GUARD_CONTEXT_SECONDS = 0.90
+    _HIGH_PITCH_GUARD_MERGE_GAP_SECONDS = 1.00
+
+    @classmethod
+    def _high_pitch_guard_rounds(cls, params: InferenceParams) -> int:
+        """Return the user-selected guarded retry count.
+
+        The ordinary workflow deliberately ignores the stored advanced value
+        and keeps the established three retry rounds. This prevents a preset
+        saved with full parameters from changing default-mode rendering.
+        """
+        if not bool(getattr(params, "auto_high_pitch_guard", True)):
+            return 0
+        default_rounds = max(0, cls._DROPOUT_RECOVERY_MAX_ATTEMPTS - 1)
+        if not bool(getattr(params, "manual_params_enabled", False)):
+            return default_rounds
+        try:
+            configured = int(getattr(params, "high_pitch_guard_rounds", default_rounds))
+        except (TypeError, ValueError):
+            configured = default_rounds
+        return max(0, min(cls._MAX_HIGH_PITCH_GUARD_ROUNDS, configured))
+
+    @classmethod
+    def _guard_semitones_for_retry(
+        cls,
+        threshold: float,
+        issue: dict[str, Any] | None = None,
+        source: Path | None = None,
+        regions: list[tuple[float, float]] | None = None,
+    ) -> int:
+        """Increase the protective drop only when a retry still misses high notes."""
+        source_f0 = float((issue or {}).get("source_f0_hz") or 0.0)
+        if source and regions:
+            try:
+                import numpy as np
+
+                sidecar = source.with_name("f0.npy")
+                if sidecar.is_file() and sidecar.stat().st_mtime >= source.stat().st_mtime - 120.0:
+                    curve = np.asarray(np.load(str(sidecar), allow_pickle=False)).reshape(-1)
+                    if curve.size >= 4:
+                        with wave.open(str(source), "rb") as handle:
+                            duration = handle.getnframes() / float(handle.getframerate() or 1)
+                        times = np.linspace(0.0, duration, curve.size)
+                        peaks: list[float] = []
+                        for start, end in regions:
+                            values = curve[(times >= start) & (times <= end)]
+                            values = values[np.isfinite(values) & (values > 0.0)]
+                            if values.size:
+                                peaks.append(float(np.max(values)))
+                        if peaks:
+                            source_f0 = max(source_f0, max(peaks))
+            except (OSError, ValueError, TypeError, ImportError):
+                pass
+        excess = source_f0 - float(threshold or cls._HIGH_PITCH_THRESHOLD)
+        if source_f0 >= 950.0 or excess >= 220.0:
+            return 12
+        if source_f0 >= 780.0 or excess >= 80.0:
+            return 9
+        return cls._HIGH_PITCH_GUARD_SEMITONES
+
+    @classmethod
+    def _confirmed_guard_regions(
+        cls,
+        issue: dict[str, Any] | None,
+        existing: list[tuple[float, float]] | None = None,
+    ) -> list[tuple[float, float]] | None:
+        """Keep confirmed regions and add only local note attack/release context."""
+        raw: list[tuple[float, float]] = list(existing or [])
+        for item in (issue or {}).get("bad_regions") or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                start = float(item.get("start", 0.0))
+                end = float(item.get("end", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if end > start:
+                raw.append(
+                    (
+                        max(0.0, start - cls._HIGH_PITCH_GUARD_CONTEXT_SECONDS),
+                        end + cls._HIGH_PITCH_GUARD_CONTEXT_SECONDS,
+                    )
+                )
+        if not raw:
+            return None
+        merged: list[tuple[float, float]] = []
+        for start, end in sorted(raw):
+            if end <= start:
+                continue
+            if merged and start <= merged[-1][1] + cls._HIGH_PITCH_GUARD_MERGE_GAP_SECONDS:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return merged or None
+
     def __init__(
         self,
         repo: ListRepository,
@@ -196,8 +303,7 @@ class ConversionService:
             "loudness_envelope": strength("loudness_envelope", 0.58),
         }
         if work.get("high_pitch_guard_applied"):
-            # The guard already restores high harmonics. Tone-shaping controls
-            # stay deliberately lighter so the protected consonants remain natural.
+            # 防护装置已恢复高谐波。音色塑造控制部分被有意调至更轻，以保持受保护的辅音自然清晰。
             controls["timbre_focus"] *= 0.68
             controls["ai_eq"] *= 0.78
             controls["ai_compressor"] *= 0.82
@@ -286,12 +392,32 @@ class ConversionService:
         log_file: Path,
         framework: str = "",
     ) -> None:
+        # The guard switch is also the opt-out for every automatic high-range
+        # adjustment.  Previously disabling the selective pitch pass still
+        # switched F0 extractors and tightened RVC protection, which could
+        # produce a metallic/vibrato result even though the guard was off.
+        if not params.auto_high_pitch_guard:
+            self._log(log_file, "  高音保护已关闭：保留手动 F0、滤波半径和辅音保护参数")
+            return
+        if not params.manual_params_enabled:
+            # Default mode must keep the engine's established F0/protection
+            # defaults.  Advanced adaptation is opt-in through full parameters;
+            # verified model dropouts are handled separately by retry logic.
+            self._log(log_file, "  普通模式：保留默认 F0、滤波半径和辅音保护参数")
+            return
         high_pitch = bool(profile.get("high_pitch"))
         high_frequency = bool(profile.get("high_frequency"))
-        recommended = max(
+        source_recommended = max(
             1100.0,
             min(1800.0, float(profile.get("recommended_f0_max") or 1100.0)),
         )
+        model_limit = float(getattr(params, "high_pitch_threshold", 0.0) or 0.0)
+        if model_limit > 0:
+            # A declared model ceiling is authoritative, even for models whose
+            # usable range is below the generic 600 Hz safety floor.
+            recommended = max(300.0, min(source_recommended, model_limit))
+        else:
+            recommended = max(600.0, source_recommended)
         setattr(params, "adaptive_f0_max", recommended)
         normalized_framework = config.modelhub_normalize_framework(framework)
         current_method = str(params.f0_method or "rmvpe").lower()
@@ -324,32 +450,140 @@ class ConversionService:
             f"高音={'是' if high_pitch else '否'} / 高频={'是' if high_frequency else '否'}",
         )
 
+    @staticmethod
+    def _model_high_pitch_threshold(
+        params: InferenceParams,
+        model: dict[str, Any] | None,
+        framework: str,
+    ) -> float:
+        """Resolve the guard boundary from the selected model, not one global constant.
+
+        Imported model metadata wins, then common f0_max config keys, followed by
+        conservative framework-specific defaults. A user supplied parameter is
+        treated as an explicit override (0 means automatic).
+        """
+        explicit = float(getattr(params, "high_pitch_threshold", 0.0) or 0.0)
+        if explicit > 0:
+            return max(300.0, min(2000.0, explicit))
+        if not bool(getattr(params, "manual_params_enabled", False)):
+            # Without a model-declared usable range, preserve the legacy default
+            # path.  Dropout recovery can lower this boundary only after it has
+            # verified a real voiced model collapse.
+            return ConversionService._HIGH_PITCH_THRESHOLD
+        model = model or {}
+        metadata = model.get("metadata") or model.get("model_metadata") or {}
+        profile = metadata.get("inference_profile") if isinstance(metadata, dict) else None
+        candidates: list[Any] = []
+        if isinstance(profile, dict):
+            candidates.extend([profile.get("high_pitch_threshold"), profile.get("f0_max_hz"), profile.get("f0_max")])
+        if isinstance(metadata, dict):
+            candidates.extend([metadata.get("high_pitch_threshold"), metadata.get("f0_max_hz"), metadata.get("f0_max")])
+        config_path = str(model.get("main_config_path") or "")
+        if config_path:
+            try:
+                raw = Path(config_path).read_text(encoding="utf-8")
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        def visit(value: Any) -> None:
+                            if isinstance(value, dict):
+                                for key, child in value.items():
+                                    if str(key).lower() in {"f0_max", "f0_max_hz", "max_f0"}:
+                                        candidates.append(child)
+                                    visit(child)
+                            elif isinstance(value, list):
+                                for child in value:
+                                    visit(child)
+                        visit(parsed)
+                except (TypeError, ValueError):
+                    for key in ("f0_max", "f0_max_hz", "max_f0"):
+                        match = re.search(rf"(?:^|\n)\s*{key}\s*:\s*([0-9]+(?:\.[0-9]+)?)", raw, re.I)
+                        if match:
+                            candidates.append(match.group(1))
+            except OSError:
+                pass
+        for value in candidates:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if 300.0 <= number <= 2000.0:
+                return number
+        defaults = {"rvc": 760.0, "seed-vc": 980.0, "ddsp-svc": 1040.0, "so-vits-svc": 1120.0}
+        return defaults.get(config.modelhub_normalize_framework(framework), 1000.0)
+
     def _prepare_high_pitch_guard(
         self,
         source: Path,
         destination: Path,
         params: InferenceParams,
         log_file: Path,
+        threshold: float | None = None,
+        only_regions: list[tuple[float, float]] | None = None,
+        semitones: int | None = None,
     ) -> tuple[Path, bool]:
         """Prepare a selective high-note pitch guard for normal AI covers."""
         if not params.auto_high_pitch_guard or not source.is_file():
             return source, False
         peak_f0 = self._estimate_peak_f0(source)
-        if peak_f0 < self._HIGH_PITCH_THRESHOLD:
+        high_threshold = float(threshold or getattr(params, "high_pitch_threshold", 0.0) or self._HIGH_PITCH_THRESHOLD)
+        if peak_f0 < high_threshold:
             return source, False
-        if not self._ffmpeg.pitch_shift(
-            source,
-            destination,
-            -self._HIGH_PITCH_GUARD_SEMITONES,
-            mask_source=source,
-            loudness_source=source,
-            high_threshold=self._HIGH_PITCH_THRESHOLD,
-        ):
+        report_path = destination.with_suffix(".regions.json")
+        shift_semitones = int(semitones or self._HIGH_PITCH_GUARD_SEMITONES)
+        try:
+            guard_ok = self._ffmpeg.pitch_shift(
+                source,
+                destination,
+                -shift_semitones,
+                mask_source=source,
+                loudness_source=source,
+                high_threshold=high_threshold,
+                report_path=report_path,
+                regions=only_regions,
+            )
+        except TypeError:
+            if only_regions:
+                self._log(log_file, "  当前高音保护组件不支持失配区间限制，跳过本次保护以保留原始结果")
+                return source, False
+            # Keep compatibility with older in-process tool doubles and
+            # installations whose frozen ffmpeg wrapper predates region reports.
+            guard_ok = self._ffmpeg.pitch_shift(
+                source,
+                destination,
+                -shift_semitones,
+                mask_source=source,
+                loudness_source=source,
+                high_threshold=high_threshold,
+            )
+        if not guard_ok:
             self._log(log_file, f"  高音保护降调失败，沿用原始推理输入（峰值 F0={peak_f0:.1f}Hz）")
+            return source, False
+        region_count = 0
+        processed_seconds = 0.0
+        region_preview = ""
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            region_count = int(report.get("region_count") or 0)
+            processed_seconds = float(report.get("processed_seconds") or 0.0)
+            regions = report.get("regions") or []
+            region_preview = ", ".join(
+                f"{float(item['start']):.2f}-{float(item['end']):.2f}s"
+                for item in regions[:6]
+                if isinstance(item, dict)
+            )
+            if len(regions) > 6:
+                region_preview += ", ..."
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+        if region_count <= 0:
+            self._log(log_file, "  高音保护未找到稳定高音区：整轨原样保留")
             return source, False
         self._log(
             log_file,
-            f"  高音保护已启用：仅对高音区域保共振峰降调 -{self._HIGH_PITCH_GUARD_SEMITONES} 半音（峰值 F0={peak_f0:.1f}Hz）",
+            f"  高音保护已启用：仅处理 {region_count} 个高音区，共 {processed_seconds:.2f}s "
+            f"（阈值 {high_threshold:.0f}Hz，降调 -{shift_semitones} 半音；"
+            f"区间 {region_preview}）",
         )
         return destination, True
 
@@ -360,27 +594,745 @@ class ConversionService:
         original: Path,
         params: InferenceParams,
         log_file: Path,
+        threshold: float | None = None,
+        only_regions: list[tuple[float, float]] | None = None,
+        semitones: int | None = None,
     ) -> Path:
         if not params.auto_high_pitch_guard:
             return source
         restored = destination
-        if self._ffmpeg.pitch_shift(
-            source,
-            destination,
-            self._HIGH_PITCH_GUARD_SEMITONES,
-            mask_source=original,
-            loudness_source=original,
-            high_threshold=self._HIGH_PITCH_THRESHOLD,
-        ):
-            self._log(log_file, "  高音保护完成：翻唱后仅对高音区域升回原调并补偿响度")
+        shift_semitones = int(semitones or self._HIGH_PITCH_GUARD_SEMITONES)
+        try:
+            restore_ok = self._ffmpeg.pitch_shift(
+                source,
+                destination,
+                shift_semitones,
+                mask_source=original,
+                loudness_source=original,
+                high_threshold=float(threshold or getattr(params, "high_pitch_threshold", 0.0) or self._HIGH_PITCH_THRESHOLD),
+                report_path=destination.with_suffix(".regions.json"),
+                regions=only_regions,
+            )
+        except TypeError:
+            if only_regions:
+                self._log(log_file, "  当前高音恢复组件不支持失配区间限制，跳过恢复以保留模型输出")
+                return source
+            restore_ok = self._ffmpeg.pitch_shift(
+                source,
+                destination,
+                shift_semitones,
+                mask_source=original,
+                loudness_source=original,
+                high_threshold=float(threshold or getattr(params, "high_pitch_threshold", 0.0) or self._HIGH_PITCH_THRESHOLD),
+            )
+        if restore_ok:
+            self._log(log_file, "  高音保护完成：仅对记录的高音区域升回原调并补偿响度")
             return restored
         self._log(log_file, "  高音保护升调失败，沿用模型输出")
         return source
 
     @staticmethod
+    def _merge_guarded_regions(
+        baseline: Path,
+        guarded: Path,
+        destination: Path,
+        report_path: Path,
+        only_regions: list[tuple[float, float]] | None = None,
+    ) -> Path:
+        """ 
+        保留基础渲染，除已确认失败的高音区。
+        """
+        try:
+            import numpy as np
+
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            regions = report.get("regions") if isinstance(report, dict) else None
+            if not isinstance(regions, list) or not regions:
+                return guarded
+            selected_regions: list[tuple[float, float]] = []
+            for item in regions:
+                if not isinstance(item, dict):
+                    continue
+                start = float(item.get("start", 0.0))
+                end = float(item.get("end", start))
+                if end <= start:
+                    continue
+                if only_regions:
+                    overlaps = [
+                        (max(start, bad_start), min(end, bad_end))
+                        for bad_start, bad_end in only_regions
+                        if end > bad_start and start < bad_end
+                    ]
+                    selected_regions.extend(
+                        (left, right) for left, right in overlaps if right > left
+                    )
+                else:
+                    selected_regions.append((start, end))
+            if not selected_regions:
+                return baseline
+            with wave.open(str(baseline), "rb") as base_wave:
+                base_params = base_wave.getparams()
+                base_raw = base_wave.readframes(base_wave.getnframes())
+            with wave.open(str(guarded), "rb") as guarded_wave:
+                guarded_params = guarded_wave.getparams()
+                guarded_raw = guarded_wave.readframes(guarded_wave.getnframes())
+            if (
+                base_params.sampwidth != 2
+                or guarded_params.sampwidth != 2
+                or base_params.nchannels != guarded_params.nchannels
+                or base_params.framerate != guarded_params.framerate
+            ):
+                return guarded
+            channels = max(1, int(base_params.nchannels))
+            base_values = np.frombuffer(base_raw, dtype="<i2").copy()
+            guarded_values = np.frombuffer(guarded_raw, dtype="<i2").copy()
+            base_frames = base_values.size // channels
+            guarded_frames = guarded_values.size // channels
+            if base_frames <= 0 or guarded_frames <= 0:
+                return guarded
+            count = min(base_frames, guarded_frames)
+            base_values = base_values[: count * channels].reshape(count, channels).astype(np.float64)
+            guarded_values = guarded_values[: count * channels].reshape(count, channels).astype(np.float64)
+            rate = float(base_params.framerate)
+            mask = np.zeros(count, dtype=np.float64)
+            fade = max(1, int(round(rate * 0.08)))
+            duration = count / rate
+            for raw_start, raw_end in selected_regions:
+                start = max(0.0, min(duration, raw_start))
+                end = max(start, min(duration, raw_end))
+                left = max(0, min(count, int(round(start * rate))))
+                right = max(left, min(count, int(round(end * rate))))
+                if right <= left:
+                    continue
+                mask[left:right] = 1.0
+                left_edge = max(0, left - fade)
+                if left > left_edge:
+                    phase = np.linspace(0.0, np.pi / 2.0, left - left_edge, endpoint=False)
+                    mask[left_edge:left] = np.maximum(mask[left_edge:left], np.sin(phase) ** 2)
+                right_edge = min(count, right + fade)
+                if right_edge > right:
+                    phase = np.linspace(np.pi / 2.0, 0.0, right_edge - right, endpoint=False)
+                    mask[right:right_edge] = np.maximum(mask[right:right_edge], np.sin(phase) ** 2)
+            if not np.any(mask > 0.0):
+                return guarded
+            merged = base_values * (1.0 - mask[:, None]) + guarded_values * mask[:, None]
+            merged = np.clip(np.rint(merged), -32768, 32767).astype("<i2")
+            if guarded_frames < base_frames:
+                # A truncated retry must never truncate the user's baseline.
+                merged = np.concatenate(
+                    (merged, np.frombuffer(base_raw, dtype="<i2")[count * channels : base_frames * channels].reshape(-1, channels)),
+                    axis=0,
+                )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with wave.open(str(destination), "wb") as output_wave:
+                output_wave.setparams(base_params)
+                output_wave.writeframes(merged.reshape(-1).tobytes())
+            return destination if destination.exists() else guarded
+        except (OSError, TypeError, ValueError, wave.Error, json.JSONDecodeError):
+            return guarded
+
+    @staticmethod
+    def _read_mono_audio(source: Path, target_rate: int = 16000):
+        """读取 PCM WAV 为单声道浮点数组，供模型输出质量探针使用。"""
+        import numpy as np
+
+        with wave.open(str(source), "rb") as handle:
+            rate = int(handle.getframerate() or target_rate)
+            channels = max(1, int(handle.getnchannels() or 1))
+            width = int(handle.getsampwidth() or 2)
+            raw = handle.readframes(handle.getnframes())
+        if not raw or rate <= 0:
+            return np.zeros(0, dtype=np.float32), target_rate
+        if width == 1:
+            audio = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+        elif width == 2:
+            audio = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+        elif width == 4:
+            audio = np.frombuffer(raw, dtype="<i4").astype(np.float32) / 2147483648.0
+        else:
+            return np.zeros(0, dtype=np.float32), target_rate
+        usable = (audio.size // channels) * channels
+        if usable <= 0:
+            return np.zeros(0, dtype=np.float32), target_rate
+        audio = audio[:usable].reshape(-1, channels).mean(axis=1)
+        if rate == target_rate:
+            return audio.astype(np.float32, copy=False), target_rate
+        count = max(1, round(audio.size * target_rate / rate))
+        positions = np.linspace(0, audio.size - 1, count)
+        return np.interp(positions, np.arange(audio.size), audio).astype(np.float32), target_rate
+
+    @classmethod
+    def _detect_model_dropout(
+        cls,
+        source: Path,
+        output: Path,
+        threshold: float,
+        pitch: int = 0,
+    ) -> dict[str, Any] | None:
+        """当可用时，优先使用源侧F0边车，因为它传递给SVC的曲线与模型支持的曲线相同。除了输出被静音外，
+            还应检测到一个高音源音符，其输出仍然具有能量，但失去了预期的基频；这是音符塌陷为低次谐波时常见的“哑音”故障模式。
+        """
+        try:
+            import numpy as np
+
+            source_audio, rate = cls._read_mono_audio(source)
+            output_audio, output_rate = cls._read_mono_audio(output)
+            if source_audio.size < 1024 or output_audio.size < 1024 or rate != output_rate:
+                return None
+            size = min(source_audio.size, output_audio.size)
+            source_audio = source_audio[:size]
+            output_audio = output_audio[:size]
+            frame = max(512, int(rate * 0.04))
+            hop = max(256, int(rate * 0.02))
+            if size < frame:
+                return None
+            min_lag = max(2, int(rate / 2000.0))
+            max_lag = min(frame - 2, int(rate / 60.0))
+            if max_lag <= min_lag + 2:
+                return None
+            source_frames = np.lib.stride_tricks.sliding_window_view(source_audio, frame)[::hop]
+            output_frames = np.lib.stride_tricks.sliding_window_view(output_audio, frame)[::hop]
+            if source_frames.size == 0 or output_frames.size == 0:
+                return None
+            source_frames = source_frames[: len(output_frames)]
+            output_frames = output_frames[: len(source_frames)]
+            source_frames = source_frames - source_frames.mean(axis=1, keepdims=True)
+            output_frames = output_frames - output_frames.mean(axis=1, keepdims=True)
+            source_rms = np.sqrt(np.mean(source_frames * source_frames, axis=1))
+            output_rms = np.sqrt(np.mean(output_frames * output_frames, axis=1))
+            def estimate_pitch(
+                frames: object,
+                rms: object,
+                indices: object,
+            ) -> tuple[object, object]:
+                pitch_values = np.zeros(len(rms), dtype=np.float32)
+                pitch_strength = np.zeros(len(rms), dtype=np.float32)
+                selected = np.asarray(indices, dtype=np.int64)
+                selected = selected[np.asarray(rms)[selected] >= 0.008]
+                if selected.size == 0:
+                    return pitch_values, pitch_strength
+                valid_frames = np.asarray(frames)[selected]
+                fft_size = 1 << max(10, (2 * frame - 1).bit_length())
+                spectrum = np.fft.rfft(valid_frames, n=fft_size, axis=1)
+                autocorr = np.fft.irfft(spectrum * np.conj(spectrum), n=fft_size, axis=1)[:, : frame]
+                bases = autocorr[:, 0]
+                lag_window = autocorr[:, min_lag : max_lag + 1]
+                lag_offsets = np.argmax(lag_window, axis=1)
+                lags = lag_offsets + min_lag
+                best = lag_window[np.arange(lag_window.shape[0]), lag_offsets]
+                valid_base = bases > 0.0
+                strengths = np.zeros_like(best, dtype=np.float32)
+                strengths[valid_base] = best[valid_base] / bases[valid_base]
+                f0_values = np.zeros_like(strengths, dtype=np.float32)
+                reliable = (strengths >= 0.35) & (lags > 0)
+                f0_values[reliable] = rate / lags[reliable].astype(np.float32)
+                pitch_values[selected] = f0_values
+                pitch_strength[selected] = strengths
+                return pitch_values, pitch_strength
+
+            all_indices = np.arange(source_frames.shape[0], dtype=np.int64)
+            f0, strength = estimate_pitch(source_frames, source_rms, all_indices)
+
+            # F0 extraction already ran immediately before SVC and is more
+            # reliable than a second lightweight autocorrelation pass on loud
+            # high harmonics.  Interpolate its time-aligned values to detector
+            # frames when this is one of the standard inference inputs.
+            if source.name.lower() in {"infer_input.wav", "vocals_repaired.wav"}:
+                sidecar = source.with_name("f0.npy")
+                try:
+                    if sidecar.stat().st_mtime >= source.stat().st_mtime - 120.0:
+                        curve = np.asarray(np.load(str(sidecar), allow_pickle=False)).reshape(-1)
+                        finite = np.isfinite(curve) & (curve > 0.0)
+                        valid_curve = np.flatnonzero(finite)
+                        if valid_curve.size >= 4:
+                            curve_times = np.linspace(
+                                0.0,
+                                size / float(rate),
+                                curve.size,
+                            )
+                            frame_times = (
+                                np.arange(f0.size, dtype=np.float64) * hop
+                                + frame * 0.5
+                            ) / float(rate)
+                            sidecar_f0 = np.interp(
+                                frame_times,
+                                curve_times[valid_curve],
+                                curve[valid_curve],
+                            )
+                            sidecar_valid = (
+                                (frame_times >= curve_times[valid_curve[0]])
+                                & (frame_times <= curve_times[valid_curve[-1]])
+                            )
+                            f0[sidecar_valid] = sidecar_f0[sidecar_valid]
+                            strength[sidecar_valid] = np.maximum(
+                                strength[sidecar_valid],
+                                0.8,
+                            )
+                except (OSError, ValueError, TypeError):
+                    pass
+
+            # 也略微低于活跃防护边界。一个短音节可以刚好位于边界之下，但仍属于需要更低重试阈值的模型不匹配音符。
+            active_threshold = float(threshold or 760.0)
+            high_floor = max(
+                cls._DROPOUT_RECOVERY_MIN_THRESHOLD,
+                active_threshold - max(70.0, active_threshold * 0.08),
+            )
+            high_voice = (
+                (source_rms >= 0.012)
+                & (strength >= 0.35)
+                & (f0 >= high_floor)
+            )
+
+            '''
+            型渲染的增益不一定与分离的语音部分具有相同的全局增益。从发声帧估计出的增益，
+            使得整体更安静（但其他方面仍然有效）的渲染结果不会被误认为是局部静音，
+            并通过一个有害的保护重试机制发送。对于本地静音并经由破坏性守卫发送的重试
+            '''
+            voiced = (source_rms >= 0.008) & (strength >= 0.35)
+            ratios = output_rms[voiced] / np.maximum(source_rms[voiced], 1e-5)
+            ratios = ratios[np.isfinite(ratios) & (ratios > 0.0)]
+            reference_gain = 1.0
+            if ratios.size >= 8:
+                reference_gain = float(np.median(ratios))
+            dropout_ratio = max(0.04, min(1.0, reference_gain * 0.18))
+            # A breathy high note can retain a trackable F0 while losing much
+            # of its vocal support. Detect that local loss relative to the
+            # song's normal gain, but keep the lower boundary well above
+            # ordinary speech so normal quiet phrases are untouched.
+            near_high_floor = max(
+                cls._DROPOUT_RECOVERY_MIN_THRESHOLD,
+                active_threshold - max(180.0, active_threshold * 0.18),
+            )
+            near_high_voice = (
+                (source_rms >= 0.025)
+                & (strength >= 0.35)
+                & (f0 >= near_high_floor)
+            )
+            soft_support_ratio = max(0.12, min(0.68, reference_gain * 0.62))
+            soft_breathy = near_high_voice & (
+                output_rms < source_rms * soft_support_ratio
+            ) & (reference_gain >= 0.35)
+            '''
+            音调崩溃在失去高音时仍可能保持响亮。
+            仅对源的高音帧估计输出F0，以限制内存和误报。
+            '''
+            high_indices = np.flatnonzero(high_voice)
+            output_f0, output_strength = estimate_pitch(
+                output_frames,
+                output_rms,
+                high_indices,
+            )
+            expected_f0 = f0 * (2.0 ** (float(pitch or 0) / 12.0))
+            # A zero F0 estimate is not sufficient evidence of a mute: Praat
+            # can lose pitch tracking on a loud, breathy or harmonic-heavy
+            # syllable while the rendered audio remains audible.  Require a
+            # simultaneous local energy drop for the missing-F0 path, while
+            # retaining non-zero but clearly wrong F0 as a real mismatch.
+            pitch_missing = (output_strength < 0.25) | (output_f0 <= 0.0)
+            pitch_missing_energy_limit = np.maximum(
+                0.002,
+                source_rms * max(dropout_ratio * 1.5, 0.12),
+            )
+            pitch_missing_with_mute = pitch_missing & (
+                output_rms < pitch_missing_energy_limit
+            )
+            pitch_wrong = (output_f0 > 0.0) & (
+                (output_f0 < expected_f0 * 0.50)
+                | (output_f0 > expected_f0 * 2.00)
+            )
+            pitch_collapse = high_voice & (pitch_missing_with_mute | pitch_wrong)
+            energy_dropout = output_rms < np.maximum(
+                0.0015,
+                source_rms * dropout_ratio,
+            )
+            core_bad = high_voice & (energy_dropout | pitch_collapse)
+
+            '''
+            高音部分可以在发声帧和静音帧之间交替。
+            使用短滑动窗口以及连续的运行，以便这些短暂的中断仍能触发恢复，
+            而无需将单个帧视为失败。
+            '''
+            min_frames = max(4, round(cls._DROPOUT_RECOVERY_MIN_DURATION / (hop / rate)))
+            window_frames = max(min_frames, round(0.24 / (hop / rate)))
+
+            def contiguous_runs(mask: object, minimum: int) -> list[tuple[int, int]]:
+                values = np.asarray(mask, dtype=bool)
+                runs: list[tuple[int, int]] = []
+                begin: int | None = None
+                for index, value in enumerate(
+                    np.concatenate((values, np.array([False], dtype=bool)))
+                ):
+                    if value and begin is None:
+                        begin = index
+                    elif not value and begin is not None:
+                        if index - begin >= minimum:
+                            runs.append((begin, index))
+                        begin = None
+                return runs
+
+            # Require a sustained local support loss before treating an
+            # audible, breathy phrase as a dropout. Very brief low-energy
+            # consonants (such as the reported 54s span) stay untouched.
+            soft_min_frames = max(4, round(0.16 / (hop / rate)))
+            soft_breathy_confirmed = np.zeros_like(soft_breathy, dtype=bool)
+            for start, end in contiguous_runs(soft_breathy, soft_min_frames):
+                soft_breathy_confirmed[start:end] = True
+            bad = core_bad | soft_breathy_confirmed
+
+            candidates: list[tuple[int, int]] = []
+            if high_voice.size >= window_frames:
+                bad_windows = np.lib.stride_tricks.sliding_window_view(bad, window_frames).sum(axis=1)
+                voice_windows = np.lib.stride_tricks.sliding_window_view(high_voice, window_frames).sum(axis=1)
+                enough_voice = voice_windows >= min_frames
+                enough_bad = bad_windows >= np.maximum(2, np.ceil(voice_windows * 0.25))
+                starts = np.flatnonzero(enough_voice & enough_bad)
+                for start in starts:
+                    end = int(start + window_frames)
+                    candidates.append((int(start), end))
+            candidates.extend(contiguous_runs(soft_breathy_confirmed, min_frames))
+            if not candidates:
+                candidates = contiguous_runs(bad, min_frames)
+
+            '''
+           单个脱落音节通常比常规的120毫秒确认窗口更短。
+           仅在接近无声的情况下接受此快速路径，并要求至少两个相邻的分析帧，
+           以避免正常辅音间隙和颤音导致重试。
+            '''
+            short_ratio = max(0.025, min(0.12, reference_gain * 0.08))
+            short_mute = high_voice & (
+                output_rms < np.maximum(0.0008, source_rms * short_ratio)
+            )
+            short_min_frames = max(2, round(0.04 / (hop / rate)))
+            short_candidates = contiguous_runs(short_mute, short_min_frames)
+            candidates.extend(short_candidates)
+            if not candidates:
+                return None
+
+            '''
+           保留实际失败的帧用于区域合并。滑动窗口仅作为确认证据；使用其完整宽度会不必要地替换掉健康的相邻音节。
+            '''
+            confirmed_bad = np.zeros_like(bad, dtype=bool)
+            for candidate_start, candidate_end in candidates:
+                if (candidate_start, candidate_end) in short_candidates:
+                    confirmed_bad[candidate_start:candidate_end] |= short_mute[
+                        candidate_start:candidate_end
+                    ]
+                else:
+                    confirmed_bad[candidate_start:candidate_end] |= bad[
+                        candidate_start:candidate_end
+                    ]
+            confirmed_runs = contiguous_runs(confirmed_bad, 1)
+            if not confirmed_runs:
+                return None
+            bad_regions: list[dict[str, float]] = []
+            for candidate_start, candidate_end in confirmed_runs:
+                region_start = max(0.0, candidate_start * hop / rate)
+                region_end = min(
+                    size / float(rate),
+                    candidate_end * hop / rate + frame / rate,
+                )
+                if region_end <= region_start:
+                    continue
+                if bad_regions and region_start <= bad_regions[-1]["end"] + 0.12:
+                    bad_regions[-1]["end"] = max(bad_regions[-1]["end"], region_end)
+                else:
+                    bad_regions.append({"start": region_start, "end": region_end})
+            begin, end = confirmed_runs[0]
+            f0_values = f0[begin:end]
+            f0_values = f0_values[f0_values > 0]
+            if f0_values.size == 0:
+                return None
+            output_f0_values = output_f0[begin:end]
+            output_f0_values = output_f0_values[output_f0_values > 0]
+            return {
+                "start": round(begin * hop / rate, 3),
+                "end": round(end * hop / rate + frame / rate, 3),
+                "source_f0_hz": round(float(np.median(f0_values)), 1),
+                "source_rms": round(float(np.median(source_rms[begin:end])), 5),
+                "output_rms": round(float(np.median(output_rms[begin:end])), 5),
+                "output_f0_hz": round(
+                    float(np.median(output_f0_values))
+                    if output_f0_values.size
+                    else 0.0,
+                    1,
+                ),
+                "bad_frames": float(np.sum(confirmed_bad)),
+                "high_frames": float(np.sum(high_voice)),
+                "bad_regions": bad_regions,
+                "duration": round((end - begin) * hop / rate, 3),
+            }
+        except (OSError, ValueError, wave.Error, ImportError):
+            return None
+
+    @classmethod
+    def _next_dropout_threshold(cls, current: float, issue: dict[str, float]) -> float:
+        """Place the next guard boundary just below the failing note."""
+        current = max(cls._DROPOUT_RECOVERY_MIN_THRESHOLD, float(current or 760.0))
+        f0 = float(issue.get("source_f0_hz") or 0.0)
+        step = max(35.0, current * 0.08)
+        target = min(current - step, f0 - 20.0) if f0 > 0 else current - step
+        target = max(cls._DROPOUT_RECOVERY_MIN_THRESHOLD, target)
+        return round(target / 10.0) * 10.0
+
+    def _infer_with_dropout_recovery(
+        self,
+        *,
+        engine: Any,
+        model: dict[str, Any],
+        source: Path,
+        output: Path,
+        params: InferenceParams,
+        duration: float,
+        log_file: Path,
+        allow_recovery: bool,
+        infer: Any | None = None,
+    ) -> tuple[Path, list[dict[str, Any]], bool]:
+        """Run inference and retry only confirmed high-note model dropouts."""
+        history: list[dict[str, Any]] = []
+        rendered = output
+
+        def run_inference(vocals: Path, target: Path) -> None:
+            if infer is None:
+                engine.infer(
+                    model=model,
+                    vocals=vocals,
+                    out_path=target,
+                    params=params,
+                    duration=duration,
+                    log_file=log_file,
+                )
+            else:
+                infer(vocals, target)
+
+        if not allow_recovery or not params.auto_high_pitch_guard:
+            # Protection is an opt-in post-inference recovery path.  When it
+            # is disabled, keep the original render path completely untouched
+            # and do not emit a misleading recovery history entry.
+            run_inference(source, output)
+            return output, [], False
+
+        threshold = max(self._DROPOUT_RECOVERY_MIN_THRESHOLD, float(params.high_pitch_threshold or 760.0))
+        guard_rounds = self._high_pitch_guard_rounds(params)
+        attempts = 1 + guard_rounds
+        guard_applied_any = False
+        guard_regions: list[tuple[float, float]] | None = None
+        guard_semitones = self._HIGH_PITCH_GUARD_SEMITONES
+
+        '''
+        认路径必须与保护功能被禁用时完全一致。
+        受保护的源代码会改变模型所看到的条件，
+        因此将其应用于每首歌曲可能会降低整个渲染质量，
+        即使不存在断音情况。请先运行普通输入，
+        仅在确认高音部分已正确处理后，再支付防护/重试的代价。
+        '''
+        baseline_first = bool(allow_recovery and params.auto_high_pitch_guard)
+        if baseline_first:
+            run_inference(source, output)
+            rendered = output
+            issue = self._detect_model_dropout(
+                source,
+                rendered,
+                threshold,
+                int(getattr(params, "pitch", 0) or 0),
+            )
+            history.append(
+                {
+                    "attempt": 1,
+                    "threshold": round(threshold, 1),
+                    "issue": issue,
+                    "guard_applied": False,
+                    "input": "original",
+                }
+            )
+            if issue is None:
+                return rendered, history, False
+            self._log(
+                log_file,
+                "  首次原始推理检测到模型失配哑音，启动局部高音保护重试："
+                f"{issue['start']:.2f}-{issue['end']:.2f}s / "
+                f"源 F0 {issue['source_f0_hz']:.0f}Hz / "
+                f"输出 F0 {float(issue.get('output_f0_hz') or 0.0):.0f}Hz",
+            )
+            # The first confirmed failing note is already enough to lower the
+            # next guard boundary.  Starting the first guarded retry at the
+            # old boundary can leave a 700-800 Hz syllable unprotected.
+            threshold = self._next_dropout_threshold(threshold, issue)
+            params.high_pitch_threshold = threshold
+            guard_regions = self._confirmed_guard_regions(issue)
+            guard_semitones = self._guard_semitones_for_retry(
+                threshold,
+                issue,
+                source,
+                guard_regions,
+            )
+            if issue.get("bad_regions") and not params.manual_params_enabled:
+                attempts = max(attempts, self._DROPOUT_RECOVERY_OFFLINE_MAX_ATTEMPTS)
+
+        guard_attempts = max(0, attempts - 1) if baseline_first else attempts
+        fallback = output if baseline_first else rendered
+        best_render = fallback
+        best_bad_frames = float("inf")
+        best_guard_applied = False
+        if baseline_first and history and history[0].get("issue"):
+            best_bad_frames = float(history[0]["issue"].get("bad_frames") or float("inf"))
+        for guard_attempt in range(guard_attempts):
+            attempt = guard_attempt + 1 if baseline_first else guard_attempt
+            raw_target = (
+                output.with_name(f"{output.stem}_dropout_retry{attempt}.wav")
+            )
+            guarded_target = output.with_name(f"{output.stem}_high_guarded_retry{attempt}.wav")
+            guarded, guard_applied = self._prepare_high_pitch_guard(
+                source,
+                guarded_target,
+                params,
+                log_file,
+                threshold,
+                guard_regions,
+                guard_semitones,
+            )
+            guard_applied_any = guard_applied_any or guard_applied
+            run_inference(guarded, raw_target)
+            rendered = raw_target
+            if guard_applied:
+                restored_target = output.with_name(f"{output.stem}_restored_retry{attempt}.wav")
+                rendered = self._restore_high_pitch_guard(
+                    raw_target,
+                    restored_target,
+                    source,
+                    params,
+                    log_file,
+                    threshold,
+                    guard_regions,
+                    guard_semitones,
+                )
+                if baseline_first and rendered != output:
+                    merged_target = output.with_name(f"{output.stem}_guarded_merged_retry{attempt}.wav")
+                    merged = self._merge_guarded_regions(
+                        output,
+                        rendered,
+                        merged_target,
+                        restored_target.with_suffix(".regions.json"),
+                        only_regions=guard_regions,
+                    )
+                    if merged != rendered:
+                        rendered = merged
+                        self._log(
+                            log_file,
+                            "  高音保护结果已按高音区合并：非高音区域沿用首次原始推理结果",
+                        )
+            issue = (
+                self._detect_model_dropout(
+                    source,
+                    rendered,
+                    threshold,
+                    int(getattr(params, "pitch", 0) or 0),
+                )
+                if allow_recovery and params.auto_high_pitch_guard
+                else None
+            )
+            entry: dict[str, Any] = {
+                "attempt": len(history) + 1,
+                "threshold": round(threshold, 1),
+                "issue": issue,
+                "guard_applied": guard_applied,
+                "input": "high_guarded" if guard_applied else "original",
+            }
+            history.append(entry)
+            if issue is None:
+                return rendered, history, guard_applied_any
+            if baseline_first:
+                candidate_bad_frames = float(issue.get("bad_frames") or float("inf"))
+                if candidate_bad_frames < best_bad_frames:
+                    best_render = rendered
+                    best_bad_frames = candidate_bad_frames
+                    best_guard_applied = guard_applied
+                if guard_regions and issue.get("bad_regions"):
+                    prior_guard_regions = guard_regions
+                    overlaps_scope = any(
+                        float(item.get("end", 0.0)) > start
+                        and float(item.get("start", 0.0)) < end
+                        for item in (issue.get("bad_regions") or [])
+                        if isinstance(item, dict)
+                        for start, end in prior_guard_regions
+                    )
+                    if not overlaps_scope:
+                        self._log(
+                            log_file,
+                            "  新检测到的哑音位于本轮保护范围外，停止继续降低阈值并保留当前最佳结果",
+                        )
+                        return best_render, history, best_guard_applied
+                    guard_regions = self._confirmed_guard_regions(
+                        issue,
+                        prior_guard_regions,
+                    )
+            next_threshold = self._next_dropout_threshold(threshold, issue)
+            entry["next_threshold"] = next_threshold
+            if next_threshold >= threshold - 10.0 or guard_attempt >= guard_attempts - 1:
+                if baseline_first:
+                    if best_render != fallback:
+                        self._log(
+                            log_file,
+                            "  高音保护未完全消除哑音，采用哑音帧更少的保护结果："
+                            f"{best_bad_frames:.0f} 帧（首次 {float(history[0]['issue'].get('bad_frames') or 0.0):.0f} 帧）",
+                        )
+                        return best_render, history, best_guard_applied
+                    self._log(
+                        log_file,
+                        "  高音保护重试仍检测到模型失配哑音，回退到首次原始推理结果："
+                        f"{issue['start']:.2f}-{issue['end']:.2f}s / "
+                        f"源 F0 {issue['source_f0_hz']:.0f}Hz / "
+                        f"输出 F0 {float(issue.get('output_f0_hz') or 0.0):.0f}Hz",
+                    )
+                    return fallback, history, False
+                self._log(
+                    log_file,
+                    "  模型失配哑音仍未消除："
+                    f"{issue['start']:.2f}-{issue['end']:.2f}s / "
+                    f"源 F0 {issue['source_f0_hz']:.0f}Hz，保留最后一次推理结果",
+                )
+                return rendered, history, guard_applied_any
+            self._log(
+                log_file,
+                "  检测到模型失配哑音："
+                f"{issue['start']:.2f}-{issue['end']:.2f}s / "
+                f"源 F0 {issue['source_f0_hz']:.0f}Hz / "
+                f"输出 F0 {float(issue.get('output_f0_hz') or 0.0):.0f}Hz，"
+                f"高音保护起点 {threshold:.0f}Hz → {next_threshold:.0f}Hz，重新推理",
+            )
+            guard_semitones = max(
+                guard_semitones,
+                self._guard_semitones_for_retry(
+                    next_threshold,
+                    issue,
+                    source,
+                    guard_regions,
+                ),
+            )
+            threshold = next_threshold
+            params.high_pitch_threshold = threshold
+        return rendered, history, guard_applied_any
+
+    @staticmethod
     def _estimate_peak_f0(source: Path) -> float:
         try:
             import numpy as np
+
+            ''' 
+            So-VITS-SVC 在守护程序运行前已立即生成基于模型的F0曲线。当可用时可重复使用：
+            下方轻量级自相关探测器可能将强谐波误认为2 kHz基频，从而在普通语音上触发保护。
+            '''
+            if source.name.lower() in {"infer_input.wav", "vocals_repaired.wav"}:
+                sidecar = source.with_name("f0.npy")
+                try:
+                    source_mtime = source.stat().st_mtime
+                    sidecar_mtime = sidecar.stat().st_mtime
+                    if sidecar_mtime >= source_mtime - 120.0:
+                        curve = np.asarray(np.load(str(sidecar), allow_pickle=False)).reshape(-1)
+                        voiced = curve[np.isfinite(curve) & (curve > 0.0)]
+                        if voiced.size >= 4:
+                            return float(np.max(voiced))
+                except (OSError, ValueError, TypeError):
+                    pass
 
             with wave.open(str(source), "rb") as handle:
                 rate = int(handle.getframerate() or 44100)
@@ -399,7 +1351,7 @@ class ConversionService:
                 return 0.0
             min_lag = max(2, int(target_rate / 2000.0))
             max_lag = min(frame - 1, int(target_rate / 60.0))
-            highest = 0.0
+            estimates: list[float] = []
             for start in range(0, max(1, len(audio) - frame + 1), max(1, frame // 2)):
                 chunk = audio[start : start + frame]
                 if len(chunk) < frame:
@@ -419,8 +1371,13 @@ class ConversionService:
                 ]
                 lag = peaks[0] if peaks else min_lag + int(np.argmax(corr[min_lag:max_lag + 1]))
                 if float(corr[lag]) >= 0.35:
-                    highest = max(highest, target_rate / float(lag))
-            return float(highest)
+                    estimates.append(target_rate / float(lag))
+            if not estimates:
+                return 0.0
+            '''将孤立的八度/泛音误差视为异常值。第85百分位数仍能捕捉到持续的高音，
+                同时防止一个噪点帧导致整个音轨变成被保护的通过。
+            '''
+            return float(np.percentile(np.asarray(estimates, dtype=np.float32), 85.0))
         except (OSError, ValueError, wave.Error, ImportError):
             return 0.0
 
@@ -691,6 +1648,7 @@ class ConversionService:
             work["duration"] = self._format_duration(duration)
             self._record_history(work)
             self._save(work)
+            self._cleanup_finished_work_cache(work_dir, work, log_file)
             self._log(log_file, f"AI 增强任务完成: {output}")
         except Exception as exc:  # noqa: BLE001 - 后台任务必须记录失败原因
             work["status"] = JobStatus.FAILED.value
@@ -752,6 +1710,14 @@ class ConversionService:
             pipeline_total = (7 if enhancement_enabled else 6) + int(harmony_enabled)
             framework = config.modelhub_normalize_framework(work.get("framework"))
             is_sovits = framework == "so-vits-svc"
+            model_profile = {
+                "framework": framework,
+                "main_config_path": work.get("main_config_path", ""),
+                "metadata": work.get("model_metadata") or {},
+            }
+            params.high_pitch_threshold = self._model_high_pitch_threshold(
+                params, model_profile, framework
+            )
             engine = self._engines.for_framework(framework)
             source = Path(work["source_path"]) if work.get("source_path") else None
             duration = (
@@ -933,37 +1899,27 @@ class ConversionService:
                 f"[4/{pipeline_total}] {fw_label} 推理开始（引擎 {'可用' if getattr(engine, 'available', False) else '降级模式'}）",
             )
             raw_converted = work_dir / "converted_raw.wav"
-            guarded_input, guard_enabled = self._prepare_high_pitch_guard(
-                original_infer_input,
-                work_dir / "infer_input_high_guarded.wav",
-                params,
-                log_file,
-            )
-            work["high_pitch_guard_applied"] = bool(guard_enabled)
-            self._save(work)
-            engine.infer(
-                model={
-                    "framework": framework,
-                    "main_model_path": work.get("main_model_path", ""),
-                    "main_config_path": work.get("main_config_path", ""),
-                    "diffusion_model_path": work.get("diffusion_model_path", ""),
-                    "diffusion_config_path": work.get("diffusion_config_path", ""),
-                    "index_path": work.get("index_path", ""),
-                },
-                vocals=guarded_input,
-                out_path=raw_converted,
+            model_payload = {
+                "framework": framework,
+                "main_model_path": work.get("main_model_path", ""),
+                "main_config_path": work.get("main_config_path", ""),
+                "diffusion_model_path": work.get("diffusion_model_path", ""),
+                "diffusion_config_path": work.get("diffusion_config_path", ""),
+                "index_path": work.get("index_path", ""),
+            }
+            raw_converted, recovery_history, guard_enabled = self._infer_with_dropout_recovery(
+                engine=engine,
+                model=model_payload,
+                source=original_infer_input,
+                output=raw_converted,
                 params=params,
                 duration=duration,
                 log_file=log_file,
+                allow_recovery=True,
             )
-            if guard_enabled:
-                raw_converted = self._restore_high_pitch_guard(
-                    raw_converted,
-                    work_dir / "converted_raw_restored.wav",
-                    original_infer_input,
-                    params,
-                    log_file,
-                )
+            work["high_pitch_guard_applied"] = bool(guard_enabled)
+            work["inference_dropout_recovery"] = recovery_history
+            self._save(work)
             self._set_step(work, "infer", StepStatus.DONE.value)
             work["progress"] = 68
             self._save(work)
@@ -1039,6 +1995,7 @@ class ConversionService:
             work["duration"] = self._format_duration(duration)
             self._record_history(work)
             self._save(work)
+            self._cleanup_finished_work_cache(work_dir, work, log_file)
             self._log(log_file, "任务完成 ✅")
         except Exception as exc:  # noqa: BLE001 - 任务失败需记录而非崩溃
             work["status"] = JobStatus.FAILED.value
@@ -1067,6 +2024,130 @@ class ConversionService:
         except (OSError, ValueError):
             pass
         return source
+
+    def _cleanup_finished_work_cache(
+        self,
+        work_dir: Path,
+        work: dict[str, Any],
+        log_file: Path,
+    ) -> None:
+        """清理任务完成后的推理临时文件，同时保留编辑器会引用的素材。
+
+        高音保护会为每次重试生成多份整轨 wav 和 regions 报告。它们只在当前
+        推理期间使用；编辑器真正需要的是作品记录中的路径和 ``editor_segments``
+        分段素材。清理采用白名单保护 + 明确临时文件模式，任何未知文件都不删除。
+        """
+        try:
+            base = work_dir.resolve()
+            if not base.is_dir():
+                return
+        except OSError:
+            return
+
+        protected: set[Path] = set()
+
+        def remember(value: Any) -> None:
+            if isinstance(value, dict):
+                for child in value.values():
+                    remember(child)
+                return
+            if isinstance(value, (list, tuple, set)):
+                for child in value:
+                    remember(child)
+                return
+            if not isinstance(value, str) or not value.strip():
+                return
+            try:
+                candidate = Path(value)
+                if not candidate.is_absolute():
+                    candidate = base / candidate
+                resolved = candidate.resolve()
+                if resolved == base or base in resolved.parents:
+                    protected.add(resolved)
+            except (OSError, ValueError):
+                return
+
+        remember(work)
+        # This is also protected when a task is in manual-vocal-merge mode and
+        # its paths are only present in editor metadata created immediately next.
+        editor_root = (base / "editor_segments").resolve()
+        protected.add(editor_root)
+        # Keep the normalized inference input as an optional muted editor track.
+        infer_input = (base / "infer_input.wav").resolve()
+        if infer_input.is_file():
+            protected.add(infer_input)
+
+        transient_patterns = (
+            "*_dropout_retry*.wav",
+            "*_high_guarded_retry*.wav",
+            "*_restored_retry*.wav",
+            "*_guarded_merged_retry*.wav",
+            "*.regions.json",
+            "f0.npy",
+            "source.wav",
+        )
+        removed = 0
+        released_bytes = 0
+        seen: set[Path] = set()
+
+        def remove_if_unprotected(candidate: Path) -> None:
+            nonlocal removed, released_bytes
+            try:
+                resolved = candidate.resolve()
+                if (
+                    resolved in seen
+                    or not resolved.is_file()
+                    or resolved in protected
+                    or resolved == editor_root
+                    or editor_root in resolved.parents
+                    or base not in resolved.parents
+                ):
+                    return
+                seen.add(resolved)
+                size = resolved.stat().st_size
+                resolved.unlink()
+                removed += 1
+                released_bytes += size
+            except (OSError, ValueError):
+                return
+
+        for pattern in transient_patterns:
+            try:
+                candidates = base.rglob(pattern)
+            except OSError:
+                continue
+            for candidate in candidates:
+                remove_if_unprotected(candidate)
+
+        # Separation and optional vocal-cleanup tools also leave large working
+        # trees.  Their selected output is protected through the work record;
+        # only unreferenced files are removed, then empty cache directories are
+        # pruned.  This keeps editor projects that point at a selected stem safe.
+        for root_name in ("original_stems", "cover_stems", "dereverb", "harmony"):
+            cache_root = base / root_name
+            if not cache_root.is_dir():
+                continue
+            try:
+                for candidate in cache_root.rglob("*"):
+                    if candidate.is_file():
+                        remove_if_unprotected(candidate)
+                directories = sorted(
+                    (item for item in cache_root.rglob("*") if item.is_dir()),
+                    key=lambda item: len(item.parts),
+                    reverse=True,
+                )
+                for directory in [*directories, cache_root]:
+                    try:
+                        directory.rmdir()
+                    except OSError:
+                        pass
+            except OSError:
+                continue
+        if removed:
+            self._log(
+                log_file,
+                f"  已清理推理临时缓存 {removed} 个，释放约 {released_bytes / (1024 * 1024):.1f} MB；编辑器素材已保留",
+            )
 
     @staticmethod
     def _build_timeline(
@@ -1107,6 +2188,50 @@ class ConversionService:
         if cursor < duration - 0.05:
             timeline.append({"start": cursor, "end": duration, "model_ids": []})
         return timeline
+
+    @staticmethod
+    def _multi_model_params(
+        model: dict[str, Any], fallback: dict[str, Any] | None = None
+    ) -> InferenceParams:
+        """Normalize one mixed-cover model's params, including the guard switch.
+
+        Older records only stored a shared ``params`` object.  Preserve that
+        value when a model-specific switch is absent, while keeping protection
+        enabled by default for newly created or incomplete records.
+        """
+        raw = model.get("params")
+        params = dict(raw) if isinstance(raw, dict) else {}
+        if (
+            "auto_high_pitch_guard" not in params
+            and "autoHighPitchGuard" not in params
+        ):
+            shared = fallback if isinstance(fallback, dict) else {}
+            guard = shared.get(
+                "auto_high_pitch_guard",
+                shared.get("autoHighPitchGuard", True),
+            )
+            params["auto_high_pitch_guard"] = guard
+        if (
+            "manual_params_enabled" not in params
+            and "manualParamsEnabled" not in params
+        ):
+            shared = fallback if isinstance(fallback, dict) else {}
+            params["manual_params_enabled"] = shared.get(
+                "manual_params_enabled",
+                shared.get("manualParamsEnabled", True),
+            )
+        if (
+            "high_pitch_guard_rounds" not in params
+            and "highPitchGuardRounds" not in params
+        ):
+            shared = fallback if isinstance(fallback, dict) else {}
+            shared_rounds = shared.get(
+                "high_pitch_guard_rounds",
+                shared.get("highPitchGuardRounds"),
+            )
+            if shared_rounds is not None:
+                params["high_pitch_guard_rounds"] = shared_rounds
+        return InferenceParams.from_dict(params)
 
     def _run_multi(self, work_id: str) -> None:
         work = self._repo.get(work_id)
@@ -1283,10 +2408,14 @@ class ConversionService:
             )
             full_renders: dict[str, Path] = {}
             high_pitch_guard_any = False
+            recovery_history: dict[str, list[dict[str, Any]]] = {}
             for n, mid in enumerate(used_models):
                 model = seg_models.get(mid) or {}
-                seg_params = InferenceParams.from_dict(model.get("params", {}))
+                seg_params = self._multi_model_params(model, work.get("params"))
                 seg_framework = config.modelhub_normalize_framework(model.get("framework"))
+                seg_params.high_pitch_threshold = self._model_high_pitch_threshold(
+                    seg_params, model, seg_framework
+                )
                 self._adapt_high_range(
                     seg_params,
                     audio_profile,
@@ -1295,13 +2424,6 @@ class ConversionService:
                 )
                 seg_engine = self._engines.for_framework(seg_framework)
                 full_raw = work_dir / f"full_{mid}.wav"
-                guarded_input, guard_enabled = self._prepare_high_pitch_guard(
-                    original_infer_input,
-                    work_dir / f"infer_input_{mid}_high_guarded.wav",
-                    seg_params,
-                    log_file,
-                )
-                high_pitch_guard_any = high_pitch_guard_any or guard_enabled
                 fw_label = config.MODELHUB_FRAMEWORKS.get(seg_framework, seg_framework)
                 self._log(
                     log_file,
@@ -1309,7 +2431,8 @@ class ConversionService:
                     f"[{fw_label}] 整轨推理（引擎 {'可用' if getattr(seg_engine, 'available', False) else '降级模式'}）…",
                 )
                 try:
-                    seg_engine.infer(
+                    full_raw, model_recovery, guard_enabled = self._infer_with_dropout_recovery(
+                        engine=seg_engine,
                         model={
                             "framework": seg_framework,
                             "main_model_path": model.get("main_model_path", ""),
@@ -1318,20 +2441,15 @@ class ConversionService:
                             "diffusion_config_path": model.get("diffusion_config_path", ""),
                             "index_path": model.get("index_path", ""),
                         },
-                        vocals=guarded_input,
-                        out_path=full_raw,
+                        source=original_infer_input,
+                        output=full_raw,
                         params=seg_params,
                         duration=duration,
                         log_file=log_file,
+                        allow_recovery=True,
                     )
-                    if guard_enabled:
-                        full_raw = self._restore_high_pitch_guard(
-                            full_raw,
-                            work_dir / f"full_{mid}_restored.wav",
-                            original_infer_input,
-                            seg_params,
-                            log_file,
-                        )
+                    recovery_history[mid] = model_recovery
+                    high_pitch_guard_any = high_pitch_guard_any or guard_enabled
                     # 规整到 44100Hz 且锁定为整曲时长：保证逐句切片与原伴奏精确对齐
                     full_fix = work_dir / f"full_{mid}_fix.wav"
                     if self._ffmpeg.available and self._ffmpeg.pad_or_trim(
@@ -1346,6 +2464,7 @@ class ConversionService:
                 self._save(work)
             self._set_step(work, "infer", StepStatus.DONE.value)
             work["progress"] = 75
+            work["inference_dropout_recovery"] = recovery_history
             self._save(work)
 
             manual_vocal_merge = (
@@ -1473,6 +2592,7 @@ class ConversionService:
                 work["duration"] = self._format_duration(duration)
                 self._record_history(work)
                 self._save(work)
+                self._cleanup_finished_work_cache(work_dir, work, log_file)
                 self._log(log_file, "=== 完成：可编辑人声片段已准备 ===")
                 return
 
@@ -1655,6 +2775,7 @@ class ConversionService:
             work["duration"] = self._format_duration(duration)
             self._record_history(work)
             self._save(work)
+            self._cleanup_finished_work_cache(work_dir, work, log_file)
             self._log(log_file, "任务完成 ✅")
         except Exception as exc:  # noqa: BLE001 - 任务失败需记录而非崩溃
             work["status"] = JobStatus.FAILED.value

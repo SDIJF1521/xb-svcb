@@ -40,7 +40,7 @@
       @set-params="activePluginEffect && setPluginParamJson(activePluginEffect, $event)"
     />
 
-    <div class="editor-head">
+    <div class="editor-head" data-guide="editor-toolbar">
       <div>
         <p class="eyebrow">// Audio Editor Lite</p>
         <h1>音频编辑工作台</h1>
@@ -90,7 +90,7 @@
     </div>
 
     <div v-if="project" class="editor-shell">
-      <aside class="inspector glass">
+      <aside class="inspector glass" data-guide="editor-inspector">
         <div class="project-block">
           <label>工程</label>
           <input v-model="project.title" class="title-input" @change="saveProject" />
@@ -101,7 +101,7 @@
           </div>
         </div>
 
-        <div class="tool-block">
+        <div class="tool-block" data-guide="editor-tools">
           <div class="tool-row">
             <span>吸附</span>
             <el-switch v-model="snapEnabled" />
@@ -138,7 +138,7 @@
           </el-button>
         </div>
 
-        <div class="role-block">
+        <div class="role-block" data-guide="editor-roles">
           <EditorRoleManager
             :roles="projectRoles"
             :models="models"
@@ -151,7 +151,7 @@
           />
         </div>
 
-        <div class="template-block">
+        <div class="template-block" data-guide="editor-templates">
           <TimelineTemplatePanel
             :templates="timelineTemplates"
             :active-template-id="activeTemplateId"
@@ -160,7 +160,7 @@
           />
         </div>
 
-        <div v-if="selectedClip && selectedTrack" class="clip-block">
+        <div v-if="selectedClip && selectedTrack" class="clip-block" data-guide="editor-clip">
           <div class="clip-title">
             <span>{{ selectedClip.name || '片段' }}</span>
             <button :class="{ active: selectedClip.locked }" title="锁定片段" @click="toggleClipLock">
@@ -295,7 +295,7 @@
           </div>
           </div>
 
-          <div v-if="activeInspectorPanel === 'effects'" class="effects-box">
+          <div v-if="activeInspectorPanel === 'effects'" class="effects-box" data-guide="editor-effects">
             <div class="effects-section-head">
               <label>音量包络</label>
               <el-switch
@@ -437,7 +437,7 @@
             </div>
           </div>
 
-          <div v-if="activeInspectorPanel === 'vocal'" class="stem-box">
+          <div v-if="activeInspectorPanel === 'vocal'" class="stem-box" data-guide="editor-vocal">
             <div class="stem-head">
               <label>人声编辑</label>
               <span class="stem-engine-badge">{{ separationEngine === 'pymss' ? 'PyMSS' : 'UVR' }}</span>
@@ -584,7 +584,7 @@
             </div>
           </div>
 
-          <div v-if="activeInspectorPanel === 'enhance'" class="rerun-box editor-enhance-box">
+          <div v-if="activeInspectorPanel === 'enhance'" class="rerun-box editor-enhance-box" data-guide="editor-ai-enhance">
             <label>当前片段 AI 增强</label>
             <button type="button" class="rerun-path-picker" @click="pickEditorEnhanceReference">
               {{ baseName(editorEnhanceReference) || '选择对应的原始歌曲' }}
@@ -606,7 +606,7 @@
             </el-button>
           </div>
 
-          <div v-if="activeInspectorPanel === 'rerun'" class="rerun-box">
+          <div v-if="activeInspectorPanel === 'rerun'" class="rerun-box" data-guide="editor-rerun">
             <label>局部重推理</label>
             <select v-model="rerunModelId">
               <option value="">选择模型</option>
@@ -616,6 +616,11 @@
             </select>
             <div v-if="rerunModelId" class="rerun-param-head">
               <span>{{ rerunFrameworkText }}</span>
+              <label class="editor-manual-switch">
+                <input v-model="rerunManualParamsEnabled" type="checkbox" />
+                <span>全参数手动调整</span>
+                <small>{{ rerunManualParamsEnabled ? '已启用' : '高级使用默认' }}</small>
+              </label>
               <button type="button" title="恢复默认参数" @click="resetRerunParams">
                 <el-icon><RefreshLeft /></el-icon>
               </button>
@@ -682,6 +687,12 @@
                   <input v-model.number="rerunFilterRadius" type="range" min="0" max="7" step="1" />
                 </div>
               </template>
+              <div v-if="rerunManualParamsEnabled && (isSovitsRerunModel || isDdspRerunModel)" class="rerun-param">
+                <div class="rerun-param-label">
+                  <span>目标说话人 / 音色 ID</span>
+                </div>
+                <input v-model="rerunSpeaker" type="text" placeholder="留空使用模型默认说话人" />
+              </div>
               <div class="rerun-mini-grid">
                 <div v-if="!isSeedVcRerunModel" class="rerun-mini">
                   <span>F0</span>
@@ -707,6 +718,20 @@
                 <span>高音保护</span>
                 <small>选择性降调/复原，减少高音失真</small>
               </label>
+              <div v-if="rerunManualParamsEnabled && rerunHighPitchGuard" class="rerun-param advanced-rerun-param">
+                <div class="rerun-param-label">
+                  <span>高音保护轮次</span>
+                  <b>{{ rerunHighPitchGuardRounds }} 轮</b>
+                </div>
+                <input v-model.number="rerunHighPitchGuardRounds" type="range" min="0" max="8" step="1" />
+              </div>
+              <div v-if="rerunManualParamsEnabled" class="rerun-param advanced-rerun-param">
+                <div class="rerun-param-label">
+                  <span>F0 过滤阈值</span>
+                  <b>{{ rerunF0FilterThreshold.toFixed(2) }}</b>
+                </div>
+                <input v-model.number="rerunF0FilterThreshold" type="range" min="0" max="1" step="0.01" />
+              </div>
               <label class="rerun-enhance-toggle">
                 <input v-model="rerunEnhanceEnabled" type="checkbox" />
                 <span>重推理后自动美声</span>
@@ -807,7 +832,7 @@
         </div>
       </aside>
 
-      <section class="timeline glass">
+      <section class="timeline glass" data-guide="editor-timeline">
         <div class="timeline-top">
           <div class="timeline-main-tools">
             <div class="transport">
@@ -880,7 +905,7 @@
             <i class="playhead" :style="{ left: playhead * zoom + 'px' }"></i>
           </div>
 
-          <div class="tracks" :style="{ width: timelineWidth + 'px' }">
+          <div class="tracks" data-guide="editor-tracks" :style="{ width: timelineWidth + 'px' }">
             <div v-for="track in project.tracks" :key="track.id" class="track-row">
               <div class="track-label" @pointerdown.stop>
                 <button :title="track.locked ? '解除轨道锁定' : '锁定轨道'" :class="{ active: track.locked }" @click="toggleTrackLock(track)">
@@ -1037,6 +1062,7 @@ interface DragState {
   originalTrackIndex: number
 }
 interface RerunPrefs {
+  manualParamsEnabled?: boolean
   pitch?: number
   formantShift?: number
   f0Method?: string
@@ -1048,6 +1074,9 @@ interface RerunPrefs {
   filterRadius?: number
   rvcVersion?: string
   referenceAudio?: string
+  speaker?: string
+  highPitchGuardRounds?: number
+  f0FilterThreshold?: number
   enhanceEnabled?: boolean
   enhanceLevel?: 'basic' | 'advanced'
   pitchCorrection?: number
@@ -1407,6 +1436,10 @@ const rerunProtect = ref(prefNum(rerunPrefs.protect, 0.33, 0, 0.5))
 const rerunFilterRadius = ref(prefNum(rerunPrefs.filterRadius, 3, 0, 7))
 const rerunRvcVersion = ref(prefStr(rerunPrefs.rvcVersion, 'v2', rvcVersions))
 const rerunReferenceAudio = ref(prefStr(rerunPrefs.referenceAudio, ''))
+const rerunManualParamsEnabled = ref(rerunPrefs.manualParamsEnabled === true)
+const rerunSpeaker = ref(prefStr(rerunPrefs.speaker, ''))
+const rerunHighPitchGuardRounds = ref(prefNum(rerunPrefs.highPitchGuardRounds, 3, 0, 8))
+const rerunF0FilterThreshold = ref(prefNum(rerunPrefs.f0FilterThreshold, 0.05, 0, 1))
 const rerunHighPitchGuard = ref(rerunPrefs.autoHighPitchGuard !== false)
 const editorEnhanceReference = ref('')
 const rerunEnhanceEnabled = ref(Boolean(rerunPrefs.enhanceEnabled))
@@ -1491,6 +1524,7 @@ const selectedRerunFramework = computed(() => selectedRerunModel.value?.framewor
 const isRvcRerunModel = computed(() => selectedRerunFramework.value === 'rvc')
 const isSeedVcRerunModel = computed(() => selectedRerunFramework.value === 'seed-vc')
 const isDdspRerunModel = computed(() => selectedRerunFramework.value === 'ddsp-svc')
+const isSovitsRerunModel = computed(() => selectedRerunFramework.value === 'so-vits-svc')
 const canRerunSelectedClip = computed(() => {
   return (
     selectedClipEditable.value &&
@@ -1561,10 +1595,15 @@ function baseName(p: string): string {
 
 function currentRerunParams(): InferenceParams {
   const f0Method = normalizeF0Method(selectedRerunFramework.value, rerunF0Method.value)
+  const manual = rerunManualParamsEnabled.value
   const params: InferenceParams = {
     pitch: Math.round(rerunPitch.value),
     device: rerunDevice.value,
     auto_high_pitch_guard: rerunHighPitchGuard.value,
+    manual_params_enabled: manual,
+    speaker: manual ? rerunSpeaker.value.trim() : '',
+    high_pitch_guard_rounds: manual && rerunHighPitchGuard.value ? Math.round(rerunHighPitchGuardRounds.value) : 3,
+    f0_filter_threshold: manual ? rerunF0FilterThreshold.value : 0.05,
   }
   if (isSeedVcRerunModel.value) {
     params.diffusion_ratio = Number(rerunDiffusionRatio.value.toFixed(3))
@@ -1599,6 +1638,9 @@ function resetRerunParams() {
   rerunFilterRadius.value = 3
   rerunRvcVersion.value = 'v2'
   rerunReferenceAudio.value = ''
+  rerunSpeaker.value = ''
+  rerunHighPitchGuardRounds.value = 3
+  rerunF0FilterThreshold.value = 0.05
   rerunHighPitchGuard.value = true
   rerunPitchCorrection.value = 0.45
   rerunTimingAlignment.value = 0.45
@@ -3895,6 +3937,10 @@ watch(
     rerunFilterRadius,
     rerunRvcVersion,
     rerunReferenceAudio,
+    rerunManualParamsEnabled,
+    rerunSpeaker,
+    rerunHighPitchGuardRounds,
+    rerunF0FilterThreshold,
     rerunHighPitchGuard,
     rerunEnhanceEnabled,
     rerunEnhanceLevel,
@@ -3923,6 +3969,10 @@ watch(
           filterRadius: rerunFilterRadius.value,
           rvcVersion: rerunRvcVersion.value,
           referenceAudio: rerunReferenceAudio.value,
+          manualParamsEnabled: rerunManualParamsEnabled.value,
+          speaker: rerunSpeaker.value,
+          highPitchGuardRounds: rerunHighPitchGuardRounds.value,
+          f0FilterThreshold: rerunF0FilterThreshold.value,
           autoHighPitchGuard: rerunHighPitchGuard.value,
           enhanceEnabled: rerunEnhanceEnabled.value,
           enhanceLevel: rerunEnhanceLevel.value,
@@ -4679,6 +4729,22 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: 800;
 }
+.editor-manual-switch {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--xb-primary) 30%, var(--xb-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--xb-primary) 7%, transparent);
+  color: var(--xb-text);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.editor-manual-switch input { accent-color: var(--xb-primary); }
+.editor-manual-switch small { color: var(--xb-muted); font-weight: 500; }
 .rerun-param-head button {
   width: 28px;
   height: 28px;
@@ -4705,6 +4771,13 @@ onUnmounted(() => {
 .rerun-param {
   display: grid;
   gap: 6px;
+}
+.advanced-rerun-param {
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--xb-primary) 28%, var(--xb-border));
+  border-left: 3px solid var(--xb-primary);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--xb-primary) 6%, transparent);
 }
 .rerun-param-label {
   display: flex;
@@ -4761,6 +4834,11 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   margin-top: 12px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--xb-primary) 22%, var(--xb-border));
+  border-left: 3px solid var(--xb-primary);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--xb-primary) 5%, transparent);
   cursor: pointer;
   font-size: 13px;
   color: var(--xb-text);
@@ -5176,5 +5254,7 @@ onUnmounted(() => {
   .inspector {
     min-height: 0;
   }
+  .rerun-param-head { flex-wrap: wrap; }
+  .editor-manual-switch { width: 100%; margin-left: 0; justify-content: space-between; white-space: normal; }
 }
 </style>

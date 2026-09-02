@@ -26,7 +26,16 @@
         </div>
       </div>
 
-      <div class="dropzone" @click="router.push('/create')">
+      <div
+        class="dropzone"
+        data-guide="home-dropzone"
+        :class="{ 'is-dragover': homeDropActive }"
+        @click="router.push('/create')"
+        @dragenter.prevent="homeDropActive = true"
+        @dragover.prevent="homeDropActive = true"
+        @dragleave.prevent="homeDropActive = false"
+        @drop.prevent="onHomeDrop"
+      >
         <el-icon class="dz-icon"><UploadFilled /></el-icon>
         <p class="dz-main">拖拽音频到此处</p>
         <p class="dz-sub">支持 MP3 / WAV / FLAC，单文件 ≤ 50MB</p>
@@ -92,7 +101,7 @@
         <h2>快捷功能</h2>
       </div>
       <div class="quick-grid">
-        <div class="quick-card glass" v-for="q in quickActions" :key="q.title" @click="q.action">
+        <div class="quick-card glass" v-for="q in quickActions" :key="q.title" :data-guide="q.title === 'AI 翻唱' ? 'home-ai-cover' : undefined" @click="q.action">
           <div class="quick-icon" :style="{ '--ic': q.color }">
             <el-icon><component :is="q.icon" /></el-icon>
           </div>
@@ -264,8 +273,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useSystemStore } from '@/stores/system'
 import { useModelsStore } from '@/stores/models'
 import { useWorksStore } from '@/stores/works'
-import { api } from '@/api'
+import { api, isDesktop } from '@/api'
 import type { DataMigrationProgress, DataStorageStatus, JobStatus } from '@/api'
+import { setPendingAudio } from '@/utils/pendingAudio'
 
 defineOptions({ name: 'Index' })
 
@@ -279,6 +289,7 @@ const { models } = storeToRefs(modelsStore)
 const { works } = storeToRefs(worksStore)
 
 const importing = ref(false)
+const homeDropActive = ref(false)
 const migratingData = ref(false)
 const changingDataDir = ref(false)
 const dataStorage = ref<DataStorageStatus | null>(null)
@@ -370,6 +381,44 @@ const onRename = async (id: string, current: string) => {
 function onImport() {
   // 导入需手动选择多个文件，统一在「我的模型」页操作
   router.push('/models')
+}
+
+function readDropAudio(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('无法读取拖入的音频文件'))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function onHomeDrop(event: DragEvent) {
+  homeDropActive.value = false
+  const file = event.dataTransfer?.files?.[0]
+  if (!file) return
+  if (file.size > 50 * 1024 * 1024) {
+    ElMessage.warning('音频文件不能超过 50MB')
+    return
+  }
+  if (!file.type.startsWith('audio/') && !/\.(mp3|wav|flac|m4a|ogg|aac|opus|wma)$/i.test(file.name)) {
+    ElMessage.warning('请选择音频文件')
+    return
+  }
+  let path = String((file as File & { path?: string }).path || '').trim()
+  if (!path || !isDesktop()) {
+    try {
+      path = String(await api.importAudioData(file.name, await readDropAudio(file)) || '').trim()
+    } catch {
+      ElMessage.error('无法导入拖入的音频文件')
+      return
+    }
+  }
+  if (!path) {
+    ElMessage.error('无法识别拖入的音频文件')
+    return
+  }
+  setPendingAudio({ name: file.name, path, hint: '首页拖入音频' })
+  await router.push('/create')
 }
 
 async function loadDataStorage() {
@@ -659,6 +708,11 @@ onUnmounted(() => {
 .dropzone:hover {
   border-color: var(--xb-primary);
   background: rgba(var(--xb-primary-rgb), 0.07);
+}
+.dropzone.is-dragover {
+  border-color: var(--xb-primary);
+  background: rgba(var(--xb-primary-rgb), 0.12);
+  box-shadow: 0 0 0 3px rgba(var(--xb-primary-rgb), 0.12);
 }
 .dz-icon {
   font-size: 46px;

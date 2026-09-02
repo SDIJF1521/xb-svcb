@@ -31,6 +31,7 @@ try:
     )
     from inference_device import (
         ResolvedDevice,
+        patch_directml_checkpoint_load,
         patch_directml_float32,
         patch_directml_rmvpe_cpu,
         resolve_torch_device,
@@ -42,6 +43,7 @@ except ImportError:  # package import used by tests/application tooling
     )
     from infrastructure.inference_device import (
         ResolvedDevice,
+        patch_directml_checkpoint_load,
         patch_directml_float32,
         patch_directml_rmvpe_cpu,
         resolve_torch_device,
@@ -147,6 +149,25 @@ def _apply_rvc_directml_memory_profile(rvc) -> tuple[int, int, int, int]:  # noq
     rvc.config.x_center = x_center
     rvc.config.x_max = x_max
     return x_pad, x_query, x_center, x_max
+
+
+def _configure_rvc_torch_load(torch_module, *, directml: bool) -> None:  # noqa: ANN001
+    """Apply checkpoint compatibility before importing rvc-python/torchcrepe."""
+    if directml:
+        # torchcrepe passes the privateuseone torch.device to map_location.
+        # Deserialize on CPU; torchcrepe moves the initialized model to DML next.
+        patch_directml_checkpoint_load(torch_module)
+
+    original_load = torch_module.load
+
+    def load_compat(*args, **kwargs):  # noqa: ANN001, ANN202
+        # PyTorch >=2.6 changed the default, while legacy RVC/fairseq checkpoints
+        # still require the former behavior. Explicit callers such as torchcrepe
+        # retain their requested weights_only value.
+        kwargs.setdefault("weights_only", False)
+        return original_load(*args, **kwargs)
+
+    torch_module.load = load_compat
 
 
 def _usable_file(path: Path, min_bytes: int = _MIN_BASE_MODEL_BYTES) -> bool:
@@ -446,23 +467,15 @@ def main() -> int:
         # rvc-python / fairseq 加载 hubert、字典、.pth 主模型时会报 "Weights only load failed"。
         # 导入 rvc-python 之前还原旧默认（RVC 的 .pth/.index/底模均为本地可信文件）。
         # 老栈（torch 2.1.1，默认即 False）加这层无副作用。
-        try:
-            import torch  # noqa: WPS433
-
-            _orig_torch_load = torch.load
-
-            def _torch_load_compat(*a, **kw):  # noqa: ANN001, ANN202
-                kw.setdefault("weights_only", False)
-                return _orig_torch_load(*a, **kw)
-
-            torch.load = _torch_load_compat  # type: ignore[assignment]
-        except Exception:  # noqa: BLE001
-            pass
-
+        import torch  # noqa: WPS433
         resolved_device = _resolve_device(args.device)
         if resolved_device.backend == "directml":
             _apply_rvc_directml_thread_limits(torch)
             patch_directml_float32(torch)
+        _configure_rvc_torch_load(
+            torch,
+            directml=resolved_device.backend == "directml",
+        )
 
         import rvc_python.download_model as rvc_download_model
         import rvc_python.infer as rvc_infer

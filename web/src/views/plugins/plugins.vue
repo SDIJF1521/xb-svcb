@@ -10,7 +10,7 @@
 
     <div class="status-banner" :class="{ active: enabled }"><div class="status-mark"><el-icon><CircleCheck /></el-icon></div><div class="status-copy"><strong>{{ enabled ? '扩展能力已接入当前工作流' : '扩展能力当前处于暂停状态' }}</strong><span>{{ enabled ? '已授权的插件页面和翻唱钩子可以正常使用。' : '开启后仍需单独启用每个插件，现有翻唱流程不会受到影响。' }}</span></div><span class="status-count">{{ plugins.length }} 个已安装</span></div>
 
-    <section class="settings glass">
+    <section class="settings glass" data-guide="plugin-settings">
       <div class="section-head">
         <div class="section-title"><span class="section-kicker">01</span><div><h2>插件功能</h2><p>控制扩展运行环境与市场来源</p></div></div>
       </div>
@@ -26,7 +26,7 @@
       </div>
     </section>
 
-    <section v-if="market.length" class="section">
+    <section v-if="market.length" class="section" data-guide="plugin-market">
       <div class="section-head"><div class="section-title"><span class="section-kicker">02</span><div><h2>插件市场</h2><p>兼容 NoneBot2 风格 plugins.json5 索引</p></div></div><span class="section-note">NONEBOT2 / GITHUB JSON5</span></div>
       <div class="plugin-grid">
         <article v-for="item in market" :key="item.id" class="plugin-card glass">
@@ -38,7 +38,7 @@
       </div>
     </section>
 
-    <section class="section">
+    <section class="section" data-guide="plugin-installed">
       <div class="section-head"><div class="section-title"><span class="section-kicker">03</span><div><h2>已安装插件</h2><p>每个插件都需要单独授权后才能运行</p></div></div><span class="section-note">LOCAL RUNTIME</span></div>
       <div v-if="plugins.length" class="plugin-grid">
         <article v-for="plugin in plugins" :key="plugin.id" class="plugin-card glass">

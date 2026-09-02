@@ -14,6 +14,42 @@ from infrastructure import rvc_engine
 from domain import InferenceParams
 
 
+def test_directml_crepe_checkpoint_is_deserialized_on_cpu() -> None:
+    calls: list[tuple[tuple, dict]] = []
+
+    class DirectMlDevice:
+        def __str__(self) -> str:
+            return "privateuseone:0"
+
+    def load(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "crepe-state"
+
+    torch = SimpleNamespace(load=load)
+    rvc_worker._configure_rvc_torch_load(torch, directml=True)
+
+    assert (
+        torch.load("torchcrepe/assets/full.pth", map_location=DirectMlDevice(), weights_only=True)
+        == "crepe-state"
+    )
+    assert calls[-1][1]["map_location"] == "cpu"
+    assert calls[-1][1]["weights_only"] is True
+
+
+def test_rvc_torch_load_keeps_non_directml_location_and_legacy_default() -> None:
+    calls: list[tuple[tuple, dict]] = []
+
+    def load(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    torch = SimpleNamespace(load=load)
+    rvc_worker._configure_rvc_torch_load(torch, directml=False)
+    torch.load("model.pth", map_location="cuda:0")
+
+    assert calls[-1][1]["map_location"] == "cuda:0"
+    assert calls[-1][1]["weights_only"] is False
+
+
 def test_rvc_prepares_pytorch_models_and_keeps_onnx_optional(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
