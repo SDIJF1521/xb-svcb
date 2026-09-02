@@ -47,7 +47,8 @@ _ALLOWED_PARAMS = {
     "pitch", "f0_method", "index_rate", "rms_mix", "uvr_model", "diffusion_ratio",
     "device", "protect", "filter_radius", "rvc_version", "ddsp_infer_steps",
     "ddsp_formant_shift", "speaker",
-    "auto_high_pitch_guard",
+    "auto_high_pitch_guard", "high_pitch_guard_rounds", "high_pitch_threshold", "f0_filter_threshold",
+    "manual_params_enabled",
 }
 
 

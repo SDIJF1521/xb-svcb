@@ -43,6 +43,21 @@ function Require-File([string]$Path, [string]$Label) {
   }
 }
 
+function Require-WorkerContract([string]$Path, [string]$Label, [string[]]$Required, [string[]]$Forbidden) {
+  Require-File $Path $Label
+  $content = Get-Content -LiteralPath $Path -Raw
+  foreach ($marker in $Required) {
+    if ($content -notmatch [regex]::Escape($marker)) {
+      throw "$Label has an unexpected implementation: missing '$marker' in $Path"
+    }
+  }
+  foreach ($marker in $Forbidden) {
+    if ($content -match [regex]::Escape($marker)) {
+      throw "$Label has been replaced by another worker: found '$marker' in $Path"
+    }
+  }
+}
+
 function Require-FileSize([string]$Path, [long]$MinimumBytes, [string]$Label) {
   Require-File $Path $Label
   $item = Get-Item -LiteralPath $Path
@@ -325,6 +340,16 @@ $workerFiles = @(
 foreach ($worker in $workerFiles) {
   Require-File (Join-Path $Root "app\infrastructure\$worker") "Worker source $worker"
 }
+Require-WorkerContract `
+  (Join-Path $Root "app\infrastructure\f0_worker.py") `
+  "F0 worker source" `
+  @("--out-npy", "F0_OK") `
+  @("--high-threshold", "FORMANT_PITCH_OK")
+Require-WorkerContract `
+  (Join-Path $Root "app\infrastructure\formant_pitch_worker.py") `
+  "Formant pitch worker source" `
+  @("--high-threshold", "FORMANT_PITCH_OK") `
+  @("--out-npy", "F0_OK")
 Require-File (Join-Path $Root "docs\release-notes\release_notes_v030.md") "v0.0.30 release notes"
 Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
@@ -482,6 +507,16 @@ Require-File (Join-Path $stagedInternal "web\dist\index.html") "Staged frontend 
 foreach ($worker in $workerFiles) {
   Require-File (Join-Path $stagedInternal "infrastructure\$worker") "Staged worker $worker"
 }
+Require-WorkerContract `
+  (Join-Path $stagedInternal "infrastructure\f0_worker.py") `
+  "Staged F0 worker" `
+  @("--out-npy", "F0_OK") `
+  @("--high-threshold", "FORMANT_PITCH_OK")
+Require-WorkerContract `
+  (Join-Path $stagedInternal "infrastructure\formant_pitch_worker.py") `
+  "Staged formant pitch worker" `
+  @("--high-threshold", "FORMANT_PITCH_OK") `
+  @("--out-npy", "F0_OK")
 
 # 3) Build native JUCE VST3 host and stage it next to the app exe.
 if (-not $SkipJuceHostBuild) {

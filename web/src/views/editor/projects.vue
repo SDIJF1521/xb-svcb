@@ -10,7 +10,7 @@
         <el-button round class="ghost-btn" :loading="loading" @click="loadProjects">
           <el-icon class="el-icon--left"><Refresh /></el-icon>刷新
         </el-button>
-        <el-button round class="cta-btn" @click="importAudio">
+        <el-button round class="cta-btn" data-guide="editor-import" @click="importAudio">
           <el-icon class="el-icon--left"><FolderAdd /></el-icon>导入音频
         </el-button>
       </div>
@@ -21,7 +21,7 @@
       <p>正在加载工程</p>
     </section>
 
-    <section v-else-if="projects.length" class="project-grid">
+    <section v-else-if="projects.length" class="project-grid" data-guide="editor-project-list">
       <article v-for="item in projects" :key="item.id" class="project-card glass">
         <button class="project-main" @click="openProject(item.id)">
           <span class="project-mark"><el-icon><Scissor /></el-icon></span>
@@ -51,7 +51,7 @@
       </article>
     </section>
 
-    <section v-else class="empty-panel glass">
+    <section v-else class="empty-panel glass" data-guide="editor-project-empty">
       <el-icon><Headset /></el-icon>
       <p>暂无编辑工程</p>
       <el-button round class="cta-btn" @click="importAudio">

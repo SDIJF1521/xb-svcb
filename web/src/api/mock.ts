@@ -885,6 +885,13 @@ export const mock = {
     m.favorite = !m.favorite
     return { ...m }
   },
+  renameModel(id: string, name: string): boolean {
+    const model = mockModels.find((item) => item.id === id)
+    const normalized = String(name || '').trim().replace(/\s+/g, ' ')
+    if (!model || !normalized || normalized.length > 120) return false
+    model.name = normalized
+    return true
+  },
   pickAudioFile(): string | null {
     return `C:/music/示例歌曲_${Date.now()}.mp3`
   },
@@ -893,6 +900,9 @@ export const mock = {
       `C:/music/批量歌曲_A_${Date.now()}.mp3`,
       `C:/music/批量歌曲_B_${Date.now()}.mp3`,
     ]
+  },
+  importAudioData(name: string, _data = ''): string {
+    return `C:/music/${fileName(name)}`
   },
   pickLyricsFile(): Promise<LyricsFileResult> {
     return browserPickTextFile('.lrc,.txt')

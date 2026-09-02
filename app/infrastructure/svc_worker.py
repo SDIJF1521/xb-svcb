@@ -64,6 +64,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--speaker", default="", help="目标说话人，留空取配置首个")
     p.add_argument("--f0", default="rmvpe", help="F0 预测器")
     p.add_argument("--f0-max", type=float, default=1100.0, help="自适应 F0 上限")
+    p.add_argument("--f0-threshold", type=float, default=0.05, help="F0 置信度过滤阈值")
     p.add_argument("--k-step", type=int, default=100, help="浅扩散步数")
     p.add_argument(
         "--diffusion-ratio",
@@ -328,7 +329,7 @@ def main() -> int:
             lgr_num=0.75,
             f0_predictor=args.f0,
             enhancer_adaptive_key=0,
-            cr_threshold=0.05,
+            cr_threshold=max(0.0, min(1.0, float(args.f0_threshold))),
             k_step=effective_k_step,
             use_spk_mix=False,
             second_encoding=False,

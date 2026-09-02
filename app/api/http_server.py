@@ -576,6 +576,7 @@ JOB_CREATE_API_DOC = _api_operation_description(
         ("params.ddsp_infer_steps", "integer", "否", "50", "仅 DDSP；采样步数，最小 1，推荐 50~100"),
         ("params.ddsp_formant_shift", "number", "否", "0", "仅 DDSP；共振峰半音偏移，范围 -2~2"),
         ("params.auto_high_pitch_guard", "boolean", "否", "true", "翻唱/实时变声；极高音先保共振峰降调，翻唱后升回原调并补偿响度"),
+        ("params.high_pitch_guard_rounds", "integer", "否", "3", "高音保护重试轮次，范围 0~8"),
         ("vocal_enhancement.enabled", "boolean", "否", "false", "启用自然修音、AI 角色共振峰与歌声增强"),
         ("vocal_enhancement.level", "string", "否", "basic", "basic 或 advanced"),
         ("vocal_enhancement.pitch_correction", "number", "否", "0.45", "自然修音强度，范围 0~1"),
@@ -851,6 +852,29 @@ class InferenceParamsRequest(BaseModel):
         default=True,
         description="高音保护：极高音先保共振峰降调，经过模型翻唱后再升回原调，并补偿高音响度。",
     )
+    high_pitch_guard_rounds: int = Field(
+        default=3,
+        ge=0,
+        le=8,
+        description="高音保护重试轮次；0 表示不进行保护重试。",
+    )
+    high_pitch_threshold: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=2000.0,
+        description="兼容旧客户端的高音保护起点；0 表示自动。",
+        deprecated=True,
+    )
+    f0_filter_threshold: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description="F0 过滤阈值，范围 0~1。",
+    )
+    manual_params_enabled: bool = Field(
+        default=False,
+        description="是否启用全参数手动调整。",
+    )
 
 
 class VocalEnhancementRequest(BaseModel):
@@ -1072,6 +1096,12 @@ class ModelDefaultRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model_id: str = Field(description="设为默认项的声音模型 ID")
+
+
+class ModelRenameRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120, description="新的模型显示名称")
 
 
 class EditorProjectCreateRequest(BaseModel):
@@ -1890,6 +1920,23 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
             raise HTTPException(status_code=404, detail="模型不存在")
         return _public_model(item)
 
+    @router.patch(
+        "/models/{model_id}",
+        response_model=ModelResponse,
+        tags=["模型"],
+        summary="重命名声音模型",
+        description="仅修改模型显示名称，不会修改模型权重、配置或模型 ID。",
+        responses={404: {"model": ErrorResponse, "description": "模型 ID 不存在"}},
+    )
+    def rename_model(
+        request: ModelRenameRequest,
+        model_id: str = ApiPath(..., description="声音模型 ID"),
+    ) -> dict[str, Any]:
+        item = facade._models.rename(model_id, request.name)
+        if not item:
+            raise HTTPException(status_code=404, detail="模型不存在或名称无效")
+        return _public_model(item)
+
     @router.post(
         "/models/{model_id}/favorite",
         response_model=ModelResponse,
@@ -2069,6 +2116,8 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
             selected_ids: set[str] = set()
             shared_guard_explicit = "auto_high_pitch_guard" in request.params.model_fields_set
             shared_guard = request.params.auto_high_pitch_guard
+            shared_rounds_explicit = "high_pitch_guard_rounds" in request.params.model_fields_set
+            shared_rounds = request.params.high_pitch_guard_rounds
             for entry in request.models:
                 if entry.model_id in selected_ids:
                     raise HTTPException(status_code=422, detail=f"models 中模型重复：{entry.model_id}")
@@ -2085,6 +2134,11 @@ def create_http_app(facade: "Api", api_key: str) -> FastAPI:
                     and "auto_high_pitch_guard" not in entry.params.model_fields_set
                 ):
                     params["auto_high_pitch_guard"] = shared_guard
+                if (
+                    shared_rounds_explicit
+                    and "high_pitch_guard_rounds" not in entry.params.model_fields_set
+                ):
+                    params["high_pitch_guard_rounds"] = shared_rounds
                 if entry.reference_upload_id:
                     params["reference_audio"] = str(_resolve_upload(entry.reference_upload_id))
                 if str(model.get("framework") or "") == "seed-vc" and not params.get(

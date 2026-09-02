@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -87,7 +88,8 @@ class ModelService:
         return items[0]["id"] if items else None
 
     def get(self, model_id: str) -> dict[str, Any] | None:
-        return self._repo.get(model_id)
+        item = self._repo.get(model_id)
+        return self._normalize_item(item, refresh_size=False) if item else None
 
     # ---- 命令 ----
     def import_model(self, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -194,6 +196,12 @@ class ModelService:
             index_file=index_file,
         )
         record = self._normalize_item(info.to_dict(), refresh_size=True)
+        inferred_profile = self._infer_pitch_profile(main_config.path if main_config else "", framework)
+        if inferred_profile:
+            record["metadata"] = {
+                **(record.get("metadata") or {}),
+                "inference_profile": inferred_profile,
+            }
         source_repo_id = str(payload.get("source_repo_id") or "").strip().strip("/")
         if source_repo_id:
             source_tags = payload.get("source_tags")
@@ -212,12 +220,61 @@ class ModelService:
             self._settings.set("default_model_id", model_id)
         return record
 
+    @staticmethod
+    def _infer_pitch_profile(config_path: str, framework: str) -> dict[str, float] | None:
+        """Read a model's declared F0 ceiling when its config provides one."""
+        if not config_path:
+            return None
+        values: list[Any] = []
+        try:
+            raw = Path(config_path).read_text(encoding="utf-8")
+            try:
+                parsed = json.loads(raw)
+
+                def visit(value: Any) -> None:
+                    if isinstance(value, dict):
+                        for key, child in value.items():
+                            if str(key).lower() in {"f0_max", "f0_max_hz", "max_f0"}:
+                                values.append(child)
+                            visit(child)
+                    elif isinstance(value, list):
+                        for child in value:
+                            visit(child)
+
+                visit(parsed)
+            except (TypeError, ValueError):
+                for key in ("f0_max", "f0_max_hz", "max_f0"):
+                    match = re.search(rf"(?:^|\n)\s*{key}\s*:\s*([0-9]+(?:\.[0-9]+)?)", raw, re.I)
+                    if match:
+                        values.append(match.group(1))
+        except OSError:
+            return None
+        for value in values:
+            try:
+                ceiling = float(value)
+            except (TypeError, ValueError):
+                continue
+            if 300.0 <= ceiling <= 2000.0:
+                return {"f0_max_hz": ceiling, "high_pitch_threshold": ceiling}
+        return None
+
     def toggle_favorite(self, model_id: str) -> dict[str, Any] | None:
         item = self._repo.get(model_id)
         if not item:
             return None
         item = self._normalize_item(item, refresh_size=False)
         item["favorite"] = not bool(item.get("favorite"))
+        self._repo.update(model_id, item)
+        return item
+
+    def rename(self, model_id: str, name: str) -> dict[str, Any] | None:
+        """Rename a model without touching its managed files."""
+        item = self._repo.get(model_id)
+        normalized_name = " ".join(str(name or "").split())
+        if not item or not normalized_name or len(normalized_name) > 120:
+            return None
+        item = self._normalize_item(item, refresh_size=False)
+        item["name"] = normalized_name
         self._repo.update(model_id, item)
         return item
 
@@ -323,11 +380,21 @@ class ModelService:
         normalized.setdefault("favorite", False)
         normalized.setdefault("tags", [])
         normalized.setdefault("metadata", {})
-        normalized["metadata"] = {
+        metadata = {
             "schema": "xb-svcb.model.v1",
             "framework": framework,
             **(normalized.get("metadata") or {}),
         }
+        # Older model records predate pitch-profile metadata.  Probe their
+        # declared F0 ceiling on read so every inference path can use the
+        # selected model's own range without requiring a re-import.
+        if not metadata.get("inference_profile"):
+            config_entry = normalized.get("main_config")
+            config_path = config_entry.get("path") if isinstance(config_entry, dict) else ""
+            inferred = self._infer_pitch_profile(str(config_path or ""), framework)
+            if inferred:
+                metadata["inference_profile"] = inferred
+        normalized["metadata"] = metadata
         if not normalized.get("type"):
             if framework == "rvc":
                 normalized["type"] = ModelType.RVC.value

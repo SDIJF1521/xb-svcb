@@ -11,7 +11,7 @@
 
     <div class="layout">
       <main class="config">
-        <section class="card glass">
+        <section class="card glass" data-guide="realtime-source">
           <div class="card-head"><span class="step-no">01</span><h2>播放源</h2></div>
           <div class="source-mode" role="group" aria-label="实时音频来源">
             <button :class="{ active: inputMode === 'system' }" :disabled="sessionActive" @click="setInputMode('system')">系统音频变声器</button>
@@ -23,11 +23,21 @@
             <label class="select-field"><span>变声输出设备</span><select v-model="systemOutputId" :disabled="sessionActive"><option value="">选择扬声器或耳机</option><option v-for="device in systemOutputDevices" :key="device.id" :value="device.id">{{ device.name }}</option></select></label>
             <button class="refresh-devices" :disabled="sessionActive" @click="loadSystemDevices"><el-icon><Refresh /></el-icon>刷新设备</button>
           </div>
-          <button v-if="inputMode === 'file' && !song" class="dropzone" @click="pickSong">
+          <button
+            v-if="inputMode === 'file' && !song"
+            class="dropzone"
+            :class="{ 'is-dragover': songDragActive }"
+            @click="pickSong"
+            @dragenter.prevent="songDragActive = true"
+            @dragover.prevent="songDragActive = true"
+            @dragleave.prevent="songDragActive = false"
+            @drop.prevent="onSongDrop"
+          >
             <el-icon><UploadFilled /></el-icon>
-            <span><b>选择要实时播放的歌曲</b><small>先分离一次人声与伴奏，随后按时间顺序分块转换与播放</small></span>
+            <span><b>选择或拖拽要实时播放的歌曲</b><small>先分离一次人声与伴奏，随后按时间顺序分块转换与播放</small></span>
           </button>
-          <div v-else-if="inputMode === 'file' && song" class="song-row">
+          <input ref="songInput" type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aac" hidden @change="onSongFileChange" />
+          <div v-if="inputMode === 'file' && song" class="song-row">
             <span class="song-icon"><el-icon><Headset /></el-icon></span>
             <span class="song-copy"><b>{{ song.name }}</b><small>{{ song.hint }} · {{ formatTime(duration) }}</small></span>
             <button class="icon-btn" title="更换歌曲" :disabled="sessionActive" @click="pickSong"><el-icon><Refresh /></el-icon></button>
@@ -42,7 +52,7 @@
           </div>
         </section>
 
-        <section class="card glass">
+        <section class="card glass" data-guide="realtime-params">
           <div class="card-head"><span class="step-no">02</span><h2>演唱编排</h2></div>
           <p v-if="!realtimeModels.length" class="empty-note">暂无可用的 RVC / SeedVC 模型，请先在模型管理中导入。</p>
           <div v-else class="model-grid">
@@ -62,7 +72,15 @@
 
           <div v-if="selectedId" class="model-settings">
             <template v-for="id in [selectedId]" :key="id">
-            <div class="setting-title"><b>{{ modelName(id) }}</b><span>{{ frameworkName(frameworkOf(id)) }}</span></div>
+            <div class="setting-title">
+              <b>{{ modelName(id) }}</b>
+              <span>{{ frameworkName(frameworkOf(id)) }}</span>
+              <label class="manual-param-switch">
+                <input v-model="manualParamsEnabled" type="checkbox" :disabled="sessionActive" />
+                <span>全参数手动调整</span>
+                <small>{{ manualParamsEnabled ? '已启用' : '基础可调 · 高级默认' }}</small>
+              </label>
+            </div>
             <div class="param-grid">
               <label class="range-row">
                 <span>变调 <b>{{ paramsFor(id).pitch > 0 ? '+' : '' }}{{ paramsFor(id).pitch }} 半音</b></span>
@@ -89,6 +107,10 @@
                 <input v-model.number="paramsFor(id).filterRadius" type="range" min="0" max="7" step="1" :disabled="sessionActive" />
               </label>
             </div>
+            <label v-if="manualParamsEnabled" class="range-row threshold-row">
+              <span>F0 过滤阈值 <b>{{ paramsFor(id).f0FilterThreshold.toFixed(2) }}</b></span>
+              <input v-model.number="paramsFor(id).f0FilterThreshold" type="range" min="0" max="1" step="0.01" :disabled="sessionActive || !manualParamsEnabled" />
+            </label>
             <div class="select-grid">
               <label v-if="frameworkOf(id) === 'rvc'" class="select-field">
                 <span>F0 算法</span>
@@ -116,6 +138,10 @@
                 <span><b>自动高音保护</b><small>高音先保共振峰降调，翻唱后升回原调</small></span>
               </label>
             </div>
+            <label v-if="manualParamsEnabled && paramsFor(id).autoHighPitchGuard" class="range-row threshold-row">
+              <span>高音保护轮次 <b>{{ paramsFor(id).highPitchGuardRounds }} 轮</b></span>
+              <input v-model.number="paramsFor(id).highPitchGuardRounds" type="range" min="0" max="8" step="1" :disabled="sessionActive || !manualParamsEnabled" />
+            </label>
             <div v-if="frameworkOf(id) === 'seed-vc'" class="reference-row">
               <span>目标音色参考</span>
               <button :disabled="sessionActive" @click="pickReference(id)">{{ baseName(paramsFor(id).referenceAudio) || '选择音频' }}</button>
@@ -133,6 +159,14 @@
             <label v-if="inputMode === 'file'" class="control"><span>伴奏 <b>{{ signedDb(musicGain) }}</b></span><input v-model.number="musicGain" type="range" min="-12" max="6" step="0.5" :disabled="sessionActive" /></label>
             <div v-else class="direct-music"><el-icon><Connection /></el-icon><span><b>原始伴奏保持不变</b><small>从同一混合音频扣除提取的人声，再与变声人声按样本时钟混合</small></span></div>
           </div>
+          <div class="select-grid realtime-selects">
+            <label class="select-field">
+              <span>人声分离模型</span>
+                <select v-model="uvrModel" :disabled="sessionActive">
+                <option v-for="model in uvrModels" :key="model" :value="model">{{ model }}</option>
+              </select>
+            </label>
+          </div>
         </section>
 
         <button class="start-btn" :disabled="!canStart || sessionActive" @click="startSession">
@@ -141,7 +175,7 @@
       </main>
 
       <aside class="monitor">
-        <section class="card glass monitor-card">
+        <section class="card glass monitor-card" data-guide="realtime-monitor">
           <div class="monitor-head"><span class="live-dot" :class="statusClass"></span><span>{{ statusLabel }}</span><b v-if="inputMode === 'system'">系统音频</b><b v-else>{{ formatTime(playhead) }} / {{ formatTime(status.duration || duration) }}</b></div>
           <div class="visualizer" :class="{ playing }"><i v-for="n in 42" :key="n" :style="barStyle(n)"></i></div>
           <div class="progress-track"><span :style="{ width: playPercent + '%' }"></span></div>
@@ -188,6 +222,7 @@ import 'element-plus/es/components/message/style/css'
 import { ElMessage } from 'element-plus'
 import {
   api,
+  isDesktop,
   type DownloadedMusic,
   type InferenceParams,
   type RealtimeCoverStatus,
@@ -203,6 +238,8 @@ defineOptions({ name: 'RealtimeCoverPage' })
 interface Song { name: string; path: string; hint: string }
 interface LiveParams {
   pitch: number
+  highPitchGuardRounds: number
+  f0FilterThreshold: number
   diffusionRatio: number
   referenceAudio: string
   device: string
@@ -221,6 +258,8 @@ const worksStore = useWorksStore()
 const { models } = storeToRefs(modelsStore)
 const inputMode = ref<'system' | 'file'>('system')
 const song = ref<Song | null>(null)
+const songInput = ref<HTMLInputElement | null>(null)
+const songDragActive = ref(false)
 const duration = ref(0)
 const downloaded = ref<DownloadedMusic[]>([])
 const selectedId = ref('')
@@ -229,6 +268,9 @@ const systemOutputId = ref('')
 const systemInputDevices = ref<Array<{ id: string; name: string; kind: 'input' | 'output'; loopback?: boolean; system_mix?: boolean }>>([])
 const systemOutputDevices = ref<Array<{ id: string; name: string; kind: 'input' | 'output'; loopback?: boolean }>>([])
 const modelParams = reactive<Record<string, LiveParams>>({})
+const manualParamsEnabled = ref(false)
+const uvrModels = ['MDX-Net', 'Demucs v4', 'VR Arch']
+const uvrModel = ref('MDX-Net')
 const bufferSeconds = ref(8)
 const chunkSeconds = ref(8)
 const vocalGain = ref(0)
@@ -293,6 +335,8 @@ function errorMessage(error: unknown, fallback: string) {
 function paramsFor(id: string) {
   return modelParams[id] ||= {
     pitch: 0,
+    highPitchGuardRounds: 3,
+    f0FilterThreshold: 0.05,
     diffusionRatio: 0.5,
     referenceAudio: '',
     device: 'auto',
@@ -341,10 +385,57 @@ async function loadSystemDevices() {
 }
 
 async function pickSong() {
+  if (!isDesktop()) {
+    songInput.value?.click()
+    return
+  }
   const path = await api.pickAudioFile()
   if (!path) return
   song.value = { path, name: baseName(path), hint: '本地音频已选择' }
   duration.value = await api.getAudioDuration(path)
+}
+
+function readFileDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('无法读取拖入的音频文件'))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function setSongFromFile(file: File | undefined) {
+  if (!file) return
+  if (file.size > 50 * 1024 * 1024) {
+    ElMessage.warning('音频文件不能超过 50MB')
+    return
+  }
+  if (!file.type.startsWith('audio/') && !/\.(mp3|wav|flac|m4a|ogg|aac|opus|wma)$/i.test(file.name)) {
+    ElMessage.warning('请选择音频文件')
+    return
+  }
+  let path = String((file as File & { path?: string }).path || '').trim()
+  if (!path && isDesktop()) {
+    try {
+      path = String(await api.importAudioData(file.name, await readFileDataUrl(file)) || '').trim()
+    } catch {
+      ElMessage.error('无法导入拖入的音频文件')
+      return
+    }
+  }
+  if (!path) path = file.name
+  song.value = { name: file.name, path, hint: '已导入音频' }
+  void loadSongDuration()
+}
+
+function onSongFileChange(event: Event) {
+  void setSongFromFile((event.target as HTMLInputElement).files?.[0])
+  ;(event.target as HTMLInputElement).value = ''
+}
+
+function onSongDrop(event: DragEvent) {
+  songDragActive.value = false
+  void setSongFromFile(event.dataTransfer?.files?.[0])
 }
 
 function pickDownloaded(item: DownloadedMusic) {
@@ -364,26 +455,36 @@ async function pickReference(id: string) {
 
 function inferenceParams(id: string): InferenceParams {
   const values = paramsFor(id)
+  const effective = manualParamsEnabled.value
+      ? values
+    : {
+        ...values,
+        highPitchGuardRounds: 3,
+        f0FilterThreshold: 0.05,
+      }
+  const common = {
+    pitch: Math.round(effective.pitch),
+    device: effective.device,
+    uvr_model: uvrModel.value,
+    auto_high_pitch_guard: effective.autoHighPitchGuard,
+    high_pitch_guard_rounds: Math.max(0, Math.min(8, Math.round(effective.highPitchGuardRounds ?? 3))),
+    f0_filter_threshold: effective.f0FilterThreshold,
+    manual_params_enabled: manualParamsEnabled.value,
+  }
   return frameworkOf(id) === 'seed-vc'
     ? {
-        pitch: Math.round(values.pitch),
-        device: values.device,
-        diffusion_ratio: values.diffusionRatio,
+        ...common,
+        diffusion_ratio: effective.diffusionRatio,
         reference_audio: values.referenceAudio,
-        uvr_model: 'MDX-Net',
-        auto_high_pitch_guard: values.autoHighPitchGuard,
       }
     : {
-        pitch: Math.round(values.pitch),
-        device: values.device,
-        f0_method: normalizeF0Method('rvc', values.f0Method),
-        index_rate: values.indexRate,
-        rms_mix: values.rmsMix,
-        protect: values.protect,
-        filter_radius: Math.round(values.filterRadius),
-        rvc_version: values.rvcVersion,
-        uvr_model: 'MDX-Net',
-        auto_high_pitch_guard: values.autoHighPitchGuard,
+        ...common,
+        f0_method: normalizeF0Method('rvc', effective.f0Method),
+        index_rate: effective.indexRate,
+        rms_mix: effective.rmsMix,
+        protect: effective.protect,
+        filter_radius: Math.round(effective.filterRadius),
+        rvc_version: effective.rvcVersion,
       }
 }
 
@@ -561,6 +662,7 @@ h1 { margin: 0; font-size: 30px; letter-spacing: 0; } .page-sub { margin: 8px 0 
 .card-head h2 { margin: 0; font-size: 16px; letter-spacing: 0; } .card-head .text-action { margin-left: auto; color: var(--accent, #00d5ff); }
 .step-no { display: grid; place-items: center; min-width: 28px; height: 24px; padding: 0 6px; border: 1px solid color-mix(in srgb, var(--accent, #00d5ff) 45%, transparent); color: var(--accent, #00d5ff); font-size: 11px; }
 .dropzone { width: 100%; min-height: 112px; display: flex; justify-content: center; align-items: center; gap: 14px; border: 1px dashed var(--border-color, #344151); background: color-mix(in srgb, var(--accent, #00d5ff) 4%, transparent); color: inherit; cursor: pointer; }
+.dropzone.is-dragover { border-color: var(--accent, #00d5ff); background: color-mix(in srgb, var(--accent, #00d5ff) 14%, transparent); }
 .dropzone > .el-icon { font-size: 30px; color: var(--accent, #00d5ff); } .dropzone span { display: grid; text-align: left; gap: 5px; } small { color: var(--text-muted, #8f9aaa); font-size: 12px; }
 .song-row { display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 10px; border: 1px solid var(--border-color, #344151); }
 .song-icon, .model-mark { display: grid; place-items: center; width: 42px; height: 42px; color: var(--accent, #00d5ff); background: color-mix(in srgb, var(--accent, #00d5ff) 12%, transparent); }
@@ -590,18 +692,22 @@ h1 { margin: 0; font-size: 30px; letter-spacing: 0; } .page-sub { margin: 8px 0 
 .check { color: var(--accent, #00d5ff); } .empty-note, .section-note { margin: 0; color: var(--text-muted, #8f9aaa); font-size: 13px; }
 .model-settings { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border-left: 2px solid var(--accent, #00d5ff); background: color-mix(in srgb, var(--xb-panel, #172033) 88%, transparent); }
 .pitch-guard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); }
-.toggle-field { min-height: 42px; display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid var(--border-color); background: color-mix(in srgb, var(--xb-panel) 72%, transparent); cursor: pointer; }
+.toggle-field { min-height: 42px; display: flex; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border-color)); border-left: 3px solid var(--accent); border-radius: 7px; background: color-mix(in srgb, var(--accent) 6%, transparent); cursor: pointer; }
 .toggle-field input { width: 16px; height: 16px; accent-color: var(--accent); }
 .toggle-field span { display: grid; gap: 2px; }
 .toggle-field small { font-size: 11px; }
 .compact-range { padding: 8px 10px; border: 1px solid var(--border-color); background: color-mix(in srgb, var(--xb-panel) 72%, transparent); }
 .setting-title, .range-row > span, .reference-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .setting-title span { color: var(--text-muted, #8f9aaa); font-size: 11px; } .range-row { display: grid; gap: 7px; font-size: 13px; }
+.manual-param-switch { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-color)); border-radius: 8px; background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--text-primary); font-size: 12px; font-weight: 650; white-space: nowrap; }
+.manual-param-switch input { accent-color: var(--accent); }
+.manual-param-switch small { color: var(--text-muted); }
 .param-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px 22px; }
 .direct-music { display: flex; align-items: center; gap: 9px; min-height: 42px; color: var(--accent); }
 .direct-music span { display: grid; gap: 3px; }
 .direct-music small { color: var(--text-muted); }
 .select-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.realtime-selects { margin-top: 12px; }
 .select-field { min-width: 0; display: grid; gap: 6px; color: var(--text-muted, #8f9aaa); font-size: 12px; }
 .select-field select { width: 100%; height: 34px; padding: 0 9px; border: 1px solid var(--xb-border, var(--border-color, #344151)); border-radius: 4px; background: var(--xb-panel, color-mix(in srgb, var(--app-bg, #0c1118) 92%, #fff)); color: var(--xb-text, var(--text-primary, #f4f7fb)); }
 .select-field select option { background: var(--xb-panel, #171c25); color: var(--xb-text, #f4f7fb); }
@@ -726,5 +832,5 @@ input[type='range'] { width: 100%; accent-color: var(--accent, #00d5ff); } .refe
 .sync-panel b { color: var(--xb-text, var(--text-primary, #f4f7fb)); font-size: 12px; }
 .sync-panel small { color: var(--xb-muted, var(--text-muted, #8f9aaa)); line-height: 1.45; }
 @media (max-width: 940px) { .layout { grid-template-columns: 1fr; } .monitor { position: static; } }
-@media (max-width: 640px) { .page { margin: 10px 8px 24px; padding: 20px 14px 40px; } .page-head { align-items: flex-start; flex-direction: column; } .model-grid, .control-grid, .param-grid, .select-grid, .pitch-guard-grid, .source-library-list, .system-audio-setup { grid-template-columns: 1fr; } .system-audio-note { grid-column: auto; } }
+@media (max-width: 640px) { .page { margin: 10px 8px 24px; padding: 20px 14px 40px; } .page-head { align-items: flex-start; flex-direction: column; } .model-grid, .control-grid, .param-grid, .select-grid, .pitch-guard-grid, .source-library-list, .system-audio-setup { grid-template-columns: 1fr; } .system-audio-note { grid-column: auto; } .setting-title { flex-wrap: wrap; } .manual-param-switch { width: 100%; margin-left: 0; white-space: normal; } }
 </style>

@@ -2,6 +2,7 @@
   <div class="layout">
     <ThemeBackground />
     <AppHeader />
+    <FirstUseGuide />
 
     <main class="layout-main">
       <router-view v-slot="{ Component, route }">
@@ -16,6 +17,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted } from 'vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
+import FirstUseGuide from '@/components/onboarding/FirstUseGuide.vue'
 import ThemeBackground from '@/components/theme/ThemeBackground.vue'
 import { useNotificationsStore } from '@/stores/notifications'
 

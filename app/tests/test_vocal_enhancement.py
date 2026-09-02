@@ -194,7 +194,12 @@ def test_conversion_service_reads_all_enhancement_controls() -> None:
 
 
 def test_high_range_profile_adapts_f0_and_transient_protection(tmp_path: Path) -> None:
-    params = InferenceParams(f0_method="harvest", protect=0.33, filter_radius=5)
+    params = InferenceParams(
+        f0_method="harvest",
+        protect=0.33,
+        filter_radius=5,
+        manual_params_enabled=True,
+    )
     logger = types.SimpleNamespace(_log=lambda *_args: None)
     fcpe_model = tmp_path / "pretrain" / "fcpe.pt"
     fcpe_model.parent.mkdir(parents=True)
@@ -250,6 +255,681 @@ def test_high_range_adaptation_is_noop_when_guard_disabled(tmp_path: Path) -> No
     assert not hasattr(params, "adaptive_f0_max")
 
 
+def test_default_mode_keeps_original_inference_defaults_on_high_pitch_input(tmp_path: Path) -> None:
+    params = InferenceParams(f0_method="harvest", protect=0.33, filter_radius=5)
+    logger = types.SimpleNamespace(_log=lambda *_args: None)
+
+    ConversionService._adapt_high_range(
+        logger,
+        params,
+        {
+            "high_pitch": True,
+            "high_frequency": True,
+            "p95_f0_hz": 980.0,
+            "high_band_ratio": 0.12,
+            "recommended_f0_max": 1480.0,
+        },
+        tmp_path / "run.log",
+        "rvc",
+    )
+
+    assert params.f0_method == "harvest"
+    assert params.filter_radius == 5
+    assert params.protect == 0.33
+    assert not hasattr(params, "adaptive_f0_max")
+    assert (
+        ConversionService._model_high_pitch_threshold(
+            params,
+            {"metadata": {"f0_max_hz": 500.0}},
+            "rvc",
+        )
+        == 800.0
+    )
+
+
+def test_peak_f0_probe_prefers_model_backed_sidecar(tmp_path: Path) -> None:
+    import wave
+
+    sample_rate = 16000
+    time_axis = np.arange(sample_rate, dtype=np.float64) / sample_rate
+    source = tmp_path / "infer_input.wav"
+    pcm = np.asarray(0.2 * np.sin(2.0 * np.pi * 680.0 * time_axis) * 32767.0, dtype="<i2")
+    with wave.open(str(source), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        handle.writeframes(pcm.tobytes())
+    np.save(tmp_path / "f0.npy", np.full(50, 680.0, dtype=np.float32))
+
+    assert 675.0 < ConversionService._estimate_peak_f0(source) < 685.0
+
+
+def test_peak_f0_probe_still_detects_sustained_high_note_without_sidecar(tmp_path: Path) -> None:
+    import wave
+
+    sample_rate = 16000
+    time_axis = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source = tmp_path / "vocal.wav"
+    pcm = np.asarray(0.2 * np.sin(2.0 * np.pi * 920.0 * time_axis) * 32767.0, dtype="<i2")
+    with wave.open(str(source), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        handle.writeframes(pcm.tobytes())
+
+    assert ConversionService._estimate_peak_f0(source) >= 800.0
+
+
+def test_model_dropout_probe_finds_only_voiced_collapsed_high_note(tmp_path: Path) -> None:
+    import wave
+
+    sample_rate = 16000
+    time_axis = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source_audio = (0.24 * np.sin(2.0 * np.pi * 760.0 * time_axis)).astype(np.float32)
+    output_audio = source_audio.copy()
+    output_audio[(time_axis >= 0.80) & (time_axis < 1.20)] = 0.0
+
+    def write_wav(path: Path, values: np.ndarray) -> None:
+        pcm = np.asarray(np.clip(values, -1.0, 1.0) * 32767.0, dtype="<i2")
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(pcm.tobytes())
+
+    source = tmp_path / "source.wav"
+    output = tmp_path / "output.wav"
+    write_wav(source, source_audio)
+    write_wav(output, output_audio)
+
+    issue = ConversionService._detect_model_dropout(source, output, 760.0)
+    assert issue is not None
+    assert 0.70 < issue["start"] < 0.90
+    assert 700.0 < issue["source_f0_hz"] < 820.0
+    assert ConversionService._next_dropout_threshold(760.0, issue) < 760.0
+
+
+def test_model_dropout_probe_ignores_normal_render_and_source_pause(tmp_path: Path) -> None:
+    import wave
+
+    sample_rate = 16000
+    time_axis = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source_audio = (0.24 * np.sin(2.0 * np.pi * 760.0 * time_axis)).astype(np.float32)
+    source_audio[(time_axis >= 0.80) & (time_axis < 1.20)] = 0.0
+
+    def write_wav(path: Path, values: np.ndarray) -> None:
+        pcm = np.asarray(np.clip(values, -1.0, 1.0) * 32767.0, dtype="<i2")
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(pcm.tobytes())
+
+    source = tmp_path / "source.wav"
+    output = tmp_path / "output.wav"
+    write_wav(source, source_audio)
+    write_wav(output, source_audio)
+
+    assert ConversionService._detect_model_dropout(source, output, 760.0) is None
+
+    # A model may produce a valid render with a lower global gain.  That is
+    # not a local high-note dropout and must not trigger a guarded re-inference.
+    write_wav(output, source_audio * 0.06)
+    assert ConversionService._detect_model_dropout(source, output, 760.0) is None
+
+
+def test_model_dropout_probe_ignores_loud_render_without_trackable_f0(tmp_path: Path) -> None:
+    import wave
+
+    sample_rate = 16000
+    time_axis = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source_audio = (0.24 * np.sin(2.0 * np.pi * 760.0 * time_axis)).astype(np.float32)
+    # A loud harmonic/noise-like render can make the lightweight pitch probe
+    # return F0=0 even though the syllable is not muted.
+    output_audio = (0.24 * np.sin(2.0 * np.pi * 7000.0 * time_axis)).astype(np.float32)
+
+    def write_wav(path: Path, values: np.ndarray) -> None:
+        pcm = np.asarray(np.clip(values, -1.0, 1.0) * 32767.0, dtype="<i2")
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(pcm.tobytes())
+
+    source = tmp_path / "source.wav"
+    output = tmp_path / "output.wav"
+    write_wav(source, source_audio)
+    write_wav(output, output_audio)
+
+    assert ConversionService._detect_model_dropout(source, output, 760.0) is None
+
+
+def test_model_dropout_probe_finds_intermittent_high_note_mutes(tmp_path: Path) -> None:
+    import wave
+
+    sample_rate = 16000
+    time_axis = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source_audio = (0.24 * np.sin(2.0 * np.pi * 760.0 * time_axis)).astype(np.float32)
+    output_audio = source_audio.copy()
+    # Simulate the reported failure: the same high note alternates between a
+    # valid render and a short mute instead of staying silent continuously.
+    affected = (time_axis >= 0.80) & (time_axis < 1.20)
+    alternating_mute = affected & (((time_axis - 0.80) % 0.16) < 0.08)
+    output_audio[alternating_mute] = 0.0
+
+    def write_wav(path: Path, values: np.ndarray) -> None:
+        pcm = np.asarray(np.clip(values, -1.0, 1.0) * 32767.0, dtype="<i2")
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(pcm.tobytes())
+
+    source = tmp_path / "source.wav"
+    output = tmp_path / "output.wav"
+    write_wav(source, source_audio)
+    write_wav(output, output_audio)
+
+    issue = ConversionService._detect_model_dropout(source, output, 760.0)
+    assert issue is not None
+    assert 0.70 < issue["start"] < 0.95
+    assert issue["duration"] > 0.04
+
+
+def test_model_dropout_probe_finds_breathy_high_note_with_f0_present(tmp_path: Path) -> None:
+    import wave
+
+    sample_rate = 16000
+    time_axis = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source_audio = (0.24 * np.sin(2.0 * np.pi * 760.0 * time_axis)).astype(np.float32)
+    output_audio = source_audio.copy()
+    output_audio[(time_axis >= 0.80) & (time_axis < 1.20)] *= 0.48
+
+    def write_wav(path: Path, values: np.ndarray) -> None:
+        pcm = np.asarray(np.clip(values, -1.0, 1.0) * 32767.0, dtype="<i2")
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(pcm.tobytes())
+
+    source = tmp_path / "source.wav"
+    output = tmp_path / "output.wav"
+    write_wav(source, source_audio)
+    write_wav(output, output_audio)
+
+    issue = ConversionService._detect_model_dropout(source, output, 760.0)
+    assert issue is not None
+    assert issue["duration"] > 0.04
+
+
+def test_model_dropout_probe_finds_short_high_note_mute_below_guard_boundary(
+    tmp_path: Path,
+) -> None:
+    import wave
+
+    sample_rate = 16000
+    time_axis = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source_audio = (0.24 * np.sin(2.0 * np.pi * 760.0 * time_axis)).astype(np.float32)
+    output_audio = source_audio.copy()
+    output_audio[(time_axis >= 0.82) & (time_axis < 0.90)] = 0.0
+
+    def write_wav(path: Path, values: np.ndarray) -> None:
+        pcm = np.asarray(np.clip(values, -1.0, 1.0) * 32767.0, dtype="<i2")
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(pcm.tobytes())
+
+    source = tmp_path / "source.wav"
+    output = tmp_path / "output.wav"
+    write_wav(source, source_audio)
+    write_wav(output, output_audio)
+
+    # 760 Hz is just below the default 800 Hz boundary and represents the
+    # short one-syllable dropout that the regular confirmation window misses.
+    issue = ConversionService._detect_model_dropout(source, output, 800.0)
+    assert issue is not None
+    assert 0.72 < issue["start"] < 0.95
+    assert issue["duration"] < 0.20
+
+
+def test_finished_work_cache_cleanup_preserves_editor_materials(tmp_path: Path) -> None:
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    editor_clip = work_dir / "editor_segments" / "model_a" / "seg_001.wav"
+    editor_clip.parent.mkdir(parents=True)
+    editor_clip.write_bytes(b"editor")
+    kept_output = work_dir / "output.wav"
+    kept_model = work_dir / "full_model_a_fix.wav"
+    kept_input = work_dir / "infer_input.wav"
+    for path in (kept_output, kept_model, kept_input):
+        path.write_bytes(b"keep")
+    retry = work_dir / "converted_raw_high_guarded_retry1.wav"
+    retry.write_bytes(b"retry")
+    (work_dir / "converted_raw_restored_retry1.regions.json").write_text("{}")
+    (work_dir / "f0.npy").write_bytes(b"f0")
+    (work_dir / "source.wav").write_bytes(b"normalized")
+    selected_stem = work_dir / "dereverb" / "selected.wav"
+    stale_stem = work_dir / "dereverb" / "stale.wav"
+    selected_stem.parent.mkdir(parents=True)
+    selected_stem.write_bytes(b"selected")
+    stale_stem.write_bytes(b"stale")
+    log_file = work_dir / "run.log"
+    work = {
+        "output_path": str(kept_output),
+        "ai_vocal_paths": [str(kept_model)],
+        "ai_segment_clips": [{"file": str(editor_clip)}],
+        "vocals_path": str(selected_stem),
+    }
+
+    service = ConversionService.__new__(ConversionService)
+    service._cleanup_finished_work_cache(work_dir, work, log_file)
+
+    assert kept_output.exists()
+    assert kept_model.exists()
+    assert kept_input.exists()
+    assert editor_clip.exists()
+    assert not retry.exists()
+    assert not (work_dir / "converted_raw_restored_retry1.regions.json").exists()
+    assert not (work_dir / "f0.npy").exists()
+    assert not (work_dir / "source.wav").exists()
+    assert selected_stem.exists()
+    assert not stale_stem.exists()
+
+
+def test_model_dropout_probe_finds_high_note_pitch_collapse_from_f0_sidecar(
+    tmp_path: Path,
+) -> None:
+    import wave
+
+    sample_rate = 16000
+    time_axis = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source_audio = (0.24 * np.sin(2.0 * np.pi * 900.0 * time_axis)).astype(np.float32)
+    output_audio = (0.24 * np.sin(2.0 * np.pi * 220.0 * time_axis)).astype(np.float32)
+
+    def write_wav(path: Path, values: np.ndarray) -> None:
+        pcm = np.asarray(np.clip(values, -1.0, 1.0) * 32767.0, dtype="<i2")
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(pcm.tobytes())
+
+    source = tmp_path / "infer_input.wav"
+    output = tmp_path / "output.wav"
+    write_wav(source, source_audio)
+    write_wav(output, output_audio)
+    np.save(tmp_path / "f0.npy", np.full(100, 900.0, dtype=np.float32))
+
+    issue = ConversionService._detect_model_dropout(source, output, 800.0)
+
+    assert issue is not None
+    assert issue["source_f0_hz"] > 850.0
+    assert issue["output_f0_hz"] < 300.0
+
+
+def test_dropout_recovery_keeps_default_render_when_no_dropout(tmp_path: Path) -> None:
+    service = ConversionService.__new__(ConversionService)
+    source = tmp_path / "source.wav"
+    output = tmp_path / "converted_raw.wav"
+    source.write_bytes(b"source")
+    calls: list[tuple[Path, Path]] = []
+
+    def infer(vocals: Path, target: Path) -> None:
+        calls.append((vocals, target))
+        target.write_bytes(b"ordinary-render")
+
+    service._log = lambda *_args: None
+    service._detect_model_dropout = lambda *_args: None
+
+    rendered, history, guard_applied = service._infer_with_dropout_recovery(
+        engine=types.SimpleNamespace(),
+        model={},
+        source=source,
+        output=output,
+        params=InferenceParams(high_pitch_threshold=800.0),
+        duration=2.0,
+        log_file=tmp_path / "run.log",
+        allow_recovery=True,
+        infer=infer,
+    )
+
+    assert rendered == output
+    assert output.read_bytes() == b"ordinary-render"
+    assert calls == [(source, output)]
+    assert history == [
+        {
+            "attempt": 1,
+            "threshold": 800.0,
+            "issue": None,
+            "guard_applied": False,
+            "input": "original",
+        }
+    ]
+    assert guard_applied is False
+
+
+def test_dropout_recovery_is_fully_disabled_when_high_pitch_guard_is_off(
+    tmp_path: Path,
+) -> None:
+    service = ConversionService.__new__(ConversionService)
+    source = tmp_path / "source.wav"
+    output = tmp_path / "converted_raw.wav"
+    source.write_bytes(b"source")
+    calls: list[tuple[Path, Path]] = []
+    detection_calls = 0
+
+    def infer(vocals: Path, target: Path) -> None:
+        calls.append((vocals, target))
+        target.write_bytes(b"ordinary-render")
+
+    def detect(*_args) -> dict[str, float]:
+        nonlocal detection_calls
+        detection_calls += 1
+        return {"start": 0.5, "end": 0.8, "source_f0_hz": 920.0}
+
+    service._log = lambda *_args: None
+    service._detect_model_dropout = detect
+    service._prepare_high_pitch_guard = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("high-pitch guard must not prepare input when disabled")
+    )
+    service._restore_high_pitch_guard = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("high-pitch guard must not restore output when disabled")
+    )
+
+    rendered, history, guard_applied = service._infer_with_dropout_recovery(
+        engine=types.SimpleNamespace(),
+        model={},
+        source=source,
+        output=output,
+        params=InferenceParams(
+            high_pitch_threshold=800.0,
+            auto_high_pitch_guard=False,
+            high_pitch_guard_rounds=8,
+        ),
+        duration=2.0,
+        log_file=tmp_path / "run.log",
+        allow_recovery=True,
+        infer=infer,
+    )
+
+    assert rendered == output
+    assert calls == [(source, output)]
+    assert detection_calls == 0
+    assert history == []
+    assert guard_applied is False
+
+
+def test_high_pitch_guard_rounds_are_opt_in_and_clamped() -> None:
+    from domain import InferenceParams
+
+    assert InferenceParams.from_dict({"high_pitch_guard_rounds": 99}).high_pitch_guard_rounds == 8
+    assert InferenceParams.from_dict({"highPitchGuardRounds": -2}).high_pitch_guard_rounds == 0
+    assert (
+        ConversionService._high_pitch_guard_rounds(
+            InferenceParams(manual_params_enabled=False, high_pitch_guard_rounds=0)
+        )
+        == ConversionService._DROPOUT_RECOVERY_MAX_ATTEMPTS - 1
+    )
+    assert (
+        ConversionService._high_pitch_guard_rounds(
+            InferenceParams(manual_params_enabled=True, high_pitch_guard_rounds=2)
+        )
+        == 2
+    )
+
+
+def test_guard_drop_escalates_only_after_high_note_retry_still_exceeds_range() -> None:
+    assert ConversionService._guard_semitones_for_retry(
+        730.0, {"source_f0_hz": 747.0}
+    ) == 7
+    assert ConversionService._guard_semitones_for_retry(
+        670.0, {"source_f0_hz": 760.0}
+    ) == 9
+    assert ConversionService._guard_semitones_for_retry(
+        620.0, {"source_f0_hz": 900.0}
+    ) == 12
+
+
+def test_confirmed_guard_regions_keep_phrase_context_without_global_expansion() -> None:
+    regions = ConversionService._confirmed_guard_regions(
+        {"bad_regions": [{"start": 61.0, "end": 61.2}, {"start": 62.0, "end": 62.3}]}
+    )
+    assert regions is not None
+    assert regions[0][0] == pytest.approx(60.1)
+    assert regions[0][1] == pytest.approx(63.2)
+    separated = ConversionService._confirmed_guard_regions(
+        {"bad_regions": [{"start": 54.0, "end": 54.2}]},
+        existing=[(60.0, 63.0)],
+    )
+    assert separated is not None
+    assert separated[0][0] == pytest.approx(53.1)
+    assert separated[0][1] == pytest.approx(55.1)
+    assert separated[1] == pytest.approx((60.0, 63.0))
+
+
+def test_dropout_recovery_uses_guard_only_after_verified_failure_and_falls_back(
+    tmp_path: Path,
+) -> None:
+    service = ConversionService.__new__(ConversionService)
+    source = tmp_path / "source.wav"
+    output = tmp_path / "converted_raw.wav"
+    source.write_bytes(b"source")
+    calls: list[tuple[Path, Path]] = []
+    issue = {
+        "start": 0.8,
+        "end": 1.1,
+        "source_f0_hz": 920.0,
+        "source_rms": 0.2,
+        "output_rms": 0.01,
+        "duration": 0.3,
+    }
+    detections = iter([issue, issue, issue, issue])
+
+    def infer(vocals: Path, target: Path) -> None:
+        calls.append((vocals, target))
+        target.write_bytes(b"guarded-render" if "dropout_retry" in target.name else b"ordinary-render")
+
+    def prepare(
+        src: Path,
+        destination: Path,
+        *_args,
+    ) -> tuple[Path, bool]:
+        destination.write_bytes(b"guarded-input")
+        return destination, True
+
+    def restore(
+        _src: Path,
+        destination: Path,
+        *_args,
+    ) -> Path:
+        destination.write_bytes(b"restored-render")
+        return destination
+
+    service._log = lambda *_args: None
+    service._detect_model_dropout = lambda *_args: next(detections)
+    service._prepare_high_pitch_guard = prepare
+    service._restore_high_pitch_guard = restore
+
+    rendered, history, guard_applied = service._infer_with_dropout_recovery(
+        engine=types.SimpleNamespace(),
+        model={},
+        source=source,
+        output=output,
+        params=InferenceParams(high_pitch_threshold=800.0),
+        duration=2.0,
+        log_file=tmp_path / "run.log",
+        allow_recovery=True,
+        infer=infer,
+    )
+
+    assert rendered == output
+    assert output.read_bytes() == b"ordinary-render"
+    assert calls[0] == (source, output)
+    assert calls[1][0].name == "converted_raw_high_guarded_retry1.wav"
+    assert history[0]["input"] == "original"
+    assert history[-1]["issue"] is not None
+    assert guard_applied is False
+
+
+def test_dropout_recovery_stops_when_retry_detects_failure_outside_guard_scope(
+    tmp_path: Path,
+) -> None:
+    from domain import InferenceParams
+
+    service = ConversionService.__new__(ConversionService)
+    source = tmp_path / "source.wav"
+    output = tmp_path / "converted_raw.wav"
+    source.write_bytes(b"source")
+    first_issue = {
+        "start": 1.0,
+        "end": 1.3,
+        "source_f0_hz": 920.0,
+        "source_rms": 0.2,
+        "output_rms": 0.01,
+        "bad_frames": 30,
+        "bad_regions": [{"start": 1.0, "end": 1.3}],
+    }
+    outside_issue = {
+        "start": 5.0,
+        "end": 5.2,
+        "source_f0_hz": 701.0,
+        "source_rms": 0.2,
+        "output_rms": 0.01,
+        "bad_frames": 10,
+        "bad_regions": [{"start": 5.0, "end": 5.2}],
+    }
+    detections = iter([first_issue, outside_issue])
+    calls: list[tuple[Path, Path]] = []
+
+    def infer(vocals: Path, target: Path) -> None:
+        calls.append((vocals, target))
+        target.write_bytes(b"render")
+
+    def prepare(src: Path, destination: Path, *_args) -> tuple[Path, bool]:
+        destination.write_bytes(b"guarded-input")
+        return destination, True
+
+    def restore(_src: Path, destination: Path, *_args) -> Path:
+        destination.write_bytes(b"restored-render")
+        return destination
+
+    service._log = lambda *_args: None
+    service._detect_model_dropout = lambda *_args: next(detections)
+    service._prepare_high_pitch_guard = prepare
+    service._restore_high_pitch_guard = restore
+
+    rendered, history, guard_applied = service._infer_with_dropout_recovery(
+        engine=types.SimpleNamespace(),
+        model={},
+        source=source,
+        output=output,
+        params=InferenceParams(high_pitch_threshold=800.0),
+        duration=2.0,
+        log_file=tmp_path / "run.log",
+        allow_recovery=True,
+        infer=infer,
+    )
+
+    assert rendered.name == "converted_raw_restored_retry1.wav"
+    assert guard_applied is True
+    assert len(history) == 2
+    assert len(calls) == 2
+
+
+def test_guarded_retry_merge_preserves_non_high_baseline_audio(tmp_path: Path) -> None:
+    import json
+    import wave
+
+    sample_rate = 16000
+    frames = sample_rate
+    baseline = tmp_path / "baseline.wav"
+    guarded = tmp_path / "guarded.wav"
+    merged = tmp_path / "merged.wav"
+    report = tmp_path / "regions.json"
+
+    def write(path: Path, value: int) -> None:
+        audio = np.full((frames, 2), value, dtype="<i2")
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(2)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(audio.tobytes())
+
+    write(baseline, 1000)
+    write(guarded, 2000)
+    report.write_text(
+        json.dumps(
+            {
+                "regions": [
+                    {"start": 0.4, "end": 0.6},
+                    {"start": 0.75, "end": 0.85},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert ConversionService._merge_guarded_regions(
+        baseline,
+        guarded,
+        merged,
+        report,
+        only_regions=[(0.35, 0.65)],
+    ) == merged
+    with wave.open(str(merged), "rb") as handle:
+        values = np.frombuffer(handle.readframes(frames), dtype="<i2").reshape(-1, 2)
+    assert np.all(values[int(0.1 * sample_rate)] == 1000)
+    assert np.all(values[int(0.5 * sample_rate)] == 2000)
+    assert np.all(values[int(0.8 * sample_rate)] == 1000)
+    assert np.all(values[int(0.9 * sample_rate)] == 1000)
+
+
+def test_formant_guard_bridges_short_high_note_boundary_dip() -> None:
+    intervals = formant_pitch_worker._high_intervals(
+        [(0.40, 830.0), (0.44, 780.0), (0.48, 835.0)],
+        800.0,
+        0.0,
+        1.0,
+    )
+
+    assert intervals
+    assert intervals[0][0] < 0.40 < intervals[0][1]
+    assert intervals[0][1] > 0.48
+
+
+def test_formant_guard_pitch_tier_uses_smooth_boundary_fades() -> None:
+    intervals = [(1.0, 1.4)]
+    before = formant_pitch_worker._region_weight_at(0.90, intervals)
+    entering = formant_pitch_worker._region_weight_at(0.98, intervals)
+    inside = formant_pitch_worker._region_weight_at(1.10, intervals)
+    leaving = formant_pitch_worker._region_weight_at(1.44, intervals)
+
+    assert before == 0.0
+    assert 0.0 < entering < 1.0
+    assert inside == 1.0
+    assert 0.0 < leaving < 1.0
+
+
+def test_realtime_high_pitch_guard_uses_stable_default_and_honors_manual_value() -> None:
+    from application.realtime_cover_service import RealtimeCoverService
+
+    assert (
+        RealtimeCoverService._model_high_pitch_threshold(
+            InferenceParams(), {"framework": "seed-vc", "metadata": {"f0_max_hz": 1200}}
+        )
+        == 720.0
+    )
+    assert (
+        RealtimeCoverService._model_high_pitch_threshold(
+            InferenceParams(high_pitch_threshold=610.0), {"framework": "rvc"}
+        )
+        == 610.0
+    )
+
+
 def test_audio_profile_detects_high_pitch_and_high_band() -> None:
     sample_rate = 24000
     time_axis = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
@@ -274,6 +954,36 @@ def test_formant_guard_ignores_isolated_pitch_tracker_spikes() -> None:
     )
     assert intervals
     assert intervals[0][0] < 0.50 < intervals[0][1]
+
+
+def test_formant_guard_accepts_notes_in_detector_hysteresis_band() -> None:
+    intervals = formant_pitch_worker._high_intervals(
+        [(0.50, 670.0), (0.54, 690.0)],
+        720.0,
+        0.0,
+        1.0,
+        allowed_regions=[(0.45, 0.60)],
+    )
+    assert intervals
+
+
+def test_formant_guard_keeps_hysteresis_notes_untouched_without_scope() -> None:
+    assert formant_pitch_worker._high_intervals(
+        [(0.50, 670.0), (0.54, 690.0)], 720.0, 0.0, 1.0
+    ) == []
+
+
+def test_formant_guard_applies_hysteresis_fallback_per_scope() -> None:
+    intervals = formant_pitch_worker._high_intervals(
+        [(0.50, 800.0), (0.54, 820.0), (0.80, 670.0), (0.84, 690.0)],
+        720.0,
+        0.0,
+        1.0,
+        allowed_regions=[(0.45, 0.60), (0.75, 0.90)],
+    )
+    assert len(intervals) == 2
+    assert intervals[0][0] < 0.50 < intervals[0][1]
+    assert intervals[1][0] < 0.80 < intervals[1][1]
 
 
 def test_formant_guard_rejects_collapsed_render(tmp_path: Path, monkeypatch) -> None:

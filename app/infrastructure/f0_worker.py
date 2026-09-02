@@ -61,6 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out-npy", required=True, help="F0 曲线输出 .npy 路径")
     p.add_argument("--f0", default="rmvpe", help="F0 预测器")
     p.add_argument("--f0-max", type=float, default=1100.0, help="自适应 F0 上限")
+    p.add_argument("--f0-threshold", type=float, default=0.05, help="F0 置信度过滤阈值")
     p.add_argument(
         "--device",
         default="auto",
@@ -97,6 +98,7 @@ def main() -> int:
         traceback.print_exc()
         return 3
 
+    f0_threshold = max(0.0, min(1.0, float(args.f0_threshold)))
     patch_sovits_fcpe_fallback(utils, args.f0_max)
 
     # 从模型配置读取采样率与 hop，保证与推理时一致
@@ -138,7 +140,7 @@ def main() -> int:
             hop_length=hop_length,
             sampling_rate=sampling_rate,
             device=device,
-            threshold=0.05,
+            threshold=f0_threshold,
         )
         if hasattr(predictor, "f0_max"):
             predictor.f0_max = max(
