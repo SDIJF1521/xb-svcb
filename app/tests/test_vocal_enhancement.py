@@ -378,6 +378,32 @@ def test_model_dropout_probe_ignores_normal_render_and_source_pause(tmp_path: Pa
     assert ConversionService._detect_model_dropout(source, output, 760.0) is None
 
 
+def test_model_dropout_probe_ignores_loud_render_without_trackable_f0(tmp_path: Path) -> None:
+    import wave
+
+    sample_rate = 16000
+    time_axis = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source_audio = (0.24 * np.sin(2.0 * np.pi * 760.0 * time_axis)).astype(np.float32)
+    # A loud harmonic/noise-like render can make the lightweight pitch probe
+    # return F0=0 even though the syllable is not muted.
+    output_audio = (0.24 * np.sin(2.0 * np.pi * 7000.0 * time_axis)).astype(np.float32)
+
+    def write_wav(path: Path, values: np.ndarray) -> None:
+        pcm = np.asarray(np.clip(values, -1.0, 1.0) * 32767.0, dtype="<i2")
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(pcm.tobytes())
+
+    source = tmp_path / "source.wav"
+    output = tmp_path / "output.wav"
+    write_wav(source, source_audio)
+    write_wav(output, output_audio)
+
+    assert ConversionService._detect_model_dropout(source, output, 760.0) is None
+
+
 def test_model_dropout_probe_finds_intermittent_high_note_mutes(tmp_path: Path) -> None:
     import wave
 
@@ -407,6 +433,33 @@ def test_model_dropout_probe_finds_intermittent_high_note_mutes(tmp_path: Path) 
     issue = ConversionService._detect_model_dropout(source, output, 760.0)
     assert issue is not None
     assert 0.70 < issue["start"] < 0.95
+    assert issue["duration"] > 0.04
+
+
+def test_model_dropout_probe_finds_breathy_high_note_with_f0_present(tmp_path: Path) -> None:
+    import wave
+
+    sample_rate = 16000
+    time_axis = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source_audio = (0.24 * np.sin(2.0 * np.pi * 760.0 * time_axis)).astype(np.float32)
+    output_audio = source_audio.copy()
+    output_audio[(time_axis >= 0.80) & (time_axis < 1.20)] *= 0.48
+
+    def write_wav(path: Path, values: np.ndarray) -> None:
+        pcm = np.asarray(np.clip(values, -1.0, 1.0) * 32767.0, dtype="<i2")
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(pcm.tobytes())
+
+    source = tmp_path / "source.wav"
+    output = tmp_path / "output.wav"
+    write_wav(source, source_audio)
+    write_wav(output, output_audio)
+
+    issue = ConversionService._detect_model_dropout(source, output, 760.0)
+    assert issue is not None
     assert issue["duration"] > 0.04
 
 
@@ -558,6 +611,57 @@ def test_dropout_recovery_keeps_default_render_when_no_dropout(tmp_path: Path) -
     assert guard_applied is False
 
 
+def test_dropout_recovery_is_fully_disabled_when_high_pitch_guard_is_off(
+    tmp_path: Path,
+) -> None:
+    service = ConversionService.__new__(ConversionService)
+    source = tmp_path / "source.wav"
+    output = tmp_path / "converted_raw.wav"
+    source.write_bytes(b"source")
+    calls: list[tuple[Path, Path]] = []
+    detection_calls = 0
+
+    def infer(vocals: Path, target: Path) -> None:
+        calls.append((vocals, target))
+        target.write_bytes(b"ordinary-render")
+
+    def detect(*_args) -> dict[str, float]:
+        nonlocal detection_calls
+        detection_calls += 1
+        return {"start": 0.5, "end": 0.8, "source_f0_hz": 920.0}
+
+    service._log = lambda *_args: None
+    service._detect_model_dropout = detect
+    service._prepare_high_pitch_guard = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("high-pitch guard must not prepare input when disabled")
+    )
+    service._restore_high_pitch_guard = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("high-pitch guard must not restore output when disabled")
+    )
+
+    rendered, history, guard_applied = service._infer_with_dropout_recovery(
+        engine=types.SimpleNamespace(),
+        model={},
+        source=source,
+        output=output,
+        params=InferenceParams(
+            high_pitch_threshold=800.0,
+            auto_high_pitch_guard=False,
+            high_pitch_guard_rounds=8,
+        ),
+        duration=2.0,
+        log_file=tmp_path / "run.log",
+        allow_recovery=True,
+        infer=infer,
+    )
+
+    assert rendered == output
+    assert calls == [(source, output)]
+    assert detection_calls == 0
+    assert history == []
+    assert guard_applied is False
+
+
 def test_high_pitch_guard_rounds_are_opt_in_and_clamped() -> None:
     from domain import InferenceParams
 
@@ -587,6 +691,23 @@ def test_guard_drop_escalates_only_after_high_note_retry_still_exceeds_range() -
     assert ConversionService._guard_semitones_for_retry(
         620.0, {"source_f0_hz": 900.0}
     ) == 12
+
+
+def test_confirmed_guard_regions_keep_phrase_context_without_global_expansion() -> None:
+    regions = ConversionService._confirmed_guard_regions(
+        {"bad_regions": [{"start": 61.0, "end": 61.2}, {"start": 62.0, "end": 62.3}]}
+    )
+    assert regions is not None
+    assert regions[0][0] == pytest.approx(60.1)
+    assert regions[0][1] == pytest.approx(63.2)
+    separated = ConversionService._confirmed_guard_regions(
+        {"bad_regions": [{"start": 54.0, "end": 54.2}]},
+        existing=[(60.0, 63.0)],
+    )
+    assert separated is not None
+    assert separated[0][0] == pytest.approx(53.1)
+    assert separated[0][1] == pytest.approx(55.1)
+    assert separated[1] == pytest.approx((60.0, 63.0))
 
 
 def test_dropout_recovery_uses_guard_only_after_verified_failure_and_falls_back(

@@ -110,7 +110,10 @@ def _high_intervals(
                     clipped.append((left, right))
         return clipped
 
-    relaxed_threshold = max(100.0, float(threshold) - max(70.0, hysteresis))
+    # A confirmed dropout can sit well below the first guard boundary after
+    # the source phrase is transposed. Keep enough hysteresis to include the
+    # neighboring 600-700 Hz notes, but still stay far above speech range.
+    relaxed_threshold = max(100.0, float(threshold) - max(110.0, hysteresis))
     relaxed_intervals = build(relaxed_threshold)
     # Resolve each confirmed scope independently. One strict high note must
     # not suppress the hysteresis fallback for a neighboring lower note.

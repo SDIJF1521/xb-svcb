@@ -2063,12 +2063,10 @@ class AudioEditorService:
             }
             history.append(entry)
             if issue and issue.get("bad_regions"):
-                guard_regions = [
-                    (float(item.get("start", 0.0)), float(item.get("end", 0.0)))
-                    for item in (issue.get("bad_regions") or [])
-                    if isinstance(item, dict)
-                    and float(item.get("end", 0.0)) > float(item.get("start", 0.0))
-                ] or guard_regions
+                guard_regions = ConversionService._confirmed_guard_regions(
+                    issue,
+                    guard_regions,
+                )
                 guard_semitones = ConversionService._guard_semitones_for_retry(
                     threshold,
                     issue,

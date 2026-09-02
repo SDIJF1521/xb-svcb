@@ -110,6 +110,11 @@ class ConversionService:
     _DROPOUT_RECOVERY_MIN_THRESHOLD = 300.0
     _DROPOUT_RECOVERY_MIN_DURATION = 0.12
     _MAX_HIGH_PITCH_GUARD_ROUNDS = 8
+    # Include the attack/release around a confirmed bad syllable. This lets a
+    # high-note phrase be guarded continuously without broadening protection
+    # to unrelated parts of the song.
+    _HIGH_PITCH_GUARD_CONTEXT_SECONDS = 0.90
+    _HIGH_PITCH_GUARD_MERGE_GAP_SECONDS = 1.00
 
     @classmethod
     def _high_pitch_guard_rounds(cls, params: InferenceParams) -> int:
@@ -167,6 +172,41 @@ class ConversionService:
         if source_f0 >= 780.0 or excess >= 80.0:
             return 9
         return cls._HIGH_PITCH_GUARD_SEMITONES
+
+    @classmethod
+    def _confirmed_guard_regions(
+        cls,
+        issue: dict[str, Any] | None,
+        existing: list[tuple[float, float]] | None = None,
+    ) -> list[tuple[float, float]] | None:
+        """Keep confirmed regions and add only local note attack/release context."""
+        raw: list[tuple[float, float]] = list(existing or [])
+        for item in (issue or {}).get("bad_regions") or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                start = float(item.get("start", 0.0))
+                end = float(item.get("end", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if end > start:
+                raw.append(
+                    (
+                        max(0.0, start - cls._HIGH_PITCH_GUARD_CONTEXT_SECONDS),
+                        end + cls._HIGH_PITCH_GUARD_CONTEXT_SECONDS,
+                    )
+                )
+        if not raw:
+            return None
+        merged: list[tuple[float, float]] = []
+        for start, end in sorted(raw):
+            if end <= start:
+                continue
+            if merged and start <= merged[-1][1] + cls._HIGH_PITCH_GUARD_MERGE_GAP_SECONDS:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return merged or None
 
     def __init__(
         self,
@@ -855,6 +895,23 @@ class ConversionService:
             if ratios.size >= 8:
                 reference_gain = float(np.median(ratios))
             dropout_ratio = max(0.04, min(1.0, reference_gain * 0.18))
+            # A breathy high note can retain a trackable F0 while losing much
+            # of its vocal support. Detect that local loss relative to the
+            # song's normal gain, but keep the lower boundary well above
+            # ordinary speech so normal quiet phrases are untouched.
+            near_high_floor = max(
+                cls._DROPOUT_RECOVERY_MIN_THRESHOLD,
+                active_threshold - max(180.0, active_threshold * 0.18),
+            )
+            near_high_voice = (
+                (source_rms >= 0.025)
+                & (strength >= 0.35)
+                & (f0 >= near_high_floor)
+            )
+            soft_support_ratio = max(0.12, min(0.68, reference_gain * 0.62))
+            soft_breathy = near_high_voice & (
+                output_rms < source_rms * soft_support_ratio
+            ) & (reference_gain >= 0.35)
             '''
             音调崩溃在失去高音时仍可能保持响亮。
             仅对源的高音帧估计输出F0，以限制内存和误报。
@@ -866,15 +923,29 @@ class ConversionService:
                 high_indices,
             )
             expected_f0 = f0 * (2.0 ** (float(pitch or 0) / 12.0))
-            pitch_collapse = high_voice & (
-                (output_strength < 0.25)
-                | (output_f0 <= 0.0)
-                | (output_f0 < expected_f0 * 0.50)
+            # A zero F0 estimate is not sufficient evidence of a mute: Praat
+            # can lose pitch tracking on a loud, breathy or harmonic-heavy
+            # syllable while the rendered audio remains audible.  Require a
+            # simultaneous local energy drop for the missing-F0 path, while
+            # retaining non-zero but clearly wrong F0 as a real mismatch.
+            pitch_missing = (output_strength < 0.25) | (output_f0 <= 0.0)
+            pitch_missing_energy_limit = np.maximum(
+                0.002,
+                source_rms * max(dropout_ratio * 1.5, 0.12),
+            )
+            pitch_missing_with_mute = pitch_missing & (
+                output_rms < pitch_missing_energy_limit
+            )
+            pitch_wrong = (output_f0 > 0.0) & (
+                (output_f0 < expected_f0 * 0.50)
                 | (output_f0 > expected_f0 * 2.00)
             )
-            bad = high_voice & (
-                output_rms < np.maximum(0.0015, source_rms * dropout_ratio)
-            ) | pitch_collapse
+            pitch_collapse = high_voice & (pitch_missing_with_mute | pitch_wrong)
+            energy_dropout = output_rms < np.maximum(
+                0.0015,
+                source_rms * dropout_ratio,
+            )
+            core_bad = high_voice & (energy_dropout | pitch_collapse)
 
             '''
             高音部分可以在发声帧和静音帧之间交替。
@@ -899,6 +970,15 @@ class ConversionService:
                         begin = None
                 return runs
 
+            # Require a sustained local support loss before treating an
+            # audible, breathy phrase as a dropout. Very brief low-energy
+            # consonants (such as the reported 54s span) stay untouched.
+            soft_min_frames = max(4, round(0.16 / (hop / rate)))
+            soft_breathy_confirmed = np.zeros_like(soft_breathy, dtype=bool)
+            for start, end in contiguous_runs(soft_breathy, soft_min_frames):
+                soft_breathy_confirmed[start:end] = True
+            bad = core_bad | soft_breathy_confirmed
+
             candidates: list[tuple[int, int]] = []
             if high_voice.size >= window_frames:
                 bad_windows = np.lib.stride_tricks.sliding_window_view(bad, window_frames).sum(axis=1)
@@ -909,6 +989,7 @@ class ConversionService:
                 for start in starts:
                     end = int(start + window_frames)
                     candidates.append((int(start), end))
+            candidates.extend(contiguous_runs(soft_breathy_confirmed, min_frames))
             if not candidates:
                 candidates = contiguous_runs(bad, min_frames)
 
@@ -1007,14 +1088,8 @@ class ConversionService:
         infer: Any | None = None,
     ) -> tuple[Path, list[dict[str, Any]], bool]:
         """Run inference and retry only confirmed high-note model dropouts."""
-        threshold = max(self._DROPOUT_RECOVERY_MIN_THRESHOLD, float(params.high_pitch_threshold or 760.0))
-        guard_rounds = self._high_pitch_guard_rounds(params) if allow_recovery else 0
-        attempts = 1 + guard_rounds if allow_recovery and params.auto_high_pitch_guard else 1
         history: list[dict[str, Any]] = []
-        guard_applied_any = False
         rendered = output
-        guard_regions: list[tuple[float, float]] | None = None
-        guard_semitones = self._HIGH_PITCH_GUARD_SEMITONES
 
         def run_inference(vocals: Path, target: Path) -> None:
             if infer is None:
@@ -1028,6 +1103,20 @@ class ConversionService:
                 )
             else:
                 infer(vocals, target)
+
+        if not allow_recovery or not params.auto_high_pitch_guard:
+            # Protection is an opt-in post-inference recovery path.  When it
+            # is disabled, keep the original render path completely untouched
+            # and do not emit a misleading recovery history entry.
+            run_inference(source, output)
+            return output, [], False
+
+        threshold = max(self._DROPOUT_RECOVERY_MIN_THRESHOLD, float(params.high_pitch_threshold or 760.0))
+        guard_rounds = self._high_pitch_guard_rounds(params)
+        attempts = 1 + guard_rounds
+        guard_applied_any = False
+        guard_regions: list[tuple[float, float]] | None = None
+        guard_semitones = self._HIGH_PITCH_GUARD_SEMITONES
 
         '''
         认路径必须与保护功能被禁用时完全一致。
@@ -1069,12 +1158,7 @@ class ConversionService:
             # old boundary can leave a 700-800 Hz syllable unprotected.
             threshold = self._next_dropout_threshold(threshold, issue)
             params.high_pitch_threshold = threshold
-            guard_regions = [
-                (float(item.get("start", 0.0)), float(item.get("end", 0.0)))
-                for item in (issue.get("bad_regions") or [])
-                if isinstance(item, dict)
-                and float(item.get("end", 0.0)) > float(item.get("start", 0.0))
-            ] or None
+            guard_regions = self._confirmed_guard_regions(issue)
             guard_semitones = self._guard_semitones_for_retry(
                 threshold,
                 issue,
@@ -1093,7 +1177,9 @@ class ConversionService:
             best_bad_frames = float(history[0]["issue"].get("bad_frames") or float("inf"))
         for guard_attempt in range(guard_attempts):
             attempt = guard_attempt + 1 if baseline_first else guard_attempt
-            raw_target = output.with_name(f"{output.stem}_dropout_retry{attempt}.wav")
+            raw_target = (
+                output.with_name(f"{output.stem}_dropout_retry{attempt}.wav")
+            )
             guarded_target = output.with_name(f"{output.stem}_high_guarded_retry{attempt}.wav")
             guarded, guard_applied = self._prepare_high_pitch_guard(
                 source,
@@ -1126,11 +1212,7 @@ class ConversionService:
                         rendered,
                         merged_target,
                         restored_target.with_suffix(".regions.json"),
-                        only_regions=[
-                            (float(item.get("start", 0.0)), float(item.get("end", 0.0)))
-                            for item in (history[0].get("issue", {}).get("bad_regions") or [])
-                            if isinstance(item, dict)
-                        ] or None,
+                        only_regions=guard_regions,
                     )
                     if merged != rendered:
                         rendered = merged
@@ -1145,7 +1227,7 @@ class ConversionService:
                     threshold,
                     int(getattr(params, "pitch", 0) or 0),
                 )
-                if allow_recovery
+                if allow_recovery and params.auto_high_pitch_guard
                 else None
             )
             entry: dict[str, Any] = {
@@ -1165,12 +1247,13 @@ class ConversionService:
                     best_bad_frames = candidate_bad_frames
                     best_guard_applied = guard_applied
                 if guard_regions and issue.get("bad_regions"):
+                    prior_guard_regions = guard_regions
                     overlaps_scope = any(
                         float(item.get("end", 0.0)) > start
                         and float(item.get("start", 0.0)) < end
                         for item in (issue.get("bad_regions") or [])
                         if isinstance(item, dict)
-                        for start, end in guard_regions
+                        for start, end in prior_guard_regions
                     )
                     if not overlaps_scope:
                         self._log(
@@ -1178,6 +1261,10 @@ class ConversionService:
                             "  新检测到的哑音位于本轮保护范围外，停止继续降低阈值并保留当前最佳结果",
                         )
                         return best_render, history, best_guard_applied
+                    guard_regions = self._confirmed_guard_regions(
+                        issue,
+                        prior_guard_regions,
+                    )
             next_threshold = self._next_dropout_threshold(threshold, issue)
             entry["next_threshold"] = next_threshold
             if next_threshold >= threshold - 10.0 or guard_attempt >= guard_attempts - 1:
