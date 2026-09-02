@@ -63,8 +63,8 @@ $outputBaseNames = @{
   cu126    = 'XB-SVCB-Setup-CUDA126'
   cu128    = 'XB-SVCB-Setup-CUDA128'
 }
-$packageStack = if ($selectedStacks.Count -eq 1) { [string]$selectedStacks[0] } else { $null }
-$outputBaseName = if ($packageStack) { [string]$outputBaseNames[$packageStack] } else { $null }
+$packageStack = if ($selectedStacks.Count -eq 1) { [string]($selectedStacks[0]) } else { $null }
+$outputBaseName = if ($packageStack) { [string]($outputBaseNames[$packageStack]) } else { $null }
 
 function Require-File([string]$Path, [string]$Label) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -524,7 +524,7 @@ if ($ValidateOnly) {
   try {
     $validateStacks = if ($packageStack) { @($packageStack) } else { @('cpu', 'directml', 'cu126', 'cu128') }
     foreach ($validateStack in $validateStacks) {
-      $validateOutput = [string]$outputBaseNames[$validateStack]
+      $validateOutput = [string]($outputBaseNames[$validateStack])
       & $iscc "/DXB_VALIDATE_ONLY=1" "/DXB_PACKAGE_STACK=$validateStack" "/DXB_OUTPUT_BASENAME=$validateOutput" `
         "/O$validateDir" "/F$validateOutput-Validation" (Join-Path $Root "installer\xb-svcb.iss")
       if ($LASTEXITCODE -ne 0) {
