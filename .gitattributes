@@ -1,5 +1,10 @@
 *.pt filter=lfs diff=lfs merge=lfs -text
 *.pth filter=lfs diff=lfs merge=lfs -text
 assets/models/** filter=lfs diff=lfs merge=lfs -text
+# Keep model binaries in LFS, but leave manifests, configs and notices reviewable.
+assets/models/**/*.json -filter diff merge text
+assets/models/**/*.md -filter diff merge text
+assets/models/**/*.txt -filter diff merge text
+assets/models/**/*.ini -filter diff merge text
 *.bat text eol=crlf
 install/runtime_profiles/** text eol=lf

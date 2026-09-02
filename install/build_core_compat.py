@@ -13,10 +13,9 @@ import csv
 import hashlib
 import io
 import json
-from pathlib import Path, PurePosixPath
 import tempfile
 import zipfile
-
+from pathlib import Path, PurePosixPath
 
 ORIGINAL = "descript_audiotools-0.7.2.dist-info"
 PATCHED_VERSION = "0.7.2+xb1"

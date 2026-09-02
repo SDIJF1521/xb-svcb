@@ -6,12 +6,12 @@ Passing this check is necessary, but is not an audio inference/quality test.
 from __future__ import annotations
 
 import argparse
-from importlib import metadata
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from importlib import metadata
+from pathlib import Path
 
 
 def dependency_issues() -> list[str]:

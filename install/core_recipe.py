@@ -4,10 +4,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import re
 import subprocess
-
+from pathlib import Path
 
 PROFILE_DIR = Path(__file__).resolve().parent / "runtime_profiles" / "core-cu128"
 

@@ -49,9 +49,9 @@ def test_pymss_wheelhouse_is_isolated_with_a_compatible_torch_pair(wheelhouse_pl
         "torchaudio==2.7.1",
     )
 
-    for stack in ("cpu", "directml", "cu121", "cu126", "cu128"):
+    for stack in ("cpu", "directml", "cu126", "cu128"):
         plan = wheelhouse.build_plan(root, {stack})
-        expected_stack = "cu126" if stack in {"cu121", "cu126"} else stack
+        expected_stack = stack
         dest = root / "assets" / "wheels" / "pymss" / "py310" / expected_stack
         package = next(batch for batch in plan if batch.label == f"pymss {expected_stack} package")
         torch = next(batch for batch in plan if batch.label == f"pymss {expected_stack} torch")
@@ -79,7 +79,7 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
     cu128 = wheelhouse.build_plan(root, {"cu128"})
 
     assert any(
-        batch.dest == root / "assets" / "wheels" / "svc" / "py39" / "cpu"
+        batch.dest == root / "assets" / "wheels" / "svc" / "py310" / "cpu"
         and batch.build_source
         and "fairseq==0.12.2" in batch.packages
         for batch in cpu
@@ -96,21 +96,21 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
         "importlib-resources>=3.2.0",
     )
     assert any(
-        batch.label == "svc py39 matplotlib support"
-        and batch.dest == root / "assets" / "wheels" / "svc" / "py39" / "cpu"
+        batch.label == "svc py310 matplotlib support"
+        and batch.dest == root / "assets" / "wheels" / "svc" / "py310" / "cpu"
         and batch.no_deps
         and batch.packages == expected_matplotlib_support
         for batch in cpu
     )
     assert any(
-        batch.label == "svc py39 matplotlib"
-        and batch.dest == root / "assets" / "wheels" / "svc" / "py39" / "cpu"
+        batch.label == "svc py310 matplotlib"
+        and batch.dest == root / "assets" / "wheels" / "svc" / "py310" / "cpu"
         and batch.no_deps
         and batch.packages == ("matplotlib==3.7.5",)
         for batch in cpu
     )
     assert any(
-        batch.dest == root / "assets" / "wheels" / "rvc" / "py39" / "cpu"
+        batch.dest == root / "assets" / "wheels" / "rvc" / "py310" / "cpu"
         and batch.build_source
         and "fairseq==0.12.2" in batch.packages
         for batch in cpu
@@ -161,7 +161,7 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
     )
     expected_fcpe = ("einops==0.8.2", "local-attention==1.10.0")
     assert any(
-        batch.label == "svc cpu py39 fcpe runtime"
+        batch.label == "svc cpu py310 fcpe runtime"
         and batch.packages == expected_fcpe
         for batch in cpu
     )
@@ -179,7 +179,7 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
         batch
         for batch in (*cpu, *directml, *cu128)
         if batch.label in {
-            "svc py39 requirements",
+            "svc py310 requirements",
             "svc directml requirements",
             "svc cu128 requirements",
         }
@@ -233,4 +233,4 @@ def test_staged_engine_requirements_support_wheelhouse_plan(request):
         if request.config.getoption("--require-packaging-inputs"):
             pytest.fail(reason)
         pytest.skip(reason)
-    assert wheelhouse.build_plan(ROOT, {"cpu", "directml", "cu121", "cu128"})
+    assert wheelhouse.build_plan(ROOT, {"cpu", "directml", "cu126", "cu128"})

@@ -1,4 +1,4 @@
-"""RVC 推理引擎封装：在独立 ``.venv-rvc`` 中通过 ``rvc_worker`` 调用 rvc-python 转换歌声。
+"""RVC 推理引擎封装：在独立运行时中通过 ``rvc_worker`` 调用 rvc-python 转换歌声。
 
 与 So-VITS 引擎同构：环境就绪时子进程跑真实推理，条件缺失时明确失败。
 由 ``EngineRegistry`` 按模型 ``framework`` 选择。
@@ -23,7 +23,7 @@ class RvcEngine:
 
     @property
     def available(self) -> bool:
-        """是否具备真实 RVC 推理能力（.venv-rvc 解释器 + worker 齐备）。"""
+        """是否具备真实 RVC 推理能力（隔离解释器 + worker 齐备）。"""
         return config.rvc_engine_ready()
 
     def device(self) -> str:

@@ -25,7 +25,7 @@
 固定版本不等于完整离线 wheelhouse：没有保存全部 147 个包的 wheel，尤其没有另外下载 Torch。
 来源于仓库的依赖仍需对应版本可获取；只有上述 14 个本地材料做了逐文件哈希固定。
 
-本机通过 `install/validate_core_install.py --recover-cache ... --wheel-dir ...` 复用了既有下载和旧缓存。71 个缓存包经 RECORD 校验后在独立临时目录重封装为 wheel，功能文件/依赖声明不改；这不等于拿到了上游原始 ZIP 的哈希认证，也不自动成为长期发布材料。完整验证及复现方法见 [安装验证报告](../../../docs/runtime-install-validation.md)。
+早期验证曾通过 `install/validate_core_install.py --recover-cache ... --wheel-dir ...` 复用既有下载和旧缓存。缓存包只有在 RECORD 校验通过后才允许在独立临时目录重封装；这不等于取得上游原始 ZIP 的哈希认证，也不会自动成为长期发布材料。当前激活、验证与修复边界见 [共享运行时与兼容布局](../../../docs/runtime-consolidation.md)。
 
 ## 校验（不安装、不下载）
 

@@ -1,126 +1,106 @@
-# 运行环境整合记录
+# 共享运行时与兼容布局
 
-分支：`codex/runtime-consolidation`。以下为 2026-08-29 本机实测，不代表所有设备或发布版本。
+本文是当前运行环境布局的唯一说明。早期空间盘点、缓存恢复和实验安装记录已合并到这里；历史版本行为保留在 `docs/release-notes/`。
 
-## 当前结论
+## 发布结论
 
-**已找到并在本机应用可统一的 NumPy/protobuf 实验配方。** UVR、SeedVC、DDSP 的原始上游要求不能直接合并，但更换旧 TensorBoardX 并制作本地 AudioTools 兼容构建后，整体依赖解析和关键运行检查均通过。完整模型音频验收、性能对比及旧环境清理仍未完成，不能称为发布验收通过。
+NVIDIA CUDA126 和 CUDA128 默认使用两层共享环境。CPU 与 DirectML 继续使用隔离环境，因为它们的 Torch、Python 和组件依赖尚不能安全合并。项目不再发布或新建 cu121 CUDA 栈。
 
-本机现有 `runtime.json` 现已将 UVR、SeedVC、DDSP 都指向 `runtimes/core-cu128/Scripts/python.exe`。原 `.venv-uvr` 已整体迁移为该 cu128 主环境；cu126 目录仅保留为未激活的实验环境。迁移前保存的旧版 wheel 和配方材料仍保留，没有删除模型权重。
-
-| 包 | 修改前 | 当前实验版本 |
+| 硬件包 | 默认布局 | 主要目录 |
 | --- | --- | --- |
-| NumPy | 1.26.4 | 2.2.6 |
-| protobuf | 3.19.6 | 7.36.0 |
-| TensorBoardX | 2.6 | 2.6.5 |
-| descript-audiotools | 0.7.2 | 0.7.2+xb1（本地兼容构建） |
+| CPU | 隔离兼容 | `.venv-uvr`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-vocal` |
+| DirectML | 隔离兼容 | 与 CPU 相同，按组件安装 DirectML 或稳定的 CPU 回退 |
+| CUDA126 | 两层共享 | `runtimes/core-cu126`、`runtimes/svc-cu126` |
+| CUDA128 | 两层共享 | `runtimes/core-cu128`、`runtimes/svc-cu128` |
 
-本机采用最小四包增量修改；`uv pip check` 检查 146 个已安装包，全部兼容。后续固化已以这 146 个包的实际版本为基准重新整体解析，消除了早期临时解析结果中 setuptools、packaging、msgpack、platformdirs 的版本差异。新配方固定 147 项；唯一额外项 `hf-xet==1.6.0` 是平台标记差异引入的下载辅助包，现有环境可缺少，元数据校验会单列说明。没有为固定配方重装现有环境。
+“共享”是依赖布局，不表示所有组件进入同一个 Python。两个共享层用于隔开 NumPy/protobuf/AudioTools 与旧 SVC/RVC 依赖之间的冲突。
 
-## 当前运行检查
+## 组件路由
 
-| 检查项 | 实测结果 |
-| --- | --- |
-| Python | 3.10.21 |
-| Torch / torchaudio / torchvision | 2.7.1+cu128 / 2.7.1+cu128 / 0.22.1+cu128 |
-| CUDA | RTX 5060 Ti 可用，小张量计算通过 |
-| UVR VR 模块导入 | 通过 |
-| UVR MDX 模块导入 | 通过；修改前 protobuf 缺少 `runtime_version` 的错误已消失 |
-| SeedVC inference / LengthRegulator 导入 | 通过 |
-| DDSP / Reflow vocoder 导入 | 通过 |
-| ONNX 序列化、校验与执行 | 简单 Identity 图经 ONNX Runtime 执行通过；不是 MDX 权重推理 |
-| SeedVC 音频前处理 | 重采样、梅尔谱、crossfade、AudioSignal STFT 通过 |
-| DDSP 音频前处理 | WORLD/Praat 音高、音量提取通过 |
-| TensorBoard / TensorBoardX | 标量日志写入并读回通过 |
-| 本地 UVR VR 真实权重 | `5_HP-Karaoke-UVR.pth`、`UVR-DeEcho-DeReverb.pth` 对两秒合成音频分离完成；波形有限值、采样率和长度检查通过，不代表歌曲质量验收 |
-| SeedVC/DDSP 完整模型音频、质量与性能 | 尚未验收 |
+| 共享层 | 组件 | 说明 |
+| --- | --- | --- |
+| `core-cu126` / `core-cu128` | UVR、SeedVC、DDSP-SVC | 统一的现代核心配方 |
+| `svc-cu126` / `svc-cu128` | So-VITS-SVC、RVC、Vocal/DeepFilterNet3 | 兼容旧模型框架的共享层 |
 
-## 原始冲突与处理依据
+应用不再根据固定目录猜测当前布局。安装成功后，`install/runtime_manifest.py` 把每个组件的相对 Python 路径写入 `runtime.json`；应用优先读取该文件，再回退到旧 `.venv-*`，以支持已有安装升级。
 
-修改前依赖元数据检查确认：
+PyMSS、插件和 ModelScope Hub 不应被文档描述成 AI 两层共享环境的固定成员。它们按各自实现和依赖要求安装，不能因为使用了某个现有解释器就改变 core/svc 的发布边界。
 
-- `audio-separator==0.44.2` 要求 `numpy>=2`；SeedVC 和 DDSP requirements 要求 `numpy==1.26.4`。
-- `ml_dtypes==0.6.0` 要求 `numpy>=2.0.0`，修改前实际为 1.26.4。
-- `onnx-weekly==1.23.0.dev20260824` 要求 `protobuf>=6.31.1`，修改前实际为 3.19.6。
-- SeedVC 的 `descript-audio-codec` 依赖链引入 `descript-audiotools==0.7.2`，后者要求 `protobuf>=3.9.2,<3.20`。
+## 安装入口
 
-不能仅从版本锁定推断代码一定无法兼容。对照测试中，NumPy 1.26.4/2.2.6 的关键路径均通过。protobuf 7.36.0 下 AudioTools、TensorBoard、UVR、SeedVC、DDSP 通过，而 TensorBoardX 2.6 因旧生成代码直接构造 descriptor 而失败；升级 2.6.5 后通过，没有强制纯 Python protobuf 或禁用版本检查。
+- `install/install_shared.py`：CUDA126/CUDA128 的共享编排入口，只暴露已验证的共享策略。
+- `install/install.py`：组件安装公共实现，同时保留 CPU、DirectML 和旧隔离安装兼容入口。
+- `setup_env.bat`：用户统一修复入口。安装包写入的 `installer_env.cmd` 会记录 `XB_RUNTIME_LAYOUT` 和 `XB_GPU_STACK`；CUDA 修复继续走共享入口，CPU/DirectML 继续走隔离入口。
+- `setup_shared_env.bat`：开发者显式测试共享布局的入口。
 
-本地 AudioTools 构建 `0.7.2+xb1` 保留 0.7.2 功能代码，只改变本地版本标记及依赖声明（protobuf==7.36.0、tensorboard==2.20.0）。构建前验证源文件 RECORD 哈希，重建 wheel RECORD，并保留许可信息和变更来源。**这属于项目维护的实验兼容构建，不是上游已宣布支持 protobuf 7。** 未使用 `--override protobuf` 或忽略 `pip check` 掩盖旧约束。
+安装器传递的固定参数：
 
-参考：[protobuf 跨版本兼容说明](https://protobuf.dev/support/cross-version-runtime-guarantee/)、[AudioTools 上游依赖声明](https://github.com/descriptinc/audiotools/blob/master/setup.py)、[TensorBoardX 发布页](https://pypi.org/project/tensorboardX/)。
-
-## 本轮完成的防护
-
-1. `--consolidated` 在创建/改装模型环境前整体解析三组依赖；不允许只安装一部分却激活全部路由。缺少引擎 requirements 时直接提示，不自动删除或重新获取源码。
-2. 后续共享安装使用同一个解析结果约束版本；解析冲突不再触发整环境 `--reinstall`。安装后还必须通过 `uv pip check` 和关键模块导入检查。
-3. Torch 构建版本匹配且可以实际导入时，跳过强制重装。CUDA 三件套在 UVR 依赖安装时固定版本，防止宽泛的 torchvision 依赖拉入另一套 Torch。
-4. `runtime.json` 原子更新、保留其他组件的映射。应用和安装包按显式配置、有效清单、旧路径的顺序找解释器，不把遗留 core 目录视为已激活。清单的相对路径以清单所在目录为基准。
-5. 旧清单已让多个组件共用环境时，阻止单独“修复”其中一个组件。移除清单只改变路由，不会撤销已经发生的包版本覆盖，不能当成完整回滚。
-6. 大模型只在同内容时去重；同大小但 SHA-256 不同的文件保留。部署采用临时文件后替换，避免覆盖硬链接时连带修改原文件；跨卷自动复制。未对本机既有权重执行去重或清理。
-
-注意：预检会读取包元数据，本轮用联网元数据完成了整体解析；Torch 索引提供独立元数据文件，未下载或重装 Torch。要保证离线可设 `UV_OFFLINE=1`，但缓存不足会报错。必须用 `--preflight-only` 才是仅解析；不带该参数的安装阶段可能下载模型或大包。
-
-## 兼容配方入口
-
-长期配方：`install/runtime_profiles/core-cu128/requirements.lock` 和 `profile.json`。
-兼容 wheel：`assets/runtime/core-cu128/compat/descript_audiotools-0.7.2+xb1-py3-none-any.whl`。
-SHA-256：`22eb8ec9db1c52a16ed3c2202f61b02ba9249c3038066e06097a1912ac1d8b27`。
-旧临时构建仍保留；新构建仅改变来源记录和 RECORD，不改功能文件，且没有重装环境。
-详见 [固定配方、离线重建及回滚边界](../install/runtime_profiles/core-cu128/README.md)。
-
-只解析，不改装环境：
-
-```powershell
-.\app\.venv\Scripts\python.exe -B install\install.py --consolidated --cu128 --only uvr seedvc ddsp --core-profile core-cu128 --preflight-only
+```text
+CUDA126: --gpu --cu126 --consolidated
+CUDA128: --gpu --cu128 --consolidated --core-profile core-cu128
+DirectML: --directml
+CPU:      --cpu
 ```
 
-中间约束写入 `.tmp/core-cu128.constraints.txt`，可由长期配方重新生成。仅 cu128 已验证；不自动用于 CPU/cu121/DirectML。未显式选择配方或候选 wheel 时保留上游原始要求，冲突会停止。不要单独运行旧 requirements，否则可能覆盖共享环境版本。固定配方使用 uv 的 `--torch-backend cu128` 按包选择 Torch 源，避免普通包受到 Torch 索引旧版本的限制。
+`--consolidated` 仍由旧公共实现识别，但在发布流程中它表示 CUDA 共享布局，不再作为面向用户的实验开关。旧安装若没有 `XB_RUNTIME_LAYOUT`，无参数运行 `setup_env.bat` 仍保持兼容行为；显式传入 `--cu126`、`--cu128` 或 `--consolidated` 会选择共享入口。
 
-复现构建使用 `install/build_core_compat.py --source-wheel <保存的原版0.7.2 wheel> --output-dir <输出目录>`，不安装依赖。仍支持原版 site-packages 输入，两种来源产生相同构建结果；当前已修改环境不能作为原版输入。`--support-wheel <路径>` 可复用缓存中已编译的辅助 wheel，固定配方还会验证这些文件的哈希，预检禁止现场源码构建。
+## 配方与离线材料
 
-## 离线自检
+CUDA128 的固定核心配方位于：
 
-从项目根目录执行，用待检查的模型环境 Python：
+- `install/runtime_profiles/core-cu128/requirements.lock`
+- `install/runtime_profiles/core-cu128/profile.json`
+- `assets/runtime/core-cu128/compat/`
+- `assets/runtime/core-cu128/candidate/`
+- `assets/runtime/core-cu128/rollback/`
+
+固定配方使用 NumPy 2.2.6、protobuf 7.36.0、TensorBoardX 2.6.5 和本地 AudioTools 兼容 wheel。哈希和重建方式见 [core-cu128 配方说明](../install/runtime_profiles/core-cu128/README.md)。CUDA126 复用已验证的兼容材料，但使用自己的 Torch cu126 wheels 和运行时目录，绝不回退 cu121。
+
+`install/prepare_wheelhouse.py` 准备四栈缓存，`installer/stage_wheelhouse.py` 在构建专用包时只暂存目标栈需要的 wheels。运行环境全部校验通过后，安装器删除用户安装目录中的 `assets/wheels`；如果失败则保留，便于离线重试。
+
+## 原子安装与激活
+
+共享安装遵守以下边界：
+
+1. UVR、SeedVC、DDSP 作为 core 组整体预解析，不能只修改其中一部分后就发布全部路由。
+2. SVC、RVC、Vocal 安装期间延后最终 `pip check`，待完整共享层安装结束后统一校验。
+3. 只有 Python 可执行、依赖检查、Torch/CUDA、关键模块导入和兼容探针全部通过，才更新 `runtime.json`。
+4. 失败不会把半成品环境声明为可用，也不会自动删除旧 `.venv-*` 或用户模型。
+5. 修复必须继续使用同一布局；CUDA 共享安装不应切换到旧隔离入口逐项覆盖包版本。
+
+## 验证命令
+
+只做安装器与脚本校验：
 
 ```powershell
-.\runtimes\core-cu128\Scripts\python.exe -B install\audit_runtime.py --root . --require-cuda --output .tmp\runtime-audit.json
+& .\installer\build.ps1 -ValidateOnly
 ```
 
-CPU 环境去掉 `--require-cuda`。检查脚本只读取包元数据、启动离线导入子进程；指定 `--output` 时另外写一份 JSON 报告，不安装依赖或下载模型。退出码 1 表示有失败，详情在报告中。每个模块有超时限制，检查通过也不等同于音频验收通过。
+只解析 CUDA128 core 配方，不安装：
 
-最新本机报告（未纳入版本控制）：
+```powershell
+& .\setup_shared_env.bat --cu128 --only uvr seedvc ddsp --preflight-only
+```
 
-- `.tmp/core-compat-migration/audit-after.json`：真实共享环境的依赖和导入结果。
-- `.tmp/core-compat-migration/probes-after.json`：同一环境、没有跨环境加载替换的五项检查。
-- `.tmp/core-compat-migration/uvr-audio/result.json`：两个本地 VR 权重的短音频结果。纯音测试的人声轨接近静音，库按阈值不写出文件；检查了写入前的真实波形，未将缺文件误算成成功输出。
-- `.tmp/core-compat-migration/before.json` / `after.json`：四个小包及 Torch 三件套修改前后版本。
-- `assets/runtime/core-cu128/rollback/`：已校验 SHA-256 的四个原版 wheel，长期保存；临时目录中的原件也保留。
+检查已安装共享环境：
 
-`.tmp/runtime-audit.json` 是修改前失败报告，不代表当前状态。回滚包仅用于恢复修改前版本；修改前状态本身存在 UVR MDX 依赖冲突，不能当成已验证健康版本。
+```powershell
+& .\runtimes\core-cu128\Scripts\python.exe -B .\install\audit_runtime.py --root . --require-cuda
+& uv pip check --python .\runtimes\core-cu128\Scripts\python.exe
+& uv pip check --python .\runtimes\svc-cu128\Scripts\python.exe
+```
 
-## 下一阶段迁移计划
+自动化测试边界和命令见 [测试说明](testing.md)。配方解析、重复安装、漂移检测、恢复、模块导入、CUDA 小张量和安装器预检都已有回归覆盖；这些检查仍不能替代在目标显卡上的真实模型、真实音频和完整 Setup.exe 验收。
 
-| 分组 | 处理方式 |
-| --- | --- |
-| UVR + SeedVC + DDSP | 本机已使用同一 Python、NumPy 2.2.6 和 protobuf 7.36.0，继续完整模型验收 |
-| Vocal / SVC / RVC / PyMSS / 插件 / DirectML | 继续独立，分别验证后再考虑减少环境数量 |
+## 旧安装与清理规则
 
-执行顺序：
+旧 `.venv-*` 是兼容回退，不属于新 CUDA 安装的目标布局。不要在安装过程中主动删除它们：只有在 `runtime.json` 已指向新环境、真实推理验收通过、没有外部快捷方式或手工脚本引用后，才由用户单独清理。
 
-1. 保持当前 `runtimes/core-cu128` 主环境，完整验收之前不清理它或其他旧环境。
-2. SeedVC 主模型及 Whisper、BigVGAN、CampPlus 权重已由用户下载，四个 SHA-256 和本地路径识别通过；DDSP 仍需 6.3 RectifiedFlow 主模型和对应配置。真实音频验收按用户要求暂缓。
-3. 147 包完整配方在独立空环境安装、无改动重复安装、四包漂移检测及恢复、依赖/导入/CUDA 基础检查均已通过。通过校验重封装旧缓存解决了 torchvision 等缓存缺口，本轮零新增下载；尚不是安装 EXE/其他电脑/真实音频验收。见 [安装与修复验证](runtime-install-validation.md)。
-4. 用短音频分别测试 UVR VR/MDX、SeedVC 转换、DDSP 转换，再验收完整流程。届时需要 SeedVC 主模型、DDSP 配套权重/配置，以及短音频；先确认本地是否已有，不盲目下载。
-5. 对比空间占用、启动时间、显存和输出效果，确认没有活动引用后才清理旧环境。
+以下内容不是源码清理对象：
 
-空间盘点已完成：旧环境及未共享的重复模型合计约 5.35 GiB 候选规模，已排除现有硬链接重复计算；没有删除任何旧环境或权重。全局 uv 缓存另行列出，不计入承诺可回收空间。见 [空间盘点与候选清单](runtime-storage-audit.md)。
+- `runtimes/` 下正在使用的本机环境。
+- `.xb_svcb` 或自定义数据目录中的模型、作品、编辑工程与日志。
+- 全局 uv 缓存；它可能被其他项目复用。
+- `assets/runtime/core-cu128` 的配方、兼容和回滚材料。
 
-## 验证记录与限制
-
-- 固化后全套回归：330 通过、15 跳过、0 失败。原先两项 Python 检测失败已修复；两项 wheelhouse 断言移入独立测试数据后通过，另设真实源码集成检查，没有删除原有断言。
-- 15 项跳过中，14 项是主程序测试解释器缺少 Torch；随后用现有共享解释器叠加临时 pytest 对 `test_inference_devices.py` 补跑，30 项全部通过，包含这 14 项。未向主程序或共享环境安装 Torch/pytest。
-- 剩余 1 项为打包集成缺少 SVC requirements；严格发布模式下会失败而非跳过。见 [测试分组](testing.md)。
-- 未执行安装包编译、发布、SeedVC/DDSP 完整模型音频验收，也没有完成全部环境整合或空间回收。
-- 后两项继续验证：新增 18 项安装/存储防护回归，全套 348 通过、15 跳过；共享解释器补跑设备辅助测试 30 项通过。现用 146 包仍匹配配方，`pip check` 通过，Torch 和路由未改动。独立四包部署测试使用 `--no-deps`，不能代替完整运行时验收。
-- 缓存复用继续验证：新增 14 项回归，全套 362 通过、15 跳过。完整 147 包空环境安装使用正常依赖解析，不用 `--no-deps`；重复安装及故障注入后的修复通过，5 项导入/CUDA 与 5 项兼容性探针通过。生产环境仍维持原 146 包和原路由。
+仓库中的 `.tmp/`、`build/`、`dist/`、`assets/wheels/` 和 `assets/tools/python310/` 是可重建或本机生成内容，已通过 `.gitignore` 排除；是否删除本机副本应与源码提交分开决定。

@@ -49,9 +49,13 @@
 
     .\installer\build.ps1 -ValidateOnly
 
-完整构建：
+构建默认 CUDA128 共享运行时包：
 
     .\installer\build.ps1
+
+顺序构建 CPU、DirectML、CUDA126、CUDA128 四套专用包：
+
+    .\installer\build-all-packages.ps1 -Python C:\path\to\python.exe
 
 构建流程大致为：
 
@@ -59,8 +63,8 @@
 2. 构建 Vue 前端。
 3. 使用 PyInstaller 生成桌面应用及其内置资源。
 4. 构建或复用 JUCE VST3 Host。
-5. 准备离线模型、wheelhouse 和运行环境载荷。
-6. 使用 Inno Setup 生成 XB-SVCB-Setup.exe 和多个小于 2GB 的 .bin 分卷。
+5. 按目标硬件栈筛选离线 wheelhouse 和运行环境载荷。
+6. 使用 Inno Setup 生成硬件专用 EXE 和多个小于 2GB 的同名前缀 `.bin` 分卷。
 
 发布时必须同时上传 EXE 和全部 BIN 文件。安装器说明、运行环境列表和分卷规则见 installer/README.md。
 

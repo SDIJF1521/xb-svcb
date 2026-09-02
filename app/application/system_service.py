@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
+import config
 from infrastructure.ffmpeg_tool import FfmpegTool
 from infrastructure.inference_device import (
     inference_device_capabilities,
     runtime_device_label,
 )
+from infrastructure.model_assets import engine_asset_status
 from infrastructure.svc_engine import SvcEngine
 from infrastructure.uvr_tool import UvrTool
 
@@ -58,6 +60,15 @@ class SystemService:
             "uvr", uvr_available, self._uvr.status() or "未安装"
         )
         svc_ok, svc_status = runtime_status("so-vits-svc", svc_available)
+
+        def bundled_assets(engine: str) -> dict[str, Any]:
+            try:
+                return engine_asset_status(config.ROOT_DIR, engine, location="runtime")
+            except (OSError, TypeError, ValueError):
+                # 模型清单属于增强诊断信息，不能阻塞基础系统状态接口。
+                return {"ok": False, "engine": engine, "assets": [], "required": 0, "ready": 0}
+
+        uvr_assets = bundled_assets("uvr")
         tools = [
             {
                 "key": "uvr",
@@ -68,6 +79,8 @@ class SystemService:
                 "ok": uvr_ok,
                 "required": False,
                 "role": "optional",
+                "model_status": "已就绪" if uvr_assets["ok"] else "自带模型不完整",
+                "model_assets": uvr_assets,
             },
             {
                 "key": "ffmpeg",
@@ -125,6 +138,7 @@ class SystemService:
         if self._seedvc is not None:
             seedvc_available = bool(self._seedvc.available)
             seedvc_ok, seedvc_status = runtime_status("seed-vc", seedvc_available)
+            seedvc_assets = bundled_assets("seedvc")
             tools.append(
                 {
                     "key": "seedvc",
@@ -135,11 +149,14 @@ class SystemService:
                     "ok": seedvc_ok,
                     "required": False,
                     "role": "engine",
+                    "model_status": "已就绪" if seedvc_assets["ok"] else "自带模型不完整",
+                    "model_assets": seedvc_assets,
                 }
             )
         if self._ddsp is not None:
             ddsp_available = bool(self._ddsp.available)
             ddsp_ok, ddsp_status = runtime_status("ddsp-svc", ddsp_available)
+            ddsp_assets = bundled_assets("ddsp")
             tools.append(
                 {
                     "key": "ddsp",
@@ -150,6 +167,8 @@ class SystemService:
                     "ok": ddsp_ok,
                     "required": False,
                     "role": "engine",
+                    "model_status": "已就绪" if ddsp_assets["ok"] else "自带模型不完整",
+                    "model_assets": ddsp_assets,
                 }
             )
         if self._vocal_enhancement is not None:

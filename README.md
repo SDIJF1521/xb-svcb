@@ -22,7 +22,7 @@
 
 <br/>
 
-### ⬇️ [**点此下载安装器 · XB-SVCB-Setup.exe**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+### ⬇️ [**选择硬件专用安装包 · CPU / DirectML / CUDA126 / CUDA128**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
 
 <sub>Windows 一键安装 · 内置前端与底模 · 无需手动配置 Python / Node</sub>
 
@@ -41,7 +41,7 @@
 [![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10-3776AB?logo=python&logoColor=white)](#)
 [![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
 
-### ⬇️ [下载安装器 · XB-SVCB-Setup.exe](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+### ⬇️ [选择硬件专用安装包](https://github.com/SDIJF1521/xb-svcb/releases/latest)
 
 Windows 一键安装 · 内置前端与底模 · 支持 NVIDIA CUDA、AMD DirectML 和 CPU
 
@@ -77,43 +77,35 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 
 普通用户建议直接使用 GitHub Releases 安装：
 
-1. 下载同一版本的 <code>XB-SVCB-Setup.exe</code> 和全部 <code>XB-SVCB-Setup-*.bin</code> 文件，并放在同一目录。
+1. 按硬件选择 CPU、DirectML、CUDA126 或 CUDA128 安装包，并下载该包的 EXE 和全部同名前缀 BIN 文件。
 2. 运行 EXE，选择应用安装目录和用户数据目录。
-3. 勾选「安装后立即搭建运行环境」，按安装器提示完成环境准备。
+3. 选择或手动指定 64 位 CPython 3.10.x，勾选「安装后立即搭建运行环境」。
 4. 通过桌面或开始菜单中的 XB-SVCB 启动应用。
 
-安装包内已包含前端、FFmpeg、模型框架源码、关键底模和离线 Python 依赖。应用安装完成后，AI 子环境会根据本机设备选择 CUDA、DirectML 或 CPU 依赖。
+安装包内已包含前端、FFmpeg、模型框架源码、关键底模和对应硬件栈的离线 Python 依赖。NVIDIA 40 系及以下选择 CUDA126，RTX 50 系选择 CUDA128；两种 CUDA 包默认创建两层共享运行时。Windows AMD 选择 DirectML，无兼容 GPU 时选择 CPU。
 
 ### 从源码安装
 
-源码运行需要 Windows、Python 3.10+、Node.js 20.19+ 或 22.12+。在项目根目录执行：
+源码运行需要 Windows、64 位 CPython 3.10.x、Node.js 20.19+ 或 22.12+。在项目根目录明确选择硬件栈：
 
 ~~~bat
-setup_env.bat
+setup_env.bat --cu128
+setup_env.bat --cu126
+setup_env.bat --directml
+setup_env.bat --cpu
 ~~~
 
-该脚本会调用 <code>install/install.py</code>，创建主程序、UVR、SVC、RVC、SeedVC、DDSP-SVC、Vocal 和 ModelScope 所需的隔离环境，并准备底模。
+CUDA126/CUDA128 调用 <code>install/install_shared.py</code>，分别创建 <code>runtimes/core-*</code> 与 <code>runtimes/svc-*</code> 两层共享环境；CPU/DirectML 调用 <code>install/install.py</code> 的隔离兼容布局。公共组件实现仍集中在 <code>install.py</code>，避免两套下载和模型逻辑分叉。
 
 常用的单组件安装命令：
 
 ~~~bat
-python install\install.py --only uvr
-python install\install.py --only svc
-python install\install.py --only rvc
-python install\install.py --only seedvc
-python install\install.py --only ddsp
-python install\install.py --only vocal
-python install\install.py --only models
+setup_env.bat --only uvr seedvc ddsp
+setup_env.bat --only svc rvc vocal
+setup_env.bat --only models
 ~~~
 
-明确使用 CPU 或 AMD DirectML 时：
-
-~~~bat
-python install\install.py --cpu
-python install\install.py --directml
-~~~
-
-`--consolidated` 目前仅供实验。上游原始依赖存在 NumPy/protobuf 冲突；本分支的 cu128 配方使用 NumPy 2.2.6、protobuf 7.36.0、TensorBoardX 2.6.5 和本地 AudioTools 兼容 wheel，已通过整体依赖解析和关键运行检查，但真实音频验收暂缓。当前 RTX 50 系主环境位于 `runtimes/core-cu128`，复现固定版本使用 `--core-profile core-cu128`，并加 `--preflight-only` 只解析、不安装；需先备齐配方所列本地 wheel。`--core-compat-wheel` 仅保留用于开发候选配方。旧安装仍兼容 `.venv-uvr`，新安装不再把它作为当前共享环境。详见 [固定配方及回滚材料](install/runtime_profiles/core-cu128/README.md) 和 [运行环境整合记录](docs/runtime-consolidation.md)。
+CUDA core 的 UVR、SeedVC、DDSP 是原子组，修复时应一起选择。共享布局、固定配方、旧安装回退和清理边界见 [共享运行时与兼容布局](docs/runtime-consolidation.md)。
 
 安装器部署大体积只读底模时优先尝试硬链接，跨卷时回退为复制；已有同尺寸权重只有 SHA-256 一致才会去重。硬链接共享内容，训练或修改权重前须另存副本。此机制不负责删除旧环境。
 
@@ -325,15 +317,15 @@ set XB_GH_MIRROR=https://ghfast.top
 
 ### 推理提示缺少 pkg_resources
 
-旧的 SVC 环境可能缺少兼容版本的 setuptools，可执行：
+SVC 环境可能缺少兼容版本的 setuptools。RTX 50 系 cu128 安装可执行：
 
 ~~~bat
-uv pip install --python <安装目录>\.venv-svc\Scripts\python.exe "setuptools<81" wheel
+uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "setuptools<81" wheel
 ~~~
 
 ### 分离或推理速度很慢
 
-确认安装器选择的设备与本机硬件一致。NVIDIA 40 系及以下通常使用 cu121，RTX 50 系使用 cu128，AMD Radeon 使用 DirectML；不兼容或没有 GPU 时会使用 CPU。
+确认安装器选择的设备与本机硬件一致。NVIDIA 40 系及以下使用共享 cu126，RTX 50 系使用共享 cu128，AMD Radeon 使用 DirectML；不兼容或没有 GPU 时会使用 CPU。
 
 ### 任务失败如何排查
 

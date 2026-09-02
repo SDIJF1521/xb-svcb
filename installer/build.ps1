@@ -7,7 +7,7 @@
   4）预下载 Windows wheelhouse（uv + 各 AI 环境依赖 whl）
   5）验证生成的运行时捆绑包
   6）使用 Inno Setup 的 ISCC 编译 installer/xb-svcb.iss
-  7）输出结果：dist/XB-SVCB-Setup.exe + 分割后的 .bin 数据包
+  7）输出一个硬件专用安装包及分割后的 .bin 数据包
      -BootstrapperOnly 时只刷新 EXE，复用已有的 .bin 分卷，不会重建或删除它们
 
   Prerequisites: Node.js (frontend build), app/.venv with pywebview + pyinstaller,
@@ -16,11 +16,15 @@
                  Inno Setup download: https://jrsoftware.org/isdl.php
 
   Usage:
-    ./installer/build.ps1
+    ./installer/build.ps1                 # default: CUDA128 shared-runtime package
+    ./installer/build.ps1 -Stacks cpu
     ./installer/build.ps1 -SkipWebBuild     # skip when web/dist already built
     ./installer/build.ps1 -SkipAppBuild     # skip when dist/XB-SVCB already built
     ./installer/build.ps1 -SkipWheelhouse   # skip only when assets/wheels is already prepared
-    ./installer/build.ps1 -BootstrapperOnly # refresh only XB-SVCB-Setup.exe; keep existing .bin slices
+    ./installer/build.ps1 -Stacks cu126     # build one hardware-specific package
+    ./installer/build.ps1 -Stacks cu128 -Python C:\Python310\python.exe
+    ./installer/build.ps1 -Stacks directml
+    ./installer/build.ps1 -Stacks cu128 -BootstrapperOnly # refresh only this package EXE
     ./installer/build.ps1 -ValidateOnly     # validate scripts without packaging models
 #>
 
@@ -29,6 +33,9 @@ param(
   [switch]$SkipAppBuild,
   [switch]$SkipJuceHostBuild,
   [switch]$SkipWheelhouse,
+  [ValidateSet('cpu', 'directml', 'cu126', 'cu128')]
+  [string[]]$Stacks,
+  [string]$Python,
   [switch]$BootstrapperOnly,
   [switch]$ValidateOnly
 )
@@ -36,6 +43,28 @@ param(
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot   # repo root
 Set-Location -Path $Root
+
+$selectedStacks = if ($PSBoundParameters.ContainsKey('Stacks')) {
+  @($Stacks | Select-Object -Unique)
+} elseif ($ValidateOnly) {
+  @()
+} else {
+  @('cu128')
+}
+if ($selectedStacks.Count -gt 1) {
+  throw "Dedicated installers must be built one stack at a time. Pass exactly one of: cpu, directml, cu126, cu128."
+}
+if ((-not $ValidateOnly) -and $selectedStacks.Count -ne 1) {
+  throw "A release build requires exactly one -Stacks value: cpu, directml, cu126, or cu128."
+}
+$outputBaseNames = @{
+  cpu      = 'XB-SVCB-Setup-CPU'
+  directml = 'XB-SVCB-Setup-DirectML'
+  cu126    = 'XB-SVCB-Setup-CUDA126'
+  cu128    = 'XB-SVCB-Setup-CUDA128'
+}
+$packageStack = if ($selectedStacks.Count -eq 1) { [string]$selectedStacks[0] } else { $null }
+$outputBaseName = if ($packageStack) { [string]$outputBaseNames[$packageStack] } else { $null }
 
 function Require-File([string]$Path, [string]$Label) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -49,6 +78,62 @@ function Require-FileSize([string]$Path, [long]$MinimumBytes, [string]$Label) {
   if ($item.Length -lt $MinimumBytes) {
     throw "$Label is incomplete: $Path ($($item.Length) bytes; expected at least $MinimumBytes)"
   }
+}
+
+function Require-WindowsLineEndings([string]$Path, [string]$Label) {
+  Require-File $Path $Label
+  $bytes = [IO.File]::ReadAllBytes($Path)
+  for ($index = 0; $index -lt $bytes.Length; $index++) {
+    if ($bytes[$index] -eq 10 -and ($index -eq 0 -or $bytes[$index - 1] -ne 13)) {
+      throw "$Label contains a bare LF line ending; normalize the complete batch file to CRLF before packaging: $Path"
+    }
+  }
+}
+
+function Test-Python310([string]$Path) {
+  if ([string]::IsNullOrWhiteSpace($Path) -or
+      -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    return $false
+  }
+  & $Path -c "import sys; raise SystemExit(0 if sys.implementation.name == 'cpython' and sys.version_info[:2] == (3, 10) and sys.maxsize > 2**32 else 1)"
+  return $LASTEXITCODE -eq 0
+}
+
+function Resolve-BuildPython310([string]$ExplicitPath) {
+  if ($ExplicitPath) {
+    $resolved = [IO.Path]::GetFullPath($ExplicitPath)
+    if (-not (Test-Python310 $resolved)) {
+      throw "-Python must point to a runnable CPython 3.10.x python.exe: $resolved"
+    }
+    return $resolved
+  }
+
+  if ($env:XB_PYTHON_EXE -and (Test-Python310 $env:XB_PYTHON_EXE)) {
+    return [IO.Path]::GetFullPath($env:XB_PYTHON_EXE)
+  }
+  if (Get-Command py -ErrorAction SilentlyContinue) {
+    $candidate = $null
+    try {
+      $candidate = (& py -3.10 -c "import sys; print(sys.executable)" 2>$null | Select-Object -First 1)
+    } catch {
+      # py.exe may exist without a registered 3.10 runtime. Continue with
+      # PATH and the common installation directory in that case.
+      $candidate = $null
+    }
+    if ($LASTEXITCODE -eq 0 -and (Test-Python310 $candidate)) {
+      return [IO.Path]::GetFullPath($candidate)
+    }
+  }
+  foreach ($pythonCommand in @(Get-Command python -All -CommandType Application -ErrorAction SilentlyContinue)) {
+    if (Test-Python310 $pythonCommand.Source) {
+      return [IO.Path]::GetFullPath($pythonCommand.Source)
+    }
+  }
+  $common = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python310\python.exe'
+  if (Test-Python310 $common) {
+    return [IO.Path]::GetFullPath($common)
+  }
+  throw "CPython 3.10.x was not detected. Pass its exact path with -Python C:\path\to\python.exe."
 }
 
 function Stop-WebNodeProcesses([string]$WebDir) {
@@ -330,6 +415,52 @@ Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
 Require-File (Join-Path $Root "install\detect_python.bat") "Python runtime detector"
 Require-File (Join-Path $Root "install\prepare_wheelhouse.py") "Wheelhouse preparation script"
+$installScriptPath = Join-Path $Root "install\install.py"
+Require-File $installScriptPath "Runtime installer"
+if ((Get-Content -LiteralPath $installScriptPath -Raw) -notmatch 'def python_spec_for_venv\(uv: str, python_version: str\)') {
+  throw "Runtime installer is missing the concrete Python-path fix; refusing to build an installer with uv --python 3.10 resolution."
+}
+$sharedInstallScriptPath = Join-Path $Root "install\install_shared.py"
+Require-File $sharedInstallScriptPath "Shared runtime installer"
+$sharedInstallSource = Get-Content -LiteralPath $sharedInstallScriptPath -Raw
+$sharedRuntimeDeclarations = [ordered]@{
+  'cu126 selector' = 'add_argument\("--cu126"'
+  'cu128 selector' = 'add_argument\("--cu128"'
+  'core-cu128 profile' = '"core-cu128"'
+  'two-layer shared layout' = '_configure_runtime_layout\(consolidated=True,\s*gpu_stack=stack\)'
+}
+foreach ($declaration in $sharedRuntimeDeclarations.GetEnumerator()) {
+  if ($sharedInstallSource -notmatch $declaration.Value) {
+    throw "Shared runtime installer is missing the $($declaration.Key) declaration."
+  }
+}
+$batchEntrypoints = [ordered]@{
+  'Runtime setup entry' = (Join-Path $Root 'setup_env.bat')
+  'Shared runtime setup entry' = (Join-Path $Root 'setup_shared_env.bat')
+  'Prerequisite installer' = (Join-Path $Root 'install_prereqs.bat')
+  'Python runtime detector' = (Join-Path $Root 'install\detect_python.bat')
+}
+foreach ($entrypoint in $batchEntrypoints.GetEnumerator()) {
+  Require-WindowsLineEndings $entrypoint.Value $entrypoint.Key
+}
+
+function Assert-WheelhouseProfile([string]$SelectedStack) {
+  $wheelRoot = Join-Path $Root 'assets\wheels'
+  $required = @("py310\$SelectedStack", 'bootstrap')
+  $missing = @($required | Where-Object {
+    -not (Test-Path -LiteralPath (Join-Path $wheelRoot $_) -PathType Container)
+  })
+  if ($missing.Count -gt 0) {
+    throw "Wheelhouse profile is incomplete; missing: $($missing -join ', ')"
+  }
+  $legacy = Join-Path $wheelRoot 'py310\cu121'
+  if (Test-Path -LiteralPath $legacy) {
+    throw "旧 cu121 wheelhouse remains: $legacy. Run the cleanup command before packaging."
+  }
+}
+if ((Get-Content -LiteralPath $installScriptPath -Raw) -notmatch 'def _resolved_file_path\(path: Path\) -> Path \| None:') {
+  throw "Runtime installer is missing Junction resolution; refusing to build an installer that may pass a Windows mount point to uv."
+}
 $licensePath = Join-Path $Root "LICENSE"
 Require-File $licensePath "GPLv3 license"
 if ((Get-Content -LiteralPath $licensePath -Raw) -notmatch 'GNU GENERAL PUBLIC LICENSE\s+Version 3, 29 June 2007') {
@@ -366,8 +497,15 @@ if ($ValidateOnly) {
   }
   New-Item -ItemType Directory -Force -Path $validateDir | Out-Null
   try {
-    & $iscc "/DXB_VALIDATE_ONLY=1" "/O$validateDir" "/FXB-SVCB-Installer-Validation" (Join-Path $Root "installer\xb-svcb.iss")
-    if ($LASTEXITCODE -ne 0) { throw "Inno Setup validation failed (exit code $LASTEXITCODE)" }
+    $validateStacks = if ($packageStack) { @($packageStack) } else { @('cpu', 'directml', 'cu126', 'cu128') }
+    foreach ($validateStack in $validateStacks) {
+      $validateOutput = [string]$outputBaseNames[$validateStack]
+      & $iscc "/DXB_VALIDATE_ONLY=1" "/DXB_PACKAGE_STACK=$validateStack" "/DXB_OUTPUT_BASENAME=$validateOutput" `
+        "/O$validateDir" "/F$validateOutput-Validation" (Join-Path $Root "installer\xb-svcb.iss")
+      if ($LASTEXITCODE -ne 0) {
+        throw "Inno Setup validation failed for $validateStack (exit code $LASTEXITCODE)"
+      }
+    }
   } finally {
     if (Test-Path -LiteralPath $validateDir) {
       Remove-Item -LiteralPath $validateDir -Recurse -Force
@@ -376,6 +514,9 @@ if ($ValidateOnly) {
   Write-Host "Installer scripts validated successfully." -ForegroundColor Green
   exit 0
 }
+
+$buildPython = Resolve-BuildPython310 $Python
+Write-Host ("Build Python 3.10: {0}" -f $buildPython) -ForegroundColor Green
 
 # Stage payloads that are downloaded only on the release builder. User machines
 # receive these files through Inno Setup's split data volumes and never fetch the
@@ -413,20 +554,29 @@ Require-FileSize `
 # PyPI unless a developer explicitly disables strict wheelhouse mode.
 if (-not $SkipWheelhouse) {
   Write-Host "`n==== Preparing Python wheelhouse (assets/wheels) ====" -ForegroundColor Cyan
-  $pythonCmd = Get-Command "python" -ErrorAction SilentlyContinue
-  if (-not $pythonCmd) {
-    throw "python not found. Install Python 3.10+ or pass -SkipWheelhouse only when assets/wheels is already prepared."
-  }
-  & $pythonCmd.Source -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+  # Resolve the wheelhouse with the exact developer-selected CPython 3.10.
+  # This avoids selecting the wrong ABI or a managed/Junction interpreter.
+  $pythonCmd = Get-Item -LiteralPath $buildPython
+  & $pythonCmd.FullName -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 10) else 1)"
   if ($LASTEXITCODE -ne 0) {
-    throw "python found at '$($pythonCmd.Source)' but it is not a runnable Python 3.10+ interpreter."
+    throw "Bundled Python is not a runnable CPython 3.10 interpreter: $($pythonCmd.FullName)"
   }
-  & $pythonCmd.Source (Join-Path $Root "install\prepare_wheelhouse.py") --root $Root --clean
+  $wheelArgs = @('--root', $Root, '--clean')
+  $wheelArgs += @('--stack', $packageStack)
+  & $pythonCmd.FullName (Join-Path $Root "install\prepare_wheelhouse.py") @wheelArgs
   if ($LASTEXITCODE -ne 0) { throw "Wheelhouse preparation failed (exit code $LASTEXITCODE)" }
 } else {
   Write-Host "`n==== Skipping Python wheelhouse preparation ====" -ForegroundColor Yellow
 }
 Require-File (Join-Path $Root "assets\wheels\wheelhouse.json") "Bundled wheelhouse manifest (build without -SkipWheelhouse)"
+Assert-WheelhouseProfile $packageStack
+$installerWheelhouse = Join-Path $Root '.tmp\installer-wheelhouse'
+$wheelhouseStager = Join-Path $Root 'installer\stage_wheelhouse.py'
+Require-File $wheelhouseStager 'Dedicated wheelhouse staging tool'
+Write-Host "`n==== Staging $packageStack wheel payload only ====" -ForegroundColor Cyan
+& $buildPython $wheelhouseStager --root $Root --stack $packageStack --output $installerWheelhouse
+if ($LASTEXITCODE -ne 0) { throw "Wheelhouse staging failed (exit code $LASTEXITCODE)" }
+Require-File (Join-Path $installerWheelhouse 'wheelhouse.json') "Staged $packageStack wheelhouse manifest"
 
 # 1) Build frontend
 if (-not $SkipWebBuild) {
@@ -513,6 +663,7 @@ $stagedHostExe = Join-Path $Root "dist\XB-SVCB\engines\juce-vst3-host\xb-juce-vs
 Require-File $stagedHostExe "Staged JUCE VST3 host (build without -SkipJuceHostBuild)"
 
 Require-File (Join-Path $Root "setup_env.bat") "Runtime setup entry"
+Require-File (Join-Path $Root "setup_shared_env.bat") "Shared runtime setup entry"
 Require-File (Join-Path $Root "install_prereqs.bat") "Prerequisite installer"
 Require-File (Join-Path $Root "install\install.py") "Runtime installer"
 Prepare-BundledEnginePayloads (Join-Path $Root '.tmp\bundled-engines')
@@ -529,9 +680,9 @@ Write-Host ("ISCC: {0}" -f $iscc) -ForegroundColor Green
 New-Item -ItemType Directory -Force -Path (Join-Path $Root "dist") | Out-Null
 $distDir = Join-Path $Root "dist"
 if ($BootstrapperOnly) {
-  $existingSlices = @(Get-ChildItem -LiteralPath $distDir -Filter "XB-SVCB-Setup-*.bin" -File -ErrorAction SilentlyContinue)
+  $existingSlices = @(Get-ChildItem -LiteralPath $distDir -Filter "$outputBaseName-*.bin" -File -ErrorAction SilentlyContinue)
   if ($existingSlices.Count -eq 0) {
-    throw "BootstrapperOnly requires existing XB-SVCB-Setup-*.bin files in dist. Build the full installer once first."
+    throw "BootstrapperOnly requires existing $outputBaseName-*.bin files in dist. Build this stack's full installer once first."
   }
   $compileDir = Join-Path $Root ".tmp\installer-bootstrapper"
   if (Test-Path -LiteralPath $compileDir) {
@@ -539,14 +690,14 @@ if ($BootstrapperOnly) {
   }
   New-Item -ItemType Directory -Force -Path $compileDir | Out-Null
   try {
-    & $iscc "/O$compileDir" (Join-Path $Root "installer\xb-svcb.iss")
+    & $iscc "/DXB_PACKAGE_STACK=$packageStack" "/DXB_OUTPUT_BASENAME=$outputBaseName" "/O$compileDir" (Join-Path $Root "installer\xb-svcb.iss")
     if ($LASTEXITCODE -ne 0) { throw "ISCC compile failed (exit code $LASTEXITCODE)" }
 
-    $tempExe = Join-Path $compileDir "XB-SVCB-Setup.exe"
+    $tempExe = Join-Path $compileDir "$outputBaseName.exe"
     Require-File $tempExe "Installer bootstrapper"
-    Copy-Item -LiteralPath $tempExe -Destination (Join-Path $distDir "XB-SVCB-Setup.exe") -Force
+    Copy-Item -LiteralPath $tempExe -Destination (Join-Path $distDir "$outputBaseName.exe") -Force
 
-    $artifacts = Get-ChildItem -LiteralPath $compileDir -Filter "XB-SVCB-Setup*" -File |
+    $artifacts = Get-ChildItem -LiteralPath $compileDir -Filter "$outputBaseName*" -File |
       Sort-Object Name
     if (-not ($artifacts | Where-Object { $_.Extension -eq ".bin" })) {
       throw "Installer payload slices were not generated. Check DiskSpanning in installer/xb-svcb.iss."
@@ -557,22 +708,22 @@ if ($BootstrapperOnly) {
       throw "Installer artifacts must each stay below 2 GiB: $names"
     }
     Write-Host "`nInstaller bootstrapper refreshed; existing split volumes left untouched." -ForegroundColor Green
-    Write-Host ("  {0}" -f (Join-Path $distDir "XB-SVCB-Setup.exe")) -ForegroundColor Green
+    Write-Host ("  {0}" -f (Join-Path $distDir "$outputBaseName.exe")) -ForegroundColor Green
   } finally {
     if (Test-Path -LiteralPath $compileDir) {
       Remove-Item -LiteralPath $compileDir -Recurse -Force
     }
   }
 } else {
-  # Never leave an older setup payload next to a newly compiled bootstrapper.
-  Get-ChildItem -LiteralPath $distDir -Filter "XB-SVCB-Setup*" -File -ErrorAction SilentlyContinue |
+  # Replace only this hardware package; keep the other three package families.
+  Get-ChildItem -LiteralPath $distDir -Filter "$outputBaseName*" -File -ErrorAction SilentlyContinue |
     Remove-Item -Force
-  & $iscc (Join-Path $Root "installer\xb-svcb.iss")
+  & $iscc "/DXB_PACKAGE_STACK=$packageStack" "/DXB_OUTPUT_BASENAME=$outputBaseName" (Join-Path $Root "installer\xb-svcb.iss")
   if ($LASTEXITCODE -ne 0) { throw "ISCC compile failed (exit code $LASTEXITCODE)" }
 
-  $out = Join-Path $distDir "XB-SVCB-Setup.exe"
+  $out = Join-Path $distDir "$outputBaseName.exe"
   Require-File $out "Installer bootstrapper"
-  $artifacts = Get-ChildItem -LiteralPath $distDir -Filter "XB-SVCB-Setup*" -File |
+  $artifacts = Get-ChildItem -LiteralPath $distDir -Filter "$outputBaseName*" -File |
     Sort-Object Name
   if (-not ($artifacts | Where-Object { $_.Extension -eq ".bin" })) {
     throw "Installer payload slices were not generated. Check DiskSpanning in installer/xb-svcb.iss."
@@ -586,4 +737,12 @@ if ($BootstrapperOnly) {
   $artifacts | ForEach-Object {
     Write-Host ("  {0} ({1:N1} MiB)" -f $_.FullName, ($_.Length / 1MB))
   }
+}
+
+# The staged directory is a disposable, filtered view of assets/wheels.  The
+# developer cache remains intact when -SkipWheelhouse is used, while temporary
+# hardlinks/copies are removed after a successful package build.
+if (Test-Path -LiteralPath $installerWheelhouse) {
+  Remove-Item -LiteralPath $installerWheelhouse -Recurse -Force
+  Write-Host "Removed temporary $packageStack wheel payload staging." -ForegroundColor DarkGray
 }

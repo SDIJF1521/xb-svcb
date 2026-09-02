@@ -20,8 +20,8 @@ def test_directml_voice_environments_use_python_310() -> None:
 
     assert installer._svc_python_for_stack("directml") == "3.10"
     assert installer._rvc_python_for_stack("directml") == "3.10"
-    assert installer._svc_python_for_stack("cu121") == "3.9"
-    assert installer._rvc_python_for_stack("cpu") == "3.9"
+    assert installer._svc_python_for_stack("cu126") == "3.10"
+    assert installer._rvc_python_for_stack("cpu") == "3.10"
 
 
 def test_directml_torch_install_never_invokes_empty_pip() -> None:

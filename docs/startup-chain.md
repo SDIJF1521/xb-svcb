@@ -20,6 +20,8 @@ build_api() 是组合根，主要负责把路径、存储、模型服务、作�
 
 FastAPI 是可选入口。用户在应用内手动启动后，Uvicorn 在 GUI 进程后台线程中监听端口；HTTP 路由调用同一个 Api 和同一批应用服务，不会另起一套业务核心。
 
+模型 Worker 的 Python 由 `runtime.json` 路由。CUDA126/CUDA128 默认把 UVR、SeedVC、DDSP 路由到 `runtimes/core-*`，把 SVC、RVC、Vocal 路由到 `runtimes/svc-*`；CPU、DirectML 和旧安装可以继续路由到 `.venv-*`。Worker 进程隔离不等于依赖隔离，共享层内的组件仍使用同一套已校验依赖。
+
 ## 3. 普通翻唱任务
 
     选择音频和模型
@@ -62,3 +64,5 @@ FastAPI 是可选入口。用户在应用内手动启动后，Uvicorn 在 GUI �
 ## 6. 退出流程
 
 app/main.py 的 finally 块会依次停止 API 和后台服务、清空当前用户数据目录的 temp 内容、释放单实例句柄。模型和作品等持久数据不会因正常退出被清除。
+
+运行时目录、安装入口和修复边界见[共享运行时与兼容布局](runtime-consolidation.md)。

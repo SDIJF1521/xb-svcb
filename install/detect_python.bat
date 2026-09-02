@@ -1,5 +1,5 @@
 @echo off
-rem Locate a real CPython 3.10+ interpreter and export its absolute path.
+rem Locate a real CPython 3.10.x interpreter and export its absolute path.
 rem This file intentionally does not use setlocal: callers consume XB_PYTHON_*.
 
 set "XB_PYTHON_DETECTED="
@@ -18,7 +18,7 @@ if defined XB_PYTHON_DETECTED goto PYTHON_FOUND
 
 rem Python's launcher resolves Store installs and installations outside PATH.
 where py >nul 2>&1 && (
-  for /f "delims=" %%P in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do if not defined XB_PYTHON_DETECTED call :TRY_PYTHON "%%P"
+  for /f "delims=" %%P in ('py -3.10 -c "import sys; print(sys.executable)" 2^>nul') do if not defined XB_PYTHON_DETECTED call :TRY_PYTHON "%%P"
 )
 if defined XB_PYTHON_DETECTED goto PYTHON_FOUND
 
@@ -50,7 +50,7 @@ if "%~1"=="" exit /b 1
 if not exist "%~1" exit /b 1
 rem A trailing slash is not a reliable directory test on Windows: it can
 rem also match a runnable python.exe. The execution probe rejects directories.
-"%~1" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>&1
+"%~1" -c "import sys; raise SystemExit(0 if sys.implementation.name == 'cpython' and sys.version_info[:2] == (3, 10) and sys.maxsize > 2**32 else 1)" >nul 2>&1
 if errorlevel 1 exit /b 1
 set "XB_PYTHON_DETECTED=%~f1"
 exit /b 0

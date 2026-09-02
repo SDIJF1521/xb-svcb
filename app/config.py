@@ -258,7 +258,7 @@ def _detect_sovits_repo() -> Path | None:
 def _detect_svc_python() -> Path | None:
     env = _existing_env_file("XB_SVC_PYTHON")
     manifest = _manifest_python("svc")
-    # 优先项目内安装器创建的 .venv-svc；其次常见 conda 环境名 svc（开发便利）
+    # 优先显式配置和 runtime.json；旧 .venv-svc / conda 路径作为兼容回退。
     return _first_file(
         [
             *([env] if env else []),
@@ -295,7 +295,7 @@ def svc_engine_ready() -> bool:
 
 
 # ---- RVC 推理引擎（rvc-python）----
-# 在独立的 .venv-rvc 中运行 rvc-python（依赖与 so-vits-svc 环境隔离，避免 torch/numpy 冲突）。
+# 在独立运行时中运行 rvc-python（依赖与 so-vits-svc 环境隔离，避免 torch/numpy 冲突）。
 # 缺失时 RvcEngine 自动降级为占位音频，整条链路仍可跑通。
 RVC_VENV_DIR = ROOT_DIR / ".venv-rvc"
 
@@ -312,7 +312,7 @@ def _detect_rvc_python() -> Path | None:
 
 # 运行 RVC 推理的 Python 解释器（需装有 rvc-python + torch）
 RVC_PYTHON = _detect_rvc_python()
-# RVC 推理子进程脚本（由 .venv-rvc 的 Python 读取，需为磁盘真实文件）
+# RVC 推理子进程脚本（由隔离环境的 Python 读取，需为磁盘真实文件）
 RVC_WORKER = BUNDLE_DIR / "infrastructure" / "rvc_worker.py"
 
 

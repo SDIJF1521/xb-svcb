@@ -7,7 +7,7 @@
   .venv-uvr/     —— 人声分离环境（audio-separator）
   .venv-pymss/   —— 可选 PyMSS 人声分离环境
   .venv-svc/     —— so-vits-svc 4.1 推理环境（torch + fairseq 等）
-  .venv-rvc/     —— RVC 推理环境（rvc-python；40 系及以下 cu121，50 系 cu128，CPU 版）
+  .venv-rvc/     —— RVC 推理环境（rvc-python；兼容旧安装目录）
   .venv-seedvc/  —— SeedVC 推理环境（官方 Seed-VC；推理时提供参考音频）
   .venv-ddsp/    —— DDSP-SVC 推理环境（yxlllc/DDSP-SVC Rectified Flow）
   .venv-vocal/   —— AI 歌声增强环境（DeepFilterNet + Pedalboard）
@@ -36,7 +36,7 @@
   python install/install.py --only seedvc  # 只装 SeedVC 推理环境（.venv-seedvc）
   python install/install.py --only ddsp    # 只装 DDSP-SVC 推理环境（.venv-ddsp）
   python install/install.py --only vocal   # 只装 AI 歌声增强环境（.venv-vocal）
-  python install/install.py --consolidated # 实验性合并预检，当前依赖冲突会停止
+  python install/install.py --consolidated # NVIDIA 共享布局兼容入口
   python install/install.py --only models  # 只跑某一步：app/plugins/web/uvr/pymss/svc/rvc/seedvc/ddsp/vocal/hub/models
 """
 
@@ -115,6 +115,10 @@ RUNTIMES_DIR = ROOT / "runtimes"
 # _configure_runtime_layout; this default keeps imported helpers meaningful.
 CORE_VENV = RUNTIMES_DIR / "core-cu128"
 RUNTIME_MANIFEST = ROOT / "runtime.json"
+# The shared installer runs several component recipes against one SVC/RVC/Vocal
+# environment. Their intermediate build pins are intentionally different, so
+# shared-mode pip checks are deferred until the complete recipe is finished.
+SHARED_INSTALL_IN_PROGRESS = False
 UVR_MODELS_DIR = ROOT / "models" / "uvr"
 VOCAL_MODELS_DIR = ROOT / "models" / "vocal-enhancement"
 
@@ -172,20 +176,28 @@ DDSP_NSF_HIFIGAN_GH = (
     "pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.zip"
 )
 
-# CUDA wheel 源（cu121 兼容 40 系及以下 NVIDIA 显卡）；CPU 用官方默认源
-TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu121"
+# CUDA wheel 源。40 系及以下 NVIDIA 的共享方案使用 cu126；旧隔离方案仍
+# 项目当前所有非 Blackwell NVIDIA 使用 cu126。
+# TORCH_CUDA_INDEX 保留变量名只是为了兼容旧函数调用，实际地址已经是 cu126。
+TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu126"
+TORCH_PREBLACKWELL_INDEX = "https://download.pytorch.org/whl/cu126"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
-# RVC 旧栈仍固定 torch 2.1.1，但 CUDA wheel 与其它环境统一走 cu121。
+# RVC 旧路径仍保留目录兼容性，但 NVIDIA wheel 不再回退到更旧 CUDA 栈。
 TORCH_RVC_CUDA_INDEX = TORCH_CUDA_INDEX
 
 # ---- 50 系（Blackwell, sm_120）专用栈 ----
-# 50 系必须用 cu128 + torch>=2.7（cu121 无 sm_120 内核，会"无可用内核"或哑音）。
+# 50 系必须用 cu128 + torch>=2.7；cu126 不覆盖 Blackwell 的 sm_120。
 # 仅升级 torch/cuda 不够：旧 3.9 + 老 numpy/fairseq/torchaudio 在新 torch 上能加载却出哑音，
 # 因此 Blackwell 走独立的 py3.10 + 新依赖栈（torchaudio I/O 改用 soundfile，fairseq 重装）。
 TORCH_BLACKWELL_INDEX = "https://download.pytorch.org/whl/cu128"
 TORCH_BLACKWELL_VER = "2.7.1"  # cp39/cp310 均有 win 轮子；统一钉此版本以求确定性
 TORCHAUDIO_BLACKWELL_VER = "2.7.1"
 TORCHVISION_BLACKWELL_VER = "0.22.1"
+# 40 系及以下 NVIDIA 的共享 cu126 方案使用与 Blackwell 相同的现代
+# Python 3.10/Torch 2.7.1 组合，只替换 CUDA wheel 栈。
+TORCH_PREBLACKWELL_VER = "2.7.1"
+TORCHAUDIO_PREBLACKWELL_VER = "2.7.1"
+TORCHVISION_PREBLACKWELL_VER = "0.22.1"
 # PyMSS 2.0.x requires Torch 2.7.1. PyTorch publishes that pair on cu126 for
 # pre-Blackwell NVIDIA cards and on cu128 for Blackwell, so keep the isolated
 # PyMSS wheelhouse aligned to the actual runtime stack.
@@ -214,7 +226,7 @@ SVC_FCPE_RUNTIME_DEPS = (
     "einops==0.8.2",
     "local-attention==1.10.0",
 )
-# So-VITS-SVC imports matplotlib while loading its vocoder. The py39 stack
+# So-VITS-SVC imports matplotlib while loading its vocoder. The CPU compatibility stack
 # installs matplotlib with --no-deps to preserve its validated NumPy pin, so
 # keep matplotlib's remaining import-time dependencies explicit.
 SVC_MATPLOTLIB_RUNTIME_DEPS = (
@@ -270,13 +282,12 @@ UVR_DATA_RAW_PREFIX = "https://raw.githubusercontent.com/TRvlvr/application_data
 
 # UVR（audio-separator）是现代库，用 3.10。
 PYTHON_FOR_ENGINES = "3.10"
-# so-vits-svc 4.1 的 CUDA/CPU 依赖以 Python 3.9 为稳定栈；DirectML 必须使用
-# Python 3.10，避免 torch-directml 0.2.5 在 3.9 导入时触发 staticmethod 错误。
-PYTHON_FOR_SVC = "3.9"
-# RVC 的 CUDA/CPU 老栈继续使用 Python 3.9；DirectML 与 Blackwell 使用 3.10。
-PYTHON_FOR_RVC = "3.9"
-# Blackwell（50 系）下改用 3.10：cu128 的 torch2.7.1 有 cp310 轮子，且 numpy 1.23.5 /
-# pyworld 等在 3.10 也有可用 wheel；3.9 老栈在新 torch 上易出哑音。
+# 所有发布包只要求用户提供 CPython 3.10。CPU 保留隔离环境和旧 Torch 组合，
+# 但使用 3.10 兼容的 NumPy/pyworld 覆盖；DirectML 也必须使用 3.10，避免
+# torch-directml 在 3.9 导入时触发 staticmethod 错误。
+PYTHON_FOR_SVC = "3.10"
+PYTHON_FOR_RVC = "3.10"
+# CUDA126/CUDA128 同样使用 3.10；现代 torch 有完整 cp310 wheels。
 PYTHON_FOR_SVC_BLACKWELL = "3.10"
 PYTHON_FOR_RVC_BLACKWELL = "3.10"
 
@@ -287,11 +298,13 @@ PYTHON_FOR_RVC_BLACKWELL = "3.10"
 CONSOLIDATED_RUNTIME = False
 CONSOLIDATED_STACK = ""
 CORE_COMPONENTS = {"uvr", "seedvc", "ddsp"}
+SVC_COMPONENTS = {"svc", "rvc", "vocal"}
 CORE_VENV_REUSED = False
 CORE_CONSTRAINTS: Path | None = None
 CORE_COMPAT_WHEEL: Path | None = None
 CORE_PROFILE: dict | None = None
 CORE_PROFILE_PINS: dict[str, str] = {}
+CORE_PROFILE_WHEEL_DIRS: tuple[Path, ...] = ()
 # Experimental, locally tested candidate. Never applied to isolated runtimes.
 CORE_COMPAT_PACKAGES = (
     "numpy==2.2.6", "protobuf==7.36.0", "tensorboardX==2.6.5",
@@ -316,16 +329,18 @@ def _recipe_module():
 
 
 def _configure_core_profile(name: str | None) -> None:
-    global CORE_PROFILE, CORE_PROFILE_PINS, CORE_COMPAT_WHEEL
+    global CORE_PROFILE, CORE_PROFILE_PINS, CORE_COMPAT_WHEEL, CORE_PROFILE_WHEEL_DIRS
     CORE_PROFILE, CORE_PROFILE_PINS = None, {}
+    CORE_PROFILE_WHEEL_DIRS = ()
     if name is None:
         return
     recipe = _recipe_module()
     profile, pins = recipe.load_profile()
     if name != profile["id"]:
         raise ValueError("Unknown core profile")
-    recipe.verify_artifacts(ROOT, profile, {"compat"})
+    artifacts = recipe.verify_artifacts(ROOT, profile, {"candidate", "compat"})
     CORE_COMPAT_WHEEL = recipe.contained(ROOT, profile["compatibility_wheel"])
+    CORE_PROFILE_WHEEL_DIRS = tuple(dict.fromkeys(path.parent for path in artifacts))
     CORE_PROFILE, CORE_PROFILE_PINS = profile, pins
 
 
@@ -341,12 +356,31 @@ def _validate_core_compat_wheel(path: Path) -> None:
         raise ValueError("AudioTools 兼容 wheel 不匹配已验证的实验配方")
 
 
+def _core_recipe_find_links() -> list[Path]:
+    """Return verified local candidate/compat directories for shared core installs."""
+    directories = list(CORE_PROFILE_WHEEL_DIRS)
+    if CORE_COMPAT_WHEEL is not None:
+        directories.append(CORE_COMPAT_WHEEL.parent)
+    return list(dict.fromkeys(directories))
+
+
 def _configure_runtime_layout(*, consolidated: bool, gpu_stack: str) -> None:
     """Select the environment layout used by installation steps."""
     global CONSOLIDATED_RUNTIME, CONSOLIDATED_STACK, CORE_VENV, CORE_VENV_REUSED
-    CONSOLIDATED_RUNTIME = bool(consolidated and gpu_stack in {"cpu", "cu121", "cu128"})
+    global SVC_VENV, RVC_VENV, VOCAL_VENV
+    CONSOLIDATED_RUNTIME = bool(consolidated and gpu_stack in {"cpu", "cu126", "cu128"})
     CONSOLIDATED_STACK = gpu_stack if CONSOLIDATED_RUNTIME else ""
     CORE_VENV_REUSED = False
+    # NVIDIA modern stacks use two shared environments.  The legacy paths are
+    # retained for the non-consolidated CPU/DirectML compatibility mode.
+    if CONSOLIDATED_RUNTIME and gpu_stack in {"cu126", "cu128"}:
+        SVC_VENV = RUNTIMES_DIR / f"svc-{gpu_stack}"
+        RVC_VENV = SVC_VENV
+        VOCAL_VENV = SVC_VENV
+    else:
+        SVC_VENV = ROOT / ".venv-svc"
+        RVC_VENV = ROOT / ".venv-rvc"
+        VOCAL_VENV = ROOT / ".venv-vocal"
     if CONSOLIDATED_RUNTIME:
         # Candidate only: the preflight and post-install checks below must pass
         # before this directory can be advertised as a shared runtime.
@@ -362,37 +396,37 @@ def runtime_venv(component: str, legacy: Path) -> Path:
     """Return the selected venv path for an installer component."""
     if CONSOLIDATED_RUNTIME and component in CORE_COMPONENTS:
         return CORE_VENV
+    if CONSOLIDATED_RUNTIME and component in SVC_COMPONENTS:
+        return SVC_VENV
     return legacy
 
 
-def write_runtime_manifest(gpu_stack: str, installed: set[str]) -> None:
-    """Persist relative interpreter paths so the app can discover shared envs."""
-    if not CONSOLIDATED_RUNTIME or not CORE_COMPONENTS.issubset(installed):
-        return
-    py = str(venv_python(CORE_VENV))
-    # Never activate a half-installed or incompatible shared environment.
-    if not Path(py).is_file():
-        raise RuntimeError("共享运行时缺少 Python，未更新 runtime.json")
+def update_runtime_manifest_routes(
+    gpu_stack: str,
+    routes: dict[str, Path],
+    *,
+    layout: str | None = None,
+) -> None:
+    """Atomically merge validated interpreter routes into ``runtime.json``."""
+    relative_routes: dict[str, str] = {}
+    for component, python in routes.items():
+        if not python.is_file():
+            raise RuntimeError(f"{component} 运行时缺少 Python，未更新 runtime.json")
+        try:
+            relative = python.relative_to(ROOT)
+        except ValueError as exc:
+            raise RuntimeError(f"{component} 运行时不在安装目录内，拒绝写入 runtime.json") from exc
+        relative_routes[component] = str(relative).replace("\\", "/")
+
     payload = {}
     if RUNTIME_MANIFEST.exists():
         payload = json.loads(RUNTIME_MANIFEST.read_text(encoding="utf-8-sig"))
         if not isinstance(payload, dict) or payload.get("version") != 1 or not isinstance(payload.get("python", {}), dict):
             raise RuntimeError("runtime.json 格式无效，拒绝覆盖")
-    components = {
-        component: venv_python(runtime_venv(component, Path(f".venv-{component}")))
-        for component in sorted(CORE_COMPONENTS)
-    }
-    # Keep paths portable across install locations; config resolves them from ROOT_DIR.
-    payload.update({
-        "version": 1,
-        "layout": "consolidated",
-        "stack": gpu_stack,
-        "python": {
-            **payload.get("python", {}),
-            **{component: str(path.relative_to(ROOT)).replace("\\", "/")
-               for component, path in components.items()},
-        },
-    })
+    payload["version"] = 1
+    payload["stack"] = gpu_stack
+    payload["layout"] = layout or payload.get("layout") or "routed"
+    payload["python"] = {**payload.get("python", {}), **relative_routes}
     if CORE_COMPAT_WHEEL is not None:
         payload["compatibility"] = {"experimental": True, "profile": "numpy2-protobuf7-xb1"}
     if CORE_PROFILE is not None:
@@ -410,15 +444,60 @@ def write_runtime_manifest(gpu_stack: str, installed: set[str]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def write_runtime_manifest(gpu_stack: str, installed: set[str]) -> None:
+    """Persist relative interpreter paths so the app can discover shared envs."""
+    if not CONSOLIDATED_RUNTIME or not CORE_COMPONENTS.issubset(installed):
+        return
+    components = {
+        component: venv_python(runtime_venv(component, Path(f".venv-{component}")))
+        for component in sorted(CORE_COMPONENTS)
+    }
+    update_runtime_manifest_routes(gpu_stack, components, layout="consolidated")
+
+
 def _shared_torch_specs(gpu_stack: str) -> list[str]:
     if gpu_stack == "cu128":
         versions = (TORCH_BLACKWELL_VER, TORCHAUDIO_BLACKWELL_VER, TORCHVISION_BLACKWELL_VER)
-    elif gpu_stack in {"cpu", "cu121"}:
+        suffix = "cu128"
+    elif gpu_stack == "cu126":
+        versions = (TORCH_PREBLACKWELL_VER, TORCHAUDIO_PREBLACKWELL_VER, TORCHVISION_PREBLACKWELL_VER)
+        suffix = "cu126"
+    elif gpu_stack == "cpu":
         versions = ("2.5.1", "2.5.1", "0.20.1")
+        suffix = "cpu"
     else:
         raise RuntimeError("共享环境暂不支持此设备栈")
-    return [f"{name}=={version}+{gpu_stack}" for name, version in
+    if suffix == "cpu":
+        return [f"{name}=={version}" for name, version in
+                zip(("torch", "torchaudio", "torchvision"), versions)]
+    return [f"{name}=={version}+{suffix}" for name, version in
             zip(("torch", "torchaudio", "torchvision"), versions)]
+
+
+def _modern_cuda_stack(gpu_stack: str) -> bool:
+    return gpu_stack in {"cu126", "cu128"}
+
+
+def _modern_torch_specs(gpu_stack: str, *, include_vision: bool = False) -> list[str]:
+    if gpu_stack == "cu128":
+        values = [f"torch=={TORCH_BLACKWELL_VER}", f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}"]
+        vision = f"torchvision=={TORCHVISION_BLACKWELL_VER}"
+    elif gpu_stack == "cu126":
+        values = [f"torch=={TORCH_PREBLACKWELL_VER}", f"torchaudio=={TORCHAUDIO_PREBLACKWELL_VER}"]
+        vision = f"torchvision=={TORCHVISION_PREBLACKWELL_VER}"
+    else:
+        raise RuntimeError(f"不是现代 CUDA 栈：{gpu_stack}")
+    if include_vision:
+        values.append(vision)
+    return values
+
+
+def _modern_torch_index(gpu_stack: str) -> str:
+    if gpu_stack == "cu128":
+        return TORCH_BLACKWELL_INDEX
+    if gpu_stack == "cu126":
+        return TORCH_PREBLACKWELL_INDEX
+    raise RuntimeError(f"不是现代 CUDA 栈：{gpu_stack}")
 
 
 def _preflight_consolidated_runtime(uv: str, selected: set[str], gpu_stack: str) -> None:
@@ -434,8 +513,8 @@ def _preflight_consolidated_runtime(uv: str, selected: set[str], gpu_stack: str)
         raise RuntimeError("缺少 SeedVC/DDSP 源码 requirements；先准备源码，预检不会下载或删除引擎目录")
     compatibility = []
     if CORE_COMPAT_WHEEL is not None:
-        if gpu_stack != "cu128":
-            raise RuntimeError("NumPy 2/protobuf 7 实验配方目前仅验证 cu128，不自动应用到 CPU/cu121/DirectML")
+        if gpu_stack not in {"cu126", "cu128"}:
+            raise RuntimeError("NumPy 2/protobuf 7 共享配方目前仅用于 NVIDIA cu126/cu128")
         _validate_core_compat_wheel(CORE_COMPAT_WHEEL)
         compatibility = [*CORE_COMPAT_PACKAGES, f"descript-audiotools @ {CORE_COMPAT_WHEEL.resolve().as_uri()}"]
     scratch = ROOT / ".tmp"
@@ -459,7 +538,11 @@ def _preflight_consolidated_runtime(uv: str, selected: set[str], gpu_stack: str)
             seed_req.read_text(encoding="utf-8"), ddsp_req.read_text(encoding="utf-8"),
         ]) + "\n", encoding="utf-8")
         locked = stage / "core.txt"
-        index = {"cpu": TORCH_CPU_INDEX, "cu121": TORCH_CUDA_INDEX, "cu128": TORCH_BLACKWELL_INDEX}[gpu_stack]
+        index = {
+            "cpu": TORCH_CPU_INDEX,
+            "cu126": TORCH_PREBLACKWELL_INDEX,
+            "cu128": TORCH_BLACKWELL_INDEX,
+        }[gpu_stack]
         directories = []
         for component in sorted(CORE_COMPONENTS):
             directories.extend(_wheelhouse_dirs(component=component, gpu_stack=gpu_stack, python_version="3.10"))
@@ -471,12 +554,16 @@ def _preflight_consolidated_runtime(uv: str, selected: set[str], gpu_stack: str)
             indices = ["--no-index"]
             for directory in dict.fromkeys(directories):
                 indices.extend(["--find-links", str(directory)])
-        if CORE_COMPAT_WHEEL is not None:
-            # Source-only packages (argbind/randomname/etc.) can be staged
-            # beside the compatibility wheel without allowing source builds
-            # or build-time downloads into this preflight.
-            indices.extend(["--find-links", str(CORE_COMPAT_WHEEL.parent)])
-        command = uv_cmd(uv, "pip", "compile", str(requirements), "--python-version", "3.10",
+        # The fixed profile keeps its candidate pins and compatibility wheels
+        # outside the generated component wheelhouse. Include both verified
+        # directories without allowing source builds or network fallback.
+        for directory in _core_recipe_find_links():
+            indices.extend(["--find-links", str(directory)])
+        resolver_python = python_spec_for_venv(uv, "3.10")
+        if resolver_python == "3.10":
+            raise RuntimeError("共享依赖预检未找到可验证的 Python 3.10 真实路径；拒绝让 uv 扫描托管 Junction")
+        command = uv_cmd(uv, "pip", "compile", str(requirements), "--python", resolver_python,
+                         "--python-version", "3.10",
                          "--python-platform", "windows", "--no-python-downloads", "--no-build",
                          "--output-file", str(locked), *indices)
         # Compilation may retrieve package metadata, but never installs into
@@ -520,7 +607,7 @@ def _guard_shared_runtime_repair(selected: set[str]) -> None:
 def _svc_python_for_stack(gpu_stack: str) -> str:
     if gpu_stack == "directml":
         return PYTHON_FOR_ENGINES
-    if gpu_stack == "cu128":
+    if gpu_stack in {"cu126", "cu128"}:
         return PYTHON_FOR_SVC_BLACKWELL
     return PYTHON_FOR_SVC
 
@@ -528,7 +615,7 @@ def _svc_python_for_stack(gpu_stack: str) -> str:
 def _rvc_python_for_stack(gpu_stack: str) -> str:
     if gpu_stack == "directml":
         return PYTHON_FOR_ENGINES
-    if gpu_stack == "cu128":
+    if gpu_stack in {"cu126", "cu128"}:
         return PYTHON_FOR_RVC_BLACKWELL
     return PYTHON_FOR_RVC
 
@@ -847,6 +934,15 @@ def _path_is_file(path: Path) -> bool:
         return False
 
 
+def _resolved_file_path(path: Path) -> Path | None:
+    """Return a concrete file path with Windows Junctions/symlinks expanded."""
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return None
+    return resolved if resolved.is_file() else None
+
+
 def _path_exists(path: Path) -> bool:
     try:
         return path.exists()
@@ -924,14 +1020,45 @@ def _candidate_python_paths(python_version: str | None = None) -> list[Path]:
     return paths
 
 
-def python_spec_for_venv(python_version: str) -> str:
-    """Prefer the verified local CPython 3.10 over uv's managed interpreter cache."""
+def python_spec_for_venv(uv: str, python_version: str) -> str:
+    """Resolve a real interpreter path before asking uv to create a venv.
+
+    Passing ``3.10`` directly to uv can select a stale generic Junction on
+    Windows. Resolve the managed interpreter first and pass its concrete path
+    to ``uv venv`` instead.
+    """
     requested = _wheel_py_tag(python_version)
     if requested != "py310":
         return python_version
     for path in _candidate_python_paths(python_version):
-        if _path_is_file(path) and _python_minor_version(path) == "3.10":
-            return str(path)
+        resolved = _resolved_file_path(path)
+        if resolved is not None and _python_minor_version(resolved) == "3.10":
+            return str(resolved)
+
+    find_args = [
+        uv,
+        "python",
+        "find",
+        python_version,
+        "--managed-python",
+        "--no-project",
+        "--resolve-links",
+    ]
+    try:
+        found = subprocess.run(
+            find_args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+        if found.returncode == 0:
+            path = _resolved_file_path(Path(found.stdout.strip()).expanduser())
+            if path is not None and _python_minor_version(path) == "3.10":
+                return str(path)
+    except (OSError, subprocess.SubprocessError):
+        pass
     return python_version
 
 
@@ -953,7 +1080,7 @@ def ensure_venv(uv: str, venv_dir: Path, python_version: str) -> None:
         print(c("y", f"    现有 {venv_dir.name} 不完整，重建中 …"))
         shutil.rmtree(venv_dir, ignore_errors=True)
 
-    spec = python_spec_for_venv(python_version)
+    spec = python_spec_for_venv(uv, python_version)
     if spec != python_version:
         print(c("g", f"    使用已验证 Python {python_version}: {spec}"))
     run(uv_cmd(uv, "venv", "--python", spec, str(venv_dir)))
@@ -989,9 +1116,10 @@ def find_nvidia_smi() -> str | None:
 
 
 def detect_gpu_stack() -> str:
-    """Return cpu, directml, cu121 or cu128 based on the detected GPU."""
+    """Return cpu, directml, cu126 or cu128 based on the detected GPU."""
     smi = find_nvidia_smi()
     caps: list[float] = []
+    names = ""
     if smi:
         try:
             subprocess.run([smi], capture_output=True, check=True, timeout=15)
@@ -1008,26 +1136,29 @@ def detect_gpu_stack() -> str:
                     continue
             if any(cap >= 12.0 for cap in caps):
                 return "cu128"
-            if any(cap >= 5.0 for cap in caps):
-                return "cu121"
         except (OSError, subprocess.SubprocessError):
             pass
 
-        if not caps:
-            try:
-                out = subprocess.run(
-                    [smi, "--query-gpu=name", "--format=csv,noheader"],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                )
-                names = out.stdout.strip()
-                if re.search(r"RTX\s*50\d0", names, flags=re.IGNORECASE):
-                    return "cu128"
-                if names:
-                    return "cu121"
-            except (OSError, subprocess.SubprocessError):
-                pass
+        # Some driver versions report an older/placeholder compute capability
+        # for Blackwell.  Always query the adapter name as a second signal so
+        # an RTX 50xx card cannot accidentally enter the cu126 stack.
+        try:
+            out = subprocess.run(
+                [smi, "--query-gpu=name", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            names = out.stdout.strip()
+            if re.search(r"RTX\s*50\d0", names, flags=re.IGNORECASE):
+                return "cu128"
+            if names and any(cap >= 5.0 for cap in caps):
+                return "cu126"
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+        if any(cap >= 5.0 for cap in caps):
+            return "cu126"
 
     if os.name == "nt":
         try:
@@ -1198,8 +1329,9 @@ def uv_pip_install(
                 cmd += pypi_index_args(use_mirror=use_mirror) + ["--torch-backend", "cu128"]
             else:
                 cmd += pypi_index_args(index, use_mirror=use_mirror)
-        if shared and CORE_COMPAT_WHEEL is not None:
-            cmd += ["--find-links", str(CORE_COMPAT_WHEEL.parent)]
+        if shared:
+            for directory in _core_recipe_find_links():
+                cmd += ["--find-links", str(directory)]
         return cmd
 
     if local_args:
@@ -1594,7 +1726,8 @@ def step_web() -> None:
 def step_uvr(uv: str, gpu_stack: str) -> None:
     hr("4/12 共享人声分离环境 runtimes/core-*（audio-separator）")
     use_blackwell = gpu_stack == "cu128"
-    use_cuda = gpu_stack in {"cu121", "cu128"}
+    use_modern_cuda = gpu_stack in {"cu126", "cu128"}
+    use_cuda = gpu_stack in {"cu126", "cu128"}
     use_directml = gpu_stack == "directml"
     venv = runtime_venv("uvr", UVR_VENV)
     ensure_venv(uv, venv, PYTHON_FOR_ENGINES)
@@ -1623,19 +1756,15 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
         run(uv_cmd(uv, "pip", "uninstall", "--python", py, "torch-directml"))
     # UVR 严格跟随全局推理栈：NVIDIA 用 CUDA，Windows AMD 用
     # torch-directml + ONNX Runtime DirectML，其余环境使用 CPU。
-    if use_blackwell:
-        torch_specs = [
-            f"torch=={TORCH_BLACKWELL_VER}",
-            f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
-            f"torchvision=={TORCHVISION_BLACKWELL_VER}",
-        ]
-        torch_index = TORCH_BLACKWELL_INDEX
-        torch_label = "cu128"
+    if use_modern_cuda:
+        torch_specs = _modern_torch_specs(gpu_stack, include_vision=True)
+        torch_index = _modern_torch_index(gpu_stack)
+        torch_label = gpu_stack
         pip(*torch_specs, index=torch_index)
     elif use_cuda:
         torch_specs = ["torch==2.5.1", "torchaudio==2.5.1", "torchvision==0.20.1"]
         torch_index = TORCH_CUDA_INDEX
-        torch_label = "cu121"
+        torch_label = "cu126"
         pip(*torch_specs, index=torch_index)
     elif use_directml:
         torch_specs = []
@@ -1664,13 +1793,13 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
         # multi-gigabyte Torch download. Pin the already validated local wheels.
         constraint_file = ROOT / ".tmp" / f"uvr-torch-{gpu_stack}.constraints.txt"
         constraint_file.parent.mkdir(parents=True, exist_ok=True)
-        local_suffix = "+cu128" if use_blackwell else "+cu121"
+        local_suffix = "+" + gpu_stack if use_modern_cuda else "+cu126"
         constraint_file.write_text(
             "\n".join(
                 (
-                    f"torch=={TORCH_BLACKWELL_VER}{local_suffix}" if use_blackwell else "torch==2.5.1+cu121",
-                    f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}{local_suffix}" if use_blackwell else "torchaudio==2.5.1+cu121",
-                    f"torchvision=={TORCHVISION_BLACKWELL_VER}{local_suffix}" if use_blackwell else "torchvision==0.20.1+cu121",
+                    *([f"{spec}{local_suffix}" for spec in _modern_torch_specs(gpu_stack, include_vision=True)]
+                      if use_modern_cuda else
+                      ["torch==2.5.1+cu126", "torchaudio==2.5.1+cu126", "torchvision==0.20.1+cu126"]),
                 )
             )
             + "\n",
@@ -1725,7 +1854,7 @@ def step_pymss(uv: str, gpu_stack: str) -> None:
     # actual runtime stack so offline installs stay deterministic.
     if gpu_stack == "cu128":
         pymss_stack = "cu128"
-    elif gpu_stack in {"cu121", "cu126"}:
+    elif gpu_stack == "cu126":
         pymss_stack = "cu126"
     else:
         pymss_stack = gpu_stack
@@ -1762,30 +1891,35 @@ def fetch_sovits() -> None:
         print(c("g", "    so-vits-svc 仓库已存在，跳过获取"))
         return
     ENGINES_DIR.mkdir(parents=True, exist_ok=True)
-    if SOVITS_DIR.exists():
-        shutil.rmtree(SOVITS_DIR, ignore_errors=True)
-
-    if have("git"):
-        run(
-            [
-                "git", "clone", "--depth", "1", "-b", SOVITS_BRANCH,
-                SOVITS_REPO_URL, str(SOVITS_DIR),
-            ]
-        )
-        return
-
-    # 没有 git：下载 GitHub 分支 ZIP 解压（无需安装任何额外工具）
-    print(c("y", "    未检测到 git，改用下载 ZIP 方式获取仓库 …"))
+    # Stage source first and merge it only after validation.  In particular,
+    # preserve an existing ``pretrain`` directory containing large model files.
     with tempfile.TemporaryDirectory() as td:
-        zp = Path(td) / "so-vits-svc.zip"
-        download(gh_urls(SOVITS_ZIP_URL), zp)
-        extract_zip(zp, Path(td))
-        # ZIP 解压出形如 so-vits-svc-4.1-Stable/ 的顶层目录
-        marker = next(Path(td).rglob("inference/infer_tool.py"), None)
-        if marker is None:
-            raise RuntimeError("下载的 so-vits-svc 压缩包结构异常，未找到 inference/infer_tool.py")
-        repo_root = marker.parent.parent
-        shutil.move(str(repo_root), str(SOVITS_DIR))
+        staging = Path(td) / "so-vits-svc"
+        if have("git"):
+            run(
+                [
+                    "git", "clone", "--depth", "1", "-b", SOVITS_BRANCH,
+                    SOVITS_REPO_URL, str(staging),
+                ]
+            )
+        else:
+            # 没有 git：下载 GitHub 分支 ZIP 解压（无需安装任何额外工具）
+            print(c("y", "    未检测到 git，改用下载 ZIP 方式获取仓库 …"))
+            zp = Path(td) / "so-vits-svc.zip"
+            download(gh_urls(SOVITS_ZIP_URL), zp)
+            extract_zip(zp, Path(td))
+            marker = next(Path(td).rglob("inference/infer_tool.py"), None)
+            if marker is not None:
+                staging = marker.parent.parent
+
+        marker = staging / "inference" / "infer_tool.py"
+        if not marker.is_file():
+            raise RuntimeError("获取的 so-vits-svc 仓库结构异常，未找到 inference/infer_tool.py")
+        if SOVITS_DIR.exists():
+            shutil.copytree(staging, SOVITS_DIR, dirs_exist_ok=True)
+            print(c("g", "    已补全 so-vits-svc 源码，并保留现有 pretrain 模型"))
+        else:
+            shutil.move(str(staging), str(SOVITS_DIR))
 
 
 def fetch_seedvc() -> None:
@@ -1976,11 +2110,12 @@ def _venv_pyver(py: Path) -> str | None:
 
 
 def step_svc(uv: str, gpu_stack: str) -> None:
-    hr("6/12 推理引擎 so-vits-svc + .venv-svc")
+    hr(f"6/12 推理引擎 so-vits-svc + {SVC_VENV.name}")
     fetch_sovits()
 
     use_blackwell = gpu_stack == "cu128"
-    use_gpu = gpu_stack in {"cu121", "cu128"}
+    use_modern_cuda = gpu_stack in {"cu126", "cu128"}
+    use_gpu = gpu_stack in {"cu126", "cu128"}
     use_directml = gpu_stack == "directml"
 
     # torch-directml 0.2.5 imports only on Python 3.10+; CUDA/CPU keep their
@@ -2034,14 +2169,12 @@ def step_svc(uv: str, gpu_stack: str) -> None:
         )
         return
 
-    if use_blackwell:
-        # 50 系：cu128 + torch2.7.1。torch.load 的 weights_only 由 svc_worker 在导入前还原；
+    if use_modern_cuda:
+        # NVIDIA shared stack: cu126 for pre-Blackwell, cu128 for Blackwell;
+        # both use Python 3.10 + torch2.7.1. torch.load 的 weights_only 由
+        # svc_worker 在导入前还原；
         # torchaudio I/O 在 2.7 改走 torchcodec，svc_worker 用 soundfile 垫片规避哑音。
-        pip(
-            f"torch=={TORCH_BLACKWELL_VER}",
-            f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
-            index=TORCH_BLACKWELL_INDEX,
-        )
+        pip(*_modern_torch_specs(gpu_stack), index=_modern_torch_index(gpu_stack))
         if req_file.exists():
             # 自管 torch/torchaudio/torchvision/fairseq；numpy/pyworld 覆盖到 3.10 兼容版
             filtered = _filter_requirements(
@@ -2057,12 +2190,13 @@ def step_svc(uv: str, gpu_stack: str) -> None:
             pip("matplotlib==3.8.4")
             # fairseq 单独装（py3.10 无官方 wheel，单列以便定位失败）
             _install_fairseq_blackwell(pip)
-            # 兜底：fairseq 可能把 cu128 torch 换成同号 CPU 版 → 强制校正回 cu128
-            _reaffirm_blackwell_torch(
+            # 兜底：fairseq 可能把 CUDA torch 换成同号 CPU 版 → 强制校正回当前栈
+            _reaffirm_modern_torch(
                 uv,
                 py,
                 component="svc",
                 python_version=target_py,
+                gpu_stack=gpu_stack,
             )
             # 修复早期错误补丁（weights_only 误插进 torch.device）；weights_only 兼容由
             # svc_worker 运行时 monkey-patch torch.load 处理
@@ -2071,25 +2205,33 @@ def step_svc(uv: str, gpu_stack: str) -> None:
             print(c("r", "    未找到 requirements，跳过依赖安装（请检查仓库）"))
         _verify_svc_fcpe_runtime(py)
         _verify_svc_matplotlib_runtime(py)
-        print(c("g", "推理环境就绪（Blackwell/cu128）"))
+        _activate_shared_cuda_runtime(
+            uv,
+            component="svc",
+            venv=SVC_VENV,
+            imports=("inference.infer_tool",),
+            gpu_stack=gpu_stack,
+            cwd=SOVITS_DIR,
+        )
+        print(c("g", f"推理环境就绪（共享 {gpu_stack}）"))
         return
 
-    # 老栈（40 系及以下 / CPU）：保持原有已验证组合不变
+    # CPU 兼容栈：保持旧 Torch 组合，但统一使用用户锁定的 Python 3.10。
     # 先装 torch（决定 CUDA/CPU），再装仓库其余依赖。
     # 钉 <2.6：torch>=2.6 起 torch.load 默认 weights_only=True，会拒绝反序列化
     # so-vits checkpoint 里的非张量对象（argparse.Namespace / numpy 标量），导致
-    # 加载模型时报 "Weights only load failed"。2.5.1 是支持 py3.9 且仍默认
+    # 加载模型时报 "Weights only load failed"。2.5.1 在 py3.10 中仍默认
     # weights_only=False 的稳定版，避免新装用户拉到不兼容的最新版。
     torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
     torch_index = TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX
     pip(*torch_specs, index=torch_index)
     # 优先 requirements_win.txt（仓库为 Windows 提供的更易装版本）
     if req_file.exists():
-        filtered = _filter_requirements(req_file)
+        filtered = _filter_requirements(req_file, overrides=PYTHON310_REQ_OVERRIDES)
         pip("-r", str(filtered))
     # so-vits-svc 的 vdecoder 代码里 `import matplotlib`，但官方 requirements 漏列了它，
-    # 不补会在推理加载模型时报 No module named 'matplotlib'。钉 3.7.5 以兼容 numpy 1.22 / py3.9，
-    # 避免最新 matplotlib(3.9+) 强行把 numpy 升到 >=1.23 而破坏 so-vits-svc 依赖。
+    # 不补会在推理加载模型时报 No module named 'matplotlib'。钉 3.7.5，
+    # 避免最新 matplotlib 强行升级 NumPy 而破坏 so-vits-svc 依赖。
         # 仍使用 --no-deps 防止修复旧环境时升级 NumPy，但显式补齐 Matplotlib
         # 的其余导入依赖（尤其 pyparsing；缺失时扩散模型加载会直接失败）。
         pip("--no-deps", *SVC_MATPLOTLIB_RUNTIME_DEPS)
@@ -2103,7 +2245,7 @@ def step_svc(uv: str, gpu_stack: str) -> None:
             py,
             torch_specs,
             torch_index,
-            "cu121",
+            "cu126",
             component="svc",
             gpu_stack=gpu_stack,
             python_version=target_py,
@@ -2367,6 +2509,26 @@ def _reaffirm_torch_wheels(
         raise
 
 
+def _reaffirm_modern_torch(
+    uv: str,
+    py: str,
+    *,
+    component: str,
+    python_version: str,
+    gpu_stack: str,
+) -> None:
+    _reaffirm_torch_wheels(
+        uv,
+        py,
+        _modern_torch_specs(gpu_stack),
+        _modern_torch_index(gpu_stack),
+        gpu_stack,
+        component=component,
+        gpu_stack=gpu_stack,
+        python_version=python_version,
+    )
+
+
 def _reaffirm_blackwell_torch(
     uv: str,
     py: str,
@@ -2374,15 +2536,13 @@ def _reaffirm_blackwell_torch(
     component: str,
     python_version: str,
 ) -> None:
-    _reaffirm_torch_wheels(
+    """Backward-compatible wrapper for callers outside the shared path."""
+    _reaffirm_modern_torch(
         uv,
         py,
-        [f"torch=={TORCH_BLACKWELL_VER}", f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}"],
-        TORCH_BLACKWELL_INDEX,
-        "cu128",
         component=component,
-        gpu_stack="cu128",
         python_version=python_version,
+        gpu_stack="cu128",
     )
 
 
@@ -2400,6 +2560,54 @@ def _verify_cuda_torch(py: str, component: str) -> None:
         raise RuntimeError(
             f"{component} GPU 环境校验失败：CUDA Torch 不可用，请检查驱动或重新安装"
         ) from exc
+
+
+def _activate_shared_cuda_runtime(
+    uv: str,
+    *,
+    component: str,
+    venv: Path,
+    imports: tuple[str, ...],
+    gpu_stack: str,
+    cwd: Path | None = None,
+) -> None:
+    """Validate a shared modern CUDA runtime before advertising it to the app."""
+    py = venv_python(venv)
+    if not SHARED_INSTALL_IN_PROGRESS:
+        run(uv_cmd(uv, "pip", "check", "--python", str(py)))
+    _verify_cuda_torch(str(py), component)
+    modules = repr(imports)
+    probe = (
+        "import importlib; "
+        f"mods={modules}; "
+        "[importlib.import_module(name) for name in mods]; "
+        "print('imports_ok:', ', '.join(mods))"
+    )
+    try:
+        run([str(py), "-c", probe], cwd=cwd)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"{component} 模块导入校验失败，未更新 runtime.json") from exc
+    update_runtime_manifest_routes(gpu_stack, {component: py})
+    print(c("g", f"    已启用 {component} 路由: {py}"))
+
+
+def _activate_isolated_cu128_runtime(
+    uv: str,
+    *,
+    component: str,
+    venv: Path,
+    imports: tuple[str, ...],
+    cwd: Path | None = None,
+) -> None:
+    """Backward-compatible cu128 wrapper for older callers."""
+    _activate_shared_cuda_runtime(
+        uv,
+        component=component,
+        venv=venv,
+        imports=imports,
+        gpu_stack="cu128",
+        cwd=cwd,
+    )
 
 
 def _install_fairseq_blackwell(pip) -> None:  # noqa: ANN001
@@ -2467,9 +2675,10 @@ def _patch_fairseq_weights_only(py: Path) -> None:
 
 
 def step_rvc(uv: str, gpu_stack: str) -> None:
-    hr("7/12 RVC 推理环境 .venv-rvc（rvc-python）")
+    hr(f"7/12 RVC 推理环境 {RVC_VENV.name}（rvc-python）")
     use_blackwell = gpu_stack == "cu128"
-    use_gpu = gpu_stack in {"cu121", "cu128"}
+    use_modern_cuda = gpu_stack in {"cu126", "cu128"}
+    use_gpu = gpu_stack in {"cu126", "cu128"}
     use_directml = gpu_stack == "directml"
     # RVC 推理在独立环境运行（rvc-python），与 so-vits 栈隔离。
     # rvc-python 默认会在首次推理时下载 hubert / rmvpe；这里安装后立即预置，
@@ -2500,28 +2709,33 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
         _verify_directml_torch(py, "RVC")
         print(c("g", "RVC 推理环境就绪（AMD DirectML；RMVPE 使用 CPU 稳定路径）"))
         return
-    if use_blackwell:
-        # 50 系：cu128 + torch2.7.1。rvc-python 会带回 fairseq，装完再就地打 weights_only 补丁，
+    if use_modern_cuda:
+        # NVIDIA shared stack: cu126 for pre-Blackwell, cu128 for Blackwell;
+        # both use Python 3.10 + torch2.7.1. rvc-python 会带回 fairseq，装完再就地打 weights_only 补丁，
         # 否则新 torch 加载 hubert/字典会报 "Weights only load failed"。
-        pip(
-            f"torch=={TORCH_BLACKWELL_VER}",
-            f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
-            index=TORCH_BLACKWELL_INDEX,
-        )
+        pip(*_modern_torch_specs(gpu_stack), index=_modern_torch_index(gpu_stack))
         pip("rvc-python")
         seed_rvc_base_models(venv_python(RVC_VENV))
-        # 兜底：rvc-python/fairseq 可能把 cu128 torch 换成同号 CPU 版 → 强制校正回 cu128
-        _reaffirm_blackwell_torch(
+        # 兜底：rvc-python/fairseq 可能把 CUDA torch 换成同号 CPU 版 → 强制校正回当前栈
+        _reaffirm_modern_torch(
             uv,
             py,
             component="rvc",
             python_version=target_py,
+            gpu_stack=gpu_stack,
         )
         _patch_fairseq_weights_only(venv_python(RVC_VENV))
-        print(c("g", "RVC 推理环境就绪（Blackwell/cu128）"))
+        _activate_shared_cuda_runtime(
+            uv,
+            component="rvc",
+            venv=RVC_VENV,
+            imports=("rvc_python.infer",),
+            gpu_stack=gpu_stack,
+        )
+        print(c("g", f"RVC 推理环境就绪（共享 {gpu_stack}）"))
         return
 
-    # 老栈：RVC 固定 torch 2.1.1；40 系及以下 NVIDIA 用 cu121，CPU/非 NVIDIA 用 CPU torch。
+    # 兼容旧目录的 RVC 路径；当前 NVIDIA 仍使用 cu126。
     torch_specs = ["torch==2.1.1", "torchaudio==2.1.1"]
     torch_index = TORCH_RVC_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX
     pip(*torch_specs, index=torch_index)
@@ -2533,7 +2747,7 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
             py,
             torch_specs,
             torch_index,
-            "cu121",
+            "cu126",
             component="rvc",
             gpu_stack=gpu_stack,
             python_version=target_py,
@@ -2584,7 +2798,8 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
     fetch_seedvc()
 
     use_blackwell = gpu_stack == "cu128"
-    use_gpu = gpu_stack in {"cu121", "cu128"}
+    use_modern_cuda = gpu_stack in {"cu126", "cu128"}
+    use_gpu = gpu_stack in {"cu126", "cu128"}
     use_directml = gpu_stack == "directml"
 
     target_py = PYTHON_FOR_ENGINES
@@ -2603,12 +2818,9 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
     if use_directml:
         torch_specs: list[str] = []
         torch_index = ""
-    elif use_blackwell:
-        torch_specs = [
-            f"torch=={TORCH_BLACKWELL_VER}",
-            f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
-        ]
-        torch_index = TORCH_BLACKWELL_INDEX
+    elif use_modern_cuda:
+        torch_specs = _modern_torch_specs(gpu_stack)
+        torch_index = _modern_torch_index(gpu_stack)
     else:
         torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
         torch_index = TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX
@@ -2638,26 +2850,27 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
         )
         _verify_directml_torch(py, "SeedVC")
         print(c("g", "SeedVC 推理环境就绪（AMD DirectML；RMVPE 使用 CPU 稳定路径）"))
-    elif use_blackwell:
-        _reaffirm_blackwell_torch(
+    elif use_modern_cuda:
+        _reaffirm_modern_torch(
             uv,
             py,
             component="seedvc",
             python_version=target_py,
+            gpu_stack=gpu_stack,
         )
-        print(c("g", "SeedVC 推理环境就绪（Blackwell/cu128）"))
+        print(c("g", f"SeedVC 推理环境就绪（共享 {gpu_stack}）"))
     elif use_gpu:
         _reaffirm_torch_wheels(
             uv,
             py,
             torch_specs,
             torch_index,
-            "cu121",
+            "cu126",
             component="seedvc",
             gpu_stack=gpu_stack,
             python_version=target_py,
         )
-        print(c("g", "SeedVC 推理环境就绪（cu121）"))
+        print(c("g", "SeedVC 推理环境就绪（cu126）"))
     else:
         print(c("g", "SeedVC 推理环境就绪（CPU）"))
 
@@ -2667,7 +2880,8 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
     fetch_ddsp()
 
     use_blackwell = gpu_stack == "cu128"
-    use_gpu = gpu_stack in {"cu121", "cu128"}
+    use_modern_cuda = gpu_stack in {"cu126", "cu128"}
+    use_gpu = gpu_stack in {"cu126", "cu128"}
     # The DDSP/Rectified-Flow graph can finish on DirectML while silently
     # producing electrical noise or near-silence. AMD installations therefore
     # use a CPU Torch runtime for DDSP only; UVR and other model environments
@@ -2687,12 +2901,9 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
     )
 
     pip("setuptools<81", "wheel")
-    if use_blackwell:
-        torch_specs = [
-            f"torch=={TORCH_BLACKWELL_VER}",
-            f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
-        ]
-        torch_index = TORCH_BLACKWELL_INDEX
+    if use_modern_cuda:
+        torch_specs = _modern_torch_specs(gpu_stack)
+        torch_index = _modern_torch_index(gpu_stack)
     else:
         torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
         torch_index = TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX
@@ -2723,30 +2934,31 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
     if amd_cpu_stable:
         _verify_ddsp_hubert(py)
         print(c("g", "DDSP-SVC 推理环境就绪（AMD 机器使用 CPU 稳定路径，避免 DirectML 电流杂音）"))
-    elif use_blackwell:
-        _reaffirm_blackwell_torch(
+    elif use_modern_cuda:
+        _reaffirm_modern_torch(
             uv,
             py,
             component="ddsp",
             python_version=target_py,
+            gpu_stack=gpu_stack,
         )
         _verify_cuda_torch(py, "DDSP-SVC")
         _verify_ddsp_hubert(py)
-        print(c("g", "DDSP-SVC 推理环境就绪（Blackwell/cu128）"))
+        print(c("g", f"DDSP-SVC 推理环境就绪（共享 {gpu_stack}）"))
     elif use_gpu:
         _reaffirm_torch_wheels(
             uv,
             py,
             torch_specs,
             torch_index,
-            "cu121",
+            "cu126",
             component="ddsp",
             gpu_stack=gpu_stack,
             python_version=target_py,
         )
         _verify_cuda_torch(py, "DDSP-SVC")
         _verify_ddsp_hubert(py)
-        print(c("g", "DDSP-SVC 推理环境就绪（cu121）"))
+        print(c("g", "DDSP-SVC 推理环境就绪（cu126）"))
     else:
         _verify_ddsp_hubert(py)
         print(c("g", "DDSP-SVC 推理环境就绪（CPU）"))
@@ -2784,7 +2996,7 @@ def _prepare_vocal_deepfilter_model(py: str) -> Path:
 
 
 def step_vocal(uv: str, gpu_stack: str) -> None:
-    hr("10/12 AI 歌声增强环境 .venv-vocal")
+    hr(f"10/12 AI 歌声增强环境 {VOCAL_VENV.name}")
     venv = runtime_venv("vocal", VOCAL_VENV)
     ensure_venv(uv, venv, PYTHON_FOR_ENGINES)
     py = str(venv_python(venv))
@@ -2800,15 +3012,9 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
     # requires packaging>=24. Vocal installs only prebuilt wheels, so it does
     # not need wheel at runtime; keeping it out avoids an impossible resolver.
     pip("setuptools<81")
-    if gpu_stack == "cu128":
-        torch_specs = [
-            f"torch=={TORCH_BLACKWELL_VER}",
-            f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}",
-        ]
-        torch_index = TORCH_BLACKWELL_INDEX
-    elif gpu_stack == "cu121":
-        torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
-        torch_index = TORCH_CUDA_INDEX
+    if gpu_stack in {"cu126", "cu128"}:
+        torch_specs = _modern_torch_specs(gpu_stack)
+        torch_index = _modern_torch_index(gpu_stack)
     else:
         # AMD 与无独显机器使用稳定的 CPU Torch。
         torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
@@ -2825,7 +3031,7 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
         "pedalboard==0.9.24",
         "praat-parselmouth==0.4.6",
     )
-    if gpu_stack in {"cu121", "cu128"}:
+    if gpu_stack in {"cu126", "cu128"}:
         _reaffirm_torch_wheels(
             uv,
             py,
@@ -2842,6 +3048,20 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
         "deepfilternet=0.5.6\npedalboard=0.9.24\npraat-parselmouth=0.4.6\n",
         encoding="ascii",
     )
+    if gpu_stack in {"cu126", "cu128"}:
+        # The shared SVC/RVC environment already contains wheel from its
+        # legacy build stack.  wheel>=0.47 requires packaging>=24, while
+        # DeepFilterNet3 0.5.6 intentionally uses packaging==23.2.  wheel is
+        # not needed at inference time, so remove this build-only conflict
+        # before the final dependency check.
+        run(uv_cmd(uv, "pip", "uninstall", "--python", py, "wheel"))
+        _activate_shared_cuda_runtime(
+            uv,
+            component="vocal",
+            venv=VOCAL_VENV,
+            imports=("df.enhance", "pedalboard"),
+            gpu_stack=gpu_stack,
+        )
     print(c("g", "AI 歌声增强环境与模型就绪"))
 
 
@@ -3010,20 +3230,25 @@ def main() -> int:
         help="请求按 50 系（Blackwell, cu128 + torch2.7）安装；会复核实际显卡",
     )
     p.add_argument(
+        "--cu126",
+        action="store_true",
+        help="请求按 40 系及以下 NVIDIA（cu126 + torch2.7）安装",
+    )
+    p.add_argument(
         "--no-cu128",
         dest="no_cu128",
         action="store_true",
-        help="请求使用 40 系及以下的 cu121 老栈；50 系会被复核并改回 cu128",
+        help="兼容旧参数：等价于请求使用 40 系及以下的 cu126 栈",
     )
     p.add_argument(
         "--consolidated",
         action="store_true",
-        help="实验性共享运行时；先整体解析 UVR/SeedVC/DDSP 依赖，当前版本存在冲突会停止",
+        help="使用 NVIDIA 两层共享布局；发布流程优先调用 install_shared.py",
     )
     p.add_argument("--core-compat-wheel", type=Path,
-                   help="实验性 NumPy 2/protobuf 7 配方使用的本地 AudioTools 0.7.2+xb1 wheel；必须与 --consolidated 一起使用")
+                   help="共享核心兼容配方使用的本地 AudioTools 0.7.2+xb1 wheel；必须与 --consolidated 一起使用")
     p.add_argument("--core-profile", choices=["core-cu128"],
-                   help="使用已固定版本和本地 wheel 哈希的实验配方；与 --core-compat-wheel 互斥")
+                   help="使用已固定版本和本地 wheel 哈希的 core-cu128 配方；与 --core-compat-wheel 互斥")
     p.add_argument("--preflight-only", action="store_true",
                    help="仅解析共享依赖并生成约束，不安装包/模型或更新路由；可用 UV_OFFLINE=1 禁止联网")
     p.add_argument(
@@ -3054,16 +3279,27 @@ def main() -> int:
     hr("XB-SVCB 安装器")
     print(f"安装根目录: {ROOT}")
 
-    if args.cpu and (args.gpu or args.directml):
-        print(c("r", "--cpu 不能与 --gpu/--directml 同时使用"))
+    if args.cpu and (args.gpu or args.directml or args.cu126 or args.cu128 or args.no_cu128):
+        print(c("r", "--cpu 不能与 GPU/CUDA 参数同时使用"))
         return 2
-    if args.directml and (args.cu128 or args.no_cu128):
+    if args.directml and (args.cu128 or args.cu126 or args.no_cu128):
         print(c("r", "--directml 不能与 CUDA 栈参数同时使用"))
         return 2
-    if args.cu128 and args.no_cu128:
-        print(c("r", "--cu128 与 --no-cu128 不能同时使用"))
+    if args.cu128 and (args.cu126 or args.no_cu128):
+        print(c("r", "--cu128 不能与 --cu126/--no-cu128 同时使用"))
         return 2
-    detected_stack = "cpu" if args.cpu else "directml" if args.directml else detect_gpu_stack()
+    if args.cu126 and args.no_cu128:
+        print(c("r", "--cu126 与 --no-cu128 不能同时使用"))
+        return 2
+    detected_stack = (
+        "cpu" if args.cpu else
+        "directml" if args.directml else
+        "cu126" if (args.cu126 or args.no_cu128) else
+        detect_gpu_stack()
+    )
+    if (args.cu126 or args.no_cu128) and detect_gpu_stack() == "cu128":
+        print(c("y", "检测到 Blackwell 显卡，忽略 cu126 请求并改用 cu128。"))
+        detected_stack = "cu128"
     if args.gpu and detected_stack == "cpu":
         print(c("y", "未检测到兼容 NVIDIA/AMD 显卡，已改用 CPU 版 torch。"))
     if args.no_cu128 and detected_stack == "cu128":
@@ -3071,8 +3307,8 @@ def main() -> int:
     installer_progress(8, "Checking GPU runtime")
     if detected_stack == "cu128":
         mode = c("g", "CUDA · Blackwell/50系 (cu128 + torch" + TORCH_BLACKWELL_VER + ")")
-    elif detected_stack == "cu121":
-        mode = c("g", "CUDA · 40系及以下 (cu121)")
+    elif detected_stack == "cu126":
+        mode = c("g", "CUDA · 40系及以下 (cu126 + torch2.7.1)")
     elif detected_stack == "directml":
         mode = c("g", "AMD · DirectML (torch " + TORCH_DIRECTML_TORCH_VER + ")")
     else:
@@ -3080,7 +3316,7 @@ def main() -> int:
     print(f"安装模式: {mode}")
     if detected_stack == "directml" and not args.directml:
         print("（检测到 AMD Radeon，自动选择 DirectML；如需 CPU 请加 --cpu）")
-    elif detected_stack in {"cu121", "cu128"} and not args.gpu:
+    elif detected_stack in {"cu126", "cu128"} and not args.gpu:
         print("（检测到 NVIDIA 显卡，自动选择 CUDA；如需 CPU 请加 --cpu）")
     if detected_stack == "cu128" and not args.cu128:
         print("（检测到 NVIDIA 显卡，自动使用统一 cu128 栈）")
@@ -3089,6 +3325,19 @@ def main() -> int:
         print(c("r", "DirectML 不支持此共享运行时；未修改环境。"))
         return 2
     elif CONSOLIDATED_RUNTIME:
+        if detected_stack == "cu126" and CORE_COMPAT_WHEEL is None:
+            CORE_COMPAT_WHEEL = (
+                ASSETS_DIR
+                / "runtime"
+                / "core-cu128"
+                / "compat"
+                / "descript_audiotools-0.7.2+xb1-py3-none-any.whl"
+            )
+            try:
+                _validate_core_compat_wheel(CORE_COMPAT_WHEEL)
+            except (OSError, ValueError, zipfile.BadZipFile) as exc:
+                print(c("r", f"cu126 共享兼容材料不可用：{exc}"))
+                return 1
         if CORE_VENV_REUSED:
             print(c("y", f"待验证的共享运行时候选（现有 UVR）：{CORE_VENV}"))
         else:

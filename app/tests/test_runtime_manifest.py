@@ -51,6 +51,8 @@ def test_relative_path_is_anchored_to_manifest_not_cwd(manifest_root, monkeypatc
     ("uvr", "_detect_uvr_python", "XB_UVR_PYTHON"),
     ("seedvc", "_detect_seedvc_python", "XB_SEEDVC_PYTHON"),
     ("ddsp", "_detect_ddsp_python", "XB_DDSP_PYTHON"),
+    ("svc", "_detect_svc_python", "XB_SVC_PYTHON"),
+    ("rvc", "_detect_rvc_python", "XB_RVC_PYTHON"),
 ])
 def test_explicit_then_manifest_priority(manifest_root, monkeypatch, component, detector, variable):
     shared = manifest_root / "shared.exe"

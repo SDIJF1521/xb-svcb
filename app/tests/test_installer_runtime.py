@@ -151,8 +151,29 @@ def test_installer_explicitly_packages_and_validates_python_detector() -> None:
     assert "function PythonPathCommandAvailable" in script
     assert "\\windowsapps\\" in script
     assert ".venv-plugins Python 不可运行" in script
-    assert ".venv-uvr Python 不可运行" in script
+    assert "UVR Python 不可运行" in script
     assert 'if defined XB_PYTHON_DIR if exist "%XB_PYTHON_DIR%\\python.exe" set "XB_PYTHON_EXE=' not in prereqs
+
+
+def test_installer_detects_and_locks_an_external_python310() -> None:
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    build = (ROOT / "installer" / "build.ps1").read_text(encoding="utf-8")
+    build_all = (ROOT / "installer" / "build-all-packages.ps1").read_text(encoding="utf-8")
+    detector = DETECTOR.read_text(encoding="utf-8")
+
+    assert 'Source: "..\\assets\\tools\\python310\\*"' not in script
+    assert "PythonPathPage := CreateInputFilePage(" in script
+    assert "PythonPathPage.Values[0] := DetectPython310Executable();" in script
+    assert "sys.version_info[:2] == (3, 10)" in script
+    assert "BatchEscape(SelectedPython)" in script
+    assert "PathJoin(AppDir, 'tools\\python310\\python.exe')" not in script
+    assert "[string]$Python" in build
+    assert "Resolve-BuildPython310 $Python" in build
+    assert "[string]$Python" in build_all
+    assert "py.exe may exist without a registered 3.10 runtime" in build
+    assert "& $BuildScript -Python $BuildPython @buildArgs" in build_all
+    assert "py -3.10" in detector
+    assert "sys.version_info[:2] == (3, 10)" in detector
 
 
 def test_installer_detects_vbcable_and_provides_manual_official_download() -> None:
@@ -209,8 +230,34 @@ def test_setup_env_exports_verified_python310_for_runtime_venvs() -> None:
     assert 'set "XB_PYTHON_310_EXE=%XB_PYTHON_EXE%"' in setup_env
 
 
+def test_cuda_installer_repairs_keep_the_shared_runtime_layout() -> None:
+    setup_env = (ROOT / "setup_env.bat").read_text(encoding="utf-8")
+    inno = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'set "XB_RUNTIME_LAYOUT=' in inno
+    assert "RuntimeLayout := 'shared'" in inno
+    assert 'if /I "%XB_RUNTIME_LAYOUT%"=="shared"' in setup_env
+    assert 'set "XB_RUNTIME_STACK_ARG=--cu126"' in setup_env
+    assert 'set "XB_RUNTIME_STACK_ARG=--cu128"' in setup_env
+    assert "%XB_RUNTIME_STACK_ARG% %*" in setup_env
+
+
+def test_default_single_package_build_is_cuda128_shared() -> None:
+    build = (ROOT / "installer" / "build.ps1").read_text(encoding="utf-8")
+    inno = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+
+    assert "@('cu128')" in build
+    assert '#define XB_PACKAGE_STACK "cu128"' in inno
+    assert '#define XB_OUTPUT_BASENAME "XB-SVCB-Setup-CUDA128"' in inno
+
+
 def test_installer_batch_entrypoints_use_windows_line_endings() -> None:
-    for relative in ("setup_env.bat", "install_prereqs.bat", "install/detect_python.bat"):
+    for relative in (
+        "setup_env.bat",
+        "setup_shared_env.bat",
+        "install_prereqs.bat",
+        "install/detect_python.bat",
+    ):
         data = (ROOT / relative).read_bytes()
         assert data.count(b"\n") == data.count(b"\r\n"), relative
 
@@ -238,8 +285,8 @@ def test_install_py_prefers_verified_python310_over_uv_managed_cache(
 
     monkeypatch.setattr(installer, "_python_minor_version", fake_minor)
 
-    assert installer.python_spec_for_venv("3.10") == str(py310)
-    assert installer.python_spec_for_venv("3.9") == "3.9"
+    assert installer.python_spec_for_venv("uv", "3.10") == str(py310)
+    assert installer.python_spec_for_venv("uv", "3.9") == "3.9"
 
 
 def test_install_py_rejects_non310_verified_python_for_py310_venvs(
@@ -254,36 +301,104 @@ def test_install_py_rejects_non310_verified_python_for_py310_venvs(
     monkeypatch.setenv("XB_PYTHON_EXE", str(py314))
     monkeypatch.setattr(installer, "_python_minor_version", lambda path: "3.14")
 
-    assert installer.python_spec_for_venv("3.10") == "3.10"
+    assert installer.python_spec_for_venv("uv", "3.10") == "3.10"
 
 
-def test_consolidated_runtime_layout_uses_one_core_environment(tmp_path: Path, monkeypatch) -> None:
+def test_all_release_stacks_use_the_locked_python310_interpreter() -> None:
+    installer = _load_install_module()
+
+    for stack in ("cpu", "directml", "cu126", "cu128"):
+        assert installer._svc_python_for_stack(stack) == "3.10"
+        assert installer._rvc_python_for_stack(stack) == "3.10"
+
+
+def test_consolidated_runtime_layout_uses_two_shared_environments(tmp_path: Path, monkeypatch) -> None:
     installer = _load_install_module()
     monkeypatch.setattr(installer, "ROOT", tmp_path)
     monkeypatch.setattr(installer, "RUNTIMES_DIR", tmp_path / "runtimes")
     monkeypatch.setattr(installer, "RUNTIME_MANIFEST", tmp_path / "runtime.json")
     monkeypatch.setattr(installer, "UVR_VENV", tmp_path / ".venv-uvr")
-    installer._configure_runtime_layout(consolidated=True, gpu_stack="cu121")
+    installer._configure_runtime_layout(consolidated=True, gpu_stack="cu126")
 
-    core = tmp_path / "runtimes" / "core-cu121"
+    core = tmp_path / "runtimes" / "core-cu126"
+    svc = tmp_path / "runtimes" / "svc-cu126"
     assert installer.runtime_venv("uvr", tmp_path / ".venv-uvr") == core
     assert installer.runtime_venv("seedvc", tmp_path / ".venv-seedvc") == core
     assert installer.runtime_venv("ddsp", tmp_path / ".venv-ddsp") == core
-    assert installer.runtime_venv("vocal", tmp_path / ".venv-vocal") == tmp_path / ".venv-vocal"
-    assert installer.runtime_venv("rvc", tmp_path / ".venv-rvc") == tmp_path / ".venv-rvc"
+    assert installer.runtime_venv("vocal", tmp_path / ".venv-vocal") == svc
+    assert installer.runtime_venv("rvc", tmp_path / ".venv-rvc") == svc
 
     core_python = core / "Scripts" / "python.exe"
     core_python.parent.mkdir(parents=True)
     core_python.write_text("", encoding="ascii")
-    installer.write_runtime_manifest("cu121", {"uvr", "seedvc", "ddsp"})
+    installer.write_runtime_manifest("cu126", {"uvr", "seedvc", "ddsp"})
     payload = (tmp_path / "runtime.json").read_text(encoding="utf-8")
-    assert "runtimes/core-cu121" in payload
+    assert "runtimes/core-cu126" in payload
 
 
 def test_consolidated_runtime_is_disabled_for_directml() -> None:
     installer = _load_install_module()
     installer._configure_runtime_layout(consolidated=True, gpu_stack="directml")
     assert installer.CONSOLIDATED_RUNTIME is False
+
+
+def test_cu128_nonconsolidated_mode_keeps_legacy_engine_environments(tmp_path: Path) -> None:
+    installer = _load_install_module()
+    installer._derive_paths(tmp_path)
+
+    installer._configure_runtime_layout(consolidated=False, gpu_stack="cu128")
+
+    assert installer.SVC_VENV == tmp_path / ".venv-svc"
+    assert installer.RVC_VENV == tmp_path / ".venv-rvc"
+    assert installer.VOCAL_VENV == tmp_path / ".venv-vocal"
+    assert installer.SVC_VENV != installer.CORE_VENV
+    assert installer.RVC_VENV != installer.CORE_VENV
+
+
+def test_isolated_route_merge_preserves_core_routes(tmp_path: Path) -> None:
+    installer = _load_install_module()
+    installer._derive_paths(tmp_path)
+    core = tmp_path / "runtimes" / "core-cu128" / "Scripts" / "python.exe"
+    svc = tmp_path / "runtimes" / "svc-cu128" / "Scripts" / "python.exe"
+    core.parent.mkdir(parents=True)
+    svc.parent.mkdir(parents=True)
+    core.touch()
+    svc.touch()
+    installer.RUNTIME_MANIFEST.write_text(json.dumps({
+        "version": 1,
+        "layout": "consolidated",
+        "stack": "cu128",
+        "python": {"seedvc": "runtimes/core-cu128/Scripts/python.exe"},
+    }), encoding="utf-8")
+
+    installer.update_runtime_manifest_routes("cu128", {"svc": svc})
+
+    payload = json.loads(installer.RUNTIME_MANIFEST.read_text(encoding="utf-8"))
+    assert payload["layout"] == "consolidated"
+    assert payload["python"]["seedvc"] == "runtimes/core-cu128/Scripts/python.exe"
+    assert payload["python"]["svc"] == "runtimes/svc-cu128/Scripts/python.exe"
+
+
+def test_fetch_sovits_preserves_pretrain_when_source_is_missing(tmp_path: Path, monkeypatch) -> None:
+    installer = _load_install_module()
+    installer._derive_paths(tmp_path)
+    model = installer.PRETRAIN_DIR / "keep.pt"
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b"model")
+
+    monkeypatch.setattr(installer, "have", lambda name: name == "git")
+
+    def fake_run(command, cwd=None, env=None):
+        staging = Path(command[-1])
+        marker = staging / "inference" / "infer_tool.py"
+        marker.parent.mkdir(parents=True)
+        marker.write_text("# source", encoding="utf-8")
+
+    monkeypatch.setattr(installer, "run", fake_run)
+    installer.fetch_sovits()
+
+    assert model.read_bytes() == b"model"
+    assert (installer.SOVITS_DIR / "inference" / "infer_tool.py").is_file()
 
 
 def test_consolidated_runtime_selects_py310_uvr_as_candidate(tmp_path: Path, monkeypatch) -> None:
@@ -526,7 +641,7 @@ def test_ensure_venv_rebuilds_an_unreadable_existing_environment(
     monkeypatch.setattr(
         installer,
         "python_spec_for_venv",
-        lambda version: r"C:\Python310\python.exe",
+        lambda uv, version: r"C:\Python310\python.exe",
     )
     monkeypatch.setattr(installer, "run", lambda cmd: commands.append(cmd))
 
@@ -577,7 +692,7 @@ def test_installer_packages_and_uses_bundled_wheelhouse() -> None:
     script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
     build = (ROOT / "installer" / "build.ps1").read_text(encoding="utf-8")
 
-    assert 'Source: "..\\assets\\wheels\\*"' in script
+    assert 'Source: "..\\.tmp\\installer-wheelhouse\\*"' in script
     assert "assets\\wheels\\wheelhouse.json" in script
     assert 'set "XB_WHEELHOUSE=' in script
     assert 'set "XB_WHEELHOUSE_STRICT=1"' in script
@@ -585,8 +700,14 @@ def test_installer_packages_and_uses_bundled_wheelhouse() -> None:
     assert 'set "XB_WHEELHOUSE=%~dp0assets\\wheels"' in prereqs
     assert "--no-index --find-links" in prereqs
     assert "install\\prepare_wheelhouse.py" in build
+    assert "installer\\stage_wheelhouse.py" in build
+    assert '"/DXB_PACKAGE_STACK=$packageStack"' in build
     assert "--clean" in build
     assert "assets\\wheels\\wheelhouse.json" in build
+    assert "CleanupBundledWheelhouse();" in script
+    assert "if DelTree(WheelhouseDir, True, True, True) then" in script
+    assert 'set "XB_WHEELHOUSE="' in setup_env
+    assert 'set "XB_WHEELHOUSE_STRICT=0"' in setup_env
 
 
 def test_wheelhouse_binary_download_uses_managed_tool_python(
@@ -654,8 +775,8 @@ def test_wheelhouse_download_can_skip_dependency_resolution(tmp_path: Path, monk
 
     batch = wheelhouse.DownloadBatch(
         "matplotlib",
-        tmp_path / "assets" / "wheels" / "svc" / "py39" / "cpu",
-        "3.9",
+        tmp_path / "assets" / "wheels" / "svc" / "py310" / "cpu",
+        "3.10",
         ("matplotlib==3.7.5",),
         no_deps=True,
     )
@@ -753,12 +874,12 @@ def test_pymss_installer_uses_the_same_isolated_runtime(
     monkeypatch.setattr(installer, "make_pip", fake_make_pip)
     monkeypatch.setattr(installer, "hr", lambda message: None)
 
-    for stack in ("cpu", "directml", "cu121", "cu126", "cu128"):
+    for stack in ("cpu", "directml", "cu126", "cu128"):
         pip_calls.clear()
         make_pip_calls.clear()
         installer.step_pymss("uv", stack)
 
-        expected_pymss_stack = "cu126" if stack in {"cu121", "cu126"} else stack
+        expected_pymss_stack = stack
         assert make_pip_calls == [
             {
                 "component": "pymss",
@@ -781,7 +902,8 @@ def test_pymss_installer_uses_the_same_isolated_runtime(
 
 def test_install_gpu_detection_distinguishes_blackwell_from_older_nvidia(monkeypatch) -> None:
     installer = _load_install_module()
-    outputs = iter(("6.1\n", "12.0\n"))
+    caps = iter(("6.1\n", "12.0\n"))
+    names = iter(("NVIDIA GeForce RTX 4090\n", "NVIDIA GeForce RTX 5060 Ti\n"))
 
     monkeypatch.setattr(installer, "find_nvidia_smi", lambda: "nvidia-smi")
 
@@ -789,10 +911,12 @@ def test_install_gpu_detection_distinguishes_blackwell_from_older_nvidia(monkeyp
         if cmd == ["nvidia-smi"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         if cmd == ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout=next(outputs), stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout=next(caps), stderr="")
+        if cmd == ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=next(names), stderr="")
         raise AssertionError(f"unexpected command: {cmd!r}")
 
     monkeypatch.setattr(installer.subprocess, "run", fake_run)
 
-    assert installer.detect_gpu_stack() == "cu121"
+    assert installer.detect_gpu_stack() == "cu126"
     assert installer.detect_gpu_stack() == "cu128"

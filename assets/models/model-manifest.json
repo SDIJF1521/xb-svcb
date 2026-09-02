@@ -1,0 +1,208 @@
+{
+  "schema": "xb-svcb.models.v1",
+  "description": "XB-SVCB bundled model assets and post-install runtime locations.",
+  "assets": [
+    {
+      "id": "uvr.karaoke",
+      "engine": "uvr",
+      "description": "5_HP-Karaoke-UVR 人声/伴奏分离模型",
+      "source": "assets/models/uvr/5_HP-Karaoke-UVR.pth",
+      "runtime": "models/uvr/5_HP-Karaoke-UVR.pth",
+      "required": true,
+      "min_bytes": 100000000,
+      "sha256": "fe00891defbb61f4261500af22f7624f1a3df8dc75fa3998d1aece02e6be4537"
+    },
+    {
+      "id": "uvr.dereverb",
+      "engine": "uvr",
+      "description": "UVR-DeEcho-DeReverb 去混响模型",
+      "source": "assets/models/uvr/UVR-DeEcho-DeReverb.pth",
+      "runtime": "models/uvr/UVR-DeEcho-DeReverb.pth",
+      "required": true,
+      "min_bytes": 180000000,
+      "sha256": "e644028ec82865dc0fe082bc6fea85a43f7c71cfe375caee2da2d154aa661ee7"
+    },
+    {
+      "id": "uvr.download_checks",
+      "engine": "uvr",
+      "description": "audio-separator 模型下载清单",
+      "source": "assets/models/uvr/download_checks.json",
+      "runtime": "models/uvr/download_checks.json",
+      "required": true,
+      "min_bytes": 1000,
+      "sha256": "d3622e1fa19c161d3cf704927711b453d593a3f1eb0f2e0838c3136907935151"
+    },
+    {
+      "id": "uvr.mdx_metadata",
+      "engine": "uvr",
+      "description": "audio-separator MDX 模型参数",
+      "source": "assets/models/uvr/mdx_model_data.json",
+      "runtime": "models/uvr/mdx_model_data.json",
+      "required": true,
+      "min_bytes": 1000,
+      "sha256": "1aca8f9bcc57233bc714029663a9ec2345d9c7721f91e5e08f46392a879c6a9a"
+    },
+    {
+      "id": "uvr.vr_metadata",
+      "engine": "uvr",
+      "description": "audio-separator VR 模型参数",
+      "source": "assets/models/uvr/vr_model_data.json",
+      "runtime": "models/uvr/vr_model_data.json",
+      "required": true,
+      "min_bytes": 1000,
+      "sha256": "6a2021b9aa355c10f845b68c73944d47bd9e1fdf37b8a584b14ce8f88b09bb2f"
+    },
+    {
+      "id": "seedvc.rmvpe",
+      "engine": "seedvc",
+      "description": "SeedVC F0 预测器；安装时可能先做格式规范化",
+      "source": "assets/models/pretrain/rmvpe.pt",
+      "runtime": [
+        "engines/seed-vc/checkpoints/rmvpe.pt",
+        "assets/models/pretrain/rmvpe.pt"
+      ],
+      "runtime_mode": "any",
+      "required": true,
+      "min_bytes": 300000000,
+      "sha256": "19dc1809cf4cdb0a18db93441816bc327e14e5644b72eeaae5220560c6736fe2"
+    },
+    {
+      "id": "seedvc.campplus",
+      "engine": "seedvc",
+      "description": "SeedVC CampPlus 音色编码器",
+      "source": "assets/models/seedvc/campplus_cn_common.bin",
+      "runtime": [
+        "engines/seed-vc/checkpoints/campplus_cn_common.bin",
+        "assets/models/seedvc/campplus_cn_common.bin"
+      ],
+      "runtime_mode": "any",
+      "required": true,
+      "min_bytes": 20000000,
+      "sha256": "3388cf5fd3493c9ac9c69851d8e7a8badcfb4f3dc631020c4961371646d5ada8"
+    },
+    {
+      "id": "seedvc.whisper-small.config",
+      "engine": "seedvc",
+      "description": "SeedVC Whisper-small 配置",
+      "source": "assets/models/seedvc/whisper-small/config.json",
+      "runtime": [
+        "assets/models/seedvc/whisper-small/config.json",
+        "engines/seed-vc/checkpoints/local_whisper_small/config.json"
+      ],
+      "runtime_mode": "any",
+      "required": true,
+      "min_bytes": 1000,
+      "sha256": "e6a2b489da1b5aed65a8eb8d1e7466fa867ad5643a8bc138ba708bd56b2875c4"
+    },
+    {
+      "id": "seedvc.whisper-small.preprocessor",
+      "engine": "seedvc",
+      "description": "SeedVC Whisper-small 预处理配置",
+      "source": "assets/models/seedvc/whisper-small/preprocessor_config.json",
+      "runtime": [
+        "assets/models/seedvc/whisper-small/preprocessor_config.json",
+        "engines/seed-vc/checkpoints/local_whisper_small/preprocessor_config.json"
+      ],
+      "runtime_mode": "any",
+      "required": true,
+      "min_bytes": 1000,
+      "sha256": "9b5cd03a36fbb8a627c64d98a5b5b126ead95a77720723944487311f0110b666"
+    },
+    {
+      "id": "seedvc.whisper-small.weights",
+      "engine": "seedvc",
+      "description": "SeedVC Whisper-small 权重",
+      "source": "assets/models/seedvc/whisper-small/model.safetensors",
+      "runtime": [
+        "assets/models/seedvc/whisper-small/model.safetensors",
+        "engines/seed-vc/checkpoints/local_whisper_small/model.safetensors"
+      ],
+      "runtime_mode": "any",
+      "required": true,
+      "min_bytes": 900000000,
+      "sha256": "1d7734884874f1a1513ed9aa760a4f8e97aaa02fd6d93a3a85d27b2ae9ca596b"
+    },
+    {
+      "id": "seedvc.bigvgan.config",
+      "engine": "seedvc",
+      "description": "SeedVC BigVGAN 配置",
+      "source": "assets/models/seedvc/bigvgan_v2_44khz_128band_512x/config.json",
+      "runtime": [
+        "assets/models/seedvc/bigvgan_v2_44khz_128band_512x/config.json",
+        "engines/seed-vc/checkpoints/local_bigvgan_v2_44khz_128band_512x/config.json"
+      ],
+      "runtime_mode": "any",
+      "required": true,
+      "min_bytes": 1000,
+      "sha256": "65b7f487bfaf15256056a75f6667ef5f640214c981922a111927873705ea4ddb"
+    },
+    {
+      "id": "seedvc.bigvgan.weights",
+      "engine": "seedvc",
+      "description": "SeedVC BigVGAN 声码器权重",
+      "source": "assets/models/seedvc/bigvgan_v2_44khz_128band_512x/bigvgan_generator.pt",
+      "runtime": [
+        "assets/models/seedvc/bigvgan_v2_44khz_128band_512x/bigvgan_generator.pt",
+        "engines/seed-vc/checkpoints/local_bigvgan_v2_44khz_128band_512x/bigvgan_generator.pt"
+      ],
+      "runtime_mode": "any",
+      "required": true,
+      "min_bytes": 400000000,
+      "sha256": "d9fe7ec6bd0b44ed9d66973d5012d8181c1570b01e5c72df51973e241dccd357"
+    },
+    {
+      "id": "ddsp.contentvec",
+      "engine": "ddsp",
+      "description": "DDSP-SVC ContentVec 编码器",
+      "source": "assets/models/pretrain/checkpoint_best_legacy_500.pt",
+      "runtime": "engines/ddsp-svc/pretrain/contentvec/pytorch_model.bin",
+      "required": true,
+      "min_bytes": 300000000,
+      "sha256": "60d936ec5a566776fc392e69ad8b630d14eb588111233fe313436e200a7b187b"
+    },
+    {
+      "id": "ddsp.rmvpe",
+      "engine": "ddsp",
+      "description": "DDSP-SVC RMVPE F0 预测器",
+      "source": "assets/models/pretrain/rmvpe.pt",
+      "runtime": "engines/ddsp-svc/pretrain/rmvpe/model.pt",
+      "required": true,
+      "min_bytes": 300000000,
+      "sha256": "19dc1809cf4cdb0a18db93441816bc327e14e5644b72eeaae5220560c6736fe2"
+    },
+    {
+      "id": "ddsp.pc-nsf-hifigan.config",
+      "engine": "ddsp",
+      "description": "DDSP-SVC PC-NSF-HiFiGAN 配置",
+      "source": "assets/models/pretrain/pc_nsf_hifigan/config.json",
+      "runtime": "engines/ddsp-svc/pretrain/nsf_hifigan/config.json",
+      "required": true,
+      "min_bytes": 500,
+      "sha256": "983bb78f45f6790e573033bfab46163743e0182d564fc5eca6938743cca6a2ea"
+    },
+    {
+      "id": "ddsp.pc-nsf-hifigan.weights",
+      "engine": "ddsp",
+      "description": "DDSP-SVC PC-NSF-HiFiGAN 权重（安装后规范命名为 model）",
+      "source": "assets/models/pretrain/pc_nsf_hifigan/model.ckpt",
+      "runtime": "engines/ddsp-svc/pretrain/nsf_hifigan/model",
+      "required": true,
+      "min_bytes": 30000000,
+      "sha256": "d6dd28909d2a1a2dcf74b3e3aa0b82b48695b87979fdf41561940aeecd85c67f"
+    }
+  ],
+  "external_requirements": [
+    {
+      "engine": "seedvc",
+      "id": "user-checkpoint",
+      "description": "用户导入的 SeedVC checkpoint + YAML 配置 + 参考音频",
+      "provided_by": "model-hub/import"
+    },
+    {
+      "engine": "ddsp",
+      "id": "user-model",
+      "description": "用户导入的 DDSP-SVC checkpoint + config.yaml",
+      "provided_by": "model-hub/import"
+    }
+  ]
+}

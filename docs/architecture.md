@@ -64,7 +64,7 @@ Vue 3 + Vite 前端。views/ 组织页面，stores/ 管理跨页面状态，src/
 ## 运行边界
 
 - 主程序环境只承载桌面壳、API 和业务服务。
-- 默认安装使用 .venv-svc、.venv-rvc、.venv-seedvc、.venv-ddsp 等独立环境。实验性 `--consolidated` 必须通过整体依赖解析、依赖检查和 Worker 关键模块导入后才写入 `runtime.json`。`--core-profile core-cu128` 使用版本固定及材料哈希验证的 NumPy 2/protobuf 7 配方；`--core-compat-wheel` 保留给其他开发候选。配方与回滚材料存放于 install/runtime_profiles 和 assets/runtime，不以临时目录作为长期来源。这不是上游支持声明，完整模型音频验收仍需另做。详见运行环境整合记录。
+- NVIDIA CUDA126/CUDA128 默认使用两层共享环境：UVR、SeedVC、DDSP 位于 `runtimes/core-*`，So-VITS-SVC、RVC、Vocal 位于 `runtimes/svc-*`。CPU/DirectML 和旧安装继续兼容 `.venv-*`。安装器只有在依赖、Torch/设备和关键模块校验通过后才把解释器写入 `runtime.json`。详见[共享运行时与兼容布局](runtime-consolidation.md)。
 - Worker 隔离进程；只有使用独立 Python 环境时才隔离依赖。共享解释器不会因为 Worker 分进程就消除包版本冲突，也不是操作系统权限沙箱。
 - FastAPI 与桌面 UI 共享任务队列，因此两种入口创建的任务在同一个应用中可见。
 - 普通任务通常按队列串行运行；实时模式使用常驻 UVR 与模型 Worker，减少重复加载。

@@ -35,10 +35,19 @@ def resolve_python(root: Path, component: str, legacy: str) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, type=Path)
-    parser.add_argument("--component", required=True, choices=("uvr", "seedvc", "ddsp"))
+    parser.add_argument(
+        "--component",
+        required=True,
+        choices=("uvr", "seedvc", "ddsp", "svc", "rvc", "vocal", "pymss", "hub", "plugins"),
+    )
     parser.add_argument("--legacy", required=True)
+    parser.add_argument("--output-file", type=Path)
     args = parser.parse_args()
-    print(resolve_python(args.root.resolve(), args.component, args.legacy))
+    resolved = str(resolve_python(args.root.resolve(), args.component, args.legacy))
+    if args.output_file:
+        args.output_file.write_text(resolved + "\n", encoding="utf-8")
+    else:
+        print(resolved)
 
 
 if __name__ == "__main__":

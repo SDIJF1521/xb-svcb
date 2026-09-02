@@ -45,26 +45,14 @@ uv run --project app --with pytest pytest -m packaging_integration --require-pac
 
 此模式下缺文件会失败，不能靠跳过获得发布绿灯。它仍只是打包计划检查，不是 Inno 编译或全新安装验收。
 
-## 2026-08-29 回归记录
+## 发布验收顺序
 
-全套：330 通过、15 跳过、0 失败；有一个 Starlette/httpx 弃用提示，未修改无关依赖。
-15 项跳过为 14 项当前测试解释器缺少 Torch 的辅助逻辑测试，以及 1 项缺 SVC requirements 的打包集成检查。
-真实共享环境包含 Torch/CUDA，不能把这里的跳过解释为没有显卡。
+历史通过数量容易随新增测试失效，不在文档中固化。每次发布按当前代码重新执行：
 
-随后使用现有模型环境补跑了设备辅助测试，30 项全部通过，包含上述 14 个跳过项：
+1. 运行全套 Python 测试并查看所有跳过原因。
+2. 强制运行 `packaging_integration`，禁止因为缺 requirements 而跳过。
+3. 运行 `installer/build.ps1 -ValidateOnly`，校验四种 Inno 配置和共享入口。
+4. 构建目标硬件包，在全新目录完成 Setup.exe 安装、运行时创建和最终 Torch 校验。
+5. 在目标 CPU、DirectML、CUDA126、CUDA128 设备上分别执行真实模型与短音频验收。
 
-```powershell
-uv run --offline --no-project --python .venv-uvr/Scripts/python.exe --with pytest python -B -m pytest app/tests/test_inference_devices.py -q -rs
-```
-
-pytest 放在临时叠加环境，不往共享环境安装工具，也不下载 Torch。这不是模型权重推理。
-
-固定配方的整体解析、已安装版本对比、14 个本地 wheel 哈希均已验证。
-随后继续安装/存储验证，新增 `test_install_validation.py` 的 18 项回归，全套为 **348 通过、15 跳过、0 失败**；使用共享解释器补跑设备辅助测试仍为 30 项全部通过。
-
-独立临时环境中已实测四包离线安装、重复安装、回滚和恢复配方（使用 `--no-deps`，只证明四包部署行为）。147 包全新安装在当前 uv 未命中 torchvision 缓存处停止；没有将其标为通过。真实模型音频、安装包编译和旧环境清理未执行。详见 [安装与修复验证](runtime-install-validation.md) 和 [空间盘点](runtime-storage-audit.md)。
-
-继续解决缓存后：全套 **362 通过、15 跳过、0 失败**。新增 13 项缓存恢复安全测试、1 项安装器不依赖调用方 `sys.path` 的测试。
-上述缓存阻塞已解决：147 包在新空环境中正常解析安装、重复安装和精确版本核对均通过；在完整环境内注入旧四包时检测出预期的 3 项冲突，完整配方修复只改四包，其余包（含 Torch）元数据未变。随后 5 项导入/CUDA 检查与 5 项兼容性探针通过。真实音频推理、安装 EXE 全流程与旧文件清理仍未执行。
-
-在本轮新建的完整环境中，设备辅助测试另行补跑 30 项通过；安装器固定配方预检在 `UV_OFFLINE=1` 下再次通过。
+共享配方的解析、原子激活、修复和回滚边界见 [共享运行时与兼容布局](runtime-consolidation.md)。自动化通过只说明代码层和打包规则满足断言，不等于真实模型推理或四类硬件都已验收。
