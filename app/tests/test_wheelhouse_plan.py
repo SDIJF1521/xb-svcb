@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -113,6 +114,7 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
         batch.dest == root / "assets" / "wheels" / "rvc" / "py310" / "cpu"
         and batch.build_source
         and "fairseq==0.12.2" in batch.packages
+        and batch.no_build_isolation
         for batch in cpu
     )
     assert any(
@@ -158,6 +160,12 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
         and batch.dest == root / "assets" / "wheels" / "py310" / "cu128"
         and batch.build_source
         for batch in cu128
+    )
+    assert all(
+        batch.no_build_isolation
+        for batch in (*cpu, *directml, *cu128)
+        if batch.packages
+        and any(package.startswith(("fairseq==", "pyworld==0.3.0")) for package in batch.packages)
     )
     expected_fcpe = ("einops==0.8.2", "local-attention==1.10.0")
     assert any(
@@ -212,6 +220,38 @@ def test_plan_does_not_rewrite_upstream_requirements(wheelhouse_plan):
     assert not list((root / "engines").rglob("requirements_xb*"))
     assert all(batch.requirements.is_relative_to(root / ".tmp")
                for batch in plan if batch.requirements)
+
+
+def test_legacy_source_wheel_build_reuses_pinned_toolchain(tmp_path, monkeypatch):
+    wheelhouse = _load_module("prepare_wheelhouse")
+    python = tmp_path / "build-python.exe"
+    destination = tmp_path / "wheels"
+    constraint = tmp_path / "constraints.txt"
+    constraint.write_text("setuptools<81\n", encoding="utf-8")
+    batch = wheelhouse.DownloadBatch(
+        "legacy source wheels",
+        destination,
+        "3.10",
+        ("pyworld==0.3.0", "fairseq==0.12.2"),
+        build_source=True,
+        no_deps=True,
+        no_build_isolation=True,
+    )
+    commands = []
+    monkeypatch.setattr(wheelhouse, "_ensure_build_python", lambda *_args: python)
+    monkeypatch.setattr(wheelhouse, "_constraint_file", lambda *_args: constraint)
+    monkeypatch.setattr(wheelhouse, "_run", commands.append)
+
+    wheelhouse._build_wheels(
+        tmp_path,
+        SimpleNamespace(PYPI_MIRROR="", PYPI_FALLBACK_INDEX="https://pypi.org/simple"),
+        batch,
+    )
+
+    assert len(commands) == 1
+    command = commands[0]
+    assert "--no-build-isolation" in command
+    assert command.index("--no-build-isolation") < command.index("--no-deps")
 
 
 def test_missing_packaging_sources_are_identified(tmp_path):

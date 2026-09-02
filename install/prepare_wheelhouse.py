@@ -42,6 +42,7 @@ class DownloadBatch:
     no_deps: bool = False
     binary_only: bool = False
     constraints: tuple[str, ...] = ()
+    no_build_isolation: bool = False
 
 
 def _load_installer(root: Path):
@@ -373,6 +374,7 @@ def _py310_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
                 build_source=True,
                 no_deps=True,
                 constraints=dml_constraints,
+                no_build_isolation=True,
             ),
             DownloadBatch(
                 "svc directml requirements",
@@ -525,6 +527,7 @@ def _py310_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
                 build_source=True,
                 no_deps=True,
                 constraints=torch_constraints,
+                no_build_isolation=True,
             ),
             DownloadBatch(f"rvc {stack} torch", dest, py, torch_packages, index=torch_index, constraints=torch_constraints),
             DownloadBatch(f"rvc {stack}", dest, py, ("rvc-python",), build_source=True, constraints=torch_constraints),
@@ -595,6 +598,7 @@ def _cpu_compat_batches(root: Path, installer, reqs: dict[str, Path], stack: str
             build_source=True,
             no_deps=True,
             constraints=svc_constraints,
+            no_build_isolation=True,
         ),
         DownloadBatch(
             f"svc {py_tag} requirements",
@@ -640,6 +644,7 @@ def _cpu_compat_batches(root: Path, installer, reqs: dict[str, Path], stack: str
             build_source=True,
             no_deps=True,
             constraints=rvc_constraints,
+            no_build_isolation=True,
         ),
         DownloadBatch(f"rvc {py_tag}", rvc_dest, py, ("rvc-python",), build_source=True, constraints=rvc_constraints),
     ]
@@ -871,6 +876,11 @@ def _build_wheels(root: Path, installer, batch: DownloadBatch) -> None:
     ]
     if constraints is not None:
         cmd += ["-c", str(constraints)]
+    if batch.no_build_isolation:
+        # pyworld 0.3.0 and fairseq 0.12.2 declare unconstrained NumPy/Cython
+        # build requirements. Reuse the pinned toolchain installed above so
+        # pip does not create an isolated environment and build a newer NumPy.
+        cmd.append("--no-build-isolation")
     if batch.no_deps:
         cmd.append("--no-deps")
     if batch.requirements is not None:
@@ -1008,6 +1018,7 @@ def main() -> int:
                 "no_deps": batch.no_deps,
                 "binary_only": batch.binary_only,
                 "constraints": list(batch.constraints),
+                "no_build_isolation": batch.no_build_isolation,
             }
             for batch in batches
         ]
