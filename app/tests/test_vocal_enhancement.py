@@ -1841,3 +1841,53 @@ def test_processor_continues_when_natural_tuning_fails(tmp_path: Path) -> None:
         )
 
     assert result == output
+
+
+def test_processor_rejects_unstable_natural_tuning_result(tmp_path: Path) -> None:
+    source = tmp_path / "source.wav"
+    reference = tmp_path / "reference.wav"
+    output = tmp_path / "enhanced.wav"
+    vocal_python = tmp_path / "vocal-python.exe"
+    vocal_worker = tmp_path / "vocal-worker.py"
+    tuning_worker = tmp_path / "tuning-worker.py"
+    marker = tmp_path / "runtime.ready"
+    cache_home = tmp_path / "cache"
+    for path in (
+        source,
+        reference,
+        vocal_python,
+        vocal_worker,
+        tuning_worker,
+        marker,
+    ):
+        path.write_bytes(b"ready")
+
+    def fake_run(cmd: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        if cmd[1] == str(tuning_worker):
+            Path(cmd[cmd.index("--output") + 1]).write_bytes(b"RIFF-tuned")
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                "VOCAL_TUNE_OK align_max=86ms psola=91%",
+                "",
+            )
+        assert Path(cmd[cmd.index("--input") + 1]) == source
+        output.write_bytes(b"RIFF-enhanced")
+        return subprocess.CompletedProcess(cmd, 0, "VOCAL_ENHANCE_OK", "")
+
+    with (
+        patch.object(config, "VOCAL_ENHANCEMENT_PYTHON", vocal_python),
+        patch.object(config, "VOCAL_ENHANCEMENT_WORKER", vocal_worker),
+        patch.object(config, "VOCAL_ENHANCEMENT_MARKER", marker),
+        patch.object(config, "VOCAL_ENHANCEMENT_MODEL_DIR", cache_home),
+        patch.object(config, "VOCAL_TUNING_WORKER", tuning_worker),
+        patch("infrastructure.vocal_enhancement.subprocess.run", side_effect=fake_run),
+    ):
+        result = VocalEnhancementProcessor().enhance(
+            source,
+            output,
+            reference=reference,
+        )
+
+    assert result == output
+    assert output.read_bytes() == b"RIFF-enhanced"
