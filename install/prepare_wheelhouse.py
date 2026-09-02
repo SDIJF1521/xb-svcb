@@ -714,16 +714,48 @@ def _run(cmd: list[str]) -> None:
 
 
 def _has_module(py: Path, module: str) -> bool:
-    return (
-        subprocess.run(
-            [str(py), "-c", f"import {module}"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            env=_subprocess_env(),
-        ).returncode
-        == 0
-    )
+    try:
+        return (
+            subprocess.run(
+                [str(py), "-c", f"import {module}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                env=_subprocess_env(),
+            ).returncode
+            == 0
+        )
+    except OSError:
+        return False
+
+
+def _python_works(py: Path) -> bool:
+    if not py.exists():
+        return False
+    try:
+        return (
+            subprocess.run(
+                [str(py), "-c", "import sys; raise SystemExit(0)"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                env=_subprocess_env(),
+            ).returncode
+            == 0
+        )
+    except OSError:
+        return False
+
+
+def _remove_broken_temp_venv(root: Path, venv: Path, label: str) -> None:
+    if not venv.exists():
+        return
+    temp_root = (root / ".tmp").resolve()
+    resolved = venv.resolve()
+    if resolved == temp_root or not resolved.is_relative_to(temp_root):
+        raise RuntimeError(f"Refusing to remove {label} outside {temp_root}: {resolved}")
+    print(f"[wheelhouse] Recreating stale {label}: {venv}")
+    shutil.rmtree(venv)
 
 
 def _ensure_pip(py: Path) -> None:
@@ -782,13 +814,18 @@ def _venv_python(venv: Path) -> Path:
 
 def _ensure_tool_python(root: Path, _installer) -> Path:
     global _TOOL_PYTHON
-    if _TOOL_PYTHON and _TOOL_PYTHON.exists():
+    if _TOOL_PYTHON and _python_works(_TOOL_PYTHON):
         return _TOOL_PYTHON
+    _TOOL_PYTHON = None
     venv = root / ".tmp" / "wheelhouse-tools"
     py = _venv_python(venv)
-    if not py.exists():
+    if venv.exists() and not _python_works(py):
+        _remove_broken_temp_venv(root, venv, "wheelhouse tool environment")
+    if not _python_works(py):
         venv.parent.mkdir(parents=True, exist_ok=True)
         _run([sys.executable, "-m", "venv", str(venv)])
+    if not _python_works(py):
+        raise RuntimeError(f"Wheelhouse tool Python could not be created: {py}")
     _ensure_pip(py)
     # 工具环境只负责下载器 / uv 自举，不安装编译用大包，避免 wheelhouse
     # 准备阶段在这里重复下载和导入 numpy、Cython、wheel 等依赖。
@@ -828,14 +865,23 @@ def _ensure_uv(root: Path, installer) -> str:
 
 def _ensure_build_python(root: Path, installer, python_version: str) -> Path:
     cached = _BUILD_PYTHONS.get(python_version)
-    if cached and cached.exists():
+    if cached and _python_works(cached):
         return cached
+    _BUILD_PYTHONS.pop(python_version, None)
     venv = root / ".tmp" / "wheelhouse-build-envs" / f"py{_py_digits(python_version)}"
     py = _venv_python(venv)
-    if not py.exists():
-        uv = _ensure_uv(root, installer)
+    if venv.exists() and not _python_works(py):
+        _remove_broken_temp_venv(root, venv, f"Python {python_version} wheel build environment")
+    if not _python_works(py):
         venv.parent.mkdir(parents=True, exist_ok=True)
-        _run([uv, "venv", "--python", python_version, str(venv)])
+        current_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        if current_version == python_version:
+            _run([sys.executable, "-m", "venv", str(venv)])
+        else:
+            uv = _ensure_uv(root, installer)
+            _run([uv, "venv", "--python", python_version, str(venv)])
+    if not _python_works(py):
+        raise RuntimeError(f"Python {python_version} wheel build environment could not be created: {py}")
     _ensure_pip(py)
     _run(
         [

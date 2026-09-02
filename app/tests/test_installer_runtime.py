@@ -751,6 +751,7 @@ def test_wheelhouse_tool_python_only_bootstraps_pip(
         PYPI_FALLBACK_INDEX = "https://example.invalid/simple"
 
     monkeypatch.setattr(wheelhouse, "_TOOL_PYTHON", None)
+    monkeypatch.setattr(wheelhouse, "_python_works", lambda py: py == tool_py)
     monkeypatch.setattr(wheelhouse, "_ensure_pip", lambda py: ensured.append(py))
     monkeypatch.setattr(wheelhouse, "_run", lambda cmd: commands.append(cmd))
 
@@ -759,6 +760,79 @@ def test_wheelhouse_tool_python_only_bootstraps_pip(
     assert result == tool_py
     assert ensured == [tool_py]
     assert commands == []
+
+
+def test_wheelhouse_tool_python_recreates_stale_venv(
+    tmp_path: Path, monkeypatch
+) -> None:
+    wheelhouse = _load_wheelhouse_module()
+    venv = tmp_path / ".tmp" / "wheelhouse-tools"
+    tool_py = venv / "Scripts" / "python.exe"
+    tool_py.parent.mkdir(parents=True)
+    tool_py.write_bytes(b"stale")
+    (venv / "pyvenv.cfg").write_text(
+        "home = C:\\removed\\python310\nversion = 3.10.21\n",
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+    ensured: list[Path] = []
+
+    def python_works(py: Path) -> bool:
+        return py == tool_py and py.exists() and py.read_bytes() == b"recreated"
+
+    def run(command: list[str]) -> None:
+        commands.append(command)
+        if command[:3] == [sys.executable, "-m", "venv"]:
+            tool_py.parent.mkdir(parents=True)
+            tool_py.write_bytes(b"recreated")
+
+    monkeypatch.setattr(wheelhouse, "_TOOL_PYTHON", None)
+    monkeypatch.setattr(wheelhouse, "_python_works", python_works)
+    monkeypatch.setattr(wheelhouse, "_ensure_pip", lambda py: ensured.append(py))
+    monkeypatch.setattr(wheelhouse, "_run", run)
+
+    result = wheelhouse._ensure_tool_python(tmp_path, object())
+
+    assert result == tool_py
+    assert commands == [[sys.executable, "-m", "venv", str(venv)]]
+    assert ensured == [tool_py]
+    assert not (venv / "pyvenv.cfg").exists()
+
+
+def test_wheelhouse_build_python_recreates_stale_matching_version(
+    tmp_path: Path, monkeypatch
+) -> None:
+    wheelhouse = _load_wheelhouse_module()
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    venv = tmp_path / ".tmp" / "wheelhouse-build-envs" / f"py{version.replace('.', '')}"
+    build_py = venv / "Scripts" / "python.exe"
+    build_py.parent.mkdir(parents=True)
+    build_py.write_bytes(b"stale")
+    commands: list[list[str]] = []
+
+    def python_works(py: Path) -> bool:
+        return py == build_py and py.exists() and py.read_bytes() == b"recreated"
+
+    def run(command: list[str]) -> None:
+        commands.append(command)
+        if command[:3] == [sys.executable, "-m", "venv"]:
+            build_py.parent.mkdir(parents=True)
+            build_py.write_bytes(b"recreated")
+
+    monkeypatch.setattr(wheelhouse, "_BUILD_PYTHONS", {})
+    monkeypatch.setattr(wheelhouse, "_python_works", python_works)
+    monkeypatch.setattr(wheelhouse, "_ensure_pip", lambda _py: None)
+    monkeypatch.setattr(wheelhouse, "_run", run)
+
+    class Installer:
+        PYPI_MIRROR = ""
+        PYPI_FALLBACK_INDEX = "https://example.invalid/simple"
+
+    result = wheelhouse._ensure_build_python(tmp_path, Installer, version)
+
+    assert result == build_py
+    assert commands[0] == [sys.executable, "-m", "venv", str(venv)]
+    assert commands[1][:6] == [str(build_py), "-m", "pip", "install", "--upgrade", "pip==24.0"]
 
 
 def test_wheelhouse_download_can_skip_dependency_resolution(tmp_path: Path, monkeypatch) -> None:
