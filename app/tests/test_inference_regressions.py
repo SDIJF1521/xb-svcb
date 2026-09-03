@@ -86,6 +86,62 @@ def test_sovits_fork_k_step_config_is_supported() -> None:
     assert _resolve_diffusion_k_step(svc, 200, 1.0) == (300, 300)
 
 
+def test_sovits_retries_unstructured_worker_crash_and_records_exit_codes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import infrastructure.svc_engine as svc_engine_module
+
+    source = tmp_path / "vocals.wav"
+    output = tmp_path / "converted.wav"
+    log_file = tmp_path / "run.log"
+    calls = 0
+
+    def run_worker(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            output.write_bytes(b"partial")
+            return SimpleNamespace(
+                returncode=-1073741819,
+                stdout="load model",
+                stderr="WeightNorm.apply(module, name, dim)\nwarning: backend deprecated",
+            )
+        output.write_bytes(b"wave")
+        return SimpleNamespace(returncode=0, stdout="SVC_OK converted.wav", stderr="")
+
+    monkeypatch.setattr(svc_engine_module.subprocess, "run", run_worker)
+    monkeypatch.setattr(svc_engine_module.time, "sleep", lambda _seconds: None)
+
+    SvcEngine()._run_worker(
+        "model.pth",
+        "config.json",
+        "",
+        "",
+        source,
+        output,
+        InferenceParams(),
+        log_file,
+    )
+
+    logged = log_file.read_text(encoding="utf-8")
+    assert calls == 2
+    assert output.is_file()
+    assert "第 1/2 次推理尝试" in logged
+    assert "-1073741819" in logged
+    assert "第 2/2 次推理尝试" in logged
+
+
+def test_sovits_error_tail_never_reports_deprecation_warning_as_root_cause() -> None:
+    detail = SvcEngine()._error_tail(
+        "",
+        "WeightNorm.apply(module, name, dim)\n"
+        "infer_tool.py: UserWarning: set_audio_backend deprecated",
+    )
+
+    assert "异常退出" in detail
+    assert "WeightNorm" not in detail
+
+
 @pytest.mark.parametrize(
     ("engine", "model", "params", "message"),
     [

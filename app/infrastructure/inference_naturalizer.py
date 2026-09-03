@@ -167,6 +167,114 @@ def _source_on_output_timeline(source: Any, output_frames: int) -> Any:
     return result
 
 
+def _source_guided_high_band_repair(
+    source: Any,
+    output: Any,
+    sample_rate: int,
+    source_rate: int,
+    engine: str,
+) -> tuple[Any, dict[str, float]]:
+    """Attenuate only short HF bursts unsupported by the input vocal.
+
+    This is deliberately limited to So-VITS-SVC output. It does not copy source
+    samples: the source only supplies a broad high-band-to-body envelope used to
+    identify model-generated bursts.
+    """
+    import numpy as np
+
+    data = np.asarray(output, dtype=np.float32)
+    if (
+        engine != "so-vits-svc"
+        or sample_rate < 16000
+        or len(data) < 256
+        or not len(source)
+    ):
+        return data, {"guarded_frames": 0.0, "reduction_db": 0.0}
+    try:
+        from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+        from scipy.signal import butter, sosfiltfilt
+    except ImportError:
+        return data, {"guarded_frames": 0.0, "reduction_db": 0.0}
+
+    source_mono = _source_on_output_timeline(source, len(data))
+    output_mono = np.mean(data, axis=1, dtype=np.float64)
+    nyquist = sample_rate * 0.5
+    high_cutoff = min(5600.0, nyquist * 0.72)
+    body_high = min(4800.0, nyquist * 0.58)
+    if body_high <= 700.0:
+        return data, {"guarded_frames": 0.0, "reduction_db": 0.0}
+    high_sos = butter(4, high_cutoff, btype="highpass", fs=sample_rate, output="sos")
+    body_sos = butter(
+        4,
+        [180.0, body_high],
+        btype="bandpass",
+        fs=sample_rate,
+        output="sos",
+    )
+    source_high = sosfiltfilt(high_sos, source_mono)
+    output_high = sosfiltfilt(high_sos, output_mono)
+    source_body = sosfiltfilt(body_sos, source_mono)
+    output_body = sosfiltfilt(body_sos, output_mono)
+    frame_size = max(64, int(round(sample_rate * 0.020)))
+    source_high_rms = _frame_rms(source_high, frame_size)
+    output_high_rms = _frame_rms(output_high, frame_size)
+    source_body_rms = _frame_rms(source_body, frame_size)
+    output_body_rms = _frame_rms(output_body, frame_size)
+    frames = min(
+        len(source_high_rms),
+        len(output_high_rms),
+        len(source_body_rms),
+        len(output_body_rms),
+    )
+    if frames < 3:
+        return data, {"guarded_frames": 0.0, "reduction_db": 0.0}
+    source_high_rms = source_high_rms[:frames]
+    output_high_rms = output_high_rms[:frames]
+    source_body_rms = source_body_rms[:frames]
+    output_body_rms = output_body_rms[:frames]
+    source_ratio = 20.0 * np.log10(
+        (source_high_rms + 1e-7) / (source_body_rms + 1e-7)
+    )
+    output_ratio = 20.0 * np.log10(
+        (output_high_rms + 1e-7) / (output_body_rms + 1e-7)
+    )
+    excess = output_ratio - source_ratio
+    source_active = source_body_rms >= max(
+        float(np.percentile(source_body_rms, 65)) * 0.03,
+        1e-5,
+    )
+    output_high_db = 20.0 * np.log10(output_high_rms + 1e-7)
+    suspicious = source_active & (output_high_db > -58.0) & (excess > 10.0)
+    anomaly = np.clip((excess - 10.0) / 8.0, 0.0, 1.0)
+    anomaly *= np.clip((output_high_db + 58.0) / 12.0, 0.0, 1.0)
+    anomaly[~suspicious] = 0.0
+    anomaly = gaussian_filter1d(anomaly, sigma=1.0, mode="nearest")
+    frame_gain = 1.0 - 0.85 * anomaly
+    centres = np.minimum(
+        len(data) - 1,
+        np.arange(frames, dtype=np.float64) * frame_size + frame_size * 0.5,
+    )
+    gain = np.interp(
+        np.arange(len(data), dtype=np.float64),
+        centres,
+        frame_gain,
+        left=float(frame_gain[0]),
+        right=float(frame_gain[-1]),
+    )
+    repaired = data.astype(np.float64, copy=True)
+    high_channels = sosfiltfilt(high_sos, repaired, axis=0)
+    repaired = repaired - high_channels + high_channels * gain[:, np.newaxis]
+    peak = float(np.max(np.abs(repaired))) if repaired.size else 0.0
+    if peak > 0.999:
+        repaired *= 0.999 / peak
+    guarded = float(np.count_nonzero(suspicious))
+    reduction = float(np.min(20.0 * np.log10(frame_gain[suspicious] + 1e-7))) if guarded else 0.0
+    return repaired.astype(np.float32), {
+        "guarded_frames": guarded,
+        "reduction_db": reduction,
+    }
+
+
 def naturalize_inference_output(
     source_path: str | Path,
     output_path: str | Path,
@@ -196,6 +304,14 @@ def naturalize_inference_output(
         output = output[:expected_frames]
     elif len(output) < expected_frames:
         output = np.pad(output, ((0, expected_frames - len(output)), (0, 0)))
+
+    output, high_band_stats = _source_guided_high_band_repair(
+        source,
+        output,
+        sample_rate,
+        source_rate,
+        engine,
+    )
 
     frame_size = max(32, int(round(sample_rate * 0.010)))
     source_mono = _source_on_output_timeline(source, len(output))
@@ -279,6 +395,8 @@ def naturalize_inference_output(
         "exact_silence_seconds": exact_frames * frame_size / sample_rate,
         "peak": peak,
         "peak_guard": peak_guard,
+        "high_band_guarded_frames": high_band_stats["guarded_frames"],
+        "high_band_reduction_db": high_band_stats["reduction_db"],
         "duration_adjustment_ms": duration_adjustment_ms,
     }
 
@@ -289,6 +407,7 @@ def format_naturalizer_stats(stats: dict[str, float]) -> str:
         f"silence=-{stats['silence_reduction_db']:.0f}dB "
         f"dynamics={stats['dynamic_min_db']:+.2f}..{stats['dynamic_max_db']:+.2f}dB "
         f"exact_silence={stats['exact_silence_seconds']:.2f}s "
+        f"hf_guard={int(stats.get('high_band_guarded_frames', 0.0))}frames "
         f"duration={stats['duration_adjustment_ms']:+.1f}ms "
         f"peak={stats['peak']:.4f}"
     )

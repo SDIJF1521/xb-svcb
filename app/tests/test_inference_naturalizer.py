@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from infrastructure.inference_naturalizer import naturalize_inference_output
+from infrastructure.inference_naturalizer import _source_guided_high_band_repair
 from infrastructure.seedvc_engine import SeedVcEngine
 
 
@@ -131,3 +132,34 @@ def test_seedvc_quality_range_avoids_low_step_artifacts() -> None:
     assert SeedVcEngine._diffusion_steps(0.0) == 20
     assert SeedVcEngine._diffusion_steps(0.5) == 35
     assert SeedVcEngine._diffusion_steps(1.0) == 50
+
+
+def test_source_guided_high_band_repair_only_attenuates_unsupported_burst() -> None:
+    sample_rate = 24000
+    time = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source = 0.16 * np.sin(2.0 * np.pi * 220.0 * time)
+    output = source.copy()
+    burst = (time >= 0.80) & (time < 0.90)
+    output[burst] += 0.12 * np.sin(2.0 * np.pi * 8200.0 * time[burst])
+
+    repaired, stats = _source_guided_high_band_repair(
+        source[:, np.newaxis],
+        output[:, np.newaxis],
+        sample_rate,
+        sample_rate,
+        "so-vits-svc",
+    )
+
+    from scipy.signal import butter, sosfiltfilt
+
+    highpass = butter(4, 5600.0, btype="highpass", fs=sample_rate, output="sos")
+    core = (time >= 0.82) & (time < 0.88)
+    before_high = sosfiltfilt(highpass, output)[core]
+    after_high = sosfiltfilt(highpass, repaired[:, 0])[core]
+    bodypass = butter(4, [180.0, 4800.0], btype="bandpass", fs=sample_rate, output="sos")
+    before_body = sosfiltfilt(bodypass, output)[core]
+    after_body = sosfiltfilt(bodypass, repaired[:, 0])[core]
+
+    assert stats["guarded_frames"] > 0.0
+    assert np.sqrt(np.mean(after_high**2)) < np.sqrt(np.mean(before_high**2)) * 0.40
+    assert np.sqrt(np.mean(after_body**2)) > np.sqrt(np.mean(before_body**2)) * 0.85

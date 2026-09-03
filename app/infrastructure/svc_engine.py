@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -42,6 +43,9 @@ class SvcEngine:
 
     # 强制切片时长（秒）：长音频按此切段逐段推理，控制显存峰值，避免 8GB 显存 OOM
     _CLIP_SECONDS = 30.0
+    # Windows 上 CUDA 子进程偶发原生退出时，进程不会留下 Python traceback 或 SVC_ERR。
+    # 在全新的子进程中仅重试一次，避免用户手动完整重跑前处理。
+    _UNSTRUCTURED_WORKER_RETRIES = 1
 
     @staticmethod
     def _ratio_to_kstep(diffusion_ratio: float) -> int:
@@ -262,46 +266,106 @@ class SvcEngine:
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
 
-        try:
-            proc = subprocess.run(
-                cmd,
-                cwd=str(repo),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=env,
-                timeout=3600,
-                **config.subprocess_no_window(),
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise RuntimeError(f"推理子进程启动失败: {exc}") from exc
+        processes = []
+        for attempt in range(self._UNSTRUCTURED_WORKER_RETRIES + 1):
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    cwd=str(repo),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env,
+                    timeout=3600,
+                    **config.subprocess_no_window(),
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise RuntimeError(f"推理子进程启动失败: {exc}") from exc
+            processes.append(proc)
+
+            if not self._should_retry_unstructured_failure(proc, out_path):
+                break
+            if attempt < self._UNSTRUCTURED_WORKER_RETRIES:
+                # 让 CUDA 驱动完成退出进程的资源回收，再使用全新的解释器重试。
+                try:
+                    out_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                time.sleep(1.0)
+
+        proc = processes[-1]
 
         # 把子进程完整输出写入作品日志，便于排查
         if log_file is not None:
             try:
                 with log_file.open("a", encoding="utf-8") as f:
                     f.write("\n----- so-vits-svc 推理输出 -----\n")
-                    f.write("$ " + " ".join(cmd) + "\n")
-                    f.write((proc.stdout or "") + "\n")
-                    if proc.stderr:
-                        f.write("----- stderr -----\n" + proc.stderr + "\n")
+                    for index, result in enumerate(processes, start=1):
+                        if len(processes) > 1:
+                            f.write(f"----- 第 {index}/{len(processes)} 次推理尝试 -----\n")
+                        f.write("$ " + " ".join(cmd) + "\n")
+                        f.write((result.stdout or "") + "\n")
+                        if result.stderr:
+                            f.write("----- stderr -----\n" + result.stderr + "\n")
+                        f.write(f"----- 子进程退出码 -----\n{result.returncode}\n")
             except OSError:
                 pass
 
         if proc.returncode != 0 or not out_path.exists():
             tail = self._error_tail(proc.stdout, proc.stderr)
-            raise RuntimeError(f"so-vits-svc 推理失败: {tail}")
+            reason = self._returncode_reason(proc.returncode)
+            raise RuntimeError(
+                f"so-vits-svc 推理失败（子进程退出码 {proc.returncode}{reason}）: {tail}"
+            )
+
+    @staticmethod
+    def _has_structured_worker_error(stdout: str | None, stderr: str | None) -> bool:
+        return any(
+            line.strip().startswith("SVC_ERR")
+            for line in f"{stdout or ''}\n{stderr or ''}".splitlines()
+        )
+
+    @classmethod
+    def _should_retry_unstructured_failure(cls, proc, out_path: Path) -> bool:  # noqa: ANN001
+        """Retry only a native/abrupt worker exit that gave no actionable error."""
+        return (
+            (proc.returncode != 0 or not out_path.exists())
+            and not cls._has_structured_worker_error(proc.stdout, proc.stderr)
+        )
+
+    @staticmethod
+    def _returncode_reason(returncode: int) -> str:
+        """Make common Windows native crash statuses actionable in the UI."""
+        status = int(returncode) & 0xFFFFFFFF
+        known = {
+            0xC0000005: "，Windows 原生崩溃/访问冲突 0xC0000005",
+            0xC0000017: "，Windows 虚拟内存不足 0xC0000017",
+            0xC0000409: "，Windows 原生快速失败 0xC0000409",
+        }
+        return known.get(status, "")
 
     @staticmethod
     def _error_tail(stdout: str | None, stderr: str | None) -> str:
         """提取子进程输出的关键错误信息（优先 SVC_ERR 行，否则取末尾几行）。"""
         text = ((stdout or "") + "\n" + (stderr or "")).strip()
+        lower = text.lower()
+        if "cuda error: out of memory" in lower or "torch.cuda.outofmemoryerror" in lower:
+            return "CUDA 显存不足：请关闭占用显卡的软件后重试，或改用更短切片/CPU 推理。"
         for line in text.splitlines():
             if line.startswith("SVC_ERR"):
                 return line[len("SVC_ERR") :].strip()
-        lines = [ln for ln in text.splitlines() if ln.strip()]
-        return " | ".join(lines[-3:]) if lines else "未知错误"
+        lines = [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip()
+            and "warning:" not in line.lower()
+            and "weightnorm.apply" not in line.lower()
+            and "set_audio_backend" not in line.lower()
+        ]
+        if lines:
+            return " | ".join(lines[-3:])
+        return "推理子进程异常退出，未返回 Python 错误详情；已自动重试一次仍失败。"
 
     @staticmethod
     def _clear_output(out_path: Path) -> None:
