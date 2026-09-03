@@ -246,7 +246,7 @@ def test_default_single_package_build_is_cuda128_shared() -> None:
     build = (ROOT / "installer" / "build.ps1").read_text(encoding="utf-8")
     inno = INSTALLER_SCRIPT.read_text(encoding="utf-8")
 
-    assert "@('cu128')" in build
+    assert "  } elseif (-not $ValidateOnly) {\n    'cu128'\n  }" in build
     assert '#define XB_PACKAGE_STACK "cu128"' in inno
     assert '#define XB_OUTPUT_BASENAME "XB-SVCB-Setup-CUDA128"' in inno
 
