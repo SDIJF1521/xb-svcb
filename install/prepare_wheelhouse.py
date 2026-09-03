@@ -1,6 +1,6 @@
 """运行时安装程序在两个运行时需要不兼容的 PyTorch 版本时，
 会使用共享的 ``assets/wheels/<py tag>/<stack>`` 文件夹，
-以及组件文件夹（如 ``assets/wheels/rvc/py39/cu121`` 或
+以及组件文件夹（如 ``assets/wheels/rvc/py310/cpu`` 或
 ``assets/wheels/pymss/py310/cu126``）。
 此脚本在发布构建器上运行，下载或构建每种支持的 Python/GPU
 组合对应的 Windows 轮子，并生成一个清单文件，与模型一起打包到 Inno Setup 中。
@@ -40,7 +40,9 @@ class DownloadBatch:
     index: str | None = None
     build_source: bool = False
     no_deps: bool = False
+    binary_only: bool = False
     constraints: tuple[str, ...] = ()
+    no_build_isolation: bool = False
 
 
 def _load_installer(root: Path):
@@ -67,19 +69,29 @@ def _component_wheelhouse_dir(root: Path, component: str, python_version: str, s
 
 
 def _copy_filtered_req(installer, source: Path, name: str, **kwargs) -> Path:
-    generated = installer._filter_requirements(source, **kwargs)  # noqa: SLF001
-    TMP_REQS.mkdir(parents=True, exist_ok=True)
-    dest = TMP_REQS / f"{name}.txt"
-    dest.write_text(generated.read_text(encoding="utf-8"), encoding="utf-8")
-    return dest
+    # Keep planning isolated from both upstream sources and other build roots.
+    destination = installer.ROOT / ".tmp" / "wheelhouse-requirements" / f"{name}.txt"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return installer._filter_requirements(source, output=destination, **kwargs)  # noqa: SLF001
+
+
+def missing_engine_requirements(root: Path) -> dict[str, tuple[Path, ...]]:
+    candidates = {
+        "so-vits-svc": (root / "engines/so-vits-svc/requirements_win.txt",
+                        root / "engines/so-vits-svc/requirements.txt"),
+        "seed-vc": (root / "engines/seed-vc/requirements.txt",),
+        "ddsp-svc": (root / "engines/ddsp-svc/requirements.txt",),
+    }
+    return {name: paths for name, paths in candidates.items() if not any(p.is_file() for p in paths)}
 
 
 def _existing_req(installer, *candidates: Path) -> Path:
     for candidate in candidates:
-        if candidate.exists():
+        if candidate.is_file():
             return candidate
     raise RuntimeError(
-        "Missing engine requirements file. Stage bundled engine sources before preparing wheels."
+        "Missing engine requirements file. Stage bundled engine sources before preparing wheels. "
+        "Searched: " + ", ".join(str(path) for path in candidates)
     )
 
 
@@ -92,7 +104,12 @@ def _reqs(installer) -> dict[str, Path]:
     seedvc_req = _existing_req(installer, installer.SEEDVC_DIR / "requirements.txt")
     ddsp_req = _existing_req(installer, installer.DDSP_DIR / "requirements.txt")
     return {
-        "svc-py39": _copy_filtered_req(installer, svc_req, "svc-py39"),
+        "svc-cpu": _copy_filtered_req(
+            installer,
+            svc_req,
+            "svc-cpu",
+            overrides=installer.PYTHON310_REQ_OVERRIDES,
+        ),
         "svc-directml": _copy_filtered_req(
             installer,
             svc_req,
@@ -104,6 +121,13 @@ def _reqs(installer) -> dict[str, Path]:
             installer,
             svc_req,
             "svc-cu128",
+            extra_deny=installer.BLACKWELL_EXTRA_DENY,
+            overrides=installer.PYTHON310_REQ_OVERRIDES,
+        ),
+        "svc-cu126": _copy_filtered_req(
+            installer,
+            svc_req,
+            "svc-cu126",
             extra_deny=installer.BLACKWELL_EXTRA_DENY,
             overrides=installer.PYTHON310_REQ_OVERRIDES,
         ),
@@ -130,14 +154,53 @@ def _reqs(installer) -> dict[str, Path]:
     }
 
 
+def _core_profile_download_requirements(installer) -> Path:
+    """Create the public-index portion of the fixed cu128 core lock."""
+    recipe = installer._recipe_module()  # noqa: SLF001
+    profile, pins = recipe.load_profile()
+    provided = {"torch", "torchaudio", "torchvision"}
+    for artifact in profile["artifacts"]:
+        if artifact["group"] not in {"candidate", "compat"}:
+            continue
+        filename = Path(artifact["path"]).name.lower()
+        matches = [
+            name
+            for name, version in pins.items()
+            if filename.startswith(f"{name.replace('-', '_')}-{version}".lower())
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"Cannot map profile artifact to one locked distribution: {artifact['path']}"
+            )
+        provided.add(matches[0])
+
+    lock = recipe.contained(recipe.PROFILE_DIR, profile["lock"])
+    lines: list[str] = []
+    for raw in lock.read_text(encoding="utf-8").splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            lines.append(raw)
+            continue
+        name = installer._normalized_dist_name(stripped.split("==", 1)[0])  # noqa: SLF001
+        if name not in provided:
+            lines.append(stripped)
+    destination = (
+        installer.ROOT
+        / ".tmp"
+        / "wheelhouse-requirements"
+        / "core-cu128-profile.txt"
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return destination
+
+
 def _torch_specs(installer, stack: str, version: str) -> tuple[tuple[str, ...], str]:
     packages = (f"torch=={version}", f"torchaudio=={version}")
     if stack == "cu128":
         return packages, installer.TORCH_BLACKWELL_INDEX
     if stack == "cu126":
         return packages, installer.TORCH_PYMSS_CUDA_INDEX
-    if stack == "cu121":
-        return packages, installer.TORCH_CUDA_INDEX
     return packages, installer.TORCH_CPU_INDEX
 
 
@@ -311,6 +374,7 @@ def _py310_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
                 build_source=True,
                 no_deps=True,
                 constraints=dml_constraints,
+                no_build_isolation=True,
             ),
             DownloadBatch(
                 "svc directml requirements",
@@ -406,13 +470,13 @@ def _py310_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
         batches += _pymss_batches(root, installer, stack)
         return batches
 
-    if stack == "cu128":
+    if stack in {"cu126", "cu128"}:
         torch_version = installer.TORCH_BLACKWELL_VER
     else:
         torch_version = "2.5.1"
     torch_packages, torch_index = _torch_specs(installer, stack, torch_version)
     torch_constraints = _torch_constraints(stack, torch_version)
-    audio_extra = "gpu" if stack in {"cu121", "cu128"} else "cpu"
+    audio_extra = "gpu" if stack in {"cu126", "cu128"} else "cpu"
     dest = shared_dest
     batches += [
         boot(f"{stack} py310 setuptools", dest, torch_constraints),
@@ -427,28 +491,28 @@ def _py310_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
         ),
     ]
     batches += _pymss_batches(root, installer, stack)
-    if stack == "cu128":
+    if stack in {"cu126", "cu128"}:
         batches += [
-            DownloadBatch("svc cu128 torch", dest, py, torch_packages, index=torch_index, constraints=torch_constraints),
+            DownloadBatch(f"svc {stack} torch", dest, py, torch_packages, index=torch_index, constraints=torch_constraints),
             DownloadBatch(
-                "svc cu128 requirements",
+                f"svc {stack} requirements",
                 dest,
                 py,
-                requirements=reqs["svc-cu128"],
+                requirements=reqs[f"svc-{stack}"],
                 build_source=True,
                 constraints=torch_constraints,
             ),
-            DownloadBatch("svc cu128 soundfile", dest, py, ("soundfile",), constraints=torch_constraints),
-            DownloadBatch("svc cu128 matplotlib", dest, py, ("matplotlib==3.8.4",), constraints=torch_constraints),
+            DownloadBatch(f"svc {stack} soundfile", dest, py, ("soundfile",), constraints=torch_constraints),
+            DownloadBatch(f"svc {stack} matplotlib", dest, py, ("matplotlib==3.8.4",), constraints=torch_constraints),
             DownloadBatch(
-                "svc cu128 fcpe runtime",
+                f"svc {stack} fcpe runtime",
                 dest,
                 py,
                 installer.SVC_FCPE_RUNTIME_DEPS,
                 constraints=torch_constraints,
             ),
             DownloadBatch(
-                "svc cu128 omegaconf",
+                f"svc {stack} omegaconf",
                 dest,
                 py,
                 ("omegaconf==2.0.6",),
@@ -456,16 +520,17 @@ def _py310_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
                 constraints=torch_constraints,
             ),
             DownloadBatch(
-                "svc cu128 fairseq",
+                f"svc {stack} fairseq",
                 dest,
                 py,
                 ("fairseq==0.12.2",),
                 build_source=True,
                 no_deps=True,
                 constraints=torch_constraints,
+                no_build_isolation=True,
             ),
-            DownloadBatch("rvc cu128 torch", dest, py, torch_packages, index=torch_index, constraints=torch_constraints),
-            DownloadBatch("rvc cu128", dest, py, ("rvc-python",), build_source=True, constraints=torch_constraints),
+            DownloadBatch(f"rvc {stack} torch", dest, py, torch_packages, index=torch_index, constraints=torch_constraints),
+            DownloadBatch(f"rvc {stack}", dest, py, ("rvc-python",), build_source=True, constraints=torch_constraints),
         ]
     batches += [
         DownloadBatch("seedvc torch", dest, py, torch_packages, index=torch_index, constraints=torch_constraints),
@@ -499,11 +564,23 @@ def _py310_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
         DownloadBatch("vocal deps", dest, py, _vocal_deps(), constraints=torch_constraints),
         DownloadBatch("hub deps", dest, py, ("modelscope", "requests", "tqdm"), constraints=common_constraints),
     ]
+    if stack == "cu128":
+        batches.append(
+            DownloadBatch(
+                "core cu128 fixed profile",
+                dest,
+                py,
+                requirements=_core_profile_download_requirements(installer),
+                no_deps=True,
+                binary_only=True,
+            )
+        )
     return batches
 
 
-def _py39_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> list[DownloadBatch]:
+def _cpu_compat_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> list[DownloadBatch]:
     py = installer.PYTHON_FOR_SVC
+    py_tag = f"py{_py_digits(py)}"
     svc_dest = _component_wheelhouse_dir(root, "svc", py, stack)
     rvc_dest = _component_wheelhouse_dir(root, "rvc", py, stack)
     svc_torch, svc_index = _torch_specs(installer, stack, "2.5.1")
@@ -511,37 +588,38 @@ def _py39_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> l
     svc_constraints = _torch_constraints(stack, "2.5.1")
     rvc_constraints = _torch_constraints(stack, "2.1.1")
     return [
-        DownloadBatch(f"svc {stack} py39 setuptools", svc_dest, py, ("setuptools<81", "wheel"), constraints=svc_constraints),
-        DownloadBatch("svc py39 torch", svc_dest, py, svc_torch, index=svc_index, constraints=svc_constraints),
+        DownloadBatch(f"svc {stack} {py_tag} setuptools", svc_dest, py, ("setuptools<81", "wheel"), constraints=svc_constraints),
+        DownloadBatch(f"svc {py_tag} torch", svc_dest, py, svc_torch, index=svc_index, constraints=svc_constraints),
         DownloadBatch(
-            "svc py39 source wheels",
+            f"svc {py_tag} source wheels",
             svc_dest,
             py,
             ("pyworld==0.3.0", "fairseq==0.12.2"),
             build_source=True,
             no_deps=True,
             constraints=svc_constraints,
+            no_build_isolation=True,
         ),
         DownloadBatch(
-            "svc py39 requirements",
+            f"svc {py_tag} requirements",
             svc_dest,
             py,
-            requirements=reqs["svc-py39"],
+            requirements=reqs["svc-cpu"],
             build_source=True,
             constraints=svc_constraints,
         ),
         DownloadBatch(
-            f"svc {stack} py39 fcpe runtime",
+            f"svc {stack} {py_tag} fcpe runtime",
             svc_dest,
             py,
             installer.SVC_FCPE_RUNTIME_DEPS,
             constraints=svc_constraints,
         ),
-        # Keep Matplotlib's py39 import-time dependencies separate because the
+        # Keep Matplotlib's import-time dependencies separate because the
         # runtime installs matplotlib with --no-deps to preserve So-VITS'
         # validated NumPy pin.
         DownloadBatch(
-            "svc py39 matplotlib support",
+            f"svc {py_tag} matplotlib support",
             svc_dest,
             py,
             installer.SVC_MATPLOTLIB_RUNTIME_DEPS,
@@ -549,45 +627,46 @@ def _py39_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> l
             constraints=svc_constraints,
         ),
         DownloadBatch(
-            "svc py39 matplotlib",
+            f"svc {py_tag} matplotlib",
             svc_dest,
             py,
             ("matplotlib==3.7.5",),
             no_deps=True,
             constraints=svc_constraints,
         ),
-        DownloadBatch(f"rvc {stack} py39 setuptools", rvc_dest, py, ("setuptools<81", "wheel"), constraints=rvc_constraints),
-        DownloadBatch("rvc py39 torch", rvc_dest, py, rvc_torch, index=rvc_index, constraints=rvc_constraints),
+        DownloadBatch(f"rvc {stack} {py_tag} setuptools", rvc_dest, py, ("setuptools<81", "wheel"), constraints=rvc_constraints),
+        DownloadBatch(f"rvc {py_tag} torch", rvc_dest, py, rvc_torch, index=rvc_index, constraints=rvc_constraints),
         DownloadBatch(
-            "rvc py39 fairseq",
+            f"rvc {py_tag} fairseq",
             rvc_dest,
             py,
             ("fairseq==0.12.2",),
             build_source=True,
             no_deps=True,
             constraints=rvc_constraints,
+            no_build_isolation=True,
         ),
-        DownloadBatch("rvc py39", rvc_dest, py, ("rvc-python",), build_source=True, constraints=rvc_constraints),
+        DownloadBatch(f"rvc {py_tag}", rvc_dest, py, ("rvc-python",), build_source=True, constraints=rvc_constraints),
     ]
 
 
 def build_plan(root: Path, stacks: set[str] | None = None) -> list[DownloadBatch]:
     installer = _load_installer(root)
     reqs = _reqs(installer)
-    requested = stacks or {"cpu", "directml", "cu121", "cu128"}
+    requested = stacks or {"cpu", "directml", "cu126", "cu128"}
     batches = _base_batches(root, installer)
-    for stack in ("cpu", "directml", "cu121", "cu128"):
+    for stack in ("cpu", "directml", "cu126", "cu128"):
         if stack in requested:
             batches += _py310_batches(root, installer, reqs, stack)
-    for stack in ("cpu", "cu121"):
+    for stack in ("cpu",):
         if stack in requested:
-            batches += _py39_batches(root, installer, reqs, stack)
+            batches += _cpu_compat_batches(root, installer, reqs, stack)
     pymss_stacks: list[str] = []
     if "cpu" in requested:
         pymss_stacks.append("cpu")
     if "directml" in requested:
         pymss_stacks.append("directml")
-    if requested & {"cu121", "cu126"}:
+    if "cu126" in requested:
         pymss_stacks.append("cu126")
     if "cu128" in requested:
         pymss_stacks.append("cu128")
@@ -635,16 +714,48 @@ def _run(cmd: list[str]) -> None:
 
 
 def _has_module(py: Path, module: str) -> bool:
-    return (
-        subprocess.run(
-            [str(py), "-c", f"import {module}"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            env=_subprocess_env(),
-        ).returncode
-        == 0
-    )
+    try:
+        return (
+            subprocess.run(
+                [str(py), "-c", f"import {module}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                env=_subprocess_env(),
+            ).returncode
+            == 0
+        )
+    except OSError:
+        return False
+
+
+def _python_works(py: Path) -> bool:
+    if not py.exists():
+        return False
+    try:
+        return (
+            subprocess.run(
+                [str(py), "-c", "import sys; raise SystemExit(0)"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                env=_subprocess_env(),
+            ).returncode
+            == 0
+        )
+    except OSError:
+        return False
+
+
+def _remove_broken_temp_venv(root: Path, venv: Path, label: str) -> None:
+    if not venv.exists():
+        return
+    temp_root = (root / ".tmp").resolve()
+    resolved = venv.resolve()
+    if resolved == temp_root or not resolved.is_relative_to(temp_root):
+        raise RuntimeError(f"Refusing to remove {label} outside {temp_root}: {resolved}")
+    print(f"[wheelhouse] Recreating stale {label}: {venv}")
+    shutil.rmtree(venv)
 
 
 def _ensure_pip(py: Path) -> None:
@@ -703,13 +814,18 @@ def _venv_python(venv: Path) -> Path:
 
 def _ensure_tool_python(root: Path, _installer) -> Path:
     global _TOOL_PYTHON
-    if _TOOL_PYTHON and _TOOL_PYTHON.exists():
+    if _TOOL_PYTHON and _python_works(_TOOL_PYTHON):
         return _TOOL_PYTHON
+    _TOOL_PYTHON = None
     venv = root / ".tmp" / "wheelhouse-tools"
     py = _venv_python(venv)
-    if not py.exists():
+    if venv.exists() and not _python_works(py):
+        _remove_broken_temp_venv(root, venv, "wheelhouse tool environment")
+    if not _python_works(py):
         venv.parent.mkdir(parents=True, exist_ok=True)
         _run([sys.executable, "-m", "venv", str(venv)])
+    if not _python_works(py):
+        raise RuntimeError(f"Wheelhouse tool Python could not be created: {py}")
     _ensure_pip(py)
     # 工具环境只负责下载器 / uv 自举，不安装编译用大包，避免 wheelhouse
     # 准备阶段在这里重复下载和导入 numpy、Cython、wheel 等依赖。
@@ -749,14 +865,23 @@ def _ensure_uv(root: Path, installer) -> str:
 
 def _ensure_build_python(root: Path, installer, python_version: str) -> Path:
     cached = _BUILD_PYTHONS.get(python_version)
-    if cached and cached.exists():
+    if cached and _python_works(cached):
         return cached
+    _BUILD_PYTHONS.pop(python_version, None)
     venv = root / ".tmp" / "wheelhouse-build-envs" / f"py{_py_digits(python_version)}"
     py = _venv_python(venv)
-    if not py.exists():
-        uv = _ensure_uv(root, installer)
+    if venv.exists() and not _python_works(py):
+        _remove_broken_temp_venv(root, venv, f"Python {python_version} wheel build environment")
+    if not _python_works(py):
         venv.parent.mkdir(parents=True, exist_ok=True)
-        _run([uv, "venv", "--python", python_version, str(venv)])
+        current_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        if current_version == python_version:
+            _run([sys.executable, "-m", "venv", str(venv)])
+        else:
+            uv = _ensure_uv(root, installer)
+            _run([uv, "venv", "--python", python_version, str(venv)])
+    if not _python_works(py):
+        raise RuntimeError(f"Python {python_version} wheel build environment could not be created: {py}")
     _ensure_pip(py)
     _run(
         [
@@ -797,6 +922,11 @@ def _build_wheels(root: Path, installer, batch: DownloadBatch) -> None:
     ]
     if constraints is not None:
         cmd += ["-c", str(constraints)]
+    if batch.no_build_isolation:
+        # pyworld 0.3.0 and fairseq 0.12.2 declare unconstrained NumPy/Cython
+        # build requirements. Reuse the pinned toolchain installed above so
+        # pip does not create an isolated environment and build a newer NumPy.
+        cmd.append("--no-build-isolation")
     if batch.no_deps:
         cmd.append("--no-deps")
     if batch.requirements is not None:
@@ -808,9 +938,10 @@ def _build_wheels(root: Path, installer, batch: DownloadBatch) -> None:
 def _download_batch(root: Path, installer, batch: DownloadBatch) -> None:
     if not batch.packages and batch.requirements is None:
         return
-    # Requirement sets can contain transitive source-only packages (SeedVC
-    # currently reaches argbind and jieba), so binary-only download is unsafe.
-    if batch.build_source or batch.requirements is not None:
+    # Requirement sets default to the wheel builder because upstream engine
+    # lists can contain source-only packages. A reviewed frozen lock may opt
+    # into the platform-specific binary downloader explicitly.
+    if batch.build_source or (batch.requirements is not None and not batch.binary_only):
         print(f"\n==== {batch.label} ====")
         _build_wheels(root, installer, batch)
         return
@@ -900,7 +1031,7 @@ def main() -> int:
     parser.add_argument(
         "--stack",
         action="append",
-        choices=("cpu", "directml", "cu121", "cu126", "cu128"),
+        choices=("cpu", "directml", "cu126", "cu128"),
         help="prepare only selected stack(s); default prepares all",
     )
     parser.add_argument("--dry-run", action="store_true", help="print the plan without downloading")
@@ -931,7 +1062,9 @@ def main() -> int:
                 "packages": list(batch.packages),
                 "build_source": batch.build_source,
                 "no_deps": batch.no_deps,
+                "binary_only": batch.binary_only,
                 "constraints": list(batch.constraints),
+                "no_build_isolation": batch.no_build_isolation,
             }
             for batch in batches
         ]

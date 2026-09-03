@@ -1,6 +1,6 @@
 """SVC 推理引擎封装：调用用户本地的 so-vits-svc 4.1 环境进行真实歌声转换。
 
-真实推理通过子进程在 ``config.SVC_PYTHON``（用户的 so-vits-svc conda 环境）中运行
+真实推理通过子进程在 ``config.SVC_PYTHON``（隔离的 so-vits-svc 环境）中运行
 ``svc_worker.py``，加载主模型 + 浅扩散模型完成转换。
 
 推理环境、模型或输入缺失时明确失败，绝不生成占位音冒充转换结果。

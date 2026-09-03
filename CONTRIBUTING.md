@@ -11,7 +11,7 @@
 Bug 报告应尽量包含：
 
 - XB-SVCB 版本、Windows 版本和安装方式；
-- Python、GPU 型号、显卡驱动及实际使用的推理后端（CPU、DirectML、cu121 或 cu128）；
+- Python、GPU 型号、显卡驱动及实际使用的推理后端（CPU、DirectML、cu126 或 cu128）；
 - 可重复执行的最小步骤、预期结果和实际结果；
 - 完整错误信息及相关日志；
 - 必要时提供经过脱敏的截图或最小音频样本。
@@ -92,7 +92,7 @@ app\.venv\Scripts\python.exe app\main.py --dev
 - `app/infrastructure/`：存储、音频、引擎和系统集成；
 - `app/tests/`：Python 单元测试与回归测试；
 - `web/src/`：Vue 3、Pinia、Element Plus 前端；
-- `install/`：依赖解析、隔离环境和离线资源准备；
+- `install/`：共享/隔离运行时编排、依赖解析和离线资源准备；
 - `installer/`：PyInstaller、Inno Setup 和发布校验；
 - `native/juce-vst3-host/`：JUCE VST3 Host；
 - `docs/`：外部 API 等专题文档。

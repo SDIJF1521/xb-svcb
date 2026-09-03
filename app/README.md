@@ -8,7 +8,7 @@
 
 - `app/main.py` 启动 pywebview 桌面壳。
 - `app/config.py` 提供应用元信息、路径与运行环境位置。
-- 重型 AI 依赖不打进应用本体，由安装器放到 `.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-uvr`、`.venv-hub` 等隔离环境中。
+- 重型 AI 依赖不打进应用本体。CUDA126/CUDA128 默认放入 `runtimes/core-*` 与 `runtimes/svc-*` 两层共享环境；CPU、DirectML 和旧安装继续使用 `.venv-*` 隔离环境。实际解释器路由由 `runtime.json` 决定。
 
 ## v0.0.30 版本说明
 

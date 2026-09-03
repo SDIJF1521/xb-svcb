@@ -1,4 +1,4 @@
-"""RVC 推理子进程脚本（运行于 ``.venv-rvc`` 中，依赖 rvc-python）。
+"""RVC 推理子进程脚本（运行于隔离环境中，依赖 rvc-python）。
 
 由 ``RvcEngine`` 以子进程方式调用，与主程序的依赖环境隔离。约定输出：
 - 成功：``RVC_OK <output_path>``

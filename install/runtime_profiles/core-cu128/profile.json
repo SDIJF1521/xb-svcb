@@ -1,0 +1,103 @@
+{
+  "schema": 1,
+  "id": "core-cu128",
+  "experimental": true,
+  "stack": "cu128",
+  "python": "3.10",
+  "platform": "win_amd64",
+  "lock": "requirements.lock",
+  "lock_sha256": "5e327091c3f89414a97299f08021a256337aa444ccfa6d52e8e6fac81d1ea715",
+  "optional_packages": [
+    "hf-xet"
+  ],
+  "optional_reason": "Transport-only helper: installed Hugging Face metadata excludes uppercase AMD64, while target-platform resolution includes lowercase amd64. Missing hf-xet is allowed for the existing HTTP-based runtime; fresh installs use its pinned version.",
+  "compatibility_wheel": "assets/runtime/core-cu128/compat/descript_audiotools-0.7.2+xb1-py3-none-any.whl",
+  "full_model_inference_validated": false,
+  "rollback_is_known_healthy": false,
+  "artifacts": [
+    {
+      "group": "candidate",
+      "path": "assets/runtime/core-cu128/candidate/numpy-2.2.6-cp310-cp310-win_amd64.whl",
+      "bytes": 12904620,
+      "sha256": "f0fd6321b839904e15c46e0d257fdd101dd7f530fe03fd6359c1ea63738703f3"
+    },
+    {
+      "group": "candidate",
+      "path": "assets/runtime/core-cu128/candidate/protobuf-7.36.0-cp310-abi3-win_amd64.whl",
+      "bytes": 453731,
+      "sha256": "1781cc1de61249b750848029bca452c0a8b7e990080316b9bbc2518b2117b488"
+    },
+    {
+      "group": "candidate",
+      "path": "assets/runtime/core-cu128/candidate/tensorboardx-2.6.5-py3-none-any.whl",
+      "bytes": 87510,
+      "sha256": "c10b891d00af306537cb8b58a039b2ba41571f0da06f433a41c4ca8d6abe1373"
+    },
+    {
+      "group": "compat",
+      "path": "assets/runtime/core-cu128/compat/antlr4_python3_runtime-4.9.3-py3-none-any.whl",
+      "bytes": 144613,
+      "sha256": "380e70cc140cff8109211b32ac2f218e8c294360206201ffba23676f3375f519"
+    },
+    {
+      "group": "compat",
+      "path": "assets/runtime/core-cu128/compat/argbind-0.3.9-py2.py3-none-any.whl",
+      "bytes": 11898,
+      "sha256": "d147ffae08a66115cf07c86a67b248e6dadbb9af4898625e239197ef5fdba871"
+    },
+    {
+      "group": "compat",
+      "path": "assets/runtime/core-cu128/compat/crcmod-1.7-cp310-cp310-win_amd64.whl",
+      "bytes": 24765,
+      "sha256": "12563314e45cd1205b362062499069bab19a0b0a72290b2bd894e2ebefcb7eeb"
+    },
+    {
+      "group": "compat",
+      "path": "assets/runtime/core-cu128/compat/descript_audiotools-0.7.2+xb1-py3-none-any.whl",
+      "bytes": 107260,
+      "sha256": "22eb8ec9db1c52a16ed3c2202f61b02ba9249c3038066e06097a1912ac1d8b27"
+    },
+    {
+      "group": "compat",
+      "path": "assets/runtime/core-cu128/compat/jieba-0.42.1-py3-none-any.whl",
+      "bytes": 19314527,
+      "sha256": "99ec084112c79e9f18e3cad5abb392856b4c41178b4d7a074523127f99de8543"
+    },
+    {
+      "group": "compat",
+      "path": "assets/runtime/core-cu128/compat/oss2-2.19.1-py3-none-any.whl",
+      "bytes": 124053,
+      "sha256": "8225bc10f42f9bf1b9d331a693a5053233e48b2c87cda8166dfa419ea36f9806"
+    },
+    {
+      "group": "compat",
+      "path": "assets/runtime/core-cu128/compat/randomname-0.2.1-py3-none-any.whl",
+      "bytes": 89313,
+      "sha256": "0ab52b34106c88eb518188ac94743d0fbe756f13f36b9156d2d92aad099d9321"
+    },
+    {
+      "group": "rollback",
+      "path": "assets/runtime/core-cu128/rollback/descript_audiotools-0.7.2-py2.py3-none-any.whl",
+      "bytes": 106704,
+      "sha256": "bb7a4e837f92395e43894d99a89406485325b88c6f158caf59e18876cf5b06ea"
+    },
+    {
+      "group": "rollback",
+      "path": "assets/runtime/core-cu128/rollback/numpy-1.26.4-cp310-cp310-win_amd64.whl",
+      "bytes": 15808905,
+      "sha256": "b97fe8060236edf3662adfc2c633f56a08ae30560c56310562cb4f95500022d5"
+    },
+    {
+      "group": "rollback",
+      "path": "assets/runtime/core-cu128/rollback/protobuf-3.19.6-cp310-cp310-win_amd64.whl",
+      "bytes": 895657,
+      "sha256": "347b393d4dd06fb93a77620781e11c058b3b0a5289262f094379ada2920a3730"
+    },
+    {
+      "group": "rollback",
+      "path": "assets/runtime/core-cu128/rollback/tensorboardX-2.6-py2.py3-none-any.whl",
+      "bytes": 114480,
+      "sha256": "24a7cd076488de1e9d15ef25371b8ebf90c4f8f622af2477c611198f03f4a606"
+    }
+  ]
+}

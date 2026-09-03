@@ -101,6 +101,10 @@ assets/tools/ffmpeg/bin/*.exe
 /plugin-data/
 .venv-svc/
 .venv-plugins/
+runtime.json
+/runtimes/
+# Local, hash-verified runtime artifacts; manifests/recipes stay in source control.
+/assets/runtime/**/*.whl
 
 .vscode
 

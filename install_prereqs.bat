@@ -114,7 +114,7 @@ exit /b 0
 set "DETECTED_GPU_STACK="
 if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="cpu" set "DETECTED_GPU_STACK=cpu"
 if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="directml" set "DETECTED_GPU_STACK=directml"
-if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="cu121" set "DETECTED_GPU_STACK=cu121"
+if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="cu126" set "DETECTED_GPU_STACK=cu126"
 if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="cu128" set "DETECTED_GPU_STACK=cu128"
 if /I "%XB_GPU_STACK_REQUESTED%"=="cpu" (
   set "XB_RESOLVED_GPU_STACK=cpu"
@@ -159,7 +159,7 @@ if "%XB_RESOLVED_GPU_STACK%"=="directml" (
 if "%XB_RESOLVED_GPU_STACK%"=="cu128" (
   set "XB_CUDA_VERSION=12.8"
 ) else (
-  set "XB_CUDA_VERSION=12.1"
+  set "XB_CUDA_VERSION=12.6"
 )
 call :NORMALIZE_CUDA_DIR
 exit /b 0
@@ -188,20 +188,25 @@ for /f "tokens=1 delims=." %%A in ('"%XB_NVIDIA_SMI%" --query-gpu=compute_cap --
   for /f "tokens=* delims= " %%B in ("!CAP_MAJOR!") do set "CAP_MAJOR=%%B"
   echo !CAP_MAJOR! | findstr /R "^[0-9][0-9]*$" >nul && (
     if !CAP_MAJOR! GEQ 12 set "DETECTED_GPU_STACK=cu128"
-    if !CAP_MAJOR! GEQ 5 if not "!DETECTED_GPU_STACK!"=="cu128" set "DETECTED_GPU_STACK=cu121"
+    if !CAP_MAJOR! GEQ 5 if not "!DETECTED_GPU_STACK!"=="cu128" set "DETECTED_GPU_STACK=cu126"
   )
+)
+rem Always inspect the adapter name too: some drivers expose a placeholder
+rem compute capability for RTX 50xx, which must still route to cu128.
+for /f "delims=" %%G in ('"%XB_NVIDIA_SMI%" --query-gpu=name --format=csv,noheader 2^>nul') do (
+  echo %%G | findstr /I /R "RTX *50[0-9][0-9]" >nul && set "DETECTED_GPU_STACK=cu128"
 )
 if not "%DETECTED_GPU_STACK%"=="cpu" exit /b 0
 for /f "delims=" %%G in ('"%XB_NVIDIA_SMI%" --query-gpu=name --format=csv,noheader 2^>nul') do (
   echo %%G | findstr /I /R "RTX *50[0-9][0-9]" >nul && set "DETECTED_GPU_STACK=cu128"
-  if "!DETECTED_GPU_STACK!"=="cpu" set "DETECTED_GPU_STACK=cu121"
+  if "!DETECTED_GPU_STACK!"=="cpu" set "DETECTED_GPU_STACK=cu126"
 )
 if not "%DETECTED_GPU_STACK%"=="cpu" exit /b 0
 :DETECT_ADAPTER_GPU
 for /f "delims=" %%G in ('powershell.exe -NoProfile -Command "Get-CimInstance Win32_VideoController ^| Select-Object -ExpandProperty Name" 2^>nul') do (
   echo %%G | findstr /I /C:"NVIDIA" /C:"GeForce" >nul && (
     echo %%G | findstr /I /R "RTX *50[0-9][0-9]" >nul && set "DETECTED_GPU_STACK=cu128"
-    if "!DETECTED_GPU_STACK!"=="cpu" set "DETECTED_GPU_STACK=cu121"
+    if "!DETECTED_GPU_STACK!"=="cpu" set "DETECTED_GPU_STACK=cu126"
   )
 )
 if not "%DETECTED_GPU_STACK%"=="cpu" exit /b 0
@@ -233,10 +238,10 @@ if not exist "!PYTHON_DETECTOR!" (
 call "!PYTHON_DETECTOR!"
 if not errorlevel 1 (
   set "PATH=!XB_PYTHON_DIR!;!XB_PYTHON_DIR!\Scripts;!PATH!"
-  echo [ok] Python 3.10+ verified: !XB_PYTHON_EXE!
+  echo [ok] Python 3.10.x verified and locked: !XB_PYTHON_EXE!
   exit /b 0
 )
-echo [fail] A runnable Python 3.10 or newer was not found.
+echo [fail] A runnable CPython 3.10.x was not found.
 call :MANUAL_GUIDANCE "Python 3.10" "https://www.python.org/downloads/windows/"
 exit /b 1
 
@@ -328,7 +333,7 @@ echo        PyTorch wheels include CUDA runtime, but Toolkit tools will be insta
 if "%XB_RESOLVED_GPU_STACK%"=="cu128" (
   call :MANUAL_GUIDANCE "CUDA Toolkit 12.8" "https://developer.nvidia.com/cuda-downloads"
 ) else (
-  call :MANUAL_GUIDANCE "CUDA Toolkit 12.1" "https://developer.nvidia.com/cuda-downloads"
+call :MANUAL_GUIDANCE "CUDA Toolkit 12.6" "https://developer.nvidia.com/cuda-downloads"
 )
 call :RESOLVE_PATHS
 call :USE_CUDA_DIR_IF_VERSION "%XB_CUDA_DIR%" "selected path" >nul 2>&1
@@ -368,27 +373,44 @@ if not defined CUDA_CANDIDATE exit /b 1
 if not exist "%CUDA_CANDIDATE%\bin\nvcc.exe" exit /b 1
 "%CUDA_CANDIDATE%\bin\nvcc.exe" --version > "%TEMP%\xb_nvcc_version.txt" 2>nul
 findstr /C:"release %XB_CUDA_VERSION%" "%TEMP%\xb_nvcc_version.txt" >nul
+if errorlevel 1 findstr /R /C:"release 13\." "%TEMP%\xb_nvcc_version.txt" >nul
 if errorlevel 1 (
-  echo [mismatch] CUDA Toolkit found at %CUDA_CANDIDATE%, but it does not match required %XB_CUDA_VERSION% for %XB_RESOLVED_GPU_STACK%.
+  echo [mismatch] CUDA Toolkit found at %CUDA_CANDIDATE%, but it is older than the recommended %XB_CUDA_VERSION% for %XB_RESOLVED_GPU_STACK%.
   exit /b 1
 )
 set "XB_CUDA_DIR=%CUDA_CANDIDATE%"
 set "XB_CUDA_BIN=%CUDA_CANDIDATE%\bin"
-echo [ok] CUDA Toolkit %XB_CUDA_VERSION% found from %CUDA_LABEL%: %CUDA_CANDIDATE%
+findstr /R /C:"release 13\." "%TEMP%\xb_nvcc_version.txt" >nul
+if not errorlevel 1 (
+  echo [ok] CUDA Toolkit 13.x found from %CUDA_LABEL%: %CUDA_CANDIDATE% ^(newer than recommended %XB_CUDA_VERSION%^)
+) else (
+  echo [ok] CUDA Toolkit %XB_CUDA_VERSION% found from %CUDA_LABEL%: %CUDA_CANDIDATE%
+)
 exit /b 0
 
 :USE_NVCC_FROM_PATH_IF_VERSION
 where nvcc >nul 2>&1 || exit /b 1
 nvcc --version > "%TEMP%\xb_nvcc_version.txt" 2>nul
 findstr /C:"release %XB_CUDA_VERSION%" "%TEMP%\xb_nvcc_version.txt" >nul
+if errorlevel 1 findstr /R /C:"release 13\." "%TEMP%\xb_nvcc_version.txt" >nul
 if errorlevel 1 (
-  echo [mismatch] CUDA Toolkit in PATH does not match required %XB_CUDA_VERSION% for %XB_RESOLVED_GPU_STACK%.
+  echo [mismatch] CUDA Toolkit in PATH is older than the recommended %XB_CUDA_VERSION% for %XB_RESOLVED_GPU_STACK%.
   exit /b 1
 )
-echo [ok] CUDA Toolkit %XB_CUDA_VERSION% found in PATH
+findstr /R /C:"release 13\." "%TEMP%\xb_nvcc_version.txt" >nul
+if not errorlevel 1 (
+  echo [ok] CUDA Toolkit 13.x found in PATH ^(newer than recommended %XB_CUDA_VERSION%^)
+) else (
+  echo [ok] CUDA Toolkit %XB_CUDA_VERSION% found in PATH
+)
 exit /b 0
 
 :CHECK_UV
+if exist "%USERPROFILE%\.local\bin\uv.exe" (
+  set "PATH=%USERPROFILE%\.local\bin;%PATH%"
+  echo [ok] uv found in user local bin: %USERPROFILE%\.local\bin\uv.exe
+  exit /b 0
+)
 where uv >nul 2>&1 && (
   echo [ok] uv found in PATH
   exit /b 0
@@ -436,6 +458,12 @@ exit /b %ERRORLEVEL%
 
 :FIND_LOCAL_UV
 if not defined XB_PYTHON_EXE exit /b 1
+if exist "%USERPROFILE%\.local\bin\uv.exe" (
+  set "XB_UV_BIN=%USERPROFILE%\.local\bin"
+  set "PATH=!XB_UV_BIN!;!PATH!"
+  echo [ok] uv found in user local bin: !XB_UV_BIN!\uv.exe
+  exit /b 0
+)
 set "XB_UV_BIN="
 for /f "delims=" %%P in ('"%XB_PYTHON_EXE%" -c "import sysconfig; print(sysconfig.get_path('scripts') or '')" 2^>nul') do if not defined XB_UV_BIN set "XB_UV_BIN=%%P"
 if defined XB_UV_BIN if exist "!XB_UV_BIN!\uv.exe" (
