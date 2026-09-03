@@ -88,8 +88,6 @@ engines/
 models/
 # 发布构建会下载并分卷携带 Windows FFmpeg，本地二进制不提交源码仓库。
 assets/tools/ffmpeg/bin/*.exe
-# Python 由安装器检测/由用户手动指定，不再作为安装包载荷提交或分发。
-/assets/tools/python310/
 # DeepFilterNet 在未重定向 LOCALAPPDATA 时会在 cwd 生成缓存目录（开发测试产物）
 /DeepFilterNet/
 
