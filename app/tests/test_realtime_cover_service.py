@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import time
+import wave
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from application.conversion_service import ConversionService
 from application.realtime_cover_service import RealtimeCoverService
+from domain import InferenceParams
 from infrastructure.uvr_tool import SeparationResult
 
 
@@ -226,3 +230,258 @@ def test_system_silent_block_ignores_non_silent_overlap(tmp_path: Path) -> None:
     assert prepared["overlap_frames"] == 2
     assert prepared["length"] == 1.0
     assert not (tmp_path / "system_input_000001.wav").exists()
+
+
+def test_realtime_dropout_recovery_uses_model_render_for_loudness_and_adaptive_shift(
+    tmp_path: Path, monkeypatch
+) -> None:  # noqa: ANN001
+    service = _service(tmp_path)
+    source = tmp_path / "source.wav"
+    output = tmp_path / "render.wav"
+    _write_test_wav(source, np.full((1600, 1), 0.1, dtype=np.float32), 16000)
+    calls: list[dict[str, object]] = []
+    issue = {
+        "start": 0.8,
+        "end": 1.1,
+        "source_f0_hz": 1200.0,
+        "bad_frames": 20,
+        "bad_regions": [{"start": 0.8, "end": 1.1}],
+    }
+    detections = iter([issue, None])
+
+    def detect(*_args):  # noqa: ANN002, ANN201
+        return next(detections)
+
+    def infer(_source: Path, destination: Path) -> None:
+        destination.write_bytes(b"baseline" if destination == output else b"retry")
+
+    def prepare(_source: Path, destination: Path, *_args, **kwargs):  # noqa: ANN002, ANN201
+        calls.append({"kind": "prepare", "semitones": kwargs["semitones"]})
+        destination.write_bytes(b"guarded")
+        return destination, -int(kwargs["semitones"])
+
+    def pitch_shift(_source: Path, destination: Path, semitones: int, **kwargs):
+        calls.append(
+            {
+                "kind": "restore",
+                "semitones": semitones,
+                "loudness_source": kwargs.get("loudness_source"),
+            }
+        )
+        destination.write_bytes(b"restored")
+        return True
+
+    def merge(_baseline: Path, _guarded: Path, destination: Path, *_args, **_kwargs):
+        destination.write_bytes(b"merged")
+        return destination
+
+    monkeypatch.setattr(ConversionService, "_detect_model_dropout", detect)
+    monkeypatch.setattr(ConversionService, "_guard_candidate_has_new_hf_peak", lambda *_args: False)
+    monkeypatch.setattr(ConversionService, "_merge_guarded_regions", merge)
+    service._prepare_pitch_guard = prepare
+    service._pitch_shift = pitch_shift
+
+    rendered, history = service._infer_with_dropout_recovery(
+        source=source,
+        output=output,
+        params=InferenceParams(
+            high_pitch_threshold=800.0,
+            manual_params_enabled=True,
+            high_pitch_guard_rounds=1,
+        ),
+        model={"framework": "rvc"},
+        infer=infer,
+        log_file=tmp_path / "run.log",
+    )
+
+    assert rendered.name == "render_guarded_merged_retry1.wav"
+    assert len(history) == 2
+    assert calls[0] == {"kind": "prepare", "semitones": 15}
+    assert calls[1] == {
+        "kind": "restore",
+        "semitones": 15,
+        "loudness_source": output.with_name("render_dropout_retry1.wav"),
+    }
+
+
+def test_realtime_dropout_recovery_rejects_whistle_candidate(tmp_path: Path, monkeypatch) -> None:
+    service = _service(tmp_path)
+    source = tmp_path / "source.wav"
+    output = tmp_path / "render.wav"
+    _write_test_wav(source, np.full((1600, 1), 0.1, dtype=np.float32), 16000)
+    issue = {
+        "start": 0.5,
+        "end": 0.9,
+        "source_f0_hz": 920.0,
+        "bad_frames": 12,
+        "bad_regions": [{"start": 0.5, "end": 0.9}],
+    }
+    detections = iter([issue, None])
+
+    def detect(*_args):  # noqa: ANN002, ANN201
+        return next(detections)
+
+    def infer(_source: Path, destination: Path) -> None:
+        destination.write_bytes(b"baseline" if destination == output else b"retry")
+
+    def prepare(_source: Path, destination: Path, *_args, **_kwargs):  # noqa: ANN002
+        destination.write_bytes(b"guarded")
+        return destination, -9
+
+    def restore(_source: Path, destination: Path, *_args, **_kwargs):  # noqa: ANN002
+        destination.write_bytes(b"restored")
+        return True
+
+    def merge(_baseline: Path, _guarded: Path, destination: Path, *_args, **_kwargs):
+        destination.write_bytes(b"whistle-candidate")
+        return destination
+
+    monkeypatch.setattr(ConversionService, "_detect_model_dropout", detect)
+    monkeypatch.setattr(ConversionService, "_guard_candidate_has_new_hf_peak", lambda *_args: True)
+    monkeypatch.setattr(ConversionService, "_merge_guarded_regions", merge)
+    service._prepare_pitch_guard = prepare
+    service._pitch_shift = lambda *_args, **_kwargs: True
+
+    rendered, history = service._infer_with_dropout_recovery(
+        source=source,
+        output=output,
+        params=InferenceParams(
+            high_pitch_threshold=800.0,
+            manual_params_enabled=True,
+            high_pitch_guard_rounds=1,
+        ),
+        model={"framework": "rvc"},
+        infer=infer,
+        log_file=tmp_path / "run.log",
+    )
+
+    assert rendered == output
+    assert output.read_bytes() == b"baseline"
+    assert len(history) == 2
+
+
+def test_realtime_dropout_recovery_keeps_first_render_when_all_retries_fail(
+    tmp_path: Path, monkeypatch
+) -> None:  # noqa: ANN001
+    service = _service(tmp_path)
+    source = tmp_path / "source.wav"
+    output = tmp_path / "render.wav"
+    _write_test_wav(source, np.full((1600, 1), 0.1, dtype=np.float32), 16000)
+    issue = {
+        "start": 0.5,
+        "end": 0.9,
+        "source_f0_hz": 920.0,
+        "bad_frames": 20,
+        "bad_regions": [{"start": 0.5, "end": 0.9}],
+    }
+
+    def infer(_source: Path, destination: Path) -> None:
+        destination.write_bytes(b"baseline" if destination == output else b"retry")
+
+    def prepare(_source: Path, destination: Path, *_args, **_kwargs):  # noqa: ANN002
+        destination.write_bytes(b"guarded")
+        return destination, -9
+
+    def merge(_baseline: Path, _guarded: Path, destination: Path, *_args, **_kwargs):
+        destination.write_bytes(b"retry")
+        return destination
+
+    monkeypatch.setattr(ConversionService, "_detect_model_dropout", lambda *_args: issue)
+    monkeypatch.setattr(ConversionService, "_guard_candidate_has_new_hf_peak", lambda *_args: False)
+    monkeypatch.setattr(ConversionService, "_merge_guarded_regions", merge)
+    service._prepare_pitch_guard = prepare
+    service._pitch_shift = lambda *_args, **_kwargs: True
+    rendered, history = service._infer_with_dropout_recovery(
+        source=source,
+        output=output,
+        params=InferenceParams(
+            high_pitch_threshold=800.0,
+            manual_params_enabled=True,
+            high_pitch_guard_rounds=2,
+        ),
+        model={"framework": "rvc"},
+        infer=infer,
+        log_file=tmp_path / "run.log",
+    )
+
+    assert rendered == output
+    assert output.read_bytes() == b"baseline"
+    assert len(history) == 3
+
+
+def _write_test_wav(path: Path, values: np.ndarray, sample_rate: int) -> None:
+    data = np.asarray(values, dtype=np.float32)
+    pcm = np.clip(data, -1.0, 1.0)
+    pcm = np.rint(pcm * 32767.0).astype("<i2")
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(int(pcm.shape[1] if pcm.ndim > 1 else 1))
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        handle.writeframes(pcm.tobytes())
+
+
+def test_system_non_silent_block_finishes_cleanup_without_guard_variable_error(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    sample_rate = 8000
+    frames = 160
+    values = np.full((frames, 2), 0.08, dtype=np.float32)
+    raw = tmp_path / "raw.wav"
+    separated = tmp_path / "separated.wav"
+    accompaniment = tmp_path / "accompaniment.wav"
+    rendered = tmp_path / "rendered.wav"
+    for path in (raw, separated, accompaniment):
+        _write_test_wav(path, values, sample_rate)
+
+    class Worker:
+        def infer(self, _source: Path, destination: Path, **_kwargs) -> None:
+            _write_test_wav(destination, values, sample_rate)
+
+    class Writer:
+        def __init__(self) -> None:
+            self.blocks = []
+
+        def write(self, block, **_kwargs) -> None:  # noqa: ANN001
+            self.blocks.append(np.asarray(block))
+
+    writer = Writer()
+    session = {
+        "models": [{"params": {"auto_high_pitch_guard": False}}],
+        "sample_rate": sample_rate,
+        "vocal_gain_db": 0.0,
+        "instrumental_gain_db": 0.0,
+        "directory": str(tmp_path),
+        "status": "live",
+        "ready_chunks": 0,
+        "processed_seconds": 0.0,
+        "ready_seconds": 0.0,
+        "realtime_factor": None,
+        "message": "",
+    }
+    prepared = {
+        "raw": raw,
+        "separated": separated,
+        "accompaniment": accompaniment,
+        "rendered": rendered,
+        "captured": values,
+        "frames": frames,
+        "overlap_frames": 0,
+        "length": frames / sample_rate,
+    }
+
+    service._render_system_block(
+        session,
+        Worker(),
+        writer,
+        prepared,
+        time.monotonic(),
+        np,
+    )
+
+    assert len(writer.blocks) == 1
+    assert writer.blocks[0].shape == (frames, 2)
+    assert session["ready_chunks"] == 1
+    assert not raw.exists()
+    assert not separated.exists()
+    assert not accompaniment.exists()

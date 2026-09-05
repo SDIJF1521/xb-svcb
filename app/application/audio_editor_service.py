@@ -1939,7 +1939,7 @@ class AudioEditorService:
             return source, False
         peak_f0 = self._estimate_peak_f0(source)
         high_threshold = self._model_high_pitch_threshold(params, model)
-        if peak_f0 < high_threshold:
+        if peak_f0 < high_threshold and not only_regions:
             return source, False
         pitch_shift = getattr(self._ffmpeg, "pitch_shift", None)
         if not callable(pitch_shift):
@@ -1978,7 +1978,10 @@ class AudioEditorService:
         try:
             kwargs = {
                 "mask_source": original,
-                "loudness_source": original,
+                # Restore against the model render's local dynamics. Using the
+                # dry vocal can make a breathy retry several dB louder and
+                # turn the upper band into a whistle.
+                "loudness_source": source,
                 "high_threshold": self._model_high_pitch_threshold(params, model),
             }
             if only_regions:
@@ -2014,7 +2017,12 @@ class AudioEditorService:
         guard_applied_any = False
         rendered = output
         guard_regions: list[tuple[float, float]] | None = None
+        merge_regions: list[tuple[float, float]] | None = None
+        initial_failure_regions: list[tuple[float, float]] | None = None
+        unresolved_failure_regions: list[tuple[float, float]] = []
         guard_semitones = self._HIGH_PITCH_GUARD_SEMITONES
+        best_render = output
+        best_bad_frames = float("inf")
         for attempt in range(attempts):
             raw_target = output if attempt == 0 else output.with_name(
                 f"{output.stem}_dropout_retry{attempt}.wav"
@@ -2046,6 +2054,32 @@ class AudioEditorService:
                 )
                 if candidate != raw_target:
                     rendered = candidate
+                    if merge_regions:
+                        merged_target = output.with_name(
+                            f"{output.stem}_guarded_merged_retry{attempt}.wav"
+                        )
+                        rendered = ConversionService._merge_guarded_regions(
+                            output,
+                            rendered,
+                            merged_target,
+                            restored.with_suffix(".regions.json"),
+                            only_regions=merge_regions,
+                        )
+                else:
+                    # Do not publish a model render that is still in the
+                    # lowered preparation register when inverse PSOLA fails.
+                    rendered = output
+            if (
+                attempt > 0
+                and rendered != output
+                and ConversionService._guard_candidate_has_new_hf_peak(
+                    source,
+                    output,
+                    rendered,
+                    merge_regions,
+                )
+            ):
+                rendered = output
             issue = (
                 ConversionService._detect_model_dropout(
                     source,
@@ -2062,23 +2096,148 @@ class AudioEditorService:
                 "issue": issue,
             }
             history.append(entry)
-            if issue and issue.get("bad_regions"):
-                guard_regions = ConversionService._confirmed_guard_regions(
-                    issue,
-                    guard_regions,
+            if attempt == 0:
+                if issue is None:
+                    return rendered, history, False
+                initial_failure_regions = ConversionService._dropout_core_regions(issue)
+                unresolved_failure_regions = list(initial_failure_regions or [])
+                merge_regions = initial_failure_regions
+                guard_regions = ConversionService._confirmed_guard_regions(issue)
+                best_bad_frames = float(issue.get("bad_frames") or float("inf"))
+                guard_semitones = max(
+                    guard_semitones,
+                    ConversionService._guard_semitones_for_retry(
+                        threshold,
+                        issue,
+                        source,
+                        guard_regions,
+                    ),
                 )
-                guard_semitones = ConversionService._guard_semitones_for_retry(
-                    threshold,
-                    issue,
-                    source,
-                    guard_regions,
+            else:
+                quality = (
+                    ConversionService._guard_candidate_high_note_quality(
+                        source,
+                        output,
+                        rendered,
+                        initial_failure_regions,
+                        restored.with_suffix(".regions.json")
+                        if guard_applied
+                        else None,
+                    )
+                    if rendered != output
+                    else {"available": False}
                 )
-            if issue is None:
-                return rendered, history, guard_applied_any
+                if quality.get("available"):
+                    entry["quality"] = quality
+                    accepted_keys = {
+                        (round(float(start), 6), round(float(end), 6))
+                        for start, end in (quality.get("accepted_regions") or [])
+                    }
+                    newly_accepted = [
+                        (start, end)
+                        for start, end in unresolved_failure_regions
+                        if (round(float(start), 6), round(float(end), 6))
+                        in accepted_keys
+                    ]
+                    if newly_accepted:
+                        best_render = ConversionService._merge_guarded_regions(
+                            best_render,
+                            rendered,
+                            output.with_name(
+                                f"{output.stem}_accepted_retry{attempt}.wav"
+                            ),
+                            restored.with_suffix(".regions.json"),
+                            only_regions=newly_accepted,
+                        )
+                        unresolved_failure_regions = [
+                            (start, end)
+                            for start, end in unresolved_failure_regions
+                            if (round(float(start), 6), round(float(end), 6))
+                            not in accepted_keys
+                        ]
+                    issue = ConversionService._quality_failure_issue(
+                        {
+                            **quality,
+                            "failed_regions": unresolved_failure_regions,
+                        },
+                        issue,
+                    )
+                    entry["issue"] = issue
+                    if issue is None:
+                        return best_render, history, bool(best_render != output)
+                    best_bad_frames = float(
+                        issue.get("bad_frames") or float("inf")
+                    )
+                    guard_regions = ConversionService._confirmed_guard_regions(issue)
+                    merge_regions = initial_failure_regions
+                    next_threshold = ConversionService._next_dropout_threshold(
+                        threshold,
+                        issue,
+                    )
+                    entry["next_threshold"] = next_threshold
+                    if (
+                        next_threshold >= threshold - 10.0
+                        or attempt >= attempts - 1
+                    ):
+                        return best_render, history, bool(best_render != output)
+                    guard_semitones = max(
+                        guard_semitones,
+                        ConversionService._guard_semitones_for_retry(
+                            next_threshold,
+                            issue,
+                            source,
+                            guard_regions,
+                        ),
+                    )
+                    threshold = next_threshold
+                    params.high_pitch_threshold = threshold
+                    continue
+                if issue is None:
+                    return rendered, history, bool(
+                        guard_applied_any and rendered != output
+                    )
+                candidate_bad_frames = float(
+                    issue.get("bad_frames") or float("inf")
+                )
+                candidate_keeps_original_failure = (
+                    ConversionService._dropout_regions_overlap(
+                        issue,
+                        initial_failure_regions,
+                    )
+                )
+                candidate_improved = (
+                    candidate_bad_frames < best_bad_frames
+                    or (
+                        best_render == output
+                        and candidate_bad_frames == best_bad_frames
+                        and not candidate_keeps_original_failure
+                    )
+                )
+                if (
+                    rendered != output
+                    and candidate_improved
+                    and not candidate_keeps_original_failure
+                ):
+                    best_render = rendered
+                    best_bad_frames = candidate_bad_frames
+                if guard_regions and issue.get("bad_regions"):
+                    overlaps_scope = any(
+                        float(item.get("end", 0.0)) > start
+                        and float(item.get("start", 0.0)) < end
+                        for item in (issue.get("bad_regions") or [])
+                        if isinstance(item, dict)
+                        for start, end in guard_regions
+                    )
+                    if not overlaps_scope:
+                        return best_render, history, bool(best_render != output)
+                    guard_regions = ConversionService._confirmed_guard_regions(
+                        issue,
+                        guard_regions,
+                    )
             next_threshold = ConversionService._next_dropout_threshold(threshold, issue)
             entry["next_threshold"] = next_threshold
             if next_threshold >= threshold - 10.0 or attempt >= attempts - 1:
-                return rendered, history, guard_applied_any
+                return best_render, history, bool(best_render != output)
             guard_semitones = max(
                 guard_semitones,
                 ConversionService._guard_semitones_for_retry(
@@ -2090,7 +2249,7 @@ class AudioEditorService:
             )
             threshold = next_threshold
             params.high_pitch_threshold = threshold
-        return rendered, history, guard_applied_any
+        return best_render, history, bool(best_render != output)
 
     @staticmethod
     def _model_high_pitch_threshold(

@@ -110,11 +110,16 @@ class ConversionService:
     _DROPOUT_RECOVERY_MIN_THRESHOLD = 300.0
     _DROPOUT_RECOVERY_MIN_DURATION = 0.12
     _MAX_HIGH_PITCH_GUARD_ROUNDS = 8
-    # Include the attack/release around a confirmed bad syllable. This lets a
-    # high-note phrase be guarded continuously without broadening protection
-    # to unrelated parts of the song.
-    _HIGH_PITCH_GUARD_CONTEXT_SECONDS = 0.90
-    _HIGH_PITCH_GUARD_MERGE_GAP_SECONDS = 1.00
+    # Include the attack/release around a confirmed bad syllable. Keep this
+    # close to the note boundary: a nearly one-second scope can pull healthy
+    # neighboring syllables into the PSOLA pass and make the transition audible.
+    _HIGH_PITCH_GUARD_CONTEXT_SECONDS = 0.24
+    _HIGH_PITCH_GUARD_MERGE_GAP_SECONDS = 0.28
+    # A final pass is allowed only for a handful of short, still-confirmed
+    # dropouts.  Keeping this scope small prevents a late retry from
+    # reprocessing an otherwise healthy high-note phrase.
+    _DROPOUT_RESIDUAL_MAX_REGIONS = 8
+    _DROPOUT_RESIDUAL_MAX_SECONDS = 4.0
 
     @classmethod
     def _high_pitch_guard_rounds(cls, params: InferenceParams) -> int:
@@ -167,6 +172,13 @@ class ConversionService:
             except (OSError, ValueError, TypeError, ImportError):
                 pass
         excess = source_f0 - float(threshold or cls._HIGH_PITCH_THRESHOLD)
+        # A C6-ish note can sit more than an octave above an RVC model's
+        # comfortable range. One fixed octave drop leaves the model rendering
+        # a second low register, which is then shifted back into a thin,
+        # breathy high note. Use a slightly larger preparation shift for these
+        # extreme notes; ordinary high notes retain the previous values.
+        if source_f0 >= 1100.0 or excess >= 420.0:
+            return 15
         if source_f0 >= 950.0 or excess >= 220.0:
             return 12
         if source_f0 >= 780.0 or excess >= 80.0:
@@ -207,6 +219,147 @@ class ConversionService:
             else:
                 merged.append((start, end))
         return merged or None
+
+    @staticmethod
+    def _dropout_core_regions(
+        issue: dict[str, Any] | None,
+        existing: list[tuple[float, float]] | None = None,
+    ) -> list[tuple[float, float]] | None:
+        """Return only measured dropout spans, without PSOLA context padding.
+
+        Guard rendering needs attack/release context, but merging that context
+        back into the baseline can replace healthy neighboring syllables. Keep
+        the two scopes separate so retries cannot make a song worse.
+        """
+        raw: list[tuple[float, float]] = list(existing or [])
+        for item in (issue or {}).get("bad_regions") or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                start = float(item.get("start", 0.0))
+                end = float(item.get("end", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if end > start:
+                raw.append((max(0.0, start), end))
+        if not raw:
+            return None
+        merged: list[tuple[float, float]] = []
+        for start, end in sorted(raw):
+            if merged and start <= merged[-1][1] + 0.04:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return merged or None
+
+    @staticmethod
+    def _dropout_regions_overlap(
+        issue: dict[str, Any] | None,
+        regions: list[tuple[float, float]] | None,
+    ) -> bool:
+        """Return whether a detector result still touches a known failure.
+
+        A guarded retry is allowed to replace the baseline only after the
+        original failed span is gone.  Counting fewer detector frames alone
+        is not sufficient: a thin/breathy PSOLA result can score better while
+        leaving the swallowed syllable in place.
+        """
+        if not issue or not regions:
+            return False
+        for item in issue.get("bad_regions") or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                start = float(item.get("start", 0.0))
+                end = float(item.get("end", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if end <= start:
+                continue
+            if any(end > left and start < right for left, right in regions):
+                return True
+        return False
+
+    @staticmethod
+    def _stable_high_pitch_mask(
+        f0: object,
+        strength: object,
+        rms: object,
+        high_floor: float,
+        *,
+        minimum_strength: float = 0.35,
+        minimum_run_frames: int = 3,
+    ) -> object:
+        """Keep only high-pitch frames supported by a coherent local note.
+
+        The lightweight autocorrelation probe can report a single upper
+        harmonic as a 1-2 kHz fundamental for one frame. Those tracker spikes
+        must not open a guarded retry. A real high note has nearby voiced
+        frames at a comparable F0, so require both local pitch coherence and
+        at least three high frames in a 100 ms neighborhood.
+        """
+        import numpy as np
+
+        values = np.asarray(f0, dtype=np.float32)
+        strengths = np.asarray(strength, dtype=np.float32)
+        levels = np.asarray(rms, dtype=np.float32)
+        if values.size == 0:
+            return np.zeros(0, dtype=bool)
+        candidate = (
+            np.isfinite(values)
+            & (values >= float(high_floor))
+            & (strengths >= float(minimum_strength))
+            & (levels >= 0.012)
+        )
+        if not np.any(candidate):
+            return np.zeros(values.shape, dtype=bool)
+
+        # Compare each estimate with the local voiced median. This rejects a
+        # one-frame octave/upper-harmonic jump while allowing normal vibrato.
+        voiced = (
+            np.isfinite(values)
+            & (values > 0.0)
+            & (strengths >= 0.35)
+            & (levels >= 0.008)
+        )
+        local_median = np.zeros_like(values, dtype=np.float32)
+        half_window = 2
+        for index in np.flatnonzero(voiced):
+            start = max(0, int(index) - half_window)
+            end = min(values.size, int(index) + half_window + 1)
+            neighbors = values[start:end][voiced[start:end]]
+            if neighbors.size >= 2:
+                local_median[index] = float(np.median(neighbors))
+        coherent = (
+            (local_median > 0.0)
+            & (values >= local_median * 0.55)
+            & (values <= local_median * 1.80)
+        )
+        candidate &= coherent
+
+        # A five-frame (100 ms) support window requires at least three
+        # neighboring high frames. Use a zero-padded convolution so short
+        # isolated spikes cannot pass at track boundaries either.
+        support = np.convolve(
+            candidate.astype(np.float32),
+            np.ones(5, dtype=np.float32),
+            mode="same",
+        )
+        supported = candidate & (support >= 3.0)
+        minimum_run_frames = max(1, int(minimum_run_frames))
+        if minimum_run_frames <= 1:
+            return supported
+        kept = np.zeros_like(supported, dtype=bool)
+        for index, value in enumerate(
+            np.concatenate((supported, np.array([False], dtype=bool)))
+        ):
+            if value and not kept[index]:
+                end = index + 1
+                while end < supported.size and supported[end]:
+                    end += 1
+                if end - index >= minimum_run_frames:
+                    kept[index:end] = True
+        return kept
 
     def __init__(
         self,
@@ -337,6 +490,7 @@ class ConversionService:
         *,
         stage: str,
         progress: int,
+        reference: Path | None = None,
     ) -> tuple[Path, dict[str, float | bool]]:
         step_key = "repair_output" if stage == "output" else "repair_input"
         self._set_step(work, step_key, StepStatus.ACTIVE.value)
@@ -365,6 +519,7 @@ class ConversionService:
                     device=device,
                     log_file=log_file,
                     profile=profile,
+                    reference=reference,
                 )
                 self._log(log_file, f"  {stage_label}修复完成: {repaired}")
             except (OSError, RuntimeError, ValueError) as exc:
@@ -455,6 +610,9 @@ class ConversionService:
         params: InferenceParams,
         model: dict[str, Any] | None,
         framework: str,
+        *,
+        honor_model_metadata: bool = False,
+        fallback_threshold: float | None = None,
     ) -> float:
         """Resolve the guard boundary from the selected model, not one global constant.
 
@@ -465,7 +623,10 @@ class ConversionService:
         explicit = float(getattr(params, "high_pitch_threshold", 0.0) or 0.0)
         if explicit > 0:
             return max(300.0, min(2000.0, explicit))
-        if not bool(getattr(params, "manual_params_enabled", False)):
+        if (
+            not bool(getattr(params, "manual_params_enabled", False))
+            and not honor_model_metadata
+        ):
             # Without a model-declared usable range, preserve the legacy default
             # path.  Dropout recovery can lower this boundary only after it has
             # verified a real voiced model collapse.
@@ -478,7 +639,11 @@ class ConversionService:
             candidates.extend([profile.get("high_pitch_threshold"), profile.get("f0_max_hz"), profile.get("f0_max")])
         if isinstance(metadata, dict):
             candidates.extend([metadata.get("high_pitch_threshold"), metadata.get("f0_max_hz"), metadata.get("f0_max")])
-        config_path = str(model.get("main_config_path") or "")
+        config_path = str(
+            model.get("main_config_path")
+            or (model.get("main_config") or {}).get("path")
+            or ""
+        )
         if config_path:
             try:
                 raw = Path(config_path).read_text(encoding="utf-8")
@@ -509,7 +674,14 @@ class ConversionService:
                 continue
             if 300.0 <= number <= 2000.0:
                 return number
-        defaults = {"rvc": 760.0, "seed-vc": 980.0, "ddsp-svc": 1040.0, "so-vits-svc": 1120.0}
+        defaults = {
+            "rvc": 760.0,
+            "seed-vc": 980.0,
+            "ddsp-svc": 1040.0,
+            "so-vits-svc": 1120.0,
+        }
+        if fallback_threshold is not None:
+            return max(300.0, min(2000.0, float(fallback_threshold)))
         return defaults.get(config.modelhub_normalize_framework(framework), 1000.0)
 
     def _prepare_high_pitch_guard(
@@ -527,7 +699,7 @@ class ConversionService:
             return source, False
         peak_f0 = self._estimate_peak_f0(source)
         high_threshold = float(threshold or getattr(params, "high_pitch_threshold", 0.0) or self._HIGH_PITCH_THRESHOLD)
-        if peak_f0 < high_threshold:
+        if peak_f0 < high_threshold and not only_regions:
             return source, False
         report_path = destination.with_suffix(".regions.json")
         shift_semitones = int(semitones or self._HIGH_PITCH_GUARD_SEMITONES)
@@ -608,7 +780,11 @@ class ConversionService:
                 destination,
                 shift_semitones,
                 mask_source=original,
-                loudness_source=original,
+                # Match the restored guard to the model render's local
+                # loudness. Using the dry vocal here can amplify a breathy
+                # retry by several dB and turn the PSOLA air band into a
+                # whistle; the dry track is still used only for the pitch mask.
+                loudness_source=source,
                 high_threshold=float(threshold or getattr(params, "high_pitch_threshold", 0.0) or self._HIGH_PITCH_THRESHOLD),
                 report_path=destination.with_suffix(".regions.json"),
                 regions=only_regions,
@@ -622,7 +798,7 @@ class ConversionService:
                 destination,
                 shift_semitones,
                 mask_source=original,
-                loudness_source=original,
+                loudness_source=source,
                 high_threshold=float(threshold or getattr(params, "high_pitch_threshold", 0.0) or self._HIGH_PITCH_THRESHOLD),
             )
         if restore_ok:
@@ -645,10 +821,24 @@ class ConversionService:
         try:
             import numpy as np
 
-            report = json.loads(report_path.read_text(encoding="utf-8"))
+            try:
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                report = None
             regions = report.get("regions") if isinstance(report, dict) else None
             if not isinstance(regions, list) or not regions:
-                return guarded
+                # The caller's confirmed dropout scope is a valid fallback for
+                # older workers that predate region reports. It still keeps the
+                # merge local; without an explicit scope there is no safe way
+                # to know which samples the guarded render changed.
+                if only_regions:
+                    regions = [
+                        {"start": float(start), "end": float(end)}
+                        for start, end in only_regions
+                        if float(end) > float(start)
+                    ]
+                if not regions:
+                    return guarded
             selected_regions: list[tuple[float, float]] = []
             for item in regions:
                 if not isinstance(item, dict):
@@ -658,16 +848,30 @@ class ConversionService:
                 if end <= start:
                     continue
                 if only_regions:
-                    overlaps = [
-                        (max(start, bad_start), min(end, bad_end))
+                    # ``regions`` comes from the formant worker and describes
+                    # the complete high note that was actually lowered and
+                    # restored. ``only_regions`` contains detector cores, which
+                    # are often just a few bad frames in the middle of that
+                    # note. Clipping the merge to their intersection leaves the
+                    # attack/release from the failed baseline in place and can
+                    # turn a recovered note back into an audible breath seam.
+                    if any(
+                        end > bad_start and start < bad_end
                         for bad_start, bad_end in only_regions
-                        if end > bad_start and start < bad_end
-                    ]
-                    selected_regions.extend(
-                        (left, right) for left, right in overlaps if right > left
-                    )
+                    ):
+                        selected_regions.append((start, end))
                 else:
                     selected_regions.append((start, end))
+            merged_regions: list[tuple[float, float]] = []
+            for start, end in sorted(selected_regions):
+                if merged_regions and start <= merged_regions[-1][1] + 0.01:
+                    merged_regions[-1] = (
+                        merged_regions[-1][0],
+                        max(merged_regions[-1][1], end),
+                    )
+                else:
+                    merged_regions.append((start, end))
+            selected_regions = merged_regions
             if not selected_regions:
                 return baseline
             with wave.open(str(baseline), "rb") as base_wave:
@@ -715,6 +919,10 @@ class ConversionService:
                     mask[right:right_edge] = np.maximum(mask[right:right_edge], np.sin(phase) ** 2)
             if not np.any(mask > 0.0):
                 return guarded
+            # The baseline is known to have collapsed in these regions, so it
+            # is not a valid loudness ceiling for the recovered note. Candidate
+            # air/whistle rejection happens before publication in the shared
+            # per-region quality gate below.
             merged = base_values * (1.0 - mask[:, None]) + guarded_values * mask[:, None]
             merged = np.clip(np.rint(merged), -32768, 32767).astype("<i2")
             if guarded_frames < base_frames:
@@ -728,7 +936,14 @@ class ConversionService:
                 output_wave.setparams(base_params)
                 output_wave.writeframes(merged.reshape(-1).tobytes())
             return destination if destination.exists() else guarded
-        except (OSError, TypeError, ValueError, wave.Error, json.JSONDecodeError):
+        except (
+            OSError,
+            EOFError,
+            TypeError,
+            ValueError,
+            wave.Error,
+            json.JSONDecodeError,
+        ):
             return guarded
 
     @staticmethod
@@ -823,6 +1038,37 @@ class ConversionService:
                 valid_base = bases > 0.0
                 strengths = np.zeros_like(best, dtype=np.float32)
                 strengths[valid_base] = best[valid_base] / bases[valid_base]
+                # Autocorrelation can lock to a strong upper harmonic instead
+                # of the singer's fundamental. This is especially common in a
+                # separated vocal with bright consonants: a 150 Hz note may be
+                # reported as 1.5-1.7 kHz. When a lower periodic candidate has
+                # comparable support, prefer it for guard decisions. Restrict
+                # this correction to very high, low-confidence candidates so
+                # genuine 700-1100 Hz notes keep their measured F0.
+                low_min_lag = max(min_lag, int(rate / 500.0))
+                low_max_lag = min(max_lag, int(rate / 60.0))
+                if low_max_lag > low_min_lag:
+                    low_window = autocorr[:, low_min_lag : low_max_lag + 1]
+                    low_offsets = np.argmax(low_window, axis=1)
+                    low_lags = low_offsets + low_min_lag
+                    low_best = low_window[
+                        np.arange(low_window.shape[0]), low_offsets
+                    ]
+                    low_strengths = np.zeros_like(low_best, dtype=np.float32)
+                    low_strengths[valid_base] = (
+                        low_best[valid_base] / bases[valid_base]
+                    )
+                    high_frequencies = rate / np.maximum(lags, 1)
+                    harmonic_candidate = (
+                        (high_frequencies >= 1200.0)
+                        & (strengths < 0.78)
+                        & (low_strengths >= np.maximum(0.42, strengths * 0.70))
+                        & (rate / np.maximum(low_lags, 1) <= 500.0)
+                    )
+                    lags[harmonic_candidate] = low_lags[harmonic_candidate]
+                    strengths[harmonic_candidate] = low_strengths[
+                        harmonic_candidate
+                    ]
                 f0_values = np.zeros_like(strengths, dtype=np.float32)
                 reliable = (strengths >= 0.35) & (lags > 0)
                 f0_values[reliable] = rate / lags[reliable].astype(np.float32)
@@ -832,12 +1078,22 @@ class ConversionService:
 
             all_indices = np.arange(source_frames.shape[0], dtype=np.int64)
             f0, strength = estimate_pitch(source_frames, source_rms, all_indices)
+            # Keep the waveform-based estimate before applying the persisted F0
+            # curve.  Some extractors lock onto a bright upper harmonic (for
+            # example 1.6 kHz while the local fundamental is about 150 Hz).
+            # That is not a singer high note and must not open the PSOLA guard.
+            fallback_f0 = f0.copy()
 
             # F0 extraction already ran immediately before SVC and is more
             # reliable than a second lightweight autocorrelation pass on loud
             # high harmonics.  Interpolate its time-aligned values to detector
             # frames when this is one of the standard inference inputs.
-            if source.name.lower() in {"infer_input.wav", "vocals_repaired.wav"}:
+            source_f0_sidecar_loaded = False
+            source_uses_standard_f0_input = source.name.lower() in {
+                "infer_input.wav",
+                "vocals_repaired.wav",
+            }
+            if source_uses_standard_f0_input:
                 sidecar = source.with_name("f0.npy")
                 try:
                     if sidecar.stat().st_mtime >= source.stat().st_mtime - 120.0:
@@ -863,10 +1119,30 @@ class ConversionService:
                                 (frame_times >= curve_times[valid_curve[0]])
                                 & (frame_times <= curve_times[valid_curve[-1]])
                             )
-                            f0[sidecar_valid] = sidecar_f0[sidecar_valid]
-                            strength[sidecar_valid] = np.maximum(
-                                strength[sidecar_valid],
+                            # Accept a sidecar value when the local waveform
+                            # agrees, or when autocorrelation has no usable
+                            # estimate.  A large sidecar/fallback ratio is the
+                            # characteristic upper-harmonic false positive;
+                            # leaving the fallback value in place keeps the
+                            # normal (unguarded) RVC render untouched.
+                            fallback_valid = (
+                                np.isfinite(fallback_f0) & (fallback_f0 > 0.0)
+                            )
+                            sidecar_outlier = fallback_valid & (
+                                (sidecar_f0 > fallback_f0 * 2.60)
+                                | (
+                                    (sidecar_f0 >= 1200.0)
+                                    & (fallback_f0 < 500.0)
+                                )
+                            )
+                            sidecar_apply = sidecar_valid & ~sidecar_outlier
+                            f0[sidecar_apply] = sidecar_f0[sidecar_apply]
+                            strength[sidecar_apply] = np.maximum(
+                                strength[sidecar_apply],
                                 0.8,
+                            )
+                            source_f0_sidecar_loaded = bool(
+                                np.count_nonzero(sidecar_apply) >= 4
                             )
                 except (OSError, ValueError, TypeError):
                     pass
@@ -877,10 +1153,27 @@ class ConversionService:
                 cls._DROPOUT_RECOVERY_MIN_THRESHOLD,
                 active_threshold - max(70.0, active_threshold * 0.08),
             )
-            high_voice = (
-                (source_rms >= 0.012)
-                & (strength >= 0.35)
-                & (f0 >= high_floor)
+            # If an old/cached work directory has no F0 sidecar, the fallback
+            # autocorrelation is intentionally conservative: it is useful for
+            # ordinary custom WAVs, but must not treat a repaired high-frequency
+            # transient in infer_input.wav as a genuine singer note.
+            source_min_strength = (
+                0.35
+                if not source_uses_standard_f0_input or source_f0_sidecar_loaded
+                else 0.62
+            )
+            source_min_run_frames = (
+                3
+                if not source_uses_standard_f0_input or source_f0_sidecar_loaded
+                else 4
+            )
+            high_voice = cls._stable_high_pitch_mask(
+                f0,
+                strength,
+                source_rms,
+                high_floor,
+                minimum_strength=source_min_strength,
+                minimum_run_frames=source_min_run_frames,
             )
 
             '''
@@ -903,11 +1196,14 @@ class ConversionService:
                 cls._DROPOUT_RECOVERY_MIN_THRESHOLD,
                 active_threshold - max(180.0, active_threshold * 0.18),
             )
-            near_high_voice = (
-                (source_rms >= 0.025)
-                & (strength >= 0.35)
-                & (f0 >= near_high_floor)
-            )
+            near_high_voice = cls._stable_high_pitch_mask(
+                f0,
+                strength,
+                source_rms,
+                near_high_floor,
+                minimum_strength=source_min_strength,
+                minimum_run_frames=source_min_run_frames,
+            ) & (source_rms >= 0.025)
             soft_support_ratio = max(0.12, min(0.68, reference_gain * 0.62))
             soft_breathy = near_high_voice & (
                 output_rms < source_rms * soft_support_ratio
@@ -922,6 +1218,42 @@ class ConversionService:
                 output_rms,
                 high_indices,
             )
+            # A collapsed high note is often still loud enough to pass the
+            # ordinary energy test.  In that case the output contains a weak
+            # low partial plus broadband air, so a pitch-only test is too easy
+            # to miss.  Measure the air band only on source-confirmed high
+            # frames; this keeps unrelated accompaniment/transient energy out
+            # of the decision and never copies that band into the render.
+            output_high_ratio = np.zeros_like(output_rms, dtype=np.float32)
+            output_high_flatness = np.zeros_like(output_rms, dtype=np.float32)
+            if high_indices.size:
+                selected_frames = np.asarray(output_frames)[high_indices]
+                fft_size = 1 << max(10, (2 * frame - 1).bit_length())
+                spectrum = np.abs(
+                    np.fft.rfft(
+                        selected_frames * np.hanning(frame)[np.newaxis, :],
+                        n=fft_size,
+                        axis=1,
+                    )
+                ) ** 2
+                frequencies = np.fft.rfftfreq(fft_size, 1.0 / float(rate))
+                total_bins = (frequencies >= 120.0) & (
+                    frequencies <= min(float(rate) * 0.48, 7600.0)
+                )
+                air_bins = (frequencies >= 3800.0) & (
+                    frequencies <= min(float(rate) * 0.48, 7600.0)
+                )
+                if bool(total_bins.any() and air_bins.any()):
+                    total_power = np.sum(spectrum[:, total_bins], axis=1)
+                    air_power = np.maximum(spectrum[:, air_bins], 1e-14)
+                    output_high_ratio[high_indices] = (
+                        np.sum(air_power, axis=1)
+                        / np.maximum(total_power, 1e-12)
+                    ).astype(np.float32)
+                    output_high_flatness[high_indices] = (
+                        np.exp(np.mean(np.log(air_power), axis=1))
+                        / np.maximum(np.mean(air_power, axis=1), 1e-14)
+                    ).astype(np.float32)
             expected_f0 = f0 * (2.0 ** (float(pitch or 0) / 12.0))
             # A zero F0 estimate is not sufficient evidence of a mute: Praat
             # can lose pitch tracking on a loud, breathy or harmonic-heavy
@@ -936,16 +1268,47 @@ class ConversionService:
             pitch_missing_with_mute = pitch_missing & (
                 output_rms < pitch_missing_energy_limit
             )
+            # The fallback autocorrelation probe is deliberately coarse on
+            # RVC/legacy inputs without an F0 sidecar.  It commonly locks to
+            # a lower harmonic (roughly 0.4x) even when the rendered note is
+            # musical.  Treat only a clear collapse as a mismatch in that
+            # mode; sidecar-backed curves retain the more sensitive boundary.
+            lower_pitch_ratio = 0.45 if source_f0_sidecar_loaded else 0.32
             pitch_wrong = (output_f0 > 0.0) & (
-                (output_f0 < expected_f0 * 0.50)
-                | (output_f0 > expected_f0 * 2.00)
+                (output_f0 < expected_f0 * lower_pitch_ratio)
+                | (output_f0 > expected_f0 * 2.20)
             )
-            pitch_collapse = high_voice & (pitch_missing_with_mute | pitch_wrong)
+            # This is the audible "唱不上去" failure mode: the output is not
+            # muted, but its periodic support drops sharply and its measured
+            # pitch either disappears or falls well below the source note.
+            # Require two independent air/voicing clues so a clean lower
+            # harmonic or a bright but tonal consonant is not retried.
+            audible_limit = np.maximum(
+                0.006,
+                source_rms * max(0.18, reference_gain * 0.20),
+            )
+            audible_breathy = output_rms >= audible_limit
+            weak_periodic_support = (
+                (output_strength <= np.minimum(0.58, strength * 0.72))
+                & (output_strength <= 0.52)
+            )
+            collapsed_pitch = (output_f0 <= 0.0) | (
+                output_f0 < expected_f0 * 0.70
+            )
+            air_evidence = (
+                (
+                    (output_high_ratio >= 0.018)
+                    & (output_high_flatness >= 0.08)
+                )
+                | (output_strength <= 0.34)
+            )
+            breathy_pitch_collapse = high_voice & (strength >= 0.58) & audible_breathy & (
+                weak_periodic_support & collapsed_pitch & air_evidence
+            )
             energy_dropout = output_rms < np.maximum(
                 0.0015,
                 source_rms * dropout_ratio,
             )
-            core_bad = high_voice & (energy_dropout | pitch_collapse)
 
             '''
             高音部分可以在发声帧和静音帧之间交替。
@@ -969,6 +1332,40 @@ class ConversionService:
                             runs.append((begin, index))
                         begin = None
                 return runs
+
+            def bridge_short_gaps(mask: object, maximum_gap: int) -> object:
+                values = np.asarray(mask, dtype=bool).copy()
+                maximum_gap = max(0, int(maximum_gap))
+                if maximum_gap <= 0 or values.size < 3:
+                    return values
+                false_runs = contiguous_runs(~values, 1)
+                for start, end in false_runs:
+                    if (
+                        end - start <= maximum_gap
+                        and start > 0
+                        and end < values.size
+                        and values[start - 1]
+                        and values[end]
+                    ):
+                        values[start:end] = True
+                return values
+
+            # Bridge one unreliable 20 ms tracker frame, then require at least
+            # 100 ms of simultaneous pitch and periodicity collapse. This keeps
+            # consonants and isolated lower-harmonic estimates out of retries.
+            breathy_min_frames = max(5, round(0.10 / (hop / rate)))
+            breathy_pitch_confirmed = np.zeros_like(
+                breathy_pitch_collapse,
+                dtype=bool,
+            )
+            breathy_bridged = bridge_short_gaps(breathy_pitch_collapse, 1)
+            for start, end in contiguous_runs(breathy_bridged, breathy_min_frames):
+                breathy_pitch_confirmed[start:end] = True
+
+            pitch_collapse = high_voice & (
+                pitch_missing_with_mute | pitch_wrong | breathy_pitch_confirmed
+            )
+            core_bad = high_voice & (energy_dropout | pitch_collapse)
 
             # Require a sustained local support loss before treating an
             # audible, breathy phrase as a dropout. Very brief low-energy
@@ -1056,6 +1453,22 @@ class ConversionService:
                     else 0.0,
                     1,
                 ),
+                "output_high_ratio": round(
+                    float(np.median(output_high_ratio[begin:end])),
+                    4,
+                ),
+                "output_high_flatness": round(
+                    float(np.median(output_high_flatness[begin:end])),
+                    4,
+                ),
+                "source_periodicity": round(
+                    float(np.median(strength[begin:end])),
+                    4,
+                ),
+                "output_periodicity": round(
+                    float(np.median(output_strength[begin:end])),
+                    4,
+                ),
                 "bad_frames": float(np.sum(confirmed_bad)),
                 "high_frames": float(np.sum(high_voice)),
                 "bad_regions": bad_regions,
@@ -1073,6 +1486,645 @@ class ConversionService:
         target = min(current - step, f0 - 20.0) if f0 > 0 else current - step
         target = max(cls._DROPOUT_RECOVERY_MIN_THRESHOLD, target)
         return round(target / 10.0) * 10.0
+
+    @classmethod
+    def _guard_candidate_has_new_hf_peak(
+        cls,
+        source: Path,
+        baseline: Path,
+        candidate: Path,
+        regions: list[tuple[float, float]] | None,
+    ) -> bool:
+        """Reject a guarded retry that adds a narrow air-band whistle.
+
+        High-note recovery is allowed to increase the musical fundamental and
+        its harmonics.  A PSOLA failure, however, usually appears as a narrow
+        5.6 kHz+ peak that is much louder than both the dry vocal and the
+        unguarded render.  This inexpensive FFT check runs only on confirmed
+        guard regions and leaves broad, supported high notes untouched.
+        """
+        try:
+            import numpy as np
+
+            if not regions:
+                return False
+            source_audio, rate = cls._read_mono_audio(source)
+            baseline_audio, baseline_rate = cls._read_mono_audio(baseline)
+            candidate_audio, candidate_rate = cls._read_mono_audio(candidate)
+            if rate != baseline_rate or rate != candidate_rate or rate < 12000:
+                return False
+            count = min(len(source_audio), len(baseline_audio), len(candidate_audio))
+            if count < 1024:
+                return False
+            source_audio = source_audio[:count]
+            baseline_audio = baseline_audio[:count]
+            candidate_audio = candidate_audio[:count]
+            frame = max(256, int(round(rate * 0.020)))
+            fft_size = 1 << max(10, (frame * 2 - 1).bit_length())
+            frequencies = np.fft.rfftfreq(fft_size, 1.0 / float(rate))
+            total_bins = (frequencies >= 120.0) & (frequencies <= rate * 0.48)
+            air_bins = (frequencies >= 5600.0) & (
+                frequencies <= min(10000.0, rate * 0.46)
+            )
+            if not bool(total_bins.any() and air_bins.any()):
+                return False
+            max_air_ratio = 0.0
+            max_air_excess = 0.0
+            whistle_frames = 0
+            for raw_start, raw_end in regions:
+                left = max(0, int(float(raw_start) * rate) - frame)
+                right = min(count, int(float(raw_end) * rate) + frame)
+                if right - left < frame:
+                    continue
+                for offset in range(left, right - frame + 1, frame):
+                    window = np.hanning(frame)
+                    def metrics(values: object) -> tuple[float, float, float]:
+                        chunk = np.asarray(values, dtype=np.float64)
+                        spectrum = np.abs(np.fft.rfft(chunk * window, n=fft_size)) ** 2
+                        total = float(np.sum(spectrum[total_bins]) + 1e-12)
+                        air = np.maximum(spectrum[air_bins], 1e-14)
+                        air_power = float(np.sum(air))
+                        flatness = float(
+                            np.exp(np.mean(np.log(air))) / max(np.mean(air), 1e-14)
+                        )
+                        peak_share = float(np.max(air) / max(air_power, 1e-14))
+                        return air_power / total, flatness, peak_share
+
+                    source_ratio, _source_flatness, source_peak = metrics(
+                        source_audio[offset : offset + frame]
+                    )
+                    baseline_ratio, _baseline_flatness, baseline_peak = metrics(
+                        baseline_audio[offset : offset + frame]
+                    )
+                    candidate_ratio, candidate_flatness, candidate_peak = metrics(
+                        candidate_audio[offset : offset + frame]
+                    )
+                    excess = candidate_ratio - max(source_ratio, baseline_ratio)
+                    max_air_ratio = max(max_air_ratio, candidate_ratio)
+                    max_air_excess = max(max_air_excess, excess)
+                    if (
+                        candidate_ratio >= 0.16
+                        and excess >= 0.075
+                        and candidate_flatness <= 0.12
+                        and candidate_peak >= 0.16
+                        and candidate_peak
+                        >= max(0.16, max(source_peak, baseline_peak) * 1.35)
+                    ):
+                        whistle_frames += 1
+            return bool(
+                whistle_frames >= 2
+                and max_air_ratio >= 0.19
+                and max_air_excess >= 0.075
+            )
+        except (OSError, EOFError, ValueError, TypeError, wave.Error, ImportError):
+            return False
+
+    @classmethod
+    def _guard_candidate_high_note_quality(
+        cls,
+        source: Path,
+        baseline: Path,
+        candidate: Path,
+        regions: list[tuple[float, float]] | None,
+        note_report_path: Path | None = None,
+    ) -> dict[str, Any]:
+        """Measure every original dropout independently.
+
+        A track-wide median can hide one fully breathy syllable among many
+        successful retries. Each detector core is therefore evaluated on its
+        own. The worker report then groups those cores by complete musical note:
+        one bad core rejects that whole note so attack/release are never taken
+        from different RVC renders.
+        """
+        requested = [
+            (max(0.0, float(start)), float(end))
+            for start, end in (regions or [])
+            if float(end) > max(0.0, float(start))
+        ]
+        result: dict[str, Any] = {
+            "available": False,
+            "passed": False,
+            "regions": [],
+            "accepted_regions": [],
+            "failed_regions": requested,
+        }
+        if not requested:
+            return result
+        try:
+            import numpy as np
+
+            source_audio, rate = cls._read_mono_audio(source)
+            baseline_audio, baseline_rate = cls._read_mono_audio(baseline)
+            candidate_audio, candidate_rate = cls._read_mono_audio(candidate)
+            if rate != baseline_rate or rate != candidate_rate or rate < 12000:
+                return result
+            count = min(len(source_audio), len(baseline_audio), len(candidate_audio))
+            if count < 1024:
+                return result
+            source_audio = source_audio[:count]
+            baseline_audio = baseline_audio[:count]
+            candidate_audio = candidate_audio[:count]
+            frame = max(512, int(round(rate * 0.040)))
+            hop = max(256, frame // 2)
+            fft_size = 1 << max(10, (frame * 2 - 1).bit_length())
+            frequencies = np.fft.rfftfreq(fft_size, 1.0 / float(rate))
+            body_bins = (frequencies >= 220.0) & (frequencies <= 3800.0)
+            air_bins = (frequencies >= 4800.0) & (
+                frequencies <= min(10000.0, rate * 0.46)
+            )
+            if not bool(body_bins.any() and air_bins.any()):
+                return result
+            lag_min = max(2, int(round(rate / 1800.0)))
+            lag_max = min(frame - 2, int(round(rate / 90.0)))
+            if lag_max <= lag_min + 2:
+                return result
+            window = np.hanning(frame)
+
+            def metrics(
+                values: object,
+            ) -> tuple[float, float, float, float, float, float]:
+                chunk = np.asarray(values, dtype=np.float64)
+                chunk = chunk - float(np.mean(chunk))
+                rms = float(np.sqrt(np.mean(np.square(chunk)) + 1e-12))
+                spectrum = np.fft.rfft(chunk * window, n=fft_size)
+                power = np.abs(spectrum) ** 2
+                body = float(np.sum(power[body_bins]))
+                air_values = np.maximum(power[air_bins], 1e-14)
+                air = float(np.sum(air_values))
+                air_flatness = float(
+                    np.exp(np.mean(np.log(air_values)))
+                    / max(np.mean(air_values), 1e-14)
+                )
+                autocorrelation = np.fft.irfft(power, n=fft_size)[:frame]
+                base = max(float(autocorrelation[0]), 1e-12)
+                lag_slice = np.maximum(
+                    autocorrelation[lag_min : lag_max + 1],
+                    0.0,
+                )
+                periodicity = float(np.max(lag_slice) / base)
+                lag = lag_min + int(np.argmax(lag_slice))
+                f0 = rate / float(max(1, lag)) if periodicity >= 0.25 else 0.0
+                return body, air, periodicity, air_flatness, f0, rms
+
+            region_results: list[dict[str, Any]] = []
+            for raw_start, raw_end in requested:
+                body_gains: list[float] = []
+                body_support: list[float] = []
+                baseline_periodicity: list[float] = []
+                candidate_periodicity: list[float] = []
+                source_f0: list[float] = []
+                candidate_f0: list[float] = []
+                baseline_air_share: list[float] = []
+                candidate_air_share: list[float] = []
+                source_air_share: list[float] = []
+                candidate_air_flatness: list[float] = []
+                source_rms_values: list[float] = []
+                candidate_rms_values: list[float] = []
+                rms_support: list[float] = []
+                left = max(0, int(raw_start * rate) - frame // 2)
+                right = min(count, int(raw_end * rate) + frame // 2)
+                if right - left >= frame:
+                    for offset in range(left, right - frame + 1, hop):
+                        (
+                            source_body,
+                            source_air,
+                            source_periodicity,
+                            _,
+                            source_pitch,
+                            source_rms,
+                        ) = metrics(source_audio[offset : offset + frame])
+                        if source_body <= 1e-8 or source_periodicity < 0.25:
+                            continue
+                        (
+                            base_body,
+                            base_air,
+                            base_periodicity,
+                            _,
+                            _,
+                            _,
+                        ) = metrics(baseline_audio[offset : offset + frame])
+                        (
+                            trial_body,
+                            trial_air,
+                            trial_periodicity,
+                            trial_flatness,
+                            trial_pitch,
+                            trial_rms,
+                        ) = metrics(candidate_audio[offset : offset + frame])
+                        floor = max(source_body * 1e-7, 1e-12)
+                        body_gains.append(
+                            10.0
+                            * np.log10(max(trial_body, floor) / max(base_body, floor))
+                        )
+                        body_support.append(
+                            float(np.sqrt(max(trial_body, floor) / max(source_body, floor)))
+                        )
+                        baseline_periodicity.append(base_periodicity)
+                        candidate_periodicity.append(trial_periodicity)
+                        source_f0.append(source_pitch)
+                        candidate_f0.append(trial_pitch)
+                        source_air_share.append(
+                            source_air / max(source_body + source_air, floor)
+                        )
+                        baseline_air_share.append(
+                            base_air / max(base_body + base_air, floor)
+                        )
+                        candidate_air_share.append(
+                            trial_air / max(trial_body + trial_air, floor)
+                        )
+                        candidate_air_flatness.append(trial_flatness)
+                        source_rms_values.append(source_rms)
+                        candidate_rms_values.append(trial_rms)
+                        rms_support.append(trial_rms / max(source_rms, 1e-6))
+
+                region_result: dict[str, Any] = {
+                    "start": raw_start,
+                    "end": raw_end,
+                    "available": len(body_gains) >= 2,
+                    "passed": False,
+                }
+                if len(body_gains) >= 2:
+                    body_gain = np.asarray(body_gains, dtype=np.float64)
+                    source_support = np.asarray(body_support, dtype=np.float64)
+                    base_periodicity = np.asarray(
+                        baseline_periodicity,
+                        dtype=np.float64,
+                    )
+                    periodicity = np.asarray(candidate_periodicity, dtype=np.float64)
+                    dry_pitch = np.asarray(source_f0, dtype=np.float64)
+                    trial_pitch = np.asarray(candidate_f0, dtype=np.float64)
+                    base_air = np.asarray(baseline_air_share, dtype=np.float64)
+                    trial_air = np.asarray(candidate_air_share, dtype=np.float64)
+                    dry_air = np.asarray(source_air_share, dtype=np.float64)
+                    air_flatness = np.asarray(
+                        candidate_air_flatness,
+                        dtype=np.float64,
+                    )
+                    source_levels = np.asarray(source_rms_values, dtype=np.float64)
+                    trial_levels = np.asarray(candidate_rms_values, dtype=np.float64)
+                    level_support = np.asarray(rms_support, dtype=np.float64)
+                    improved_fraction = float(np.mean(body_gain >= 0.75))
+                    voiced_fraction = float(np.mean(periodicity >= 0.28))
+                    median_base_air = float(np.median(base_air))
+                    median_trial_air = float(np.median(trial_air))
+                    median_dry_air = float(np.median(dry_air))
+                    air_limit = max(
+                        0.10,
+                        median_base_air + 0.015,
+                        median_dry_air + 0.025,
+                    )
+                    noisy_air = bool(
+                        median_trial_air >= 0.14
+                        and float(np.median(air_flatness)) >= 0.16
+                        and median_trial_air > median_base_air + 0.01
+                    )
+                    pitch_comparable = (
+                        (dry_pitch > 0.0)
+                        & (trial_pitch > 0.0)
+                        & (trial_pitch >= dry_pitch * 0.68)
+                        & (trial_pitch <= dry_pitch * 1.45)
+                    )
+                    pitch_match_fraction = float(np.mean(pitch_comparable))
+                    median_body_support = float(np.median(source_support))
+                    median_level_support = float(np.median(level_support))
+                    median_trial_level = float(np.median(trial_levels))
+                    energy_floor = bool(
+                        median_trial_level >= max(
+                            0.0025,
+                            float(np.median(source_levels)) * 0.14,
+                        )
+                        and median_level_support >= 0.14
+                        and median_body_support >= 0.12
+                    )
+                    body_recovery = bool(
+                        float(np.median(body_gain)) >= 0.90
+                        and improved_fraction >= 0.45
+                        and voiced_fraction >= 0.55
+                        and pitch_match_fraction >= 0.35
+                    )
+                    periodicity_gain = periodicity - base_periodicity
+                    tonal_recovery = bool(
+                        float(np.median(body_gain)) >= -1.50
+                        and float(np.mean(body_gain >= -3.0)) >= 0.65
+                        and float(np.median(periodicity)) >= 0.62
+                        and float(np.median(periodicity_gain)) >= 0.14
+                        and float(np.mean(periodicity_gain >= 0.18)) >= 0.48
+                        and pitch_match_fraction >= 0.52
+                    )
+                    # The failed baseline may contain a loud low partial or
+                    # broadband rasp, so improvement relative to that file is
+                    # not always meaningful. A candidate that independently
+                    # has stable pitch, strong periodic support and a healthy
+                    # fraction of the source note is already a real sung note.
+                    # This path still rejects the reported pure-air tail: its
+                    # periodicity and source-relative energy are both too low.
+                    absolute_tonal_recovery = bool(
+                        float(np.median(periodicity)) >= 0.72
+                        and voiced_fraction >= 0.70
+                        and pitch_match_fraction >= 0.52
+                        and median_level_support >= 0.22
+                        and median_body_support >= 0.22
+                    )
+                    passed = bool(
+                        (
+                            body_recovery
+                            or tonal_recovery
+                            or absolute_tonal_recovery
+                        )
+                        and energy_floor
+                        and median_trial_air <= air_limit
+                        and not noisy_air
+                    )
+                    region_result.update(
+                        {
+                            "passed": passed,
+                            "body_gain_db": round(float(np.median(body_gain)), 3),
+                            "body_support": round(median_body_support, 4),
+                            "source_rms": round(float(np.median(source_levels)), 6),
+                            "candidate_rms": round(median_trial_level, 6),
+                            "rms_support": round(median_level_support, 4),
+                            "baseline_periodicity": round(
+                                float(np.median(base_periodicity)),
+                                4,
+                            ),
+                            "candidate_periodicity": round(
+                                float(np.median(periodicity)),
+                                4,
+                            ),
+                            "source_f0_hz": round(float(np.median(dry_pitch)), 1),
+                            "candidate_f0_hz": round(
+                                float(np.median(trial_pitch[trial_pitch > 0.0]))
+                                if bool(np.any(trial_pitch > 0.0))
+                                else 0.0,
+                                1,
+                            ),
+                            "pitch_match": round(pitch_match_fraction, 4),
+                            "baseline_air_share": round(median_base_air, 5),
+                            "candidate_air_share": round(median_trial_air, 5),
+                            "air_limit": round(air_limit, 5),
+                        }
+                    )
+                region_results.append(region_result)
+
+            if not region_results or not all(
+                bool(item.get("available")) for item in region_results
+            ):
+                result["regions"] = region_results
+                return result
+
+            note_regions: list[tuple[float, float]] = []
+            if note_report_path is not None:
+                try:
+                    raw_report = json.loads(
+                        note_report_path.read_text(encoding="utf-8")
+                    )
+                    for item in (
+                        raw_report.get("regions", [])
+                        if isinstance(raw_report, dict)
+                        else []
+                    ):
+                        if not isinstance(item, dict):
+                            continue
+                        start = float(item.get("start", 0.0))
+                        end = float(item.get("end", 0.0))
+                        if end > start:
+                            note_regions.append((start, end))
+                except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                    pass
+            if not note_regions:
+                note_regions = list(requested)
+
+            accepted_indices: set[int] = set()
+            for note_start, note_end in note_regions:
+                covered = [
+                    index
+                    for index, item in enumerate(region_results)
+                    if float(item["end"]) > note_start
+                    and float(item["start"]) < note_end
+                ]
+                if covered and all(
+                    bool(region_results[index].get("passed")) for index in covered
+                ):
+                    accepted_indices.update(covered)
+            accepted = [
+                requested[index]
+                for index in range(len(requested))
+                if index in accepted_indices
+            ]
+            failed = [
+                requested[index]
+                for index in range(len(requested))
+                if index not in accepted_indices
+            ]
+            result.update(
+                {
+                    "available": True,
+                    "passed": not failed,
+                    "regions": region_results,
+                    "accepted_regions": accepted,
+                    "failed_regions": failed,
+                }
+            )
+            return result
+        except (OSError, EOFError, ValueError, TypeError, wave.Error, ImportError):
+            return result
+
+    @classmethod
+    def _guard_candidate_restores_high_note_body(
+        cls,
+        source: Path,
+        baseline: Path,
+        candidate: Path,
+        regions: list[tuple[float, float]] | None,
+    ) -> bool:
+        """Backward-compatible boolean wrapper for the per-region quality gate."""
+        quality = cls._guard_candidate_high_note_quality(
+            source,
+            baseline,
+            candidate,
+            regions,
+        )
+        return bool(quality.get("available") and quality.get("passed"))
+
+    @staticmethod
+    def _quality_failure_issue(
+        quality: dict[str, Any],
+        fallback: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Build retry evidence from immutable quality-gate failures."""
+        failed = [
+            (float(start), float(end))
+            for start, end in (quality.get("failed_regions") or [])
+            if float(end) > float(start)
+        ]
+        if not failed:
+            return None
+        metrics = [
+            item
+            for item in (quality.get("regions") or [])
+            if isinstance(item, dict)
+            and any(
+                float(item.get("end", 0.0)) > start
+                and float(item.get("start", 0.0)) < end
+                for start, end in failed
+            )
+        ]
+        issue = dict(fallback or {})
+        source_f0 = [
+            float(item.get("source_f0_hz") or 0.0)
+            for item in metrics
+            if float(item.get("source_f0_hz") or 0.0) > 0.0
+        ]
+        source_rms = [
+            float(item.get("source_rms") or 0.0)
+            for item in metrics
+            if float(item.get("source_rms") or 0.0) > 0.0
+        ]
+        output_rms = [
+            float(item.get("candidate_rms") or 0.0)
+            for item in metrics
+            if float(item.get("candidate_rms") or 0.0) > 0.0
+        ]
+        output_f0 = [
+            float(item.get("candidate_f0_hz") or 0.0)
+            for item in metrics
+            if float(item.get("candidate_f0_hz") or 0.0) > 0.0
+        ]
+        issue.update(
+            {
+                "start": min(start for start, _ in failed),
+                "end": max(end for _, end in failed),
+                "bad_regions": [
+                    {"start": start, "end": end} for start, end in failed
+                ],
+                "bad_frames": float(
+                    sum(max(1, round((end - start) / 0.02)) for start, end in failed)
+                ),
+            }
+        )
+        if source_f0:
+            issue["source_f0_hz"] = max(source_f0)
+        if source_rms:
+            issue["source_rms"] = sum(source_rms) / len(source_rms)
+        if output_rms:
+            issue["output_rms"] = sum(output_rms) / len(output_rms)
+        if output_f0:
+            issue["output_f0_hz"] = sum(output_f0) / len(output_f0)
+        return issue
+
+    def _run_residual_dropout_retry(
+        self,
+        *,
+        run_inference: Any,
+        source: Path,
+        output: Path,
+        baseline: Path,
+        params: InferenceParams,
+        log_file: Path,
+        issue: dict[str, Any] | None,
+        threshold: float,
+        semitones: int,
+        pitch: int,
+        attempt: int,
+    ) -> tuple[Path, dict[str, Any] | None, bool]:
+        """Retry only the small residual regions left by the best render.
+
+        A global retry can fix one high note while changing neighboring notes.
+        At the end of the normal recovery ladder, use the detector's measured
+        spans as a surgical scope and merge the result back into the best
+        render.  The candidate is accepted only when it removes the residual
+        detector result entirely; otherwise the previous best file is kept.
+        """
+        residual_regions = self._dropout_core_regions(issue)
+        if not residual_regions:
+            return baseline, issue, False
+        total_seconds = sum(max(0.0, end - start) for start, end in residual_regions)
+        if (
+            len(residual_regions) > self._DROPOUT_RESIDUAL_MAX_REGIONS
+            or total_seconds > self._DROPOUT_RESIDUAL_MAX_SECONDS
+        ):
+            return baseline, issue, False
+        guard_regions = self._confirmed_guard_regions(issue)
+        if not guard_regions:
+            return baseline, issue, False
+
+        residual_threshold = self._next_dropout_threshold(threshold, issue)
+        residual_threshold = max(
+            self._DROPOUT_RECOVERY_MIN_THRESHOLD,
+            min(float(threshold), float(residual_threshold)),
+        )
+        residual_semitones = max(
+            int(semitones or self._HIGH_PITCH_GUARD_SEMITONES),
+            self._guard_semitones_for_retry(
+                residual_threshold,
+                issue,
+                source,
+                guard_regions,
+            ),
+        )
+        raw_target = output.with_name(f"{output.stem}_dropout_retry{attempt}.wav")
+        guarded_target = output.with_name(
+            f"{output.stem}_high_guarded_retry{attempt}.wav"
+        )
+        guarded, guard_applied = self._prepare_high_pitch_guard(
+            source,
+            guarded_target,
+            params,
+            log_file,
+            residual_threshold,
+            guard_regions,
+            residual_semitones,
+        )
+        if not guard_applied:
+            return baseline, issue, False
+        self._log(
+            log_file,
+            "  高音保护进入残留片段补偿：仅重试 "
+            f"{len(residual_regions)} 个片段，共 {total_seconds:.2f}s "
+            f"（阈值 {residual_threshold:.0f}Hz，降调 -{residual_semitones} 半音）",
+        )
+        run_inference(guarded, raw_target)
+        restored_target = output.with_name(
+            f"{output.stem}_restored_retry{attempt}.wav"
+        )
+        restored = self._restore_high_pitch_guard(
+            raw_target,
+            restored_target,
+            source,
+            params,
+            log_file,
+            residual_threshold,
+            guard_regions,
+            residual_semitones,
+        )
+        merged_target = output.with_name(
+            f"{output.stem}_guarded_merged_retry{attempt}.wav"
+        )
+        candidate = self._merge_guarded_regions(
+            baseline,
+            restored,
+            merged_target,
+            restored_target.with_suffix(".regions.json"),
+            only_regions=residual_regions,
+        )
+        if self._guard_candidate_has_new_hf_peak(
+            source,
+            baseline,
+            candidate,
+            residual_regions,
+        ):
+            self._log(
+                log_file,
+                "  残留高音片段补偿出现新的窄带高频峰，拒绝本轮结果并保留之前的最佳结果",
+            )
+            return baseline, issue, True
+        candidate_issue = self._detect_model_dropout(
+            source,
+            candidate,
+            threshold,
+            pitch,
+        )
+        return candidate, candidate_issue, True
 
     def _infer_with_dropout_recovery(
         self,
@@ -1159,6 +2211,7 @@ class ConversionService:
             threshold = self._next_dropout_threshold(threshold, issue)
             params.high_pitch_threshold = threshold
             guard_regions = self._confirmed_guard_regions(issue)
+            merge_regions = self._dropout_core_regions(issue)
             guard_semitones = self._guard_semitones_for_retry(
                 threshold,
                 issue,
@@ -1173,7 +2226,20 @@ class ConversionService:
         best_render = fallback
         best_bad_frames = float("inf")
         best_guard_applied = False
+        best_body_recovered = False
+        best_issue: dict[str, Any] | None = None
+        # Keep the first detector spans immutable for candidate selection. The
+        # retry ladder may discover fewer spans, but it must not gradually
+        # widen the replacement scope and then score that broader render as
+        # the new baseline.
+        initial_failure_regions = (
+            self._dropout_core_regions(history[0].get("issue"))
+            if baseline_first and history and history[0].get("issue")
+            else None
+        )
+        unresolved_failure_regions = list(initial_failure_regions or [])
         if baseline_first and history and history[0].get("issue"):
+            best_issue = history[0]["issue"]
             best_bad_frames = float(history[0]["issue"].get("bad_frames") or float("inf"))
         for guard_attempt in range(guard_attempts):
             attempt = guard_attempt + 1 if baseline_first else guard_attempt
@@ -1212,7 +2278,7 @@ class ConversionService:
                         rendered,
                         merged_target,
                         restored_target.with_suffix(".regions.json"),
-                        only_regions=guard_regions,
+                        only_regions=merge_regions,
                     )
                     if merged != rendered:
                         rendered = merged
@@ -1220,6 +2286,21 @@ class ConversionService:
                             log_file,
                             "  高音保护结果已按高音区合并：非高音区域沿用首次原始推理结果",
                         )
+                    if self._guard_candidate_has_new_hf_peak(
+                        source,
+                        output,
+                        rendered,
+                        merge_regions,
+                    ):
+                        # Do not let a successful F0 detector result hide a
+                        # new PSOLA air-band whistle. The following detector
+                        # pass will keep the original dropout evidence and can
+                        # try the next, less aggressive guarded round.
+                        self._log(
+                            log_file,
+                            "  高音保护结果出现新的窄带高频峰，拒绝本轮保护并保留原始结果",
+                        )
+                        rendered = output
             issue = (
                 self._detect_model_dropout(
                     source,
@@ -1238,14 +2319,157 @@ class ConversionService:
                 "input": "high_guarded" if guard_applied else "original",
             }
             history.append(entry)
+            quality = (
+                self._guard_candidate_high_note_quality(
+                    source,
+                    fallback,
+                    rendered,
+                    initial_failure_regions,
+                    restored_target.with_suffix(".regions.json")
+                    if guard_applied
+                    else None,
+                )
+                if baseline_first and rendered != fallback
+                else {"available": False}
+            )
+            if quality.get("available"):
+                entry["quality"] = quality
+                accepted_keys = {
+                    (round(float(start), 6), round(float(end), 6))
+                    for start, end in (quality.get("accepted_regions") or [])
+                }
+                newly_accepted = [
+                    (start, end)
+                    for start, end in unresolved_failure_regions
+                    if (round(float(start), 6), round(float(end), 6))
+                    in accepted_keys
+                ]
+                if newly_accepted:
+                    accepted_target = output.with_name(
+                        f"{output.stem}_accepted_retry{attempt}.wav"
+                    )
+                    best_render = self._merge_guarded_regions(
+                        best_render,
+                        rendered,
+                        accepted_target,
+                        restored_target.with_suffix(".regions.json"),
+                        only_regions=newly_accepted,
+                    )
+                    best_guard_applied = True
+                    unresolved_failure_regions = [
+                        (start, end)
+                        for start, end in unresolved_failure_regions
+                        if (round(float(start), 6), round(float(end), 6))
+                        not in accepted_keys
+                    ]
+                    self._log(
+                        log_file,
+                        "  高音保护逐区验收通过 "
+                        f"{len(newly_accepted)} 个初始失配区，已累计保留完整音符；"
+                        f"仍需重试 {len(unresolved_failure_regions)} 个区",
+                    )
+                quality_issue = self._quality_failure_issue(
+                    {
+                        **quality,
+                        "failed_regions": unresolved_failure_regions,
+                    },
+                    issue or best_issue,
+                )
+                entry["issue"] = quality_issue
+                issue = quality_issue
+                if issue is None:
+                    self._log(
+                        log_file,
+                        "  高音保护逐区验收全部通过：每个初始失配区均恢复有声主体且未增加气声",
+                    )
+                    return best_render, history, best_guard_applied
+                best_issue = issue
+                best_bad_frames = float(issue.get("bad_frames") or float("inf"))
+                best_body_recovered = False
+                guard_regions = self._confirmed_guard_regions(issue)
+                merge_regions = initial_failure_regions
+                next_threshold = self._next_dropout_threshold(threshold, issue)
+                entry["next_threshold"] = next_threshold
+                if (
+                    next_threshold >= threshold - 10.0
+                    or guard_attempt >= guard_attempts - 1
+                ):
+                    self._log(
+                        log_file,
+                        "  高音保护逐区验收仍有 "
+                        f"{len(unresolved_failure_regions)} 个区未通过；保留已验收音符，"
+                        "未通过音符沿用首次原始推理结果",
+                    )
+                    return best_render, history, best_guard_applied
+                self._log(
+                    log_file,
+                    "  高音保护逐区验收发现残留纯气声/弱主体："
+                    f"{issue['start']:.2f}-{issue['end']:.2f}s，"
+                    f"高音保护起点 {threshold:.0f}Hz → {next_threshold:.0f}Hz，"
+                    "仅重试未通过音符",
+                )
+                guard_semitones = max(
+                    guard_semitones,
+                    self._guard_semitones_for_retry(
+                        next_threshold,
+                        issue,
+                        source,
+                        guard_regions,
+                    ),
+                )
+                threshold = next_threshold
+                params.high_pitch_threshold = threshold
+                continue
             if issue is None:
                 return rendered, history, guard_applied_any
             if baseline_first:
                 candidate_bad_frames = float(issue.get("bad_frames") or float("inf"))
-                if candidate_bad_frames < best_bad_frames:
+                candidate_improved = candidate_bad_frames < best_bad_frames
+                candidate_body_recovered = bool(
+                    rendered != fallback
+                    and self._guard_candidate_restores_high_note_body(
+                        source,
+                        fallback,
+                        rendered,
+                        initial_failure_regions,
+                    )
+                )
+                entry["body_recovered"] = candidate_body_recovered
+                # Keep the lowest-count candidate available as the input for a
+                # later surgical residual retry.  It is not automatically the
+                # final result: unresolved original spans are filtered below,
+                # because a thinner/breathier render can score better while
+                # leaving the swallowed syllable in place.
+                candidate_keeps_original_failure = self._dropout_regions_overlap(
+                    issue,
+                    initial_failure_regions,
+                )
+                if candidate_improved and (
+                    not candidate_keeps_original_failure or candidate_body_recovered
+                ):
                     best_render = rendered
                     best_bad_frames = candidate_bad_frames
                     best_guard_applied = guard_applied
+                    best_issue = issue
+                    best_body_recovered = candidate_body_recovered
+                if (
+                    candidate_improved
+                    and candidate_keeps_original_failure
+                    and candidate_body_recovered
+                ):
+                    self._log(
+                        log_file,
+                        "  高音保护仍有少量残留检测帧，但有声主体已增强且未增加气声，保留为当前最佳结果",
+                    )
+                if (
+                    candidate_improved
+                    and candidate_keeps_original_failure
+                    and not candidate_body_recovered
+                ):
+                    self._log(
+                        log_file,
+                        "  高音保护本轮仍触及原失配区，检测帧虽减少但音色可能变薄，拒绝替换原始结果",
+                    )
                 if guard_regions and issue.get("bad_regions"):
                     prior_guard_regions = guard_regions
                     overlaps_scope = any(
@@ -1265,17 +2489,94 @@ class ConversionService:
                         issue,
                         prior_guard_regions,
                     )
+                    merge_regions = self._dropout_core_regions(
+                        issue,
+                        merge_regions,
+                    )
             next_threshold = self._next_dropout_threshold(threshold, issue)
             entry["next_threshold"] = next_threshold
             if next_threshold >= threshold - 10.0 or guard_attempt >= guard_attempts - 1:
                 if baseline_first:
-                    if best_render != fallback:
+                    if best_render != fallback and best_issue and best_issue.get("bad_regions"):
+                        residual_render, residual_issue, residual_guard_applied = (
+                            self._run_residual_dropout_retry(
+                                run_inference=run_inference,
+                                source=source,
+                                output=output,
+                                baseline=best_render,
+                                params=params,
+                                log_file=log_file,
+                                issue=best_issue,
+                                threshold=threshold,
+                                semitones=guard_semitones,
+                                pitch=int(getattr(params, "pitch", 0) or 0),
+                                attempt=len(history),
+                            )
+                        )
+                        if residual_guard_applied:
+                            history.append(
+                                {
+                                    "attempt": len(history) + 1,
+                                    "threshold": round(threshold, 1),
+                                    "issue": residual_issue,
+                                    "guard_applied": True,
+                                    "input": "high_guarded_residual",
+                                }
+                            )
+                            if residual_issue is None:
+                                self._log(
+                                    log_file,
+                                    "  残留高音片段补偿成功：已保留其余区域的最佳推理结果",
+                                )
+                                return residual_render, history, True
+                            residual_bad_frames = float(
+                                residual_issue.get("bad_frames") or float("inf")
+                            )
+                            residual_failure_remains = self._dropout_regions_overlap(
+                                residual_issue,
+                                initial_failure_regions,
+                            )
+                            residual_body_recovered = bool(
+                                residual_render != fallback
+                                and self._guard_candidate_restores_high_note_body(
+                                    source,
+                                    fallback,
+                                    residual_render,
+                                    initial_failure_regions,
+                                )
+                            )
+                            if residual_bad_frames < best_bad_frames and (
+                                not residual_failure_remains
+                                or residual_body_recovered
+                            ):
+                                best_render = residual_render
+                                best_bad_frames = residual_bad_frames
+                                best_guard_applied = True
+                                best_issue = residual_issue
+                                best_body_recovered = residual_body_recovered
+                            else:
+                                self._log(
+                                    log_file,
+                                    "  残留高音片段补偿未改善，继续使用之前的最佳结果",
+                                )
+                    best_failure_remains = self._dropout_regions_overlap(
+                        best_issue,
+                        initial_failure_regions,
+                    )
+                    if best_render != fallback and (
+                        not best_failure_remains or best_body_recovered
+                    ):
                         self._log(
                             log_file,
-                            "  高音保护未完全消除哑音，采用哑音帧更少的保护结果："
+                            "  高音保护未完全消除哑音，但主体恢复通过质量检查，采用哑音帧更少的保护结果："
                             f"{best_bad_frames:.0f} 帧（首次 {float(history[0]['issue'].get('bad_frames') or 0.0):.0f} 帧）",
                         )
                         return best_render, history, best_guard_applied
+                    if best_render != fallback and best_failure_remains:
+                        self._log(
+                            log_file,
+                            "  高音保护候选仍包含首次失配区，放弃气声风险较高的候选并回退原始推理结果",
+                        )
                     self._log(
                         log_file,
                         "  高音保护重试仍检测到模型失配哑音，回退到首次原始推理结果："
@@ -1346,13 +2647,17 @@ class ConversionService:
             if rate != target_rate:
                 positions = np.linspace(0, len(audio) - 1, max(1, round(len(audio) * target_rate / rate)))
                 audio = np.interp(positions, np.arange(len(audio)), audio)
-            frame = min(len(audio), max(1024, int(target_rate * 0.08)))
+            # Use a 40 ms analysis window. The previous 80 ms window could
+            # average a brief high note together with the neighboring low
+            # note, making the high note invisible to the guard entry check.
+            frame = min(len(audio), max(512, int(target_rate * 0.04)))
             if frame < 256:
                 return 0.0
             min_lag = max(2, int(target_rate / 2000.0))
             max_lag = min(frame - 1, int(target_rate / 60.0))
-            estimates: list[float] = []
-            for start in range(0, max(1, len(audio) - frame + 1), max(1, frame // 2)):
+            estimates: list[tuple[float, float, float]] = []
+            hop = max(1, frame // 2)
+            for start in range(0, max(1, len(audio) - frame + 1), hop):
                 chunk = audio[start : start + frame]
                 if len(chunk) < frame:
                     chunk = np.pad(chunk, (0, frame - len(chunk)))
@@ -1371,13 +2676,59 @@ class ConversionService:
                 ]
                 lag = peaks[0] if peaks else min_lag + int(np.argmax(corr[min_lag:max_lag + 1]))
                 if float(corr[lag]) >= 0.35:
-                    estimates.append(target_rate / float(lag))
+                    estimates.append(
+                        (
+                            target_rate / float(lag),
+                            float(corr[lag]),
+                            start / float(target_rate),
+                        )
+                    )
             if not estimates:
                 return 0.0
-            '''将孤立的八度/泛音误差视为异常值。第85百分位数仍能捕捉到持续的高音，
-                同时防止一个噪点帧导致整个音轨变成被保护的通过。
-            '''
-            return float(np.percentile(np.asarray(estimates, dtype=np.float32), 85.0))
+            values = np.asarray([item[0] for item in estimates], dtype=np.float32)
+            baseline = float(np.percentile(values, 85.0))
+
+            # Keep the robust whole-track estimate for ordinary material, but
+            # also retain a short, internally consistent high-pitch run. This
+            # is the case that matters for songs with a brief high syllable.
+            candidate_floor = max(760.0, baseline + 180.0)
+            candidate_indices = np.flatnonzero(values >= candidate_floor)
+            if candidate_indices.size >= 2:
+                runs: list[np.ndarray] = []
+                run_start = 0
+                for index in range(1, candidate_indices.size + 1):
+                    separated = (
+                        index == candidate_indices.size
+                        or candidate_indices[index] - candidate_indices[index - 1] > 2
+                    )
+                    if separated:
+                        runs.append(candidate_indices[run_start:index])
+                        run_start = index
+                supported_runs = [
+                    run
+                    for run in runs
+                    if len(run) >= 2
+                    and float(np.ptp(values[run])) <= max(90.0, float(np.median(values[run])) * 0.12)
+                    and float(
+                        np.median(
+                            np.asarray(
+                                [estimates[int(item)][1] for item in run],
+                                dtype=np.float32,
+                            )
+                        )
+                    ) >= 0.45
+                ]
+                if supported_runs:
+                    strongest = max(
+                        supported_runs,
+                        key=lambda run: float(np.median(values[run])),
+                    )
+                    return float(np.median(values[strongest]))
+
+            # Ignore isolated octave/upper-harmonic errors. The percentile
+            # still captures sustained high notes without opening protection
+            # for a single noisy frame.
+            return baseline
         except (OSError, ValueError, wave.Error, ImportError):
             return 0.0
 
@@ -1416,6 +2767,20 @@ class ConversionService:
             f"AI Exciter {controls['ai_exciter']:.0%}；Stereo {controls['stereo_width']:.0%}；"
             f"AI 响度包络 {controls['loudness_envelope']:.0%}）",
         )
+        # Natural tuning writes a temporary file and can lower the measured
+        # high-band ratio. Carry the model-output classification from the repair
+        # step so the enhancement worker does not re-enable dry HF injection just
+        # because the tuned intermediate looks slightly less bright.
+        preserve_model_high_band = False
+        repair_results = work.get("vocal_repair")
+        if isinstance(repair_results, dict):
+            output_repair = repair_results.get("output")
+            if isinstance(output_repair, dict):
+                output_profile = output_repair.get("profile")
+                if isinstance(output_profile, dict):
+                    preserve_model_high_band = bool(
+                        output_profile.get("high_band_noise", False)
+                    )
         enhanced = self._vocal_enhancement.enhance(
             source,
             output,
@@ -1424,6 +2789,7 @@ class ConversionService:
             log_file=log_file,
             reference=reference,
             skip_repair=True,
+            preserve_model_high_band=preserve_model_high_band,
             **controls,
         )
         self._set_step(work, "enhance", StepStatus.DONE.value)
@@ -1561,6 +2927,22 @@ class ConversionService:
                 raise RuntimeError("无法从原始歌曲提取参考人声")
             if getattr(original_sep, "simulated", False):
                 raise RuntimeError("原始歌曲分离未使用真实 UVR 结果，无法进行可靠增强")
+            if config.uvr_dereverb_ready():
+                self._log(
+                    log_file,
+                    f"原曲参考人声去混响中（{config.UVR_DEREVERB_MODEL}）…",
+                )
+                dereverb = self._uvr.separate(
+                    reference_vocal,
+                    work_dir / "reference_dereverb",
+                    config.UVR_DEREVERB_MODEL,
+                    params.device,
+                )
+                if not dereverb.simulated and dereverb.vocals.exists():
+                    reference_vocal = Path(dereverb.vocals)
+                    self._log(log_file, f"原曲去混响参考人声: {reference_vocal}")
+                else:
+                    self._log(log_file, "原曲参考去混响降级：沿用 UVR 分离人声")
             self._set_step(work, "reference", StepStatus.DONE.value)
             work["progress"] = 25
             work["reference_vocals_path"] = str(reference_vocal)
@@ -1834,6 +3216,7 @@ class ConversionService:
                     log_file,
                     stage="separated",
                     progress=32,
+                    reference=Path(vocals),
                 )
             else:
                 audio_profile = {}
@@ -1851,6 +3234,13 @@ class ConversionService:
                 wav_input = work_dir / "infer_input.wav"
                 if self._ffmpeg.convert(infer_input, wav_input):
                     infer_input = wav_input
+            # Use the exact dry vocal that finished preprocessing and is sent to
+            # the model. This keeps AI Vocal reference matching in the same
+            # sample-rate/timing domain as inference, instead of using the
+            # earlier DeepFilter output.
+            if infer_input.is_file():
+                work["reference_vocals_path"] = str(infer_input)
+                self._log(log_file, f"AI Vocal 参考干声（前期处理完成）: {infer_input}")
             self._log(log_file, f"[3/{pipeline_total}] 推理输入已准备: {infer_input}")
             original_infer_input = infer_input
             # 真实 F0 提取（rmvpe 等），保存曲线并校验是否检测到人声。
@@ -1935,6 +3325,7 @@ class ConversionService:
                 log_file,
                 stage="output",
                 progress=82,
+                reference=original_infer_input,
             )
             converted = self._enhance_vocal(
                 work,
@@ -1943,7 +3334,9 @@ class ConversionService:
                 params.device,
                 log_file,
                 progress=90,
-                reference=Path(work["vocals_path"]) if work.get("vocals_path") else None,
+                reference=Path(
+                    work.get("reference_vocals_path") or work["vocals_path"]
+                ) if work.get("vocals_path") else None,
             )
             work["raw_converted_path"] = str(raw_converted)
 
@@ -2123,7 +3516,13 @@ class ConversionService:
         # trees.  Their selected output is protected through the work record;
         # only unreferenced files are removed, then empty cache directories are
         # pruned.  This keeps editor projects that point at a selected stem safe.
-        for root_name in ("original_stems", "cover_stems", "dereverb", "harmony"):
+        for root_name in (
+            "original_stems",
+            "cover_stems",
+            "reference_dereverb",
+            "dereverb",
+            "harmony",
+        ):
             cache_root = base / root_name
             if not cache_root.is_dir():
                 continue
@@ -2363,6 +3762,7 @@ class ConversionService:
                     log_file,
                     stage="separated",
                     progress=27,
+                    reference=Path(vocals),
                 )
             else:
                 audio_profile = {}
@@ -2379,6 +3779,9 @@ class ConversionService:
                 wav_input = work_dir / "infer_input.wav"
                 if self._ffmpeg.convert(infer_input, wav_input):
                     infer_input = wav_input
+            if infer_input.is_file():
+                work["reference_vocals_path"] = str(infer_input)
+                self._log(log_file, f"AI Vocal 参考干声（前期处理完成）: {infer_input}")
             original_infer_input = infer_input
             timeline = self._build_timeline(segments_in, duration)
             used_models: list[str] = []
@@ -2483,6 +3886,7 @@ class ConversionService:
                             stage="output",
                             device=base_params.device,
                             log_file=log_file,
+                            reference=original_infer_input,
                         )
                     except (OSError, RuntimeError, ValueError) as exc:
                         repaired_renders[mid] = Path(rendered)
@@ -2717,6 +4121,7 @@ class ConversionService:
                 log_file,
                 stage="output",
                 progress=86,
+                reference=original_infer_input,
             )
             full_vocal = self._enhance_vocal(
                 work,
@@ -2725,7 +4130,9 @@ class ConversionService:
                 base_params.device,
                 log_file,
                 progress=90,
-                reference=Path(work["vocals_path"]) if work.get("vocals_path") else None,
+                reference=Path(
+                    work.get("reference_vocals_path") or work["vocals_path"]
+                ) if work.get("vocals_path") else None,
             )
             work["raw_converted_path"] = str(raw_full_vocal)
             work["converted_path"] = str(full_vocal)

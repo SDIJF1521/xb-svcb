@@ -28,8 +28,9 @@ class VocalEnhancementProcessor:
     DEFAULT_LOUDNESS_ENVELOPE = 0.58
     # Large Praat resynthesis or local timing offsets create a periodic
     # fan-like artifact. Keep normal tuning results, but reject unstable ones.
-    MAX_SAFE_TUNING_PSOLA_PERCENT = 75.0
+    MAX_SAFE_TUNING_PSOLA_PERCENT = 20.0
     MAX_SAFE_TUNING_ALIGNMENT_MS = 60.0
+    MAX_SAFE_TUNING_STRETCH_PERCENT = 2.2
 
     @property
     def available(self) -> bool:
@@ -60,6 +61,7 @@ class VocalEnhancementProcessor:
         stereo_width: float = DEFAULT_STEREO_WIDTH,
         loudness_envelope: float = DEFAULT_LOUDNESS_ENVELOPE,
         skip_repair: bool = False,
+        preserve_model_high_band: bool = False,
     ) -> Path:
         normalized_level = str(level or self.LEVEL_BASIC).strip().lower()
         if normalized_level not in self.LEVELS:
@@ -152,8 +154,14 @@ class VocalEnhancementProcessor:
             ]
             if reference is not None:
                 cmd.extend(["--reference", str(reference)])
+            # Keep the pre-tuning render available to the worker. Natural tuning
+            # can lower the measured HF ratio even though the model output had
+            # already been classified as residual noise.
+            cmd.extend(["--model-profile-source", str(source)])
             if skip_repair:
                 cmd.append("--skip-deepfilter")
+            if preserve_model_high_band:
+                cmd.append("--preserve-model-high-band")
 
             try:
                 proc = subprocess.run(
@@ -236,6 +244,7 @@ class VocalEnhancementProcessor:
         device: str = "auto",
         log_file: Path | None = None,
         profile: dict[str, float | bool] | None = None,
+        reference: Path | None = None,
     ) -> Path:
         """Repair UVR/model vocals with the bundled DeepFilterNet3 model."""
         normalized_stage = "output" if str(stage).lower() == "output" else "separated"
@@ -268,6 +277,8 @@ class VocalEnhancementProcessor:
                     json.dumps(profile, ensure_ascii=False, separators=(",", ":")),
                 ]
             )
+        if reference is not None and reference.is_file():
+            cmd.extend(["--reference", str(reference)])
         try:
             proc = subprocess.run(
                 cmd,
@@ -394,6 +405,7 @@ class VocalEnhancementProcessor:
 
         psola_percent = metric("psola")
         alignment_ms = metric("align_max")
+        stretch_percent = metric("stretch")
         if (
             psola_percent is not None
             and psola_percent > cls.MAX_SAFE_TUNING_PSOLA_PERCENT
@@ -401,6 +413,11 @@ class VocalEnhancementProcessor:
             return False, f"PSOLA 重合成占比 {psola_percent:.0f}%"
         if alignment_ms is not None and alignment_ms > cls.MAX_SAFE_TUNING_ALIGNMENT_MS:
             return False, f"局部对齐偏移 {alignment_ms:.0f}ms"
+        if (
+            stretch_percent is not None
+            and stretch_percent > cls.MAX_SAFE_TUNING_STRETCH_PERCENT
+        ):
+            return False, f"局部时间拉伸 {stretch_percent:.1f}%"
         return True, ""
 
     @staticmethod

@@ -33,8 +33,8 @@ class RealtimeCoverService:
     """Manage progressive RVC / SeedVC song playback sessions."""
 
     _FRAMEWORKS = {"rvc", "seed-vc"}
-    # Realtime favors a stable, slightly conservative boundary over per-model
-    # metadata because blocks must be processed immediately and consistently.
+    # Fallback used when an imported model does not declare a usable F0 range.
+    # Model metadata still wins so the guard matches the selected voice model.
     _HIGH_PITCH_THRESHOLD = 720.0
 
     def __init__(
@@ -692,6 +692,12 @@ class RealtimeCoverService:
         history: list[dict[str, Any]] = []
         rendered = output
         guard_regions: list[tuple[float, float]] | None = None
+        merge_regions: list[tuple[float, float]] | None = None
+        initial_failure_regions: list[tuple[float, float]] | None = None
+        unresolved_failure_regions: list[tuple[float, float]] = []
+        guard_semitones = ConversionService._HIGH_PITCH_GUARD_SEMITONES
+        best_render = output
+        best_bad_frames = float("inf")
         for attempt in range(attempts):
             raw_target = output if attempt == 0 else output.with_name(
                 f"{output.stem}_dropout_retry{attempt}.wav"
@@ -706,6 +712,7 @@ class RealtimeCoverService:
                     self._duration(source),
                     model=model,
                     only_regions=guard_regions,
+                    semitones=guard_semitones,
                 )
             infer(guarded, raw_target)
             rendered = raw_target
@@ -716,16 +723,46 @@ class RealtimeCoverService:
                     restored,
                     -guard_shift,
                     mask_source=source,
-                    loudness_source=source,
+                    # The dry vocal can be much louder than a breathy model
+                    # retry. Match the restored region to this model render so
+                    # PSOLA does not amplify its air band into a whistle.
+                    loudness_source=raw_target,
                     high_threshold=threshold,
                     only_regions=guard_regions,
                 ):
                     rendered = restored
+                    if merge_regions:
+                        merged_target = output.with_name(
+                            f"{output.stem}_guarded_merged_retry{attempt}.wav"
+                        )
+                        rendered = ConversionService._merge_guarded_regions(
+                            output,
+                            rendered,
+                            merged_target,
+                            restored.with_suffix(".regions.json"),
+                            only_regions=merge_regions,
+                        )
                 else:
                     self._append_realtime_log(
                         log_file,
-                        "PITCH_GUARD_RESTORE_FAILED\t保共振峰升调失败，保留模型输出\n",
+                        "PITCH_GUARD_RESTORE_FAILED\t保共振峰升调失败，保留首次推理结果\n",
                     )
+                    rendered = output
+            if (
+                attempt > 0
+                and rendered != output
+                and ConversionService._guard_candidate_has_new_hf_peak(
+                    source,
+                    output,
+                    rendered,
+                    merge_regions,
+                )
+            ):
+                self._append_realtime_log(
+                    log_file,
+                    "PITCH_GUARD_REJECTED\t保护结果出现新的窄带高频峰，保留首次推理结果\n",
+                )
+                rendered = output
             issue = (
                 ConversionService._detect_model_dropout(
                     source,
@@ -742,15 +779,144 @@ class RealtimeCoverService:
                 "issue": issue,
             }
             history.append(entry)
-            if issue and issue.get("bad_regions"):
-                guard_regions = [
-                    (float(item.get("start", 0.0)), float(item.get("end", 0.0)))
-                    for item in (issue.get("bad_regions") or [])
-                    if isinstance(item, dict)
-                    and float(item.get("end", 0.0)) > float(item.get("start", 0.0))
-                ] or guard_regions
-            if issue is None:
-                return rendered, history
+            if attempt == 0:
+                if issue is None:
+                    return rendered, history
+                initial_failure_regions = ConversionService._dropout_core_regions(issue)
+                unresolved_failure_regions = list(initial_failure_regions or [])
+                merge_regions = initial_failure_regions
+                guard_regions = ConversionService._confirmed_guard_regions(issue)
+                best_bad_frames = float(issue.get("bad_frames") or float("inf"))
+            else:
+                quality = (
+                    ConversionService._guard_candidate_high_note_quality(
+                        source,
+                        output,
+                        rendered,
+                        initial_failure_regions,
+                        restored.with_suffix(".regions.json")
+                        if guard_shift
+                        else None,
+                    )
+                    if rendered != output
+                    else {"available": False}
+                )
+                if quality.get("available"):
+                    entry["quality"] = quality
+                    accepted_keys = {
+                        (round(float(start), 6), round(float(end), 6))
+                        for start, end in (quality.get("accepted_regions") or [])
+                    }
+                    newly_accepted = [
+                        (start, end)
+                        for start, end in unresolved_failure_regions
+                        if (round(float(start), 6), round(float(end), 6))
+                        in accepted_keys
+                    ]
+                    if newly_accepted:
+                        best_render = ConversionService._merge_guarded_regions(
+                            best_render,
+                            rendered,
+                            output.with_name(
+                                f"{output.stem}_accepted_retry{attempt}.wav"
+                            ),
+                            restored.with_suffix(".regions.json"),
+                            only_regions=newly_accepted,
+                        )
+                        unresolved_failure_regions = [
+                            (start, end)
+                            for start, end in unresolved_failure_regions
+                            if (round(float(start), 6), round(float(end), 6))
+                            not in accepted_keys
+                        ]
+                    issue = ConversionService._quality_failure_issue(
+                        {
+                            **quality,
+                            "failed_regions": unresolved_failure_regions,
+                        },
+                        issue,
+                    )
+                    entry["issue"] = issue
+                    if issue is None:
+                        return best_render, history
+                    best_bad_frames = float(
+                        issue.get("bad_frames") or float("inf")
+                    )
+                    guard_regions = ConversionService._confirmed_guard_regions(issue)
+                    merge_regions = initial_failure_regions
+                    next_threshold = ConversionService._next_dropout_threshold(
+                        threshold,
+                        issue,
+                    )
+                    entry["next_threshold"] = next_threshold
+                    if (
+                        next_threshold >= threshold - 10.0
+                        or attempt >= attempts - 1
+                    ):
+                        self._append_realtime_log(
+                            log_file,
+                            "PITCH_DROPOUT_UNRESOLVED\t"
+                            f"regions={len(unresolved_failure_regions)}\t"
+                            "quality_gate=failed\n",
+                        )
+                        return best_render, history
+                    guard_semitones = max(
+                        guard_semitones,
+                        ConversionService._guard_semitones_for_retry(
+                            next_threshold,
+                            issue,
+                            source,
+                            guard_regions,
+                        ),
+                    )
+                    threshold = next_threshold
+                    params.high_pitch_threshold = threshold
+                    continue
+                if issue is None:
+                    return rendered, history
+                candidate_bad_frames = float(
+                    issue.get("bad_frames") or float("inf")
+                )
+                candidate_keeps_original_failure = (
+                    ConversionService._dropout_regions_overlap(
+                        issue,
+                        initial_failure_regions,
+                    )
+                )
+                candidate_improved = (
+                    candidate_bad_frames < best_bad_frames
+                    or (
+                        best_render == output
+                        and candidate_bad_frames == best_bad_frames
+                        and not candidate_keeps_original_failure
+                    )
+                )
+                if (
+                    rendered != output
+                    and candidate_improved
+                    and not candidate_keeps_original_failure
+                ):
+                    best_render = rendered
+                    best_bad_frames = candidate_bad_frames
+                elif candidate_improved and candidate_keeps_original_failure:
+                    self._append_realtime_log(
+                        log_file,
+                        "PITCH_GUARD_REJECTED\t保护结果仍包含首次失配区，保留更安全的结果\n",
+                    )
+                if guard_regions and issue.get("bad_regions"):
+                    overlaps_scope = any(
+                        float(item.get("end", 0.0)) > start
+                        and float(item.get("start", 0.0)) < end
+                        for item in (issue.get("bad_regions") or [])
+                        if isinstance(item, dict)
+                        for start, end in guard_regions
+                    )
+                    if not overlaps_scope:
+                        return best_render, history
+                    guard_regions = ConversionService._confirmed_guard_regions(
+                        issue,
+                        guard_regions,
+                    )
             next_threshold = ConversionService._next_dropout_threshold(threshold, issue)
             entry["next_threshold"] = next_threshold
             if next_threshold >= threshold - 10.0 or attempt >= attempts - 1:
@@ -761,7 +927,7 @@ class RealtimeCoverService:
                     f"source_f0={issue['source_f0_hz']:.0f}\t"
                     f"threshold={threshold:.0f}\n",
                 )
-                return rendered, history
+                return best_render, history
             self._append_realtime_log(
                 log_file,
                 "PITCH_DROPOUT_RETRY\t"
@@ -769,9 +935,18 @@ class RealtimeCoverService:
                 f"source_f0={issue['source_f0_hz']:.0f}\t"
                 f"threshold={threshold:.0f}->{next_threshold:.0f}\n",
             )
+            guard_semitones = max(
+                guard_semitones,
+                ConversionService._guard_semitones_for_retry(
+                    next_threshold,
+                    issue,
+                    source,
+                    guard_regions,
+                ),
+            )
             threshold = next_threshold
             params.high_pitch_threshold = threshold
-        return rendered, history
+        return best_render, history
 
     @staticmethod
     def _duration(source: Path) -> float:
@@ -779,7 +954,7 @@ class RealtimeCoverService:
             with wave.open(str(source), "rb") as handle:
                 rate = int(handle.getframerate() or 0)
                 return handle.getnframes() / float(rate) if rate else 0.0
-        except (OSError, ValueError, wave.Error):
+        except (OSError, EOFError, ValueError, wave.Error):
             return 0.0
 
     def _render_system_block(
@@ -883,18 +1058,25 @@ class RealtimeCoverService:
                 3,
             )
             session["message"] = "变声人声与伴奏已按块对齐输出"
-        for path in (
-            prepared["raw"],
-            prepared["separated"],
-            prepared["accompaniment"],
-            prepared["rendered"],
-            guarded,
-            rendered if rendered != Path(prepared["rendered"]) else None,
-        ):
+        cleanup_paths: set[Path] = {
+            Path(str(prepared[key]))
+            for key in ("raw", "separated", "accompaniment", "rendered")
+            if prepared.get(key)
+        }
+        render_stem = Path(str(prepared["rendered"]))
+        try:
+            # Recovery creates sibling files with the render stem. They have
+            # already been read into the output block, so remove them together
+            # with the primary system block files.
+            cleanup_paths.update(render_stem.parent.glob(f"{render_stem.stem}_*"))
+        except OSError:
+            pass
+        cleanup_paths.add(Path(rendered))
+        for path in cleanup_paths:
             if not path:
                 continue
             try:
-                Path(path).unlink(missing_ok=True)
+                path.unlink(missing_ok=True)
             except OSError:
                 pass
 
@@ -946,6 +1128,7 @@ class RealtimeCoverService:
         sample_rate: int = 44100,
         model: dict[str, Any] | None = None,
         only_regions: list[tuple[float, float]] | None = None,
+        semitones: int | None = None,
     ) -> tuple[Path, int]:
         """Lower only detected extreme-high regions before model inference.
 
@@ -957,12 +1140,21 @@ class RealtimeCoverService:
             return source, 0
         peak_f0 = self._estimate_peak_f0(source, sample_rate)
         high_threshold = self._model_high_pitch_threshold(params, model)
-        if peak_f0 < high_threshold:
+        if peak_f0 < high_threshold and not only_regions:
             return source, 0
+        applied_semitones = int(
+            semitones
+            or ConversionService._guard_semitones_for_retry(
+                high_threshold,
+                {"source_f0_hz": peak_f0},
+                source,
+                only_regions,
+            )
+        )
         if not self._pitch_shift(
             source,
             destination,
-            -12,
+            -applied_semitones,
             high_threshold=high_threshold,
             only_regions=only_regions,
         ):
@@ -973,18 +1165,25 @@ class RealtimeCoverService:
             return source, 0
         self._append_realtime_log(
             source.with_name("realtime.log"),
-            f"PITCH_GUARD\tpeak_f0={peak_f0:.1f}\tsemitones=-12\n",
+            "PITCH_GUARD\t"
+            f"peak_f0={peak_f0:.1f}\tsemitones=-{applied_semitones}\n",
         )
-        return destination, -12
+        return destination, -applied_semitones
 
     @staticmethod
     def _model_high_pitch_threshold(
         params: InferenceParams, model: dict[str, Any] | None = None
     ) -> float:
-        explicit = float(getattr(params, "high_pitch_threshold", 0.0) or 0.0)
-        if explicit > 0:
-            return max(300.0, min(2000.0, explicit))
-        return RealtimeCoverService._HIGH_PITCH_THRESHOLD
+        framework = config.modelhub_normalize_framework(
+            (model or {}).get("framework")
+        )
+        return ConversionService._model_high_pitch_threshold(
+            params,
+            model,
+            framework,
+            honor_model_metadata=True,
+            fallback_threshold=RealtimeCoverService._HIGH_PITCH_THRESHOLD,
+        )
 
     @staticmethod
     def _estimate_peak_f0(source: Path, sample_rate: int = 44100) -> float:
@@ -993,7 +1192,7 @@ class RealtimeCoverService:
             from application.conversion_service import ConversionService
 
             return float(ConversionService._estimate_peak_f0(source))
-        except (OSError, ValueError, wave.Error, ImportError):
+        except (OSError, EOFError, ValueError, wave.Error, ImportError):
             return 0.0
 
     @staticmethod

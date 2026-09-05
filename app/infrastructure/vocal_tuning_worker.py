@@ -15,6 +15,35 @@ import traceback
 from pathlib import Path
 
 
+_RESYNTHESIS_PITCH_SEED_CENTS = 12.0
+_RESYNTHESIS_PITCH_SUPPORT_CENTS = 5.0
+_RESYNTHESIS_PITCH_RELEASE_CENTS = 1.5
+_MIN_APPLIED_RESYNTHESIS_PITCH_CENTS = 5.0
+_RESYNTHESIS_PITCH_SMOOTH_SECONDS = 0.040
+_MIN_RESYNTHESIS_PITCH_POINTS = 12
+_MIN_RESYNTHESIS_PITCH_SECONDS = 0.150
+# A missing F0 frame inside a correction lobe usually marks an onset, release, or
+# consonant.  Letting PSOLA span it produces a short phase jump at the exact place
+# listeners describe as a click/stutter.
+_RESYNTHESIS_MAX_INTERNAL_GAP_SECONDS = 0.025
+# PSOLA is reliable on a held note, but a portamento or an octave-tracker jump needs
+# its own time-varying treatment.  Exclude those contours from the local resynthesis
+# mask while leaving the pitch curve itself available for diagnostics/future methods.
+_RESYNTHESIS_MAX_SOURCE_PITCH_SPAN_SEMITONES = 1.75
+_RESYNTHESIS_MAX_SOURCE_PITCH_SLOPE_SEMITONES_PER_SECOND = 6.0
+_RESYNTHESIS_CROSSFADE_SECONDS = 0.005
+_RESYNTHESIS_CROSSFADE_POWER_SECONDS = 0.006
+_MAX_RESYNTHESIS_CROSSFADE_GAIN_DB = 3.0
+_REFERENCE_GAP_FRAME_SECONDS = 0.020
+_REFERENCE_GAP_HOP_SECONDS = 0.005
+_REFERENCE_GAP_MIN_SECONDS = 0.025
+_REFERENCE_GAP_MAX_SECONDS = 0.160
+_REFERENCE_GAP_SUPPORT_SECONDS = 0.120
+_REFERENCE_GAP_QUIET_DROP_DB = 18.0
+_REFERENCE_GAP_MIN_EXCESS_DB = 7.0
+_REFERENCE_GAP_MAX_ATTENUATION_DB = 8.0
+
+
 def _hz_to_midi(frequency: "np.ndarray") -> "np.ndarray":
     import numpy as np
 
@@ -177,6 +206,191 @@ def _estimate_envelope_lag(
             best_lag = lag
             best_correlation = correlation
     return best_lag * hop / sample_rate, best_correlation
+
+
+def _suppress_reference_gap_residual(
+    audio: "np.ndarray",
+    reference: "np.ndarray",
+    sample_rate: int,
+    lag_seconds: float = 0.0,
+) -> tuple["np.ndarray", dict[str, float]]:
+    """Attenuate short model-only bursts inside reference vocal gaps.
+
+    A converted render can keep a voiced/noisy island where the guide has a real
+    consonant gap.  This is separate from pitch correction: the guide controls only
+    the short-term level, and the bounded, smoothed attenuation keeps breaths and
+    phrase boundaries intact.
+    """
+    import numpy as np
+    from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+
+    empty_stats = {
+        "reference_gap_regions": 0.0,
+        "reference_gap_seconds": 0.0,
+        "reference_gap_max_attenuation_db": 0.0,
+    }
+    raw_audio = np.asarray(audio, dtype=np.float64)
+    raw_reference = np.asarray(reference, dtype=np.float64)
+    was_mono = raw_audio.ndim == 1
+    data = raw_audio[np.newaxis, :] if was_mono else raw_audio
+    guide = (
+        raw_reference[np.newaxis, :]
+        if raw_reference.ndim == 1
+        else raw_reference
+    )
+    if data.ndim != 2 or guide.ndim != 2 or not data.shape[-1]:
+        return raw_audio.copy(), empty_stats
+
+    total_frames = int(data.shape[-1])
+    guide_frames = int(guide.shape[-1])
+    length = min(total_frames, guide_frames)
+    allowed_delta = max(
+        int(round(sample_rate * 0.050)),
+        int(round(total_frames * 0.002)),
+    )
+    if (
+        length < int(round(sample_rate * 0.20))
+        or abs(total_frames - guide_frames) > allowed_delta
+    ):
+        return raw_audio.copy(), empty_stats
+
+    source = np.mean(data[:, :length], axis=0)
+    aligned_guide = guide[:, :length].copy()
+    sample_shift = int(round(float(lag_seconds) * sample_rate))
+    if sample_shift > 0:
+        shifted = np.zeros_like(aligned_guide)
+        if sample_shift < length:
+            shifted[:, sample_shift:] = aligned_guide[:, : length - sample_shift]
+        aligned_guide = shifted
+    elif sample_shift < 0:
+        shift = -sample_shift
+        shifted = np.zeros_like(aligned_guide)
+        if shift < length:
+            shifted[:, : length - shift] = aligned_guide[:, shift:]
+        aligned_guide = shifted
+    guide_mono = np.mean(aligned_guide, axis=0)
+
+    frame_size = max(
+        32,
+        int(round(sample_rate * _REFERENCE_GAP_FRAME_SECONDS)),
+    )
+    hop_size = max(
+        1,
+        int(round(sample_rate * _REFERENCE_GAP_HOP_SECONDS)),
+    )
+    positions = np.arange(0, length, hop_size, dtype=np.int64)
+    if len(positions) < 12:
+        return raw_audio.copy(), empty_stats
+
+    source_power = uniform_filter1d(
+        source * source,
+        size=frame_size,
+        mode="nearest",
+    )[positions]
+    guide_power = uniform_filter1d(
+        guide_mono * guide_mono,
+        size=frame_size,
+        mode="nearest",
+    )[positions]
+    source_db = 10.0 * np.log10(np.maximum(source_power, 1e-12))
+    guide_db = 10.0 * np.log10(np.maximum(guide_power, 1e-12))
+    finite = np.isfinite(source_db) & np.isfinite(guide_db)
+    if int(np.count_nonzero(finite)) < 12:
+        return raw_audio.copy(), empty_stats
+
+    guide_peak = float(np.percentile(guide_db[finite], 90.0))
+    source_peak = float(np.percentile(source_db[finite], 90.0))
+    guide_loud = finite & (guide_db >= guide_peak - 12.0)
+    source_present = finite & (source_db >= source_peak - 20.0)
+    joint = guide_loud & source_present
+    if int(np.count_nonzero(joint)) < 12:
+        return raw_audio.copy(), empty_stats
+    level_offset = float(np.median(source_db[joint] - guide_db[joint]))
+    excess_db = source_db - guide_db - level_offset
+    candidate = (
+        finite
+        & (guide_db <= guide_peak - _REFERENCE_GAP_QUIET_DROP_DB)
+        & source_present
+        & (excess_db >= _REFERENCE_GAP_MIN_EXCESS_DB)
+    )
+
+    # Bridge one or two unstable analysis frames, but never bridge a long pause.
+    for _ in range(2):
+        bridge = (
+            ~candidate
+            & np.r_[False, candidate[:-1]]
+            & np.r_[candidate[1:], False]
+        )
+        candidate |= bridge
+
+    candidate_indices = np.flatnonzero(candidate)
+    if not candidate_indices.size:
+        return raw_audio.copy(), empty_stats
+    split_at = np.flatnonzero(np.diff(candidate_indices) > 1)
+    starts = np.r_[0, split_at + 1]
+    ends = np.r_[split_at + 1, len(candidate_indices)]
+    accepted = np.zeros(len(positions), dtype=bool)
+    region_seconds = 0.0
+    region_count = 0
+    support_frames = max(
+        2,
+        int(round(_REFERENCE_GAP_SUPPORT_SECONDS * sample_rate / hop_size)),
+    )
+    for start, end in zip(starts, ends):
+        run = candidate_indices[start:end]
+        duration = float(
+            positions[run[-1]] - positions[run[0]] + frame_size
+        ) / max(sample_rate, 1)
+        if not (
+            _REFERENCE_GAP_MIN_SECONDS
+            <= duration
+            <= _REFERENCE_GAP_MAX_SECONDS
+        ):
+            continue
+        before = guide_loud[max(0, int(run[0]) - support_frames) : int(run[0])]
+        after = guide_loud[
+            int(run[-1]) + 1 : min(len(guide_loud), int(run[-1]) + support_frames + 1)
+        ]
+        if int(np.count_nonzero(before)) < 2 or int(np.count_nonzero(after)) < 2:
+            continue
+        if float(np.max(excess_db[run])) < _REFERENCE_GAP_MIN_EXCESS_DB + 3.0:
+            continue
+        accepted[run] = True
+        region_seconds += duration
+        region_count += 1
+
+    if not bool(accepted.any()):
+        return raw_audio.copy(), empty_stats
+
+    attenuation_db = np.clip(
+        (excess_db - (_REFERENCE_GAP_MIN_EXCESS_DB - 3.0)) * 0.65,
+        0.0,
+        _REFERENCE_GAP_MAX_ATTENUATION_DB,
+    )
+    attenuation_db *= accepted.astype(np.float64)
+    attenuation_db = gaussian_filter1d(
+        attenuation_db,
+        sigma=max(1.0, 0.008 / _REFERENCE_GAP_HOP_SECONDS),
+        mode="nearest",
+    )
+    attenuation_db = np.clip(attenuation_db, 0.0, _REFERENCE_GAP_MAX_ATTENUATION_DB)
+    attenuation_db[attenuation_db < 0.05] = 0.0
+    sample_attenuation = np.interp(
+        np.arange(total_frames, dtype=np.float64),
+        positions.astype(np.float64),
+        attenuation_db,
+        left=0.0,
+        right=0.0,
+    )
+    gain = np.power(10.0, -sample_attenuation / 20.0)
+    processed = data.copy()
+    processed[:, :length] *= gain[:length][np.newaxis, :]
+    stats = {
+        "reference_gap_regions": float(region_count),
+        "reference_gap_seconds": float(region_seconds),
+        "reference_gap_max_attenuation_db": float(np.max(attenuation_db)),
+    }
+    return (processed[0] if was_mono else processed), stats
 
 
 def _alignment_feature(
@@ -685,7 +899,10 @@ def _local_alignment_map(
     target_points = target_points[keep]
     source_delta = np.diff(source_points)
     desired_factors = np.diff(target_points) / np.maximum(source_delta, 1e-6)
-    max_stretch = 0.025 + 0.045 * amount
+    # Sustained vowels expose local time warps as flutter/"fan" artifacts.  Keep the
+    # guide map for pitch correspondence, but cap the actual DurationTier at 2% so
+    # SVC/RVC/SeedVC renders remain phase-stable and mix-aligned.
+    max_stretch = 0.020
     factors = np.clip(desired_factors, 1.0 - max_stretch, 1.0 + max_stretch)
 
     # Preserve the full duration after clipping. Distribute the residual only across
@@ -764,13 +981,234 @@ def _tier_points(tier, praat_call) -> tuple["np.ndarray", "np.ndarray"]:
     return times, frequencies
 
 
+def _stable_pitch_resynthesis_regions(
+    pitch_times: "np.ndarray",
+    source_frequencies: "np.ndarray",
+    corrected_frequencies: "np.ndarray",
+    strength: float,
+) -> list[tuple[float, float]]:
+    """Select complete, coherent correction lobes instead of short PSOLA islands."""
+    import numpy as np
+    from scipy.ndimage import gaussian_filter1d, median_filter
+
+    times = np.asarray(pitch_times, dtype=np.float64)
+    source_hz = np.asarray(source_frequencies, dtype=np.float64)
+    corrected_hz = np.asarray(corrected_frequencies, dtype=np.float64)
+    amount = float(np.clip(strength, 0.0, 1.0))
+    count = min(len(times), len(source_hz), len(corrected_hz))
+    if amount <= 0.0 or count < _MIN_RESYNTHESIS_PITCH_POINTS:
+        return []
+
+    times = times[:count]
+    source_hz = source_hz[:count]
+    corrected_hz = corrected_hz[:count]
+    valid = (
+        np.isfinite(times)
+        & np.isfinite(source_hz)
+        & np.isfinite(corrected_hz)
+        & (source_hz > 0.0)
+        & (corrected_hz > 0.0)
+    )
+    applied_cents = np.zeros(count, dtype=np.float64)
+    applied_cents[valid] = 1200.0 * np.log2(
+        corrected_hz[valid] / source_hz[valid]
+    )
+    target_cents = applied_cents / amount
+
+    valid_indices = np.flatnonzero(valid)
+    if valid_indices.size < _MIN_RESYNTHESIS_PITCH_POINTS:
+        return []
+    phrase_splits = np.flatnonzero(
+        (np.diff(valid_indices) > 1)
+        | (np.diff(times[valid_indices]) > 0.055)
+    )
+    phrase_starts = np.r_[0, phrase_splits + 1]
+    phrase_ends = np.r_[phrase_splits + 1, len(valid_indices)]
+
+    regions: list[tuple[float, float]] = []
+    for phrase_start, phrase_end in zip(phrase_starts, phrase_ends):
+        phrase = valid_indices[phrase_start:phrase_end]
+        if len(phrase) < _MIN_RESYNTHESIS_PITCH_POINTS:
+            continue
+        phrase_times = times[phrase]
+        spacing_values = np.diff(phrase_times)
+        spacing_values = spacing_values[spacing_values > 1e-6]
+        if not spacing_values.size:
+            continue
+        spacing = float(np.median(spacing_values))
+        smooth_sigma = max(
+            1.0,
+            _RESYNTHESIS_PITCH_SMOOTH_SECONDS / max(spacing, 0.002),
+        )
+        smoothed_target = gaussian_filter1d(
+            target_cents[phrase],
+            sigma=smooth_sigma,
+            mode="nearest",
+        )
+
+        supported = np.flatnonzero(
+            np.abs(smoothed_target) >= _RESYNTHESIS_PITCH_SUPPORT_CENTS
+        )
+        if not supported.size:
+            continue
+        support_splits = np.flatnonzero(
+            (np.diff(supported) > 1)
+            | (np.diff(phrase_times[supported]) > 0.055)
+            | (
+                np.sign(smoothed_target[supported][1:])
+                != np.sign(smoothed_target[supported][:-1])
+            )
+        )
+        support_starts = np.r_[0, support_splits + 1]
+        support_ends = np.r_[support_splits + 1, len(supported)]
+        for support_start, support_end in zip(support_starts, support_ends):
+            lobe = supported[support_start:support_end]
+            if (
+                len(lobe) < _MIN_RESYNTHESIS_PITCH_POINTS
+                or float(phrase_times[lobe[-1]] - phrase_times[lobe[0]])
+                < _MIN_RESYNTHESIS_PITCH_SECONDS
+            ):
+                continue
+
+            lobe_times = phrase_times[lobe]
+            # Do not let an overlap-add window cross a real F0 hole.  The broader
+            # phrase split above intentionally tolerates short word gaps for pitch
+            # matching, but that tolerance is unsafe for local PSOLA.
+            if (
+                len(lobe_times) > 1
+                and float(np.max(np.diff(lobe_times)))
+                > _RESYNTHESIS_MAX_INTERNAL_GAP_SECONDS
+            ):
+                continue
+
+            # A correction lobe can be long and coherent in the *requested* delta
+            # while the source itself is sliding between notes.  Resynthesizing that
+            # contour with one local mask is where the remaining flutter/card-like
+            # artifacts originate.  Use a short median filter to ignore one-frame
+            # tracker spikes, then reject only broad movement or a sustained slope.
+            source_midi = _hz_to_midi(source_hz[phrase[lobe]])
+            if len(source_midi) >= 3:
+                filter_size = min(5, len(source_midi))
+                if filter_size % 2 == 0:
+                    filter_size -= 1
+                stable_source_midi = median_filter(
+                    source_midi,
+                    size=max(3, filter_size),
+                    mode="nearest",
+                )
+            else:
+                stable_source_midi = source_midi
+            robust_span = float(
+                np.percentile(stable_source_midi, 95.0)
+                - np.percentile(stable_source_midi, 5.0)
+            )
+            if robust_span > _RESYNTHESIS_MAX_SOURCE_PITCH_SPAN_SEMITONES:
+                continue
+            if len(lobe_times) >= 3:
+                time_offset = lobe_times - float(lobe_times[0])
+                time_centre = time_offset - float(np.mean(time_offset))
+                denominator = float(np.dot(time_centre, time_centre))
+                if denominator > 1e-9:
+                    slope = float(
+                        np.dot(
+                            time_centre,
+                            stable_source_midi
+                            - float(np.mean(stable_source_midi)),
+                        )
+                        / denominator
+                    )
+                    if (
+                        abs(slope)
+                        > _RESYNTHESIS_MAX_SOURCE_PITCH_SLOPE_SEMITONES_PER_SECOND
+                    ):
+                        continue
+
+            lobe_peak = float(np.max(np.abs(smoothed_target[lobe])))
+            if (
+                lobe_peak < _RESYNTHESIS_PITCH_SEED_CENTS
+                or lobe_peak * amount < _MIN_APPLIED_RESYNTHESIS_PITCH_CENTS
+            ):
+                continue
+
+            direction = float(np.sign(np.median(smoothed_target[lobe])))
+            if direction == 0.0:
+                continue
+            raw_lobe = target_cents[phrase[lobe]]
+            coherent = np.flatnonzero(
+                raw_lobe * direction >= _RESYNTHESIS_PITCH_SUPPORT_CENTS
+            )
+            opposed = np.flatnonzero(
+                raw_lobe * direction <= -_RESYNTHESIS_PITCH_SUPPORT_CENTS
+            )
+            if (
+                len(coherent) < _MIN_RESYNTHESIS_PITCH_POINTS
+                or float(
+                    phrase_times[lobe[coherent[-1]]]
+                    - phrase_times[lobe[coherent[0]]]
+                )
+                < _MIN_RESYNTHESIS_PITCH_SECONDS
+                or len(opposed) > 0.20 * (len(coherent) + len(opposed))
+            ):
+                continue
+
+            # Grow from the trustworthy lobe to the near-zero crossings. PSOLA then
+            # enters and leaves on a complete correction lobe rather than crossfading
+            # repeatedly in the middle of a sustained vowel.
+            left = int(lobe[0])
+            while (
+                left > 0
+                and float(phrase_times[left] - phrase_times[left - 1])
+                <= _RESYNTHESIS_MAX_INTERNAL_GAP_SECONDS
+                and smoothed_target[left - 1] * direction > 0.0
+                and abs(float(smoothed_target[left - 1]))
+                >= _RESYNTHESIS_PITCH_RELEASE_CENTS
+            ):
+                left -= 1
+            right = int(lobe[-1])
+            while (
+                right + 1 < len(phrase)
+                and float(phrase_times[right + 1] - phrase_times[right])
+                <= _RESYNTHESIS_MAX_INTERNAL_GAP_SECONDS
+                and smoothed_target[right + 1] * direction > 0.0
+                and abs(float(smoothed_target[right + 1]))
+                >= _RESYNTHESIS_PITCH_RELEASE_CENTS
+            ):
+                right += 1
+            final_times = phrase_times[left : right + 1]
+            if (
+                len(final_times) > 1
+                and float(np.max(np.diff(final_times)))
+                > _RESYNTHESIS_MAX_INTERNAL_GAP_SECONDS
+            ):
+                continue
+            regions.append(
+                (
+                    float(phrase_times[left]) - 0.010,
+                    float(phrase_times[right]) + 0.010,
+                )
+            )
+    return regions
+
+
 def _resynthesis_region_curve(
     original: "np.ndarray",
     sample_rate: int,
+    *,
+    pitch_times: "np.ndarray | None" = None,
+    source_frequencies: "np.ndarray | None" = None,
+    corrected_frequencies: "np.ndarray | None" = None,
+    pitch_strength: float = 1.0,
+    duration_source_points: "np.ndarray | None" = None,
+    duration_factors: "np.ndarray | None" = None,
 ) -> "np.ndarray":
-    """Keep PSOLA inside continuous vocal regions and preserve original silence."""
+    """Blend PSOLA only where a perceptible pitch or timing change was requested.
+
+    Praat resynthesis can alter phase even when a pitch point is unchanged. A
+    voice-activity mask therefore replaces too much of a clean render. The mask
+    below is driven exclusively by the requested pitch delta and DurationTier
+    factors, with short fades at their boundaries.
+    """
     import numpy as np
-    from scipy.ndimage import gaussian_filter1d
 
     audio = np.asarray(original, dtype=np.float64)
     if audio.ndim == 1:
@@ -779,62 +1217,150 @@ def _resynthesis_region_curve(
     if total_frames == 0:
         return np.zeros(0, dtype=np.float64)
 
-    frame_size = max(32, int(round(sample_rate * 0.020)))
-    frame_count = int(np.ceil(total_frames / frame_size))
-    sample_power = np.mean(audio * audio, axis=0)
-    padded = np.pad(sample_power, (0, frame_count * frame_size - total_frames))
-    frame_rms = np.sqrt(
-        np.mean(padded.reshape(frame_count, frame_size), axis=1) + 1e-12
-    )
-    levels = 20.0 * np.log10(frame_rms + 1e-10)
-    active_threshold = max(-52.0, float(np.percentile(levels, 90)) - 32.0)
-    active = levels >= active_threshold
-    if not bool(active.any()):
+    regions: list[tuple[float, float]] = []
+    if (
+        pitch_times is not None
+        and source_frequencies is not None
+        and corrected_frequencies is not None
+    ):
+        regions.extend(
+            _stable_pitch_resynthesis_regions(
+                pitch_times,
+                source_frequencies,
+                corrected_frequencies,
+                pitch_strength,
+            )
+        )
+
+    if duration_source_points is not None and duration_factors is not None:
+        source_points = np.asarray(duration_source_points, dtype=np.float64)
+        factors = np.asarray(duration_factors, dtype=np.float64)
+        interval_count = min(len(factors), max(0, len(source_points) - 1))
+        if interval_count:
+            source_points = source_points[: interval_count + 1]
+            factors = factors[:interval_count]
+            changed = np.flatnonzero(
+                np.isfinite(factors) & (np.abs(factors - 1.0) >= 0.005)
+            )
+            for index in changed:
+                regions.append(
+                    (
+                        float(source_points[index]) - 0.015,
+                        float(source_points[index + 1]) + 0.015,
+                    )
+                )
+
+    sample_regions: list[tuple[int, int]] = []
+    for start, end in regions:
+        start_frame = max(0, min(total_frames, int(math.floor(start * sample_rate))))
+        end_frame = max(0, min(total_frames, int(math.ceil(end * sample_rate))))
+        if end_frame > start_frame:
+            sample_regions.append((start_frame, end_frame))
+    if not sample_regions:
         return np.zeros(total_frames, dtype=np.float64)
 
-    # A short consonant or intra-phrase rest must not switch PSOLA on and off. Bridge
-    # gaps up to 450 ms, then protect 100 ms before and 300 ms after each vocal region.
-    bridge_frames = max(1, int(round(0.45 * sample_rate / frame_size)))
-    inactive = np.flatnonzero(~active)
-    if len(inactive):
-        run_starts = np.r_[0, np.flatnonzero(np.diff(inactive) > 1) + 1]
-        run_ends = np.r_[run_starts[1:], len(inactive)]
-        for run_start, run_end in zip(run_starts, run_ends):
-            run = inactive[run_start:run_end]
-            if (
-                len(run) <= bridge_frames
-                and run[0] > 0
-                and run[-1] < frame_count - 1
-                and active[run[0] - 1]
-                and active[run[-1] + 1]
-            ):
-                active[run] = True
+    sample_regions.sort()
+    bridge = max(1, int(round(0.020 * sample_rate)))
+    merged: list[list[int]] = []
+    for start, end in sample_regions:
+        if merged and start <= merged[-1][1] + bridge:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
 
-    protected = np.zeros(frame_count, dtype=np.float64)
-    pre_frames = max(1, int(round(0.10 * sample_rate / frame_size)))
-    post_frames = max(1, int(round(0.30 * sample_rate / frame_size)))
-    for index in np.flatnonzero(active):
-        protected[
-            max(0, index - pre_frames) : min(frame_count, index + post_frames + 1)
-        ] = 1.0
-    protected = gaussian_filter1d(
-        protected,
-        sigma=max(1.0, 0.050 * sample_rate / frame_size),
-        mode="nearest",
+    curve = np.zeros(total_frames, dtype=np.float64)
+    fade = max(1, int(round(_RESYNTHESIS_CROSSFADE_SECONDS * sample_rate)))
+    for start, end in merged:
+        curve[start:end] = 1.0
+        left = max(0, start - fade)
+        if start > left:
+            curve[left:start] = np.maximum(
+                curve[left:start],
+                np.sin(np.linspace(0.0, np.pi / 2.0, start - left, endpoint=False))
+                ** 2,
+            )
+        right = min(total_frames, end + fade)
+        if right > end:
+            curve[end:right] = np.maximum(
+                curve[end:right],
+                np.cos(np.linspace(0.0, np.pi / 2.0, right - end, endpoint=False))
+                ** 2,
+            )
+    curve[curve < 1e-8] = 0.0
+    return curve
+
+
+def _blend_resynthesis(
+    original: "np.ndarray",
+    tuned: "np.ndarray",
+    mix: "np.ndarray",
+    sample_rate: int,
+) -> "np.ndarray":
+    """Crossfade PSOLA without the short level holes caused by phase cancellation."""
+    import numpy as np
+    from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+
+    dry = np.asarray(original, dtype=np.float64)
+    wet = np.asarray(tuned, dtype=np.float64)
+    curve = np.clip(np.asarray(mix, dtype=np.float64).reshape(-1), 0.0, 1.0)
+    if dry.ndim == 1:
+        dry = dry[np.newaxis, :]
+    if wet.ndim == 1:
+        wet = wet[np.newaxis, :]
+    if dry.shape != wet.shape or dry.shape[-1] != len(curve):
+        raise ValueError("PSOLA 混合输入尺寸不一致")
+
+    blended = dry + (wet - dry) * curve[np.newaxis, :]
+    transition = np.flatnonzero((curve > 1e-8) & (curve < 1.0 - 1e-8))
+    if not transition.size:
+        return blended
+
+    split_at = np.flatnonzero(np.diff(transition) > 1)
+    starts = np.r_[0, split_at + 1]
+    ends = np.r_[split_at + 1, len(transition)]
+    power_window = max(
+        8,
+        int(round(_RESYNTHESIS_CROSSFADE_POWER_SECONDS * sample_rate)),
     )
-    protected[protected < 1e-5] = 0.0
-    protected[protected > 1.0 - 1e-5] = 1.0
-    centres = np.minimum(
-        total_frames - 1,
-        np.arange(frame_count, dtype=np.float64) * frame_size + frame_size * 0.5,
-    )
-    return np.interp(
-        np.arange(total_frames, dtype=np.float64),
-        centres,
-        protected,
-        left=float(protected[0]),
-        right=float(protected[-1]),
-    )
+    smooth_sigma = max(1.0, 0.0015 * sample_rate)
+    pad = power_window + int(math.ceil(smooth_sigma * 4.0))
+    max_gain = 10.0 ** (_MAX_RESYNTHESIS_CROSSFADE_GAIN_DB / 20.0)
+
+    for run_start, run_end in zip(starts, ends):
+        run = transition[run_start:run_end]
+        start = int(run[0])
+        end = int(run[-1]) + 1
+        local_start = max(0, start - pad)
+        local_end = min(len(curve), end + pad)
+        local_curve = curve[local_start:local_end]
+        local_dry = dry[:, local_start:local_end]
+        local_wet = wet[:, local_start:local_end]
+        local_blend = blended[:, local_start:local_end]
+        dry_power = uniform_filter1d(
+            np.mean(local_dry * local_dry, axis=0),
+            size=power_window,
+            mode="nearest",
+        )
+        wet_power = uniform_filter1d(
+            np.mean(local_wet * local_wet, axis=0),
+            size=power_window,
+            mode="nearest",
+        )
+        blend_power = uniform_filter1d(
+            np.mean(local_blend * local_blend, axis=0),
+            size=power_window,
+            mode="nearest",
+        )
+        target_power = (1.0 - local_curve) * dry_power + local_curve * wet_power
+        gain = np.sqrt((target_power + 1e-12) / (blend_power + 1e-12))
+        gain = np.clip(gain, 1.0, max_gain)
+        gain = gaussian_filter1d(gain, sigma=smooth_sigma, mode="nearest")
+        # Keep unity gain at both ends and inside the fully wet region.
+        gain = 1.0 + (gain - 1.0) * 4.0 * local_curve * (1.0 - local_curve)
+        offset_start = start - local_start
+        offset_end = end - local_start
+        blended[:, start:end] *= gain[offset_start:offset_end][np.newaxis, :]
+    return blended
 
 
 def tune(
@@ -952,6 +1478,32 @@ def tune(
         shutil.copy2(source, output)
         return stats
 
+    expected_frames = source_sound.values.shape[-1]
+    resynthesis_mix = _resynthesis_region_curve(
+        np.asarray(source_sound.values, dtype=np.float64),
+        sample_rate,
+        pitch_times=source_times,
+        source_frequencies=source_frequencies,
+        corrected_frequencies=corrected_frequencies,
+        pitch_strength=strength,
+        duration_source_points=duration_source_points,
+        duration_factors=duration_factors,
+    )
+    stats["resynthesis_percent"] = float(np.mean(resynthesis_mix) * 100.0)
+    if not bool(np.any(resynthesis_mix)):
+        cleaned, gap_stats = _suppress_reference_gap_residual(
+            np.asarray(source_sound.values, dtype=np.float64),
+            np.asarray(reference_sound.values, dtype=np.float64),
+            sample_rate,
+            lag_seconds=lag,
+        )
+        stats.update(gap_stats)
+        if float(gap_stats["reference_gap_regions"]) > 0.0:
+            sf.write(str(output), cleaned.T.astype(np.float32), sample_rate, subtype="FLOAT")
+        else:
+            shutil.copy2(source, output)
+        return stats
+
     corrected_tier = call(
         "Create PitchTier",
         "xb-natural-tuning",
@@ -970,7 +1522,6 @@ def tune(
     tuned_sound = call(source_manipulation, "Get resynthesis (overlap-add)")
     tuned = np.asarray(tuned_sound.values, dtype=np.float64)
     original = np.asarray(source_sound.values, dtype=np.float64)
-    expected_frames = original.shape[-1]
     if tuned.shape[-1] > expected_frames:
         tuned = tuned[..., :expected_frames]
     elif tuned.shape[-1] < expected_frames:
@@ -982,9 +1533,14 @@ def tune(
         tuned_rms = float(np.sqrt(np.mean(tuned[:, active] ** 2) + 1e-12))
         if tuned_rms > 1e-7:
             tuned *= float(np.clip(original_rms / tuned_rms, 0.85, 1.15))
-    resynthesis_mix = _resynthesis_region_curve(original, sample_rate)
-    tuned = original + (tuned - original) * resynthesis_mix[np.newaxis, :]
-    stats["resynthesis_percent"] = float(np.mean(resynthesis_mix) * 100.0)
+    tuned = _blend_resynthesis(original, tuned, resynthesis_mix, sample_rate)
+    tuned, gap_stats = _suppress_reference_gap_residual(
+        tuned,
+        np.asarray(reference_sound.values, dtype=np.float64),
+        sample_rate,
+        lag_seconds=lag,
+    )
+    stats.update(gap_stats)
     peak = float(np.max(np.abs(tuned))) if tuned.size else 0.0
     if peak > 0.99:
         tuned *= 0.99 / peak
@@ -1026,6 +1582,7 @@ def main() -> int:
             f"align_max={stats['max_alignment_ms']:.0f}ms "
             f"stretch={stats['max_stretch_percent']:.1f}% "
             f"psola={stats.get('resynthesis_percent', 0.0):.0f}% "
+            f"gap_gate={stats.get('reference_gap_seconds', 0.0):.2f}s "
             f"lag={stats['lag_ms']:+.0f}ms corr={stats['correlation']:.2f}",
             flush=True,
         )

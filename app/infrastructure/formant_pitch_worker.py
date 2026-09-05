@@ -14,6 +14,8 @@ from pathlib import Path
 
 
 _REGION_FADE_SECONDS = 0.08
+_HIGH_POINT_GROUP_GAP_SECONDS = 0.12
+_HIGH_NOTE_PADDING_SECONDS = 0.05
 
 
 def _pitch_points(tier, call) -> list[tuple[float, float]]:  # noqa: ANN001
@@ -39,103 +41,122 @@ def _high_intervals(
     xmax: float,
     allowed_regions: list[tuple[float, float]] | None = None,
 ) -> list[tuple[float, float]]:
-    """Turn *stable* high voiced pitch points into expanded time regions.
+    """Turn reliable high-pitch points into smooth, local processing regions.
 
-    A single Praat pitch point is often an octave error or a consonant
-    transient.  Shifting such a point creates a short PSOLA blip that sounds
-    like vibrato/electronic noise, so require two nearby high points before
-    enabling a region.
+    Outside a confirmed dropout scope, two nearby high points are still
+    required so an octave tracker spike cannot activate PSOLA. Inside a scope
+    that was independently confirmed by the model-dropout detector, one
+    high/near-high point is enough to recover a short note whose pitch tier
+    contains only one usable frame.
     """
-    hysteresis = max(35.0, float(threshold) * 0.08)
+    import math
+
+    threshold = max(100.0, float(threshold))
+    hysteresis = max(35.0, threshold * 0.08)
     scoped_regions = sorted(
         (max(float(start), xmin), min(float(end), xmax))
         for start, end in (allowed_regions or [])
-        if float(end) > float(start)
+        if math.isfinite(float(start))
+        and math.isfinite(float(end))
+        and float(end) > float(start)
         and min(float(end), xmax) > max(float(start), xmin)
     )
-    def build(anchor_threshold: float) -> list[tuple[float, float]]:
-        anchors = sorted(
-            (float(time), float(frequency))
-            for time, frequency in points
-            if frequency >= anchor_threshold and xmin <= time <= xmax
-        )
-        if len(anchors) < 2:
-            return []
-        # Keep notes whose F0 briefly dips below the boundary in one region.
-        high_points = sorted(
-            (float(time), float(frequency))
-            for time, frequency in points
-            if frequency >= max(100.0, threshold - hysteresis)
-            and xmin <= time <= xmax
-        )
-        if not high_points:
-            return []
-        groups: list[list[tuple[float, float]]] = [[high_points[0]]]
-        for point in high_points[1:]:
-            if point[0] - groups[-1][-1][0] <= 0.12:
-                groups[-1].append(point)
-            else:
-                groups.append([point])
-        padding = 0.06
-        intervals: list[tuple[float, float]] = []
+    clean_points = sorted(
+        (float(time), float(frequency))
+        for time, frequency in points
+        if math.isfinite(float(time))
+        and math.isfinite(float(frequency))
+        and xmin <= float(time) <= xmax
+        and float(frequency) >= 100.0
+    )
+    if not clean_points:
+        return []
+
+    # Group neighboring voiced points first. This lets a note briefly dip below
+    # the hard threshold without splitting its protection region.
+    near_threshold = max(100.0, threshold - hysteresis)
+    near_points = [
+        point
+        for point in clean_points
+        if point[1] >= near_threshold
+    ]
+    if not near_points:
+        return []
+    groups: list[list[tuple[float, float]]] = [[near_points[0]]]
+    for point in near_points[1:]:
+        if point[0] - groups[-1][-1][0] <= _HIGH_POINT_GROUP_GAP_SECONDS:
+            groups[-1].append(point)
+        else:
+            groups.append([point])
+
+    def candidates_for(
+        anchor_threshold: float,
+        *,
+        allow_single: bool,
+        scope: tuple[float, float] | None = None,
+    ) -> list[tuple[float, float]]:
+        candidates: list[tuple[float, float]] = []
         for group in groups:
-            if sum(1 for _, frequency in group if frequency >= anchor_threshold) < 2:
+            anchors = [
+                point
+                for point in group
+                if point[1] >= anchor_threshold
+            ]
+            if scope is not None:
+                scope_start, scope_end = scope
+                anchors = [
+                    point
+                    for point in anchors
+                    if scope_start <= point[0] <= scope_end
+                ]
+            if len(anchors) < (1 if allow_single else 2):
                 continue
-            start = max(xmin, group[0][0] - padding)
-            end = min(xmax, group[-1][0] + padding)
-            if intervals and start <= intervals[-1][1] + 0.01:
-                intervals[-1] = (intervals[-1][0], max(intervals[-1][1], end))
-            else:
-                intervals.append((start, end))
-        return intervals
+            # A confirmed scope identifies *which* note needs recovery; it is
+            # not the note boundary. Keep the whole connected pitch group so
+            # its attack and release are lowered, inferred and restored as one
+            # unit. The caller still merges only groups intersecting a verified
+            # dropout, so neighboring healthy notes remain untouched.
+            group_start = group[0][0]
+            group_end = group[-1][0]
+            if group_end < group_start:
+                continue
+            start = max(xmin, group_start - _HIGH_NOTE_PADDING_SECONDS)
+            end = min(xmax, group_end + _HIGH_NOTE_PADDING_SECONDS)
+            if end <= start:
+                continue
+            candidates.append((start, end))
+        return candidates
 
-    # Always prefer the strict high-note boundary. A lower hysteresis retry is
-    # considered only when a confirmed dropout scope contains no strict note.
-    intervals = build(float(threshold))
+    # Without confirmed failure evidence, stay conservative and ignore a
+    # one-frame pitch spike.
+    strict_intervals = candidates_for(threshold, allow_single=False)
     if not scoped_regions:
-        return intervals
+        return strict_intervals
 
-    def clip_to_scope(source: list[tuple[float, float]]) -> list[tuple[float, float]]:
-        clipped: list[tuple[float, float]] = []
-        context = _REGION_FADE_SECONDS
-        for start, end in source:
-            for scope_start, scope_end in scoped_regions:
-                left = max(start, scope_start - context)
-                right = min(end, scope_end + context)
-                if right <= left:
-                    continue
-                if clipped and left <= clipped[-1][1] + 0.01:
-                    clipped[-1] = (clipped[-1][0], max(clipped[-1][1], right))
-                else:
-                    clipped.append((left, right))
-        return clipped
-
-    # A confirmed dropout can sit well below the first guard boundary after
-    # the source phrase is transposed. Keep enough hysteresis to include the
-    # neighboring 600-700 Hz notes, but still stay far above speech range.
-    relaxed_threshold = max(100.0, float(threshold) - max(110.0, hysteresis))
-    relaxed_intervals = build(relaxed_threshold)
-    # Resolve each confirmed scope independently. One strict high note must
-    # not suppress the hysteresis fallback for a neighboring lower note.
+    # A confirmed dropout can be below the initial protection boundary after
+    # pitch conversion. Resolve each scope independently so one real high note
+    # cannot suppress the fallback for a neighboring short note.
+    relaxed_threshold = max(100.0, threshold - max(110.0, hysteresis))
     scoped: list[tuple[float, float]] = []
-    context = _REGION_FADE_SECONDS
     for scope_start, scope_end in scoped_regions:
-        strict_matches = [
-            item
-            for item in intervals
-            if item[1] > scope_start and item[0] < scope_end
-        ]
-        candidates = strict_matches or [
-            item
-            for item in relaxed_intervals
-            if item[1] > scope_start and item[0] < scope_end
-        ]
+        scope = (scope_start, scope_end)
+        candidates = candidates_for(
+            threshold,
+            allow_single=False,
+            scope=scope,
+        )
+        if not candidates:
+            candidates = candidates_for(
+                relaxed_threshold,
+                allow_single=True,
+                scope=scope,
+            )
         for start, end in candidates:
-            left = max(start, scope_start - context)
-            right = min(end, scope_end + context)
-            if right <= left:
-                continue
-            if scoped and left <= scoped[-1][1] + 0.01:
+            # The sample mask and pitch tier both apply the single shared fade
+            # around this interval. Do not expand it a second time here.
+            left = max(xmin, start)
+            right = min(xmax, end)
+            if scoped and left < scoped[-1][1] - 1e-6:
                 scoped[-1] = (scoped[-1][0], max(scoped[-1][1], right))
             else:
                 scoped.append((left, right))
@@ -240,7 +261,12 @@ def _restore_region_loudness(
     output_rms = float(np.sqrt(np.mean(np.square(output_audio[:count][active]))))
     if source_rms < 1e-4 or output_rms < 1e-5:
         return output_audio
-    gain = max(0.85, min(3.0, source_rms / output_rms))
+    # PSOLA can make an unvoiced/breathy high-note fragment look quieter than
+    # the source even though its high-band noise is already prominent. A large
+    # loudness correction then amplifies that air and produces the familiar
+    # "唱不上去" hiss. Keep the correction close to unity: valid high notes
+    # retain their dynamics, while breath is never allowed to grow several dB.
+    gain = max(0.92, min(1.18, source_rms / output_rms))
     output_audio[:count] *= 1.0 + mask * (gain - 1.0)
     return output_audio
 
@@ -309,13 +335,55 @@ def _selective_mono_psola(
         if not points:
             # A malformed/empty tier must never replace the original segment.
             continue
+        # Add synthetic boundary anchors when Praat's pitch tier has no sample
+        # exactly at the region edge. Without them, the first/last available
+        # point can make the selective pitch amount jump inside the fade.
+        tier_points = list(points)
+        absolute_points = [
+            (float(time), float(frequency))
+            for time, frequency in source_points
+            if float(frequency) > 0.0
+        ]
+        if len(absolute_points) >= 2:
+            absolute_times = np.asarray(
+                [item[0] for item in absolute_points],
+                dtype=np.float64,
+            )
+            absolute_frequencies = np.asarray(
+                [item[1] for item in absolute_points],
+                dtype=np.float64,
+            )
+            for boundary in (
+                float(value)
+                for interval in intervals
+                for value in interval
+                if chunk_start <= float(value) <= chunk_end
+            ):
+                local_boundary = boundary - segment_xmin
+                if not (segment_sound.xmin <= local_boundary <= segment_sound.xmax):
+                    continue
+                if any(abs(item[0] - local_boundary) < 0.008 for item in tier_points):
+                    continue
+                if float(np.min(np.abs(absolute_times - boundary))) > 0.18:
+                    continue
+                frequency = float(
+                    np.interp(
+                        boundary,
+                        absolute_times,
+                        absolute_frequencies,
+                    )
+                )
+                if frequency <= 0.0:
+                    continue
+                tier_points.append((local_boundary, frequency))
+        tier_points.sort(key=lambda item: item[0])
         selective = call(
             "Create PitchTier",
             "Selective high pitch window",
             segment_sound.xmin,
             segment_sound.xmax,
         )
-        for local_time, frequency in points:
+        for local_time, frequency in tier_points:
             blend = _region_weight_at(local_time + segment_xmin, intervals)
             shifted_frequency = frequency * (1.0 + blend * (ratio - 1.0))
             call(selective, "Add point", local_time, shifted_frequency)

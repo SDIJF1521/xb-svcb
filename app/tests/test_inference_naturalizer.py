@@ -163,3 +163,199 @@ def test_source_guided_high_band_repair_only_attenuates_unsupported_burst() -> N
     assert stats["guarded_frames"] > 0.0
     assert np.sqrt(np.mean(after_high**2)) < np.sqrt(np.mean(before_high**2)) * 0.40
     assert np.sqrt(np.mean(after_body**2)) > np.sqrt(np.mean(before_body**2)) * 0.85
+
+
+def test_source_guided_high_band_repair_applies_to_rvc_without_copying_timbre() -> None:
+    sample_rate = 24000
+    time = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source = 0.16 * np.sin(2.0 * np.pi * 220.0 * time)
+    output = source.copy()
+    burst = (time >= 0.80) & (time < 0.90)
+    output[burst] += 0.12 * np.sin(2.0 * np.pi * 8200.0 * time[burst])
+
+    repaired, stats = _source_guided_high_band_repair(
+        source[:, np.newaxis],
+        output[:, np.newaxis],
+        sample_rate,
+        sample_rate,
+        "rvc",
+    )
+
+    assert stats["transient_guarded_frames"] > 0.0
+    assert np.sqrt(np.mean((repaired[:, 0] - source) ** 2)) < np.sqrt(
+        np.mean((output - source) ** 2)
+    )
+    assert np.sqrt(np.mean(repaired[:, 0] ** 2)) > 0.10
+
+
+def test_source_guided_high_band_repair_keeps_supported_sustained_high_note() -> None:
+    sample_rate = 24000
+    time = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    sustained = (
+        0.16 * np.sin(2.0 * np.pi * 220.0 * time)
+        + 0.08 * np.sin(2.0 * np.pi * 8200.0 * time)
+    )
+
+    repaired, stats = _source_guided_high_band_repair(
+        sustained[:, np.newaxis],
+        sustained[:, np.newaxis],
+        sample_rate,
+        sample_rate,
+        "so-vits-svc",
+    )
+
+    assert stats["guarded_frames"] == 0.0
+    assert stats["transient_guarded_frames"] == 0.0
+    assert np.max(np.abs(repaired[:, 0] - sustained)) < 1e-5
+
+
+def test_source_guided_high_band_repair_softens_short_overbright_sibilant() -> None:
+    sample_rate = 24000
+    time = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source = 0.04 * np.sin(2.0 * np.pi * 220.0 * time)
+    sibilant = (time >= 0.80) & (time < 0.90)
+    source[sibilant] += 0.02 * np.sin(2.0 * np.pi * 7200.0 * time[sibilant])
+    output = source.copy()
+    output[sibilant] = (
+        0.16 * np.sin(2.0 * np.pi * 220.0 * time[sibilant])
+        + 0.08 * np.sin(2.0 * np.pi * 7200.0 * time[sibilant])
+    )
+
+    repaired, stats = _source_guided_high_band_repair(
+        source[:, np.newaxis],
+        output[:, np.newaxis],
+        sample_rate,
+        sample_rate,
+        "so-vits-svc",
+    )
+
+    from scipy.signal import butter, sosfiltfilt
+
+    highpass = butter(4, 5600.0, btype="highpass", fs=sample_rate, output="sos")
+    core = (time >= 0.82) & (time < 0.88)
+    before_high = sosfiltfilt(highpass, output)[core]
+    after_high = sosfiltfilt(highpass, repaired[:, 0])[core]
+
+    assert stats["transient_guarded_frames"] > 0.0
+    assert np.sqrt(np.mean(after_high**2)) < np.sqrt(np.mean(before_high**2)) * 0.90
+    assert np.sqrt(np.mean(after_high**2)) > np.sqrt(np.mean(before_high**2)) * 0.55
+
+
+def test_source_guided_high_band_repair_keeps_sustained_bright_sibilance() -> None:
+    sample_rate = 24000
+    time = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source = (
+        0.16 * np.sin(2.0 * np.pi * 220.0 * time)
+        + 0.07 * np.sin(2.0 * np.pi * 7200.0 * time)
+    )
+    output = source + 0.08 * np.sin(2.0 * np.pi * 7200.0 * time)
+
+    repaired, stats = _source_guided_high_band_repair(
+        source[:, np.newaxis],
+        output[:, np.newaxis],
+        sample_rate,
+        sample_rate,
+        "so-vits-svc",
+    )
+
+    assert stats["transient_guarded_frames"] == 0.0
+    assert np.max(np.abs(repaired[:, 0] - output)) < 1e-5
+
+
+def test_source_guided_high_band_repair_softens_short_ratio_scrape() -> None:
+    sample_rate = 24000
+    time = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source = (
+        0.16 * np.sin(2.0 * np.pi * 220.0 * time)
+        + 0.02 * np.sin(2.0 * np.pi * 3200.0 * time)
+        + 0.03 * np.sin(2.0 * np.pi * 7200.0 * time)
+    )
+    output = source.copy()
+    scrape = (time >= 0.80) & (time < 0.90)
+    output[scrape] = (
+        0.10 * np.sin(2.0 * np.pi * 220.0 * time[scrape])
+        + 0.05 * np.sin(2.0 * np.pi * 3900.0 * time[scrape])
+        + 0.055 * np.sin(2.0 * np.pi * 7200.0 * time[scrape])
+    )
+
+    repaired, stats = _source_guided_high_band_repair(
+        source[:, np.newaxis],
+        output[:, np.newaxis],
+        sample_rate,
+        sample_rate,
+        "so-vits-svc",
+    )
+
+    from scipy.signal import butter, sosfiltfilt
+
+    highpass = butter(4, 5600.0, btype="highpass", fs=sample_rate, output="sos")
+    scrapepass = butter(
+        4,
+        [3500.0, 5600.0],
+        btype="bandpass",
+        fs=sample_rate,
+        output="sos",
+    )
+    core = (time >= 0.82) & (time < 0.88)
+    before_high = sosfiltfilt(highpass, output)[core]
+    after_high = sosfiltfilt(highpass, repaired[:, 0])[core]
+    before_scrape = sosfiltfilt(scrapepass, output)[core]
+    after_scrape = sosfiltfilt(scrapepass, repaired[:, 0])[core]
+
+    assert stats["transient_guarded_frames"] > 0.0
+    assert np.sqrt(np.mean(after_high**2)) < np.sqrt(np.mean(before_high**2)) * 0.98
+    assert np.sqrt(np.mean(after_high**2)) > np.sqrt(np.mean(before_high**2)) * 0.75
+    assert np.sqrt(np.mean(after_scrape**2)) < np.sqrt(np.mean(before_scrape**2)) * 0.95
+    assert np.sqrt(np.mean(after_scrape**2)) > np.sqrt(np.mean(before_scrape**2)) * 0.65
+
+
+def test_source_guided_high_band_repair_softens_short_presence_scrape() -> None:
+    sample_rate = 24000
+    time = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source = 0.16 * np.sin(2.0 * np.pi * 220.0 * time)
+    output = source.copy()
+    scrape = (time >= 0.80) & (time < 0.86)
+    output[scrape] += 0.10 * np.sin(2.0 * np.pi * 4400.0 * time[scrape])
+
+    repaired, stats = _source_guided_high_band_repair(
+        source[:, np.newaxis],
+        output[:, np.newaxis],
+        sample_rate,
+        sample_rate,
+        "so-vits-svc",
+    )
+
+    from scipy.signal import butter, sosfiltfilt
+
+    presence = butter(
+        4,
+        [3500.0, 5600.0],
+        btype="bandpass",
+        fs=sample_rate,
+        output="sos",
+    )
+    core = (time >= 0.81) & (time < 0.85)
+    before = sosfiltfilt(presence, output)[core]
+    after = sosfiltfilt(presence, repaired[:, 0])[core]
+
+    assert stats["transient_guarded_frames"] > 0.0
+    assert np.sqrt(np.mean(after**2)) < np.sqrt(np.mean(before**2)) * 0.97
+    assert np.sqrt(np.mean(after**2)) > np.sqrt(np.mean(before**2)) * 0.70
+
+
+def test_source_guided_high_band_repair_keeps_sustained_presence_tone() -> None:
+    sample_rate = 24000
+    time = np.arange(sample_rate * 2, dtype=np.float64) / sample_rate
+    source = 0.16 * np.sin(2.0 * np.pi * 220.0 * time)
+    output = source + 0.06 * np.sin(2.0 * np.pi * 4400.0 * time)
+
+    repaired, stats = _source_guided_high_band_repair(
+        output[:, np.newaxis],
+        output[:, np.newaxis],
+        sample_rate,
+        sample_rate,
+        "so-vits-svc",
+    )
+
+    assert stats["transient_guarded_frames"] == 0.0
+    assert np.max(np.abs(repaired[:, 0] - output)) < 1e-5
