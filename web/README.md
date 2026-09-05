@@ -1,13 +1,14 @@
 # XB-SVCB Vue 前端
 
-版本：`0.0.30`
+版本：`0.0.31`
 
 这里是 XB-SVCB 桌面应用的 Vue 3 + Vite 前端。生产构建产物会由 `installer/xb-svcb-app.spec` 打进 `XB-SVCB.exe`。
 
-## v0.0.30 版本说明
+## v0.0.31 版本说明
 
-- 前端版本与应用本体、Python 锁文件、EXE 版本资源和安装器版本统一为 `0.0.30`。
-- 详细更新内容见 [v0.0.30 更新说明](../docs/release-notes/release_notes_v030.md)。
+- 前端版本与应用本体、Python 锁文件、EXE 版本资源和安装器版本统一为 `0.0.31`。
+- 本版新增首次使用交互引导、首页/创建页拖拽音频、模型重命名和高音保护高级参数控制。
+- 详细更新内容见 [v0.0.31 更新说明](../docs/release-notes/release_notes_v031.md)。
 
 ## v0.0.29 重点
 

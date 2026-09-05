@@ -31,3 +31,5 @@
 ## 版本记录
 
 历史更新说明集中在 [release-notes/](release-notes/)。新增版本建议继续使用 release_notes_vXYZ.md 命名，并在根 README 只链接当前版本。
+
+- [v0.0.31 更新说明](release-notes/release_notes_v031.md)：共享运行时、首次引导与高音/美声稳定性。

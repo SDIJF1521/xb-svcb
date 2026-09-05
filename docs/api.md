@@ -1,6 +1,6 @@
 # XB-SVCB FastAPI 接入文档
 
-适用版本：XB-SVCB 0.0.30
+适用版本：XB-SVCB 0.0.31
 
 ## 启动与安全
 
@@ -33,6 +33,17 @@ FastAPI 服务默认关闭，不会随 XB-SVCB 自动启动。打开软件的“
 5. 成功后请求返回的 `result_url` 下载成品。
 
 任务进入 XB-SVCB 的同一条串行推理队列。软件界面和外部 API 创建的任务会相互可见，并共享当前的 CUDA、DirectML 或 CPU 推理环境。
+
+## 模型管理
+
+模型显示名称可通过 API 修改，不会改变模型 ID、权重文件、配置文件或来源记录：
+
+```http
+PATCH /api/v1/models/{model_id}
+Content-Type: application/json
+
+{"name": "新的模型显示名称"}
+```
 
 ## PyMSS 人声处理
 
@@ -321,6 +332,7 @@ print("成品已保存：", OUTPUT_AUDIO.resolve())
 | `GET`            | `/api/v1/models`                                                                       | 模型列表和默认模型                                   |
 | `POST`           | `/api/v1/models/default`                                                               | 设置默认模型                                         |
 | `GET`            | `/api/v1/models/{model_id}`                                                            | 单个模型信息                                         |
+| `PATCH`          | `/api/v1/models/{model_id}`                                                            | 重命名模型显示名称                                   |
 | `POST`           | `/api/v1/models/{model_id}/favorite`                                                   | 切换收藏状态                                         |
 | `POST`           | `/api/v1/models/{model_id}/inspect`                                                    | 检查模型，可选自动修复                               |
 | `DELETE`         | `/api/v1/models/{model_id}`                                                            | 删除模型及托管文件                                   |

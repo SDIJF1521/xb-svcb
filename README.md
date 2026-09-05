@@ -16,7 +16,7 @@
 [![Stars](https://img.shields.io/github/stars/SDIJF1521/xb-svcb?style=flat&color=yellow)](https://github.com/SDIJF1521/xb-svcb/stargazers)
 
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#)
-[![Python](https://img.shields.io/badge/python-3.9%20|%203.10-3776AB?logo=python&logoColor=white)](#)
+[![Python](https://img.shields.io/badge/python-3.10-3776AB?logo=python&logoColor=white)](#)
 [![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
 [![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
 
@@ -36,12 +36,13 @@
 
 XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它以 Vue 3 作为界面，以 Python 作为业务核心，并将不同 AI 框架放在独立环境和 Worker 进程中运行。
 
-项目目前支持 So-VITS-SVC、RVC、SeedVC 和 DDSP-SVC 四种歌声转换框架，同时提供 UVR 人声分离、AI 歌声增强、在线曲库、模型站、实时系统音频变声和 Audio Editor Lite 音频编辑器。
+项目目前支持 So-VITS-SVC、RVC、SeedVC 和 DDSP-SVC 四种歌声转换框架，同时提供 UVR / PyMSS 人声分离、AI 歌声增强、高音保护、在线曲库、模型站、实时系统音频变声和 Audio Editor Lite 音频编辑器。
 
 ## 主要功能
 
 - 一键完成「人声分离 → 去混响 → F0 分析 → 歌声转换 → 增强 → 混音」。
 - 统一管理 So-VITS-SVC、RVC、SeedVC、DDSP-SVC 模型，并按模型框架选择推理参数。
+- 按模型音域自动进行高音保护，对掉音或错误音高区域局部降调重试并恢复原调。
 - 通过歌词或静音检测切分歌曲，在可视化时间轴中分配模型，支持多人混唱和一句多模型合唱。
 - 使用 Audio Editor Lite 进行多轨编辑、剪切、淡化、声道分配、效果处理和 WAV / MP3 / FLAC 导出。
 - 支持 TXT / LRC 歌词导入、角色管理和独唱、对唱、和声等时间轴模板。
@@ -176,7 +177,7 @@ flowchart LR
 | Worker → 随包模型资产 | 优先读取本地 checkpoint、声码器和 F0 模型，缺失时才联网获取。 |
 | Application Services ↔ .xb_svcb | 保存模型记录、任务、作品、编辑工程、设置、日志和缓存。 |
 
-主程序环境只负责桌面壳、API 和业务编排，不会把所有模型权重加载到同一个 Python 进程。各 AI 框架使用独立的 <code>.venv-*</code> 环境，隔离依赖、Torch 版本和设备运行时。详细的 Python 后端、启动链路和模型加载时机见：
+主程序环境只负责桌面壳、API 和业务编排，不会把所有模型权重加载到同一个 Python 进程。模型 Worker 通过 <code>runtime.json</code> 路由到实际解释器：CUDA126/CUDA128 使用 <code>runtimes/core-*</code> 与 <code>runtimes/svc-*</code> 两层共享环境，CPU/DirectML 使用兼容的 <code>.venv-*</code> 隔离环境。详细的 Python 后端、启动链路和模型加载时机见：
 
 - [系统架构说明](docs/architecture.md)
 - [启动与模型推理链路](docs/startup-chain.md)
@@ -314,7 +315,7 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 
 ## Roadmap
 
-当前版本：**v0.0.30**
+当前版本：**v0.0.31**
 
 已完成的核心方向：
 
@@ -335,7 +336,7 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 - 作品分类、视频导出和歌词视频能力；
 - Intel GPU、CPU 性能和多 GPU 调度优化。
 
-完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.0.30 更新说明](docs/release-notes/release_notes_v030.md)。
+完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.0.31 更新说明](docs/release-notes/release_notes_v031.md)。
 
 ## 进一步阅读
 

@@ -23,8 +23,8 @@
 
 ### 🚀 PyMSS GPU 与重推理
 
-- NVIDIA 最低 CUDA wheel 栈统一为 cu126，不再创建 cu121 环境。Blackwell 使用 cu128，40 系及以下使用 cu126。
-- CUDA126/CUDA128 默认采用两层共享布局：UVR、SeedVC、DDSP 使用 `runtimes/core-*`，SVC、RVC、Vocal 使用 `runtimes/svc-*`；PyMSS 仍按自己的依赖边界安装。
+- PyMSS 使用独立的 Torch 2.7.1 环境：Blackwell 使用 `cu128`，50 系以下 NVIDIA 改用 `cu126`，项目其余引擎仍保留原有 `cu121` 栈，不再把普通 NVIDIA 卡错误安装成 CPU Torch。
+- **重要**：这次 `cu126` 只作用于 PyMSS 专属栈，不会把 SVC / RVC / SeedVC / DDSP-SVC 的主安装栈全局改掉。
 - wheelhouse 将 PyMSS 依赖放入 `assets/wheels/pymss/py310/<stack>`，约束文件按运行时批次隔离；`--clean` 会清理旧约束，防止历史 Torch 2.5.x 约束触发 `ResolutionImpossible`。
 - PyMSS `auto` 在子进程内重新探测实际 Torch 后端，按 CUDA、ROCm、DirectML、MPS 顺序选择；只有显式选择 `cpu` 才强制 CPU，Apple `mlx` 继续使用 PyMSS 原生后端。DirectML 只有在隔离环境实际安装了兼容的 `torch-directml` 时才会启用。
 - 当前官方 `torch-directml` 固定 Torch 2.4.1，而 PyMSS 2.0.x 要求 Torch 2.7.1；因此 DirectML 安装栈暂为 PyMSS 准备 CPU Torch，避免伪装成 GPU 就绪或破坏 UVR/SVC 环境。待上游发布匹配版本后可独立替换该批次。
@@ -33,7 +33,7 @@
 
 ### 🛠️ 应用环境检测
 
-- 应用端统一验证 `runtime.json` 路由对应的真实 Python、Torch 和 worker，不再只根据旧隔离目录是否存在判断环境就绪。
+- 应用端统一验证隔离环境中的真实 Python、Torch 和 worker，不再只根据路径存在判断环境就绪。
 - SVC、RVC、SeedVC、DDSP-SVC、UVR、PyMSS、插件和模型站 Python 环境会忽略失效环境变量，并回退到实际存在的安装路径。
 - 设备探测结果按 Python 环境签名缓存；环境文件发生变化时自动重新探测，失败结果不再长时间阻塞修复后的状态恢复。
 - 首页 PyMSS 状态按模型目录中任一已下载模型判断，不再只检查固定默认模型；创建页提交任务时仍严格校验当前选中的模型。
@@ -41,12 +41,10 @@
 
 ### 📦 安装器与构建
 
-- Python 检测器会清理旧的 `XB_PYTHON_EXE` / `XB_PYTHON_DIR`，只在确认 64 位 CPython 3.10.x 可运行后导出路径；安装向导允许手动指定解释器。
-- CPU 的 SVC/RVC 兼容环境也统一改用 Python 3.10；用户不再需要额外安装 Python 3.9，旧 CPU wheelhouse 需重新生成。
+- Python 检测器会清理旧的 `XB_PYTHON_EXE` / `XB_PYTHON_DIR`，逐个执行 3.10+ 版本校验后才导出路径。
 - 跳过 WindowsApps 的 Python 执行别名，避免 Microsoft Store 占位程序被显示为已安装。
-- 安装器前置页和安装完成校验均执行真实 Python 可运行性检查；每个运行时路由进一步验证 Torch 导入和所选 GPU 栈。
-- 发布包拆为 CPU、DirectML、CUDA126、CUDA128 四套硬件专用包。每套只携带目标栈 wheels；安装成功后自动清理离线 wheels。
-- 构建脚本在生成 wheelhouse 前验证构建机 Python 版本，应用、前端、锁文件、EXE 资源和 Inno Setup 版本统一为 `0.0.30`。默认单包构建输出 CUDA128 共享运行时安装包。
+- 安装器前置页和安装完成校验均执行真实 Python 可运行性检查；各 AI 隔离环境进一步验证 Torch 导入和所选 GPU 栈。
+- 构建脚本在生成 wheelhouse 前验证构建机 Python 版本，应用、前端、锁文件、EXE 资源和 Inno Setup 版本统一为 `0.0.30`。
 
 ### 🎼 高音保护
 
@@ -57,16 +55,16 @@
 
 ### ⚠️ 注意
 
-- CUDA126 已成为 40 系及以下 NVIDIA 的最低发布栈，不再分发 cu121 wheels。CPU 和 DirectML 仍使用隔离兼容布局。
+- $\color{red}本次更新将cuda由121改为了cuda126用于pymss的兼容$
 
 ### 🔄 升级说明
 
 - 用户的模型、作品、编辑工程、主题媒体、API 设置和插件数据继续保留，升级不会清空用户数据。
-- 若升级后仍显示环境异常，请从安装目录运行 `setup_env.bat`，再重新启动软件；CUDA 安装会根据 `installer_env.cmd` 继续修复共享环境。
+- 若升级后仍显示环境异常，请从安装目录运行 `setup_env.bat`，再重新启动软件；状态页会重新探测隔离环境。
 
 ### ✅ 验证
 
-- Python 安装器、运行时路由和 wheel staging 回归测试通过。
+- Python 完整测试：**266 passed**。
 - 前端 TypeScript 类型检查通过。
 - 前端单元测试：**6 passed**。
-- Python 探测器、安装器四栈配置、状态聚合、PyMSS 模型用途白名单、和声去除参数及高音保护回归测试通过。
+- Python 探测器、安装器状态聚合、PyMSS 模型用途白名单、和声去除参数及高音保护回归测试通过。

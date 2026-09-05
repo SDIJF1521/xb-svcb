@@ -1,6 +1,6 @@
 # XB-SVCB 应用本体
 
-版本：`0.0.30`
+版本：`0.0.31`
 
 这里是 XB-SVCB 的桌面应用壳、本地 API、应用服务、领域对象和基础设施适配层。
 
@@ -10,10 +10,11 @@
 - `app/config.py` 提供应用元信息、路径与运行环境位置。
 - 重型 AI 依赖不打进应用本体。CUDA126/CUDA128 默认放入 `runtimes/core-*` 与 `runtimes/svc-*` 两层共享环境；CPU、DirectML 和旧安装继续使用 `.venv-*` 隔离环境。实际解释器路由由 `runtime.json` 决定。
 
-## v0.0.30 版本说明
+## v0.0.31 版本说明
 
-- 应用本体、前端、Python 锁文件、EXE 版本资源和安装器版本统一为 `0.0.30`。
-- 详细更新内容见 [v0.0.30 更新说明](../docs/release-notes/release_notes_v030.md)。
+- 应用本体、前端、Python 锁文件、EXE 版本资源和安装器版本统一为 `0.0.31`。
+- 本版重点更新共享运行时、四套硬件专用安装包、高音保护、So-VITS-SVC 推理修复与 AI 歌声增强质量门。
+- 详细更新内容见 [v0.0.31 更新说明](../docs/release-notes/release_notes_v031.md)。
 
 ## v0.0.29 重点
 
