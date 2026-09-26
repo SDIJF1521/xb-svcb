@@ -53,6 +53,6 @@ uv run --project app --with pytest pytest -m packaging_integration --require-pac
 2. 强制运行 `packaging_integration`，禁止因为缺 requirements 而跳过。
 3. 运行 `installer/build.ps1 -ValidateOnly`，校验四种 Inno 配置和共享入口。
 4. 构建目标硬件包，在全新目录完成 Setup.exe 安装、运行时创建和最终 Torch 校验。
-5. 在目标 CPU、DirectML、CUDA126、CUDA128 设备上分别执行真实模型与短音频验收。
+5. 在目标 CPU、ROCm 10、CUDA126、CUDA128 设备上分别执行真实模型与短音频验收。
 
 共享配方的解析、原子激活、修复和回滚边界见 [共享运行时与兼容布局](runtime-consolidation.md)。自动化通过只说明代码层和打包规则满足断言，不等于真实模型推理或四类硬件都已验收。

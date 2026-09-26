@@ -411,8 +411,10 @@ class PymssTool:
         if not self.available or not src or not Path(src).exists():
             raise RuntimeError("PyMSS 环境未安装或输入音频不存在，请先安装环境并下载模型")
         requested = str(device or "auto").strip().lower()
-        aliases = {"gpu": "auto", "dml": "directml", "hip": "rocm"}
+        aliases = {"gpu": "auto", "dml": "directml", "hip": "rocm", "amd": "rocm", "rocm10": "rocm"}
         requested = aliases.get(requested, requested)
+        if requested == "directml":
+            raise RuntimeError("PyMSS 的 AMD 加速需要 ROCm，不支持 DirectML")
         if requested not in {"auto", "cuda", "rocm", "directml", "cpu", "mps", "mlx"}:
             raise RuntimeError(f"不支持的 PyMSS 推理设备: {device}")
         model_name = str(model or config.PYMSS_DEFAULT_MODEL).strip()

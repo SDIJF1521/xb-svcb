@@ -1,8 +1,12 @@
 # core-cu128 固定实验配方
 
-适用范围：Windows x86_64、CPython 3.10、Torch 2.7.1+cu128，UVR / SeedVC / DDSP 共享环境。
+适用范围：Windows x86_64、CPython 3.12、Torch 2.7.1+cu128，UVR / SeedVC / DDSP 共享环境。
 已验证 uv 0.12.5。必须支持 `uv pip compile/install --torch-backend cu128`。
-真实模型音频验收暂缓，仍是实验配方。本机完整 148 包空环境安装、重复安装与模拟修复已通过；不等同于发布验收或安装 EXE 全流程验收。
+这是迁移到 Python 3.12 的实验配方，完整依赖安装及真实模型音频需要重新验收；历史 Python 3.10 的安装结果不代表 3.12 已通过。
+
+NumPy 和 crcmod 使用真正的 cp312 wheel，必须按 profile 中的大小及 SHA-256 校验。
+protobuf 保留 `cp310-abi3` 文件名，其稳定 ABI 支持 Python 3.12，不能直接改名为 cp312。
+`rollback/` 仅保留 Python 3.10 历史材料，不适用于新的 3.12 环境。
 
 ## 保存了什么
 
@@ -86,7 +90,7 @@
 2. 只使用 `rollback/` 中四个精确文件，显式指定目标环境：
 
 ```powershell
-uv pip install --python runtimes\core-cu128\Scripts\python.exe --no-index --no-deps assets\runtime\core-cu128\rollback\numpy-1.26.4-cp310-cp310-win_amd64.whl assets\runtime\core-cu128\rollback\protobuf-3.19.6-cp310-cp310-win_amd64.whl assets\runtime\core-cu128\rollback\tensorboardX-2.6-py2.py3-none-any.whl assets\runtime\core-cu128\rollback\descript_audiotools-0.7.2-py2.py3-none-any.whl
+uv pip install --python <historical-python310-environment> --no-index --no-deps assets\runtime\core-cu128\rollback\numpy-1.26.4-cp310-cp310-win_amd64.whl assets\runtime\core-cu128\rollback\protobuf-3.19.6-cp310-cp310-win_amd64.whl assets\runtime\core-cu128\rollback\tensorboardX-2.6-py2.py3-none-any.whl assets\runtime\core-cu128\rollback\descript_audiotools-0.7.2-py2.py3-none-any.whl
 ```
 
 3. 重新检查依赖/导入并单独处理解释器路由，不宣称恢复后所有组件可用。

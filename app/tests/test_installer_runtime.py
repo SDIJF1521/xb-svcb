@@ -69,7 +69,7 @@ def _run_detector(tmp_path: Path, candidate: Path) -> subprocess.CompletedProces
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows cmd.exe detector")
-def test_python_detector_accepts_runnable_python_310_or_newer(tmp_path: Path) -> None:
+def test_python_detector_accepts_runnable_python_312_or_newer(tmp_path: Path) -> None:
     result = _run_detector(tmp_path, Path(sys.executable))
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -155,25 +155,25 @@ def test_installer_explicitly_packages_and_validates_python_detector() -> None:
     assert 'if defined XB_PYTHON_DIR if exist "%XB_PYTHON_DIR%\\python.exe" set "XB_PYTHON_EXE=' not in prereqs
 
 
-def test_installer_detects_and_locks_an_external_python310() -> None:
+def test_installer_detects_and_locks_an_external_python312() -> None:
     script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
     build = (ROOT / "installer" / "build.ps1").read_text(encoding="utf-8")
     build_all = (ROOT / "installer" / "build-all-packages.ps1").read_text(encoding="utf-8")
     detector = DETECTOR.read_text(encoding="utf-8")
 
-    assert 'Source: "..\\assets\\tools\\python310\\*"' not in script
+    assert 'Source: "..\\assets\\tools\\python312\\*"' not in script
     assert "PythonPathPage := CreateInputFilePage(" in script
-    assert "PythonPathPage.Values[0] := DetectPython310Executable();" in script
-    assert "sys.version_info[:2] == (3, 10)" in script
+    assert "PythonPathPage.Values[0] := DetectPython312Executable();" in script
+    assert "sys.version_info[:2] == (3, 12)" in script
     assert "BatchEscape(SelectedPython)" in script
-    assert "PathJoin(AppDir, 'tools\\python310\\python.exe')" not in script
+    assert "PathJoin(AppDir, 'tools\\python312\\python.exe')" not in script
     assert "[string]$Python" in build
-    assert "Resolve-BuildPython310 $Python" in build
+    assert "Resolve-BuildPython312 $Python" in build
     assert "[string]$Python" in build_all
-    assert "py.exe may exist without a registered 3.10 runtime" in build
+    assert "py.exe may exist without a registered 3.12 runtime" in build
     assert "& $BuildScript -Python $BuildPython @buildArgs" in build_all
-    assert "py -3.10" in detector
-    assert "sys.version_info[:2] == (3, 10)" in detector
+    assert "py -3.12" in detector
+    assert "sys.version_info[:2] == (3, 12)" in detector
 
 
 def test_installer_detects_vbcable_and_provides_manual_official_download() -> None:
@@ -224,10 +224,10 @@ def test_ffmpeg_file_check_does_not_expand_app_before_directory_initialization()
     assert "{app}" not in function
 
 
-def test_setup_env_exports_verified_python310_for_runtime_venvs() -> None:
+def test_setup_env_exports_verified_python312_for_runtime_venvs() -> None:
     setup_env = (ROOT / "setup_env.bat").read_text(encoding="utf-8")
 
-    assert 'set "XB_PYTHON_310_EXE=%XB_PYTHON_EXE%"' in setup_env
+    assert 'set "XB_PYTHON_312_EXE=%XB_PYTHON_EXE%"' in setup_env
 
 
 def test_cuda_installer_repairs_keep_the_shared_runtime_layout() -> None:
@@ -262,34 +262,34 @@ def test_installer_batch_entrypoints_use_windows_line_endings() -> None:
         assert data.count(b"\n") == data.count(b"\r\n"), relative
 
 
-def test_install_py_prefers_verified_python310_over_uv_managed_cache(
+def test_install_py_prefers_verified_python312_over_uv_managed_cache(
     tmp_path: Path, monkeypatch
 ) -> None:
     installer = _load_install_module()
-    py310 = tmp_path / "Python310" / "python.exe"
+    py312 = tmp_path / "Python312" / "python.exe"
     py314 = tmp_path / "Python314" / "python.exe"
-    py310.parent.mkdir()
+    py312.parent.mkdir()
     py314.parent.mkdir()
-    py310.write_text("", encoding="ascii")
+    py312.write_text("", encoding="ascii")
     py314.write_text("", encoding="ascii")
 
-    monkeypatch.setenv("XB_PYTHON_310_EXE", str(py310))
+    monkeypatch.setenv("XB_PYTHON_312_EXE", str(py312))
     monkeypatch.setenv("XB_PYTHON_EXE", str(py314))
 
     def fake_minor(path: Path) -> str | None:
-        if path == py310:
-            return "3.10"
+        if path == py312:
+            return "3.12"
         if path == py314:
             return "3.14"
         return None
 
     monkeypatch.setattr(installer, "_python_minor_version", fake_minor)
 
-    assert installer.python_spec_for_venv("uv", "3.10") == str(py310)
+    assert installer.python_spec_for_venv("uv", "3.12") == str(py312)
     assert installer.python_spec_for_venv("uv", "3.9") == "3.9"
 
 
-def test_install_py_rejects_non310_verified_python_for_py310_venvs(
+def test_install_py_rejects_non312_verified_python_for_py312_venvs(
     tmp_path: Path, monkeypatch
 ) -> None:
     installer = _load_install_module()
@@ -297,19 +297,19 @@ def test_install_py_rejects_non310_verified_python_for_py310_venvs(
     py314.parent.mkdir()
     py314.write_text("", encoding="ascii")
 
-    monkeypatch.delenv("XB_PYTHON_310_EXE", raising=False)
+    monkeypatch.delenv("XB_PYTHON_312_EXE", raising=False)
     monkeypatch.setenv("XB_PYTHON_EXE", str(py314))
     monkeypatch.setattr(installer, "_python_minor_version", lambda path: "3.14")
 
-    assert installer.python_spec_for_venv("uv", "3.10") == "3.10"
+    assert installer.python_spec_for_venv("uv", "3.12") == "3.12"
 
 
-def test_all_release_stacks_use_the_locked_python310_interpreter() -> None:
+def test_all_release_stacks_use_the_locked_python312_interpreter() -> None:
     installer = _load_install_module()
 
     for stack in ("cpu", "directml", "cu126", "cu128"):
-        assert installer._svc_python_for_stack(stack) == "3.10"
-        assert installer._rvc_python_for_stack(stack) == "3.10"
+        assert installer._svc_python_for_stack(stack) == "3.12"
+        assert installer._rvc_python_for_stack(stack) == "3.12"
 
 
 def test_consolidated_runtime_layout_uses_two_shared_environments(tmp_path: Path, monkeypatch) -> None:
@@ -401,14 +401,14 @@ def test_fetch_sovits_preserves_pretrain_when_source_is_missing(tmp_path: Path, 
     assert (installer.SOVITS_DIR / "inference" / "infer_tool.py").is_file()
 
 
-def test_consolidated_runtime_selects_py310_uvr_as_candidate(tmp_path: Path, monkeypatch) -> None:
+def test_consolidated_runtime_selects_py312_uvr_as_candidate(tmp_path: Path, monkeypatch) -> None:
     installer = _load_install_module()
     uvr = tmp_path / ".venv-uvr"
     python = uvr / "Scripts" / "python.exe"
     python.parent.mkdir(parents=True)
     python.write_text("", encoding="ascii")
     monkeypatch.setattr(installer, "UVR_VENV", uvr)
-    monkeypatch.setattr(installer, "_python_minor_version", lambda path: "3.10")
+    monkeypatch.setattr(installer, "_python_minor_version", lambda path: "3.12")
 
     installer._configure_runtime_layout(consolidated=True, gpu_stack="cu128")
 
@@ -563,7 +563,7 @@ def test_correct_importable_torch_is_not_reinstalled(monkeypatch):
     monkeypatch.setattr(installer, "uv_pip_install", lambda *args, **kwargs: pytest.fail("Torch reinstalled"))
     installer._reaffirm_torch_wheels("uv", "python", ["torch==2.7.1", "torchaudio==2.7.1"],
                                     installer.TORCH_BLACKWELL_INDEX, "cu128",
-                                    component="uvr", gpu_stack="cu128", python_version="3.10")
+                                    component="uvr", gpu_stack="cu128", python_version="3.12")
 
 
 def test_torch_import_check_requires_exact_cuda_build(monkeypatch):
@@ -592,7 +592,7 @@ def test_shared_install_retries_keep_constraints_without_reinstall(tmp_path, mon
 
     monkeypatch.setattr(installer, "run", fail)
     with pytest.raises(subprocess.CalledProcessError):
-        installer.uv_pip_install("uv", "python", "numpy", component="seedvc", gpu_stack="cu128", python_version="3.10")
+        installer.uv_pip_install("uv", "python", "numpy", component="seedvc", gpu_stack="cu128", python_version="3.12")
     assert calls
     assert len(calls) <= 2
     for command in calls:
@@ -683,11 +683,11 @@ def test_ensure_venv_rebuilds_an_unreadable_existing_environment(
     monkeypatch.setattr(
         installer,
         "python_spec_for_venv",
-        lambda uv, version: r"C:\Python310\python.exe",
+        lambda uv, version: r"C:\Python312\python.exe",
     )
     monkeypatch.setattr(installer, "run", lambda cmd: commands.append(cmd))
 
-    installer.ensure_venv("uv.exe", venv_dir, "3.10")
+    installer.ensure_venv("uv.exe", venv_dir, "3.12")
 
     assert not venv_dir.exists()
     assert commands == [
@@ -695,7 +695,7 @@ def test_ensure_venv_rebuilds_an_unreadable_existing_environment(
             "uv.exe",
             "venv",
             "--python",
-            r"C:\Python310\python.exe",
+            r"C:\Python312\python.exe",
             str(venv_dir),
         ]
     ]
@@ -795,7 +795,7 @@ def test_wheelhouse_binary_download_uses_managed_tool_python(
     batch = wheelhouse.DownloadBatch(
         "bootstrap uv",
         tmp_path / "assets" / "wheels" / "bootstrap",
-        "3.10",
+        "3.12",
         ("uv",),
     )
     wheelhouse._download_batch(tmp_path, Installer, batch)
@@ -839,7 +839,7 @@ def test_wheelhouse_tool_python_recreates_stale_venv(
     tool_py.parent.mkdir(parents=True)
     tool_py.write_bytes(b"stale")
     (venv / "pyvenv.cfg").write_text(
-        "home = C:\\removed\\python310\nversion = 3.10.21\n",
+        "home = C:\\removed\\python312\nversion = 3.12.21\n",
         encoding="utf-8",
     )
     commands: list[list[str]] = []
@@ -917,8 +917,8 @@ def test_wheelhouse_download_can_skip_dependency_resolution(tmp_path: Path, monk
 
     batch = wheelhouse.DownloadBatch(
         "matplotlib",
-        tmp_path / "assets" / "wheels" / "svc" / "py310" / "cpu",
-        "3.10",
+        tmp_path / "assets" / "wheels" / "svc" / "py312" / "cpu",
+        "3.12",
         ("matplotlib==3.7.5",),
         no_deps=True,
     )
@@ -953,8 +953,8 @@ def test_wheelhouse_requirements_always_use_wheel_builder(
 
     batch = wheelhouse.DownloadBatch(
         "seedvc requirements",
-        tmp_path / "assets" / "wheels" / "py310" / "cpu",
-        "3.10",
+        tmp_path / "assets" / "wheels" / "py312" / "cpu",
+        "3.12",
         requirements=requirements,
     )
     wheelhouse._download_batch(tmp_path, object(), batch)
@@ -1016,7 +1016,7 @@ def test_pymss_installer_uses_the_same_isolated_runtime(
     monkeypatch.setattr(installer, "make_pip", fake_make_pip)
     monkeypatch.setattr(installer, "hr", lambda message: None)
 
-    for stack in ("cpu", "directml", "cu126", "cu128"):
+    for stack in ("cpu", "cu126", "cu128"):
         pip_calls.clear()
         make_pip_calls.clear()
         installer.step_pymss("uv", stack)
@@ -1026,7 +1026,7 @@ def test_pymss_installer_uses_the_same_isolated_runtime(
             {
                 "component": "pymss",
                 "gpu_stack": expected_pymss_stack,
-                "python_version": "3.10",
+                "python_version": "3.12",
             }
         ]
         expected_index = (

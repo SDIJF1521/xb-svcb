@@ -11,6 +11,7 @@ import argparse
 import os
 import runpy
 import shutil
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -31,7 +32,40 @@ except ImportError:  # package import used by tests/application tooling
 from typing import Any
 
 
-def _resolve_model_path(raw: Any, config_dir: Path, fallback: Path) -> str:
+def _select_entrypoint(data: dict[str, Any], repo: Path) -> tuple[Path, str, str]:
+    model = data.get("model") or {}
+    kind = str(model.get("type") or "")
+    if kind in {"Sins", "CombSub", "CombSubFast", "CombSubSuperFast"}:
+        return repo / "legacy", "main.py", "--model_path"
+    if kind in {"Diffusion", "DiffusionNew", "DiffusionFast"}:
+        return repo / "legacy", "main_diff.py", "--diff_ckpt"
+    if kind == "RectifiedFlow":
+        version = str(data.get("xb_ddsp_version") or "")
+        if not version:
+            if "n_aux_layers" not in model:
+                version = "6.1"
+            else:
+                encoder = str((data.get("data") or {}).get("encoder_ckpt") or "")
+                version = "6.2" if Path(encoder).suffix.lower() in {".pt", ".pth"} else "6.3"
+        roots = {"6.1": repo / "legacy", "6.2": repo / "6.2", "6.3": repo}
+        if version not in roots:
+            raise ValueError(f"不支持的 xb_ddsp_version: {version}")
+        selected_repo = roots[version]
+        # Some bundled DDSP repositories ship only the current 6.3 entrypoint
+        # while older model manifests still use the 6.2 encoder filename
+        # convention.  If the inferred 6.2 directory is absent, use the
+        # repository's root 6.3 loader instead of failing before inference.
+        if (
+            version == "6.2"
+            and not (selected_repo / "main_reflow.py").is_file()
+            and (repo / "main_reflow.py").is_file()
+        ):
+            selected_repo = repo
+        return selected_repo, "main_reflow.py", "--model_ckpt"
+    raise ValueError(f"未知 DDSP 模型类型: {kind or '配置缺少 model.type'}")
+
+
+def _resolve_model_path(raw: Any, config_dir: Path, fallback: Path | None, repo: Path) -> str:
     value = str(raw or "").strip()
     if value:
         path = Path(value).expanduser()
@@ -40,7 +74,12 @@ def _resolve_model_path(raw: Any, config_dir: Path, fallback: Path) -> str:
         beside_config = (config_dir / path).resolve()
         if beside_config.exists():
             return str(beside_config)
-    return str(fallback.resolve())
+        beside_repo = repo / path
+        if beside_repo.exists():
+            return str(beside_repo.resolve())
+    if fallback is not None and fallback.exists():
+        return str(fallback.resolve())
+    raise FileNotFoundError(f"模型配套文件不存在: {value or fallback}；请提供模型训练时使用的编码器/声码器")
 
 
 def _localized_config(source: Path, destination: Path, repo: Path) -> dict[str, Any]:
@@ -50,19 +89,42 @@ def _localized_config(source: Path, destination: Path, repo: Path) -> dict[str, 
     if not isinstance(data, dict):
         raise ValueError("配置文件内容不是 YAML 对象")
     data_section = data.setdefault("data", {})
-    vocoder = data.setdefault("vocoder", {})
-    if not isinstance(data_section, dict) or not isinstance(vocoder, dict):
-        raise ValueError("配置缺少 data/vocoder 对象")
+    if not isinstance(data_section, dict):
+        raise ValueError("配置缺少 data 对象")
+    selected_repo, _, _ = _select_entrypoint(data, repo)
+    legacy = selected_repo != repo
+    encoder = str(data_section.get("encoder") or "").lower()
+    raw_encoder = str(data_section.get("encoder_ckpt") or "")
+    standard_encoder = raw_encoder.replace("\\", "/").startswith("pretrain/contentvec/") or not raw_encoder
+    fallback = None
+    if encoder.startswith("contentvec") and standard_encoder:
+        fallback = (
+            repo.parents[1] / "assets/models/pretrain/checkpoint_best_legacy_500.pt"
+            if legacy else repo / "pretrain/contentvec/pytorch_model.bin"
+        )
     data_section["encoder_ckpt"] = _resolve_model_path(
         data_section.get("encoder_ckpt"),
         source.parent,
-        repo / "pretrain" / "contentvec" / "pytorch_model.bin",
+        fallback,
+        repo,
     )
-    vocoder["ckpt"] = _resolve_model_path(
-        vocoder.get("ckpt"),
-        source.parent,
-        repo / "pretrain" / "nsf_hifigan" / "model",
-    )
+    for key in ("vocoder", "enhancer"):
+        section = data.get(key)
+        if not isinstance(section, dict):
+            continue
+        raw = str(section.get("ckpt") or "")
+        normalized = raw.replace("\\", "/").strip("/").lower()
+        standard = normalized in {
+            "pretrain/nsf_hifigan/model",
+            "pretrain/vocoder/pc_nsf_hifigan/model",
+            "pretrain/vocoder/pc_nsf_hifigan_testing/model",
+        } or not raw
+        fallback = None
+        if standard and str(section.get("type", "")).startswith("nsf-hifigan"):
+            fallback = (repo.parents[1] / "assets/models/pretrain/nsf_hifigan/model") if legacy else (repo / "pretrain/nsf_hifigan/model")
+        # Legacy and 6.3 NSF implementations require different bundled weights.
+        lookup_repo = selected_repo if legacy else repo
+        section["ckpt"] = _resolve_model_path(raw, source.parent, fallback, lookup_repo)
     destination.write_text(
         yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
@@ -376,6 +438,8 @@ def main() -> int:
     parser.add_argument("--infer-steps", type=int, default=50)
     parser.add_argument("--formant-shift", type=float, default=0.0)
     parser.add_argument("--speaker", default="1")
+    parser.add_argument("--ddsp-checkpoint", default="")
+    parser.add_argument("--ddsp-config", default="")
     args = parser.parse_args()
 
     repo = Path(args.repo).resolve()
@@ -383,7 +447,22 @@ def main() -> int:
     config = Path(args.config).resolve()
     source = Path(args.input).resolve()
     output = Path(args.output).resolve()
-    upstream = repo / "main_reflow.py"
+    try:
+        import yaml
+
+        model_data = yaml.safe_load(config.read_text(encoding="utf-8"))
+        selected_repo, script, checkpoint_flag = _select_entrypoint(model_data, repo)
+        if selected_repo != repo:
+            compat_python = repo.parents[1] / ".venv-ddsp-legacy" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+            if compat_python.is_file() and compat_python.resolve() != Path(sys.executable).resolve():
+                return subprocess.call(
+                    [str(compat_python), str(Path(__file__).resolve()), *sys.argv[1:]],
+                    creationflags=0x08000000 if os.name == "nt" else 0,
+                )
+        upstream = selected_repo / script
+    except Exception as exc:
+        print(f"DDSP_ERR 模型配置无效: {exc}", flush=True)
+        return 2
     for label, path in (
         ("DDSP-SVC 仓库", repo),
         ("上游推理脚本", upstream),
@@ -454,11 +533,11 @@ def main() -> int:
                 flush=True,
             )
         _patch_torch_load(resolved_device.backend == "cpu")
-        sys.path.insert(0, str(repo))
+        sys.path.insert(0, str(selected_repo))
         os.chdir(repo)
         sys.argv = [
             str(upstream),
-            "--model_ckpt",
+            checkpoint_flag,
             str(staged_model),
             "--input",
             str(source),
@@ -480,14 +559,31 @@ def main() -> int:
                     ),
                 )
             ),
-            "--infer_step",
-            str(infer_steps),
-            "--formant_shift_key",
-            str(max(-2.0, min(2.0, float(args.formant_shift)))),
             "--spk_id",
             str(args.speaker or "1"),
         ]
+        if script == "main_reflow.py":
+            sys.argv.extend(["--infer_step", str(infer_steps)])
+        if script != "main.py":
+            sys.argv.extend(["--formant_shift_key", str(max(-2.0, min(2.0, float(args.formant_shift))))])
+        elif not localized_config.get("enhancer"):
+            sys.argv.extend(["--enhance", "false"])
+        if script == "main_diff.py" and args.ddsp_checkpoint:
+            if not args.ddsp_config:
+                raise ValueError("浅扩散 DDSP 配套权重需要对应配置")
+            companion = stage / "ddsp"
+            companion.mkdir()
+            companion_model = companion / Path(args.ddsp_checkpoint).name
+            _link_or_copy(Path(args.ddsp_checkpoint), companion_model)
+            _localized_config(Path(args.ddsp_config), companion / "config.yaml", repo)
+            sys.argv.extend(["--ddsp_ckpt", str(companion_model)])
+        if script == "main_diff.py":
+            infer = localized_config.get("infer") or {}
+            for key in ("speedup", "method", "k_step"):
+                if infer.get(key) is not None:
+                    sys.argv.extend([f"--{key}", str(infer[key])])
         sys.argv.extend(["--device", str(resolved_device.device)])
+        print(f"DDSP_MODEL {model_data['model']['type']} {selected_repo.name}/{script}", flush=True)
         runpy.run_path(str(upstream), run_name="__main__")
         if not output.is_file() or output.stat().st_size <= 44:
             raise RuntimeError("上游脚本未生成有效 WAV")

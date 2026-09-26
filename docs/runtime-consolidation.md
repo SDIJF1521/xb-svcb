@@ -4,12 +4,12 @@
 
 ## 发布结论
 
-NVIDIA CUDA126 和 CUDA128 默认使用两层共享环境。CPU 与 DirectML 继续使用隔离环境，因为它们的 Torch、Python 和组件依赖尚不能安全合并。项目不再发布或新建 cu121 CUDA 栈。
+NVIDIA CUDA126 和 CUDA128 默认使用两层共享环境。CPU 与 ROCm 10 使用隔离环境，所有组件均使用 64 位 CPython 3.12.x；不同组件的依赖仍单独解析。项目不再发布或新建 cu121 CUDA 栈。
 
 | 硬件包 | 默认布局 | 主要目录 |
 | --- | --- | --- |
 | CPU | 隔离兼容 | `.venv-uvr`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-vocal` |
-| DirectML | 隔离兼容 | 与 CPU 相同，按组件安装 DirectML 或稳定的 CPU 回退 |
+| ROCm 10 | 隔离 | `.venv-*`，包含 PyMSS；校验 ROCm 10、HIP 和 GPU 运算，失败时不会静默安装 CPU |
 | CUDA126 | 两层共享 | `runtimes/core-cu126`、`runtimes/svc-cu126` |
 | CUDA128 | 两层共享 | `runtimes/core-cu128`、`runtimes/svc-cu128` |
 
@@ -29,8 +29,8 @@ PyMSS、插件和 ModelScope Hub 不应被文档描述成 AI 两层共享环境�
 ## 安装入口
 
 - `install/install_shared.py`：CUDA126/CUDA128 的共享编排入口，只暴露已验证的共享策略。
-- `install/install.py`：组件安装公共实现，同时保留 CPU、DirectML 和旧隔离安装兼容入口。
-- `setup_env.bat`：用户统一修复入口。安装包写入的 `installer_env.cmd` 会记录 `XB_RUNTIME_LAYOUT` 和 `XB_GPU_STACK`；CUDA 修复继续走共享入口，CPU/DirectML 继续走隔离入口。
+- `install/install.py`：组件安装公共实现，同时保留 CPU、ROCm 10 和旧隔离安装兼容入口。
+- `setup_env.bat`：用户统一修复入口。安装包写入的 `installer_env.cmd` 会记录 `XB_RUNTIME_LAYOUT` 和 `XB_GPU_STACK`；CUDA 修复继续走共享入口，CPU/ROCm 10 继续走隔离入口。
 - `setup_shared_env.bat`：开发者显式测试共享布局的入口。
 
 安装器传递的固定参数：
@@ -38,7 +38,7 @@ PyMSS、插件和 ModelScope Hub 不应被文档描述成 AI 两层共享环境�
 ```text
 CUDA126: --gpu --cu126 --consolidated
 CUDA128: --gpu --cu128 --consolidated --core-profile core-cu128
-DirectML: --directml
+ROCm 10: --rocm10
 CPU:      --cpu
 ```
 
@@ -107,4 +107,4 @@ CUDA 安装包构建还必须携带 `assets/runtime/core-cu128/candidate` 和 `c
 - 全局 uv 缓存；它可能被其他项目复用。
 - `assets/runtime/core-cu128` 的配方、兼容和回滚材料。
 
-仓库中的 `.tmp/`、`build/`、`dist/`、`assets/wheels/` 和 `assets/tools/python310/` 是可重建或本机生成内容，已通过 `.gitignore` 排除；是否删除本机副本应与源码提交分开决定。
+仓库中的 `.tmp/`、`build/`、`dist/`、`assets/wheels/` 和 `assets/tools/python312/` 是可重建或本机生成内容，已通过 `.gitignore` 排除；是否删除本机副本应与源码提交分开决定。

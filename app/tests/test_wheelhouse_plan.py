@@ -29,7 +29,7 @@ def wheelhouse_plan(tmp_path, monkeypatch):
     installer = _load_install_module()
     installer._derive_paths(tmp_path)
     inputs = {
-        "so-vits-svc": "numpy==1.23.5\neinops==0.8.2\nlocal-attention==1.10.0\n",
+        "so-vits-svc": "numpy==1.26.4\neinops==0.8.2\nlocal-attention==1.10.0\n",
         "seed-vc": "numpy==1.26.4\n",
         "ddsp-svc": "numpy==1.26.4\ntransformers\n",
     }
@@ -53,7 +53,7 @@ def test_pymss_wheelhouse_is_isolated_with_a_compatible_torch_pair(wheelhouse_pl
     for stack in ("cpu", "directml", "cu126", "cu128"):
         plan = wheelhouse.build_plan(root, {stack})
         expected_stack = stack
-        dest = root / "assets" / "wheels" / "pymss" / "py310" / expected_stack
+        dest = root / "assets" / "wheels" / "pymss" / "py312" / expected_stack
         package = next(batch for batch in plan if batch.label == f"pymss {expected_stack} package")
         torch = next(batch for batch in plan if batch.label == f"pymss {expected_stack} torch")
 
@@ -80,9 +80,9 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
     cu128 = wheelhouse.build_plan(root, {"cu128"})
 
     assert any(
-        batch.dest == root / "assets" / "wheels" / "svc" / "py310" / "cpu"
+        batch.dest == root / "assets" / "wheels" / "svc" / "py312" / "cpu"
         and batch.build_source
-        and "fairseq==0.12.2" in batch.packages
+        and "fairseq-fixed==0.12.3.1" in batch.packages
         for batch in cpu
     )
     expected_matplotlib_support = (
@@ -97,34 +97,34 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
         "importlib-resources>=3.2.0",
     )
     assert any(
-        batch.label == "svc py310 matplotlib support"
-        and batch.dest == root / "assets" / "wheels" / "svc" / "py310" / "cpu"
+        batch.label == "svc py312 matplotlib support"
+        and batch.dest == root / "assets" / "wheels" / "svc" / "py312" / "cpu"
         and batch.no_deps
         and batch.packages == expected_matplotlib_support
         for batch in cpu
     )
     assert any(
-        batch.label == "svc py310 matplotlib"
-        and batch.dest == root / "assets" / "wheels" / "svc" / "py310" / "cpu"
+        batch.label == "svc py312 matplotlib"
+        and batch.dest == root / "assets" / "wheels" / "svc" / "py312" / "cpu"
         and batch.no_deps
-        and batch.packages == ("matplotlib==3.7.5",)
+        and batch.packages == ("matplotlib==3.8.4",)
         for batch in cpu
     )
     assert any(
-        batch.dest == root / "assets" / "wheels" / "rvc" / "py310" / "cpu"
+        batch.dest == root / "assets" / "wheels" / "rvc" / "py312" / "cpu"
         and batch.build_source
-        and "fairseq==0.12.2" in batch.packages
+        and "fairseq-fixed==0.12.3.1" in batch.packages
         and batch.no_build_isolation
         for batch in cpu
     )
     assert any(
-        batch.dest == root / "assets" / "wheels" / "ddsp" / "py310" / "directml"
+        batch.dest == root / "assets" / "wheels" / "ddsp" / "py312" / "directml"
         and "torch==2.5.1" in batch.constraints
         for batch in directml
     )
     assert any(
         batch.label == "seedvc cpu source wheels"
-        and batch.dest == root / "assets" / "wheels" / "py310" / "cpu"
+        and batch.dest == root / "assets" / "wheels" / "py312" / "cpu"
         and batch.build_source
         and batch.no_deps
         and "argbind>=0.3.7" in batch.packages
@@ -132,13 +132,13 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
     )
     assert any(
         batch.label == "seedvc requirements"
-        and batch.dest == root / "assets" / "wheels" / "py310" / "cpu"
+        and batch.dest == root / "assets" / "wheels" / "py312" / "cpu"
         and batch.build_source
         for batch in cpu
     )
     assert any(
         batch.label == "seedvc directml source wheels"
-        and batch.dest == root / "assets" / "wheels" / "py310" / "directml"
+        and batch.dest == root / "assets" / "wheels" / "py312" / "directml"
         and batch.build_source
         and batch.no_deps
         and "argbind>=0.3.7" in batch.packages
@@ -146,18 +146,18 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
     )
     assert any(
         batch.label == "seedvc requirements"
-        and batch.dest == root / "assets" / "wheels" / "py310" / "directml"
+        and batch.dest == root / "assets" / "wheels" / "py312" / "directml"
         and batch.build_source
         for batch in directml
     )
     assert any(
-        batch.dest == root / "assets" / "wheels" / "py310" / "directml"
+        batch.dest == root / "assets" / "wheels" / "py312" / "directml"
         and "torch==2.4.1" in batch.constraints
         for batch in directml
     )
     assert any(
         batch.label == "svc cu128 requirements"
-        and batch.dest == root / "assets" / "wheels" / "py310" / "cu128"
+        and batch.dest == root / "assets" / "wheels" / "py312" / "cu128"
         and batch.build_source
         for batch in cu128
     )
@@ -169,7 +169,7 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
     )
     expected_fcpe = ("einops==0.8.2", "local-attention==1.10.0")
     assert any(
-        batch.label == "svc cpu py310 fcpe runtime"
+        batch.label == "svc cpu py312 fcpe runtime"
         and batch.packages == expected_fcpe
         for batch in cpu
     )
@@ -187,7 +187,7 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
         batch
         for batch in (*cpu, *directml, *cu128)
         if batch.label in {
-            "svc py310 requirements",
+            "svc py312 requirements",
             "svc directml requirements",
             "svc cu128 requirements",
         }
@@ -199,13 +199,13 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
         assert "local-attention==1.10.0" in requirement_text
     assert any(
         batch.label == "ddsp requirements"
-        and batch.dest == root / "assets" / "wheels" / "py310" / "cpu"
+        and batch.dest == root / "assets" / "wheels" / "py312" / "cpu"
         and batch.build_source
         for batch in cpu
     )
     assert any(
         batch.label == "ddsp directml requirements"
-        and batch.dest == root / "assets" / "wheels" / "ddsp" / "py310" / "directml"
+        and batch.dest == root / "assets" / "wheels" / "ddsp" / "py312" / "directml"
         and batch.build_source
         for batch in directml
     )
@@ -231,7 +231,7 @@ def test_legacy_source_wheel_build_reuses_pinned_toolchain(tmp_path, monkeypatch
     batch = wheelhouse.DownloadBatch(
         "legacy source wheels",
         destination,
-        "3.10",
+        "3.12",
         ("pyworld==0.3.0", "fairseq==0.12.2"),
         build_source=True,
         no_deps=True,

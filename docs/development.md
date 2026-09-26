@@ -53,7 +53,7 @@
 
     .\installer\build.ps1
 
-顺序构建 CPU、DirectML、CUDA126、CUDA128 四套专用包：
+顺序构建 CPU、ROCm 10、CUDA126、CUDA128 四套专用包：
 
     .\installer\build-all-packages.ps1 -Python C:\path\to\python.exe
 

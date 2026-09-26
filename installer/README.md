@@ -9,11 +9,11 @@
 | 包 | 运行时布局 | Torch 栈 |
 | --- | --- | --- |
 | `XB-SVCB-Setup-CPU` | 兼容隔离环境 | CPU |
-| `XB-SVCB-Setup-DirectML` | 兼容隔离环境 | DirectML |
+| `XB-SVCB-Setup-ROCm10` | 兼容隔离环境 | ROCm 10 |
 | `XB-SVCB-Setup-CUDA126` | 两层共享环境 | Torch 2.7.1 + cu126 |
 | `XB-SVCB-Setup-CUDA128` | 两层共享环境 | Torch 2.7.1 + cu128 |
 
-CUDA 是默认发布路径：不传 `-Stacks` 时，`build.ps1` 构建 CUDA128 共享运行时安装包。CPU 和 DirectML 因依赖组合不同，继续保留隔离布局。四套包都包含同一应用、引擎源码、模型、FFmpeg 和 JUCE Host，但只携带目标硬件栈需要的 wheels。
+CUDA 是默认发布路径：不传 `-Stacks` 时，`build.ps1` 构建 CUDA128 共享运行时安装包。CPU 和 ROCm 10 因依赖组合不同，继续保留隔离布局。四套包都包含同一应用、引擎源码、模型、FFmpeg 和 JUCE Host，但只携带目标硬件栈需要的 wheels。
 
 CUDA 共享布局：
 
@@ -25,7 +25,7 @@ CUDA 共享布局：
 
 ## 构建前置
 
-- 64 位 CPython 3.10.x。可用 `-Python C:\path\to\python.exe` 明确指定。
+- 64 位 CPython 3.12.x。可用 `-Python C:\path\to\python.exe` 明确指定。
 - Node.js，用于构建 `web/dist`。
 - `app/.venv` 中的 PyInstaller 与桌面依赖。
 - CMake、Visual C++ Build Tools 和 JUCE，用于 JUCE VST3 Host。
@@ -34,9 +34,9 @@ CUDA 共享布局：
 - CUDA 包还必须有 `assets/runtime/core-cu128` 的 candidate/compat 材料；可用
   `-RuntimeAssets C:\path\to\core-cu128` 从单独备份同步。
 
-Python 不随安装器内置。用户安装时可从检测结果中选择 CPython 3.10.x，安装器把选择写入安装目录的 `installer_env.cmd`。`uv` 无需用户预装：wheelhouse 携带启动 wheel，缺失时由安装流程安装。
+Python 不随安装器内置。用户安装时可从检测结果中选择 CPython 3.12.x，安装器把选择写入安装目录的 `installer_env.cmd`。`uv` 无需用户预装：wheelhouse 携带启动 wheel，缺失时由安装流程安装。
 
-四种发布栈现在都只创建 Python 3.10 环境。CPU 的 SVC/RVC 仍保留独立目录和兼容 Torch 版本，但不再额外要求 Python 3.9。
+四种发布栈现在都只创建 Python 3.12 环境。CPU 的 SVC/RVC 仍保留独立目录和兼容 Torch 版本，但不再额外要求 Python 3.9。
 
 ## 默认构建
 
@@ -49,22 +49,22 @@ Python 不随安装器内置。用户安装时可从检测结果中选择 CPytho
 构建默认 CUDA128 共享包：
 
 ```powershell
-& .\installer\build.ps1 -Python "C:\Python310\python.exe"
+& .\installer\build.ps1 -Python "C:\Python312\python.exe"
 ```
 
 构建指定硬件包：
 
 ```powershell
-& .\installer\build.ps1 -Stacks cu126 -Python "C:\Python310\python.exe"
-& .\installer\build.ps1 -Stacks cpu -Python "C:\Python310\python.exe"
-& .\installer\build.ps1 -Stacks directml -Python "C:\Python310\python.exe"
+& .\installer\build.ps1 -Stacks cu126 -Python "C:\Python312\python.exe"
+& .\installer\build.ps1 -Stacks cpu -Python "C:\Python312\python.exe"
+& .\installer\build.ps1 -Stacks rocm10 -Python "C:\Python312\python.exe"
 ```
 
 CUDA 运行时材料不在 Git 中时，先从备份同步再构建：
 
 ```powershell
 & .\installer\build.ps1 -Stacks cu126 `
-  -Python "C:\Python310\python.exe" `
+  -Python "C:\Python312\python.exe" `
   -RuntimeAssets "D:\XB-SVCB\assets\runtime\core-cu128"
 ```
 
@@ -75,7 +75,7 @@ SHA-256；缺少 `protobuf-7.36.0` 时会在编译 EXE 前停止。
 已有前端、应用、JUCE Host 和完整 wheelhouse 时，可复用它们：
 
 ```powershell
-& .\installer\build.ps1 -Stacks cu128 -Python "C:\Python310\python.exe" `
+& .\installer\build.ps1 -Stacks cu128 -Python "C:\Python312\python.exe" `
   -SkipWheelhouse -SkipWebBuild -SkipAppBuild -SkipJuceHostBuild
 ```
 
@@ -84,14 +84,14 @@ SHA-256；缺少 `protobuf-7.36.0` 时会在编译 EXE 前停止。
 四套包共享 staging 目录，必须顺序构建：
 
 ```powershell
-& .\installer\build-all-packages.ps1 -Python "C:\Python310\python.exe"
+& .\installer\build-all-packages.ps1 -Python "C:\Python312\python.exe"
 ```
 
 从独立运行时备份同步材料并构建四套包：
 
 ```powershell
 & .\installer\build-all-packages.ps1 `
-  -Python "C:\Python310\python.exe" `
+  -Python "C:\Python312\python.exe" `
   -RuntimeAssets "D:\XB-SVCB\assets\runtime\core-cu128"
 ```
 
@@ -99,7 +99,7 @@ SHA-256；缺少 `protobuf-7.36.0` 时会在编译 EXE 前停止。
 
 ```powershell
 & .\installer\build-all-packages.ps1 `
-  -Python "C:\Python310\python.exe" `
+  -Python "C:\Python312\python.exe" `
   -RebuildWheelhouse
 ```
 
@@ -134,9 +134,9 @@ XB-SVCB-Setup-CUDA128-2.bin
 安装器会：
 
 1. 校验应用、模型、引擎源码、FFmpeg、JUCE Host 和 wheels。
-2. 检测并锁定用户选择的 CPython 3.10.x。
+2. 检测并锁定用户选择的 CPython 3.12.x。
 3. 安装或复用 `uv`，按包内固定硬件栈创建环境。
-4. CUDA126/CUDA128 调用共享入口；CPU/DirectML 调用隔离兼容入口。
+4. CUDA126/CUDA128 调用共享入口；CPU/ROCm 10 调用隔离兼容入口。
 5. 对每个解释器执行真实 Python/Torch 校验，通过后写入 `runtime.json`。
 6. 全部校验通过后删除安装目录中的 `assets/wheels`，降低最终占用；失败时保留缓存便于重试。
 
@@ -150,6 +150,6 @@ XB-SVCB-Setup-CUDA128-2.bin
 - `xb-svcb.iss`：Inno Setup 安装流程、校验、分卷和缓存清理。
 - `xb-svcb-app.spec`：PyInstaller 应用本体。
 - `../install/install_shared.py`：CUDA 两层共享运行时编排。
-- `../install/install.py`：公共组件实现及 CPU/DirectML/旧安装兼容入口。
+- `../install/install.py`：公共组件实现及 CPU/ROCm 10/旧安装兼容入口。
 - `../setup_env.bat`：自动选择共享或兼容布局的统一修复入口。
 - `../setup_shared_env.bat`：开发者显式调用的共享入口。

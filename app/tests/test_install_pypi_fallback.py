@@ -61,9 +61,9 @@ def test_uv_pip_install_reinstalls_from_fallback_mirror_if_fallback_fails(monkey
 
 def test_uv_pip_install_prefers_matching_bundled_wheelhouse(monkeypatch, tmp_path: Path) -> None:
     installer = _load_installer_module()
-    wheel_dir = tmp_path / "wheels" / "py310" / "cu126"
+    wheel_dir = tmp_path / "wheels" / "py312" / "cu126"
     wheel_dir.mkdir(parents=True)
-    (wheel_dir / "torch-2.5.1+cu126-cp310-cp310-win_amd64.whl").write_bytes(b"wheel")
+    (wheel_dir / "torch-2.5.1+cu126-cp312-cp312-win_amd64.whl").write_bytes(b"wheel")
     calls: list[list[str]] = []
 
     monkeypatch.setenv("XB_WHEELHOUSE", str(tmp_path / "wheels"))
@@ -76,7 +76,7 @@ def test_uv_pip_install_prefers_matching_bundled_wheelhouse(monkeypatch, tmp_pat
         "torch==2.5.1",
         component="uvr",
         gpu_stack="cu126",
-        python_version="3.10",
+        python_version="3.12",
     )
 
     assert len(calls) == 1
@@ -91,9 +91,9 @@ def test_uv_pip_install_can_fallback_online_when_wheelhouse_is_non_strict(
     tmp_path: Path,
 ) -> None:
     installer = _load_installer_module()
-    wheel_dir = tmp_path / "wheels" / "py310" / "cpu"
+    wheel_dir = tmp_path / "wheels" / "py312" / "cpu"
     wheel_dir.mkdir(parents=True)
-    (wheel_dir / "numpy-1.23.5-cp310-cp310-win_amd64.whl").write_bytes(b"wheel")
+    (wheel_dir / "numpy-1.23.5-cp312-cp312-win_amd64.whl").write_bytes(b"wheel")
     calls: list[list[str]] = []
 
     def fake_run(command: list[str], **_kwargs) -> None:
@@ -112,7 +112,7 @@ def test_uv_pip_install_can_fallback_online_when_wheelhouse_is_non_strict(
         "numpy==1.23.5",
         component="vocal",
         gpu_stack="cpu",
-        python_version="3.10",
+        python_version="3.12",
     )
 
     assert len(calls) == 3
@@ -127,9 +127,9 @@ def test_repair_broken_wheel_metadata_from_matching_wheelhouse(
 ) -> None:
     installer = _load_installer_module()
     wheel_root = tmp_path / "wheels"
-    wheel_dir = wheel_root / "py310" / "cu126"
+    wheel_dir = wheel_root / "py312" / "cu126"
     wheel_dir.mkdir(parents=True)
-    wheel = wheel_dir / "torch-2.5.1+cu126-cp310-cp310-win_amd64.whl"
+    wheel = wheel_dir / "torch-2.5.1+cu126-cp312-cp312-win_amd64.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr(
             "torch-2.5.1+cu126.dist-info/METADATA",
@@ -153,7 +153,7 @@ def test_repair_broken_wheel_metadata_from_matching_wheelhouse(
         ("torch",),
         component="uvr",
         gpu_stack="cu126",
-        python_version="3.10",
+        python_version="3.12",
     )
 
     assert repaired == ["torch"]
@@ -166,7 +166,7 @@ def test_repair_broken_wheel_metadata_removes_orphan_without_wheel(
 ) -> None:
     installer = _load_installer_module()
     wheel_root = tmp_path / "wheels"
-    (wheel_root / "py310" / "cu126").mkdir(parents=True)
+    (wheel_root / "py312" / "cu126").mkdir(parents=True)
     venv = tmp_path / ".venv-uvr"
     dist_info = venv / "Lib" / "site-packages" / "torch-2.5.1+cu126.dist-info"
     dist_info.mkdir(parents=True)
@@ -177,7 +177,7 @@ def test_repair_broken_wheel_metadata_removes_orphan_without_wheel(
         ("torch",),
         component="uvr",
         gpu_stack="cu126",
-        python_version="3.10",
+        python_version="3.12",
     )
 
     assert repaired == []

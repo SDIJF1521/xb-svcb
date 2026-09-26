@@ -32,10 +32,10 @@ if not exist "%PYTHON_DETECTOR%" (
 )
 call "%PYTHON_DETECTOR%"
 if errorlevel 1 (
-  echo [XB-SVCB] A runnable CPython 3.10.x was not found.
+  echo [XB-SVCB] A runnable CPython 3.12.x was not found.
   exit /b 1
 )
-set "XB_PYTHON_310_EXE=%XB_PYTHON_EXE%"
+set "XB_PYTHON_312_EXE=%XB_PYTHON_EXE%"
 set "UV_PYTHON=%XB_PYTHON_EXE%"
 set "UV_NO_MANAGED_PYTHON=1"
 set "UV_PYTHON_DOWNLOADS=never"

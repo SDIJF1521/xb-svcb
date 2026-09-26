@@ -14,7 +14,7 @@
 - [启动与推理链路](startup-chain.md)：从 app/main.py 启动到一次普通任务和实时任务完成的过程。
 - [开发与发布](development.md)：代码结构、测试、前端构建、JUCE Host 和安装包构建。
 - [安装器说明](../installer/README.md)：PyInstaller、运行环境、离线 wheelhouse 和 Inno Setup 分卷。
-- [共享运行时与兼容布局](runtime-consolidation.md)：CUDA 两层共享环境、CPU/DirectML 兼容布局、路由与修复边界。
+- [共享运行时与兼容布局](runtime-consolidation.md)：CUDA 两层共享环境、CPU/ROCm 10 兼容布局、路由与修复边界。
 
 ## 插件作者
 

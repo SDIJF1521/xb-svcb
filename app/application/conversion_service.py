@@ -812,7 +812,7 @@ class ConversionService:
         baseline: Path,
         guarded: Path,
         destination: Path,
-        report_path: Path,
+        report_path: Path | None,
         only_regions: list[tuple[float, float]] | None = None,
     ) -> Path:
         """ 
@@ -822,7 +822,11 @@ class ConversionService:
             import numpy as np
 
             try:
-                report = json.loads(report_path.read_text(encoding="utf-8"))
+                report = (
+                    json.loads(report_path.read_text(encoding="utf-8"))
+                    if report_path is not None
+                    else None
+                )
             except (OSError, TypeError, ValueError, json.JSONDecodeError):
                 report = None
             regions = report.get("regions") if isinstance(report, dict) else None
@@ -2259,8 +2263,12 @@ class ConversionService:
             guard_applied_any = guard_applied_any or guard_applied
             run_inference(guarded, raw_target)
             rendered = raw_target
+            # Unguarded retries have no restoration report. Reset this each
+            # round so quality checks and merges cannot reuse an earlier note.
+            guard_report: Path | None = None
             if guard_applied:
                 restored_target = output.with_name(f"{output.stem}_restored_retry{attempt}.wav")
+                guard_report = restored_target.with_suffix(".regions.json")
                 rendered = self._restore_high_pitch_guard(
                     raw_target,
                     restored_target,
@@ -2277,7 +2285,7 @@ class ConversionService:
                         output,
                         rendered,
                         merged_target,
-                        restored_target.with_suffix(".regions.json"),
+                        guard_report,
                         only_regions=merge_regions,
                     )
                     if merged != rendered:
@@ -2325,9 +2333,7 @@ class ConversionService:
                     fallback,
                     rendered,
                     initial_failure_regions,
-                    restored_target.with_suffix(".regions.json")
-                    if guard_applied
-                    else None,
+                    guard_report,
                 )
                 if baseline_first and rendered != fallback
                 else {"available": False}
@@ -2352,10 +2358,10 @@ class ConversionService:
                         best_render,
                         rendered,
                         accepted_target,
-                        restored_target.with_suffix(".regions.json"),
+                        guard_report,
                         only_regions=newly_accepted,
                     )
-                    best_guard_applied = True
+                    best_guard_applied = best_guard_applied or guard_applied
                     unresolved_failure_regions = [
                         (start, end)
                         for start, end in unresolved_failure_regions

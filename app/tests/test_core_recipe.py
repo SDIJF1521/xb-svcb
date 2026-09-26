@@ -75,9 +75,9 @@ def test_resolution_drift_is_not_silently_adopted(tmp_path):
 
 def test_environment_check_reports_optional_transport_and_real_drift(monkeypatch):
     recipe = load("core_recipe")
-    actual = {"python": "3.10.21", "system": "win32", "machine": "AMD64", "packages": {"numpy": "2.2.6"}}
+    actual = {"python": "3.12.21", "system": "win32", "machine": "AMD64", "packages": {"numpy": "2.2.6"}}
     monkeypatch.setattr(recipe.subprocess, "run", lambda *a, **kw: SimpleNamespace(stdout=json.dumps(actual)))
-    profile = {"optional_packages": ["hf-xet"]}
+    profile = {"python": "3.12", "optional_packages": ["hf-xet"]}
     pins = {"numpy": "2.2.6", "hf-xet": "1.6.0"}
     report = recipe.check_environment(Path("python"), profile, pins)
     assert report["ok"] and report["missing_optional"] == ["hf-xet"]

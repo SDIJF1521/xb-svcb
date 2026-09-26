@@ -169,6 +169,10 @@ SEEDVC_ZIP_URL = "https://github.com/Plachtaa/seed-vc/archive/refs/heads/main.zi
 DDSP_REPO_URL = "https://github.com/yxlllc/DDSP-SVC.git"
 DDSP_BRANCH = "6.3"
 DDSP_ZIP_URL = "https://github.com/yxlllc/DDSP-SVC/archive/refs/heads/6.3.zip"
+DDSP_COMPAT_REVISIONS = {
+    "legacy": "88f157c03dfea4855e9b7101897bac174fd9b53d",
+    "6.2": "aeaba53f46fbb4e8177af444c5c56660f55b1787",
+}
 DDSP_CONTENTVEC_HF = "/lengyue233/content-vec-best/resolve/main/pytorch_model.bin"
 DDSP_NSF_HIFIGAN_GH = (
     "https://github.com/openvpi/vocoders/releases/download/"
@@ -182,19 +186,28 @@ DDSP_NSF_HIFIGAN_GH = (
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu126"
 TORCH_PREBLACKWELL_INDEX = "https://download.pytorch.org/whl/cu126"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+# AMD's Windows ROCm stack uses independently versioned audio/vision wheels.
+ROCM_STACK = "rocm10"
+TORCH_ROCM_INDEX = _normalize_url(
+    os.environ.get("XB_TORCH_ROCM_INDEX"),
+    "https://stable.repo.amd.com/rocm/whl-next/",
+)
+TORCH_ROCM_VER = os.environ.get("XB_ROCM_TORCH_VERSION", "2.13.0+rocm10.0.0").strip()
+TORCHAUDIO_ROCM_VER = os.environ.get("XB_ROCM_TORCHAUDIO_VERSION", "2.11.0.2+rocm10.0.0").strip()
+TORCHVISION_ROCM_VER = os.environ.get("XB_ROCM_TORCHVISION_VERSION", "0.28.0+rocm10.0.0").strip()
 # RVC 旧路径仍保留目录兼容性，但 NVIDIA wheel 不再回退到更旧 CUDA 栈。
 TORCH_RVC_CUDA_INDEX = TORCH_CUDA_INDEX
 
 # ---- 50 系（Blackwell, sm_120）专用栈 ----
 # 50 系必须用 cu128 + torch>=2.7；cu126 不覆盖 Blackwell 的 sm_120。
 # 仅升级 torch/cuda 不够：旧 3.9 + 老 numpy/fairseq/torchaudio 在新 torch 上能加载却出哑音，
-# 因此 Blackwell 走独立的 py3.10 + 新依赖栈（torchaudio I/O 改用 soundfile，fairseq 重装）。
+# 因此 Blackwell 使用 py3.12 + 新依赖栈（torchaudio I/O 改用 soundfile，fairseq 重装）。
 TORCH_BLACKWELL_INDEX = "https://download.pytorch.org/whl/cu128"
-TORCH_BLACKWELL_VER = "2.7.1"  # cp39/cp310 均有 win 轮子；统一钉此版本以求确定性
+TORCH_BLACKWELL_VER = "2.7.1"  # Provides Windows cp312 wheels.
 TORCHAUDIO_BLACKWELL_VER = "2.7.1"
 TORCHVISION_BLACKWELL_VER = "0.22.1"
 # 40 系及以下 NVIDIA 的共享 cu126 方案使用与 Blackwell 相同的现代
-# Python 3.10/Torch 2.7.1 组合，只替换 CUDA wheel 栈。
+# Python 3.12/Torch 2.7.1 组合，只替换 CUDA wheel 栈。
 TORCH_PREBLACKWELL_VER = "2.7.1"
 TORCHAUDIO_PREBLACKWELL_VER = "2.7.1"
 TORCHVISION_PREBLACKWELL_VER = "0.22.1"
@@ -203,10 +216,8 @@ TORCHVISION_PREBLACKWELL_VER = "0.22.1"
 # PyMSS wheelhouse aligned to the actual runtime stack.
 TORCH_PYMSS_CUDA_INDEX = "https://download.pytorch.org/whl/cu126"
 
-# PyMSS 2.0.x requires torch>=2.7.1. Keep its runtime pinned and isolated from
-# the older torch stacks used by UVR/RVC/SVC. NVIDIA cards use cu126 for
-# pre-Blackwell and cu128 for Blackwell; DirectML remains CPU because
-# torch-directml pins 2.4.1.
+# PyMSS supports AMD through HIP-enabled PyTorch. Its isolated environment
+# follows the selected CUDA/ROCm stack; DirectML is not a PyMSS backend.
 PYMSS_VERSION = "2.0.18"
 PYMSS_TORCH_VER = "2.7.1"
 PYMSS_TORCHAUDIO_VER = "2.7.1"
@@ -280,16 +291,13 @@ UVR_SUPPORT_GH = {
 }
 UVR_DATA_RAW_PREFIX = "https://raw.githubusercontent.com/TRvlvr/application_data/main/"
 
-# UVR（audio-separator）是现代库，用 3.10。
-PYTHON_FOR_ENGINES = "3.10"
-# 所有发布包只要求用户提供 CPython 3.10。CPU 保留隔离环境和旧 Torch 组合，
-# 但使用 3.10 兼容的 NumPy/pyworld 覆盖；DirectML 也必须使用 3.10，避免
-# torch-directml 在 3.9 导入时触发 staticmethod 错误。
-PYTHON_FOR_SVC = "3.10"
-PYTHON_FOR_RVC = "3.10"
-# CUDA126/CUDA128 同样使用 3.10；现代 torch 有完整 cp310 wheels。
-PYTHON_FOR_SVC_BLACKWELL = "3.10"
-PYTHON_FOR_RVC_BLACKWELL = "3.10"
+# All application, engine and plugin environments use CPython 3.12.
+PYTHON_FOR_ENGINES = "3.12"
+PYTHON_FOR_SVC = "3.12"
+PYTHON_FOR_RVC = "3.12"
+# CUDA126/CUDA128 同样使用 3.12；现代 torch 有完整 cp312 wheels。
+PYTHON_FOR_SVC_BLACKWELL = "3.12"
+PYTHON_FOR_RVC_BLACKWELL = "3.12"
 
 # Consolidated runtime is deliberately opt-in for the first migration pass.
 # Matching Python/Torch is necessary but NOT sufficient: all upstream
@@ -509,6 +517,11 @@ def _modern_cuda_stack(gpu_stack: str) -> bool:
 
 
 def _modern_torch_specs(gpu_stack: str, *, include_vision: bool = False) -> list[str]:
+    if gpu_stack == ROCM_STACK:
+        values = [f"torch[device-all]=={TORCH_ROCM_VER}", f"torchaudio=={TORCHAUDIO_ROCM_VER}"]
+        if include_vision:
+            values.append(f"torchvision[device-all]=={TORCHVISION_ROCM_VER}")
+        return values
     if gpu_stack == "cu128":
         values = [f"torch=={TORCH_BLACKWELL_VER}", f"torchaudio=={TORCHAUDIO_BLACKWELL_VER}"]
         vision = f"torchvision=={TORCHVISION_BLACKWELL_VER}"
@@ -523,11 +536,19 @@ def _modern_torch_specs(gpu_stack: str, *, include_vision: bool = False) -> list
 
 
 def _modern_torch_index(gpu_stack: str) -> str:
+    if gpu_stack == ROCM_STACK:
+        return TORCH_ROCM_INDEX
     if gpu_stack == "cu128":
         return TORCH_BLACKWELL_INDEX
     if gpu_stack == "cu126":
         return TORCH_PREBLACKWELL_INDEX
     raise RuntimeError(f"不是现代 CUDA 栈：{gpu_stack}")
+
+
+def _rocm_constraints() -> tuple[str, ...]:
+    # pip constraints cannot contain extras; the installation specs retain them.
+    return (f"torch=={TORCH_ROCM_VER}", f"torchaudio=={TORCHAUDIO_ROCM_VER}",
+            f"torchvision=={TORCHVISION_ROCM_VER}")
 
 
 def _preflight_consolidated_runtime(uv: str, selected: set[str], gpu_stack: str) -> None:
@@ -575,7 +596,7 @@ def _preflight_consolidated_runtime(uv: str, selected: set[str], gpu_stack: str)
         }[gpu_stack]
         directories = []
         for component in sorted(CORE_COMPONENTS):
-            directories.extend(_wheelhouse_dirs(component=component, gpu_stack=gpu_stack, python_version="3.10"))
+            directories.extend(_wheelhouse_dirs(component=component, gpu_stack=gpu_stack, python_version="3.12"))
         # Do not let the Torch index shadow unrelated PyPI packages (e.g.
         # setuptools/packaging). uv's backend routing is package-specific.
         indices = (pypi_index_args(use_mirror=False) + ["--torch-backend", "cu128"]
@@ -589,11 +610,11 @@ def _preflight_consolidated_runtime(uv: str, selected: set[str], gpu_stack: str)
         # directories without allowing source builds or network fallback.
         for directory in _core_recipe_find_links():
             indices.extend(["--find-links", str(directory)])
-        resolver_python = python_spec_for_venv(uv, "3.10")
-        if resolver_python == "3.10":
-            raise RuntimeError("共享依赖预检未找到可验证的 Python 3.10 真实路径；拒绝让 uv 扫描托管 Junction")
+        resolver_python = python_spec_for_venv(uv, "3.12")
+        if resolver_python == "3.12":
+            raise RuntimeError("共享依赖预检未找到可验证的 Python 3.12 真实路径；拒绝让 uv 扫描托管 Junction")
         command = uv_cmd(uv, "pip", "compile", str(requirements), "--python", resolver_python,
-                         "--python-version", "3.10",
+                         "--python-version", "3.12",
                          "--python-platform", "windows", "--no-python-downloads", "--no-build",
                          "--output-file", str(locked), *indices)
         # Compilation may retrieve package metadata, but never installs into
@@ -1022,7 +1043,7 @@ def _where_python_paths() -> list[str]:
 def _candidate_python_paths(python_version: str | None = None) -> list[Path]:
     launcher = _python_launcher_path(python_version) if python_version else None
     raw_candidates = [
-        os.environ.get("XB_PYTHON_310_EXE"),
+        os.environ.get("XB_PYTHON_312_EXE"),
         os.environ.get("XB_PYTHON_EXE"),
         (
             str(Path(os.environ["XB_PYTHON_DIR"]) / "python.exe")
@@ -1031,7 +1052,7 @@ def _candidate_python_paths(python_version: str | None = None) -> list[Path]:
         ),
         launcher,
         os.environ.get("LocalAppData") and str(
-            Path(os.environ["LocalAppData"]) / "Programs" / "Python" / "Python310" / "python.exe"
+            Path(os.environ["LocalAppData"]) / "Programs" / "Python" / "Python312" / "python.exe"
         ),
         sys.executable,
         *_where_python_paths(),
@@ -1053,16 +1074,16 @@ def _candidate_python_paths(python_version: str | None = None) -> list[Path]:
 def python_spec_for_venv(uv: str, python_version: str) -> str:
     """Resolve a real interpreter path before asking uv to create a venv.
 
-    Passing ``3.10`` directly to uv can select a stale generic Junction on
+    Passing ``3.12`` directly to uv can select a stale generic Junction on
     Windows. Resolve the managed interpreter first and pass its concrete path
     to ``uv venv`` instead.
     """
     requested = _wheel_py_tag(python_version)
-    if requested != "py310":
+    if requested != "py312":
         return python_version
     for path in _candidate_python_paths(python_version):
         resolved = _resolved_file_path(path)
-        if resolved is not None and _python_minor_version(resolved) == "3.10":
+        if resolved is not None and _python_minor_version(resolved) == "3.12":
             return str(resolved)
 
     find_args = [
@@ -1085,7 +1106,7 @@ def python_spec_for_venv(uv: str, python_version: str) -> str:
         )
         if found.returncode == 0:
             path = _resolved_file_path(Path(found.stdout.strip()).expanduser())
-            if path is not None and _python_minor_version(path) == "3.10":
+            if path is not None and _python_minor_version(path) == "3.12":
                 return str(path)
     except (OSError, subprocess.SubprocessError):
         pass
@@ -1146,7 +1167,7 @@ def find_nvidia_smi() -> str | None:
 
 
 def detect_gpu_stack() -> str:
-    """Return cpu, directml, cu126 or cu128 based on the detected GPU."""
+    """Return the requested installation stack; runtime probes check usability."""
     smi = find_nvidia_smi()
     caps: list[float] = []
     names = ""
@@ -1206,7 +1227,7 @@ def detect_gpu_stack() -> str:
                 timeout=20,
             )
             if re.search(r"\bAMD\b|Radeon", out.stdout, flags=re.IGNORECASE):
-                return "directml"
+                return ROCM_STACK
         except (OSError, subprocess.SubprocessError):
             pass
     return "cpu"
@@ -1334,6 +1355,12 @@ def uv_pip_install(
     先切官方 PyPI，避免重复撞同一个失效镜像。
     """
     shared = CONSOLIDATED_RUNTIME and component in CORE_COMPONENTS
+    if gpu_stack == ROCM_STACK:
+        constraints = ROOT / ".tmp" / "runtime-constraints" / "rocm10.txt"
+        constraints.parent.mkdir(parents=True, exist_ok=True)
+        constraints.write_text("\n".join(_rocm_constraints()) + "\n", encoding="utf-8")
+        args = ("-c", str(constraints), *args)
+        index = index or TORCH_ROCM_INDEX
     if shared:
         if CORE_CONSTRAINTS is None or not CORE_CONSTRAINTS.is_file():
             raise RuntimeError("共享依赖尚未通过整体解析，拒绝修改环境")
@@ -1358,7 +1385,14 @@ def uv_pip_install(
             if shared and CORE_PROFILE is not None:
                 cmd += pypi_index_args(use_mirror=use_mirror) + ["--torch-backend", "cu128"]
             else:
-                cmd += pypi_index_args(index, use_mirror=use_mirror)
+                index_args = pypi_index_args(index, use_mirror=use_mirror)
+                if gpu_stack == ROCM_STACK and index == TORCH_ROCM_INDEX:
+                    # AMD's wheel index also publishes a newer setuptools
+                    # than the <81 pin required by audio-separator. Let uv
+                    # consider the fallback PyPI indexes for general packages
+                    # while retaining the vendor index for ROCm Torch wheels.
+                    index_args = ["--index-strategy", "unsafe-best-match", *index_args]
+                cmd += index_args
         if shared:
             for directory in _core_recipe_find_links():
                 cmd += ["--find-links", str(directory)]
@@ -1759,6 +1793,7 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
     use_modern_cuda = gpu_stack in {"cu126", "cu128"}
     use_cuda = gpu_stack in {"cu126", "cu128"}
     use_directml = gpu_stack == "directml"
+    use_rocm = gpu_stack == ROCM_STACK
     venv = runtime_venv("uvr", UVR_VENV)
     ensure_venv(uv, venv, PYTHON_FOR_ENGINES)
     py = str(venv_python(venv))
@@ -1784,9 +1819,8 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
         # Switching an existing installation back to CUDA/CPU must also remove
         # the old provider; otherwise auto detection would keep selecting DML.
         run(uv_cmd(uv, "pip", "uninstall", "--python", py, "torch-directml"))
-    # UVR 严格跟随全局推理栈：NVIDIA 用 CUDA，Windows AMD 用
-    # torch-directml + ONNX Runtime DirectML，其余环境使用 CPU。
-    if use_modern_cuda:
+    # Follow the selected Torch backend. Windows ROCm uses CPU ONNX Runtime.
+    if use_modern_cuda or use_rocm:
         torch_specs = _modern_torch_specs(gpu_stack, include_vision=True)
         torch_index = _modern_torch_index(gpu_stack)
         torch_label = gpu_stack
@@ -1806,6 +1840,11 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
         torch_index = TORCH_CPU_INDEX
         torch_label = "CPU"
         pip(*torch_specs, index=torch_index)
+    # audio-separator 0.44.2 imports audioread from its shared UVR helpers,
+    # but newer librosa releases no longer pull it in transitively. It also
+    # calls librosa.get_duration(filename=...), which librosa 1.0 removed.
+    # Install both parts of that undeclared runtime contract explicitly.
+    pip("audioread>=3.0,<4", "librosa==0.10.2")
     # ORT 的不同发行包共享同一个 onnxruntime 命名空间。切换显卡栈时先移除
     # 冲突发行包，避免旧 CUDA/CPU provider 覆盖 DirectML provider（反之亦然）。
     if use_directml:
@@ -1867,6 +1906,8 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
         _verify_uvr_directml(py)
     else:
         pip(f"audio-separator[cpu]=={AUDIO_SEPARATOR_VER}")
+        if use_rocm:
+            _reaffirm_rocm_runtime(uv, py, component="uvr", include_vision=True)
     print(c("g", "分离环境就绪"))
 
 
@@ -1877,6 +1918,8 @@ def step_pymss(uv: str, gpu_stack: str) -> None:
     user can choose a catalog model instead of consuming disk space up front.
     """
     hr("5/12 可选 PyMSS 分离环境 .venv-pymss")
+    if gpu_stack == "directml":
+        raise RuntimeError("PyMSS 的 AMD 加速需要 ROCm，请使用 --rocm10，或显式选择 --cpu")
     ensure_venv(uv, PYMSS_VENV, PYTHON_FOR_ENGINES)
     py = str(venv_python(PYMSS_VENV))
     # PyMSS 2.0.x requires Torch 2.7.1. Pre-Blackwell NVIDIA uses cu126 and
@@ -1899,6 +1942,8 @@ def step_pymss(uv: str, gpu_stack: str) -> None:
         torch_index = TORCH_BLACKWELL_INDEX
     elif pymss_stack == "cu126":
         torch_index = TORCH_PYMSS_CUDA_INDEX
+    elif pymss_stack == ROCM_STACK:
+        torch_index = TORCH_ROCM_INDEX
     else:
         torch_index = TORCH_CPU_INDEX
     # A CPU build with the same Torch version satisfies ``torch==...`` in uv
@@ -1906,12 +1951,14 @@ def step_pymss(uv: str, gpu_stack: str) -> None:
     # Remove the provider first so the selected cu126/cu128 wheel is installed.
     if Path(py).is_file():
         run(uv_cmd(uv, "pip", "uninstall", "--python", py, "torch", "torchaudio", "torchvision"))
-    pip(
-        f"torch=={PYMSS_TORCH_VER}",
-        f"torchaudio=={PYMSS_TORCHAUDIO_VER}",
-        index=torch_index,
-    )
+    specs = (_modern_torch_specs(ROCM_STACK, include_vision=True) if pymss_stack == ROCM_STACK else
+             [f"torch=={PYMSS_TORCH_VER}", f"torchaudio=={PYMSS_TORCHAUDIO_VER}"])
+    pip(*specs, index=torch_index)
     pip(f"pymss=={PYMSS_VERSION}")
+    if pymss_stack == ROCM_STACK:
+        _reaffirm_rocm_runtime(uv, py, component="pymss", include_vision=True)
+        run(uv_cmd(uv, "pip", "check", "--python", py))
+        run([py, "-c", "from pymss import MSSeparator; print('PyMSS', MSSeparator.__name__)"])
     print(c("g", "PyMSS 环境就绪；请在模型管理页选择并下载分离模型"))
 
 
@@ -1954,18 +2001,15 @@ def fetch_sovits() -> None:
 
 def fetch_seedvc() -> None:
     """获取 Seed-VC 仓库：优先 git clone，无 git 时下载 main 分支 ZIP。"""
-    if (SEEDVC_DIR / "inference.py").exists():
+    if all((SEEDVC_DIR / name).is_file() for name in ("inference.py", "inference_v2.py", "configs/v2/vc_wrapper.yaml")):
         print(c("g", "    Seed-VC 仓库已存在，跳过获取"))
         return
     ENGINES_DIR.mkdir(parents=True, exist_ok=True)
-    if SEEDVC_DIR.exists():
-        shutil.rmtree(SEEDVC_DIR, ignore_errors=True)
-
-    if have("git"):
+    if not SEEDVC_DIR.exists() and have("git"):
         run(["git", "clone", "--depth", "1", SEEDVC_REPO_URL, str(SEEDVC_DIR)])
         return
 
-    print(c("y", "    未检测到 git，改用下载 ZIP 方式获取 Seed-VC 仓库 …"))
+    print(c("y", "    正在用 ZIP 方式获取/补全 Seed-VC V1/V2 源码 …"))
     with tempfile.TemporaryDirectory() as td:
         zp = Path(td) / "seed-vc.zip"
         download(gh_urls(SEEDVC_ZIP_URL), zp)
@@ -1974,13 +2018,34 @@ def fetch_seedvc() -> None:
         if marker is None:
             raise RuntimeError("下载的 Seed-VC 压缩包结构异常，未找到 inference.py")
         repo_root = marker.parent
-        shutil.move(str(repo_root), str(SEEDVC_DIR))
+        shutil.copytree(repo_root, SEEDVC_DIR, dirs_exist_ok=True)
+
+
+def fetch_ddsp_compat() -> None:
+    """Stage official loaders for classic DDSP, Diffusion and older Reflow models."""
+    for family, revision in DDSP_COMPAT_REVISIONS.items():
+        destination = DDSP_DIR / family
+        scripts = ("main.py", "main_diff.py", "main_reflow.py") if family == "legacy" else ("main_reflow.py",)
+        if all((destination / name).is_file() for name in scripts):
+            continue
+        with tempfile.TemporaryDirectory() as td:
+            archive = Path(td) / "ddsp.zip"
+            download(gh_urls(f"https://github.com/yxlllc/DDSP-SVC/archive/{revision}.zip"), archive)
+            extracted = Path(td) / "source"
+            extract_zip(archive, extracted)
+            source = extracted / f"DDSP-SVC-{revision}"
+            if not all((source / name).is_file() for name in scripts):
+                raise RuntimeError(f"DDSP-SVC {family} 源码不完整")
+            # Preserve existing model assets when repairing an incomplete snapshot.
+            shutil.copytree(source, destination, dirs_exist_ok=True)
+            (destination / ".xb-revision").write_text(revision + "\n", encoding="ascii")
 
 
 def fetch_ddsp() -> None:
     """获取 DDSP-SVC 6.3 仓库：优先 git clone，无 git 时下载分支 ZIP。"""
     if (DDSP_DIR / "main_reflow.py").exists():
         print(c("g", "    DDSP-SVC 仓库已存在，跳过获取"))
+        fetch_ddsp_compat()
         return
     ENGINES_DIR.mkdir(parents=True, exist_ok=True)
     if DDSP_DIR.exists():
@@ -1988,6 +2053,7 @@ def fetch_ddsp() -> None:
     if have("git"):
         try:
             run(["git", "clone", "--depth", "1", "-b", DDSP_BRANCH, DDSP_REPO_URL, str(DDSP_DIR)])
+            fetch_ddsp_compat()
             return
         except subprocess.CalledProcessError:
             print(c("y", "    git clone 失败，改用分支 ZIP 下载 …"))
@@ -2002,6 +2068,7 @@ def fetch_ddsp() -> None:
         if marker is None:
             raise RuntimeError("下载的 DDSP-SVC 压缩包结构异常，未找到 main_reflow.py")
         shutil.move(str(marker.parent), str(DDSP_DIR))
+    fetch_ddsp_compat()
 
 
 def seed_ddsp_base_models() -> None:
@@ -2144,12 +2211,11 @@ def step_svc(uv: str, gpu_stack: str) -> None:
     fetch_sovits()
 
     use_blackwell = gpu_stack == "cu128"
-    use_modern_cuda = gpu_stack in {"cu126", "cu128"}
+    use_modern_cuda = gpu_stack in {"cu126", "cu128", ROCM_STACK}
     use_gpu = gpu_stack in {"cu126", "cu128"}
     use_directml = gpu_stack == "directml"
 
-    # torch-directml 0.2.5 imports only on Python 3.10+; CUDA/CPU keep their
-    # established versions to avoid changing already-validated dependency sets.
+    # Keep interpreter selection identical across accelerator stacks.
     target_py = _svc_python_for_stack(gpu_stack)
     ensure_venv(uv, SVC_VENV, target_py)
     py = str(venv_python(SVC_VENV))
@@ -2175,10 +2241,10 @@ def step_svc(uv: str, gpu_stack: str) -> None:
             filtered = _filter_requirements(
                 req_file,
                 extra_deny=DIRECTML_EXTRA_DENY,
-                overrides=PYTHON310_REQ_OVERRIDES,
+                overrides=PYTHON312_REQ_OVERRIDES,
             )
             pip("-r", str(filtered))
-            pip("matplotlib==3.7.5", "soundfile")
+            pip("matplotlib==3.8.4", "soundfile")
             pip(*SVC_FCPE_RUNTIME_DEPS)
         else:
             print(c("r", "    未找到 requirements，跳过依赖安装（请检查仓库）"))
@@ -2200,25 +2266,24 @@ def step_svc(uv: str, gpu_stack: str) -> None:
         return
 
     if use_modern_cuda:
-        # NVIDIA shared stack: cu126 for pre-Blackwell, cu128 for Blackwell;
-        # both use Python 3.10 + torch2.7.1. torch.load 的 weights_only 由
-        # svc_worker 在导入前还原；
+        # CUDA and ROCm use Python 3.12 with modern Torch. torch.load 的
+        # weights_only 由 svc_worker 在导入前还原；
         # torchaudio I/O 在 2.7 改走 torchcodec，svc_worker 用 soundfile 垫片规避哑音。
         pip(*_modern_torch_specs(gpu_stack), index=_modern_torch_index(gpu_stack))
         if req_file.exists():
-            # 自管 torch/torchaudio/torchvision/fairseq；numpy/pyworld 覆盖到 3.10 兼容版
+            # 自管 torch/torchaudio/torchvision/fairseq；numpy/pyworld 覆盖到 3.12 兼容版
             filtered = _filter_requirements(
                 req_file,
                 extra_deny=BLACKWELL_EXTRA_DENY,
-                overrides=PYTHON310_REQ_OVERRIDES,
+                overrides=PYTHON312_REQ_OVERRIDES,
             )
             pip("-r", str(filtered))
             # 显式确保读写音频用的 soundfile 在位（svc_worker 的 torchaudio 垫片依赖它）
             pip("soundfile")
             pip(*SVC_FCPE_RUNTIME_DEPS)
-            # matplotlib 在 3.10 用较新版本（3.7.5 也可，但 3.10 下放宽到 3.8.x 更易装）
+            # Matplotlib 3.8.4 provides Windows cp312 wheels.
             pip("matplotlib==3.8.4")
-            # fairseq 单独装（py3.10 无官方 wheel，单列以便定位失败）
+            # Use the fairseq fork that provides Windows cp312 wheels.
             _install_fairseq_blackwell(pip)
             # 兜底：fairseq 可能把 CUDA torch 换成同号 CPU 版 → 强制校正回当前栈
             _reaffirm_modern_torch(
@@ -2243,29 +2308,30 @@ def step_svc(uv: str, gpu_stack: str) -> None:
             gpu_stack=gpu_stack,
             cwd=SOVITS_DIR,
         )
-        print(c("g", f"推理环境就绪（共享 {gpu_stack}）"))
+        print(c("g", f"推理环境就绪（{gpu_stack}）"))
         return
 
-    # CPU 兼容栈：保持旧 Torch 组合，但统一使用用户锁定的 Python 3.10。
+    # CPU 兼容栈：保持旧 Torch 组合，但统一使用用户锁定的 Python 3.12。
     # 先装 torch（决定 CUDA/CPU），再装仓库其余依赖。
     # 钉 <2.6：torch>=2.6 起 torch.load 默认 weights_only=True，会拒绝反序列化
     # so-vits checkpoint 里的非张量对象（argparse.Namespace / numpy 标量），导致
-    # 加载模型时报 "Weights only load failed"。2.5.1 在 py3.10 中仍默认
+    # 加载模型时报 "Weights only load failed"。2.5.1 在 py3.12 中仍默认
     # weights_only=False 的稳定版，避免新装用户拉到不兼容的最新版。
     torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
     torch_index = TORCH_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX
     pip(*torch_specs, index=torch_index)
     # 优先 requirements_win.txt（仓库为 Windows 提供的更易装版本）
     if req_file.exists():
-        filtered = _filter_requirements(req_file, overrides=PYTHON310_REQ_OVERRIDES)
+        filtered = _filter_requirements(req_file, extra_deny=DIRECTML_EXTRA_DENY,
+                                        overrides=PYTHON312_REQ_OVERRIDES)
         pip("-r", str(filtered))
     # so-vits-svc 的 vdecoder 代码里 `import matplotlib`，但官方 requirements 漏列了它，
-    # 不补会在推理加载模型时报 No module named 'matplotlib'。钉 3.7.5，
+    # 不补会在推理加载模型时报 No module named 'matplotlib'。钉 3.8.4，
     # 避免最新 matplotlib 强行升级 NumPy 而破坏 so-vits-svc 依赖。
         # 仍使用 --no-deps 防止修复旧环境时升级 NumPy，但显式补齐 Matplotlib
         # 的其余导入依赖（尤其 pyparsing；缺失时扩散模型加载会直接失败）。
         pip("--no-deps", *SVC_MATPLOTLIB_RUNTIME_DEPS)
-        pip("--no-deps", "matplotlib==3.7.5")
+        pip("--no-deps", "matplotlib==3.8.4")
         pip(*SVC_FCPE_RUNTIME_DEPS)
     else:
         print(c("r", "    未找到 requirements，跳过依赖安装（请检查仓库）"))
@@ -2295,7 +2361,7 @@ def _filter_requirements(
     """剔除推理用不到/装不上的包（见 REQ_DENYLIST），生成精简 requirements。
 
     extra_deny：额外剔除的包名（小写、连字符）；用于 Blackwell 下自行管理的 torch/fairseq 等。
-    overrides：包名 -> 整行 requirement 覆盖（如 numpy 升到 3.10 兼容版本）；命中即替换原行，
+    overrides：包名 -> 整行 requirement 覆盖（如 numpy 升到 3.12 兼容版本）；命中即替换原行，
                未在原文件出现的覆盖项会在末尾追加。
     """
     out = output if output is not None else src.parent / "requirements_xb.txt"
@@ -2329,15 +2395,17 @@ def _filter_requirements(
     return out
 
 
-# Python 3.10 下 so-vits / RVC 需要的、对新 torch 友好的依赖覆盖。
-# numpy 1.23.5 仍有 cp310 轮子且兼容 so-vits 代码（未用 1.24 移除的 np.float 等别名）；
-# pyworld 0.3.5 提供 cp310 轮子，避免 0.3.0 在 3.10 拉取 numpy 1.19.5 并现场编译失败；
-# scipy 1.10.1 提供 cp310 轮子且兼容 numpy 1.23.5（so-vits 原钉的旧 scipy 在 3.10
-# 无轮子会现场编译失败 / 与 numpy 1.23 不匹配）。
-PYTHON310_REQ_OVERRIDES = {
-    "numpy": "numpy==1.23.5",
+# These releases publish CPython 3.12 wheels. Older NumPy/SciPy pins do not.
+PYTHON312_REQ_OVERRIDES = {
+    "numpy": "numpy==1.26.4",
     "pyworld": "pyworld==0.3.5",
-    "scipy": "scipy==1.10.1",
+    "scipy": "scipy==1.13.1",
+    "librosa": "librosa==0.10.2",
+    # librosa 0.10.2 needs soundfile>=0.12.1; the upstream SVC requirements
+    # still pin the Python 3.10-era 0.10.3.post1 release.
+    "soundfile": "soundfile>=0.12.1,<0.15",
+    "numba": "numba==0.60.0",
+    "fairseq": "fairseq-fixed==0.12.3.1",
 }
 # Blackwell 下由我们自行装的包：不让 requirements 里的旧钉死把它们覆盖回去。
 BLACKWELL_EXTRA_DENY = {"torch", "torchaudio", "torchvision", "fairseq"}
@@ -2399,7 +2467,7 @@ def _verify_directml_torch(py: str, component: str) -> None:
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
             f"{component} AMD 环境校验失败：DirectML 导入、设备初始化或张量执行失败；"
-            "请查看上方原始错误并检查 Python 3.10、Torch/DirectML 版本与 AMD 驱动"
+            "请查看上方原始错误并检查 Python 3.12、Torch/DirectML 版本与 AMD 驱动"
         ) from exc
 
 
@@ -2547,6 +2615,9 @@ def _reaffirm_modern_torch(
     python_version: str,
     gpu_stack: str,
 ) -> None:
+    if gpu_stack == ROCM_STACK:
+        _reaffirm_rocm_runtime(uv, py, component=component)
+        return
     _reaffirm_torch_wheels(
         uv,
         py,
@@ -2592,6 +2663,41 @@ def _verify_cuda_torch(py: str, component: str) -> None:
         ) from exc
 
 
+def _verify_rocm_torch(py: str, component: str) -> None:
+    check = (
+        "import torch; "
+        "hip=str(getattr(torch.version,'hip',None) or ''); "
+        "rocm=str(getattr(torch.version,'rocm',None) or ''); "
+        "assert hip and rocm.split('.')[0] == '10', f'Expected ROCm 10, got ROCm {rocm!r}, HIP {hip!r}'; "
+        "assert torch.cuda.is_available(), 'ROCm GPU unavailable'; "
+        "x=torch.ones(4,device='cuda'); "
+        "assert (x+x).sum().cpu().item() == 8; "
+        "print(torch.__version__, rocm, hip, torch.cuda.get_device_name(0))"
+    )
+    try:
+        run([py, "-c", check])
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"{component} ROCm 10 校验失败：需要支持当前显卡及 Python 3.12 的 HIP Torch；"
+            "请检查驱动、XB_TORCH_ROCM_INDEX 和 XB_ROCM_TORCH_VERSION。"
+            "不会将 CPU/CUDA Torch 标记为 AMD 可用。"
+        ) from exc
+
+
+def _reaffirm_rocm_runtime(uv: str, py: str, *, component: str, include_vision: bool = False) -> None:
+    # Dependency resolution can replace a vendor build with a public CPU build.
+    # Reinstall only the selected binary pair, then execute a real HIP tensor op.
+    run(uv_cmd(uv, "pip", "uninstall", "--python", py, "torch-directml"))
+    uv_pip_install(
+        uv, py, "--reinstall-package", "torch", "--reinstall-package", "torchaudio",
+        *(["--reinstall-package", "torchvision"] if include_vision else []),
+        *_modern_torch_specs(ROCM_STACK, include_vision=include_vision),
+        index=TORCH_ROCM_INDEX, component=component,
+        gpu_stack=ROCM_STACK, python_version=PYTHON_FOR_ENGINES,
+    )
+    _verify_rocm_torch(py, component)
+
+
 def _activate_shared_cuda_runtime(
     uv: str,
     *,
@@ -2601,11 +2707,14 @@ def _activate_shared_cuda_runtime(
     gpu_stack: str,
     cwd: Path | None = None,
 ) -> None:
-    """Validate a shared modern CUDA runtime before advertising it to the app."""
+    """Validate a modern GPU runtime before advertising it to the app."""
     py = venv_python(venv)
     if not SHARED_INSTALL_IN_PROGRESS:
         run(uv_cmd(uv, "pip", "check", "--python", str(py)))
-    _verify_cuda_torch(str(py), component)
+    if gpu_stack == ROCM_STACK:
+        _verify_rocm_torch(str(py), component)
+    else:
+        _verify_cuda_torch(str(py), component)
     modules = repr(imports)
     probe = (
         "import importlib; "
@@ -2641,23 +2750,8 @@ def _activate_isolated_cu128_runtime(
 
 
 def _install_fairseq_blackwell(pip) -> None:  # noqa: ANN001
-    """在 Blackwell（py3.10）环境安装 fairseq。
-
-    fairseq 0.12.2 在 py3.10 无官方 win 轮子、且与新 setuptools/torch 冲突。这里优先尝试
-    PyPI（命中预编译/可构建即可），失败则回退 GitHub 源码安装（需 VS C++ Build Tools）。
-    这一步是 50 系适配最易出问题处，失败时请把日志贴出以便定位。
-    """
-    # omegaconf 2.0.6 是 fairseq 0.12.2 的运行期依赖，提前钉好避免被拉到不兼容的新版本
-    try:
-        pip("omegaconf==2.0.6")
-    except subprocess.CalledProcessError:
-        print(c("y", "    omegaconf 2.0.6 安装失败，继续尝试 fairseq（可能用新版 omegaconf）"))
-    try:
-        pip("fairseq==0.12.2")
-        return
-    except subprocess.CalledProcessError:
-        print(c("y", "    PyPI fairseq==0.12.2 安装失败，回退 GitHub 源码安装 …"))
-    pip("git+https://github.com/facebookresearch/fairseq.git")
+    """Install the maintained fairseq fork with Windows CPython 3.12 wheels."""
+    pip("fairseq-fixed==0.12.3.1")
 
 
 def _patch_fairseq_weights_only(py: Path) -> None:
@@ -2707,7 +2801,7 @@ def _patch_fairseq_weights_only(py: Path) -> None:
 def step_rvc(uv: str, gpu_stack: str) -> None:
     hr(f"7/12 RVC 推理环境 {RVC_VENV.name}（rvc-python）")
     use_blackwell = gpu_stack == "cu128"
-    use_modern_cuda = gpu_stack in {"cu126", "cu128"}
+    use_modern_cuda = gpu_stack in {"cu126", "cu128", ROCM_STACK}
     use_gpu = gpu_stack in {"cu126", "cu128"}
     use_directml = gpu_stack == "directml"
     # RVC 推理在独立环境运行（rvc-python），与 so-vits 栈隔离。
@@ -2726,9 +2820,10 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
 
     # uv venv 默认不含 setuptools；fairseq/rvc 运行时可能用到 pkg_resources，先补齐
     pip("setuptools<81", "wheel")
+    rvc_wheel = _prepare_rvc_compat(gpu_stack)
     if use_directml:
         _install_directml_runtime(pip)
-        pip("rvc-python")
+        pip(str(rvc_wheel))
         _reaffirm_directml_runtime(
             uv,
             py,
@@ -2740,11 +2835,11 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
         print(c("g", "RVC 推理环境就绪（AMD DirectML；RMVPE 使用 CPU 稳定路径）"))
         return
     if use_modern_cuda:
-        # NVIDIA shared stack: cu126 for pre-Blackwell, cu128 for Blackwell;
-        # both use Python 3.10 + torch2.7.1. rvc-python 会带回 fairseq，装完再就地打 weights_only 补丁，
+        # CUDA and ROCm use Python 3.12 with modern Torch.
+        # rvc-python 会带回 fairseq，装完再就地打 weights_only 补丁，
         # 否则新 torch 加载 hubert/字典会报 "Weights only load failed"。
         pip(*_modern_torch_specs(gpu_stack), index=_modern_torch_index(gpu_stack))
-        pip("rvc-python")
+        pip(str(rvc_wheel))
         seed_rvc_base_models(venv_python(RVC_VENV))
         # 兜底：rvc-python/fairseq 可能把 CUDA torch 换成同号 CPU 版 → 强制校正回当前栈
         _reaffirm_modern_torch(
@@ -2766,11 +2861,11 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
         return
 
     # 兼容旧目录的 RVC 路径；当前 NVIDIA 仍使用 cu126。
-    torch_specs = ["torch==2.1.1", "torchaudio==2.1.1"]
+    torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
     torch_index = TORCH_RVC_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX
     pip(*torch_specs, index=torch_index)
     # rvc-python（含 fairseq / faiss 等推理依赖）
-    pip("rvc-python")
+    pip(str(rvc_wheel))
     if use_gpu:
         _reaffirm_torch_wheels(
             uv,
@@ -2786,6 +2881,17 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
     print(c("g", "RVC 推理环境就绪"))
 
 
+def _prepare_rvc_compat(gpu_stack: str) -> Path:
+    spec = importlib.util.spec_from_file_location("xb_rvc_compat", Path(__file__).with_name("build_rvc_compat.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.prepare(
+        ROOT / ".tmp" / "rvc-compat",
+        _wheelhouse_dirs(component="rvc", gpu_stack=gpu_stack, python_version=PYTHON_FOR_ENGINES),
+        offline=bool(_wheelhouse_root() and _wheelhouse_strict()),
+    )
+
+
 SEEDVC_REQ_DENY = {
     "torch",
     "torchvision",
@@ -2794,7 +2900,7 @@ SEEDVC_REQ_DENY = {
     "sounddevice",
     "freesimplegui",
     # resemblyzer is only imported by Seed-VC's eval.py. Its unmaintained
-    # webrtcvad dependency has no Windows cp310 wheel and otherwise forces a
+    # webrtcvad dependency has no Windows cp312 wheel and otherwise forces a
     # local MSVC build, which is unnecessary for XB-SVCB file inference.
     "resemblyzer",
     "webrtcvad",
@@ -2828,7 +2934,7 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
     fetch_seedvc()
 
     use_blackwell = gpu_stack == "cu128"
-    use_modern_cuda = gpu_stack in {"cu126", "cu128"}
+    use_modern_cuda = gpu_stack in {"cu126", "cu128", ROCM_STACK}
     use_gpu = gpu_stack in {"cu126", "cu128"}
     use_directml = gpu_stack == "directml"
 
@@ -2888,7 +2994,7 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
             python_version=target_py,
             gpu_stack=gpu_stack,
         )
-        print(c("g", f"SeedVC 推理环境就绪（共享 {gpu_stack}）"))
+        print(c("g", f"SeedVC 推理环境就绪（{gpu_stack}）"))
     elif use_gpu:
         _reaffirm_torch_wheels(
             uv,
@@ -2905,17 +3011,41 @@ def step_seedvc(uv: str, gpu_stack: str) -> None:
         print(c("g", "SeedVC 推理环境就绪（CPU）"))
 
 
+def _install_ddsp_legacy_runtime(uv: str, gpu_stack: str) -> None:
+    stack = "cpu" if gpu_stack == "directml" else gpu_stack
+    venv = ROOT / ".venv-ddsp-legacy"
+    ensure_venv(uv, venv, PYTHON_FOR_ENGINES)
+    py = str(venv_python(venv))
+    pip = make_pip(uv, py, component="ddsp-legacy", gpu_stack=stack, python_version=PYTHON_FOR_ENGINES)
+    pip("setuptools<81", "wheel")
+    modern = stack in {"cu126", "cu128", ROCM_STACK}
+    specs = _modern_torch_specs(stack) if modern else ["torch==2.5.1", "torchaudio==2.5.1"]
+    index = _modern_torch_index(stack) if modern else TORCH_CPU_INDEX
+    pip(*specs, index=index)
+    requirements = _filter_requirements(
+        DDSP_DIR / "requirements.txt", extra_deny=DDSP_REQ_DENY,
+        overrides={**PYTHON312_REQ_OVERRIDES, **DDSP_REQ_OVERRIDES},
+        output=ROOT / ".tmp" / "ddsp-legacy-requirements.txt",
+    )
+    pip("-r", str(requirements), "fairseq-fixed==0.12.3.1", "einops", "local-attention")
+    if modern:
+        _reaffirm_modern_torch(uv, py, component="ddsp-legacy", python_version=PYTHON_FOR_ENGINES, gpu_stack=stack)
+    run(uv_cmd(uv, "pip", "check", "--python", py))
+    for folder in ("legacy", "6.2"):
+        modules = "ddsp.vocoder,reflow.vocoder" + (",diffusion.vocoder" if folder == "legacy" else "")
+        run([py, "-c", f"import sys; sys.path.insert(0,sys.argv[1]); import {modules}; print('DDSP {folder} imports OK')", str(DDSP_DIR / folder)])
+
+
 def step_ddsp(uv: str, gpu_stack: str) -> None:
     hr("9/12 DDSP-SVC 推理环境 engines/ddsp-svc + .venv-ddsp")
     fetch_ddsp()
 
     use_blackwell = gpu_stack == "cu128"
-    use_modern_cuda = gpu_stack in {"cu126", "cu128"}
+    use_modern_cuda = gpu_stack in {"cu126", "cu128", ROCM_STACK}
     use_gpu = gpu_stack in {"cu126", "cu128"}
     # The DDSP/Rectified-Flow graph can finish on DirectML while silently
-    # producing electrical noise or near-silence. AMD installations therefore
-    # use a CPU Torch runtime for DDSP only; UVR and other model environments
-    # keep their DirectML acceleration.
+    # producing electrical noise or near-silence. Legacy DirectML installations
+    # therefore use CPU for DDSP; ROCm installations use HIP.
     amd_cpu_stable = gpu_stack == "directml"
 
     target_py = PYTHON_FOR_ENGINES
@@ -2974,7 +3104,7 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
         )
         _verify_cuda_torch(py, "DDSP-SVC")
         _verify_ddsp_hubert(py)
-        print(c("g", f"DDSP-SVC 推理环境就绪（共享 {gpu_stack}）"))
+        print(c("g", f"DDSP-SVC 推理环境就绪（{gpu_stack}）"))
     elif use_gpu:
         _reaffirm_torch_wheels(
             uv,
@@ -2992,6 +3122,7 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
     else:
         _verify_ddsp_hubert(py)
         print(c("g", "DDSP-SVC 推理环境就绪（CPU）"))
+    _install_ddsp_legacy_runtime(uv, gpu_stack)
 
 
 def _prepare_vocal_deepfilter_model(py: str) -> Path:
@@ -3042,18 +3173,18 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
     # requires packaging>=24. Vocal installs only prebuilt wheels, so it does
     # not need wheel at runtime; keeping it out avoids an impossible resolver.
     pip("setuptools<81")
-    if gpu_stack in {"cu126", "cu128"}:
+    if gpu_stack in {"cu126", "cu128", ROCM_STACK}:
         torch_specs = _modern_torch_specs(gpu_stack)
         torch_index = _modern_torch_index(gpu_stack)
     else:
-        # AMD 与无独显机器使用稳定的 CPU Torch。
+        # Explicit CPU and legacy DirectML use CPU for this component.
         torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
         torch_index = TORCH_CPU_INDEX
     pip(*torch_specs, index=torch_index)
     pip(
-        "numpy==1.23.5",
+        "numpy==1.26.4",
         "scipy<1.15",
-        "librosa==0.9.2",
+        "librosa==0.10.2",
         "matplotlib<3.9",
         "torchlibrosa==0.1.0",
         "PyYAML",
@@ -3061,7 +3192,9 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
         "pedalboard==0.9.24",
         "praat-parselmouth==0.4.6",
     )
-    if gpu_stack in {"cu126", "cu128"}:
+    if gpu_stack == ROCM_STACK:
+        _reaffirm_rocm_runtime(uv, py, component="vocal")
+    elif gpu_stack in {"cu126", "cu128"}:
         _reaffirm_torch_wheels(
             uv,
             py,
@@ -3078,7 +3211,7 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
         "deepfilternet=0.5.6\npedalboard=0.9.24\npraat-parselmouth=0.4.6\n",
         encoding="ascii",
     )
-    if gpu_stack in {"cu126", "cu128"}:
+    if gpu_stack in {"cu126", "cu128", ROCM_STACK}:
         # The shared SVC/RVC environment already contains wheel from its
         # legacy build stack.  wheel>=0.47 requires packaging>=24, while
         # DeepFilterNet3 0.5.6 intentionally uses packaging==23.2.  wheel is
@@ -3098,7 +3231,7 @@ def step_vocal(uv: str, gpu_stack: str) -> None:
 def step_hub(uv: str, gpu_stack: str) -> None:
     hr("11/12 模型上传组件 .venv-hub（modelscope）")
     # 仅「分享到模型站（上传）」需要 modelscope SDK；搜索 / 下载走纯 HTTP，不依赖本环境。
-    # 用 3.10（与 UVR 一致），装 modelscope hub 能力即可（上传用 upload_folder，无需本地 git）。
+    # 用 3.12（与 UVR 一致），装 modelscope hub 能力即可（上传用 upload_folder，无需本地 git）。
     ensure_venv(uv, HUB_VENV, PYTHON_FOR_ENGINES)
     py = str(venv_python(HUB_VENV))
     pip = make_pip(
@@ -3252,7 +3385,8 @@ def main() -> int:
         help="安装根目录（引擎/虚拟环境/模型都装到此处）；默认取脚本上级目录",
     )
     p.add_argument("--cpu", action="store_true", help="安装 CPU 版")
-    p.add_argument("--gpu", action="store_true", help="请求安装 GPU 版；自动选择 NVIDIA CUDA 或 AMD DirectML")
+    p.add_argument("--gpu", action="store_true", help="请求安装 GPU 版；自动选择 NVIDIA CUDA 或 AMD ROCm 10")
+    p.add_argument("--rocm10", "--rocm", dest="rocm10", action="store_true", help="安装 AMD ROCm 10 推理环境")
     p.add_argument("--directml", action="store_true", help="强制安装 AMD/Windows DirectML 推理环境")
     p.add_argument(
         "--cu128",
@@ -3309,6 +3443,8 @@ def main() -> int:
     hr("XB-SVCB 安装器")
     print(f"安装根目录: {ROOT}")
 
+    if args.rocm10 and (args.cpu or args.directml or args.cu126 or args.cu128 or args.no_cu128):
+        p.error("--rocm10 不能与 CPU/DirectML/CUDA 栈参数同时使用")
     if args.cpu and (args.gpu or args.directml or args.cu126 or args.cu128 or args.no_cu128):
         print(c("r", "--cpu 不能与 GPU/CUDA 参数同时使用"))
         return 2
@@ -3323,6 +3459,7 @@ def main() -> int:
         return 2
     detected_stack = (
         "cpu" if args.cpu else
+        ROCM_STACK if args.rocm10 else
         "directml" if args.directml else
         "cu126" if (args.cu126 or args.no_cu128) else
         detect_gpu_stack()
@@ -3339,6 +3476,8 @@ def main() -> int:
         mode = c("g", "CUDA · Blackwell/50系 (cu128 + torch" + TORCH_BLACKWELL_VER + ")")
     elif detected_stack == "cu126":
         mode = c("g", "CUDA · 40系及以下 (cu126 + torch2.7.1)")
+    elif detected_stack == ROCM_STACK:
+        mode = c("g", f"AMD · ROCm 10 ({TORCH_ROCM_INDEX})")
     elif detected_stack == "directml":
         mode = c("g", "AMD · DirectML (torch " + TORCH_DIRECTML_TORCH_VER + ")")
     else:

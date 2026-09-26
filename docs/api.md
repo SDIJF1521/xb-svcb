@@ -32,7 +32,7 @@ FastAPI 服务默认关闭，不会随 XB-SVCB 自动启动。打开软件的“
 4. 轮询 `GET /api/v1/jobs/{job_id}`，直到 `status` 为 `done` 或 `failed`。
 5. 成功后请求返回的 `result_url` 下载成品。
 
-任务进入 XB-SVCB 的同一条串行推理队列。软件界面和外部 API 创建的任务会相互可见，并共享当前的 CUDA、DirectML 或 CPU 推理环境。
+任务进入 XB-SVCB 的同一条串行推理队列。软件界面和外部 API 创建的任务会相互可见，并共享当前的 CUDA、ROCm 10 或 CPU 推理环境。
 
 ## 模型管理
 

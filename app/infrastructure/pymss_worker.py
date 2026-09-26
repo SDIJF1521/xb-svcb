@@ -45,36 +45,26 @@ def _subtract_audio(source: Path, removed: Path, destination: Path) -> None:
 def _resolve_device(requested: str) -> tuple[str, str]:
     """Resolve devices inside the PyMSS environment, never the app process."""
     requested = str(requested or "auto").strip().lower()
+    requested = {"amd": "rocm", "hip": "rocm", "rocm10": "rocm"}.get(requested, requested)
     if requested == "mlx":
         return "mlx", "mlx"
     import torch
 
     if requested in {"", "auto", "gpu"}:
         if bool(torch.cuda.is_available()):
-            return "cuda", "cuda"
-        try:
-            from inference_device import _directml_device  # type: ignore
-
-            resolved = _directml_device(torch)
-            if resolved is not None:
-                return str(resolved.device), "directml"
-        except (ImportError, AttributeError):
-            pass
+            return "cuda", "rocm" if getattr(torch.version, "hip", None) else "cuda"
         return "cpu", "cpu"
     if requested in {"cuda", "rocm"}:
         if not bool(torch.cuda.is_available()):
-            raise RuntimeError(f"已选择 {requested.upper()}，但 PyMSS 环境中 CUDA 不可用")
+            raise RuntimeError(f"已选择 {requested.upper()}，但 PyMSS 环境中对应 GPU 不可用；AMD 需要 ROCm Torch")
         backend = "rocm" if getattr(torch.version, "hip", None) else "cuda"
         if requested == "rocm" and backend != "rocm":
             raise RuntimeError("已选择 ROCm，但 PyMSS 环境不是 ROCm Torch")
+        if requested == "cuda" and backend != "cuda":
+            raise RuntimeError("已选择 NVIDIA CUDA，但 PyMSS 环境安装的是 AMD ROCm Torch")
         return "cuda", backend
     if requested in {"directml", "dml"}:
-        from inference_device import _directml_device  # type: ignore
-
-        resolved = _directml_device(torch)
-        if resolved is None:
-            raise RuntimeError("已选择 DirectML，但 PyMSS 环境或驱动不可用")
-        return str(resolved.device), "directml"
+        raise RuntimeError("PyMSS 不支持 DirectML；AMD 显卡请安装 ROCm 环境并选择 rocm")
     if requested == "cpu":
         return "cpu", "cpu"
     return requested, requested
@@ -115,10 +105,6 @@ def main() -> int:
         import torch
 
         device_name, device_backend = _resolve_device(args.device)
-        if device_backend == "directml":
-            from inference_device import patch_directml_float32  # type: ignore
-
-            patch_directml_float32(torch)
     except (ImportError, RuntimeError) as exc:
         raise RuntimeError(f"PyMSS 设备初始化失败: {exc}") from exc
     separator = MSSeparator.from_model_name(

@@ -8,7 +8,7 @@
   Examples:
     ./installer/build-all-packages.ps1
     ./installer/build-all-packages.ps1 -RebuildWheelhouse
-    ./installer/build-all-packages.ps1 -Python C:\Python310\python.exe
+    ./installer/build-all-packages.ps1 -Python C:\Python312\python.exe
     ./installer/build-all-packages.ps1 -RuntimeAssets D:\XB-SVCB\assets\runtime\core-cu128
     ./installer/build-all-packages.ps1 -ReuseBuildOutputs
 #>
@@ -29,7 +29,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 $BuildScript = Join-Path $PSScriptRoot 'build.ps1'
 $WheelhouseScript = Join-Path $Root 'install\prepare_wheelhouse.py'
 $DistDir = Join-Path $Root 'dist'
-$Stacks = @('cpu', 'directml', 'cu126', 'cu128')
+$Stacks = @('cpu', 'rocm10', 'cu126', 'cu128')
 
 function Require-File([string]$Path, [string]$Label) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -37,47 +37,47 @@ function Require-File([string]$Path, [string]$Label) {
   }
 }
 
-function Test-Python310([string]$Path) {
+function Test-Python312([string]$Path) {
   if ([string]::IsNullOrWhiteSpace($Path) -or
       -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     return $false
   }
-  & $Path -c "import sys; raise SystemExit(0 if sys.implementation.name == 'cpython' and sys.version_info[:2] == (3, 10) and sys.maxsize > 2**32 else 1)"
+  & $Path -c "import sys; raise SystemExit(0 if sys.implementation.name == 'cpython' and sys.version_info[:2] == (3, 12) and sys.maxsize > 2**32 else 1)"
   return $LASTEXITCODE -eq 0
 }
 
-function Resolve-Python310([string]$ExplicitPath) {
+function Resolve-Python312([string]$ExplicitPath) {
   if ($ExplicitPath) {
     $candidate = [IO.Path]::GetFullPath($ExplicitPath)
-    if (-not (Test-Python310 $candidate)) {
-      throw "-Python must point to a runnable CPython 3.10.x python.exe: $candidate"
+    if (-not (Test-Python312 $candidate)) {
+      throw "-Python must point to a runnable CPython 3.12.x python.exe: $candidate"
     }
     return $candidate
   }
-  if ($env:XB_PYTHON_EXE -and (Test-Python310 $env:XB_PYTHON_EXE)) {
+  if ($env:XB_PYTHON_EXE -and (Test-Python312 $env:XB_PYTHON_EXE)) {
     return [IO.Path]::GetFullPath($env:XB_PYTHON_EXE)
   }
   if (Get-Command py -ErrorAction SilentlyContinue) {
     $candidate = $null
     try {
-      $candidate = (& py -3.10 -c "import sys; print(sys.executable)" 2>$null | Select-Object -First 1)
+      $candidate = (& py -3.12 -c "import sys; print(sys.executable)" 2>$null | Select-Object -First 1)
     } catch {
       $candidate = $null
     }
-    if ($LASTEXITCODE -eq 0 -and (Test-Python310 $candidate)) {
+    if ($LASTEXITCODE -eq 0 -and (Test-Python312 $candidate)) {
       return [IO.Path]::GetFullPath($candidate)
     }
   }
   foreach ($pythonCommand in @(Get-Command python -All -CommandType Application -ErrorAction SilentlyContinue)) {
-    if (Test-Python310 $pythonCommand.Source) {
+    if (Test-Python312 $pythonCommand.Source) {
       return [IO.Path]::GetFullPath($pythonCommand.Source)
     }
   }
-  $candidate = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python310\python.exe'
-  if (Test-Python310 $candidate) {
+  $candidate = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'
+  if (Test-Python312 $candidate) {
     return [IO.Path]::GetFullPath($candidate)
   }
-  throw "CPython 3.10.x was not detected. Pass -Python C:\path\to\python.exe."
+  throw "CPython 3.12.x was not detected. Pass -Python C:\path\to\python.exe."
 }
 
 Require-File $BuildScript 'Installer build script'
@@ -92,8 +92,8 @@ if ($RuntimeAssets) {
   $validationArgs.RuntimeAssets = $RuntimeAssets
 }
 & $BuildScript @validationArgs
-$BuildPython = Resolve-Python310 $Python
-Write-Host ("Locked build Python 3.10: {0}" -f $BuildPython) -ForegroundColor Green
+$BuildPython = Resolve-Python312 $Python
+Write-Host ("Locked build Python 3.12: {0}" -f $BuildPython) -ForegroundColor Green
 
 $refreshWeb = (-not $ReuseBuildOutputs) -or $RebuildWeb
 $refreshApp = (-not $ReuseBuildOutputs) -or $RebuildApp
@@ -105,7 +105,7 @@ if ($RebuildWheelhouse) {
     --root $Root `
     --clean `
     --stack cpu `
-    --stack directml `
+    --stack rocm10 `
     --stack cu126 `
     --stack cu128
   if ($LASTEXITCODE -ne 0) {
@@ -122,7 +122,7 @@ if (-not $KeepExistingInstallers) {
         ($_.Name -like 'XB-SVCB-Setup-*.bin') -or
         ($_.Name -in @(
           'XB-SVCB-Setup-CPU.exe',
-          'XB-SVCB-Setup-DirectML.exe',
+          'XB-SVCB-Setup-ROCm10.exe',
           'XB-SVCB-Setup-CUDA126.exe',
           'XB-SVCB-Setup-CUDA128.exe'
         ))
@@ -154,7 +154,7 @@ for ($index = 0; $index -lt $Stacks.Count; $index++) {
 
 $expectedExecutables = @(
   'XB-SVCB-Setup-CPU.exe',
-  'XB-SVCB-Setup-DirectML.exe',
+  'XB-SVCB-Setup-ROCm10.exe',
   'XB-SVCB-Setup-CUDA126.exe',
   'XB-SVCB-Setup-CUDA128.exe'
 )

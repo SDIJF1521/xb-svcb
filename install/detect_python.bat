@@ -1,5 +1,5 @@
 @echo off
-rem Locate a real CPython 3.10.x interpreter and export its absolute path.
+rem Locate a real CPython 3.12.x interpreter and export its absolute path.
 rem This file intentionally does not use setlocal: callers consume XB_PYTHON_*.
 
 set "XB_PYTHON_DETECTED="
@@ -18,7 +18,7 @@ if defined XB_PYTHON_DETECTED goto PYTHON_FOUND
 
 rem Python's launcher resolves Store installs and installations outside PATH.
 where py >nul 2>&1 && (
-  for /f "delims=" %%P in ('py -3.10 -c "import sys; print(sys.executable)" 2^>nul') do if not defined XB_PYTHON_DETECTED call :TRY_PYTHON "%%P"
+  for /f "delims=" %%P in ('py -3.12 -c "import sys; print(sys.executable)" 2^>nul') do if not defined XB_PYTHON_DETECTED call :TRY_PYTHON "%%P"
 )
 if defined XB_PYTHON_DETECTED goto PYTHON_FOUND
 
@@ -26,8 +26,8 @@ rem Check every PATH result. The first one may be the non-runnable WindowsApps a
 for /f "delims=" %%P in ('where python 2^>nul') do if not defined XB_PYTHON_DETECTED call :TRY_PYTHON "%%P"
 if defined XB_PYTHON_DETECTED goto PYTHON_FOUND
 
-rem Keep the common per-user CPython 3.10 location as a final fallback.
-call :TRY_PYTHON "%LocalAppData%\Programs\Python\Python310\python.exe"
+rem Keep the common per-user CPython 3.12 location as a final fallback.
+call :TRY_PYTHON "%LocalAppData%\Programs\Python\Python312\python.exe"
 if defined XB_PYTHON_DETECTED goto PYTHON_FOUND
 
 set "XB_PYTHON_EXE="
@@ -50,7 +50,7 @@ if "%~1"=="" exit /b 1
 if not exist "%~1" exit /b 1
 rem A trailing slash is not a reliable directory test on Windows: it can
 rem also match a runnable python.exe. The execution probe rejects directories.
-"%~1" -c "import sys; raise SystemExit(0 if sys.implementation.name == 'cpython' and sys.version_info[:2] == (3, 10) and sys.maxsize > 2**32 else 1)" >nul 2>&1
+"%~1" -c "import sys; raise SystemExit(0 if sys.implementation.name == 'cpython' and sys.version_info[:2] == (3, 12) and sys.maxsize > 2**32 else 1)" >nul 2>&1
 if errorlevel 1 exit /b 1
 set "XB_PYTHON_DETECTED=%~f1"
 exit /b 0

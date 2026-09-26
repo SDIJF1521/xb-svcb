@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import config
 from infrastructure.uvr_tool import UvrTool
 from infrastructure.pymss_tool import PymssTool
+from infrastructure.uvr_worker import _configure_rocm_miopen
 
 
 class UvrStatusTests(unittest.TestCase):
@@ -21,6 +23,21 @@ class UvrStatusTests(unittest.TestCase):
         manifest = patch.object(config, "_RUNTIME_MANIFEST", {})
         manifest.start()
         self.addCleanup(manifest.stop)
+
+    def test_uvr_rocm_disables_gfx12_miopen_asm_by_default(self) -> None:
+        names = (
+            "MIOPEN_DEBUG_GCN_ASM_KERNELS",
+            "MIOPEN_DEBUG_CONV_DIRECT_ASM_3X3U",
+            "MIOPEN_DEBUG_CONV_DIRECT_ASM_1X1U",
+            "MIOPEN_DEBUG_CONV_IMPLICIT_GEMM_ASM_FWD_V4R1",
+            "MIOPEN_DEBUG_CONV_IMPLICIT_GEMM_ASM_FWD_GTC_XDLOPS",
+            "MIOPEN_FIND_MODE",
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            _configure_rocm_miopen()
+            self.assertEqual(os.environ["MIOPEN_DEBUG_GCN_ASM_KERNELS"], "0")
+            self.assertEqual(os.environ["MIOPEN_FIND_MODE"], "FAST")
+            self.assertTrue(all(os.environ[name] == "0" for name in names[:-1]))
 
     def test_pymss_catalog_is_limited_to_two_processing_purposes(self) -> None:
         self.assertEqual(

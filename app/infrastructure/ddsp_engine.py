@@ -67,7 +67,11 @@ class DdspSvcEngine:
                 missing.append(f"输入人声不存在: {vocals}")
             raise RuntimeError("；".join(missing) or "DDSP-SVC 推理条件不完整")
 
-        self._run_worker(main_model, main_config, vocals, out_path, params, log_file)
+        self._run_worker(
+            main_model, main_config, vocals, out_path, params, log_file,
+            ddsp_checkpoint=str((model or {}).get("diffusion_model_path") or ""),
+            ddsp_config=str((model or {}).get("diffusion_config_path") or ""),
+        )
         return out_path
 
     def _run_worker(
@@ -78,6 +82,8 @@ class DdspSvcEngine:
         out_path: Path,
         params: InferenceParams,
         log_file: Optional[Path],
+        ddsp_checkpoint: str = "",
+        ddsp_config: str = "",
     ) -> None:
         f0_method = (params.f0_method or "rmvpe").lower()
         if f0_method == "pm":
@@ -115,6 +121,8 @@ class DdspSvcEngine:
             "--speaker",
             params.speaker or "1",
         ]
+        if ddsp_checkpoint:
+            cmd.extend(["--ddsp-checkpoint", ddsp_checkpoint, "--ddsp-config", ddsp_config])
         env = os.environ.copy()
         env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
         env["PYTHONIOENCODING"] = "utf-8"

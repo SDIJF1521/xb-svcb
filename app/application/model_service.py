@@ -151,9 +151,20 @@ class ModelService:
             if main_config is None:
                 shutil.rmtree(dst_dir, ignore_errors=True)
                 return None
-            if is_seedvc:
-                diffusion_model = None
-                diffusion_config = None
+            if is_seedvc or is_ddsp:
+                companion = payload.get("diffusion_model")
+                diffusion_model = copy(companion, f"companion_{Path(companion).name}" if companion else None)
+                diffusion_config = copy(payload.get("diffusion_config"), "companion_config.yaml") if is_ddsp else None
+                if (companion and diffusion_model is None) or (is_ddsp and companion and diffusion_config is None):
+                    shutil.rmtree(dst_dir, ignore_errors=True)
+                    return None
+                try:
+                    self._preserve_model_assets(Path(main_config_src), Path(main_config.path))
+                    if diffusion_config:
+                        self._preserve_model_assets(Path(payload["diffusion_config"]), Path(diffusion_config.path))
+                except (OSError, ValueError):
+                    shutil.rmtree(dst_dir, ignore_errors=True)
+                    return None
             else:
                 diffusion_model = copy(payload.get("diffusion_model"))
                 diffusion_config = copy(payload.get("diffusion_config"))
@@ -219,6 +230,51 @@ class ModelService:
         if not self._settings.get("default_model_id"):
             self._settings.set("default_model_id", model_id)
         return record
+
+    @staticmethod
+    def _preserve_model_assets(source: Path, destination: Path) -> None:
+        """Keep explicitly referenced local inference assets beside an imported config."""
+        import yaml
+
+        try:
+            data = yaml.safe_load(source.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            return
+        keys = {"encoder_ckpt", "ckpt", "path", "config", "name", "ar_checkpoint_path",
+                "tokenizer_name", "ssl_model_name", "pretrained_model_name_or_path"}
+        copied: dict[Path, Path] = {}
+
+        def visit(node: Any) -> None:
+            if not isinstance(node, dict):
+                return
+            for key, value in node.items():
+                if isinstance(value, dict):
+                    visit(value)
+                elif key in keys and isinstance(value, str) and value.strip():
+                    asset = (source.parent / value).resolve()
+                    if not asset.exists() or asset == source.resolve():
+                        continue
+                    # A model directory is identified by its Hugging Face config.
+                    if asset.is_dir() and not (asset / "config.json").is_file():
+                        continue
+                    target = copied.get(asset)
+                    if target is None:
+                        target = destination.parent / "assets" / destination.stem / str(len(copied)) / asset.name
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        if asset.is_dir():
+                            shutil.copytree(asset, target)
+                        else:
+                            shutil.copy2(asset, target)
+                            for name in ("config.json", "config.yaml"):
+                                sibling = asset.parent / name
+                                if sibling.is_file() and sibling != asset:
+                                    shutil.copy2(sibling, target.parent / name)
+                        copied[asset] = target
+                    node[key] = target.relative_to(destination.parent).as_posix()
+
+        visit(data)
+        if copied:
+            destination.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     @staticmethod
     def _infer_pitch_profile(config_path: str, framework: str) -> dict[str, float] | None:

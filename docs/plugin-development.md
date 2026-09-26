@@ -120,7 +120,7 @@ node --version
 npm --version
 ```
 
-Python/混合插件还建议安装 Python 3.10 或更高版本，用于本地类型检查和测试：
+Python/混合插件还建议安装 Python 3.12 或更高版本，用于本地类型检查和测试：
 
 ```powershell
 python --version
@@ -1420,7 +1420,7 @@ app.permission(
 
 ## 14. 第三方依赖
 
-宿主使用专用 Python 3.10 运行时，只保证标准库和 `xb_svcb_plugin` SDK。不要假设用户安装了 `requests`、`numpy` 等包。
+宿主使用专用 Python 3.12 运行时，只保证标准库和 `xb_svcb_plugin` SDK。不要假设用户安装了 `requests`、`numpy` 等包。
 
 在项目根目录的 `requirements.txt` 固定依赖：
 
@@ -1434,7 +1434,7 @@ httpx==0.28.1
 import httpx
 ```
 
-使用 `.python('plugin.py', { requirements: 'requirements.txt' })` 或 `.hybrid(...)` 声明依赖文件。`npm run pack` 会在开发机使用 Python 3.10 把依赖装入临时 `vendor/` 后再打包；用户安装和启用插件时不会运行 pip 或联网。Worker 以隔离模式运行，只读取宿主 SDK、插件代码、包内 `vendor/` 和标准库。
+使用 `.python('plugin.py', { requirements: 'requirements.txt' })` 或 `.hybrid(...)` 声明依赖文件。`npm run pack` 会在开发机使用 Python 3.12 把依赖装入临时 `vendor/` 后再打包；用户安装和启用插件时不会运行 pip 或联网。Worker 以隔离模式运行，只读取宿主 SDK、插件代码、包内 `vendor/` 和标准库。
 
 发布要求：
 
@@ -1761,7 +1761,7 @@ ActionResult.create_work(payload)
 
 ### Python 插件无法启用
 
-确认 XB-SVCB 能找到 Python 3.10+，插件包内存在清单声明的入口，例如 `plugin.py`，且入口中的 `Plugin()` ID 与清单一致。
+确认 XB-SVCB 能找到 Python 3.12.x，插件包内存在清单声明的入口，例如 `plugin.py`，且入口中的 `Plugin()` ID 与清单一致。
 
 ### 页面按钮提示“未注册 Python 动作”
 

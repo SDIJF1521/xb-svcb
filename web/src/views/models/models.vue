@@ -137,7 +137,7 @@
           <!-- SeedVC：checkpoint + config；参考音频在推理时选择 -->
           <div v-else-if="impFramework === 'seed-vc'" class="imp-grid">
             <div class="imp-field" :class="{ filled: !!imp.mainModel }">
-              <label>SeedVC checkpoint <i>*</i></label>
+              <label>SeedVC / V2 CFM checkpoint <i>*</i></label>
               <button class="picker" @click="pick('mainModel', 'model')">
                 <el-icon><Document /></el-icon>
                 <span class="picker-text">{{ baseName(imp.mainModel) || '选择 ft_model.pth / checkpoint.pth' }}</span>
@@ -154,7 +154,7 @@
             </div>
           </div>
 
-          <!-- DDSP-SVC：Rectified Flow checkpoint + 同目录配置 -->
+          <!-- DDSP-SVC model families share the checkpoint/config import. -->
           <div v-else-if="impFramework === 'ddsp-svc'" class="imp-grid">
             <div class="imp-field" :class="{ filled: !!imp.mainModel }">
               <label>DDSP-SVC checkpoint <i>*</i></label>
@@ -189,6 +189,24 @@
               <button class="picker" @click="pick('indexFile', 'index')">
                 <el-icon><Document /></el-icon>
                 <span class="picker-text">{{ baseName(imp.indexFile) || '选择 added_xxx.index' }}</span>
+                <el-icon class="picker-arrow"><Plus /></el-icon>
+              </button>
+            </div>
+          </div>
+          <div v-if="impFramework === 'seed-vc' || impFramework === 'ddsp-svc'" class="imp-grid">
+            <div class="imp-field" :class="{ filled: !!imp.diffusionModel }">
+              <label>{{ impFramework === 'seed-vc' ? 'V2 AR 权重（可选）' : '浅扩散 DDSP 权重（可选）' }}</label>
+              <button class="picker" @click="pick('diffusionModel', 'model')">
+                <el-icon><Document /></el-icon>
+                <span class="picker-text">{{ baseName(imp.diffusionModel) || '选择配套 checkpoint' }}</span>
+                <el-icon class="picker-arrow"><Plus /></el-icon>
+              </button>
+            </div>
+            <div v-if="impFramework === 'ddsp-svc'" class="imp-field" :class="{ filled: !!imp.diffusionConfig }">
+              <label>浅扩散 DDSP 配置 <i v-if="imp.diffusionModel">*</i></label>
+              <button class="picker" @click="pick('diffusionConfig', 'config')">
+                <el-icon><Document /></el-icon>
+                <span class="picker-text">{{ baseName(imp.diffusionConfig) || '选择配套 config.yaml' }}</span>
                 <el-icon class="picker-arrow"><Plus /></el-icon>
               </button>
             </div>
@@ -742,13 +760,14 @@ const suggestedName = computed(() => baseName(imp.value.mainModel).replace(/\.[^
 const importHint = computed(() => {
   if (impFramework.value === 'rvc') return '主模型(.pth) 必填，检索文件(.index) 可选'
   if (impFramework.value === 'seed-vc') return 'checkpoint + 配置必填；参考音频在推理时选择'
-  if (impFramework.value === 'ddsp-svc') return 'Rectified Flow checkpoint + config.yaml 必填'
+  if (impFramework.value === 'ddsp-svc') return 'DDSP / Diffusion / Rectified Flow checkpoint + config.yaml'
   return '主模型 + 配置为必填，扩散模型可选'
 })
 const canImport = computed(() =>
   impFramework.value === 'rvc'
     ? !!imp.value.mainModel
-    : !!imp.value.mainModel && !!imp.value.mainConfig,
+    : !!imp.value.mainModel && !!imp.value.mainConfig &&
+      (impFramework.value !== 'ddsp-svc' || !imp.value.diffusionModel || !!imp.value.diffusionConfig),
 )
 
 async function pick(field: keyof typeof imp.value, kind: 'model' | 'config' | 'index') {
@@ -783,14 +802,13 @@ async function doImport() {
   try {
     const isRvc = impFramework.value === 'rvc'
     const isSeedVc = impFramework.value === 'seed-vc'
-    const isDdsp = impFramework.value === 'ddsp-svc'
     const created = await modelsStore.importModel({
       name: imp.value.name.trim() || undefined,
       framework: impFramework.value,
       main_model: imp.value.mainModel,
       main_config: isRvc ? undefined : imp.value.mainConfig,
-      diffusion_model: isRvc || isSeedVc || isDdsp ? null : imp.value.diffusionModel || null,
-      diffusion_config: isRvc || isSeedVc || isDdsp ? null : imp.value.diffusionConfig || null,
+      diffusion_model: isRvc ? null : imp.value.diffusionModel || null,
+      diffusion_config: isRvc || isSeedVc ? null : imp.value.diffusionConfig || null,
       index_file: isRvc ? imp.value.indexFile || null : null,
     })
     if (created) {
@@ -1413,6 +1431,7 @@ onUnmounted(() => {
 .seg-btn:hover { color: var(--xb-text); }
 .seg-btn.on { background: linear-gradient(135deg, var(--xb-primary), var(--xb-primary-2)); color: var(--xb-on-primary); }
 .imp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.imp-grid + .imp-grid { margin-top: 14px; }
 .imp-field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 7px; color: var(--xb-text); }
 .imp-field label i { color: var(--xb-accent); font-style: normal; }
 .picker { width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-radius: 9px; border: 1px dashed var(--xb-border); background: rgba(var(--xb-fill-rgb), 0.04); color: var(--xb-muted); cursor: pointer; transition: all 0.2s; }
@@ -1608,6 +1627,13 @@ onUnmounted(() => {
 
 @media (max-width: 720px) {
   .page-head { flex-direction: column; align-items: flex-start; }
+  .tabs { display: flex; max-width: 100%; overflow-x: auto; }
+  .tab { flex-shrink: 0; white-space: nowrap; }
+  .block-head { flex-wrap: wrap; gap: 8px; }
+  .block-head h2 { flex-shrink: 0; }
+  .fw-row { flex-direction: column; align-items: stretch; gap: 8px; }
+  .seg { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .seg-btn { min-width: 0; white-space: nowrap; }
   .framework-grid { grid-template-columns: 1fr; }
   .imp-grid { grid-template-columns: 1fr; }
   .local-tools { flex-direction: column; align-items: stretch; }

@@ -3,10 +3,10 @@
   "id": "core-cu128",
   "experimental": true,
   "stack": "cu128",
-  "python": "3.10",
+  "python": "3.12",
   "platform": "win_amd64",
   "lock": "requirements.lock",
-  "lock_sha256": "dd95d74cd428d35d8559625ebb471b9a92219fa45af3898d02bc2ce19ba81805",
+  "lock_sha256": "99648e092cfb5c55012afa24973a74f46a4d9434b24ddc8a2bd0a71f205c4b97",
   "optional_packages": [
     "hf-xet"
   ],
@@ -17,9 +17,9 @@
   "artifacts": [
     {
       "group": "candidate",
-      "path": "assets/runtime/core-cu128/candidate/numpy-2.2.6-cp310-cp310-win_amd64.whl",
-      "bytes": 12904620,
-      "sha256": "f0fd6321b839904e15c46e0d257fdd101dd7f530fe03fd6359c1ea63738703f3"
+      "path": "assets/runtime/core-cu128/candidate/numpy-2.2.6-cp312-cp312-win_amd64.whl",
+      "bytes": 12614190,
+      "sha256": "c1f9540be57940698ed329904db803cf7a402f3fc200bfe599334c9bd84a40b2"
     },
     {
       "group": "candidate",
@@ -47,9 +47,9 @@
     },
     {
       "group": "compat",
-      "path": "assets/runtime/core-cu128/compat/crcmod-1.7-cp310-cp310-win_amd64.whl",
-      "bytes": 24765,
-      "sha256": "12563314e45cd1205b362062499069bab19a0b0a72290b2bd894e2ebefcb7eeb"
+      "path": "assets/runtime/core-cu128/compat/crcmod-1.7-cp312-cp312-win_amd64.whl",
+      "bytes": 25423,
+      "sha256": "ef22f5c59bde8d01f9f8546074ef2294371b954e7881b01f17cec1c916954949"
     },
     {
       "group": "compat",

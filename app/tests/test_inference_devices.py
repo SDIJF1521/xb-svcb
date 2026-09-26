@@ -571,13 +571,13 @@ def test_seedvc_directml_f0_integer_and_embedding_lookup_stay_on_cpu(monkeypatch
     assert ("embedding", "cpu", "cpu", (None, None, 2.0, False, False)) in calls
 
 
-def test_installer_detects_amd_as_directml_when_nvidia_is_absent() -> None:
+def test_installer_detects_amd_as_rocm10_when_nvidia_is_absent() -> None:
     installer = _load_installer_module()
     completed = SimpleNamespace(stdout="AMD Radeon RX 7900 XTX\n", returncode=0)
     with patch.object(installer, "find_nvidia_smi", return_value=None), patch.object(
         installer.os, "name", "nt"
     ), patch.object(installer.subprocess, "run", return_value=completed):
-        assert installer.detect_gpu_stack() == "directml"
+        assert installer.detect_gpu_stack() == "rocm10"
 
 
 def test_environment_probe_hides_windows_console(tmp_path: Path) -> None:
@@ -696,6 +696,7 @@ def test_ddsp_directml_is_not_advertised_as_usable(monkeypatch) -> None:
     config = SimpleNamespace(
         DATA_DIR=Path("cache"),
         UVR_PYTHON=Path("uvr.exe"),
+        PYMSS_PYTHON=Path("pymss.exe"),
         SVC_PYTHON=Path("svc.exe"),
         RVC_PYTHON=Path("rvc.exe"),
         SEEDVC_PYTHON=Path("seed.exe"),

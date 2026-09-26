@@ -101,7 +101,7 @@ def check_environment(python: Path, profile: dict, pins: dict[str, str]) -> dict
     changed = {name: {"expected": version, "actual": packages[name]}
                for name, version in pins.items() if name in packages and packages[name] != version}
     extra = sorted(packages.keys() - pins.keys())
-    platform_ok = (actual["python"].split(".")[:2] == ["3", "10"]
+    platform_ok = (actual["python"].split(".")[:2] == profile["python"].split(".")[:2]
                    and actual["system"] == "win32" and actual["machine"].lower() in {"amd64", "x86_64"})
     return {**actual, "ok": platform_ok and not missing and not changed and not extra,
             "platform_ok": platform_ok, "installed_count": len(packages), "locked_count": len(pins),

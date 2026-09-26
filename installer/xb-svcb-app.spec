@@ -60,6 +60,7 @@ hiddenimports = [
     "soundcard.mediafoundation",
     "soundcard.coreaudioconstants",
     "numpy",
+    "yaml",
 ]
 
 # pywebview（Windows EdgeChromium 后端）+ 其 http server 依赖一并收集；

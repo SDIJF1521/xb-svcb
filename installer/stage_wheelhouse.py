@@ -8,20 +8,22 @@ the stack-neutral bootstrap/common groups.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import shutil
+import zipfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 
-STACKS = frozenset({"cpu", "directml", "cu126", "cu128"})
+STACKS = frozenset({"cpu", "rocm10", "cu126", "cu128"})
 REQUIRED_COMPONENT_GROUPS = {
-    "cpu": ("svc", "rvc", "pymss"),
-    "directml": ("ddsp", "hub", "vocal", "pymss"),
-    "cu126": ("pymss",),
-    "cu128": ("pymss",),
+    "cpu": ("svc", "rvc", "pymss", "ddsp-legacy"),
+    "rocm10": ("pymss", "ddsp-legacy"),
+    "cu126": ("pymss", "ddsp-legacy"),
+    "cu128": ("pymss", "ddsp-legacy"),
 }
 
 
@@ -29,7 +31,7 @@ def wheel_belongs_to_stack(relative_path: Path, stack: str) -> bool:
     parts = tuple(part.lower() for part in relative_path.parts[:-1])
     if "bootstrap" in parts or "common" in parts:
         return True
-    if "py39" in parts:
+    if any(part.startswith("py") and part[2:].isdigit() and part != "py312" for part in parts):
         return False
     selected = STACKS.intersection(parts)
     return selected == {stack}
@@ -45,6 +47,35 @@ def _safe_output(root: Path, output: Path, source: Path) -> Path:
     if output == staging_root or staging_root not in output.parents:
         raise ValueError(f"staging output must be a child of {staging_root}: {output}")
     return output
+
+
+def validate_rocm_wheels(directory: Path) -> None:
+    """Inspect the build marker without importing or executing wheel contents."""
+    wheels = list(directory.glob("torch-*.whl"))
+    if not wheels:
+        raise RuntimeError(f"ROCm 10 Torch wheel missing: {directory}")
+    if any(directory.glob("torch_directml-*.whl")):
+        raise RuntimeError(f"DirectML wheel in ROCm 10 wheelhouse: {directory}")
+    for wheel in wheels:
+        try:
+            with zipfile.ZipFile(wheel) as archive:
+                tree = ast.parse(archive.read("torch/version.py").decode("utf-8"))
+            versions = {}
+            for node in tree.body:
+                targets = node.targets if isinstance(node, ast.Assign) else (
+                    [node.target] if isinstance(node, ast.AnnAssign) else []
+                )
+                for target in targets:
+                    if isinstance(target, ast.Name) and target.id in {"hip", "rocm"}:
+                        versions[target.id] = ast.literal_eval(node.value)
+            hip, rocm = versions.get("hip"), versions.get("rocm")
+            if not isinstance(hip, str) or not hip or not isinstance(rocm, str) or rocm.split(".")[0] != "10":
+                raise ValueError(f"expected ROCm 10 with HIP, got ROCm {rocm!r}, HIP {hip!r}")
+        except (KeyError, ValueError, SyntaxError, zipfile.BadZipFile) as exc:
+            raise RuntimeError(
+                f"Invalid ROCm 10 Torch wheel: {wheel}: {exc}. "
+                "Rebuild using XB_TORCH_ROCM_INDEX and matching XB_ROCM_TORCH_VERSION."
+            ) from exc
 
 
 def stage_wheelhouse(root: Path, stack: str, output: Path) -> dict[str, object]:
@@ -78,19 +109,24 @@ def stage_wheelhouse(root: Path, stack: str, output: Path) -> dict[str, object]:
             copied += 1
         groups[relative.parent.as_posix()] += 1
 
-    required = output / "py310" / stack
+    required = output / "py312" / stack
     if not required.is_dir() or not any(required.glob("*.whl")):
         raise RuntimeError(f"selected wheelhouse group is empty: {required}")
     bootstrap = output / "bootstrap"
     if not bootstrap.is_dir() or not any(bootstrap.glob("*.whl")):
         raise RuntimeError(f"bootstrap wheelhouse group is empty: {bootstrap}")
     for component in REQUIRED_COMPONENT_GROUPS[stack]:
-        group = output / component / "py310" / stack
+        group = output / component / "py312" / stack
         if not group.is_dir() or not any(group.glob("*.whl")):
             raise RuntimeError(
                 f"selected wheelhouse component group is empty: {group}; "
                 "rebuild the wheelhouse before packaging"
             )
+
+    if stack == "rocm10":
+        for group in groups:
+            if "rocm10" in Path(group).parts:
+                validate_rocm_wheels(output / group)
 
     manifest: dict[str, object] = {
         "schema": 1,

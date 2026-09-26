@@ -247,7 +247,7 @@ class PluginService:
         if not config.PLUGIN_WORKER.is_file() or not config.PLUGIN_SDK_DIR.is_dir():
             return {"ready": False, "error": "宿主 Python Worker 或 SDK 缺失"}
         if not config.PLUGIN_PYTHON or not config.PLUGIN_PYTHON.is_file():
-            return {"ready": False, "error": "未找到 Python 3.10+ 运行环境"}
+            return {"ready": False, "error": "未找到 Python 3.12.x 运行环境"}
         return {"ready": True, "error": ""}
 
     def install_bundle_bytes(self, name: str, data: bytes) -> dict[str, Any]:
@@ -517,7 +517,7 @@ class PluginService:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not config.PLUGIN_PYTHON or not config.PLUGIN_PYTHON.is_file():
-            return {"ok": False, "error": "未找到 Python 3.10+ 插件运行环境。"}
+            return {"ok": False, "error": "未找到 Python 3.12.x 插件运行环境。"}
         if not config.PLUGIN_WORKER.is_file() or not config.PLUGIN_SDK_DIR.is_dir():
             return {"ok": False, "error": "Python 插件 Worker 或 SDK 缺失。"}
         plugin_dir = Path(plugin["path"]).resolve()

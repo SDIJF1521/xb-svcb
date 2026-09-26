@@ -95,6 +95,7 @@ class SeedVcEngine:
             out_path,
             params,
             log_file,
+            ar_checkpoint=str((model or {}).get("diffusion_model_path") or ""),
         )
         return out_path
 
@@ -135,6 +136,8 @@ class SeedVcEngine:
         ]
         if low_latency:
             command.append("--low-latency")
+        if model.get("diffusion_model_path"):
+            command.extend(["--ar-checkpoint", str(model["diffusion_model_path"])])
         return PersistentInferenceSession(
             command,
             ready_marker="SEEDVC_SERVER_READY",
@@ -153,6 +156,7 @@ class SeedVcEngine:
         out_path: Path,
         params: InferenceParams,
         log_file: Optional[Path] = None,
+        ar_checkpoint: str = "",
     ) -> None:
         cmd = [
             str(config.SEEDVC_PYTHON),
@@ -182,6 +186,8 @@ class SeedVcEngine:
             "--fp16",
             "False" if (params.device or "").lower() == "cpu" else "True",
         ]
+        if ar_checkpoint:
+            cmd.extend(["--ar-checkpoint", ar_checkpoint])
         env = self._worker_env()
 
         try:

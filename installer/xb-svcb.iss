@@ -10,7 +10,7 @@
 ;
 ;  安装器在用户机上的行为：
 ;    - 释放打包好的应用本体 XB-SVCB.exe（前端与 worker 已内置，无需 Python 也能起界面）
-;    - 可选“搭建运行环境”：CUDA126/128 创建两层共享环境，CPU/DirectML 使用兼容隔离环境
+;    - 可选“搭建运行环境”：CUDA126/128 创建两层共享环境，CPU/ROCm 10 使用兼容隔离环境
 ;    - 创建开始菜单与桌面快捷方式（指向 XB-SVCB.exe）
 ;
 ;  用户机前置：安装器只检测缺失的 Python/Git/C++ Build Tools/CUDA Toolkit，
@@ -94,6 +94,7 @@ Source: "..\install\runtime_profiles\*"; DestDir: "{app}\install\runtime_profile
 Source: "..\assets\runtime\*"; DestDir: "{app}\assets\runtime"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression skipifsourcedoesntexist
 Source: "..\install\configure_user_env.py"; DestDir: "{app}\install"; Flags: ignoreversion
 Source: "..\install\detect_python.bat"; DestDir: "{app}\install"; Flags: ignoreversion
+Source: "..\install\build_rvc_compat.py"; DestDir: "{app}\install"; Flags: ignoreversion
 Source: "..\setup_env.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\setup_shared_env.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\install_prereqs.bat"; DestDir: "{app}"; Flags: ignoreversion
@@ -137,6 +138,7 @@ Type: filesandordirs; Name: "{app}\.venv-svc"
 Type: filesandordirs; Name: "{app}\.venv-rvc"
 Type: filesandordirs; Name: "{app}\.venv-seedvc"
 Type: filesandordirs; Name: "{app}\.venv-ddsp"
+Type: filesandordirs; Name: "{app}\.venv-ddsp-legacy"
 Type: filesandordirs; Name: "{app}\.venv-hub"
 Type: filesandordirs; Name: "{app}\runtimes"
 Type: files; Name: "{app}\runtime.json"
@@ -312,7 +314,7 @@ begin
   if (FileName = '') or (not FileExists(FileName)) then
     Exit;
   Result := Exec(FileName,
-    '-c "import sys; raise SystemExit(0 if sys.implementation.name == ''cpython'' and sys.version_info[:2] == (3, 10) and sys.maxsize > 2**32 else 1)"',
+    '-c "import sys; raise SystemExit(0 if sys.implementation.name == ''cpython'' and sys.version_info[:2] == (3, 12) and sys.maxsize > 2**32 else 1)"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
 end;
 
@@ -359,7 +361,7 @@ begin
   Result := PythonPathCommandExecutable(CommandName) <> '';
 end;
 
-function DetectPython310Executable(): String;
+function DetectPython312Executable(): String;
 var
   Candidate: String;
 begin
@@ -370,7 +372,7 @@ begin
     Result := Candidate;
     Exit;
   end;
-  Candidate := ExpandConstant('{localappdata}\Programs\Python\Python310\python.exe');
+  Candidate := ExpandConstant('{localappdata}\Programs\Python\Python312\python.exe');
   if PythonFileAvailable(Candidate) then
   begin
     Result := Candidate;
@@ -379,7 +381,7 @@ begin
   if CmdAvailable('py') then
   begin
     Candidate := Trim(CommandOutput(
-      'py -3.10 -c "import sys; print(sys.executable)"'));
+      'py -3.12 -c "import sys; print(sys.executable)"'));
     if PythonFileAvailable(Candidate) then
     begin
       Result := Candidate;
@@ -394,7 +396,7 @@ begin
   if CustomExecutable <> '' then
     Result := PythonFileAvailable(CustomExecutable)
   else
-    Result := DetectPython310Executable() <> '';
+    Result := DetectPython312Executable() <> '';
 end;
 
 function SystemFfmpegAvailable(): Boolean;
@@ -534,7 +536,7 @@ begin
   else if ContainsText(Names, 'NVIDIA') or ContainsText(Names, 'GeForce') then
     Result := 'cu126'
   else if ContainsText(Names, 'AMD') or ContainsText(Names, 'Radeon') then
-    Result := 'directml';
+    Result := 'rocm10';
 end;
 
 function DetectedGpuStackName(): String;
@@ -665,8 +667,8 @@ begin
     Result := 'NVIDIA 50 系 / Blackwell，固定使用 CUDA 12.8（cu128 torch）'
   else if Stack = 'cu126' then
     Result := 'NVIDIA 50 系以下兼容显卡，使用共享 CUDA 12.6（cu126 torch）'
-  else if Stack = 'directml' then
-    Result := 'AMD Radeon，使用 DirectML 与 torch-directml'
+  else if Stack = 'rocm10' then
+    Result := 'AMD Radeon，使用 ROCm 10 与 ROCm Torch'
   else
     Result := 'CPU 或未检测到兼容 GPU，安装 CPU 版 torch';
 end;
@@ -712,14 +714,14 @@ var
   DetectedStack, PythonExe, PythonStatus: String;
 begin
   DetectedStack := InstallerGpuStackName();
-  PythonExe := DetectPython310Executable();
+  PythonExe := DetectPython312Executable();
   if PythonExe <> '' then
     PythonStatus := '已检测到 ' + PythonExe
   else
     PythonStatus := '未检测到，请稍后选择 python.exe';
   Result :=
     '安装器会先检查运行环境，再进入安装路径选择。当前检测结果：' + #13#10 +
-    '  Python 3.10.x：' + PythonStatus + #13#10 +
+    '  Python 3.12.x：' + PythonStatus + #13#10 +
     '  Git：' + StatusText(CmdAvailable('git')) + #13#10 +
     '  ffmpeg / ffprobe：' + StatusText(SystemFfmpegAvailable()) + '（未检测到时使用安装包内置版本）' + #13#10 +
     '  uv：' + StatusText(CmdAvailable('uv')) + '（安装时自动准备；不会托管 Python）' + #13#10;
@@ -730,7 +732,7 @@ begin
     '  VB-CABLE：' + StatusText(VbCableAvailable()) + '（系统音频变声可选，未安装时请手动安装）' + #13#10 +
     '  JUCE VST3 Host：随安装包内置，安装后检查' + #13#10 +
     '  GPU 推理栈：' + GpuStackLabel(DetectedStack) + #13#10 +
-    'Python 采用用户已安装的 3.10.x；可以使用自动检测结果，也可以手动指定 python.exe。';
+    'Python 采用用户已安装的 3.12.x；可以使用自动检测结果，也可以手动指定 python.exe。';
 end;
 
 procedure OpenDownloadUrl(const URL: String);
@@ -754,7 +756,7 @@ end;
 
 procedure UvDownloadClick(Sender: TObject);
 begin
-  MsgBox('uv 会在锁定 Python 3.10.x 后自动安装到当前用户目录，无需手动下载。',
+  MsgBox('uv 会在锁定 Python 3.12.x 后自动安装到当前用户目录，无需手动下载。',
     mbInformation, MB_OK);
 end;
 
@@ -781,7 +783,7 @@ function GpuStackName(): String; forward;
 
 procedure DriverDownloadClick(Sender: TObject);
 begin
-  if GpuStackName() = 'directml' then
+  if GpuStackName() = 'rocm10' then
     OpenDownloadUrl('https://www.amd.com/en/support/download/drivers.html')
   else
     OpenDownloadUrl('https://www.nvidia.com/download/index.aspx');
@@ -819,7 +821,7 @@ end;
 
 procedure RefreshPrereqDownloadStatus;
 var
-  IsNvidia, IsDirectml, PythonReady: Boolean;
+  IsNvidia, IsRocm, PythonReady: Boolean;
   DetectedStack, CudaVersion, GitPath, SelectedPython, PythonDir: String;
   CudaPath: String;
   UserProfilePath, UvStandalonePath, UvPythonScriptsPath, UvUserScriptsPath: String;
@@ -833,18 +835,18 @@ begin
   SelectedPython := PythonPathPage.Values[0];
   if not PythonFileAvailable(SelectedPython) then
   begin
-    SelectedPython := DetectPython310Executable();
+    SelectedPython := DetectPython312Executable();
     if SelectedPython <> '' then
       PythonPathPage.Values[0] := SelectedPython;
   end;
   PythonReady := PythonFileAvailable(SelectedPython);
   PythonDir := ExtractFileDir(SelectedPython);
   UvPythonScriptsPath := PathJoin(PythonDir, 'Scripts\uv.exe');
-  UvUserScriptsPath := ExpandConstant('{userappdata}\Python\Python310\Scripts\uv.exe');
+  UvUserScriptsPath := ExpandConstant('{userappdata}\Python\Python312\Scripts\uv.exe');
   if PythonReady then
-    PythonStatusLabel.Caption := 'Python 3.10.x：已锁定 ' + SelectedPython
+    PythonStatusLabel.Caption := 'Python 3.12.x：已锁定 ' + SelectedPython
   else
-    PythonStatusLabel.Caption := 'Python 3.10.x：未检测到，请下载或手动选择';
+    PythonStatusLabel.Caption := 'Python 3.12.x：未检测到，请下载或手动选择';
   GitStatusLabel.Caption := 'Git：' +
     StatusText(CommandOrFileAvailable('git', GitPath,
       ExpandConstant('{autopf}\Git\cmd\git.exe'), ''));
@@ -863,11 +865,11 @@ begin
 
   DetectedStack := InstallerGpuStackName();
   IsNvidia := (DetectedStack = 'cu126') or (DetectedStack = 'cu128');
-  IsDirectml := DetectedStack = 'directml';
+  IsRocm := DetectedStack = 'rocm10';
   CudaStatusLabel.Visible := IsNvidia;
   CudaDownloadButton.Visible := IsNvidia;
-  DriverStatusLabel.Visible := IsNvidia or IsDirectml;
-  DriverDownloadButton.Visible := IsNvidia or IsDirectml;
+  DriverStatusLabel.Visible := IsNvidia or IsRocm;
+  DriverDownloadButton.Visible := IsNvidia or IsRocm;
   if IsNvidia then
   begin
     CudaVersion := DetectedCudaVersion();
@@ -885,7 +887,7 @@ begin
     CudaStatusLabel.Caption := '';
     CudaDownloadButton.Caption := '打开 CUDA 下载';
   end;
-  if IsDirectml then
+  if IsRocm then
     DriverStatusLabel.Caption := 'AMD Radeon 驱动：请确认已安装'
   else if IsNvidia then
     DriverStatusLabel.Caption := 'NVIDIA 显卡驱动：请确认已安装'
@@ -1081,7 +1083,7 @@ begin
     wpSelectDir,
     'GPU 推理栈',
     '选择本机要使用的推理依赖栈',
-    '安装器会复核实际显卡：NVIDIA 使用匹配的 CUDA 栈，AMD Radeon 使用 DirectML；没有兼容 GPU 时安装 CPU 版。',
+    '安装器会复核实际显卡：NVIDIA 使用匹配的 CUDA 栈，AMD Radeon 使用 ROCm 10；没有兼容 GPU 时安装 CPU 版。',
     True,
     False
   );
@@ -1089,7 +1091,7 @@ begin
   GpuStackPage.Add('CPU 模式');
   GpuStackPage.Add('NVIDIA 50 系以下：共享 CUDA 12.6（cu126）');
   GpuStackPage.Add('NVIDIA 50 系 Blackwell：CUDA 12.8（cu128）');
-  GpuStackPage.Add('AMD Radeon：DirectML');
+  GpuStackPage.Add('AMD Radeon：ROCm 10');
   GpuStackPage.Values[0] := True;
 
   PrereqDownloadPage := CreateCustomPage(
@@ -1110,7 +1112,7 @@ begin
     + '完成安装后点击“重新检测”，再继续下一步。uv 会在 Python 可用后自动安装。';
   PrereqDownloadIntro.Parent := PrereqDownloadPage.Surface;
 
-  CreateDownloadRow('Python 3.10.x：', '下载 Python 3.10', 56, PythonStatusLabel, PythonDownloadButton);
+  CreateDownloadRow('Python 3.12.x：', '下载 Python 3.12', 56, PythonStatusLabel, PythonDownloadButton);
   PythonDownloadButton.OnClick := @PythonDownloadClick;
   CreateDownloadRow('Git：', '打开 Git 下载', 88, GitStatusLabel, GitDownloadButton);
   GitDownloadButton.OnClick := @GitDownloadClick;
@@ -1137,13 +1139,13 @@ begin
 
   PythonPathPage := CreateInputFilePage(
     PrereqDownloadPage.ID,
-    '选择 Python 3.10',
+    '选择 Python 3.12',
     '锁定本次安装使用的 Python 解释器',
-    '安装器只接受 CPython 3.10.x。可以采用自动检测结果，也可以浏览并选择其他 python.exe。'
+    '安装器只接受 CPython 3.12.x。可以采用自动检测结果，也可以浏览并选择其他 python.exe。'
   );
-  PythonPathPage.Add('Python 3.10 python.exe：',
+  PythonPathPage.Add('Python 3.12 python.exe：',
     'Python executable|python.exe|Executable files|*.exe|All files|*.*', '.exe');
-  PythonPathPage.Values[0] := DetectPython310Executable();
+  PythonPathPage.Values[0] := DetectPython312Executable();
 
   PrereqPathPage := CreateInputDirPage(
     PythonPathPage.ID,
@@ -1217,7 +1219,7 @@ begin
   else if GpuStackPage.Values[3] then
     Result := 'cu128'
   else if GpuStackPage.Values[4] then
-    Result := 'directml';
+    Result := 'rocm10';
 end;
 
 function GpuStackName(): String;
@@ -1251,8 +1253,8 @@ begin
     Result := '--gpu --cu128 --consolidated --core-profile core-cu128'
   else if Requested = 'cu126' then
     Result := '--gpu --cu126 --consolidated'
-  else if Requested = 'directml' then
-    Result := '--directml'
+  else if Requested = 'rocm10' then
+    Result := '--rocm10'
   else
   begin
     Stack := GpuStackName();
@@ -1260,8 +1262,8 @@ begin
       Result := '--gpu --cu128 --consolidated --core-profile core-cu128'
     else if Stack = 'cu126' then
       Result := '--gpu --cu126 --consolidated'
-    else if Stack = 'directml' then
-      Result := '--directml'
+    else if Stack = 'rocm10' then
+      Result := '--rocm10'
     else
       Result := '--cpu';
   end;
@@ -1285,7 +1287,7 @@ begin
   end;
   if CurPageID = PythonPathPage.ID then
     if PythonPathPage.Values[0] = '' then
-      PythonPathPage.Values[0] := DetectPython310Executable();
+      PythonPathPage.Values[0] := DetectPython312Executable();
   if CurPageID = PrereqDownloadPage.ID then
   begin
     if CudaPathPage.Values[0] = '' then
@@ -1341,8 +1343,8 @@ begin
   begin
     if not PythonFileAvailable(PythonPathPage.Values[0]) then
     begin
-      MsgBox('请选择一个可运行的 CPython 3.10.x python.exe。' + #13#10 +
-        'Python 3.9、3.11、3.12 或 3.13 都不能用于当前 py310 离线依赖。',
+      MsgBox('请选择一个可运行的 CPython 3.12.x python.exe。' + #13#10 +
+        '当前离线依赖只支持 64 位 Python 3.12.x。',
         mbError, MB_OK);
       Result := False;
       Exit;
@@ -1389,7 +1391,7 @@ begin
     'set "XB_GPU_STACK=' + BatchEscape(Stack) + '"' + #13#10 +
     'set "XB_RUNTIME_LAYOUT=' + RuntimeLayout + '"' + #13#10 +
     'set "XB_PYTHON_EXE=' + BatchEscape(SelectedPython) + '"' + #13#10 +
-    'set "XB_PYTHON_310_EXE=' + BatchEscape(SelectedPython) + '"' + #13#10 +
+    'set "XB_PYTHON_312_EXE=' + BatchEscape(SelectedPython) + '"' + #13#10 +
     'set "XB_PYTHON_DIR=' + BatchEscape(SelectedPythonDir) + '"' + #13#10 +
     'set "UV_PYTHON=' + BatchEscape(SelectedPython) + '"' + #13#10 +
     'set "UV_NO_MANAGED_PYTHON=1"' + #13#10 +
@@ -1551,8 +1553,8 @@ begin
     an old or incomplete split package cannot report a false overall [ok]. }
   if (InstallerGpuStackName() = 'cu126') or (InstallerGpuStackName() = 'cu128') then
   begin
-    if not FileExists(PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\numpy-2.2.6-cp310-cp310-win_amd64.whl')) then
-      Missing := AddMissingRuntimeFile(Missing, 'CUDA 共享核心 NumPy candidate', PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\numpy-2.2.6-cp310-cp310-win_amd64.whl'));
+    if not FileExists(PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\numpy-2.2.6-cp312-cp312-win_amd64.whl')) then
+      Missing := AddMissingRuntimeFile(Missing, 'CUDA 共享核心 NumPy candidate', PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\numpy-2.2.6-cp312-cp312-win_amd64.whl'));
     if not FileExists(PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\protobuf-7.36.0-cp310-abi3-win_amd64.whl')) then
       Missing := AddMissingRuntimeFile(Missing, 'CUDA 共享核心 protobuf candidate', PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\protobuf-7.36.0-cp310-abi3-win_amd64.whl'));
     if not FileExists(PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\tensorboardx-2.6.5-py3-none-any.whl')) then
@@ -1824,8 +1826,8 @@ begin
     Exit;
   end;
 
-  if GpuStackName() = 'directml' then
-    CheckCode := 'import torch,torch_directml; assert hasattr(torch,''__version__''); assert torch_directml.is_available()'
+  if GpuStackName() = 'rocm10' then
+    CheckCode := 'import torch; assert getattr(torch.version,''hip'',None); assert str(getattr(torch.version,''rocm'','''')).split(''.'')[0] == ''10''; assert torch.cuda.is_available(); assert (torch.ones(4,device=''cuda'')*2).sum().cpu().item() == 8'
   else if (GpuStackName() = 'cu126') or (GpuStackName() = 'cu128') then
     CheckCode := 'import torch; assert hasattr(torch,''__version__''); assert torch.cuda.is_available()'
   else
@@ -1859,6 +1861,8 @@ begin
   CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'seedvc', '.venv-seedvc\Scripts\python.exe'), 'SeedVC');
   Result := Result and CurrentReady;
   CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'ddsp', '.venv-ddsp\Scripts\python.exe'), 'DDSP-SVC');
+  Result := Result and CurrentReady;
+  CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-ddsp-legacy\Scripts\python.exe'), 'DDSP-SVC legacy');
   Result := Result and CurrentReady;
   CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'vocal', '.venv-vocal\Scripts\python.exe'), 'AI 歌声增强');
   Result := Result and CurrentReady;

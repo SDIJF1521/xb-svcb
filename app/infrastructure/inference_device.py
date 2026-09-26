@@ -328,7 +328,8 @@ def normalize_device(value: str) -> str:
     requested = str(value or "auto").strip().lower()
     aliases = {
         "gpu": "auto",
-        "amd": "directml" if os.name == "nt" else "rocm",
+        "amd": "rocm",
+        "rocm10": "rocm",
         "dml": "directml",
         "hip": "rocm",
         "cpu:0": "cpu",
@@ -825,6 +826,7 @@ def inference_device_capabilities() -> dict[str, Any]:
     _configure_persistent_probe_cache(config.DATA_DIR / "inference_devices.json")
     environments = {
         "uvr": config.UVR_PYTHON,
+        "pymss": config.PYMSS_PYTHON,
         "so-vits-svc": config.SVC_PYTHON,
         "rvc": config.RVC_PYTHON,
         "seed-vc": config.SEEDVC_PYTHON,
@@ -836,6 +838,14 @@ def inference_device_capabilities() -> dict[str, Any]:
             for framework, python in environments.items()
         }
         frameworks = {framework: future.result() for framework, future in futures.items()}
+
+    # PyMSS accepts HIP through torch.cuda, but cannot use DirectML tensors.
+    pymss_runtime = dict(frameworks["pymss"])
+    pymss_runtime["backends"] = [b for b in pymss_runtime.get("backends", []) if b != "directml"]
+    pymss_runtime["devices"] = [d for d in pymss_runtime.get("devices", []) if d.get("backend") != "directml"]
+    if pymss_runtime.get("preferred") == "directml":
+        pymss_runtime["preferred"] = "cpu"
+    frameworks["pymss"] = pymss_runtime
 
     # DDSP's full DirectML graph can complete without an exception yet produce
     # electrical noise / near-silence. Do not advertise that backend as usable

@@ -88,6 +88,28 @@ def _torch_backend(torch, device: object) -> str:  # noqa: ANN001
     return "cpu"
 
 
+def _configure_rocm_miopen() -> None:
+    """Avoid the gfx12 ASM solver that aborts VR models on ROCm 10 Windows.
+
+    RX 9070 GRE (gfx1201) can initialize ROCm and run ordinary convolutions,
+    but audio-separator's VR model selects a MIOpen gfx12 ASM kernel that
+    raises ``hipEventCreate ... unspecified launch failure``.  MIOpen's
+    generic solvers complete the same workload reliably, at the cost of some
+    throughput.  Set defaults before importing torch/audio_separator so users
+    can still override them explicitly in the environment.
+    """
+    defaults = {
+        "MIOPEN_DEBUG_GCN_ASM_KERNELS": "0",
+        "MIOPEN_DEBUG_CONV_DIRECT_ASM_3X3U": "0",
+        "MIOPEN_DEBUG_CONV_DIRECT_ASM_1X1U": "0",
+        "MIOPEN_DEBUG_CONV_IMPLICIT_GEMM_ASM_FWD_V4R1": "0",
+        "MIOPEN_DEBUG_CONV_IMPLICIT_GEMM_ASM_FWD_GTC_XDLOPS": "0",
+        "MIOPEN_FIND_MODE": "FAST",
+    }
+    for name, value in defaults.items():
+        os.environ.setdefault(name, value)
+
+
 def _patch_directml_vr_lstm() -> None:
     """Run the VR 5.1 recurrent block on CPU while keeping its CNN on DML."""
     from audio_separator.separator.uvr_lib_v5.vr_network import layers_new
@@ -168,6 +190,10 @@ def main() -> int:
     # 强制 CPU：在导入 torch / audio_separator 之前隐藏 CUDA，使其自动回退到 CPU。
     if requested_device == "cpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    elif requested_device == "rocm":
+        # Must be set before torch/audio_separator import; see the gfx12
+        # MIOpen solver compatibility note in _configure_rocm_miopen().
+        _configure_rocm_miopen()
 
     try:
         import torch

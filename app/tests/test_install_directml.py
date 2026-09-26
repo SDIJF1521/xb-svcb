@@ -15,13 +15,13 @@ def _load_installer_module():
     return module
 
 
-def test_directml_voice_environments_use_python_310() -> None:
+def test_directml_voice_environments_use_python_312() -> None:
     installer = _load_installer_module()
 
-    assert installer._svc_python_for_stack("directml") == "3.10"
-    assert installer._rvc_python_for_stack("directml") == "3.10"
-    assert installer._svc_python_for_stack("cu126") == "3.10"
-    assert installer._rvc_python_for_stack("cpu") == "3.10"
+    assert installer._svc_python_for_stack("directml") == "3.12"
+    assert installer._rvc_python_for_stack("directml") == "3.12"
+    assert installer._svc_python_for_stack("cu126") == "3.12"
+    assert installer._rvc_python_for_stack("cpu") == "3.12"
 
 
 def test_directml_torch_install_never_invokes_empty_pip() -> None:
@@ -69,13 +69,14 @@ def test_directml_svc_requirements_override_python39_builds(tmp_path: Path) -> N
     filtered = installer._filter_requirements(
         requirements,
         extra_deny=installer.DIRECTML_EXTRA_DENY,
-        overrides=installer.PYTHON310_REQ_OVERRIDES,
+        overrides=installer.PYTHON312_REQ_OVERRIDES,
     )
     result = filtered.read_text(encoding="utf-8")
 
-    assert "numpy==1.23.5" in result
+    assert "numpy==1.26.4" in result
     assert "pyworld==0.3.5" in result
-    assert "scipy==1.10.1" in result
+    assert "scipy==1.13.1" in result
+    assert "soundfile>=0.12.1,<0.15" in result
     assert "numpy==1.19.5" not in result
     assert "pyworld==0.3.0" not in result
     assert "torch==1.10.0" not in result

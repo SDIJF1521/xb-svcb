@@ -242,23 +242,23 @@ async function commandSucceeds(command, args) {
   })
 }
 
-async function python310Command() {
+async function python312Command() {
   const explicit = clean(process.env.XB_PLUGIN_BUILD_PYTHON)
   const candidates = [
     ...(explicit ? [{ command: explicit, prefix: [] }] : []),
-    ...(process.platform === 'win32' ? [{ command: 'py', prefix: ['-3.10'] }] : []),
-    { command: 'python3.10', prefix: [] },
+    ...(process.platform === 'win32' ? [{ command: 'py', prefix: ['-3.12'] }] : []),
+    { command: 'python3.12', prefix: [] },
     { command: 'python', prefix: [] },
   ]
   for (const candidate of candidates) {
     const probe = [
       ...candidate.prefix,
       '-c',
-      'import sys;raise SystemExit(0 if sys.version_info[:2] == (3, 10) else 1)',
+      'import sys;raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)',
     ]
     if (await commandSucceeds(candidate.command, probe)) return candidate
   }
-  throw new Error('打包 Python 依赖需要 Python 3.10；可通过 XB_PLUGIN_BUILD_PYTHON 指定解释器')
+  throw new Error('打包 Python 依赖需要 Python 3.12；可通过 XB_PLUGIN_BUILD_PYTHON 指定解释器')
 }
 
 function hasRequirements(content) {
@@ -287,7 +287,7 @@ async function bundlePythonRequirements(source, staging, manifest) {
   const target = resolve(staging, vendor.replaceAll('\\', '/'))
   await rm(target, { recursive: true, force: true })
   await mkdir(target, { recursive: true })
-  const python = await python310Command()
+  const python = await python312Command()
   const args = [
     ...python.prefix,
     '-m', 'pip', 'install',

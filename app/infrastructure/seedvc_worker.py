@@ -8,6 +8,9 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import importlib
+import inspect
 import json
 import os
 import shutil
@@ -42,6 +45,88 @@ except ImportError:  # package import used by tests/application tooling
         resolve_torch_device,
     )
 from typing import Any, Callable
+
+
+def _model_family(data: dict[str, Any]) -> tuple[str, bool]:
+    if str(data.get("_target_", "")).endswith("VoiceConversionWrapper"):
+        return "v2", False
+    params = data.get("model_params")
+    if not isinstance(params, dict):
+        raise ValueError("SeedVC 配置缺少 model_params 或 V2 VoiceConversionWrapper")
+    flags = [
+        _parse_bool(params[key]["f0_condition"])
+        for key in ("DiT", "length_regulator")
+        if isinstance(params.get(key), dict) and "f0_condition" in params[key]
+    ]
+    if len(set(flags)) > 1:
+        raise ValueError("SeedVC DiT 与 length_regulator 的 f0_condition 不一致")
+    return "v1", any(flags)
+
+
+def _patch_seedvc_runtime(torch: Any, torchaudio: Any, soundfile: Any, fp16: bool) -> None:
+    original_load = torch.load
+
+    def load(*args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("weights_only", False)
+        if len(args) < 2:
+            kwargs.setdefault("map_location", "cpu")
+        return original_load(*args, **kwargs)
+
+    def save(uri: Any, src: Any, sample_rate: int, channels_first: bool = True, **kwargs: Any) -> None:
+        samples = src.detach().float().cpu().numpy()
+        if channels_first and samples.ndim == 2:
+            samples = samples.T
+        soundfile.write(uri, samples, sample_rate, format=kwargs.get("format"), subtype="FLOAT")
+
+    torch.load = load
+    torchaudio.save = save
+    if not fp16:
+        # Upstream tokenizers call half() independently of the inference flag.
+        torch.Tensor.half = lambda self, *args, **kwargs: self.float()
+        torch.nn.Module.half = lambda self: self.float()
+        from transformers import WhisperModel
+
+        original_pretrained = WhisperModel.from_pretrained
+
+        def from_pretrained(cls: Any, *args: Any, **kwargs: Any) -> Any:
+            kwargs["torch_dtype"] = torch.float32
+            return original_pretrained(*args, **kwargs)
+
+        WhisperModel.from_pretrained = classmethod(from_pretrained)
+
+
+def _patch_v1_audio_geometry(module: Any) -> None:
+    """Use the selected model's sample rate/hop instead of upstream's two presets."""
+    tree = ast.parse(inspect.getsource(module.main))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.IfExp):
+            continue
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+            continue
+        key = {"sr": "sampling_rate", "hop_length": "hop_size"}.get(node.targets[0].id)
+        if key:
+            node.value = ast.Subscript(
+                value=ast.Name(id="mel_fn_args", ctx=ast.Load()),
+                slice=ast.Constant(value=key), ctx=ast.Load(),
+            )
+    exec(compile(ast.fix_missing_locations(tree), inspect.getfile(module), "exec"), module.__dict__)
+
+
+def _load_v2_models(args: Any, module: Any) -> Any:
+    import yaml
+    from hydra.utils import instantiate
+    from omegaconf import DictConfig
+
+    data = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    configured_ar = data.pop("ar_checkpoint_path", None)
+    ar_checkpoint = args.ar_checkpoint_path or configured_ar
+    data.pop("cfm_checkpoint_path", None)
+    wrapper = instantiate(DictConfig(data))
+    wrapper.load_checkpoints(ar_checkpoint_path=ar_checkpoint, cfm_checkpoint_path=args.cfm_checkpoint_path)
+    wrapper.to(module.device)
+    wrapper.eval()
+    wrapper.setup_ar_caches(max_batch_size=1, max_seq_len=4096, dtype=module.dtype, device=module.device)
+    return wrapper
 
 
 def _parse_bool(value: str | bool) -> bool:
@@ -294,6 +379,14 @@ def _local_hf_loader(
 
 
 def _apply_local_model_paths(data: dict[str, Any], assets: dict[str, Path]) -> bool:
+    if str(data.get("_target_", "")).endswith("VoiceConversionWrapper"):
+        changed = False
+        for key in ("content_extractor_narrow", "content_extractor_wide"):
+            extractor = data.get(key)
+            if isinstance(extractor, dict) and extractor.get("tokenizer_name") == "openai/whisper-small" and assets.get("whisper"):
+                extractor["tokenizer_name"] = str(assets["whisper"])
+                changed = True
+        return changed
     model_params = data.get("model_params")
     if not isinstance(model_params, dict):
         return False
@@ -316,13 +409,29 @@ def _apply_local_model_paths(data: dict[str, Any], assets: dict[str, Path]) -> b
 
 
 def _localized_config(config: Path, folder: Path, assets: dict[str, Path]) -> Path:
-    if not assets.get("whisper") and not assets.get("bigvgan"):
-        return config
     try:
         import yaml
 
         data = yaml.safe_load(config.read_text(encoding="utf-8"))
-        if not isinstance(data, dict) or not _apply_local_model_paths(data, assets):
+        if not isinstance(data, dict):
+            return config
+        changed = _apply_local_model_paths(data, assets)
+
+        def resolve_paths(node: Any) -> None:
+            nonlocal changed
+            if not isinstance(node, dict):
+                return
+            for key, value in node.items():
+                if isinstance(value, dict):
+                    resolve_paths(value)
+                elif key in {"name", "path", "config", "ar_checkpoint_path", "tokenizer_name", "ssl_model_name", "pretrained_model_name_or_path"} and isinstance(value, str):
+                    path = config.parent / value
+                    if not Path(value).is_absolute() and path.exists():
+                        node[key] = str(path.resolve())
+                        changed = True
+
+        resolve_paths(data)
+        if not changed:
             return config
         output = folder / "seedvc_local_config.yml"
         output.write_text(
@@ -340,6 +449,7 @@ def main() -> int:
     parser.add_argument("--repo", required=True, help="Seed-VC 仓库根目录")
     parser.add_argument("--checkpoint", required=True, help="SeedVC checkpoint .pth 路径")
     parser.add_argument("--config", required=True, help="SeedVC config .yml/.yaml 路径")
+    parser.add_argument("--ar-checkpoint", default="", help="SeedVC V2 AR 配套权重")
     parser.add_argument("--reference", required=True, help="目标音色参考音频路径")
     parser.add_argument("--input", default="", help="待转换人声 wav")
     parser.add_argument("--output", default="", help="输出 wav 路径")
@@ -376,8 +486,20 @@ def main() -> int:
         if not path.exists():
             print(f"SEEDVC_ERR {label}不存在: {path}", flush=True)
             return 2
-    if not (repo / "inference.py").exists():
-        print(f"SEEDVC_ERR Seed-VC inference.py 不存在: {repo}", flush=True)
+    try:
+        import yaml
+
+        model_data = yaml.safe_load(config.read_text(encoding="utf-8"))
+        family, f0_condition = _model_family(model_data)
+        if args.pitch and not f0_condition:
+            raise ValueError("所选 SeedVC 模型不含 F0 条件，不能使用半音变调；请将变调设为 0 或选择 F0 模型")
+        entry = "inference_v2" if family == "v2" else "inference"
+        if not (repo / f"{entry}.py").is_file():
+            raise ValueError(f"SeedVC {family} 推理源码缺失，请修复 SeedVC 环境")
+        if args.ar_checkpoint and not Path(args.ar_checkpoint).is_file():
+            raise ValueError(f"SeedVC AR 权重不存在: {args.ar_checkpoint}")
+    except Exception as exc:
+        print(f"SEEDVC_ERR {exc}", flush=True)
         return 2
 
     if str(args.device or "").lower() == "cpu":
@@ -405,6 +527,7 @@ def main() -> int:
             import torch
 
             resolved_device = resolve_torch_device(args.device, torch)
+            fp16 = fp16 and resolved_device.backend not in {"cpu", "directml"}
             if resolved_device.backend == "directml":
                 patch_directml_no_half(torch)
                 fp16 = False
@@ -412,7 +535,7 @@ def main() -> int:
             print(f"SEEDVC_ERR 设备初始化失败: {exc}", flush=True)
             return 3
         local_assets = _discover_local_assets(repo)
-        if local_assets.get("rmvpe"):
+        if f0_condition and local_assets.get("rmvpe"):
             try:
                 local_assets["rmvpe"] = _normalized_seedvc_rmvpe(
                     local_assets["rmvpe"],
@@ -422,12 +545,20 @@ def main() -> int:
                 print(f"SEEDVC_ERR SeedVC RMVPE 底模准备失败: {exc}", flush=True)
                 return 3
         try:
-            import inference as seedvc_inference  # type: ignore
+            import torchaudio
+            import soundfile
 
-            seedvc_inference.load_custom_model_from_hf = _local_hf_loader(
-                seedvc_inference.load_custom_model_from_hf,
-                local_assets,
-            )
+            _patch_seedvc_runtime(torch, torchaudio, soundfile, fp16)
+            seedvc_inference = importlib.import_module(entry)
+
+            if family == "v1":
+                seedvc_inference.load_custom_model_from_hf = _local_hf_loader(
+                    seedvc_inference.load_custom_model_from_hf, local_assets,
+                )
+                _patch_v1_audio_geometry(seedvc_inference)
+            else:
+                seedvc_inference.dtype = torch.float16 if fp16 else torch.float32
+                seedvc_inference.load_v2_models = lambda ns: _load_v2_models(ns, seedvc_inference)
             seedvc_inference.device = resolved_device.device
             if resolved_device.backend == "directml":
                 import modules.audio as seedvc_audio  # type: ignore
@@ -458,7 +589,7 @@ def main() -> int:
 
                 WhisperModel.from_pretrained = classmethod(directml_from_pretrained)
             seedvc_main = seedvc_inference.main
-            if args.server:
+            if args.server and family == "v1":
                 original_load_models = seedvc_inference.load_models
                 loaded_models = None
 
@@ -485,12 +616,22 @@ def main() -> int:
                     diffusion_steps=max(1, int(args.diffusion_steps)),
                     length_adjust=float(args.length_adjust),
                     inference_cfg_rate=float(args.cfg_rate),
-                    f0_condition=True,
+                    f0_condition=f0_condition,
                     auto_f0_adjust=False,
                     semi_tone_shift=int(args.pitch),
                     checkpoint=str(checkpoint),
                     config=str(inference_config),
                     fp16=fp16,
+                    ar_checkpoint_path=str(Path(args.ar_checkpoint).resolve()) if args.ar_checkpoint else None,
+                    cfm_checkpoint_path=str(checkpoint),
+                    compile=False,
+                    intelligibility_cfg_rate=0.7,
+                    similarity_cfg_rate=float(args.cfg_rate),
+                    top_p=0.9,
+                    temperature=1.0,
+                    repetition_penalty=1.0,
+                    convert_style=False,
+                    anonymization_only=False,
                 )
                 seedvc_main(ns)
                 generated = _latest_wav(out_dir)
@@ -509,6 +650,7 @@ def main() -> int:
                         flush=True,
                     )
 
+        print(f"SEEDVC_MODEL {family} f0={f0_condition} fp16={fp16}", flush=True)
         if args.server:
             print("SEEDVC_SERVER_READY", flush=True)
             for raw in sys.stdin:

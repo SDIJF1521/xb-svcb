@@ -11,7 +11,7 @@
 - 支持插件功能的 XB-SVCB；
 - 支持 TypeScript/Vue 的编辑器。
 
-Python 或混合插件另外需要 Python 3.10+。宿主运行时会提供 Python SDK，本地单元测试时才需要手动安装 `plugin-sdk/python`。
+Python 或混合插件另外需要 Python 3.12.x。宿主运行时会提供 Python SDK，本地单元测试时才需要手动安装 `plugin-sdk/python`。
 
 ```powershell
 node --version
