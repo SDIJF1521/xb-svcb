@@ -3642,8 +3642,9 @@ def test_deepfilter_uses_model_rate_then_restores_input_rate(
 
     model_dir = tmp_path / "DeepFilterNet3"
 
-    def fake_init_df(path: str):
+    def fake_init_df(path: str, *, log_file: str | None):
         calls["model_dir"] = path
+        calls["log_file"] = log_file
         return object(), FakeState(), object()
 
     enhance_module = types.ModuleType("df.enhance")
@@ -3670,6 +3671,7 @@ def test_deepfilter_uses_model_rate_then_restores_input_rate(
 
     assert calls == {
         "model_dir": str(model_dir),
+        "log_file": None,
         "load_sr": 48000,
         "attenuation": 3.0,
         "resample": (48000, 44100),

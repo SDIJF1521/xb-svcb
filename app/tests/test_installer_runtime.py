@@ -340,6 +340,193 @@ def test_consolidated_runtime_is_disabled_for_directml() -> None:
     installer = _load_install_module()
     installer._configure_runtime_layout(consolidated=True, gpu_stack="directml")
     assert installer.CONSOLIDATED_RUNTIME is False
+    assert installer.RVC_VENV == installer.ROOT / ".venv-rvc-directml"
+
+
+def test_directml_wheel_plan_includes_cpu_legacy_and_rvc_compat(tmp_path: Path, monkeypatch) -> None:
+    wheelhouse = _load_wheelhouse_module()
+    installer = _load_install_module()
+    installer._derive_paths(tmp_path)
+    monkeypatch.setattr(wheelhouse, "_load_installer", lambda _root: installer)
+    monkeypatch.setattr(
+        wheelhouse,
+        "_reqs",
+        lambda _installer: {name: tmp_path / f"{name}.txt" for name in
+                            ("svc-directml", "seedvc", "ddsp-directml", "ddsp-legacy")},
+    )
+
+    plan = wheelhouse.build_plan(tmp_path, {"directml"})
+
+    assert not any("pymss" in batch.label for batch in plan)
+    assert any(batch.label == "svc directml source wheels" and
+               batch.packages == ("fairseq-fixed==0.12.3.1",) for batch in plan)
+    assert any(batch.label == "rvc directml" and
+               batch.packages == ("rvc-python==0.1.5+xb312",) for batch in plan)
+    assert any(batch.label == "ddsp legacy directml torch" and
+               batch.dest == tmp_path / "assets/wheels/ddsp-legacy/py312/cpu" and
+               batch.packages == ("torch==2.5.1", "torchaudio==2.5.1") for batch in plan)
+
+
+def test_directml_default_install_skips_pymss(tmp_path: Path, monkeypatch) -> None:
+    installer = _load_install_module()
+    events = []
+    monkeypatch.setattr(installer.sys, "argv", ["install.py", "--root", str(tmp_path), "--directml"])
+    monkeypatch.setattr(installer, "ensure_uv", lambda: "uv")
+    monkeypatch.setattr(
+        installer,
+        "STEPS",
+        {name: (lambda _uv, _stack, step=name: events.append(step)) for name in installer.ORDER},
+    )
+
+    assert installer.main() == 0
+    assert events == [name for name in installer.ORDER if name != "pymss"]
+
+
+def test_directml_explicit_pymss_install_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    installer = _load_install_module()
+    monkeypatch.setattr(
+        installer.sys, "argv",
+        ["install.py", "--root", str(tmp_path), "--directml", "--only", "pymss"],
+    )
+    monkeypatch.setattr(installer, "ensure_uv", lambda: pytest.fail("unsupported runtime installed"))
+
+    assert installer.main() == 2
+
+
+def test_directml_installer_build_and_repair_contract() -> None:
+    build = (ROOT / "installer/build.ps1").read_text(encoding="utf-8")
+    build_all = (ROOT / "installer/build-all-packages.ps1").read_text(encoding="utf-8")
+    inno = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    setup = (ROOT / "setup_env.bat").read_text(encoding="utf-8")
+    prereqs = (ROOT / "install_prereqs.bat").read_text(encoding="utf-8")
+
+    assert "[ValidateSet('cpu', 'rocm10', 'directml', 'cu126', 'cu128')]" in build
+    assert "XB-SVCB-Setup-DirectML" in build_all
+    assert "Result := '--directml'" in inno
+    assert "RuntimePython(AppDir, 'rvc-directml', '.venv-rvc-directml\\Scripts\\python.exe')" in inno
+    assert "torch_directml.is_available()" in inno
+    assert 'set "XB_RUNTIME_STACK_ARG=--directml"' in setup
+    assert 'if /I "%XB_GPU_STACK_REQUESTED%"=="directml" (' in prereqs
+    assert '[skip] CUDA check skipped for AMD DirectML mode.' in prereqs
+
+
+def test_rocm_runtime_lock_guard_reports_process_using_hip_dll(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer = _load_install_module()
+    venv = tmp_path / "runtimes" / "svc-rocm10"
+    (venv / "Lib" / "site-packages").mkdir(parents=True)
+    monkeypatch.setattr(installer.os, "name", "nt")
+
+    def fake_tasklist(command, **_kwargs):  # noqa: ANN001
+        module = command[2]
+        stdout = '"python.exe","4321","Console","1","10,000 K"\n' if module == "amd_comgr.dll" else ""
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(installer.subprocess, "run", fake_tasklist)
+    lockers = installer._runtime_lockers(venv)
+
+    assert lockers == ["PID 4321 (amd_comgr.dll)"]
+    with pytest.raises(RuntimeError, match="正在被运行中的进程使用"):
+        installer._guard_runtime_mutation(venv, {"svc"}, installer.ROCM_STACK)
+
+
+def test_rocm_svc_requirements_replace_legacy_starlette(tmp_path: Path) -> None:
+    installer = _load_install_module()
+    filtered = installer._filter_requirements(
+        ROOT / "engines" / "so-vits-svc" / "requirements_win.txt",
+        extra_deny=installer.BLACKWELL_EXTRA_DENY,
+        overrides=installer.SVC_SHARED_REQ_OVERRIDES,
+        output=tmp_path / "svc-requirements.txt",
+    )
+    requirements = filtered.read_text(encoding="utf-8")
+
+    assert "starlette>=0.46,<2" in requirements
+    assert "starlette==0.19.1" not in requirements
+
+
+def test_rocm_shared_repair_requires_the_full_group(tmp_path: Path, monkeypatch) -> None:
+    installer = _load_install_module()
+    installer._derive_paths(tmp_path)
+    monkeypatch.setattr(installer.sys, "argv", ["install.py", "--rocm10", "--only", "svc"])
+    monkeypatch.setattr(installer, "ensure_uv", lambda: pytest.fail("runtime changed"))
+
+    assert installer.main() == 2
+
+
+def test_rocm_shared_probe_defers_dependency_check_and_routes(tmp_path: Path, monkeypatch) -> None:
+    installer = _load_install_module()
+    installer._derive_paths(tmp_path)
+    installer._configure_runtime_layout(consolidated=False, gpu_stack=installer.ROCM_STACK)
+    commands = []
+    monkeypatch.setattr(installer, "run", lambda command, **_kwargs: commands.append(command))
+    monkeypatch.setattr(installer, "_verify_rocm_torch", lambda *_args: None)
+    monkeypatch.setattr(installer, "check_runtime_dependencies", lambda *_args: pytest.fail("early pip check"))
+    monkeypatch.setattr(installer, "update_runtime_manifest_routes", lambda *_args, **_kwargs: pytest.fail("early route"))
+
+    installer._activate_shared_cuda_runtime(
+        "uv", component="svc", venv=installer.SVC_VENV,
+        imports=("math",), gpu_stack=installer.ROCM_STACK,
+    )
+
+    assert len(commands) == 1
+    assert commands[0][1] == "-c"
+    assert "importlib.import_module" in commands[0][2]
+
+
+def test_rocm_shared_install_checks_dependencies_before_publishing_routes(tmp_path: Path, monkeypatch) -> None:
+    installer = _load_install_module()
+    installer._derive_paths(tmp_path)
+    monkeypatch.setattr(
+        installer.sys, "argv", ["install.py", "--rocm10", "--only", "svc", "rvc", "vocal"]
+    )
+    events = []
+    monkeypatch.setattr(installer, "ensure_uv", lambda: "uv")
+    monkeypatch.setattr(installer, "_guard_runtime_mutation", lambda *_args: None)
+    monkeypatch.setattr(installer, "_preflight_consolidated_runtime", lambda *_args: None)
+    monkeypatch.setattr(
+        installer, "STEPS",
+        {name: (lambda _uv, _stack, component=name: events.append(component)) for name in installer.SVC_COMPONENTS},
+    )
+    monkeypatch.setattr(installer, "check_runtime_dependencies", lambda *_args: events.append("check"))
+    monkeypatch.setattr(installer, "write_rocm_shared_runtime_manifest", lambda *_args: events.append("routes"))
+    monkeypatch.setattr(installer, "cleanup_rocm_legacy_runtimes", lambda *_args: events.append("cleanup"))
+
+    assert installer.main() == 0
+    assert events == ["svc", "rvc", "vocal", "check", "routes", "cleanup"]
+
+
+def test_runtime_dependency_check_reports_uv_conflicts(monkeypatch) -> None:
+    installer = _load_install_module()
+    conflict = "The package `fastapi` requires `starlette>=0.46.0`, but `0.19.1` is installed"
+    monkeypatch.setattr(
+        installer.subprocess, "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 1, stdout="", stderr=conflict),
+    )
+
+    with pytest.raises(RuntimeError, match="fastapi.*starlette"):
+        installer.check_runtime_dependencies("uv", "python.exe")
+
+
+def test_rocm_vocal_resolves_packaging_after_removing_wheel(tmp_path: Path, monkeypatch) -> None:
+    installer = _load_install_module()
+    installer._derive_paths(tmp_path)
+    installer._configure_runtime_layout(consolidated=False, gpu_stack=installer.ROCM_STACK)
+    installer.VOCAL_MODELS_DIR.mkdir(parents=True)
+    events = []
+    monkeypatch.setattr(installer, "ensure_venv", lambda *_args: None)
+    monkeypatch.setattr(installer, "make_pip", lambda *_args, **_kwargs: lambda *specs, **_kw: events.append(("pip", specs)))
+    monkeypatch.setattr(installer, "run", lambda command, **_kwargs: events.append(("run", command)))
+    monkeypatch.setattr(installer, "_reaffirm_rocm_runtime", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(installer, "_prepare_vocal_deepfilter_model", lambda *_args: tmp_path)
+    monkeypatch.setattr(installer, "_activate_shared_cuda_runtime", lambda *_args, **_kwargs: None)
+
+    installer.step_vocal("uv", installer.ROCM_STACK)
+
+    wheel_removal = next(i for i, (kind, args) in enumerate(events) if kind == "run" and args[-1] == "wheel")
+    vocal_deps = next(i for i, (kind, args) in enumerate(events) if kind == "pip" and "deepfilternet[soundfile]==0.5.6" in args)
+    assert wheel_removal < vocal_deps
+    assert "packaging==23.2" in events[vocal_deps][1]
 
 
 def test_cu128_nonconsolidated_mode_keeps_legacy_engine_environments(tmp_path: Path) -> None:
@@ -636,6 +823,40 @@ def test_same_size_different_model_is_preserved(tmp_path, monkeypatch):
     assert not source.samefile(destination)
 
 
+def test_deepfilter_runtime_log_is_not_deployed(tmp_path, monkeypatch):
+    installer = _load_install_module()
+    assets = tmp_path / "assets"
+    source = (
+        assets / "vocal-enhancement" / "DeepFilterNet" / "DeepFilterNet"
+        / "Cache" / "DeepFilterNet3" / "enhance.log"
+    )
+    source.parent.mkdir(parents=True)
+    source.write_text("runtime log", encoding="utf-8")
+    destination = tmp_path / "models" / "vocal-enhancement" / "DeepFilterNet3" / "enhance.log"
+    monkeypatch.setattr(installer, "ASSETS_MODELS_DIR", assets)
+
+    assert installer.copy_bundled(
+        "vocal-enhancement/DeepFilterNet/DeepFilterNet/Cache/DeepFilterNet3/enhance.log",
+        destination,
+    )
+    assert not destination.exists()
+
+
+def test_same_size_unreadable_model_is_redeployed(tmp_path, monkeypatch):
+    installer = _load_install_module()
+    assets = tmp_path / "assets"
+    source = assets / "model.ini"
+    source.parent.mkdir(parents=True)
+    source.write_text("new", encoding="utf-8")
+    destination = tmp_path / "model.ini"
+    destination.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(installer, "ASSETS_MODELS_DIR", assets)
+    monkeypatch.setattr(installer, "_is_readable_file", lambda _path: False)
+
+    assert installer.copy_bundled("model.ini", destination)
+    assert destination.read_text(encoding="utf-8") == "new"
+
+
 def test_directory_redeployment_detaches_existing_hardlink(tmp_path, monkeypatch):
     installer = _load_install_module()
     monkeypatch.setattr(installer, "ASSETS_MODELS_DIR", tmp_path / "assets")
@@ -716,6 +937,15 @@ def test_setup_env_uses_install_py_as_the_single_progress_source() -> None:
     assert "[XB-PROGRESS] 10 已找到 Python，准备创建隔离环境" not in setup_env
     assert "[XB-PROGRESS] 18 正在执行运行环境安装脚本" not in setup_env
     assert "if Target < EnvProgressCurrent then" in script
+
+
+def test_setup_env_failure_hint_matches_gpu_stack() -> None:
+    setup_env = (ROOT / "setup_env.bat").read_text(encoding="utf-8")
+
+    assert "ROCm repair: setup_env.bat --rocm10 --only svc rvc vocal" in setup_env
+    assert "DirectML repair: setup_env.bat --directml --only svc rvc vocal" in setup_env
+    assert "CUDA core repair: setup_env.bat --cu126 --only uvr seedvc ddsp" in setup_env
+    assert "CUDA core repair: setup_env.bat --cu128 --only uvr seedvc ddsp" in setup_env
 
 
 def test_vocal_runtime_avoids_wheel_packaging_conflict() -> None:
@@ -1062,3 +1292,27 @@ def test_install_gpu_detection_distinguishes_blackwell_from_older_nvidia(monkeyp
 
     assert installer.detect_gpu_stack() == "cu126"
     assert installer.detect_gpu_stack() == "cu128"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell installer build")
+@pytest.mark.parametrize("flag", ["-Help", "-h", "--help"])
+def test_installer_build_help_exits_before_build_checks(tmp_path: Path, flag: str) -> None:
+    script = tmp_path / "build.ps1"
+    script.write_bytes((ROOT / "installer" / "build.ps1").read_bytes())
+
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), flag],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Usage: .\\installer\\build.ps1" in result.stdout
+    assert "-Stacks directml" in result.stdout
+    assert "-SkipWheelhouse" in result.stdout
+    assert "Release version:" not in result.stdout

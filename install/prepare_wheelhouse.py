@@ -123,19 +123,19 @@ def _reqs(installer) -> dict[str, Path]:
             svc_req,
             "svc-cu128",
             extra_deny=installer.BLACKWELL_EXTRA_DENY,
-            overrides=installer.PYTHON312_REQ_OVERRIDES,
+            overrides=installer.SVC_SHARED_REQ_OVERRIDES,
         ),
         "svc-cu126": _copy_filtered_req(
             installer,
             svc_req,
             "svc-cu126",
             extra_deny=installer.BLACKWELL_EXTRA_DENY,
-            overrides=installer.PYTHON312_REQ_OVERRIDES,
+            overrides=installer.SVC_SHARED_REQ_OVERRIDES,
         ),
         "svc-rocm10": _copy_filtered_req(
             installer, svc_req, "svc-rocm10",
             extra_deny=installer.BLACKWELL_EXTRA_DENY,
-            overrides=installer.PYTHON312_REQ_OVERRIDES,
+            overrides=installer.SVC_SHARED_REQ_OVERRIDES,
         ),
         "seedvc": _copy_filtered_req(
             installer,
@@ -232,6 +232,7 @@ def _vocal_deps() -> tuple[str, ...]:
         "matplotlib<3.9",
         "torchlibrosa==0.1.0",
         "PyYAML",
+        "packaging==23.2",
         "deepfilternet[soundfile]==0.5.6",
         "pedalboard==0.9.24",
         "praat-parselmouth==0.4.6",
@@ -333,6 +334,25 @@ def _pymss_batches(root: Path, installer, stack: str) -> list[DownloadBatch]:
     ]
 
 
+def _vocal_deepfilterlib_batch(dest: Path, py: str, constraints: tuple[str, ...]) -> DownloadBatch:
+    """Build DeepFilterLib for the exact CPython ABI used by Vocal.
+
+    DeepFilterLib 0.5.6 publishes Windows wheels only through CPython 3.11;
+    CPython 3.12 must use its bundled Rust/maturin source build. Keeping this
+    as a separate no-deps batch places the generated wheel in the same local
+    directory before pip resolves deepfilternet's runtime dependencies.
+    """
+    return DownloadBatch(
+        "vocal deepfilterlib",
+        dest,
+        py,
+        ("deepfilterlib==0.5.6",),
+        build_source=True,
+        no_deps=True,
+        constraints=constraints,
+    )
+
+
 def _base_batches(root: Path, installer) -> list[DownloadBatch]:
     return [
         DownloadBatch(
@@ -388,7 +408,7 @@ def _py312_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
                 "svc directml source wheels",
                 dest,
                 py,
-                ("fairseq==0.12.2",),
+                ("fairseq-fixed==0.12.3.1",),
                 build_source=True,
                 no_deps=True,
                 constraints=dml_constraints,
@@ -427,7 +447,7 @@ def _py312_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
                 "rvc directml",
                 dest,
                 py,
-                ("rvc-python",),
+                ("rvc-python==0.1.5+xb312",),
                 build_source=True,
                 constraints=dml_constraints,
             ),
@@ -455,14 +475,13 @@ def _py312_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
                 build_source=True,
                 constraints=dml_constraints,
             ),
-            boot("ddsp directml py312 setuptools", ddsp_dest, cpu_constraints),
+            boot("ddsp directml py312 setuptools", ddsp_dest, dml_constraints),
             DownloadBatch(
-                "ddsp directml cpu torch",
+                "ddsp directml runtime",
                 ddsp_dest,
                 py,
-                _torch_specs(installer, "cpu", "2.5.1")[0],
-                index=installer.TORCH_CPU_INDEX,
-                constraints=cpu_constraints,
+                _directml_runtime(installer),
+                constraints=dml_constraints,
             ),
             DownloadBatch(
                 "ddsp directml requirements",
@@ -470,7 +489,7 @@ def _py312_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
                 py,
                 requirements=reqs["ddsp-directml"],
                 build_source=True,
-                constraints=cpu_constraints,
+                constraints=dml_constraints,
             ),
             boot("vocal directml py312 setuptools", vocal_dest, cpu_constraints),
             DownloadBatch(
@@ -481,11 +500,11 @@ def _py312_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
                 index=installer.TORCH_CPU_INDEX,
                 constraints=cpu_constraints,
             ),
+            _vocal_deepfilterlib_batch(vocal_dest, py, cpu_constraints),
             DownloadBatch("vocal directml deps", vocal_dest, py, _vocal_deps(), constraints=cpu_constraints),
             boot("hub directml py312 setuptools", hub_dest, common_constraints),
             DownloadBatch("hub directml deps", hub_dest, py, ("modelscope", "requests", "tqdm"), constraints=common_constraints),
         ]
-        batches += _pymss_batches(root, installer, stack)
         return batches
 
     if stack in {"cu126", "cu128", installer.ROCM_STACK}:
@@ -581,6 +600,7 @@ def _py312_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
             constraints=torch_constraints,
         ),
         DownloadBatch("vocal torch", dest, py, torch_packages, index=torch_index, constraints=torch_constraints),
+        _vocal_deepfilterlib_batch(dest, py, torch_constraints),
         DownloadBatch("vocal deps", dest, py, _vocal_deps(), constraints=torch_constraints),
         DownloadBatch("hub deps", dest, py, ("modelscope", "requests", "tqdm"), constraints=common_constraints),
     ]
@@ -673,21 +693,24 @@ def _cpu_compat_batches(root: Path, installer, reqs: dict[str, Path], stack: str
 def build_plan(root: Path, stacks: set[str] | None = None) -> list[DownloadBatch]:
     installer = _load_installer(root)
     reqs = _reqs(installer)
-    requested = stacks or {"cpu", "rocm10", "cu126", "cu128"}
+    requested = stacks or {"cpu", "rocm10", "directml", "cu126", "cu128"}
     batches = _base_batches(root, installer)
     for stack in ("cpu", "rocm10", "directml", "cu126", "cu128"):
         if stack in requested:
             batches += _py312_batches(root, installer, reqs, stack)
-            if stack != "directml":
-                dest = _component_wheelhouse_dir(root, "ddsp-legacy", installer.PYTHON_FOR_ENGINES, stack)
-                packages, index = _torch_specs(installer, stack, "2.5.1" if stack == "cpu" else "2.7.1")
-                constraints = ("setuptools<81", *installer._rocm_constraints()) if stack == installer.ROCM_STACK else _torch_constraints(stack, "2.5.1" if stack == "cpu" else "2.7.1")
-                batches += [
-                    DownloadBatch("ddsp legacy torch", dest, installer.PYTHON_FOR_ENGINES, packages, index=index, constraints=constraints),
-                    DownloadBatch("ddsp legacy requirements", dest, installer.PYTHON_FOR_ENGINES,
-                                  ("setuptools<81", "wheel", "fairseq-fixed==0.12.3.1", "einops", "local-attention"),
-                                  requirements=reqs["ddsp-legacy"], build_source=True, constraints=constraints),
-                ]
+            if stack == "directml" and "cpu" in requested:
+                continue
+            legacy_stack = "cpu" if stack == "directml" else stack
+            dest = _component_wheelhouse_dir(root, "ddsp-legacy", installer.PYTHON_FOR_ENGINES, legacy_stack)
+            version = "2.5.1" if legacy_stack == "cpu" else "2.7.1"
+            packages, index = _torch_specs(installer, legacy_stack, version)
+            constraints = ("setuptools<81", *installer._rocm_constraints()) if legacy_stack == installer.ROCM_STACK else _torch_constraints(legacy_stack, version)
+            batches += [
+                DownloadBatch(f"ddsp legacy {stack} torch", dest, installer.PYTHON_FOR_ENGINES, packages, index=index, constraints=constraints),
+                DownloadBatch(f"ddsp legacy {stack} requirements", dest, installer.PYTHON_FOR_ENGINES,
+                              ("setuptools<81", "wheel", "fairseq-fixed==0.12.3.1", "einops", "local-attention"),
+                              requirements=reqs["ddsp-legacy"], build_source=True, constraints=constraints),
+            ]
     for stack in ("cpu",):
         if stack in requested:
             batches += _cpu_compat_batches(root, installer, reqs, stack)
@@ -960,6 +983,31 @@ def _download_batch(root: Path, installer, batch: DownloadBatch) -> None:
     if "rocm10" in batch.dest.parts and batch.index is None:
         from dataclasses import replace
         batch = replace(batch, index=installer.TORCH_ROCM_INDEX)
+    # AMD publishes ``rocm==10.0.0`` as an sdist-only metadata package.  The
+    # ROCm Torch wheels depend on it, but the cross-platform download below is
+    # intentionally binary-only and therefore cannot resolve that sdist. Build
+    # the tiny pure-Python metadata wheel into each ROCm group before resolving
+    # its Torch/dependent packages; subsequent downloads then consume it via
+    # --find-links without relaxing the binary-only policy for the rest.
+    if "rocm10" in batch.dest.parts and any(
+        package.lower().startswith(("torch", "torchaudio", "torchvision"))
+        for package in batch.packages
+    ):
+        rocm_wheel = next(batch.dest.glob("rocm-10.0.0-*.whl"), None)
+        if rocm_wheel is None:
+            _build_wheels(
+                root,
+                installer,
+                DownloadBatch(
+                    "rocm10 runtime metadata",
+                    batch.dest,
+                    batch.python_version,
+                    ("rocm==10.0.0",),
+                    index=installer.TORCH_ROCM_INDEX,
+                    no_deps=True,
+                    build_source=True,
+                ),
+            )
     if "rvc-python==0.1.5+xb312" in batch.packages:
         spec = importlib.util.spec_from_file_location("xb_rvc_compat_build", Path(__file__).with_name("build_rvc_compat.py"))
         module = importlib.util.module_from_spec(spec)
@@ -1058,11 +1106,16 @@ def main() -> int:
     parser.add_argument(
         "--stack",
         action="append",
-        choices=("cpu", "rocm10", "cu126", "cu128"),
+        choices=("cpu", "rocm10", "directml", "cu126", "cu128"),
         help="prepare only selected stack(s); default prepares all",
     )
     parser.add_argument("--dry-run", action="store_true", help="print the plan without downloading")
     parser.add_argument("--clean", action="store_true", help="remove assets/wheels before downloading")
+    parser.add_argument(
+        "--from-batch",
+        metavar="LABEL",
+        help="resume at the exact batch label (for example: 'vocal deps')",
+    )
     args = parser.parse_args()
 
     root = args.root.expanduser().resolve()
@@ -1078,6 +1131,17 @@ def main() -> int:
 
     installer = _load_installer(root)
     batches = build_plan(root, set(args.stack or []))
+    manifest_batches = batches
+    if args.from_batch:
+        labels = [batch.label for batch in batches]
+        if args.from_batch not in labels:
+            raise SystemExit(
+                f"Unknown --from-batch label {args.from_batch!r}. Available labels: "
+                + ", ".join(labels)
+            )
+        start = labels.index(args.from_batch)
+        batches = batches[start:]
+        print(f"Resuming wheelhouse at batch: {args.from_batch}")
     if args.dry_run:
         plan = [
             {
@@ -1102,7 +1166,7 @@ def main() -> int:
     wheelhouse.mkdir(parents=True, exist_ok=True)
     for batch in batches:
         _download_batch(root, installer, batch)
-    _write_manifest(root, batches)
+    _write_manifest(root, manifest_batches)
     return 0
 
 

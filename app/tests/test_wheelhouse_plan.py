@@ -50,7 +50,7 @@ def test_pymss_wheelhouse_is_isolated_with_a_compatible_torch_pair(wheelhouse_pl
         "torchaudio==2.7.1",
     )
 
-    for stack in ("cpu", "directml", "cu126", "cu128"):
+    for stack in ("cpu", "cu126", "cu128"):
         plan = wheelhouse.build_plan(root, {stack})
         expected_stack = stack
         dest = root / "assets" / "wheels" / "pymss" / "py312" / expected_stack
@@ -70,6 +70,9 @@ def test_pymss_wheelhouse_is_isolated_with_a_compatible_torch_pair(wheelhouse_pl
             else installer.TORCH_CPU_INDEX
         )
         assert torch.index == expected_index
+
+    directml = wheelhouse.build_plan(root, {"directml"})
+    assert not any(batch.label.startswith("pymss ") for batch in directml)
 
 
 def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torch(wheelhouse_plan) -> None:
@@ -119,7 +122,12 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
     )
     assert any(
         batch.dest == root / "assets" / "wheels" / "ddsp" / "py312" / "directml"
-        and "torch==2.5.1" in batch.constraints
+        and "torch==2.4.1" in batch.constraints
+        for batch in directml
+    )
+    assert any(
+        batch.label == "ddsp directml runtime"
+        and "torch-directml==0.2.5.dev240914" in batch.packages
         for batch in directml
     )
     assert any(

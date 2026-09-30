@@ -313,6 +313,10 @@ class VocalEnhancementProcessor:
         env["XDG_CACHE_HOME"] = str(cache_home / ".cache")
         env["LOCALAPPDATA"] = str(cache_home / ".local")
         env["XB_DEEPFILTER_MODEL_DIR"] = str(cache_home / "DeepFilterNet3")
+        # DeepFilterNet 0.5.6 calls torch.load without an explicit
+        # weights_only argument. Torch 2.6+ changed that default to True,
+        # which rejects the bundled legacy state-dict checkpoint.
+        env["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
         return env
 
     @staticmethod

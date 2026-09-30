@@ -1,5 +1,5 @@
 <#
-  Sequentially build the four dedicated XB-SVCB installer families.
+  Sequentially build the five dedicated XB-SVCB installer families.
 
   Default behavior reuses the existing assets/wheels cache, but rebuilds the
   frontend/application/JUCE outputs once so every installer contains current
@@ -29,7 +29,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 $BuildScript = Join-Path $PSScriptRoot 'build.ps1'
 $WheelhouseScript = Join-Path $Root 'install\prepare_wheelhouse.py'
 $DistDir = Join-Path $Root 'dist'
-$Stacks = @('cpu', 'rocm10', 'cu126', 'cu128')
+$Stacks = @('cpu', 'rocm10', 'directml', 'cu126', 'cu128')
 
 function Require-File([string]$Path, [string]$Label) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -86,7 +86,7 @@ New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
 Set-Location -LiteralPath $Root
 
-Write-Host '==== Validating all four installer configurations ====' -ForegroundColor Cyan
+Write-Host '==== Validating all five installer configurations ====' -ForegroundColor Cyan
 $validationArgs = @{ ValidateOnly = $true }
 if ($RuntimeAssets) {
   $validationArgs.RuntimeAssets = $RuntimeAssets
@@ -100,12 +100,13 @@ $refreshApp = (-not $ReuseBuildOutputs) -or $RebuildApp
 $refreshJuceHost = (-not $ReuseBuildOutputs) -or $RebuildJuceHost
 
 if ($RebuildWheelhouse) {
-  Write-Host "`n==== Rebuilding the complete four-stack wheelhouse ====" -ForegroundColor Cyan
+  Write-Host "`n==== Rebuilding the complete five-stack wheelhouse ====" -ForegroundColor Cyan
   & $BuildPython $WheelhouseScript `
     --root $Root `
     --clean `
     --stack cpu `
     --stack rocm10 `
+    --stack directml `
     --stack cu126 `
     --stack cu128
   if ($LASTEXITCODE -ne 0) {
@@ -123,6 +124,7 @@ if (-not $KeepExistingInstallers) {
         ($_.Name -in @(
           'XB-SVCB-Setup-CPU.exe',
           'XB-SVCB-Setup-ROCm10.exe',
+          'XB-SVCB-Setup-DirectML.exe',
           'XB-SVCB-Setup-CUDA126.exe',
           'XB-SVCB-Setup-CUDA128.exe'
         ))
@@ -155,6 +157,7 @@ for ($index = 0; $index -lt $Stacks.Count; $index++) {
 $expectedExecutables = @(
   'XB-SVCB-Setup-CPU.exe',
   'XB-SVCB-Setup-ROCm10.exe',
+  'XB-SVCB-Setup-DirectML.exe',
   'XB-SVCB-Setup-CUDA126.exe',
   'XB-SVCB-Setup-CUDA128.exe'
 )

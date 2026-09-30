@@ -65,6 +65,7 @@ if /I "%XB_RUNTIME_LAYOUT%"=="shared" set "XB_RUNTIME_INSTALLER=install\install_
 if /I "%XB_GPU_STACK%"=="cu126" set "XB_RUNTIME_STACK_ARG=--cu126"
 if /I "%XB_GPU_STACK%"=="cu128" set "XB_RUNTIME_STACK_ARG=--cu128"
 if /I "%XB_GPU_STACK%"=="rocm10" set "XB_RUNTIME_STACK_ARG=--rocm10"
+if /I "%XB_GPU_STACK%"=="directml" set "XB_RUNTIME_STACK_ARG=--directml"
 for %%A in (%*) do (
   if /I "%%~A"=="--cpu" (
     set "XB_RUNTIME_INSTALLER=install\install.py"
@@ -75,6 +76,10 @@ for %%A in (%*) do (
     set "XB_RUNTIME_STACK_ARG="
   )
   if /I "%%~A"=="--rocm" (
+    set "XB_RUNTIME_INSTALLER=install\install.py"
+    set "XB_RUNTIME_STACK_ARG="
+  )
+  if /I "%%~A"=="--directml" (
     set "XB_RUNTIME_INSTALLER=install\install.py"
     set "XB_RUNTIME_STACK_ARG="
   )
@@ -99,7 +104,17 @@ if "%RC%"=="0" (
 ) else (
   if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 100 运行环境搭建失败
   echo [XB-SVCB] Finished with errors ^(exit code %RC%^). See log above.
-  echo           CUDA core repair: setup_env.bat --only uvr seedvc ddsp
+  if /I "%XB_GPU_STACK%"=="rocm10" (
+    echo           ROCm repair: setup_env.bat --rocm10 --only svc rvc vocal
+  ) else if /I "%XB_GPU_STACK%"=="directml" (
+    echo           DirectML repair: setup_env.bat --directml --only svc rvc vocal
+  ) else if /I "%XB_GPU_STACK%"=="cu126" (
+    echo           CUDA core repair: setup_env.bat --cu126 --only uvr seedvc ddsp
+  ) else if /I "%XB_GPU_STACK%"=="cu128" (
+    echo           CUDA core repair: setup_env.bat --cu128 --only uvr seedvc ddsp
+  ) else (
+    echo           Retry the failed component with setup_env.bat --only ^<component^>
+  )
 )
 echo.
 if not "%XB_FROM_INSTALLER%"=="1" pause

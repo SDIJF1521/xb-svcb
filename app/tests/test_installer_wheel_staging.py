@@ -81,6 +81,77 @@ def test_cpu_staging_requires_python312_component_groups(tmp_path: Path) -> None
         raise AssertionError("stale Python 3.9 CPU wheelhouse was accepted")
 
 
+def test_directml_staging_keeps_cpu_legacy_without_other_stack_wheels(tmp_path: Path) -> None:
+    stager = _load_stager()
+    wheel_root = tmp_path / "assets" / "wheels"
+    wheel_root.mkdir(parents=True)
+    (wheel_root / "wheelhouse.json").write_text("{}", encoding="utf-8")
+    expected = {
+        "bootstrap/uv.whl",
+        "common/metadata.whl",
+        "py312/directml/torch_directml-0.2.5.whl",
+        "ddsp/py312/directml/torch-cpu.whl",
+        "vocal/py312/directml/torch-cpu.whl",
+        "hub/py312/directml/modelscope.whl",
+        "ddsp-legacy/py312/cpu/torch-cpu.whl",
+    }
+    for path in expected | {
+        "py312/cpu/torch-cpu.whl",
+        "py312/rocm10/torch-rocm.whl",
+        "py312/cu128/torch-cuda.whl",
+        "pymss/py312/directml/pymss.whl",
+        "svc/py312/cpu/other.whl",
+    }:
+        _wheel(tmp_path, path)
+
+    output = tmp_path / ".tmp" / "installer-wheelhouse"
+    result = stager.stage_wheelhouse(tmp_path, "directml", output)
+
+    staged = {path.relative_to(output).as_posix() for path in output.rglob("*.whl")}
+    assert staged == expected
+    assert result["wheel_count"] == len(expected)
+
+
+def test_directml_staging_requires_cpu_legacy_group(tmp_path: Path) -> None:
+    stager = _load_stager()
+    wheel_root = tmp_path / "assets" / "wheels"
+    wheel_root.mkdir(parents=True)
+    (wheel_root / "wheelhouse.json").write_text("{}", encoding="utf-8")
+    for path in (
+        "bootstrap/uv.whl",
+        "py312/directml/torch_directml-0.2.5.whl",
+        "ddsp/py312/directml/torch-cpu.whl",
+        "vocal/py312/directml/torch-cpu.whl",
+        "hub/py312/directml/modelscope.whl",
+    ):
+        _wheel(tmp_path, path)
+
+    output = tmp_path / ".tmp" / "installer-wheelhouse"
+    try:
+        stager.stage_wheelhouse(tmp_path, "directml", output)
+    except RuntimeError as exc:
+        assert str(output / "ddsp-legacy" / "py312" / "cpu") in str(exc)
+    else:
+        raise AssertionError("DirectML wheelhouse without DDSP legacy CPU wheels was accepted")
+
+
+def test_directml_staging_requires_directml_torch_wheel(tmp_path: Path) -> None:
+    stager = _load_stager()
+    wheel_root = tmp_path / "assets" / "wheels"
+    wheel_root.mkdir(parents=True)
+    (wheel_root / "wheelhouse.json").write_text("{}", encoding="utf-8")
+    _wheel(tmp_path, "bootstrap/uv.whl")
+    _wheel(tmp_path, "py312/directml/other.whl")
+
+    output = tmp_path / ".tmp" / "installer-wheelhouse"
+    try:
+        stager.stage_wheelhouse(tmp_path, "directml", output)
+    except RuntimeError as exc:
+        assert "DirectML Torch wheel missing" in str(exc)
+    else:
+        raise AssertionError("DirectML wheelhouse without its Torch backend was accepted")
+
+
 def test_stage_wheelhouse_rejects_output_outside_repo_tmp(tmp_path: Path) -> None:
     stager = _load_stager()
     wheel_root = tmp_path / "assets" / "wheels"

@@ -114,6 +114,7 @@ exit /b 0
 set "DETECTED_GPU_STACK="
 if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="cpu" set "DETECTED_GPU_STACK=cpu"
 if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="rocm10" set "DETECTED_GPU_STACK=rocm10"
+if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="directml" set "DETECTED_GPU_STACK=directml"
 if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="cu126" set "DETECTED_GPU_STACK=cu126"
 if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="cu128" set "DETECTED_GPU_STACK=cu128"
 if /I "%XB_GPU_STACK_REQUESTED%"=="cpu" (
@@ -127,6 +128,14 @@ if /I "%XB_GPU_STACK_REQUESTED%"=="cpu" (
 if /I "%XB_GPU_STACK_REQUESTED%"=="rocm10" (
   set "XB_RESOLVED_GPU_STACK=rocm10"
   set "XB_GPU_STACK=rocm10"
+  set "XB_CUDA_VERSION="
+  set "XB_CUDA_DIR="
+  set "XB_CUDA_BIN="
+  exit /b 0
+)
+if /I "%XB_GPU_STACK_REQUESTED%"=="directml" (
+  set "XB_RESOLVED_GPU_STACK=directml"
+  set "XB_GPU_STACK=directml"
   set "XB_CUDA_VERSION="
   set "XB_CUDA_DIR="
   set "XB_CUDA_BIN="
@@ -151,6 +160,12 @@ if /I not "%XB_GPU_STACK_REQUESTED%"=="auto" if /I not "%XB_GPU_STACK_REQUESTED%
 set "XB_RESOLVED_GPU_STACK=%DETECTED_GPU_STACK%"
 set "XB_GPU_STACK=%DETECTED_GPU_STACK%"
 if "%XB_RESOLVED_GPU_STACK%"=="rocm10" (
+  set "XB_CUDA_VERSION="
+  set "XB_CUDA_DIR="
+  set "XB_CUDA_BIN="
+  exit /b 0
+)
+if "%XB_RESOLVED_GPU_STACK%"=="directml" (
   set "XB_CUDA_VERSION="
   set "XB_CUDA_DIR="
   set "XB_CUDA_BIN="
@@ -320,6 +335,10 @@ if "%XB_RESOLVED_GPU_STACK%"=="cpu" (
 )
 if "%XB_RESOLVED_GPU_STACK%"=="rocm10" (
   echo [skip] CUDA check skipped for AMD ROCm 10 mode.
+  exit /b 0
+)
+if "%XB_RESOLVED_GPU_STACK%"=="directml" (
+  echo [skip] CUDA check skipped for AMD DirectML mode.
   exit /b 0
 )
 

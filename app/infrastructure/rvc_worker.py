@@ -16,9 +16,34 @@ import array
 import json
 import math
 import os
+
+# FAISS uses OpenMP around its searches while NumPy/OpenBLAS may create another
+# worker pool inside each FAISS worker. On Windows that nested parallelism can
+# consume every CPU core for tens of minutes before ROCm receives the next RVC
+# segment. These variables must be set before importing NumPy/FAISS (the local
+# infrastructure imports below can import NumPy). A dedicated XB setting keeps
+# the limit explicit and user-overridable without inheriting a machine-wide
+# OPENBLAS_NUM_THREADS value.
+if __name__ == "__main__":
+    try:
+        _rvc_blas_threads = max(
+            1, int(os.environ.get("XB_RVC_BLAS_THREADS", "1"))
+        )
+    except (TypeError, ValueError):
+        _rvc_blas_threads = 1
+    for _rvc_blas_env in (
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    ):
+        os.environ[_rvc_blas_env] = str(_rvc_blas_threads)
+    del _rvc_blas_env, _rvc_blas_threads
+
 import shutil
 import sys
 import tempfile
+import time
 import traceback
 import urllib.request
 import wave
@@ -389,6 +414,88 @@ def _resolve_device(requested: str) -> ResolvedDevice:
     return resolve_torch_device(requested, torch)
 
 
+def _should_force_fp32(
+    backend: str,
+    torch_version: tuple[int, int],
+    *,
+    rocm_fp32: bool = False,
+) -> bool:
+    """Return whether this RVC backend needs the fp32 compatibility path."""
+    return (
+        backend in {"cpu", "directml"}
+        or (backend == "cuda" and torch_version >= (2, 6))
+        or (backend == "rocm" and rocm_fp32)
+    )
+
+
+def _module_device(module) -> str:  # noqa: ANN001
+    """Return the first parameter device without assuming a model layout."""
+    if module is None:
+        return "unloaded"
+    try:
+        parameter = next(module.parameters())
+    except (AttributeError, StopIteration, TypeError):
+        return "unknown"
+    return str(getattr(parameter, "device", "unknown"))
+
+
+def _rvc_device_report(rvc, resolved: ResolvedDevice, torch_module) -> str:  # noqa: ANN001
+    """Describe the devices actually used by RVC's lazily loaded components."""
+    vc = getattr(rvc, "vc", None)
+    pipeline = getattr(vc, "pipeline", None)
+    hubert = getattr(vc, "hubert_model", None)
+    rmvpe = getattr(pipeline, "model_rmvpe", None)
+    rmvpe_model = getattr(rmvpe, "model", None)
+    return (
+        "RVC_COMPONENT_DEVICES "
+        f"backend={resolved.backend} target={resolved.device} "
+        f"config={getattr(getattr(rvc, 'config', None), 'device', 'unknown')} "
+        f"is_half={bool(getattr(getattr(rvc, 'config', None), 'is_half', False))} "
+        f"net_g={_module_device(getattr(vc, 'net_g', None))} "
+        f"hubert={_module_device(hubert)} "
+        f"rmvpe={_module_device(rmvpe_model)} "
+        f"torch_cuda={bool(getattr(torch_module.cuda, 'is_available', lambda: False)())}"
+    )
+
+
+def _configure_rocm_runtime(torch_module, resolved: ResolvedDevice) -> None:  # noqa: ANN001
+    """Avoid an exhaustive MIOpen search on the first ROCm RVC inference.
+
+    RVC creates many different convolution shapes while loading HuBERT, RMVPE
+    and the synthesizer.  On a fresh Windows ROCm install, MIOpen's default
+    search can benchmark every candidate with large host workspaces before the
+    first audio block completes.  CUDA/cuDNN and DirectML do not have this
+    startup behavior.  FAST still selects a valid MIOpen solution and keeps
+    the setting user-overridable for machines with a warmed MIOpen database.
+    """
+    if resolved.backend != "rocm":
+        return
+    os.environ.setdefault("MIOPEN_FIND_MODE", "FAST")
+    print(
+        "XB: ROCm MIOpen 算法搜索模式="
+        f"{os.environ.get('MIOPEN_FIND_MODE', 'FAST')}（避免首次推理长时间调优）",
+        flush=True,
+    )
+
+
+def _configure_faiss_runtime(faiss_module) -> int:  # noqa: ANN001
+    """Keep FAISS parallel while preventing nested BLAS oversubscription."""
+    logical_cpus = max(1, int(os.cpu_count() or 1))
+    default_threads = max(1, min(8, logical_cpus // 2))
+    threads = _env_int("XB_RVC_FAISS_THREADS", default_threads)
+    try:
+        faiss_module.omp_set_num_threads(threads)
+    except (AttributeError, TypeError, ValueError) as exc:
+        print(f"XB: FAISS 线程配置失败（继续使用库默认值）: {exc}", flush=True)
+        return threads
+    print(
+        "XB: RVC 索引检索线程 "
+        f"FAISS={threads} BLAS={os.environ.get('OPENBLAS_NUM_THREADS', 'default')}",
+        flush=True,
+    )
+    return threads
+
+
 def _infer_file_checked(rvc, input_path: str, output_path: str) -> str:  # noqa: ANN001
     """Run rvc-python inference and surface vc_single failures before wav writing."""
     if not rvc.current_model:
@@ -469,6 +576,15 @@ def main() -> int:
         # 老栈（torch 2.1.1，默认即 False）加这层无副作用。
         import torch  # noqa: WPS433
         resolved_device = _resolve_device(args.device)
+        print(
+            "RVC_RUNTIME "
+            f"pid={os.getpid()} exe={sys.executable} "
+            f"prefix={sys.prefix} base_prefix={sys.base_prefix} "
+            f"torch={getattr(torch, '__file__', '')} "
+            f"version={torch.__version__} hip={getattr(torch.version, 'hip', None)}",
+            flush=True,
+        )
+        _configure_rocm_runtime(torch, resolved_device)
         if resolved_device.backend == "directml":
             _apply_rvc_directml_thread_limits(torch)
             patch_directml_float32(torch)
@@ -480,7 +596,9 @@ def main() -> int:
         import rvc_python.download_model as rvc_download_model
         import rvc_python.infer as rvc_infer
         import rvc_python.lib.rmvpe as rvc_rmvpe
+        import faiss  # noqa: WPS433
 
+        _configure_faiss_runtime(faiss)
         rvc_download_model.download_rvc_models = _prepare_rvc_base_models
         rvc_infer.download_rvc_models = _prepare_rvc_base_models
         if resolved_device.backend == "directml":
@@ -509,10 +627,15 @@ def main() -> int:
         # 先不传 model_path 构造（避免在构造期就按默认 is_half=True 把模型转半精度），
         # 以便在加载模型前按需切换精度。
         rvc = RVCInference(device=device, version=version)
-        if resolved_device.backend == "directml":
+        if resolved_device.backend in {"cuda", "rocm", "directml"}:
+            # rvc-python's Config performs its own hardware detection and can
+            # rewrite the device on older AMD/Windows combinations.  The
+            # resolver above has already validated the selected backend, so
+            # keep every RVC object on that exact device.
             rvc.device = resolved_device.device
             rvc.config.device = resolved_device.device
             rvc.vc.device = resolved_device.device
+        if resolved_device.backend == "directml":
             x_pad, x_query, x_center, x_max = _apply_rvc_directml_memory_profile(rvc)
             print(
                 "XB: RVC DirectML 低显存切片 "
@@ -541,7 +664,21 @@ def main() -> int:
         except Exception:  # noqa: BLE001
             _tv = (0, 0)
             _cuda_mem_gb = 0.0
-        force_fp32 = resolved_device.backend in {"cpu", "directml"} or _tv >= (2, 6)
+        # PyTorch 2.6+ needs fp32 for the affected NVIDIA Blackwell CUDA
+        # stack, but the same version test must not catch ROCm.  ROCm wheels
+        # expose HIP through the CUDA API and rvc-python's default fp16 path
+        # is the GPU fast path.  Forcing ROCm 10 (Torch 2.13) to fp32 makes
+        # the RVC model look like a CPU workload on supported AMD cards.
+        rocm_fp32 = (
+            resolved_device.backend == "rocm"
+            and os.environ.get("XB_RVC_ROCM_FP32", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        force_fp32 = _should_force_fp32(
+            resolved_device.backend,
+            _tv,
+            rocm_fp32=rocm_fp32,
+        )
         if force_fp32:
             try:
                 rvc.config.is_half = False
@@ -557,6 +694,8 @@ def main() -> int:
                     reason = "AMD DirectML"
                 elif resolved_device.backend == "cpu":
                     reason = "CPU 推理"
+                elif resolved_device.backend == "rocm":
+                    reason = "ROCm 强制 fp32 配置"
                 else:
                     reason = "新 torch"
                 print(f"XB: {reason}检测到，RVC 强制 fp32", flush=True)
@@ -589,6 +728,13 @@ def main() -> int:
                 print(f"XB: 设置低显存切片失败（继续用默认切片）: {exc}", flush=True)
 
         rvc.load_model(args.model, version=version, index_path=index_path)
+        print(
+            "RVC_DEVICE "
+            f"{resolved_device.backend} {resolved_device.name} "
+            f"target={resolved_device.device} torch={torch.__version__}",
+            flush=True,
+        )
+        print(_rvc_device_report(rvc, resolved_device, torch), flush=True)
         rvc.set_params(
             f0up_key=int(args.pitch),
             f0method=method,
@@ -601,6 +747,7 @@ def main() -> int:
             try:
                 _warm_up_realtime(rvc)
                 print("XB: RVC 实时组件预热完成", flush=True)
+                print(_rvc_device_report(rvc, resolved_device, torch), flush=True)
             except Exception as exc:  # noqa: BLE001 - a real block may still succeed
                 print(f"XB: RVC 实时预热失败（继续启动）: {exc}", flush=True)
             print("RVC_SERVER_READY", flush=True)
@@ -613,9 +760,21 @@ def main() -> int:
                     output_path = str(request.get("output") or "")
                     if not input_path or not output_path:
                         raise ValueError("输入或输出路径为空")
+                    infer_started = time.perf_counter()
                     _infer_file_checked(rvc, input_path, output_path)
+                    if resolved_device.backend in {"cuda", "rocm"}:
+                        torch.cuda.synchronize()
+                    infer_seconds = time.perf_counter() - infer_started
+                    post_started = time.perf_counter()
                     if not args.low_latency:
                         naturalize_inference_output(input_path, output_path, "rvc")
+                    post_seconds = time.perf_counter() - post_started
+                    print(
+                        "RVC_TIMING "
+                        f"infer_seconds={infer_seconds:.3f} "
+                        f"postprocess_seconds={post_seconds:.3f}",
+                        flush=True,
+                    )
                     result = {"ok": True, "output": output_path}
                 except Exception as exc:  # noqa: BLE001 - per-block errors must not kill the session
                     result = {"ok": False, "error": str(exc)}
@@ -623,10 +782,24 @@ def main() -> int:
             return 0
         if not args.input or not args.output:
             raise ValueError("非 server 模式必须提供 --input 和 --output")
+        infer_started = time.perf_counter()
         _infer_file_checked(rvc, args.input, args.output)
+        if resolved_device.backend in {"cuda", "rocm"}:
+            # The HIP queue is asynchronous. Synchronizing here makes the
+            # device report describe completed GPU work, not only enqueued work.
+            torch.cuda.synchronize()
+        infer_seconds = time.perf_counter() - infer_started
+        print(_rvc_device_report(rvc, resolved_device, torch), flush=True)
+        post_started = time.perf_counter()
         natural_stats = naturalize_inference_output(args.input, args.output, "rvc")
+        post_seconds = time.perf_counter() - post_started
+        print(
+            "RVC_TIMING "
+            f"infer_seconds={infer_seconds:.3f} "
+            f"postprocess_seconds={post_seconds:.3f}",
+            flush=True,
+        )
         print(f"RVC_NATURAL {format_naturalizer_stats(natural_stats)}", flush=True)
-        print(f"RVC_DEVICE {resolved_device.backend} {resolved_device.name}", flush=True)
         print(f"RVC_OK {args.output}", flush=True)
         return 0
     except Exception as exc:  # noqa: BLE001

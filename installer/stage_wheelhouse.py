@@ -18,10 +18,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-STACKS = frozenset({"cpu", "rocm10", "cu126", "cu128"})
+STACKS = frozenset({"cpu", "rocm10", "directml", "cu126", "cu128"})
 REQUIRED_COMPONENT_GROUPS = {
     "cpu": ("svc", "rvc", "pymss", "ddsp-legacy"),
     "rocm10": ("pymss", "ddsp-legacy"),
+    "directml": ("ddsp", "vocal", "hub"),
     "cu126": ("pymss", "ddsp-legacy"),
     "cu128": ("pymss", "ddsp-legacy"),
 }
@@ -29,6 +30,10 @@ REQUIRED_COMPONENT_GROUPS = {
 
 def wheel_belongs_to_stack(relative_path: Path, stack: str) -> bool:
     parts = tuple(part.lower() for part in relative_path.parts[:-1])
+    if stack == "directml" and parts and parts[0] == "pymss":
+        return False
+    if stack == "directml" and parts == ("ddsp-legacy", "py312", "cpu"):
+        return True
     if "bootstrap" in parts or "common" in parts:
         return True
     if any(part.startswith("py") and part[2:].isdigit() and part != "py312" for part in parts):
@@ -95,9 +100,22 @@ def stage_wheelhouse(root: Path, stack: str, output: Path) -> dict[str, object]:
     groups: dict[str, int] = defaultdict(int)
     linked = 0
     copied = 0
+    # The ROCm resolver writes the same large Torch/ROCm wheels into the
+    # public stack directory and component override directories. Component
+    # installs already search the public directory after their override, so
+    # carrying a second copy only inflates the installer.
+    shared_stack_dir = source / "py312" / stack
+    shared_names = {wheel.name.lower() for wheel in shared_stack_dir.glob("*.whl")}
     for wheel in sorted(source.rglob("*.whl")):
         relative = wheel.relative_to(source)
         if not wheel_belongs_to_stack(relative, stack):
+            continue
+        if (
+            stack == "rocm10"
+            and len(relative.parts) >= 4
+            and relative.parts[0] in {"pymss", "ddsp-legacy"}
+            and relative.parts[-1].lower() in shared_names
+        ):
             continue
         destination = output / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -112,20 +130,37 @@ def stage_wheelhouse(root: Path, stack: str, output: Path) -> dict[str, object]:
     required = output / "py312" / stack
     if not required.is_dir() or not any(required.glob("*.whl")):
         raise RuntimeError(f"selected wheelhouse group is empty: {required}")
+    if stack == "directml" and not any(required.glob("torch_directml-*.whl")):
+        raise RuntimeError(f"DirectML Torch wheel missing: {required}")
     bootstrap = output / "bootstrap"
     if not bootstrap.is_dir() or not any(bootstrap.glob("*.whl")):
         raise RuntimeError(f"bootstrap wheelhouse group is empty: {bootstrap}")
     for component in REQUIRED_COMPONENT_GROUPS[stack]:
         group = output / component / "py312" / stack
         if not group.is_dir() or not any(group.glob("*.whl")):
+            if stack == "rocm10" and component in {"pymss", "ddsp-legacy"}:
+                # These groups may contain no unique wheels after shared ROCm
+                # deduplication; dependencies resolve from py312/rocm10.
+                continue
             raise RuntimeError(
                 f"selected wheelhouse component group is empty: {group}; "
+                "rebuild the wheelhouse before packaging"
+            )
+    if stack == "directml":
+        legacy = output / "ddsp-legacy" / "py312" / "cpu"
+        if not legacy.is_dir() or not any(legacy.glob("*.whl")):
+            raise RuntimeError(
+                f"selected wheelhouse component group is empty: {legacy}; "
                 "rebuild the wheelhouse before packaging"
             )
 
     if stack == "rocm10":
         for group in groups:
             if "rocm10" in Path(group).parts:
+                # Component override directories may contain only their own
+                # packages after shared Torch/ROCm deduplication.
+                if not any((output / group).glob("torch-*.whl")):
+                    continue
                 validate_rocm_wheels(output / group)
 
     manifest: dict[str, object] = {

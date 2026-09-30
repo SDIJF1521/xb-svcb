@@ -127,9 +127,15 @@ runtime.json
 assets/models/seedvc/**/*.bin
 assets/models/seedvc/**/*.pt
 assets/models/seedvc/**/*.safetensors
+# DeepFilterNet writes this runtime log next to its model; it is not a bundled resource.
+assets/models/**/DeepFilterNet3/enhance.log
 
 # 安装器本体不入库：超过 GitHub LFS / Release 之外的 2GiB 单文件上限处理，
 # 改为构建后上传到 GitHub Releases 分发（见 README）。dist/* 已忽略，无需额外规则。
 .tmp-amd-rocm10-venv
 
 .tmp-amd-rocm10
+
+.tmp-pymss-rocm-packages
+
+.tmp-pymss-test

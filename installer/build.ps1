@@ -16,6 +16,7 @@
                  Inno Setup download: https://jrsoftware.org/isdl.php
 
   Usage:
+    ./installer/build.ps1 -Help            # show options without running a build
     ./installer/build.ps1                 # default: CUDA128 shared-runtime package
     ./installer/build.ps1 -Stacks cpu
     ./installer/build.ps1 -SkipWebBuild     # skip when web/dist already built
@@ -25,22 +26,54 @@
     ./installer/build.ps1 -Stacks cu128 -Python C:\Python312\python.exe
     ./installer/build.ps1 -Stacks cu126 -RuntimeAssets D:\XB-SVCB\assets\runtime\core-cu128
     ./installer/build.ps1 -Stacks rocm10
+    ./installer/build.ps1 -Stacks directml
     ./installer/build.ps1 -Stacks cu128 -BootstrapperOnly # refresh only this package EXE
     ./installer/build.ps1 -ValidateOnly     # validate scripts without packaging models
 #>
 
 param(
+  [Alias('h')]
+  [switch]$Help,
   [switch]$SkipWebBuild,
   [switch]$SkipAppBuild,
   [switch]$SkipJuceHostBuild,
   [switch]$SkipWheelhouse,
-  [ValidateSet('cpu', 'rocm10', 'cu126', 'cu128')]
+  [ValidateSet('cpu', 'rocm10', 'directml', 'cu126', 'cu128')]
   [string[]]$Stacks,
   [string]$Python,
   [string]$RuntimeAssets,
   [switch]$BootstrapperOnly,
   [switch]$ValidateOnly
 )
+
+if ($Help -or $args -contains '--help') {
+  @'
+Usage: .\installer\build.ps1 [-Stacks <stack>] [options]
+
+Stacks (one per build): cpu, rocm10, directml, cu126, cu128
+Default: cu128
+
+Options:
+  -Python <path>        Use a 64-bit CPython 3.12 executable.
+  -RuntimeAssets <dir>  Supply the shared CUDA core runtime assets.
+  -SkipWebBuild         Reuse an existing web/dist build.
+  -SkipAppBuild         Reuse an up-to-date dist/XB-SVCB app build.
+  -SkipJuceHostBuild    Reuse the existing JUCE VST3 host.
+  -SkipWheelhouse       Reuse an already prepared wheelhouse.
+  -BootstrapperOnly     Refresh the EXE using existing split .bin volumes.
+  -ValidateOnly         Validate installer scripts without packaging.
+  -Help, -h, --help     Show this help and exit.
+
+By default, wheelhouse preparation clears assets/wheels before downloading.
+Use -SkipWheelhouse only after preparing the selected stack's wheels.
+
+Examples:
+  .\installer\build.ps1 -Stacks directml -Python C:\Python312\python.exe
+  .\installer\build.ps1 -Stacks directml -SkipWheelhouse -SkipWebBuild
+  .\installer\build.ps1 -ValidateOnly -Stacks directml
+'@ | Write-Output
+  return
+}
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot   # repo root
@@ -54,14 +87,15 @@ $selectedStacks = @(
   }
 )
 if ($selectedStacks.Count -gt 1) {
-  throw "Dedicated installers must be built one stack at a time. Pass exactly one of: cpu, rocm10, cu126, cu128."
+  throw "Dedicated installers must be built one stack at a time. Pass exactly one of: cpu, rocm10, directml, cu126, cu128."
 }
 if ((-not $ValidateOnly) -and $selectedStacks.Count -ne 1) {
-  throw "A release build requires exactly one -Stacks value: cpu, rocm10, cu126, or cu128."
+  throw "A release build requires exactly one -Stacks value: cpu, rocm10, directml, cu126, or cu128."
 }
 $outputBaseNames = @{
   cpu      = 'XB-SVCB-Setup-CPU'
   rocm10 = 'XB-SVCB-Setup-ROCm10'
+  directml = 'XB-SVCB-Setup-DirectML'
   cu126    = 'XB-SVCB-Setup-CUDA126'
   cu128    = 'XB-SVCB-Setup-CUDA128'
 }
@@ -660,7 +694,7 @@ if ((Get-Content -LiteralPath $installScriptPath -Raw) -notmatch 'def _resolved_
   throw "Runtime installer is missing Junction resolution; refusing to build an installer that may pass a Windows mount point to uv."
 }
 
-$assetValidationStacks = if ($packageStack) { @($packageStack) } else { @('cpu', 'rocm10', 'cu126', 'cu128') }
+$assetValidationStacks = if ($packageStack) { @($packageStack) } else { @('cpu', 'rocm10', 'directml', 'cu126', 'cu128') }
 if (@($assetValidationStacks | Where-Object { $_ -in @('cu126', 'cu128') }).Count -gt 0) {
   Ensure-CoreRuntimeAssets $RuntimeAssets
   Assert-CoreRuntimeAssets
@@ -701,7 +735,7 @@ if ($ValidateOnly) {
   }
   New-Item -ItemType Directory -Force -Path $validateDir | Out-Null
   try {
-    $validateStacks = if ($packageStack) { @($packageStack) } else { @('cpu', 'rocm10', 'cu126', 'cu128') }
+    $validateStacks = if ($packageStack) { @($packageStack) } else { @('cpu', 'rocm10', 'directml', 'cu126', 'cu128') }
     foreach ($validateStack in $validateStacks) {
       $validateOutput = [string]($outputBaseNames[$validateStack])
       & $iscc "/DXB_VALIDATE_ONLY=1" "/DXB_PACKAGE_STACK=$validateStack" "/DXB_OUTPUT_BASENAME=$validateOutput" `

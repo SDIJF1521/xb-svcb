@@ -6,21 +6,23 @@
 
 NVIDIA CUDA126 和 CUDA128 默认使用两层共享环境。CPU 与 ROCm 10 使用隔离环境，所有组件均使用 64 位 CPython 3.12.x；不同组件的依赖仍单独解析。项目不再发布或新建 cu121 CUDA 栈。
 
-| 硬件包 | 默认布局 | 主要目录 |
-| --- | --- | --- |
-| CPU | 隔离兼容 | `.venv-uvr`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-vocal` |
-| ROCm 10 | 隔离 | `.venv-*`，包含 PyMSS；校验 ROCm 10、HIP 和 GPU 运算，失败时不会静默安装 CPU |
-| CUDA126 | 两层共享 | `runtimes/core-cu126`、`runtimes/svc-cu126` |
-| CUDA128 | 两层共享 | `runtimes/core-cu128`、`runtimes/svc-cu128` |
+| 硬件包  | 默认布局 | 主要目录                                                                                       |
+| ------- | -------- | ---------------------------------------------------------------------------------------------- |
+| CPU     | 隔离兼容 | `.venv-uvr`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-vocal` |
+| ROCm 10 | 隔离     | `.venv-*`，包含 PyMSS；校验 ROCm 10、HIP 和 GPU 运算，失败时不会静默安装 CPU                 |
+| CUDA126 | 两层共享 | `runtimes/core-cu126`、`runtimes/svc-cu126`                                                |
+| CUDA128 | 两层共享 | `runtimes/core-cu128`、`runtimes/svc-cu128`                                                |
 
 “共享”是依赖布局，不表示所有组件进入同一个 Python。两个共享层用于隔开 NumPy/protobuf/AudioTools 与旧 SVC/RVC 依赖之间的冲突。
 
+ROCm 10 的 SVC、RVC 和 Vocal 共用 `runtimes/svc-rocm10`。RVC 的 DirectML 版本必须保持独立，安装到 `.venv-rvc-directml`，并通过 `runtime.json` 的 `rvc-directml` 路由选择；它不能与 ROCm Torch 混装在同一个环境中。推理参数显式使用 `device=directml` 时才会启动该解释器，`device=rocm` 或 `auto` 继续使用 ROCm 路由。
+
 ## 组件路由
 
-| 共享层 | 组件 | 说明 |
-| --- | --- | --- |
-| `core-cu126` / `core-cu128` | UVR、SeedVC、DDSP-SVC | 统一的现代核心配方 |
-| `svc-cu126` / `svc-cu128` | So-VITS-SVC、RVC、Vocal/DeepFilterNet3 | 兼容旧模型框架的共享层 |
+| 共享层                          | 组件                                   | 说明                   |
+| ------------------------------- | -------------------------------------- | ---------------------- |
+| `core-cu126` / `core-cu128` | UVR、SeedVC、DDSP-SVC                  | 统一的现代核心配方     |
+| `svc-cu126` / `svc-cu128`   | So-VITS-SVC、RVC、Vocal/DeepFilterNet3 | 兼容旧模型框架的共享层 |
 
 应用不再根据固定目录猜测当前布局。安装成功后，`install/runtime_manifest.py` 把每个组件的相对 Python 路径写入 `runtime.json`；应用优先读取该文件，再回退到旧 `.venv-*`，以支持已有安装升级。
 
@@ -41,6 +43,14 @@ CUDA128: --gpu --cu128 --consolidated --core-profile core-cu128
 ROCm 10: --rocm10
 CPU:      --cpu
 ```
+
+只安装独立 DirectML RVC 环境：
+
+```powershell
+python install/install.py --directml --only rvc
+```
+
+ROCm RVC 默认保留 rvc-python 的 fp16 GPU 路径。若目标驱动或模型在 fp16 下不稳定，可临时设置 `XB_RVC_ROCM_FP32=1` 重试；worker 日志中的 `RVC_COMPONENT_DEVICES` 和 `RVC_TIMING` 会分别显示组件设备及模型/后处理耗时。
 
 `--consolidated` 仍由旧公共实现识别，但在发布流程中它表示 CUDA 共享布局，不再作为面向用户的实验开关。旧安装若没有 `XB_RUNTIME_LAYOUT`，无参数运行 `setup_env.bat` 仍保持兼容行为；显式传入 `--cu126`、`--cu128` 或 `--consolidated` 会选择共享入口。
 

@@ -23,8 +23,8 @@ class DdspSvcEngine:
         if not self.available:
             return "CPU (simulated)"
         runtime = probe_python_environment(config.DDSP_PYTHON)
-        if runtime.get("preferred") == "directml":
-            return "CPU 稳定路径（AMD DDSP）"
+        if "directml" in runtime.get("backends", []):
+            return "CPU 默认 / DirectML 实验"
         return runtime_device_label(runtime, "ddsp-svc env")
 
     def version(self) -> Optional[str]:

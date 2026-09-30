@@ -97,7 +97,7 @@ def test_uvr_directml_validation_initializes_separator(monkeypatch) -> None:
     assert "s.onnx_execution_provider" in check
 
 
-def test_ddsp_amd_stack_uses_cpu_torch(monkeypatch, tmp_path: Path) -> None:
+def test_ddsp_amd_stack_installs_directml_for_explicit_inference(monkeypatch, tmp_path: Path) -> None:
     installer = _load_installer_module()
     calls: list[tuple[tuple[str, ...], str | None]] = []
     monkeypatch.setattr(installer, "fetch_ddsp", lambda: None)
@@ -105,6 +105,8 @@ def test_ddsp_amd_stack_uses_cpu_torch(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(installer, "DDSP_DIR", tmp_path / "ddsp")
     monkeypatch.setattr(installer, "seed_ddsp_base_models", lambda: None)
     monkeypatch.setattr(installer, "_verify_ddsp_hubert", lambda py: None)
+    monkeypatch.setattr(installer, "_verify_directml_torch", lambda py, label: None)
+    monkeypatch.setattr(installer, "_install_ddsp_legacy_runtime", lambda uv, stack: None)
     monkeypatch.setattr(installer, "run", lambda command, **kwargs: None)
     python = installer.venv_python(installer.DDSP_VENV)
     python.parent.mkdir(parents=True)
@@ -121,8 +123,7 @@ def test_ddsp_amd_stack_uses_cpu_torch(monkeypatch, tmp_path: Path) -> None:
     installer.step_ddsp("uv", "directml")
 
     assert any(
-        args == ("torch==2.5.1", "torchaudio==2.5.1")
-        and index == installer.TORCH_CPU_INDEX
-        for args, index in calls
+        args == ("torch-directml==0.2.5.dev240914", "torchaudio==2.4.1")
+        for args, _ in calls
     )
-    assert not any(any("torch-directml" in arg for arg in args) for args, _ in calls)
+    assert not any(args == ("torch==2.5.1", "torchaudio==2.5.1") for args, _ in calls)

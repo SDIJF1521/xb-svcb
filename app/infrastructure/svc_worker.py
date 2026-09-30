@@ -28,8 +28,10 @@ try:
     from inference_device import (
         patch_directml_checkpoint_load,
         patch_directml_float32,
+        patch_directml_sovits_diffusion_extract,
         patch_directml_sovits_f0_coarse,
         patch_directml_sovits_rmvpe_cpu,
+        patch_directml_sovits_sinegen,
         patch_sovits_fcpe_fallback,
         resolve_torch_device,
     )
@@ -41,8 +43,10 @@ except ImportError:  # package import used by tests/application tooling
     from infrastructure.inference_device import (
         patch_directml_checkpoint_load,
         patch_directml_float32,
+        patch_directml_sovits_diffusion_extract,
         patch_directml_sovits_f0_coarse,
         patch_directml_sovits_rmvpe_cpu,
+        patch_directml_sovits_sinegen,
         patch_sovits_fcpe_fallback,
         resolve_torch_device,
     )
@@ -431,12 +435,22 @@ def main() -> int:
             patch_directml_sovits_rmvpe_cpu(sovits_utils)
             print(
                 "XB: So-VITS-SVC checkpoint/F0 粗化使用 DirectML 安全路径；"
-                "RMVPE/FCPE 使用 CPU 稳定路径，"
-                "主模型/扩散/声码器继续使用 AMD DirectML",
+                "RMVPE/FCPE、声源相位与扩散系数索引使用 CPU 稳定路径，"
+                "主模型/扩散网络继续使用 AMD DirectML",
                 flush=True,
             )
 
         from inference.infer_tool import Svc
+        if resolved_device.backend == "directml":
+            from diffusion import diffusion as diffusion_model
+            from vdecoder.hifigan import models as hifigan_models
+            from vdecoder.hifiganwithsnake import models as snake_models
+            from vdecoder.nsf_hifigan import models as diffusion_vocoder_models
+
+            patch_directml_sovits_diffusion_extract(diffusion_model)
+            patch_directml_sovits_sinegen(
+                (hifigan_models, snake_models), diffusion_vocoder_models
+            )
     except Exception as exc:  # noqa: BLE001
         print(f"SVC_ERR 依赖导入失败: {exc}")
         traceback.print_exc()

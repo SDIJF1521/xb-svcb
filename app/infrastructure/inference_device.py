@@ -619,9 +619,8 @@ def patch_directml_sovits_f0_coarse(utils_module: Any) -> None:
     Some torch-directml builds represent the result of ``Tensor.long()`` with
     an unsigned 8-bit kernel for this operation.  The upstream so-vits-svc
     implementation then compares that tensor with ``f0_bin == 256``; converting
-    the scalar 256 to uint8 fails before the encoder can run.  Clamping the
-    floating-point bins to 1..255 before converting to integer is equivalent for
-    valid F0 input and never feeds an out-of-range scalar to the uint8 kernel.
+    the scalar 256 to uint8 fails before the encoder can run.  Compare before
+    converting to integer, while preserving upstream's overflow bin (0).
     """
     if getattr(utils_module, "_xb_directml_f0_coarse_patch", False):
         return
@@ -640,10 +639,122 @@ def patch_directml_sovits_f0_coarse(utils_module: Any) -> None:
             f0_mel * scale - offset,
             f0_mel,
         )
-        return torch.clamp(torch.round(f0_mel), min=1, max=f0_bin - 1).long()
+        rounded = torch.round(f0_mel)
+        # Upstream maps bins >= f0_bin to 0, not to the highest voiced bin.
+        # Keep that comparison in float32 so DirectML never converts 256 to uint8.
+        bounded = torch.clamp(rounded, min=1, max=f0_bin - 1)
+        return torch.where(rounded >= f0_bin, torch.zeros_like(bounded), bounded).long()
 
     utils_module.f0_to_coarse = f0_to_coarse
     utils_module._xb_directml_f0_coarse_patch = True
+
+
+def patch_directml_sovits_sinegen(
+    hifigan_modules: tuple[Any, ...], diffusion_module: Any
+) -> None:
+    """Keep long So-VITS harmonic phases accurate on DirectML.
+
+    DirectML's float32 cumsum drifts over long clips, and its SineGen output
+    becomes audibly flat. Accumulate one harmonic at a time in CPU float64;
+    only the excitation tensor moves back to the model's DirectML device.
+    """
+    import numpy as np
+
+    torch = diffusion_module.torch
+
+    def stable_sines(
+        f0: Any, sampling_rate: float, phases: Any, harmonics: int,
+        upsample: int = 1,
+    ) -> Any:
+        batch, frames = f0.shape[:2]
+        result = np.empty((batch, frames * upsample, harmonics), dtype=np.float32)
+        for batch_index in range(batch):
+            for harmonic_index in range(harmonics):
+                if upsample == 1:
+                    hz = f0[batch_index, :, harmonic_index].detach().cpu().numpy()
+                    radians = np.array(hz, dtype=np.float64, copy=True)
+                else:
+                    hz = f0[batch_index].detach().cpu().numpy()
+                    radians = np.repeat(hz.astype(np.float64), upsample)
+                    radians *= harmonic_index + 1
+                radians /= sampling_rate
+                np.remainder(radians, 1.0, out=radians)
+                # The diffusion source repeats its random first-frame phase
+                # during nearest-neighbor upsampling; the main source does not.
+                radians[:upsample] += phases[batch_index, harmonic_index]
+                np.cumsum(radians, out=radians)
+                np.remainder(radians, 1.0, out=radians)
+                radians *= 2 * np.pi
+                np.sin(radians, out=radians)
+                result[batch_index, :, harmonic_index] = radians
+        return torch.from_numpy(result).to(device=f0.device, dtype=f0.dtype)
+
+    for module in hifigan_modules:
+        sinegen = module.SineGen
+        if getattr(sinegen, "_xb_directml_stable_phase", False):
+            continue
+        original_f02sine = sinegen._f02sine
+
+        def f02sine(self: Any, f0_values: Any, original: Any = original_f02sine) -> Any:
+            if not _is_directml_tensor(f0_values) or self.flag_for_pulse:
+                return original(self, f0_values)
+            phases = torch.rand(
+                f0_values.shape[0], f0_values.shape[2], device=f0_values.device
+            ).cpu().numpy()
+            phases[:, 0] = 0
+            return stable_sines(
+                f0_values, self.sampling_rate, phases, f0_values.shape[2]
+            )
+
+        sinegen._f02sine = f02sine
+        sinegen._xb_directml_stable_phase = True
+
+    sinegen = diffusion_module.SineGen
+    if getattr(sinegen, "_xb_directml_stable_phase", False):
+        return
+    original_forward = sinegen.forward
+
+    def diffusion_forward(self: Any, f0: Any, upp: Any) -> Any:
+        if not _is_directml_tensor(f0) or f0.ndim != 2 or int(upp) != upp:
+            return original_forward(self, f0, upp)
+        with torch.no_grad():
+            upsample = int(upp)
+            phases = torch.rand(f0.shape[0], self.dim, device=f0.device).cpu().numpy()
+            phases[:, 0] = 0
+            sine_waves = stable_sines(
+                f0, self.sampling_rate, phases, self.dim, upsample
+            ) * self.sine_amp
+            uv = self._f02uv(f0.unsqueeze(-1))
+            uv = torch.nn.functional.interpolate(
+                uv.transpose(2, 1), scale_factor=upsample, mode="nearest"
+            ).transpose(2, 1)
+            noise_amp = uv * self.noise_std + (1 - uv) * self.sine_amp / 3
+            noise = noise_amp * torch.randn_like(sine_waves)
+            sine_waves = sine_waves * uv + noise
+            return sine_waves, uv, noise
+
+    sinegen.forward = diffusion_forward
+    sinegen._xb_directml_stable_phase = True
+
+
+def patch_directml_sovits_diffusion_extract(diffusion_module: Any) -> None:
+    """Read shallow-diffusion schedule coefficients correctly on DirectML.
+
+    DirectML can return element zero for a one-element gather from the
+    1000-entry schedule. The table and indices are tiny, so index on CPU and
+    return only the selected coefficients to the model device.
+    """
+    if getattr(diffusion_module, "_xb_directml_extract_patch", False):
+        return
+    original_extract = diffusion_module.extract
+
+    def extract(a: Any, t: Any, x_shape: Any) -> Any:
+        if not (_is_directml_tensor(a) or _is_directml_tensor(t)):
+            return original_extract(a, t, x_shape)
+        return original_extract(a.cpu(), t.cpu(), x_shape).to(a.device)
+
+    diffusion_module.extract = extract
+    diffusion_module._xb_directml_extract_patch = True
 
 
 def patch_directml_seedvc_f0_coarse(
@@ -839,6 +950,40 @@ def inference_device_capabilities() -> dict[str, Any]:
         }
         frameworks = {framework: future.result() for framework, future in futures.items()}
 
+    # RVC may have both a ROCm/CUDA interpreter and an independent
+    # torch-directml interpreter. Merge the optional route into the RVC
+    # capability record so the UI/API exposes DirectML as a real choice rather
+    # than probing only whichever runtime is listed under ``rvc``.
+    directml_rvc_python = getattr(config, "RVC_DIRECTML_PYTHON", None)
+    primary_rvc_python = environments.get("rvc")
+    if directml_rvc_python and directml_rvc_python != primary_rvc_python:
+        directml_rvc = probe_python_environment(directml_rvc_python)
+        rvc_runtime = dict(frameworks.get("rvc") or {})
+        merged_backends = list(rvc_runtime.get("backends") or [])
+        for backend in directml_rvc.get("backends") or []:
+            if backend not in merged_backends:
+                merged_backends.append(backend)
+        merged_devices = list(rvc_runtime.get("devices") or [])
+        existing_devices = {
+            (item.get("backend"), item.get("index"), item.get("name"))
+            for item in merged_devices
+            if isinstance(item, dict)
+        }
+        for item in directml_rvc.get("devices") or []:
+            if not isinstance(item, dict):
+                continue
+            key = (item.get("backend"), item.get("index"), item.get("name"))
+            if key not in existing_devices:
+                merged_devices.append(item)
+                existing_devices.add(key)
+        rvc_runtime["backends"] = merged_backends
+        rvc_runtime["devices"] = merged_devices
+        if not rvc_runtime.get("ok") and directml_rvc.get("ok"):
+            rvc_runtime["ok"] = True
+        if rvc_runtime.get("preferred") in (None, "cpu") and directml_rvc.get("preferred"):
+            rvc_runtime["preferred"] = directml_rvc["preferred"]
+        frameworks["rvc"] = rvc_runtime
+
     # PyMSS accepts HIP through torch.cuda, but cannot use DirectML tensors.
     pymss_runtime = dict(frameworks["pymss"])
     pymss_runtime["backends"] = [b for b in pymss_runtime.get("backends", []) if b != "directml"]
@@ -847,26 +992,13 @@ def inference_device_capabilities() -> dict[str, Any]:
         pymss_runtime["preferred"] = "cpu"
     frameworks["pymss"] = pymss_runtime
 
-    # DDSP's full DirectML graph can complete without an exception yet produce
-    # electrical noise / near-silence. Do not advertise that backend as usable
-    # until an end-to-end numerical validation exists; the isolated environment
-    # still exposes a stable CPU path on AMD systems.
+    # An explicit DirectML selection opts into DDSP's unvalidated path. Keep
+    # automatic selection on CPU even when its environment has a DML adapter.
     ddsp_runtime = frameworks.get("ddsp-svc")
     if isinstance(ddsp_runtime, dict) and "directml" in ddsp_runtime.get("backends", []):
         ddsp_runtime = dict(ddsp_runtime)
-        ddsp_runtime["backends"] = [
-            backend for backend in ddsp_runtime.get("backends", []) if backend != "directml"
-        ]
-        if "cpu" not in ddsp_runtime["backends"]:
-            ddsp_runtime["backends"].append("cpu")
-        ddsp_runtime["devices"] = [
-            device
-            for device in ddsp_runtime.get("devices", [])
-            if device.get("backend") != "directml"
-        ]
-        if ddsp_runtime.get("preferred") == "directml":
-            ddsp_runtime["preferred"] = "cpu"
-        ddsp_runtime["note"] = "AMD 环境使用 CPU 稳定路径，避免 DDSP DirectML 电流杂音"
+        ddsp_runtime["preferred"] = "cpu"
+        ddsp_runtime["note"] = "DirectML 实验推理可能失真；自动选择使用 CPU"
         frameworks["ddsp-svc"] = ddsp_runtime
 
     labels = {

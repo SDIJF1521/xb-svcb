@@ -48,6 +48,24 @@ def test_ddsp_reflow_generation(tmp_path, model, encoder, override, folder):
     assert _select_entrypoint(data, tmp_path)[0] == tmp_path / folder
 
 
+def test_ddsp_reflow_uses_checkpoint_layout_when_version_is_missing(tmp_path, monkeypatch):
+    import infrastructure.ddsp_worker as worker
+
+    checkpoint = tmp_path / "model.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    monkeypatch.setattr(worker, "_checkpoint_reflow_version", lambda _path: "6.3")
+
+    data = {
+        "model": {"type": "RectifiedFlow", "n_aux_layers": 6},
+        "data": {"encoder_ckpt": "pretrain/contentvec/checkpoint_best_legacy_500.pt"},
+    }
+    selected, script, flag = _select_entrypoint(data, tmp_path, checkpoint)
+
+    assert selected == tmp_path
+    assert script == "main_reflow.py"
+    assert flag == "--model_ckpt"
+
+
 def test_missing_custom_encoder_is_never_replaced_with_contentvec(tmp_path):
     config = tmp_path / "custom.yaml"
     config.write_text(yaml.safe_dump({"model": {"type": "Sins"}, "data": {"encoder": "hubertsoft", "encoder_ckpt": "missing/hubert.pt"}}))

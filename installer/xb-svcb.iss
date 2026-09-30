@@ -136,6 +136,7 @@ Type: filesandordirs; Name: "{app}\.venv-uvr"
 Type: filesandordirs; Name: "{app}\.venv-plugins"
 Type: filesandordirs; Name: "{app}\.venv-svc"
 Type: filesandordirs; Name: "{app}\.venv-rvc"
+Type: filesandordirs; Name: "{app}\.venv-rvc-directml"
 Type: filesandordirs; Name: "{app}\.venv-seedvc"
 Type: filesandordirs; Name: "{app}\.venv-ddsp"
 Type: filesandordirs; Name: "{app}\.venv-ddsp-legacy"
@@ -669,6 +670,8 @@ begin
     Result := 'NVIDIA 50 系以下兼容显卡，使用共享 CUDA 12.6（cu126 torch）'
   else if Stack = 'rocm10' then
     Result := 'AMD Radeon，使用 ROCm 10 与 ROCm Torch'
+  else if Stack = 'directml' then
+    Result := 'AMD Radeon，使用 Windows DirectML'
   else
     Result := 'CPU 或未检测到兼容 GPU，安装 CPU 版 torch';
 end;
@@ -783,7 +786,7 @@ function GpuStackName(): String; forward;
 
 procedure DriverDownloadClick(Sender: TObject);
 begin
-  if GpuStackName() = 'rocm10' then
+  if (GpuStackName() = 'rocm10') or (GpuStackName() = 'directml') then
     OpenDownloadUrl('https://www.amd.com/en/support/download/drivers.html')
   else
     OpenDownloadUrl('https://www.nvidia.com/download/index.aspx');
@@ -821,7 +824,7 @@ end;
 
 procedure RefreshPrereqDownloadStatus;
 var
-  IsNvidia, IsRocm, PythonReady: Boolean;
+  IsNvidia, IsAmd, PythonReady: Boolean;
   DetectedStack, CudaVersion, GitPath, SelectedPython, PythonDir: String;
   CudaPath: String;
   UserProfilePath, UvStandalonePath, UvPythonScriptsPath, UvUserScriptsPath: String;
@@ -865,11 +868,11 @@ begin
 
   DetectedStack := InstallerGpuStackName();
   IsNvidia := (DetectedStack = 'cu126') or (DetectedStack = 'cu128');
-  IsRocm := DetectedStack = 'rocm10';
+  IsAmd := (DetectedStack = 'rocm10') or (DetectedStack = 'directml');
   CudaStatusLabel.Visible := IsNvidia;
   CudaDownloadButton.Visible := IsNvidia;
-  DriverStatusLabel.Visible := IsNvidia or IsRocm;
-  DriverDownloadButton.Visible := IsNvidia or IsRocm;
+  DriverStatusLabel.Visible := IsNvidia or IsAmd;
+  DriverDownloadButton.Visible := IsNvidia or IsAmd;
   if IsNvidia then
   begin
     CudaVersion := DetectedCudaVersion();
@@ -887,7 +890,7 @@ begin
     CudaStatusLabel.Caption := '';
     CudaDownloadButton.Caption := '打开 CUDA 下载';
   end;
-  if IsRocm then
+  if IsAmd then
     DriverStatusLabel.Caption := 'AMD Radeon 驱动：请确认已安装'
   else if IsNvidia then
     DriverStatusLabel.Caption := 'NVIDIA 显卡驱动：请确认已安装'
@@ -1255,6 +1258,8 @@ begin
     Result := '--gpu --cu126 --consolidated'
   else if Requested = 'rocm10' then
     Result := '--rocm10'
+  else if Requested = 'directml' then
+    Result := '--directml'
   else
   begin
     Stack := GpuStackName();
@@ -1264,6 +1269,8 @@ begin
       Result := '--gpu --cu126 --consolidated'
     else if Stack = 'rocm10' then
       Result := '--rocm10'
+    else if Stack = 'directml' then
+      Result := '--directml'
     else
       Result := '--cpu';
   end;
@@ -1814,7 +1821,8 @@ begin
   AppendInstallValidation('建议：从开始菜单运行“搭建/修复运行环境”，或执行 setup_env.bat --only vocal。');
 end;
 
-function ValidateTorchRuntime(const PythonPath, RuntimeLabel: String): Boolean;
+function ValidateTorchRuntime(const PythonPath, RuntimeLabel: String;
+  RequireDirectML: Boolean): Boolean;
 var
   ResultCode: Integer;
   CheckCode: String;
@@ -1830,6 +1838,8 @@ begin
     CheckCode := 'import torch; assert getattr(torch.version,''hip'',None); assert str(getattr(torch.version,''rocm'','''')).split(''.'')[0] == ''10''; assert torch.cuda.is_available(); assert (torch.ones(4,device=''cuda'')*2).sum().cpu().item() == 8'
   else if (GpuStackName() = 'cu126') or (GpuStackName() = 'cu128') then
     CheckCode := 'import torch; assert hasattr(torch,''__version__''); assert torch.cuda.is_available()'
+  else if (GpuStackName() = 'directml') and RequireDirectML then
+    CheckCode := 'import torch,torch_directml; assert torch_directml.is_available(); x=torch.ones(1,device=torch_directml.device()); assert x.cpu().item() == 1'
   else
     CheckCode := 'import torch; assert hasattr(torch,''__version__'')';
 
@@ -1852,19 +1862,22 @@ begin
   AppendInstallValidation('------------------------------------------------------------');
   AppendInstallValidation('六个 AI 运行环境真实 Torch 校验');
 
-  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'uvr', '.venv-uvr\Scripts\python.exe'), 'UVR');
+  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'uvr', '.venv-uvr\Scripts\python.exe'), 'UVR', True);
   Result := Result and CurrentReady;
-  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'svc', '.venv-svc\Scripts\python.exe'), 'So-VITS-SVC');
+  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'svc', '.venv-svc\Scripts\python.exe'), 'So-VITS-SVC', True);
   Result := Result and CurrentReady;
-  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'rvc', '.venv-rvc\Scripts\python.exe'), 'RVC');
+  if GpuStackName() = 'directml' then
+    CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'rvc-directml', '.venv-rvc-directml\Scripts\python.exe'), 'RVC', True)
+  else
+    CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'rvc', '.venv-rvc\Scripts\python.exe'), 'RVC', True);
   Result := Result and CurrentReady;
-  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'seedvc', '.venv-seedvc\Scripts\python.exe'), 'SeedVC');
+  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'seedvc', '.venv-seedvc\Scripts\python.exe'), 'SeedVC', True);
   Result := Result and CurrentReady;
-  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'ddsp', '.venv-ddsp\Scripts\python.exe'), 'DDSP-SVC');
+  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'ddsp', '.venv-ddsp\Scripts\python.exe'), 'DDSP-SVC', True);
   Result := Result and CurrentReady;
-  CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-ddsp-legacy\Scripts\python.exe'), 'DDSP-SVC legacy');
+  CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-ddsp-legacy\Scripts\python.exe'), 'DDSP-SVC legacy', False);
   Result := Result and CurrentReady;
-  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'vocal', '.venv-vocal\Scripts\python.exe'), 'AI 歌声增强');
+  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'vocal', '.venv-vocal\Scripts\python.exe'), 'AI 歌声增强', False);
   Result := Result and CurrentReady;
 
   if not Result then
