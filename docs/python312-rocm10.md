@@ -36,7 +36,7 @@ Torch、torchvision、torchaudio 使用各自的官方版本号，不能假设�
 
 离线安装包在暂存阶段还会读取 Torch wheel 内的 `torch/version.py`，校验 ROCm 10 与 HIP 标记，拒绝混入 DirectML 的依赖目录。已下载验证官方 Windows cp312 wheel：`torch.version.rocm == '10.0.0'`，而 `torch.version.hip == '7.15.26333'`；两者版本号不同，不能用 HIP 主版本代替 ROCm 主版本。源与版本不匹配时会停止打包，需要重新准备对应的 wheelhouse。
 
-PyMSS 在独立 `.venv-pymss` 环境安装同一 ROCm 栈，支持 AMD 加速。`auto` 会识别 HIP 并回报 `rocm`，显式 `rocm` 不可用时直接报错。PyMSS 不支持 DirectML。旧 DirectML worker 兼容代码仅用于已有环境，新的 AMD 安装和发布入口均选择 ROCm 10。
+PyMSS 在独立 `.venv-pymss` 环境安装同一 ROCm 栈，支持 AMD 加速。`auto` 会识别 HIP 并回报 `rocm`，显式 `rocm` 不可用时直接报错。PyMSS 不支持 DirectML。ROCm 10 的 SVC/RVC/Vocal 共用 `runtimes/svc-rocm10`；独立 DirectML 安装包和 RVC DirectML 环境仍可选，但不能与 ROCm Torch 混装。
 
 ## DDSP 与 SeedVC 模型
 

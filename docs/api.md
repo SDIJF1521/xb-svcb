@@ -1,28 +1,28 @@
 # XB-SVCB FastAPI 接入文档
 
-适用版本：XB-SVCB 0.0.31
+适用版本：XB-SVCB 0.0.32
 
 ## 启动与安全
 
 FastAPI 服务默认关闭，不会随 XB-SVCB 自动启动。打开软件的“资料库 -> API 接入”，配置监听范围和端口，然后手动点击“启动服务”。关闭软件或点击“停止服务”会释放监听端口。
 
 - 仅本机：监听 `127.0.0.1`，适合同一台电脑上的自动化程序。
-- 局域网：监听 `0.0.0.0`，同一网络的设备可通过软件页面显示的局域网地址调用。
-- 默认端口：`8765`，可改为 `1024` 到 `65535` 之间的空闲端口。
+- 局域网：监听 `0.0.0.0`，同一网络的设备可通过软件页面显示的局域网地址调用；此模式可填写已经解析到本机的绑定域名。切回本机模式会清空域名。
+- 默认端口：`8760`，可改为 `1024` 到 `65535` 之间的空闲端口。
 - 鉴权：除 `GET /health`、`/docs`、`/redoc` 和 `/openapi.json` 外，请求必须携带 `X-API-Key`。
-- API Key：在“API 接入”页查看、复制或重新生成。服务运行时不能更换密钥。
+- API Key：在“API 接入”页管理多条密钥，可命名、设置有效期和启停。仅启用且未过期的 Key 可用于鉴权；至少保留一条。修改、删除或切换状态前需先停止服务。旧版单 Key 配置会在读取时迁移。
 
-局域网模式只应在可信网络使用。Windows 防火墙首次拦截时，需要允许 XB-SVCB 在专用网络通信；不要把端口直接映射到公网。
+局域网模式只应在可信网络使用。域名绑定仅改变访问地址，不会自动配置 DNS、HTTPS 或公网安全策略。Windows 防火墙首次拦截时，需要允许 XB-SVCB 在专用网络通信；不要把端口直接映射到公网。
 
 ## 在线接口文档
 
 服务启动后可访问：
 
-- Swagger UI：`http://127.0.0.1:8765/docs`
-- ReDoc：`http://127.0.0.1:8765/redoc`
-- OpenAPI JSON：`http://127.0.0.1:8765/openapi.json`
+- Swagger UI：`http://127.0.0.1:8760/docs`
+- ReDoc：`http://127.0.0.1:8760/redoc`
+- OpenAPI JSON：`http://127.0.0.1:8760/openapi.json`
 
-端口修改后请同步替换上述地址。软件内“连通性测试”会使用当前 API Key 实际请求模型接口，并返回延迟与模型数量。
+端口修改后请同步替换上述地址；局域网绑定域名时也可使用状态页显示的域名 URL。软件内“连通性测试”会使用当前有效 API Key 实际请求模型接口，并返回延迟与模型数量。
 
 ## 标准调用流程
 
@@ -32,7 +32,7 @@ FastAPI 服务默认关闭，不会随 XB-SVCB 自动启动。打开软件的“
 4. 轮询 `GET /api/v1/jobs/{job_id}`，直到 `status` 为 `done` 或 `failed`。
 5. 成功后请求返回的 `result_url` 下载成品。
 
-任务进入 XB-SVCB 的同一条串行推理队列。软件界面和外部 API 创建的任务会相互可见，并共享当前的 CUDA、ROCm 10 或 CPU 推理环境。
+任务进入 XB-SVCB 的同一条串行推理队列。软件界面和外部 API 创建的任务会相互可见，并使用当前安装包提供的 CUDA、ROCm 10、DirectML 或 CPU 推理环境。
 
 ## 模型管理
 
@@ -103,7 +103,7 @@ from pathlib import Path
 
 import requests
 
-BASE_URL = "http://127.0.0.1:8765"
+BASE_URL = "http://127.0.0.1:8760"
 HEADERS = {"X-API-Key": "替换为软件中显示的 API Key"}
 
 with open("song.wav", "rb") as audio:
@@ -206,7 +206,7 @@ from pathlib import Path
 
 import requests
 
-BASE_URL = "http://127.0.0.1:8765"
+BASE_URL = "http://127.0.0.1:8760"
 API_KEY = "替换为软件中显示的 API Key"
 SOURCE_AUDIO = Path("song.wav")
 OUTPUT_AUDIO = Path("multi_model_cover.wav")

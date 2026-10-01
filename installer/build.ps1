@@ -619,7 +619,7 @@ Require-WorkerContract `
   "Formant pitch worker source" `
   @("--high-threshold", "FORMANT_PITCH_OK") `
   @("--out-npy", "F0_OK")
-Require-File (Join-Path $Root "docs\release-notes\release_notes_v031.md") "v0.0.31 release notes"
+Require-File (Join-Path $Root "docs\release-notes\release_notes_v032.md") "v0.0.32 release notes"
 Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
 Require-File (Join-Path $Root "install\detect_python.bat") "Python runtime detector"
@@ -978,7 +978,7 @@ if ($BootstrapperOnly) {
     }
   }
 } else {
-  # Replace only this hardware package; keep the other three package families.
+  # Replace only this hardware package; keep the other package families.
   Get-ChildItem -LiteralPath $distDir -Filter "$outputBaseName*" -File -ErrorAction SilentlyContinue |
     Remove-Item -Force
   & $iscc "/DXB_PACKAGE_STACK=$packageStack" "/DXB_OUTPUT_BASENAME=$outputBaseName" (Join-Path $Root "installer\xb-svcb.iss")

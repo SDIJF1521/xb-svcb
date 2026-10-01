@@ -9,12 +9,12 @@
 | 包 | 运行时布局 | Torch 栈 |
 | --- | --- | --- |
 | `XB-SVCB-Setup-CPU` | 兼容隔离环境 | CPU |
-| `XB-SVCB-Setup-ROCm10` | 兼容隔离环境 | ROCm 10 |
+| `XB-SVCB-Setup-ROCm10` | SVC/RVC/Vocal 共享，其余隔离 | ROCm 10 |
 | `XB-SVCB-Setup-DirectML` | 兼容隔离环境 | DirectML；DDSP 默认 CPU、显式实验 DirectML，Vocal 使用 CPU Torch |
 | `XB-SVCB-Setup-CUDA126` | 两层共享环境 | Torch 2.7.1 + cu126 |
 | `XB-SVCB-Setup-CUDA128` | 两层共享环境 | Torch 2.7.1 + cu128 |
 
-CUDA 是默认发布路径：不传 `-Stacks` 时，`build.ps1` 构建 CUDA128 共享运行时安装包。CPU、ROCm 10 和 DirectML 因依赖组合不同，继续保留隔离布局。五套包都包含同一应用、引擎源码、模型、FFmpeg 和 JUCE Host，但只携带目标硬件栈需要的 wheels。DirectML 包额外携带 DDSP legacy 所需的 CPU wheel，不安装尚不支持 DirectML 的 PyMSS。DDSP 自动设备仍走 CPU；用户显式选择 DirectML 才尝试 6.3 模型的实验推理，输出可能存在静默数值失真，需要试听确认。
+CUDA 是默认发布路径：不传 `-Stacks` 时，`build.ps1` 构建 CUDA128 共享运行时安装包。CPU 和 DirectML 保留隔离布局；ROCm 10 的 SVC/RVC/Vocal 共用 `runtimes/svc-rocm10`，其余组件隔离。五套包都包含同一应用、引擎源码、模型、FFmpeg 和 JUCE Host，但只携带目标硬件栈需要的 wheels。DirectML 包额外携带 DDSP legacy 所需的 CPU wheel，不安装尚不支持 DirectML 的 PyMSS。DDSP 自动设备仍走 CPU；用户显式选择 DirectML 才尝试 6.3 模型的实验推理，输出可能存在静默数值失真，需要试听确认。
 
 CUDA 共享布局：
 
@@ -45,6 +45,7 @@ Python 不随安装器内置。用户安装时可从检测结果中选择 CPytho
 
 ```powershell
 & .\installer\build.ps1 -Help
+& .\installer\build-all-packages.ps1 -Help
 ```
 
 轻量校验五种配置，不生成发布包：
@@ -154,7 +155,7 @@ XB-SVCB-Setup-CUDA128-2.bin
 1. 校验应用、模型、引擎源码、FFmpeg、JUCE Host 和 wheels。
 2. 检测并锁定用户选择的 CPython 3.12.x。
 3. 安装或复用 `uv`，按包内固定硬件栈创建环境。
-4. CUDA126/CUDA128 调用共享入口；CPU/ROCm 10/DirectML 调用隔离兼容入口。
+4. CUDA126/CUDA128 调用两层共享入口；CPU/ROCm 10/DirectML 调用兼容入口，其中 ROCm 10 的 SVC/RVC/Vocal 使用单独共享层。
 5. 对每个解释器执行真实 Python/Torch 校验，通过后写入 `runtime.json`。
 6. 全部校验通过后删除安装目录中的 `assets/wheels`，降低最终占用；失败时保留缓存便于重试。
 

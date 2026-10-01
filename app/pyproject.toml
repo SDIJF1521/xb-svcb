@@ -1,6 +1,6 @@
 [project]
 name = "app"
-version = "0.0.31"
+version = "0.0.32"
 description = "Add your description here"
 readme = "README.md"
 license = "GPL-3.0-only"

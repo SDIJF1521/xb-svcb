@@ -6,6 +6,7 @@
   source. Use -ReuseBuildOutputs only for an unchanged, already validated tree.
 
   Examples:
+    ./installer/build-all-packages.ps1 -Help
     ./installer/build-all-packages.ps1
     ./installer/build-all-packages.ps1 -RebuildWheelhouse
     ./installer/build-all-packages.ps1 -Python C:\Python312\python.exe
@@ -14,6 +15,8 @@
 #>
 
 param(
+  [Alias('h')]
+  [switch]$Help,
   [switch]$RebuildWheelhouse,
   [switch]$RebuildWeb,
   [switch]$RebuildApp,
@@ -23,6 +26,28 @@ param(
   [string]$Python,
   [string]$RuntimeAssets
 )
+
+if ($Help -or $args -contains '--help') {
+  @'
+Usage: .\installer\build-all-packages.ps1 [options]
+
+Build order: cpu, rocm10, directml, cu126, cu128.
+
+Options:
+  -Python <path>          Use a 64-bit CPython 3.12 executable.
+  -RuntimeAssets <dir>    Supply the shared CUDA core runtime assets.
+  -RebuildWheelhouse      Rebuild the complete five-stack wheelhouse.
+  -RebuildWeb             Rebuild the frontend.
+  -RebuildApp             Rebuild the PyInstaller application.
+  -RebuildJuceHost        Rebuild the JUCE VST3 host.
+  -ReuseBuildOutputs      Reuse existing frontend/app/JUCE outputs.
+  -KeepExistingInstallers Keep existing installer artifacts in dist.
+  -Help, -h, --help       Show this help and exit.
+
+By default, existing wheels are reused and frontend/app/JUCE outputs are rebuilt.
+'@ | Write-Output
+  return
+}
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot

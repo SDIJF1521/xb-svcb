@@ -10,7 +10,7 @@
 ;
 ;  安装器在用户机上的行为：
 ;    - 释放打包好的应用本体 XB-SVCB.exe（前端与 worker 已内置，无需 Python 也能起界面）
-;    - 可选“搭建运行环境”：CUDA126/128 创建两层共享环境，CPU/ROCm 10 使用兼容隔离环境
+;    - 可选“搭建运行环境”：CUDA126/128 创建两层共享环境，ROCm 10 共享 SVC 组，CPU/DirectML 使用隔离环境
 ;    - 创建开始菜单与桌面快捷方式（指向 XB-SVCB.exe）
 ;
 ;  用户机前置：安装器只检测缺失的 Python/Git/C++ Build Tools/CUDA Toolkit，
@@ -24,7 +24,7 @@
 
 #define MyAppName "XB-SVCB AI 翻唱工具"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.31"
+#define MyAppVersion "0.0.32"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 #ifndef XB_PACKAGE_STACK
@@ -115,7 +115,7 @@ Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubd
 Source: "..\.tmp\installer-wheelhouse\*"; DestDir: "{app}\assets\wheels"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\docs\release-notes\release_notes_v031.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
+Source: "..\docs\release-notes\release_notes_v032.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
 Source: "..\docs\api.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 #endif
 

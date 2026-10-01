@@ -1316,3 +1316,26 @@ def test_installer_build_help_exits_before_build_checks(tmp_path: Path, flag: st
     assert "-Stacks directml" in result.stdout
     assert "-SkipWheelhouse" in result.stdout
     assert "Release version:" not in result.stdout
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell installer build")
+@pytest.mark.parametrize("flag", ["-Help", "-h", "--help"])
+def test_installer_build_all_help_exits_before_build_checks(tmp_path: Path, flag: str) -> None:
+    script = tmp_path / "build-all-packages.ps1"
+    script.write_bytes((ROOT / "installer" / "build-all-packages.ps1").read_bytes())
+
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), flag],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Usage: .\\installer\\build-all-packages.ps1" in result.stdout
+    assert "-RebuildWheelhouse" in result.stdout
+    assert "Validating all five installer configurations" not in result.stdout
