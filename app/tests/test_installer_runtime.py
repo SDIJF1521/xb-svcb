@@ -618,6 +618,46 @@ def test_shared_manifest_partial_install_does_not_activate(tmp_path, monkeypatch
     installer = _shared_fixture(tmp_path, monkeypatch)
     installer.write_runtime_manifest("cu128", {"uvr"})
     assert not installer.RUNTIME_MANIFEST.exists()
+    installer.write_runtime_manifest("cu128", {"svc", "rvc"})
+    assert not installer.RUNTIME_MANIFEST.exists()
+
+
+def test_shared_manifest_routes_both_complete_runtime_groups(tmp_path, monkeypatch):
+    installer = _shared_fixture(tmp_path, monkeypatch)
+    for venv in (installer.CORE_VENV, installer.SVC_VENV):
+        python = installer.venv_python(venv)
+        python.parent.mkdir(parents=True)
+        python.touch()
+
+    installer.write_runtime_manifest("cu128", installer.CORE_COMPONENTS | installer.SVC_COMPONENTS)
+
+    payload = json.loads(installer.RUNTIME_MANIFEST.read_text(encoding="utf-8"))
+    assert payload["layout"] == "consolidated"
+    assert payload["python"] == {
+        **{component: "runtimes/core-cu128/Scripts/python.exe" for component in installer.CORE_COMPONENTS},
+        **{component: "runtimes/svc-cu128/Scripts/python.exe" for component in installer.SVC_COMPONENTS},
+    }
+
+
+def test_shared_manifest_svc_repair_preserves_core_routes(tmp_path, monkeypatch):
+    installer = _shared_fixture(tmp_path, monkeypatch)
+    python = installer.venv_python(installer.SVC_VENV)
+    python.parent.mkdir(parents=True)
+    python.touch()
+    installer.RUNTIME_MANIFEST.write_text(json.dumps({
+        "version": 1,
+        "layout": "consolidated",
+        "python": {"uvr": "runtimes/core-cu128/Scripts/python.exe"},
+    }), encoding="utf-8")
+
+    installer.write_runtime_manifest("cu128", installer.SVC_COMPONENTS)
+
+    payload = json.loads(installer.RUNTIME_MANIFEST.read_text(encoding="utf-8"))
+    assert payload["python"]["uvr"] == "runtimes/core-cu128/Scripts/python.exe"
+    assert all(
+        payload["python"][component] == "runtimes/svc-cu128/Scripts/python.exe"
+        for component in installer.SVC_COMPONENTS
+    )
 
 
 def test_shared_manifest_preserves_other_components_and_invalid_files(tmp_path, monkeypatch):

@@ -37,19 +37,19 @@
       "group": "compat",
       "path": "assets/runtime/core-cu128/compat/antlr4_python3_runtime-4.9.3-py3-none-any.whl",
       "bytes": 144613,
-      "sha256": "380e70cc140cff8109211b32ac2f218e8c294360206201ffba23676f3375f519"
+      "sha256": "c92ab72e596aafc4a0074af9930751439db3777f450c5fbaed477aaf5a887ed0"
     },
     {
       "group": "compat",
       "path": "assets/runtime/core-cu128/compat/argbind-0.3.9-py2.py3-none-any.whl",
-      "bytes": 11898,
-      "sha256": "d147ffae08a66115cf07c86a67b248e6dadbb9af4898625e239197ef5fdba871"
+      "bytes": 11895,
+      "sha256": "7431efe071e8e2a0aeb1de285b94a083cc0cb5477dfa121d2c075be82e34257a"
     },
     {
       "group": "compat",
       "path": "assets/runtime/core-cu128/compat/crcmod-1.7-cp312-cp312-win_amd64.whl",
       "bytes": 25423,
-      "sha256": "ef22f5c59bde8d01f9f8546074ef2294371b954e7881b01f17cec1c916954949"
+      "sha256": "59da44407b06bafb8a3922e4f1c62223065928c44e6c0fb40717a1a8c75562f4"
     },
     {
       "group": "compat",
@@ -60,20 +60,20 @@
     {
       "group": "compat",
       "path": "assets/runtime/core-cu128/compat/jieba-0.42.1-py3-none-any.whl",
-      "bytes": 19314527,
-      "sha256": "99ec084112c79e9f18e3cad5abb392856b4c41178b4d7a074523127f99de8543"
+      "bytes": 19314526,
+      "sha256": "d0c546af3068971acda657065ccfd4572a276110059b841197c716e35d0eaf70"
     },
     {
       "group": "compat",
       "path": "assets/runtime/core-cu128/compat/oss2-2.19.1-py3-none-any.whl",
-      "bytes": 124053,
-      "sha256": "8225bc10f42f9bf1b9d331a693a5053233e48b2c87cda8166dfa419ea36f9806"
+      "bytes": 124054,
+      "sha256": "39502329e8a292382af5ac7878d1a6e905dc8799a0edf6752c017bf993a0bbf7"
     },
     {
       "group": "compat",
       "path": "assets/runtime/core-cu128/compat/randomname-0.2.1-py3-none-any.whl",
-      "bytes": 89313,
-      "sha256": "0ab52b34106c88eb518188ac94743d0fbe756f13f36b9156d2d92aad099d9321"
+      "bytes": 89312,
+      "sha256": "f31ae08a384b4d1bebc61a3dbf08e4c500d76a09a9fa4d265ab15b2577e3c3bd"
     },
     {
       "group": "rollback",

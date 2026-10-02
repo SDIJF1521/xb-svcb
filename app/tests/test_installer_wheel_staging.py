@@ -4,6 +4,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +26,17 @@ def _wheel(root: Path, relative: str) -> None:
     path.write_bytes(relative.encode("ascii"))
 
 
+def _cuda_torch_wheel(root: Path, relative: str, tag: str = "cp312") -> None:
+    path = root / "assets" / "wheels" / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            "torch-2.7.1+cu128.dist-info/WHEEL",
+            f"Tag: {tag}-{tag}-win_amd64\n",
+        )
+        archive.writestr(f"torch/_C.{tag}-win_amd64.pyd", b"")
+
+
 def test_stage_wheelhouse_keeps_only_selected_stack(tmp_path: Path) -> None:
     stager = _load_stager()
     wheel_root = tmp_path / "assets" / "wheels"
@@ -35,7 +47,7 @@ def test_stage_wheelhouse_keeps_only_selected_stack(tmp_path: Path) -> None:
     _wheel(tmp_path, "py312/cpu/torch-cpu.whl")
     _wheel(tmp_path, "py312/directml/torch-directml.whl")
     _wheel(tmp_path, "py312/cu126/torch-cu126.whl")
-    _wheel(tmp_path, "py312/cu128/torch-cu128.whl")
+    _cuda_torch_wheel(tmp_path, "py312/cu128/torch-2.7.1+cu128-cp312-cp312-win_amd64.whl")
     _wheel(tmp_path, "pymss/py312/cu128/pymss-cu128.whl")
     _wheel(tmp_path, "ddsp-legacy/py312/cu128/fairseq-fixed.whl")
     _wheel(tmp_path, "pymss/py312/cu126/pymss-cu126.whl")
@@ -51,7 +63,7 @@ def test_stage_wheelhouse_keeps_only_selected_stack(tmp_path: Path) -> None:
     assert staged == {
         "bootstrap/uv.whl",
         "common/metadata.whl",
-        "py312/cu128/torch-cu128.whl",
+        "py312/cu128/torch-2.7.1+cu128-cp312-cp312-win_amd64.whl",
         "pymss/py312/cu128/pymss-cu128.whl",
         "ddsp-legacy/py312/cu128/fairseq-fixed.whl",
     }
@@ -59,6 +71,27 @@ def test_stage_wheelhouse_keeps_only_selected_stack(tmp_path: Path) -> None:
     manifest = json.loads((output / "wheelhouse.json").read_text(encoding="utf-8"))
     assert manifest["package_stack"] == "cu128"
     assert sum(group["wheel_count"] for group in manifest["groups"]) == 5
+
+
+def test_cuda_staging_rejects_retagged_python310_torch(tmp_path: Path) -> None:
+    stager = _load_stager()
+    wheel_root = tmp_path / "assets" / "wheels"
+    wheel_root.mkdir(parents=True)
+    (wheel_root / "wheelhouse.json").write_text("{}", encoding="utf-8")
+    _wheel(tmp_path, "bootstrap/uv.whl")
+    _cuda_torch_wheel(
+        tmp_path,
+        "py312/cu128/torch-2.7.1+cu128-cp312-cp312-win_amd64.whl",
+        tag="cp310",
+    )
+
+    output = tmp_path / ".tmp" / "installer-wheelhouse"
+    try:
+        stager.stage_wheelhouse(tmp_path, "cu128", output)
+    except RuntimeError as exc:
+        assert "wrong Python ABI" in str(exc)
+    else:
+        raise AssertionError("retagged Python 3.10 CUDA Torch wheel was accepted")
 
 
 def test_cpu_staging_requires_python312_component_groups(tmp_path: Path) -> None:

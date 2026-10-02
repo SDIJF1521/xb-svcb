@@ -487,11 +487,17 @@ def update_runtime_manifest_routes(
 
 def write_runtime_manifest(gpu_stack: str, installed: set[str]) -> None:
     """Persist relative interpreter paths so the app can discover shared envs."""
-    if not CONSOLIDATED_RUNTIME or not CORE_COMPONENTS.issubset(installed):
+    if not CONSOLIDATED_RUNTIME:
+        return
+    ready = set()
+    for group in (CORE_COMPONENTS, SVC_COMPONENTS):
+        if group.issubset(installed):
+            ready.update(group)
+    if not ready:
         return
     components = {
         component: venv_python(runtime_venv(component, Path(f".venv-{component}")))
-        for component in sorted(CORE_COMPONENTS)
+        for component in sorted(ready)
     }
     update_runtime_manifest_routes(gpu_stack, components, layout="consolidated")
 

@@ -83,6 +83,27 @@ def validate_rocm_wheels(directory: Path) -> None:
             ) from exc
 
 
+def validate_cuda_torch_wheel(wheel: Path, stack: str) -> None:
+    expected_tag = "cp312-cp312-win_amd64"
+    if not wheel.name.endswith(f"+{stack}-{expected_tag}.whl"):
+        raise RuntimeError(f"CUDA Torch wheel filename has the wrong Python ABI: {wheel}")
+    try:
+        with zipfile.ZipFile(wheel) as archive:
+            metadata_name = next(
+                name for name in archive.namelist()
+                if name.startswith("torch-") and name.endswith(".dist-info/WHEEL")
+            )
+            metadata = archive.read(metadata_name).decode("utf-8")
+            valid = (
+                f"Tag: {expected_tag}" in metadata.splitlines()
+                and "torch/_C.cp312-win_amd64.pyd" in archive.namelist()
+            )
+    except (KeyError, StopIteration, UnicodeDecodeError, zipfile.BadZipFile) as exc:
+        raise RuntimeError(f"Invalid CUDA Torch wheel: {wheel}") from exc
+    if not valid:
+        raise RuntimeError(f"CUDA Torch wheel has the wrong Python ABI: {wheel}")
+
+
 def stage_wheelhouse(root: Path, stack: str, output: Path) -> dict[str, object]:
     if stack not in STACKS:
         raise ValueError(f"unsupported stack: {stack}")
@@ -110,6 +131,8 @@ def stage_wheelhouse(root: Path, stack: str, output: Path) -> dict[str, object]:
         relative = wheel.relative_to(source)
         if not wheel_belongs_to_stack(relative, stack):
             continue
+        if stack in {"cu126", "cu128"} and relative.name.startswith("torch-"):
+            validate_cuda_torch_wheel(wheel, stack)
         if (
             stack == "rocm10"
             and len(relative.parts) >= 4

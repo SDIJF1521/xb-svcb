@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -815,7 +816,36 @@ def _constraint_file(root: Path, batch: DownloadBatch) -> Path | None:
     tmp_reqs.mkdir(parents=True, exist_ok=True)
     safe = "".join(ch if ch.isalnum() else "-" for ch in batch.label.lower()).strip("-")
     path = tmp_reqs / f"constraints-{safe}.txt"
-    path.write_text("\n".join(batch.constraints) + "\n", encoding="utf-8")
+    constraints = list(batch.constraints)
+    stack = next((part for part in batch.dest.parts if part in {"cu126", "cu128"}), None)
+    torch_pin = next((line.removeprefix("torch==") for line in constraints if line.startswith("torch==")), None)
+    if stack and torch_pin:
+        py_tag = f"cp{_py_digits(batch.python_version)}"
+        local_torch = (
+            _wheelhouse_dir(root, batch.python_version, stack)
+            / f"torch-{torch_pin}+{stack}-{py_tag}-{py_tag}-{PLATFORM}.whl"
+        )
+        if local_torch.is_file():
+            expected_tag = f"{py_tag}-{py_tag}-{PLATFORM}"
+            try:
+                with zipfile.ZipFile(local_torch) as archive:
+                    wheel_metadata = archive.read(
+                        f"torch-{torch_pin}+{stack}.dist-info/WHEEL"
+                    ).decode("utf-8")
+                    extension = f"torch/_C.{py_tag}-{PLATFORM}.pyd"
+                    valid = (
+                        f"Tag: {expected_tag}" in wheel_metadata.splitlines()
+                        and extension in archive.namelist()
+                    )
+            except (KeyError, UnicodeDecodeError, zipfile.BadZipFile) as exc:
+                raise RuntimeError(f"Invalid local CUDA Torch wheel: {local_torch}") from exc
+            if not valid:
+                raise RuntimeError(
+                    f"Local CUDA Torch wheel has the wrong Python ABI: {local_torch}"
+                )
+            # An explicit local reference wins over an index wheel with the same version.
+            constraints.append(f"torch @ {local_torch.resolve().as_uri()}")
+    path.write_text("\n".join(constraints) + "\n", encoding="utf-8")
     return path
 
 

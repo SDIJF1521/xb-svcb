@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+import zipfile
 
 import pytest
 
@@ -73,6 +74,35 @@ def test_pymss_wheelhouse_is_isolated_with_a_compatible_torch_pair(wheelhouse_pl
 
     directml = wheelhouse.build_plan(root, {"directml"})
     assert not any(batch.label.startswith("pymss ") for batch in directml)
+
+
+def test_cuda_constraints_use_matching_local_torch_wheel(wheelhouse_plan) -> None:
+    wheelhouse, root = wheelhouse_plan
+    batch = next(
+        batch for batch in wheelhouse.build_plan(root, {"cu128"})
+        if batch.label == "pymss cu128 torch"
+    )
+    constraints_path = wheelhouse._constraint_file(root, batch)
+    assert constraints_path is not None
+    assert "torch @ " not in constraints_path.read_text(encoding="utf-8")
+
+    wheel_dir = wheelhouse._wheelhouse_dir(root, batch.python_version, "cu128")
+    wheel_dir.mkdir(parents=True)
+    local_torch = wheel_dir / "torch-2.7.1+cu128-cp312-cp312-win_amd64.whl"
+    with zipfile.ZipFile(local_torch, "w") as archive:
+        archive.writestr("torch-2.7.1+cu128.dist-info/WHEEL", "Tag: cp312-cp312-win_amd64\n")
+        archive.writestr("torch/_C.cp312-win_amd64.pyd", b"")
+    constraints_path = wheelhouse._constraint_file(root, batch)
+    assert constraints_path is not None
+    constraints = constraints_path.read_text(encoding="utf-8").splitlines()
+    assert "torch==2.7.1" in constraints
+    assert f"torch @ {local_torch.resolve().as_uri()}" in constraints
+
+    with zipfile.ZipFile(local_torch, "w") as archive:
+        archive.writestr("torch-2.7.1+cu128.dist-info/WHEEL", "Tag: cp310-cp310-win_amd64\n")
+        archive.writestr("torch/_C.cp310-win_amd64.pyd", b"")
+    with pytest.raises(RuntimeError, match="wrong Python ABI"):
+        wheelhouse._constraint_file(root, batch)
 
 
 def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torch(wheelhouse_plan) -> None:

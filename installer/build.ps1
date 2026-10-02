@@ -681,7 +681,7 @@ function Assert-WheelhouseProfile([string]$SelectedStack) {
   }
   if ($SelectedStack -in @('cu126', 'cu128')) {
     foreach ($name in @(
-      'onnx_weekly-1.23.0.dev20260831-cp312-cp312-win_amd64.whl',
+      'onnx_weekly-1.23.0.dev20260831-cp312-abi3-win_amd64.whl',
       'numpy-2.2.6-cp312-cp312-win_amd64.whl',
       'tensorboardx-2.6.5-py3-none-any.whl'
     )) {
@@ -829,7 +829,9 @@ if (-not $SkipWebBuild) {
   $webDir = Join-Path $Root "web"
   Stop-WebNodeProcesses $webDir
   Push-Location $webDir
+  $previousErrorActionPreference = $ErrorActionPreference
   try {
+    $ErrorActionPreference = 'Continue'
     if (Test-Path "package-lock.json") { npm ci } else { npm install }
     if ($LASTEXITCODE -ne 0) {
       throw "npm install/ci failed (exit code $LASTEXITCODE). Frontend NOT rebuilt. If npm reports EPERM, check antivirus or another process locking web/node_modules."
@@ -837,6 +839,7 @@ if (-not $SkipWebBuild) {
     npm run build
     if ($LASTEXITCODE -ne 0) { throw "npm run build failed (exit code $LASTEXITCODE). Frontend NOT rebuilt." }
   } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
     Pop-Location
   }
 }
@@ -866,7 +869,13 @@ if (-not $SkipAppBuild) {
   }
   & $venvPy -c "import PyInstaller; print('PyInstaller ' + getattr(PyInstaller, '__version__', 'unknown'))"
   if ($LASTEXITCODE -ne 0) { throw "PyInstaller is unavailable in app/.venv after installation" }
-  & $venvPy -m PyInstaller (Join-Path $Root "installer\xb-svcb-app.spec") --clean --noconfirm --distpath (Join-Path $Root "dist") --workpath (Join-Path $Root "build")
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    & $venvPy -m PyInstaller (Join-Path $Root "installer\xb-svcb-app.spec") --clean --noconfirm --distpath (Join-Path $Root "dist") --workpath (Join-Path $Root "build")
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
   if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed (exit code $LASTEXITCODE)" }
 }
 Require-File (Join-Path $Root "dist\XB-SVCB\XB-SVCB.exe") "Staged app executable (build without -SkipAppBuild)"

@@ -16,9 +16,10 @@ protobuf 保留 `cp310-abi3` 文件名，其稳定 ABI 支持 Python 3.12，不�
 - `assets/runtime/core-cu128/candidate/`：这次迁移使用的 NumPy、protobuf、TensorBoardX 三个新版 wheel。
 - `assets/runtime/core-cu128/rollback/`：四个迁移前 wheel。只用于恢复原版本，不是完整虚拟环境备份。
 
-二进制 wheel 不提交 Git；本机已从临时目录校验复制，原件未删除。请将
-`assets/runtime/core-cu128/` 随自己的备份保存。Inno 配置会在该目录存在时携带这些材料，
-但本轮没有编译或发布新安装包。仅克隆源码不会获得这些二进制材料。
+二进制 wheel 不提交 Git；本机已从现有 wheelhouse 和 PyPI 恢复，并按 profile 校验。
+其中六个辅助 wheel 的 ZIP 字节与历史记录不同，profile 已更新为本次材料的大小和 SHA-256；
+14 个 wheel 均通过 ZIP 和 RECORD 校验。请将 `assets/runtime/core-cu128/` 随自己的备份保存。
+Inno 配置会携带该目录中的材料；仅克隆源码不会获得这些二进制文件。
 缺失时 `--core-profile` 会明确拒绝执行；不得通过删除哈希检查绕过。
 
 锁文件共有 148 项：比现有环境多出的 `hf-xet==1.6.0` 是下载传输辅助包；
@@ -27,8 +28,9 @@ protobuf 保留 `cp310-abi3` 文件名，其稳定 ABI 支持 Python 3.12，不�
 因此固定其版本供新安装使用，但现有 HTTP 下载路径可缺少它；校验结果会单列 `missing_optional`。
 这不是第二套模型运行配方，也不会为通过校验自动安装它。
 
-固定版本不等于完整离线 wheelhouse：没有保存全部 147 个包的 wheel，尤其没有另外下载 Torch。
-来源于仓库的依赖仍需对应版本可获取；只有上述 14 个本地材料做了逐文件哈希固定。
+此目录仅保存上述 14 个固定材料；安装器使用的完整离线 wheelhouse 位于 `assets/wheels/`，
+包含五套硬件栈各自的 Torch 和其他依赖。两处二进制材料均未提交 Git；
+只有此 profile 中的 14 个 wheel 做了逐文件哈希固定。
 
 早期验证曾通过 `install/validate_core_install.py --recover-cache ... --wheel-dir ...` 复用既有下载和旧缓存。缓存包只有在 RECORD 校验通过后才允许在独立临时目录重封装；这不等于取得上游原始 ZIP 的哈希认证，也不会自动成为长期发布材料。当前激活、验证与修复边界见 [共享运行时与兼容布局](../../../docs/runtime-consolidation.md)。
 

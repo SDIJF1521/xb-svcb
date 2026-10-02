@@ -40,7 +40,7 @@ Options:
   -RebuildWeb             Rebuild the frontend.
   -RebuildApp             Rebuild the PyInstaller application.
   -RebuildJuceHost        Rebuild the JUCE VST3 host.
-  -ReuseBuildOutputs      Reuse existing frontend/app/JUCE outputs.
+  -ReuseBuildOutputs       Reuse existing frontend/app/JUCE outputs.
   -KeepExistingInstallers Keep existing installer artifacts in dist.
   -Help, -h, --help       Show this help and exit.
 
