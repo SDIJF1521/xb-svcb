@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 import config
 from domain import InferenceParams
-from infrastructure.inference_device import environment_device_label
+from infrastructure.inference_device import environment_device_label, normalize_device
 from infrastructure.persistent_worker import PersistentInferenceSession
 
 
@@ -24,12 +24,34 @@ class RvcEngine:
     @property
     def available(self) -> bool:
         """是否具备真实 RVC 推理能力（隔离解释器 + worker 齐备）。"""
-        return config.rvc_engine_ready()
+        return bool(
+            config.RVC_WORKER.is_file()
+            and (config.RVC_PYTHON and config.RVC_PYTHON.is_file()
+                 or config.RVC_DIRECTML_PYTHON and config.RVC_DIRECTML_PYTHON.is_file())
+        )
+
+    @staticmethod
+    def _python_for_device(requested: str = "auto") -> Optional[Path]:
+        """Select the runtime matching the requested backend.
+
+        DirectML has a separate Torch build and cannot share the ROCm/CUDA
+        interpreter. Keep the primary route for auto/ROCm/CUDA and switch only
+        an explicit DirectML request to the independent runtime.
+        """
+        if normalize_device(requested) == "directml":
+            return getattr(config, "RVC_DIRECTML_PYTHON", None)
+        primary = getattr(config, "RVC_PYTHON", None)
+        if primary and primary.is_file():
+            return primary
+        # A DirectML-only installation has no primary route. It remains usable
+        # with auto rather than silently reporting that RVC is unavailable.
+        return getattr(config, "RVC_DIRECTML_PYTHON", None)
 
     def device(self) -> str:
+        python = self._python_for_device("auto")
         return (
-            environment_device_label(config.RVC_PYTHON, "rvc env")
-            if self.available
+            environment_device_label(python, "rvc env")
+            if python and python.is_file() and config.RVC_WORKER.is_file()
             else "CPU (simulated)"
         )
 
@@ -51,15 +73,16 @@ class RvcEngine:
         main_model = (model or {}).get("main_model_path", "") or ""
         index_path = (model or {}).get("index_path", "") or ""
 
+        python = self._python_for_device(params.device)
         ready = (
-            self.available
+            bool(python and python.is_file() and config.RVC_WORKER.is_file())
             and bool(main_model)
             and Path(main_model).exists()
             and Path(vocals).exists()
         )
         if not ready:
             missing = []
-            if not self.available:
+            if not python or not python.is_file() or not config.RVC_WORKER.is_file():
                 missing.append("RVC 推理环境未就绪")
             if not main_model or not Path(main_model).is_file():
                 missing.append(f"RVC 模型不存在: {main_model or '未配置'}")
@@ -67,7 +90,10 @@ class RvcEngine:
                 missing.append(f"输入人声不存在: {vocals}")
             raise RuntimeError("；".join(missing) or "RVC 推理条件不完整")
 
-        self._run_worker(main_model, index_path, Path(vocals), out_path, params, log_file)
+        self._run_worker(
+            main_model, index_path, Path(vocals), out_path, params, log_file,
+            python_path=python,
+        )
         return out_path
 
     def open_realtime_session(
@@ -80,10 +106,11 @@ class RvcEngine:
         """Load one RVC model once and keep it alive for successive song blocks."""
         main_model = str((model or {}).get("main_model_path") or "")
         index_path = str((model or {}).get("index_path") or "")
-        if not self.available or not Path(main_model).is_file():
+        python = self._python_for_device(params.device)
+        if not python or not python.is_file() or not config.RVC_WORKER.is_file() or not Path(main_model).is_file():
             raise RuntimeError("RVC 实时推理环境或模型未就绪")
         command = [
-            str(config.RVC_PYTHON),
+            str(python),
             str(config.RVC_WORKER),
             "--server",
             "--model", main_model,
@@ -117,9 +144,16 @@ class RvcEngine:
         out_path: Path,
         params: InferenceParams,
         log_file: Optional[Path] = None,
+        *,
+        python_path: Optional[Path] = None,
     ) -> None:
+        python = python_path or self._python_for_device(params.device)
+        if not python:
+            raise RuntimeError(
+                f"RVC {params.device or 'auto'} 独立运行环境未就绪"
+            )
         cmd = [
-            str(config.RVC_PYTHON),
+            str(python),
             str(config.RVC_WORKER),
             "--model",
             str(main_model),
@@ -185,6 +219,20 @@ class RvcEngine:
         env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
+        # FAISS is OpenMP-parallel. Let BLAS use one inner thread so an RVC
+        # .index lookup does not create an OpenBLAS pool in every FAISS worker.
+        # rvc_worker applies the same defaults when invoked directly.
+        try:
+            blas_threads = max(1, int(env.get("XB_RVC_BLAS_THREADS", "1")))
+        except (TypeError, ValueError):
+            blas_threads = 1
+        for name in (
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+            "VECLIB_MAXIMUM_THREADS",
+        ):
+            env[name] = str(blas_threads)
         hf_mirror = (
             env.get("XB_HF_MIRROR")
             or env.get("HF_ENDPOINT")
@@ -198,6 +246,11 @@ class RvcEngine:
     @staticmethod
     def _error_tail(stdout: str | None, stderr: str | None) -> str:
         text = ((stdout or "") + "\n" + (stderr or "")).strip()
+        if "MIOpen:" in text and "Invalid elapsed time" in text:
+            return (
+                "ROCm/MIOpen 首次卷积算法搜索失败（Invalid elapsed time）。"
+                "可先设置 MIOPEN_FIND_MODE=FAST 后重试；新版 worker 已默认使用 FAST 搜索。"
+            )
         if "cuda error: out of memory" in text.lower() or "torch.cuda.outofmemoryerror" in text.lower():
             return (
                 "CUDA 显存不足：请关闭占用显卡的软件后重试；仍失败时把 F0 算法改为 pm/harvest、"

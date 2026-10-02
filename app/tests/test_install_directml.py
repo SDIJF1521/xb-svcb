@@ -15,13 +15,13 @@ def _load_installer_module():
     return module
 
 
-def test_directml_voice_environments_use_python_310() -> None:
+def test_directml_voice_environments_use_python_312() -> None:
     installer = _load_installer_module()
 
-    assert installer._svc_python_for_stack("directml") == "3.10"
-    assert installer._rvc_python_for_stack("directml") == "3.10"
-    assert installer._svc_python_for_stack("cu126") == "3.10"
-    assert installer._rvc_python_for_stack("cpu") == "3.10"
+    assert installer._svc_python_for_stack("directml") == "3.12"
+    assert installer._rvc_python_for_stack("directml") == "3.12"
+    assert installer._svc_python_for_stack("cu126") == "3.12"
+    assert installer._rvc_python_for_stack("cpu") == "3.12"
 
 
 def test_directml_torch_install_never_invokes_empty_pip() -> None:
@@ -69,13 +69,14 @@ def test_directml_svc_requirements_override_python39_builds(tmp_path: Path) -> N
     filtered = installer._filter_requirements(
         requirements,
         extra_deny=installer.DIRECTML_EXTRA_DENY,
-        overrides=installer.PYTHON310_REQ_OVERRIDES,
+        overrides=installer.PYTHON312_REQ_OVERRIDES,
     )
     result = filtered.read_text(encoding="utf-8")
 
-    assert "numpy==1.23.5" in result
+    assert "numpy==1.26.4" in result
     assert "pyworld==0.3.5" in result
-    assert "scipy==1.10.1" in result
+    assert "scipy==1.13.1" in result
+    assert "soundfile>=0.12.1,<0.15" in result
     assert "numpy==1.19.5" not in result
     assert "pyworld==0.3.0" not in result
     assert "torch==1.10.0" not in result
@@ -96,7 +97,7 @@ def test_uvr_directml_validation_initializes_separator(monkeypatch) -> None:
     assert "s.onnx_execution_provider" in check
 
 
-def test_ddsp_amd_stack_uses_cpu_torch(monkeypatch, tmp_path: Path) -> None:
+def test_ddsp_amd_stack_installs_directml_for_explicit_inference(monkeypatch, tmp_path: Path) -> None:
     installer = _load_installer_module()
     calls: list[tuple[tuple[str, ...], str | None]] = []
     monkeypatch.setattr(installer, "fetch_ddsp", lambda: None)
@@ -104,6 +105,8 @@ def test_ddsp_amd_stack_uses_cpu_torch(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(installer, "DDSP_DIR", tmp_path / "ddsp")
     monkeypatch.setattr(installer, "seed_ddsp_base_models", lambda: None)
     monkeypatch.setattr(installer, "_verify_ddsp_hubert", lambda py: None)
+    monkeypatch.setattr(installer, "_verify_directml_torch", lambda py, label: None)
+    monkeypatch.setattr(installer, "_install_ddsp_legacy_runtime", lambda uv, stack: None)
     monkeypatch.setattr(installer, "run", lambda command, **kwargs: None)
     python = installer.venv_python(installer.DDSP_VENV)
     python.parent.mkdir(parents=True)
@@ -120,8 +123,7 @@ def test_ddsp_amd_stack_uses_cpu_torch(monkeypatch, tmp_path: Path) -> None:
     installer.step_ddsp("uv", "directml")
 
     assert any(
-        args == ("torch==2.5.1", "torchaudio==2.5.1")
-        and index == installer.TORCH_CPU_INDEX
-        for args, index in calls
+        args == ("torch-directml==0.2.5.dev240914", "torchaudio==2.4.1")
+        for args, _ in calls
     )
-    assert not any(any("torch-directml" in arg for arg in args) for args, _ in calls)
+    assert not any(args == ("torch==2.5.1", "torchaudio==2.5.1") for args, _ in calls)

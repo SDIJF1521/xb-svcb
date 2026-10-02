@@ -153,7 +153,7 @@ npm run validate
 
 ## 6. Python 依赖发布
 
-宿主使用专用 Python 3.10 运行时，只保证标准库和 `xb_svcb_plugin`。其他 Python 依赖写入固定版本的 `requirements.txt`：
+宿主使用专用 Python 3.12 运行时，只保证标准库和 `xb_svcb_plugin`。其他 Python 依赖写入固定版本的 `requirements.txt`：
 
 ```powershell
 httpx==0.28.1
@@ -163,7 +163,7 @@ httpx==0.28.1
 
 - 依赖及其传递依赖允许再分发；
 - 仓库和插件包保留要求的许可证或版权声明；
-- `npm run pack` 使用 Python 3.10 成功生成包内 `vendor/`；
+- `npm run pack` 使用 Python 3.12 成功生成包内 `vendor/`；
 - 没有把开发机 `.venv` 整体复制到 `vendor/`；
 - 没有安装时自动执行 `pip install` 的脚本；
 - `vendor/` 加入后仍满足 20 MB/50 MB 限制。

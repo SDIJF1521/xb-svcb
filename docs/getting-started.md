@@ -4,32 +4,35 @@
 
 ## 选择安装包
 
-| 设备 | 安装包 | 运行时布局 |
-| --- | --- | --- |
-| 无兼容 GPU | CPU | 隔离兼容环境 |
-| Windows AMD Radeon | DirectML | 隔离兼容环境 |
-| NVIDIA RTX 40 系及以下 | CUDA126 | `core-cu126` + `svc-cu126` 两层共享环境 |
+| 设备                       | 安装包  | 运行时布局                                  |
+| -------------------------- | ------- | ------------------------------------------- |
+| 无兼容 GPU                 | CPU     | 隔离兼容环境                                |
+| Windows AMD Radeon（首选） | ROCm 10 | SVC/RVC/Vocal 共享，其余隔离                 |
+| Windows AMD（可选）        | DirectML | 隔离兼容环境；DDSP 自动使用 CPU             |
+| NVIDIA RTX 40 系及以下     | CUDA126 | `core-cu126` + `svc-cu126` 两层共享环境 |
 | NVIDIA RTX 50 系 Blackwell | CUDA128 | `core-cu128` + `svc-cu128` 两层共享环境 |
 
 项目最低 CUDA wheel 栈为 cu126，不再使用 cu121。每套专用包只携带自己的硬件 wheels，但应用、模型和引擎源码相同。
 
-安装器不内置完整 Python。请选择 64 位 CPython 3.10.x；如果自动检测结果不正确，可在安装向导中手动指定 `python.exe`。`uv` 无需预装，安装器会从自带启动 wheel 安装。
+安装器不内置完整 Python。请选择 64 位 CPython 3.12.x；如果自动检测结果不正确，可在安装向导中手动指定 `python.exe`。`uv` 无需预装，安装器会从自带启动 wheel 安装。
 
 ## 安装后的运行环境
 
 CUDA126/CUDA128 默认共享：
 
-| 目录 | 组件 |
-| --- | --- |
-| `runtimes/core-cu126` / `core-cu128` | UVR、SeedVC、DDSP-SVC |
-| `runtimes/svc-cu126` / `svc-cu128` | So-VITS-SVC、RVC、Vocal/DeepFilterNet3 |
+| 目录                                     | 组件                                   |
+| ---------------------------------------- | -------------------------------------- |
+| `runtimes/core-cu126` / `core-cu128` | UVR、SeedVC、DDSP-SVC                  |
+| `runtimes/svc-cu126` / `svc-cu128`   | So-VITS-SVC、RVC、Vocal/DeepFilterNet3 |
 
-CPU/DirectML 使用 `.venv-uvr`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp` 和 `.venv-vocal` 等隔离目录。应用通过 `runtime.json` 识别实际解释器，不应只根据目录名判断安装是否完成。
+CPU 使用 `.venv-uvr`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp` 和 `.venv-vocal` 等隔离目录。DirectML 也隔离，但 RVC 使用 `.venv-rvc-directml`。ROCm 10 的 SVC/RVC/Vocal 共用 `runtimes/svc-rocm10`，其余组件隔离。应用通过 `runtime.json` 识别实际解释器，不应只根据目录名判断安装是否完成。
 
 完整布局和旧安装兼容规则见 [共享运行时与兼容布局](runtime-consolidation.md)。
 
+## 仅旧版 0.0.31：RTX 50 安装修复
 
-## 0.0.31版本50系显卡安装失败将请先在shell中执行如下代码
+0.0.32 的 CUDA128 配方已包含 `gin-config`，无需执行下面的旧版补丁。只有暂时无法升级、且 0.0.31 因缺少此依赖而安装失败时，才在 PowerShell 中对旧安装目录执行：
+
 ```powershell
 Set-Location '安装目录'
 
@@ -96,7 +99,7 @@ setup_env.bat --only models
 ## 源码环境要求
 
 - Windows。
-- 64 位 CPython 3.10.x，用于安装器和当前离线 wheels。
+- 64 位 CPython 3.12.x，用于安装器和当前离线 wheels。
 - Node.js 20.19+ 或 22.12+，仅构建前端需要。
 - 可访问 PyPI、模型源和上游仓库，或已准备离线 wheelhouse 与模型资产。
 - 构建 VST3 Host 时需要 CMake、Visual C++ Build Tools 和 JUCE。
@@ -107,14 +110,16 @@ setup_env.bat --only models
 setup_env.bat --cu128
 setup_env.bat --cu126
 setup_env.bat --cpu
+setup_env.bat --rocm10
 setup_env.bat --directml
 ```
 
-CUDA 参数调用共享入口；CPU/DirectML 调用隔离兼容入口。开发者也可直接运行：
+CUDA 参数调用两层共享入口；ROCm 10 调用带 SVC 共享层的兼容入口，CPU/DirectML 调用隔离入口。开发者也可直接运行：
 
 ```bat
 setup_shared_env.bat --cu128
 python install\install.py --cpu
+python install\install.py --rocm10
 python install\install.py --directml
 ```
 
@@ -158,7 +163,7 @@ npm run dev
 
 ### 找不到 Python
 
-安装器只接受可运行的 64 位 CPython 3.10.x，因为离线 wheels 是 `cp310-win_amd64`。优先选择普通 Python 或 Conda 解释器，不要选择某个 AI 项目的 `.venv`。
+安装器只接受可运行的 64 位 CPython 3.12.x，因为离线 wheels 是 `cp312-win_amd64`。优先选择普通 Python 或 Conda 解释器，不要选择某个 AI 项目的 `.venv`。
 
 ### 缺少前端
 

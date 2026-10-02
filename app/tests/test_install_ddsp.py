@@ -83,24 +83,29 @@ def test_bundled_deepfilter_model_uses_an_explicit_project_path(
     (bundled / "config.ini").write_text("[df]\nsr = 48000\n", encoding="utf-8")
     (bundled / "checkpoints" / "model_120.ckpt.best").write_bytes(b"model")
 
-    calls: list[list[str]] = []
+    calls: list[tuple[list[str], dict]] = []
     monkeypatch.setattr(installer, "ASSETS_MODELS_DIR", assets_dir)
     monkeypatch.setattr(installer, "VOCAL_MODELS_DIR", vocal_models_dir)
     monkeypatch.setattr(installer, "DEEPFILTER_CHECKPOINT_MIN_BYTES", 1)
-    monkeypatch.setattr(installer, "run", lambda command: calls.append(command))
+    monkeypatch.setattr(
+        installer,
+        "run",
+        lambda command, **kwargs: calls.append((command, kwargs)),
+    )
 
     model_dir = installer._prepare_vocal_deepfilter_model("vocal-python.exe")
 
     assert model_dir == vocal_models_dir / "DeepFilterNet3"
     assert (model_dir / "config.ini").is_file()
     assert calls == [
-        [
+        ([
             "vocal-python.exe",
             "-c",
-            "import sys; from df.enhance import init_df; init_df(sys.argv[1])",
+            calls[0][0][2],
             str(model_dir),
-        ]
+        ], {"env": {"TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD": "1"}})
     ]
+    assert "init_df(sys.argv[1], log_file=None)" in calls[0][0][2]
 
 
 def test_ddsp_hubert_validation_imports_runtime_entrypoint(monkeypatch):

@@ -2,7 +2,7 @@
 rem ============================================================
 rem  XB-SVCB - build/repair the runtime environment (no PowerShell)
 rem  Installed CUDA packages remember XB_RUNTIME_LAYOUT=shared and continue
-rem  using the two-layer shared runtime on later repairs. CPU/DirectML and old
+rem  using the two-layer shared runtime on later repairs. CPU/ROCm 10 and old
 rem  installations retain the isolated compatibility path.
 rem  Extra args are forwarded, e.g.:  setup_env.bat --only svc
 rem ============================================================
@@ -41,7 +41,7 @@ if not exist "%PYTHON_DETECTOR%" (
 )
 call "%PYTHON_DETECTOR%"
 if errorlevel 1 goto PYTHON_MISSING
-set "XB_PYTHON_310_EXE=%XB_PYTHON_EXE%"
+set "XB_PYTHON_312_EXE=%XB_PYTHON_EXE%"
 set "PATH=%XB_PYTHON_DIR%;%XB_PYTHON_DIR%\Scripts;%PATH%"
 rem Prefer the current per-user uv installation over an older uv.exe that
 rem may be left in the detected Python Scripts directory.
@@ -53,7 +53,7 @@ if defined XB_FFMPEG_BIN set "PATH=%XB_FFMPEG_BIN%;%PATH%"
 if defined XB_CUDA_BIN set "PATH=%XB_CUDA_BIN%;%PATH%"
 
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 0 已找到 Python，准备创建运行环境
-echo [XB-SVCB] Using locked Python 3.10.x: %XB_PYTHON_EXE%
+echo [XB-SVCB] Using locked Python 3.12.x: %XB_PYTHON_EXE%
 echo [XB-SVCB] Building runtime environment, this may take a while...
 echo.
 rem App UI ships as XB-SVCB.exe, so the app/web build steps are not needed here;
@@ -64,8 +64,18 @@ set "XB_RUNTIME_STACK_ARG="
 if /I "%XB_RUNTIME_LAYOUT%"=="shared" set "XB_RUNTIME_INSTALLER=install\install_shared.py"
 if /I "%XB_GPU_STACK%"=="cu126" set "XB_RUNTIME_STACK_ARG=--cu126"
 if /I "%XB_GPU_STACK%"=="cu128" set "XB_RUNTIME_STACK_ARG=--cu128"
+if /I "%XB_GPU_STACK%"=="rocm10" set "XB_RUNTIME_STACK_ARG=--rocm10"
+if /I "%XB_GPU_STACK%"=="directml" set "XB_RUNTIME_STACK_ARG=--directml"
 for %%A in (%*) do (
   if /I "%%~A"=="--cpu" (
+    set "XB_RUNTIME_INSTALLER=install\install.py"
+    set "XB_RUNTIME_STACK_ARG="
+  )
+  if /I "%%~A"=="--rocm10" (
+    set "XB_RUNTIME_INSTALLER=install\install.py"
+    set "XB_RUNTIME_STACK_ARG="
+  )
+  if /I "%%~A"=="--rocm" (
     set "XB_RUNTIME_INSTALLER=install\install.py"
     set "XB_RUNTIME_STACK_ARG="
   )
@@ -94,7 +104,17 @@ if "%RC%"=="0" (
 ) else (
   if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 100 运行环境搭建失败
   echo [XB-SVCB] Finished with errors ^(exit code %RC%^). See log above.
-  echo           CUDA core repair: setup_env.bat --only uvr seedvc ddsp
+  if /I "%XB_GPU_STACK%"=="rocm10" (
+    echo           ROCm repair: setup_env.bat --rocm10 --only svc rvc vocal
+  ) else if /I "%XB_GPU_STACK%"=="directml" (
+    echo           DirectML repair: setup_env.bat --directml --only svc rvc vocal
+  ) else if /I "%XB_GPU_STACK%"=="cu126" (
+    echo           CUDA core repair: setup_env.bat --cu126 --only uvr seedvc ddsp
+  ) else if /I "%XB_GPU_STACK%"=="cu128" (
+    echo           CUDA core repair: setup_env.bat --cu128 --only uvr seedvc ddsp
+  ) else (
+    echo           Retry the failed component with setup_env.bat --only ^<component^>
+  )
 )
 echo.
 if not "%XB_FROM_INSTALLER%"=="1" pause
@@ -102,7 +122,7 @@ endlocal & exit /b %RC%
 
 :PYTHON_MISSING
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 100 未找到可用的 Python，运行环境搭建失败
-echo [XB-SVCB] A runnable CPython 3.10.x was not found.
+echo [XB-SVCB] A runnable CPython 3.12.x was not found.
 echo           Get it from https://www.python.org/downloads/ then retry.
 echo.
 if not "%XB_FROM_INSTALLER%"=="1" pause

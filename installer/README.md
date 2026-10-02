@@ -4,16 +4,17 @@
 
 ## 当前发布方案
 
-发布产物按硬件栈拆成四套完整安装包：
+发布产物按硬件栈拆成五套完整安装包：
 
 | 包 | 运行时布局 | Torch 栈 |
 | --- | --- | --- |
 | `XB-SVCB-Setup-CPU` | 兼容隔离环境 | CPU |
-| `XB-SVCB-Setup-DirectML` | 兼容隔离环境 | DirectML |
+| `XB-SVCB-Setup-ROCm10` | SVC/RVC/Vocal 共享，其余隔离 | ROCm 10 |
+| `XB-SVCB-Setup-DirectML` | 兼容隔离环境 | DirectML；DDSP 默认 CPU、显式实验 DirectML，Vocal 使用 CPU Torch |
 | `XB-SVCB-Setup-CUDA126` | 两层共享环境 | Torch 2.7.1 + cu126 |
 | `XB-SVCB-Setup-CUDA128` | 两层共享环境 | Torch 2.7.1 + cu128 |
 
-CUDA 是默认发布路径：不传 `-Stacks` 时，`build.ps1` 构建 CUDA128 共享运行时安装包。CPU 和 DirectML 因依赖组合不同，继续保留隔离布局。四套包都包含同一应用、引擎源码、模型、FFmpeg 和 JUCE Host，但只携带目标硬件栈需要的 wheels。
+CUDA 是默认发布路径：不传 `-Stacks` 时，`build.ps1` 构建 CUDA128 共享运行时安装包。CPU 和 DirectML 保留隔离布局；ROCm 10 的 SVC/RVC/Vocal 共用 `runtimes/svc-rocm10`，其余组件隔离。五套包都包含同一应用、引擎源码、模型、FFmpeg 和 JUCE Host，但只携带目标硬件栈需要的 wheels。DirectML 包额外携带 DDSP legacy 所需的 CPU wheel，不安装尚不支持 DirectML 的 PyMSS。DDSP 自动设备仍走 CPU；用户显式选择 DirectML 才尝试 6.3 模型的实验推理，输出可能存在静默数值失真，需要试听确认。
 
 CUDA 共享布局：
 
@@ -25,7 +26,7 @@ CUDA 共享布局：
 
 ## 构建前置
 
-- 64 位 CPython 3.10.x。可用 `-Python C:\path\to\python.exe` 明确指定。
+- 64 位 CPython 3.12.x。可用 `-Python C:\path\to\python.exe` 明确指定。
 - Node.js，用于构建 `web/dist`。
 - `app/.venv` 中的 PyInstaller 与桌面依赖。
 - CMake、Visual C++ Build Tools 和 JUCE，用于 JUCE VST3 Host。
@@ -34,13 +35,20 @@ CUDA 共享布局：
 - CUDA 包还必须有 `assets/runtime/core-cu128` 的 candidate/compat 材料；可用
   `-RuntimeAssets C:\path\to\core-cu128` 从单独备份同步。
 
-Python 不随安装器内置。用户安装时可从检测结果中选择 CPython 3.10.x，安装器把选择写入安装目录的 `installer_env.cmd`。`uv` 无需用户预装：wheelhouse 携带启动 wheel，缺失时由安装流程安装。
+Python 不随安装器内置。用户安装时可从检测结果中选择 CPython 3.12.x，安装器把选择写入安装目录的 `installer_env.cmd`。`uv` 无需用户预装：wheelhouse 携带启动 wheel，缺失时由安装流程安装。
 
-四种发布栈现在都只创建 Python 3.10 环境。CPU 的 SVC/RVC 仍保留独立目录和兼容 Torch 版本，但不再额外要求 Python 3.9。
+五种发布栈现在都只创建 Python 3.12 环境。CPU 的 SVC/RVC 仍保留独立目录和兼容 Torch 版本，但不再额外要求 Python 3.9。
 
 ## 默认构建
 
-轻量校验四种配置，不生成发布包：
+查看参数，不执行构建：
+
+```powershell
+& .\installer\build.ps1 -Help
+& .\installer\build-all-packages.ps1 -Help
+```
+
+轻量校验五种配置，不生成发布包：
 
 ```powershell
 & .\installer\build.ps1 -ValidateOnly
@@ -49,22 +57,33 @@ Python 不随安装器内置。用户安装时可从检测结果中选择 CPytho
 构建默认 CUDA128 共享包：
 
 ```powershell
-& .\installer\build.ps1 -Python "C:\Python310\python.exe"
+& .\installer\build.ps1 -Python "C:\Python312\python.exe"
 ```
 
 构建指定硬件包：
 
 ```powershell
-& .\installer\build.ps1 -Stacks cu126 -Python "C:\Python310\python.exe"
-& .\installer\build.ps1 -Stacks cpu -Python "C:\Python310\python.exe"
-& .\installer\build.ps1 -Stacks directml -Python "C:\Python310\python.exe"
+& .\installer\build.ps1 -Stacks cu126 -Python "C:\Python312\python.exe"
+& .\installer\build.ps1 -Stacks cpu -Python "C:\Python312\python.exe"
+& .\installer\build.ps1 -Stacks rocm10 -Python "C:\Python312\python.exe"
+& .\installer\build.ps1 -Stacks directml -Python "C:\Python312\python.exe"
 ```
+
+`build.ps1` 默认重新准备 wheelhouse，使用的 `--clean` 会清空现有全部 wheel 缓存。
+已有 ROCm/CUDA 缓存时，先追加准备 DirectML wheels，再跳过重复准备，避免删掉其他栈：
+
+```powershell
+& "C:\Python312\python.exe" .\install\prepare_wheelhouse.py --stack directml
+& .\installer\build.ps1 -Stacks directml -Python "C:\Python312\python.exe" -SkipWheelhouse
+```
+
+成功后产物为 `dist\XB-SVCB-Setup-DirectML.exe` 及同名前缀的 `.bin` 分卷。
 
 CUDA 运行时材料不在 Git 中时，先从备份同步再构建：
 
 ```powershell
 & .\installer\build.ps1 -Stacks cu126 `
-  -Python "C:\Python310\python.exe" `
+  -Python "C:\Python312\python.exe" `
   -RuntimeAssets "D:\XB-SVCB\assets\runtime\core-cu128"
 ```
 
@@ -75,23 +94,23 @@ SHA-256；缺少 `protobuf-7.36.0` 时会在编译 EXE 前停止。
 已有前端、应用、JUCE Host 和完整 wheelhouse 时，可复用它们：
 
 ```powershell
-& .\installer\build.ps1 -Stacks cu128 -Python "C:\Python310\python.exe" `
+& .\installer\build.ps1 -Stacks cu128 -Python "C:\Python312\python.exe" `
   -SkipWheelhouse -SkipWebBuild -SkipAppBuild -SkipJuceHostBuild
 ```
 
-## 顺序构建四套包
+## 顺序构建五套包
 
-四套包共享 staging 目录，必须顺序构建：
+五套包共享 staging 目录，必须顺序构建：
 
 ```powershell
-& .\installer\build-all-packages.ps1 -Python "C:\Python310\python.exe"
+& .\installer\build-all-packages.ps1 -Python "C:\Python312\python.exe"
 ```
 
-从独立运行时备份同步材料并构建四套包：
+从独立运行时备份同步材料并构建五套包：
 
 ```powershell
 & .\installer\build-all-packages.ps1 `
-  -Python "C:\Python310\python.exe" `
+  -Python "C:\Python312\python.exe" `
   -RuntimeAssets "D:\XB-SVCB\assets\runtime\core-cu128"
 ```
 
@@ -99,7 +118,7 @@ SHA-256；缺少 `protobuf-7.36.0` 时会在编译 EXE 前停止。
 
 ```powershell
 & .\installer\build-all-packages.ps1 `
-  -Python "C:\Python310\python.exe" `
+  -Python "C:\Python312\python.exe" `
   -RebuildWheelhouse
 ```
 
@@ -127,16 +146,16 @@ XB-SVCB-Setup-CUDA128-2.bin
 ...
 ```
 
-四套完整包会重复公共应用和模型载荷，因此发布方总存储量大于单个通用包；用户只需下载与自己硬件匹配的一套。
+五套完整包会重复公共应用和模型载荷，因此发布方总存储量大于单个通用包；用户只需下载与自己硬件匹配的一套。
 
 ## 用户机安装与修复
 
 安装器会：
 
 1. 校验应用、模型、引擎源码、FFmpeg、JUCE Host 和 wheels。
-2. 检测并锁定用户选择的 CPython 3.10.x。
+2. 检测并锁定用户选择的 CPython 3.12.x。
 3. 安装或复用 `uv`，按包内固定硬件栈创建环境。
-4. CUDA126/CUDA128 调用共享入口；CPU/DirectML 调用隔离兼容入口。
+4. CUDA126/CUDA128 调用两层共享入口；CPU/ROCm 10/DirectML 调用兼容入口，其中 ROCm 10 的 SVC/RVC/Vocal 使用单独共享层。
 5. 对每个解释器执行真实 Python/Torch 校验，通过后写入 `runtime.json`。
 6. 全部校验通过后删除安装目录中的 `assets/wheels`，降低最终占用；失败时保留缓存便于重试。
 
@@ -145,11 +164,11 @@ XB-SVCB-Setup-CUDA128-2.bin
 ## 文件职责
 
 - `build.ps1`：构建一套硬件专用包；默认 CUDA128。
-- `build-all-packages.ps1`：顺序构建四套专用包。
+- `build-all-packages.ps1`：顺序构建五套专用包。
 - `stage_wheelhouse.py`：筛选并暂存单一硬件栈 wheels。
 - `xb-svcb.iss`：Inno Setup 安装流程、校验、分卷和缓存清理。
 - `xb-svcb-app.spec`：PyInstaller 应用本体。
 - `../install/install_shared.py`：CUDA 两层共享运行时编排。
-- `../install/install.py`：公共组件实现及 CPU/DirectML/旧安装兼容入口。
+- `../install/install.py`：公共组件实现及 CPU/ROCm 10/DirectML/旧安装兼容入口。
 - `../setup_env.bat`：自动选择共享或兼容布局的统一修复入口。
 - `../setup_shared_env.bat`：开发者显式调用的共享入口。

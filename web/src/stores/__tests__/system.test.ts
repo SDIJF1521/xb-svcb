@@ -19,8 +19,8 @@ describe('inference device adaptation', () => {
         preferred: 'directml',
         options: [
           { value: 'auto', label: '自动选择', backend: 'auto', frameworks: ['uvr', 'so-vits-svc', 'rvc'] },
-          { value: 'directml', label: 'AMD GPU (DirectML)', backend: 'directml', name: 'AMD Radeon RX 7900 XTX', frameworks: ['uvr', 'so-vits-svc'] },
-          { value: 'cpu', label: 'CPU', backend: 'cpu', frameworks: ['uvr', 'so-vits-svc', 'rvc'] },
+          { value: 'directml', label: 'AMD GPU (DirectML)', backend: 'directml', name: 'AMD Radeon RX 7900 XTX', frameworks: ['uvr', 'so-vits-svc', 'ddsp-svc'] },
+          { value: 'cpu', label: 'CPU', backend: 'cpu', frameworks: ['uvr', 'so-vits-svc', 'rvc', 'ddsp-svc'] },
         ],
         frameworks: {
           uvr: {
@@ -42,6 +42,13 @@ describe('inference device adaptation', () => {
             torch_version: '2.4.1',
             backends: ['cpu'],
             devices: [],
+            preferred: 'cpu',
+          },
+          'ddsp-svc': {
+            ok: true,
+            torch_version: '2.4.1',
+            backends: ['directml', 'cpu'],
+            devices: [{ backend: 'directml', name: 'AMD Radeon RX 7900 XTX', index: 0 }],
             preferred: 'cpu',
           },
         },
@@ -76,5 +83,14 @@ describe('inference device adaptation', () => {
       'auto',
       'cpu',
     ])
+  })
+
+  it('keeps DDSP automatic mode on CPU and labels DirectML as experimental', async () => {
+    const store = useSystemStore()
+    await store.load()
+
+    const options = store.optionsForFramework(['ddsp-svc', 'uvr'])
+    expect(options[0]?.label).toBe('自动 (CPU)')
+    expect(options.find((option) => option.value === 'directml')?.label).toContain('DDSP 实验')
   })
 })

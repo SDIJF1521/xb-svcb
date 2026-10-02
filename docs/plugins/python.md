@@ -72,7 +72,7 @@ const result = await runAction('create', {
 
 ### 3.1 必需环境
 
-- Python 3.10 或更高版本；
+- Python 3.12 或更高版本；
 - Node.js `^20.19.0` 或 `>=22.12.0`，用于官方脚手架、清单校验和打包；
 - XB-SVCB，用于最终安装测试。
 
@@ -83,7 +83,7 @@ Python SDK 本身没有第三方依赖。宿主运行插件时会自动提供 SD
 在插件项目目录执行：
 
 ```powershell
-py -3.10 -m venv .venv
+py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 ```
@@ -91,7 +91,7 @@ python -m pip install --upgrade pip
 Linux 或 macOS 的本地开发环境可以使用：
 
 ```bash
-python3.10 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 ```
@@ -948,7 +948,7 @@ Worker 对名为 `__init__.py` 的入口建立包加载上下文，所以 `.rule
 
 ## 14. 打包第三方依赖到 `vendor`
 
-宿主运行插件时不会访问网络、不会执行 `pip install`，也不会使用插件的 `.venv`。新版 SDK 脚手架会创建 `requirements.txt`，并在 `npm run pack` 时使用 Python 3.10 把其中的依赖安装到临时打包目录的 `vendor/`。最终用户拿到的 `.xbplugin` 已经包含依赖。
+宿主运行插件时不会访问网络、不会执行 `pip install`，也不会使用插件的 `.venv`。新版 SDK 脚手架会创建 `requirements.txt`，并在 `npm run pack` 时使用 Python 3.12 把其中的依赖安装到临时打包目录的 `vendor/`。最终用户拿到的 `.xbplugin` 已经包含依赖。
 
 在 `requirements.txt` 中固定依赖版本：
 
@@ -963,7 +963,7 @@ httpx==0.28.1
 // 混合插件使用 .hybrid('plugin.py', { requirements: 'requirements.txt' })
 ```
 
-然后正常运行 `npm run validate` 和 `npm run pack`。需要指定打包解释器时设置 `XB_PLUGIN_BUILD_PYTHON`；解释器必须是 Python 3.10，以匹配正式插件运行时。旧项目也可以保留手工生成的 `vendor/`，没有依赖清单时打包器会原样包含它。
+然后正常运行 `npm run validate` 和 `npm run pack`。需要指定打包解释器时设置 `XB_PLUGIN_BUILD_PYTHON`；解释器必须是 Python 3.12，以匹配正式插件运行时。旧项目也可以保留手工生成的 `vendor/`，没有依赖清单时打包器会原样包含它。
 
 运行时 Worker 会把以下位置加入模块搜索路径：
 
@@ -1540,7 +1540,7 @@ ActionResult(
 - 缺少 `vendor` 依赖；
 - `Plugin.id` 不匹配；
 - `on_enable` 抛出异常或超过 30 秒；
-- 宿主没有找到 Python 3.10+ 插件运行环境；
+- 宿主没有找到 Python 3.12.x 插件运行环境；
 - 宿主附带的 Worker 或 SDK 文件缺失。
 
 查看 `error.log`。安装阶段会确认入口文件存在，但不会执行入口；启用成功才代表入口和生命周期能够运行。

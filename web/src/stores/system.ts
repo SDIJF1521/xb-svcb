@@ -56,7 +56,9 @@ export const useSystemStore = defineStore('system', () => {
       })
       .map((option) => option.value === 'auto'
         ? { ...option, label: `自动 (${backendLabels[preferred]})` }
-        : option)
+        : option.value === 'directml' && target.includes('ddsp-svc')
+          ? { ...option, label: `${option.label} · DDSP 实验` }
+          : option)
   }
 
   function startSync() {

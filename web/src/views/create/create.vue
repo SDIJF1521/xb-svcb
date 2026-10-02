@@ -2823,10 +2823,6 @@ const barStyle = (n: number) => ({
   animationDelay: n * 0.03 + 's',
 })
 
-watch(defaultId, (id) => {
-  if (id && !selectedModel.value) selectedModel.value = id
-})
-
 // 选中歌曲后默认带出歌名作为歌词搜索词；切歌时重置时长
 watch(song, (s) => {
   if (s && !songQuery.value.trim()) songQuery.value = s.name.replace(/\.[^.]+$/, '')
@@ -2891,11 +2887,6 @@ onMounted(async () => {
   }
   presets.value = await api.listInferencePresets()
   queueStatus.value = await api.getInferenceQueue()
-  selectedModel.value = defaultId.value || models.value[0]?.id || ''
-  // 默认勾选默认模型，便于直接进入多模型流程
-  if (selectedModel.value && selectedMulti.value.length === 0) {
-    togglePick(selectedModel.value)
-  }
   const pendingAudio = takePendingAudio()
   if (pendingAudio) {
     song.value = {
@@ -2941,6 +2932,12 @@ watch(
 watch(selectedFramework, (framework) => {
   f0Method.value = normalizeF0Method(framework, f0Method.value)
 })
+// Initialize from model data only, without overwriting later user selections.
+watch([models, defaultId], ([items, id]) => {
+  if (selectedModel.value || !items.length) return
+  selectedModel.value = items.find((model) => model.id === id)?.id || items[0]!.id
+  if (selectedMulti.value.length === 0) togglePick(selectedModel.value)
+}, { immediate: true })
 watch(models, (items) => {
   if (activeGuideDemoKind.value && activeGuideDemoKind.value !== 'enhancement' && items.length) {
     prepareGuideDemo(activeGuideDemoKind.value)

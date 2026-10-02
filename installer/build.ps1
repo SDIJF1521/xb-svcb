@@ -16,31 +16,64 @@
                  Inno Setup download: https://jrsoftware.org/isdl.php
 
   Usage:
+    ./installer/build.ps1 -Help            # show options without running a build
     ./installer/build.ps1                 # default: CUDA128 shared-runtime package
     ./installer/build.ps1 -Stacks cpu
     ./installer/build.ps1 -SkipWebBuild     # skip when web/dist already built
     ./installer/build.ps1 -SkipAppBuild     # skip when dist/XB-SVCB already built
     ./installer/build.ps1 -SkipWheelhouse   # skip only when assets/wheels is already prepared
     ./installer/build.ps1 -Stacks cu126     # build one hardware-specific package
-    ./installer/build.ps1 -Stacks cu128 -Python C:\Python310\python.exe
+    ./installer/build.ps1 -Stacks cu128 -Python C:\Python312\python.exe
     ./installer/build.ps1 -Stacks cu126 -RuntimeAssets D:\XB-SVCB\assets\runtime\core-cu128
+    ./installer/build.ps1 -Stacks rocm10
     ./installer/build.ps1 -Stacks directml
     ./installer/build.ps1 -Stacks cu128 -BootstrapperOnly # refresh only this package EXE
     ./installer/build.ps1 -ValidateOnly     # validate scripts without packaging models
 #>
 
 param(
+  [Alias('h')]
+  [switch]$Help,
   [switch]$SkipWebBuild,
   [switch]$SkipAppBuild,
   [switch]$SkipJuceHostBuild,
   [switch]$SkipWheelhouse,
-  [ValidateSet('cpu', 'directml', 'cu126', 'cu128')]
+  [ValidateSet('cpu', 'rocm10', 'directml', 'cu126', 'cu128')]
   [string[]]$Stacks,
   [string]$Python,
   [string]$RuntimeAssets,
   [switch]$BootstrapperOnly,
   [switch]$ValidateOnly
 )
+
+if ($Help -or $args -contains '--help') {
+  @'
+Usage: .\installer\build.ps1 [-Stacks <stack>] [options]
+
+Stacks (one per build): cpu, rocm10, directml, cu126, cu128
+Default: cu128
+
+Options:
+  -Python <path>        Use a 64-bit CPython 3.12 executable.
+  -RuntimeAssets <dir>  Supply the shared CUDA core runtime assets.
+  -SkipWebBuild         Reuse an existing web/dist build.
+  -SkipAppBuild         Reuse an up-to-date dist/XB-SVCB app build.
+  -SkipJuceHostBuild    Reuse the existing JUCE VST3 host.
+  -SkipWheelhouse       Reuse an already prepared wheelhouse.
+  -BootstrapperOnly     Refresh the EXE using existing split .bin volumes.
+  -ValidateOnly         Validate installer scripts without packaging.
+  -Help, -h, --help     Show this help and exit.
+
+By default, wheelhouse preparation clears assets/wheels before downloading.
+Use -SkipWheelhouse only after preparing the selected stack's wheels.
+
+Examples:
+  .\installer\build.ps1 -Stacks directml -Python C:\Python312\python.exe
+  .\installer\build.ps1 -Stacks directml -SkipWheelhouse -SkipWebBuild
+  .\installer\build.ps1 -ValidateOnly -Stacks directml
+'@ | Write-Output
+  return
+}
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot   # repo root
@@ -54,13 +87,14 @@ $selectedStacks = @(
   }
 )
 if ($selectedStacks.Count -gt 1) {
-  throw "Dedicated installers must be built one stack at a time. Pass exactly one of: cpu, directml, cu126, cu128."
+  throw "Dedicated installers must be built one stack at a time. Pass exactly one of: cpu, rocm10, directml, cu126, cu128."
 }
 if ((-not $ValidateOnly) -and $selectedStacks.Count -ne 1) {
-  throw "A release build requires exactly one -Stacks value: cpu, directml, cu126, or cu128."
+  throw "A release build requires exactly one -Stacks value: cpu, rocm10, directml, cu126, or cu128."
 }
 $outputBaseNames = @{
   cpu      = 'XB-SVCB-Setup-CPU'
+  rocm10 = 'XB-SVCB-Setup-ROCm10'
   directml = 'XB-SVCB-Setup-DirectML'
   cu126    = 'XB-SVCB-Setup-CUDA126'
   cu128    = 'XB-SVCB-Setup-CUDA128'
@@ -174,7 +208,7 @@ function Assert-CoreRuntimeAssets {
   # Keep the exact files visible in the build log/error, especially the wheel
   # whose absence caused the previous cu126 EXE to fail during uv resolution.
   $requiredRelative = @(
-    'assets/runtime/core-cu128/candidate/numpy-2.2.6-cp310-cp310-win_amd64.whl',
+    'assets/runtime/core-cu128/candidate/numpy-2.2.6-cp312-cp312-win_amd64.whl',
     'assets/runtime/core-cu128/candidate/protobuf-7.36.0-cp310-abi3-win_amd64.whl',
     'assets/runtime/core-cu128/candidate/tensorboardx-2.6.5-py3-none-any.whl',
     'assets/runtime/core-cu128/compat/descript_audiotools-0.7.2+xb1-py3-none-any.whl'
@@ -251,50 +285,50 @@ function Assert-AppPayloadFresh {
   }
 }
 
-function Test-Python310([string]$Path) {
+function Test-Python312([string]$Path) {
   if ([string]::IsNullOrWhiteSpace($Path) -or
       -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     return $false
   }
-  & $Path -c "import sys; raise SystemExit(0 if sys.implementation.name == 'cpython' and sys.version_info[:2] == (3, 10) and sys.maxsize > 2**32 else 1)"
+  & $Path -c "import sys; raise SystemExit(0 if sys.implementation.name == 'cpython' and sys.version_info[:2] == (3, 12) and sys.maxsize > 2**32 else 1)"
   return $LASTEXITCODE -eq 0
 }
 
-function Resolve-BuildPython310([string]$ExplicitPath) {
+function Resolve-BuildPython312([string]$ExplicitPath) {
   if ($ExplicitPath) {
     $resolved = [IO.Path]::GetFullPath($ExplicitPath)
-    if (-not (Test-Python310 $resolved)) {
-      throw "-Python must point to a runnable CPython 3.10.x python.exe: $resolved"
+    if (-not (Test-Python312 $resolved)) {
+      throw "-Python must point to a runnable CPython 3.12.x python.exe: $resolved"
     }
     return $resolved
   }
 
-  if ($env:XB_PYTHON_EXE -and (Test-Python310 $env:XB_PYTHON_EXE)) {
+  if ($env:XB_PYTHON_EXE -and (Test-Python312 $env:XB_PYTHON_EXE)) {
     return [IO.Path]::GetFullPath($env:XB_PYTHON_EXE)
   }
   if (Get-Command py -ErrorAction SilentlyContinue) {
     $candidate = $null
     try {
-      $candidate = (& py -3.10 -c "import sys; print(sys.executable)" 2>$null | Select-Object -First 1)
+      $candidate = (& py -3.12 -c "import sys; print(sys.executable)" 2>$null | Select-Object -First 1)
     } catch {
-      # py.exe may exist without a registered 3.10 runtime. Continue with
+      # py.exe may exist without a registered 3.12 runtime. Continue with
       # PATH and the common installation directory in that case.
       $candidate = $null
     }
-    if ($LASTEXITCODE -eq 0 -and (Test-Python310 $candidate)) {
+    if ($LASTEXITCODE -eq 0 -and (Test-Python312 $candidate)) {
       return [IO.Path]::GetFullPath($candidate)
     }
   }
   foreach ($pythonCommand in @(Get-Command python -All -CommandType Application -ErrorAction SilentlyContinue)) {
-    if (Test-Python310 $pythonCommand.Source) {
+    if (Test-Python312 $pythonCommand.Source) {
       return [IO.Path]::GetFullPath($pythonCommand.Source)
     }
   }
-  $common = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python310\python.exe'
-  if (Test-Python310 $common) {
+  $common = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'
+  if (Test-Python312 $common) {
     return [IO.Path]::GetFullPath($common)
   }
-  throw "CPython 3.10.x was not detected. Pass its exact path with -Python C:\path\to\python.exe."
+  throw "CPython 3.12.x was not detected. Pass its exact path with -Python C:\path\to\python.exe."
 }
 
 function Stop-WebNodeProcesses([string]$WebDir) {
@@ -486,7 +520,11 @@ function Prepare-BundledEnginePayloads([string]$PayloadRoot) {
   foreach ($marker in @(
     (Join-Path $PayloadRoot 'so-vits-svc\inference\infer_tool.py'),
     (Join-Path $PayloadRoot 'ddsp-svc\main_reflow.py'),
+    (Join-Path $PayloadRoot 'ddsp-svc\legacy\main.py'),
+    (Join-Path $PayloadRoot 'ddsp-svc\legacy\main_diff.py'),
+    (Join-Path $PayloadRoot 'ddsp-svc\6.2\main_reflow.py'),
     (Join-Path $PayloadRoot 'seed-vc\inference.py'),
+    (Join-Path $PayloadRoot 'seed-vc\inference_v2.py'),
     $contentvec
   )) { Require-File $marker 'Staged bundled engine payload' }
 }
@@ -581,7 +619,7 @@ Require-WorkerContract `
   "Formant pitch worker source" `
   @("--high-threshold", "FORMANT_PITCH_OK") `
   @("--out-npy", "F0_OK")
-Require-File (Join-Path $Root "docs\release-notes\release_notes_v031.md") "v0.0.31 release notes"
+Require-File (Join-Path $Root "docs\release-notes\release_notes_v032.md") "v0.0.32 release notes"
 Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
 Require-File (Join-Path $Root "install\detect_python.bat") "Python runtime detector"
@@ -590,7 +628,7 @@ $installScriptPath = Join-Path $Root "install\install.py"
 Require-File $installScriptPath "Runtime installer"
 $installSource = Get-Content -LiteralPath $installScriptPath -Raw
 if ($installSource -notmatch 'def python_spec_for_venv\(uv: str, python_version: str\)') {
-  throw "Runtime installer is missing the concrete Python-path fix; refusing to build an installer with uv --python 3.10 resolution."
+  throw "Runtime installer is missing the concrete Python-path fix; refusing to build an installer with uv --python 3.12 resolution."
 }
 $runtimeInstallerDeclarations = @(
   'CORE_COMPAT_WHEEL_DIRS: tuple[Path, ...] = ()',
@@ -630,24 +668,24 @@ foreach ($entrypoint in $batchEntrypoints.GetEnumerator()) {
 
 function Assert-WheelhouseProfile([string]$SelectedStack) {
   $wheelRoot = Join-Path $Root 'assets\wheels'
-  $required = @("py310\$SelectedStack", 'bootstrap')
+  $required = @("py312\$SelectedStack", 'bootstrap')
   $missing = @($required | Where-Object {
     -not (Test-Path -LiteralPath (Join-Path $wheelRoot $_) -PathType Container)
   })
   if ($missing.Count -gt 0) {
     throw "Wheelhouse profile is incomplete; missing: $($missing -join ', ')"
   }
-  $legacy = Join-Path $wheelRoot 'py310\cu121'
+  $legacy = Join-Path $wheelRoot 'py312\cu121'
   if (Test-Path -LiteralPath $legacy) {
     throw "旧 cu121 wheelhouse remains: $legacy. Run the cleanup command before packaging."
   }
   if ($SelectedStack -in @('cu126', 'cu128')) {
     foreach ($name in @(
-      'onnx_weekly-1.23.0.dev20260831-cp310-cp310-win_amd64.whl',
-      'numpy-2.2.6-cp310-cp310-win_amd64.whl',
+      'onnx_weekly-1.23.0.dev20260831-cp312-abi3-win_amd64.whl',
+      'numpy-2.2.6-cp312-cp312-win_amd64.whl',
       'tensorboardx-2.6.5-py3-none-any.whl'
     )) {
-      Require-File (Join-Path $wheelRoot ("py310\{0}\{1}" -f $SelectedStack, $name)) `
+      Require-File (Join-Path $wheelRoot ("py312\{0}\{1}" -f $SelectedStack, $name)) `
         ("$SelectedStack wheelhouse candidate $name")
     }
   }
@@ -656,7 +694,7 @@ if ((Get-Content -LiteralPath $installScriptPath -Raw) -notmatch 'def _resolved_
   throw "Runtime installer is missing Junction resolution; refusing to build an installer that may pass a Windows mount point to uv."
 }
 
-$assetValidationStacks = if ($packageStack) { @($packageStack) } else { @('cpu', 'directml', 'cu126', 'cu128') }
+$assetValidationStacks = if ($packageStack) { @($packageStack) } else { @('cpu', 'rocm10', 'directml', 'cu126', 'cu128') }
 if (@($assetValidationStacks | Where-Object { $_ -in @('cu126', 'cu128') }).Count -gt 0) {
   Ensure-CoreRuntimeAssets $RuntimeAssets
   Assert-CoreRuntimeAssets
@@ -697,7 +735,7 @@ if ($ValidateOnly) {
   }
   New-Item -ItemType Directory -Force -Path $validateDir | Out-Null
   try {
-    $validateStacks = if ($packageStack) { @($packageStack) } else { @('cpu', 'directml', 'cu126', 'cu128') }
+    $validateStacks = if ($packageStack) { @($packageStack) } else { @('cpu', 'rocm10', 'directml', 'cu126', 'cu128') }
     foreach ($validateStack in $validateStacks) {
       $validateOutput = [string]($outputBaseNames[$validateStack])
       & $iscc "/DXB_VALIDATE_ONLY=1" "/DXB_PACKAGE_STACK=$validateStack" "/DXB_OUTPUT_BASENAME=$validateOutput" `
@@ -715,8 +753,8 @@ if ($ValidateOnly) {
   exit 0
 }
 
-$buildPython = Resolve-BuildPython310 $Python
-Write-Host ("Build Python 3.10: {0}" -f $buildPython) -ForegroundColor Green
+$buildPython = Resolve-BuildPython312 $Python
+Write-Host ("Build Python 3.12: {0}" -f $buildPython) -ForegroundColor Green
 
 # Stage payloads that are downloaded only on the release builder. User machines
 # receive these files through Inno Setup's split data volumes and never fetch the
@@ -734,6 +772,8 @@ Ensure-EngineSource `
   "https://github.com/yxlllc/DDSP-SVC.git" `
   "6.3" `
   "DDSP-SVC"
+& $buildPython -c "import importlib.util; s=importlib.util.spec_from_file_location('xb_install', r'$Root\install\install.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.fetch_ddsp_compat()"
+if ($LASTEXITCODE -ne 0) { throw 'Failed to stage DDSP compatibility sources' }
 Ensure-DdspContentvecPayload `
   (Join-Path $Root "engines\ddsp-svc\pretrain\contentvec\pytorch_model.bin")
 Ensure-EngineSource `
@@ -742,6 +782,8 @@ Ensure-EngineSource `
   "https://github.com/Plachtaa/seed-vc.git" `
   "main" `
   "SeedVC"
+& $buildPython -c "import importlib.util; s=importlib.util.spec_from_file_location('xb_install', r'$Root\install\install.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.fetch_seedvc()"
+if ($LASTEXITCODE -ne 0) { throw 'Failed to stage SeedVC V1/V2 sources' }
 Require-File (Join-Path $Root "assets\tools\ffmpeg\bin\ffmpeg.exe") "Bundled FFmpeg"
 Require-File (Join-Path $Root "assets\tools\ffmpeg\bin\ffprobe.exe") "Bundled ffprobe"
 Require-FileSize `
@@ -754,12 +796,12 @@ Require-FileSize `
 # PyPI unless a developer explicitly disables strict wheelhouse mode.
 if (-not $SkipWheelhouse) {
   Write-Host "`n==== Preparing Python wheelhouse (assets/wheels) ====" -ForegroundColor Cyan
-  # Resolve the wheelhouse with the exact developer-selected CPython 3.10.
+  # Resolve the wheelhouse with the exact developer-selected CPython 3.12.
   # This avoids selecting the wrong ABI or a managed/Junction interpreter.
   $pythonCmd = Get-Item -LiteralPath $buildPython
-  & $pythonCmd.FullName -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 10) else 1)"
+  & $pythonCmd.FullName -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)"
   if ($LASTEXITCODE -ne 0) {
-    throw "Bundled Python is not a runnable CPython 3.10 interpreter: $($pythonCmd.FullName)"
+    throw "Bundled Python is not a runnable CPython 3.12 interpreter: $($pythonCmd.FullName)"
   }
   $wheelArgs = @('--root', $Root, '--clean')
   $wheelArgs += @('--stack', $packageStack)
@@ -787,7 +829,9 @@ if (-not $SkipWebBuild) {
   $webDir = Join-Path $Root "web"
   Stop-WebNodeProcesses $webDir
   Push-Location $webDir
+  $previousErrorActionPreference = $ErrorActionPreference
   try {
+    $ErrorActionPreference = 'Continue'
     if (Test-Path "package-lock.json") { npm ci } else { npm install }
     if ($LASTEXITCODE -ne 0) {
       throw "npm install/ci failed (exit code $LASTEXITCODE). Frontend NOT rebuilt. If npm reports EPERM, check antivirus or another process locking web/node_modules."
@@ -795,6 +839,7 @@ if (-not $SkipWebBuild) {
     npm run build
     if ($LASTEXITCODE -ne 0) { throw "npm run build failed (exit code $LASTEXITCODE). Frontend NOT rebuilt." }
   } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
     Pop-Location
   }
 }
@@ -806,6 +851,9 @@ if (-not $SkipAppBuild) {
   $venvPy = Join-Path $Root "app\.venv\Scripts\python.exe"
   if (-not (Test-Path $venvPy)) {
     throw "app\.venv not found. Run setup first (uv sync in app/), then: uv pip install --python app\.venv\Scripts\python.exe pyinstaller"
+  }
+  if (-not (Test-Python312 $venvPy)) {
+    throw "app\.venv must use 64-bit CPython 3.12. Run uv sync --python 3.12 in app/ before packaging."
   }
   # Use importlib for the probe so a missing optional build tool does not emit
   # a misleading Python traceback through PowerShell's native stderr handler.
@@ -821,7 +869,13 @@ if (-not $SkipAppBuild) {
   }
   & $venvPy -c "import PyInstaller; print('PyInstaller ' + getattr(PyInstaller, '__version__', 'unknown'))"
   if ($LASTEXITCODE -ne 0) { throw "PyInstaller is unavailable in app/.venv after installation" }
-  & $venvPy -m PyInstaller (Join-Path $Root "installer\xb-svcb-app.spec") --clean --noconfirm --distpath (Join-Path $Root "dist") --workpath (Join-Path $Root "build")
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    & $venvPy -m PyInstaller (Join-Path $Root "installer\xb-svcb-app.spec") --clean --noconfirm --distpath (Join-Path $Root "dist") --workpath (Join-Path $Root "build")
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
   if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed (exit code $LASTEXITCODE)" }
 }
 Require-File (Join-Path $Root "dist\XB-SVCB\XB-SVCB.exe") "Staged app executable (build without -SkipAppBuild)"
@@ -831,6 +885,7 @@ if ($SkipAppBuild) {
 
 # PyInstaller data files must be present on disk for the external AI environments.
 $stagedInternal = Join-Path $Root "dist\XB-SVCB\_internal"
+Require-File (Join-Path $stagedInternal "python312.dll") "Staged CPython 3.12 runtime (rebuild app without -SkipAppBuild)"
 Require-File (Join-Path $stagedInternal "web\dist\index.html") "Staged frontend entry"
 foreach ($worker in $workerFiles) {
   Require-File (Join-Path $stagedInternal "infrastructure\$worker") "Staged worker $worker"
@@ -932,7 +987,7 @@ if ($BootstrapperOnly) {
     }
   }
 } else {
-  # Replace only this hardware package; keep the other three package families.
+  # Replace only this hardware package; keep the other package families.
   Get-ChildItem -LiteralPath $distDir -Filter "$outputBaseName*" -File -ErrorAction SilentlyContinue |
     Remove-Item -Force
   & $iscc "/DXB_PACKAGE_STACK=$packageStack" "/DXB_OUTPUT_BASENAME=$outputBaseName" (Join-Path $Root "installer\xb-svcb.iss")

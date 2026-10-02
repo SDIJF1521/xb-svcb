@@ -394,7 +394,7 @@ def test_sovits_fcpe_fallback_does_not_hide_other_predictor_errors() -> None:
         utils.get_f0_predictor("rmvpe", 512, 44100, device="cpu")
 
 
-def test_sovits_directml_f0_coarse_clamps_before_integer_conversion() -> None:
+def test_sovits_directml_f0_coarse_preserves_overflow_bin() -> None:
     torch = pytest.importorskip("torch")
     utils = SimpleNamespace(
         torch=torch,
@@ -409,12 +409,13 @@ def test_sovits_directml_f0_coarse_clamps_before_integer_conversion() -> None:
 
     assert result.dtype == torch.int64
     assert result.tolist()[0] == 1
-    assert min(result.tolist()) >= 1
+    assert min(result.tolist()) >= 0
     assert max(result.tolist()) <= 255
-    assert result.tolist()[-1] == 255
+    assert result.tolist()[-2] == 255
+    assert result.tolist()[-1] == 0
 
 
-def test_sovits_directml_f0_coarse_matches_upstream_for_normal_f0() -> None:
+def test_sovits_directml_f0_coarse_matches_upstream_across_range() -> None:
     torch = pytest.importorskip("torch")
     f0_bin = 256
     f0_mel_min = 1127 * torch.log(torch.tensor(1 + 50 / 700)).item()
@@ -426,7 +427,7 @@ def test_sovits_directml_f0_coarse_matches_upstream_for_normal_f0() -> None:
         f0_mel_max=f0_mel_max,
         f0_to_coarse=lambda value: value,
     )
-    f0 = torch.tensor([0.0, 50.0, 100.0, 220.0, 440.0, 880.0, 1100.0])
+    f0 = torch.tensor([0.0, 50.0, 100.0, 220.0, 440.0, 880.0, 1100.0, 1104.0, 5000.0])
     f0_mel = 1127 * (1 + f0 / 700).log()
     scale = (f0_bin - 2) / (f0_mel_max - f0_mel_min)
     offset = f0_mel_min * scale - 1.0
@@ -457,6 +458,123 @@ def test_sovits_directml_f0_coarse_patch_is_idempotent() -> None:
     inference_device.patch_directml_sovits_f0_coarse(utils)
 
     assert utils.f0_to_coarse is patched
+
+
+def test_sovits_directml_main_sine_stays_in_tune_over_long_clip(monkeypatch) -> None:
+    torch = pytest.importorskip("torch")
+
+    class MainSineGen:
+        sampling_rate = 8000
+        flag_for_pulse = False
+
+        def _f02sine(self, _f0):
+            return "upstream"
+
+    class DiffusionSineGen:
+        def forward(self, _f0, _upp):
+            return "upstream"
+
+    main = SimpleNamespace(SineGen=MainSineGen)
+    diffusion = SimpleNamespace(SineGen=DiffusionSineGen, torch=torch)
+    inference_device.patch_directml_sovits_sinegen((main,), diffusion)
+    patched = MainSineGen._f02sine
+    inference_device.patch_directml_sovits_sinegen((main,), diffusion)
+    assert MainSineGen._f02sine is patched
+
+    f0 = torch.full((1, 12 * 8000, 1), 440.0)
+    monkeypatch.setattr(inference_device, "_is_directml_tensor", lambda value: value is f0)
+    sine = MainSineGen()._f02sine(f0)[0, :, 0]
+    for second in (0, 10, 11):
+        window = sine[second * 8000 : (second + 1) * 8000]
+        crossings = torch.count_nonzero((window[:-1] <= 0) & (window[1:] > 0))
+        assert abs(crossings.item() - 440) <= 1
+    assert MainSineGen()._f02sine(torch.ones(1, 1, 1)) == "upstream"
+
+
+def test_sovits_directml_diffusion_sine_stays_in_tune_over_long_clip(monkeypatch) -> None:
+    torch = pytest.importorskip("torch")
+
+    class MainSineGen:
+        def _f02sine(self, _f0):
+            return "upstream"
+
+    class DiffusionSineGen:
+        sampling_rate = 8000
+        dim = 3
+        sine_amp = 1.0
+        noise_std = 0.0
+        voiced_threshold = 0.0
+
+        def _f02uv(self, f0):
+            return (f0 > self.voiced_threshold).float()
+
+        def forward(self, _f0, _upp):
+            return "upstream"
+
+    main = SimpleNamespace(SineGen=MainSineGen)
+    diffusion = SimpleNamespace(SineGen=DiffusionSineGen, torch=torch)
+    inference_device.patch_directml_sovits_sinegen((main,), diffusion)
+
+    f0 = torch.full((1, 12 * 100), 440.0)
+    monkeypatch.setattr(inference_device, "_is_directml_tensor", lambda value: value is f0)
+    sine, uv, noise = DiffusionSineGen().forward(f0, 80)
+    assert sine.shape == (1, 12 * 8000, 3)
+    assert uv.shape == (1, 12 * 8000, 1)
+    assert torch.all(uv == 1)
+    assert torch.count_nonzero(noise) == 0
+    for harmonic, expected_hz in enumerate((440, 880, 1320)):
+        window = sine[0, 11 * 8000 : 12 * 8000, harmonic]
+        crossings = torch.count_nonzero((window[:-1] <= 0) & (window[1:] > 0))
+        assert abs(crossings.item() - expected_hz) <= 1
+    assert DiffusionSineGen().forward(torch.ones(1, 1), 80) == "upstream"
+
+
+def test_sovits_directml_diffusion_extract_indexes_on_cpu() -> None:
+    torch = pytest.importorskip("torch")
+    calls: list[tuple[object, object]] = []
+
+    class Result:
+        def __init__(self, values):
+            self.values = values
+            self.target = None
+
+        def to(self, device):
+            self.target = device
+            return self
+
+    def original_extract(a, t, x_shape):
+        calls.append((a, t))
+        return Result(a.gather(-1, t).reshape(t.shape[0], *((1,) * (len(x_shape) - 1))))
+
+    class DirectMLTensor:
+        device = "privateuseone:0"
+
+        def __init__(self, cpu_value):
+            self.cpu_value = cpu_value
+
+        def cpu(self):
+            return self.cpu_value
+
+    module = SimpleNamespace(extract=original_extract)
+    inference_device.patch_directml_sovits_diffusion_extract(module)
+    patched = module.extract
+    inference_device.patch_directml_sovits_diffusion_extract(module)
+    assert module.extract is patched
+
+    table = torch.arange(1000, dtype=torch.float32)
+    indices = torch.tensor([79, 255], dtype=torch.long)
+    cpu_result = module.extract(table, indices, (2, 1, 128, 4))
+    assert cpu_result.values[:, 0, 0, 0].tolist() == [79.0, 255.0]
+    assert cpu_result.target is None
+    assert calls[-1][0] is table and calls[-1][1] is indices
+
+    single_index = torch.tensor([79], dtype=torch.long)
+    directml_result = module.extract(
+        DirectMLTensor(table), DirectMLTensor(single_index), (1, 1, 128, 4)
+    )
+    assert directml_result.values[:, 0, 0, 0].tolist() == [79.0]
+    assert directml_result.target == "privateuseone:0"
+    assert calls[-1][0] is table and calls[-1][1] is single_index
 
 
 def test_seedvc_directml_f0_coarse_stays_float_until_final_conversion() -> None:
@@ -571,13 +689,13 @@ def test_seedvc_directml_f0_integer_and_embedding_lookup_stay_on_cpu(monkeypatch
     assert ("embedding", "cpu", "cpu", (None, None, 2.0, False, False)) in calls
 
 
-def test_installer_detects_amd_as_directml_when_nvidia_is_absent() -> None:
+def test_installer_detects_amd_as_rocm10_when_nvidia_is_absent() -> None:
     installer = _load_installer_module()
     completed = SimpleNamespace(stdout="AMD Radeon RX 7900 XTX\n", returncode=0)
     with patch.object(installer, "find_nvidia_smi", return_value=None), patch.object(
         installer.os, "name", "nt"
     ), patch.object(installer.subprocess, "run", return_value=completed):
-        assert installer.detect_gpu_stack() == "directml"
+        assert installer.detect_gpu_stack() == "rocm10"
 
 
 def test_environment_probe_hides_windows_console(tmp_path: Path) -> None:
@@ -676,7 +794,7 @@ def test_environment_probe_rechecks_after_signature_change_and_failure(tmp_path:
     assert run.call_count == 2
 
 
-def test_ddsp_directml_is_not_advertised_as_usable(monkeypatch) -> None:
+def test_ddsp_directml_is_explicit_but_auto_prefers_cpu(monkeypatch) -> None:
     directml = {
         "ok": True,
         "torch_version": "2.4.1",
@@ -696,6 +814,7 @@ def test_ddsp_directml_is_not_advertised_as_usable(monkeypatch) -> None:
     config = SimpleNamespace(
         DATA_DIR=Path("cache"),
         UVR_PYTHON=Path("uvr.exe"),
+        PYMSS_PYTHON=Path("pymss.exe"),
         SVC_PYTHON=Path("svc.exe"),
         RVC_PYTHON=Path("rvc.exe"),
         SEEDVC_PYTHON=Path("seed.exe"),
@@ -712,10 +831,55 @@ def test_ddsp_directml_is_not_advertised_as_usable(monkeypatch) -> None:
     capabilities = inference_device.inference_device_capabilities()
     ddsp = capabilities["frameworks"]["ddsp-svc"]
 
-    assert ddsp["backends"] == ["cpu"]
+    assert ddsp["backends"] == ["directml", "cpu"]
     assert ddsp["preferred"] == "cpu"
+    assert ddsp["devices"] == directml["devices"]
+    assert "实验" in ddsp["note"]
     directml_option = next(
         (item for item in capabilities["options"] if item["value"] == "directml"),
         None,
     )
-    assert directml_option is None or "ddsp-svc" not in directml_option["frameworks"]
+    assert directml_option is not None
+    assert "ddsp-svc" in directml_option["frameworks"]
+
+
+def test_rvc_merges_independent_directml_runtime(monkeypatch) -> None:
+    cpu = {
+        "ok": True,
+        "torch_version": "2.13.0+rocm10.0.0",
+        "backends": ["rocm", "cpu"],
+        "devices": [{"backend": "rocm", "name": "AMD ROCm", "index": 0}],
+        "preferred": "rocm",
+    }
+    directml = {
+        "ok": True,
+        "torch_version": "2.4.1",
+        "backends": ["directml", "cpu"],
+        "devices": [{"backend": "directml", "name": "AMD DirectML", "index": 0}],
+        "preferred": "directml",
+    }
+    config = SimpleNamespace(
+        DATA_DIR=Path("cache"),
+        UVR_PYTHON=Path("uvr.exe"),
+        PYMSS_PYTHON=Path("pymss.exe"),
+        SVC_PYTHON=Path("svc.exe"),
+        RVC_PYTHON=Path("rocm-rvc.exe"),
+        RVC_DIRECTML_PYTHON=Path("directml-rvc.exe"),
+        SEEDVC_PYTHON=Path("seed.exe"),
+        DDSP_PYTHON=Path("ddsp.exe"),
+    )
+    monkeypatch.setitem(sys.modules, "config", config)
+    monkeypatch.setattr(
+        inference_device,
+        "probe_python_environment",
+        lambda python: directml if "directml" in str(python) else cpu,
+    )
+    monkeypatch.setattr(inference_device, "_configure_persistent_probe_cache", lambda path: None)
+
+    capabilities = inference_device.inference_device_capabilities()
+    rvc = capabilities["frameworks"]["rvc"]
+
+    assert "rocm" in rvc["backends"]
+    assert "directml" in rvc["backends"]
+    directml_option = next(item for item in capabilities["options"] if item["value"] == "directml")
+    assert "rvc" in directml_option["frameworks"]

@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import config
@@ -13,15 +15,18 @@ from application.model_service import ModelService
 from domain import InferenceParams
 from infrastructure.ddsp_engine import DdspSvcEngine
 from infrastructure.ddsp_worker import (
+    _ddsp_inference_device,
     _ddsp_output_levels,
     _effective_ddsp_infer_steps,
     _finalize_ddsp_output,
+    _legacy_cpu_args,
     _patch_ddsp_float_wav,
     _patch_directml_ddsp_rmvpe_cpu,
     _patch_directml_ddsp_sinusoidal_cpu,
     _patch_directml_ddsp_vocoder_cpu,
     _patch_torch_load,
 )
+from infrastructure.inference_device import ResolvedDevice
 from infrastructure.engine import EngineRegistry
 from infrastructure.storage import ListRepository, SettingsStore
 
@@ -147,6 +152,130 @@ class DdspEngineCommandTests(unittest.TestCase):
             self.assertEqual(command[command.index("--infer-steps") + 1], "42")
             self.assertEqual(command[command.index("--formant-shift") + 1], "0.65")
             self.assertEqual(command[command.index("--speaker") + 1], "2")
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [("auto", "cpu"), ("directml", "directml")],
+)
+def test_ddsp_directml_worker_only_patches_explicit_device(
+    tmp_path, monkeypatch, requested: str, expected: str
+) -> None:
+    from infrastructure import ddsp_worker
+
+    repo = tmp_path / "engines" / "ddsp-svc"
+    repo.mkdir(parents=True)
+    model = repo / "model.pt"
+    config_file = repo / "config.yaml"
+    source = tmp_path / "vocals.wav"
+    output = tmp_path / "out.wav"
+    for path in (model, source):
+        path.write_bytes(b"model")
+    config_file.write_text("model:\n  type: RectifiedFlow\n", encoding="utf-8")
+    (repo / "main_reflow.py").write_text("", encoding="utf-8")
+    events: list[tuple[str, str]] = []
+    torch = SimpleNamespace(load=lambda *args, **kwargs: None, device=lambda value: value)
+    soundfile = SimpleNamespace(write=lambda *args, **kwargs: None)
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "soundfile", soundfile)
+    monkeypatch.setattr(
+        ddsp_worker,
+        "resolve_torch_device",
+        lambda *_args: ResolvedDevice("privateuseone:0", "directml", "AMD Radeon"),
+    )
+    monkeypatch.setattr(
+        ddsp_worker,
+        "_select_entrypoint",
+        lambda *_args: (repo, "main_reflow.py", "--model_ckpt"),
+    )
+    monkeypatch.setattr(
+        ddsp_worker,
+        "_localized_config",
+        lambda *_args: {"model": {"type": "RectifiedFlow"}, "data": {}},
+    )
+    monkeypatch.setattr(ddsp_worker, "patch_directml_no_half", lambda _torch: events.append(("patch", "float32")))
+    monkeypatch.setattr(ddsp_worker, "_patch_ddsp_directml", lambda: events.append(("patch", "ddsp")))
+    monkeypatch.setattr(
+        ddsp_worker,
+        "_finalize_ddsp_output",
+        lambda *_args: {"peak": 0.2, "rms": 0.1, "reference_rms": 0.1, "gain": 1.0, "finite_ratio": 1.0},
+    )
+    monkeypatch.setattr(ddsp_worker, "naturalize_inference_output", lambda *_args: {})
+    monkeypatch.setattr(ddsp_worker, "format_naturalizer_stats", lambda _stats: "ok")
+
+    def fake_inference(_path, *, run_name):
+        assert run_name == "__main__"
+        events.append(("device", sys.argv[sys.argv.index("--device") + 1]))
+        output.write_bytes(b"RIFF" + b"\0" * 60)
+
+    monkeypatch.setattr(ddsp_worker.runpy, "run_path", fake_inference)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["ddsp_worker.py", "--repo", str(repo), "--model", str(model),
+         "--config", str(config_file), "--input", str(source),
+         "--output", str(output), "--device", requested],
+    )
+
+    try:
+        assert ddsp_worker.main() == 0
+    finally:
+        sys.path.remove(str(repo))
+
+    assert ("device", "privateuseone:0" if expected == "directml" else "cpu") in events
+    assert (("patch", "ddsp") in events) is (expected == "directml")
+    assert (("patch", "float32") in events) is (expected == "directml")
+
+
+def test_ddsp_device_selection_preserves_non_directml_backend() -> None:
+    cuda = ResolvedDevice("cuda:0", "cuda", "NVIDIA")
+    torch = SimpleNamespace(device=lambda value: value)
+
+    assert _ddsp_inference_device("auto", cuda, torch) is cuda
+
+
+def test_legacy_ddsp_directml_argument_is_rewritten_to_cpu() -> None:
+    assert _legacy_cpu_args(["--model", "model.pt", "--device", "directml"]) == [
+        "--model", "model.pt", "--device", "cpu",
+    ]
+    assert _legacy_cpu_args(["--device=directml"]) == ["--device=cpu"]
+    assert _legacy_cpu_args(["--model", "model.pt"]) == ["--model", "model.pt", "--device", "cpu"]
+
+
+def test_legacy_ddsp_directml_uses_cpu_runtime(tmp_path, monkeypatch) -> None:
+    from infrastructure import ddsp_worker
+
+    repo = tmp_path / "engines" / "ddsp-svc"
+    legacy = repo / "legacy"
+    legacy.mkdir(parents=True)
+    compat_python = tmp_path / ".venv-ddsp-legacy" / (
+        "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+    )
+    compat_python.parent.mkdir(parents=True)
+    compat_python.write_bytes(b"python")
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("model:\n  type: Sins\n", encoding="utf-8")
+    monkeypatch.setattr(
+        ddsp_worker, "_select_entrypoint",
+        lambda *_args: (legacy, "main.py", "--model_path"),
+    )
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        ddsp_worker.subprocess,
+        "call",
+        lambda command, **_kwargs: commands.append(command) or 0,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["ddsp_worker.py", "--repo", str(repo), "--model", str(tmp_path / "model.pt"),
+         "--config", str(config_file), "--input", str(tmp_path / "input.wav"),
+         "--output", str(tmp_path / "output.wav"), "--device", "directml"],
+    )
+
+    assert ddsp_worker.main() == 0
+    assert commands[0][0] == str(compat_python)
+    assert commands[0][commands[0].index("--device") + 1] == "cpu"
 
 
 class DdspDirectMlCheckpointTests(unittest.TestCase):

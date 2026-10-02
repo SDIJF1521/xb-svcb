@@ -213,7 +213,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   Aim, ArrowLeft, Clock, Connection, Download, Headset, Microphone, Refresh, Right,
   Select, UploadFilled, VideoPause, VideoPlay,
@@ -621,6 +621,10 @@ async function exportResult() {
 
 function barStyle(index: number) { return { height: `${16 + Math.abs(Math.sin(index * 0.73)) * 74}%`, animationDelay: `${index * 0.035}s` } }
 
+watch(realtimeModels, (items) => {
+  if (!selectedId.value && items[0]) toggleModel(items[0].id)
+}, { immediate: true })
+
 onMounted(async () => {
   await Promise.all([
     modelsStore.load(),
@@ -628,8 +632,6 @@ onMounted(async () => {
     api.listMusic().then((items) => { downloaded.value = items }),
   ])
   await loadSystemDevices()
-  const first = realtimeModels.value[0]
-  if (first) { selectedId.value = first.id; paramsFor(first.id) }
 })
 
 onUnmounted(() => {

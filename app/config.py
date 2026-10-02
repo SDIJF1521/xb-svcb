@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.0.31"
+APP_VERSION = "0.0.32"
 APP_BG = "#05060d"
 
 
@@ -298,6 +298,7 @@ def svc_engine_ready() -> bool:
 # 在独立运行时中运行 rvc-python（依赖与 so-vits-svc 环境隔离，避免 torch/numpy 冲突）。
 # 缺失时 RvcEngine 自动降级为占位音频，整条链路仍可跑通。
 RVC_VENV_DIR = ROOT_DIR / ".venv-rvc"
+RVC_DIRECTML_VENV_DIR = ROOT_DIR / ".venv-rvc-directml"
 
 
 def _detect_rvc_python() -> Path | None:
@@ -310,8 +311,30 @@ def _detect_rvc_python() -> Path | None:
     return _first_file(candidates)
 
 
+def _detect_rvc_directml_python() -> Path | None:
+    """Find the optional RVC DirectML runtime without replacing the main route."""
+    env = _existing_env_file("XB_RVC_DIRECTML_PYTHON")
+    candidates = [env] if env else []
+    manifest = _manifest_python("rvc-directml")
+    if manifest:
+        candidates.append(manifest)
+    # Older DirectML installs used .venv-rvc. Keep that path as a fallback;
+    # new installs can use the dedicated directory without touching ROCm.
+    candidates.extend(
+        (
+            _venv_python(root / ".venv-rvc-directml")
+            for root in RUNTIME_ROOTS
+        )
+    )
+    candidates.extend(_venv_python(root / ".venv-rvc") for root in RUNTIME_ROOTS)
+    return _first_file(candidates)
+
+
 # 运行 RVC 推理的 Python 解释器（需装有 rvc-python + torch）
 RVC_PYTHON = _detect_rvc_python()
+# Optional independent DirectML interpreter. It is selected only when the
+# request explicitly uses ``device=directml``.
+RVC_DIRECTML_PYTHON = _detect_rvc_directml_python()
 # RVC 推理子进程脚本（由隔离环境的 Python 读取，需为磁盘真实文件）
 RVC_WORKER = BUNDLE_DIR / "infrastructure" / "rvc_worker.py"
 

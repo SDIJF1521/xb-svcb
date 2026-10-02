@@ -15,7 +15,73 @@ import shutil
 import sys
 import tempfile
 import traceback
+import types
+from collections import namedtuple
 from pathlib import Path
+
+
+def _install_deepfilter_torchaudio_compat() -> None:
+    """Restore the Torchaudio metadata API required by DeepFilterNet 0.5.6."""
+    import torchaudio
+
+    try:
+        from torchaudio.backend.common import AudioMetaData  # noqa: F401
+    except ImportError:
+        audio_metadata = namedtuple(
+            "AudioMetaData",
+            "sample_rate num_frames num_channels bits_per_sample encoding",
+        )
+        backend = sys.modules.setdefault(
+            "torchaudio.backend", types.ModuleType("torchaudio.backend")
+        )
+        common = types.ModuleType("torchaudio.backend.common")
+        common.AudioMetaData = audio_metadata
+        backend.common = common
+        sys.modules["torchaudio.backend.common"] = common
+
+    if not hasattr(torchaudio, "info"):
+        def info(uri: str, **_kwargs):
+            import soundfile as sf
+
+            metadata = sf.info(str(uri))
+            subtype = str(metadata.subtype or "")
+            digits = "".join(ch for ch in subtype if ch.isdigit())
+            bits = int(digits) if digits else 0
+            metadata_type = sys.modules[
+                "torchaudio.backend.common"
+            ].AudioMetaData
+            return metadata_type(
+                int(metadata.samplerate),
+                int(metadata.frames),
+                int(metadata.channels),
+                bits,
+                subtype,
+            )
+
+        torchaudio.info = info
+
+    # TorchAudio 2.11 routes load() through TorchCodec, which is not bundled
+    # with this runtime. DeepFilterNet only needs a float waveform and sample
+    # rate, so use soundfile directly and preserve torchaudio's tensor layout.
+    def load(uri, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        import io
+        import soundfile as sf
+        import torch
+
+        del args
+        dtype = kwargs.pop("dtype", "float32")
+        always_2d = kwargs.pop("always_2d", True)
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(f"Unsupported torchaudio.load options: {unexpected}")
+        source = uri if isinstance(uri, (io.BytesIO, io.RawIOBase, io.BufferedIOBase)) else str(uri)
+        data, sample_rate = sf.read(source, dtype=dtype, always_2d=always_2d)
+        tensor = torch.from_numpy(data.T.copy() if data.ndim == 2 else data.copy())
+        if tensor.ndim == 1:
+            tensor = tensor.unsqueeze(0)
+        return tensor, int(sample_rate)
+
+    torchaudio.load = load
 
 
 def _write_float_wav(output: Path, audio: "np.ndarray", sample_rate: int) -> None:
@@ -1392,6 +1458,7 @@ def _deepfilter(
         会改变每个分析频带，并添加金属质感色彩。同时，
         3 dB 的衰减限制可防止该语音降噪器过度覆盖干净的歌唱音频。
     """
+    _install_deepfilter_torchaudio_compat()
     try:
         from df.enhance import enhance, init_df, load_audio
     except ImportError as exc:
@@ -1401,7 +1468,11 @@ def _deepfilter(
     import torchaudio
 
     model_dir = os.environ.get("XB_DEEPFILTER_MODEL_DIR")
-    model, state, _ = init_df(model_dir) if model_dir else init_df()
+    # The model directory is deployed read-only on some Windows installations;
+    # DeepFilterNet's default enhance.log would then make initialization fail.
+    model, state, _ = (
+        init_df(model_dir, log_file=None) if model_dir else init_df(log_file=None)
+    )
     model_sr = int(state.sr())
     audio, info = load_audio(str(source), sr=model_sr)
     enhanced = enhance(

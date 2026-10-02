@@ -1,15 +1,16 @@
 [project]
 name = "app"
-version = "0.0.31"
+version = "0.0.32"
 description = "Add your description here"
 readme = "README.md"
 license = "GPL-3.0-only"
 classifiers = ["License :: OSI Approved :: GNU General Public License v3 (GPLv3)"]
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.116.1",
     "httpx[http2]>=0.28.1",
     "python-multipart>=0.0.20",
+    "pyyaml>=6.0.2",
     "pywebview>=6.2.1",
     "soundcard>=0.4.3",
     "uvicorn>=0.35.0",

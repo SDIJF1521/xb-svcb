@@ -5,7 +5,9 @@
 ## 使用者
 
 - [源码安装与启动](getting-started.md)：环境要求、安装脚本、运行模式、数据目录和常见排障。
+- [Python 3.12 与 ROCm 10 迁移](python312-rocm10.md)：AMD 安装、模型兼容和依赖迁移。
 - [FastAPI 接入](api.md)：服务启动、鉴权、任务接口、上传下载和调用示例。
+- [API 管理变更说明](api-management.md)：域名绑定和多密钥管理的实现背景。
 - [模型资产说明](../assets/models/README.md)：随包模型、底模、来源和缺失时的处理方式。
 
 ## 开发者
@@ -14,7 +16,7 @@
 - [启动与推理链路](startup-chain.md)：从 app/main.py 启动到一次普通任务和实时任务完成的过程。
 - [开发与发布](development.md)：代码结构、测试、前端构建、JUCE Host 和安装包构建。
 - [安装器说明](../installer/README.md)：PyInstaller、运行环境、离线 wheelhouse 和 Inno Setup 分卷。
-- [共享运行时与兼容布局](runtime-consolidation.md)：CUDA 两层共享环境、CPU/DirectML 兼容布局、路由与修复边界。
+- [共享运行时与兼容布局](runtime-consolidation.md)：CUDA 两层共享环境、ROCm 10 的 SVC 共享层、CPU/DirectML 兼容布局及修复边界。
 
 ## 插件作者
 
@@ -32,4 +34,5 @@
 
 历史更新说明集中在 [release-notes/](release-notes/)。新增版本建议继续使用 release_notes_vXYZ.md 命名，并在根 README 只链接当前版本。
 
+- [v0.0.32 更新说明](release-notes/release_notes_v032.md)：Python 3.12、ROCm 10 与 DirectML 推理修复。
 - [v0.0.31 更新说明](release-notes/release_notes_v031.md)：共享运行时、首次引导与高音/美声稳定性。

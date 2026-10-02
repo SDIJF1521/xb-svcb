@@ -20,7 +20,7 @@ build_api() 是组合根，主要负责把路径、存储、模型服务、作�
 
 FastAPI 是可选入口。用户在应用内手动启动后，Uvicorn 在 GUI 进程后台线程中监听端口；HTTP 路由调用同一个 Api 和同一批应用服务，不会另起一套业务核心。
 
-模型 Worker 的 Python 由 `runtime.json` 路由。CUDA126/CUDA128 默认把 UVR、SeedVC、DDSP 路由到 `runtimes/core-*`，把 SVC、RVC、Vocal 路由到 `runtimes/svc-*`；CPU、DirectML 和旧安装可以继续路由到 `.venv-*`。Worker 进程隔离不等于依赖隔离，共享层内的组件仍使用同一套已校验依赖。
+模型 Worker 的 Python 由 `runtime.json` 路由。CUDA126/CUDA128 默认把 UVR、SeedVC、DDSP 路由到 `runtimes/core-*`，把 SVC、RVC、Vocal 路由到 `runtimes/svc-*`；CPU、ROCm 10 和旧安装可以继续路由到 `.venv-*`。Worker 进程隔离不等于依赖隔离，共享层内的组件仍使用同一套已校验依赖。
 
 ## 3. 普通翻唱任务
 

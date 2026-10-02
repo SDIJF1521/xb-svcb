@@ -1410,6 +1410,126 @@ def test_dropout_recovery_keeps_initial_cores_fixed_across_quality_retries(
     assert guard_applied is True
 
 
+@pytest.mark.parametrize("previous_guard_accepted", [None, False, True])
+def test_dropout_recovery_accepts_unguarded_retry_without_stale_regions(
+    tmp_path: Path,
+    previous_guard_accepted: bool | None,
+) -> None:
+    import json
+    import wave
+
+    service = ConversionService.__new__(ConversionService)
+    source = tmp_path / "source.wav"
+    output = tmp_path / "converted_raw.wav"
+    cores = [(1.0, 1.2), (3.0, 3.2)]
+    first_issue = {
+        "start": 1.0,
+        "end": 3.2,
+        "source_f0_hz": 920.0,
+        "bad_frames": 20,
+        "bad_regions": [{"start": start, "end": end} for start, end in cores],
+    }
+    has_previous_guard = previous_guard_accepted is not None
+    detections = iter([first_issue, None, None])
+    calls: list[Path] = []
+    reports: list[Path | None] = []
+    sample_rate = 16000
+    frames = sample_rate * 4
+
+    def write(path: Path, value: int) -> None:
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(sample_rate)
+            handle.writeframes(np.full(frames, value, dtype="<i2").tobytes())
+
+    write(source, 4000)
+
+    def infer(_vocals: Path, target: Path) -> None:
+        calls.append(target)
+        write(target, len(calls) * 1000)
+
+    def prepare(src: Path, destination: Path, *_args) -> tuple[Path, bool]:
+        if has_previous_guard and len(calls) == 1:
+            destination.write_bytes(src.read_bytes())
+            return destination, True
+        return src, False
+
+    def restore(src: Path, destination: Path, *_args) -> Path:
+        destination.write_bytes(src.read_bytes())
+        # This report covers only the first note and extends beyond its core.
+        # Reusing it on the next, unguarded round would omit the second note
+        # and could overwrite audio outside the newly accepted cores.
+        destination.with_suffix(".regions.json").write_text(
+            json.dumps({"regions": [{"start": 0.8, "end": 1.4}]}),
+            encoding="utf-8",
+        )
+        return destination
+
+    def quality(_source, _baseline, _candidate, regions, report):
+        assert regions == cores
+        reports.append(report)
+        if has_previous_guard and len(reports) == 1:
+            accepted = [cores[0]] if previous_guard_accepted else []
+        else:
+            accepted = cores
+        failed = [region for region in cores if region not in accepted]
+        return {
+            "available": True,
+            "passed": not failed,
+            "accepted_regions": accepted,
+            "failed_regions": failed,
+            "regions": [],
+        }
+
+    service._log = lambda *_args: None
+    service._detect_model_dropout = lambda *_args: next(detections)
+    service._guard_semitones_for_retry = lambda *_args: 5
+    service._prepare_high_pitch_guard = prepare
+    service._restore_high_pitch_guard = restore
+    service._guard_candidate_has_new_hf_peak = lambda *_args: False
+    service._guard_candidate_high_note_quality = quality
+
+    rendered, history, guard_applied = service._infer_with_dropout_recovery(
+        engine=types.SimpleNamespace(),
+        model={},
+        source=source,
+        output=output,
+        params=InferenceParams(
+            high_pitch_threshold=800.0,
+            manual_params_enabled=True,
+            high_pitch_guard_rounds=2 if has_previous_guard else 1,
+        ),
+        duration=4.0,
+        log_file=tmp_path / "run.log",
+        allow_recovery=True,
+        infer=infer,
+    )
+
+    assert len(calls) == (3 if has_previous_guard else 2)
+    assert reports == (
+        [tmp_path / "converted_raw_restored_retry1.regions.json", None]
+        if has_previous_guard else [None]
+    )
+    assert history[-1]["issue"] is None
+    assert history[-1]["guard_applied"] is False
+    assert history[-1]["input"] == "original"
+    assert guard_applied is bool(previous_guard_accepted)
+    with wave.open(str(rendered), "rb") as handle:
+        assert handle.getnframes() == frames
+        values = np.frombuffer(handle.readframes(frames), dtype="<i2")
+    latest_value = len(calls) * 1000
+    assert values[int(0.5 * sample_rate)] == 1000
+    assert values[int(1.1 * sample_rate)] == (
+        2000 if previous_guard_accepted else latest_value
+    )
+    assert values[int(1.35 * sample_rate)] == (
+        2000 if previous_guard_accepted else 1000
+    )
+    assert values[int(2.0 * sample_rate)] == 1000
+    assert values[int(3.1 * sample_rate)] == latest_value
+
+
 def test_dropout_recovery_stops_when_retry_detects_failure_outside_guard_scope(
     tmp_path: Path,
 ) -> None:
@@ -1822,8 +1942,10 @@ def test_guarded_retry_merge_does_not_use_failed_baseline_as_loudness_ceiling(
     assert int(values[int(0.5 * sample_rate)]) == 6000
 
 
+@pytest.mark.parametrize("report_name", ["missing-regions.json", None])
 def test_guarded_retry_merge_keeps_baseline_when_region_report_is_missing(
     tmp_path: Path,
+    report_name: str | None,
 ) -> None:
     import wave
 
@@ -1848,7 +1970,7 @@ def test_guarded_retry_merge_keeps_baseline_when_region_report_is_missing(
         baseline,
         guarded,
         merged,
-        tmp_path / "missing-regions.json",
+        tmp_path / report_name if report_name else None,
         only_regions=[(0.49, 0.51)],
     ) == merged
     with wave.open(str(merged), "rb") as handle:
@@ -3520,8 +3642,9 @@ def test_deepfilter_uses_model_rate_then_restores_input_rate(
 
     model_dir = tmp_path / "DeepFilterNet3"
 
-    def fake_init_df(path: str):
+    def fake_init_df(path: str, *, log_file: str | None):
         calls["model_dir"] = path
+        calls["log_file"] = log_file
         return object(), FakeState(), object()
 
     enhance_module = types.ModuleType("df.enhance")
@@ -3548,6 +3671,7 @@ def test_deepfilter_uses_model_rate_then_restores_input_rate(
 
     assert calls == {
         "model_dir": str(model_dir),
+        "log_file": None,
         "load_sr": 48000,
         "attenuation": 3.0,
         "resample": (48000, 44100),

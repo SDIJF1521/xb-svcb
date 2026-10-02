@@ -79,3 +79,23 @@ def test_missing_manifest_interpreter_uses_legacy(manifest_root, monkeypatch):
         "version": 1, "python": {"uvr": "missing.exe"},
     })
     assert config._detect_uvr_python() == python
+
+
+def test_directml_rvc_route_is_independent_from_primary_route(manifest_root, monkeypatch):
+    primary = manifest_root / "rocm" / "python.exe"
+    directml = manifest_root / "directml" / "python.exe"
+    primary.parent.mkdir()
+    directml.parent.mkdir()
+    primary.touch()
+    directml.touch()
+    monkeypatch.setattr(config, "_RUNTIME_MANIFEST", {
+        "version": 1,
+        "python": {
+            "rvc": "rocm/python.exe",
+            "rvc-directml": "directml/python.exe",
+        },
+    })
+    monkeypatch.delenv("XB_RVC_DIRECTML_PYTHON", raising=False)
+
+    assert config._manifest_python("rvc") == primary
+    assert config._detect_rvc_directml_python() == directml

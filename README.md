@@ -16,13 +16,13 @@
 [![Stars](https://img.shields.io/github/stars/SDIJF1521/xb-svcb?style=flat&color=yellow)](https://github.com/SDIJF1521/xb-svcb/stargazers)
 
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#)
-[![Python](https://img.shields.io/badge/python-3.10-3776AB?logo=python&logoColor=white)](#)
+[![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](#)
 [![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
 [![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
 
 <br/>
 
-### ⬇️ [**选择硬件专用安装包 · CPU / DirectML / CUDA126 / CUDA128**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+### ⬇️ [**选择硬件专用安装包 · CPU / ROCm 10 / DirectML / CUDA126 / CUDA128**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
 
 <sub>Windows 一键安装 · 内置前端与底模 · 无需手动配置 Python / Node</sub>
 
@@ -49,7 +49,7 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 - 通过 WASAPI 回环或 VB-CABLE 对播放器音频进行实时人声转换，伴奏保持原样。
 - 通过 ModelScope 搜索、上传和下载模型，支持后台传输、断点续传和模型清单校验。
 - 支持网易云、QQ 音乐、酷我音乐的搜索、试听、下载和歌词获取。
-- 支持 GPU / CPU 切换：NVIDIA 使用 CUDA，Windows AMD 使用 DirectML，无法使用 GPU 时回退 CPU。
+- 支持 GPU / CPU 切换：NVIDIA 使用 CUDA，Windows AMD 优先使用 ROCm 10，也可选择独立 DirectML 包；无兼容 GPU 时使用 CPU。
 - 提供可选 FastAPI 服务，供外部程序创建任务、查询进度、管理模型和下载成品。
 - 支持插件中心、自定义插件页面、Python 插件 Worker 和 C++ JUCE VST3 Host。
 
@@ -59,25 +59,28 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 
 普通用户建议直接使用 GitHub Releases 安装：
 
-1. 按硬件选择 CPU、DirectML、CUDA126 或 CUDA128 安装包，并下载该包的 EXE 和全部同名前缀 BIN 文件。
+1. 按硬件选择 CPU、ROCm 10、DirectML、CUDA126 或 CUDA128 安装包，并下载该包的 EXE 和全部同名前缀 BIN 文件。
 2. 运行 EXE，选择应用安装目录和用户数据目录。
-3. 选择或手动指定 64 位 CPython 3.10.x，勾选「安装后立即搭建运行环境」。
+3. 选择或手动指定 64 位 CPython 3.12.x，勾选「安装后立即搭建运行环境」。
 4. 通过桌面或开始菜单中的 XB-SVCB 启动应用。
 
-安装包内已包含前端、FFmpeg、模型框架源码、关键底模和对应硬件栈的离线 Python 依赖。NVIDIA 40 系及以下选择 CUDA126，RTX 50 系选择 CUDA128；两种 CUDA 包默认创建两层共享运行时。Windows AMD 选择 DirectML，无兼容 GPU 时选择 CPU。
+安装包内已包含前端、FFmpeg、模型框架源码、关键底模和对应硬件栈的离线 Python 依赖。NVIDIA 40 系及以下选择 CUDA126，RTX 50 系选择 CUDA128；两种 CUDA 包默认创建两层共享运行时。Windows AMD 首选 ROCm 10，也可按需选择 DirectML；无兼容 GPU 时选择 CPU。DirectML 包不提供 PyMSS 加速，DDSP 自动模式使用 CPU。
 
 ### 从源码安装
 
-源码运行需要 Windows、64 位 CPython 3.10.x、Node.js 20.19+ 或 22.12+。在项目根目录明确选择硬件栈：
+源码运行需要 Windows、64 位 CPython 3.12.x、Node.js 20.19+ 或 22.12+。在项目根目录明确选择硬件栈：
+
+Python 3.12 依赖迁移、ROCm 10 官方源和模型兼容范围见 [迁移说明](docs/python312-rocm10.md)。AMD 默认使用官方 `whl-next` 源及 `device-all` 套件，已验证 Windows cp312 wheel 与 PyMSS 的依赖解析；安装成功仍须通过 HIP/GPU 运算校验。
 
 ~~~bat
 setup_env.bat --cu128
 setup_env.bat --cu126
+setup_env.bat --rocm10
 setup_env.bat --directml
 setup_env.bat --cpu
 ~~~
 
-CUDA126/CUDA128 调用 <code>install/install_shared.py</code>，分别创建 <code>runtimes/core-*</code> 与 <code>runtimes/svc-*</code> 两层共享环境；CPU/DirectML 调用 <code>install/install.py</code> 的隔离兼容布局。公共组件实现仍集中在 <code>install.py</code>，避免两套下载和模型逻辑分叉。
+CUDA126/CUDA128 调用 <code>install/install_shared.py</code>，分别创建 <code>runtimes/core-*</code> 与 <code>runtimes/svc-*</code> 两层共享环境；CPU、ROCm 10 和 DirectML 走 <code>install/install.py</code>。ROCm 10 的 SVC/RVC/Vocal 共用 <code>runtimes/svc-rocm10</code>，其余组件仍隔离；CPU/DirectML 使用隔离布局。
 
 常用的单组件安装命令：
 
@@ -177,7 +180,7 @@ flowchart LR
 | Worker → 随包模型资产 | 优先读取本地 checkpoint、声码器和 F0 模型，缺失时才联网获取。 |
 | Application Services ↔ .xb_svcb | 保存模型记录、任务、作品、编辑工程、设置、日志和缓存。 |
 
-主程序环境只负责桌面壳、API 和业务编排，不会把所有模型权重加载到同一个 Python 进程。模型 Worker 通过 <code>runtime.json</code> 路由到实际解释器：CUDA126/CUDA128 使用 <code>runtimes/core-*</code> 与 <code>runtimes/svc-*</code> 两层共享环境，CPU/DirectML 使用兼容的 <code>.venv-*</code> 隔离环境。详细的 Python 后端、启动链路和模型加载时机见：
+主程序环境只负责桌面壳、API 和业务编排，不会把所有模型权重加载到同一个 Python 进程。模型 Worker 通过 <code>runtime.json</code> 路由到实际解释器：CUDA126/CUDA128 使用 <code>runtimes/core-*</code> 与 <code>runtimes/svc-*</code>；ROCm 10 的 SVC/RVC/Vocal 使用 <code>runtimes/svc-rocm10</code>，其余组件和 CPU/DirectML 采用隔离环境。详细的 Python 后端、启动链路和模型加载时机见：
 
 - [系统架构说明](docs/architecture.md)
 - [启动与模型推理链路](docs/startup-chain.md)
@@ -307,7 +310,7 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 
 ### 分离或推理速度很慢
 
-确认安装器选择的设备与本机硬件一致。NVIDIA 40 系及以下使用共享 cu126，RTX 50 系使用共享 cu128，AMD Radeon 使用 DirectML；不兼容或没有 GPU 时会使用 CPU。
+确认安装器选择的设备与本机硬件一致。NVIDIA 40 系及以下使用共享 cu126，RTX 50 系使用共享 cu128，AMD Radeon 优先使用 ROCm 10，也可选择 DirectML；没有兼容 GPU 时使用 CPU。
 
 ### 任务失败如何排查
 
@@ -315,7 +318,7 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 
 ## Roadmap
 
-当前版本：**v0.0.31**
+当前版本：**v0.0.32**
 
 已完成的核心方向：
 
@@ -324,7 +327,7 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 - Audio Editor Lite 音频编辑工程；
 - ModelScope 模型站；
 - FastAPI 外部接入；
-- NVIDIA CUDA、AMD DirectML 和 CPU 路径；
+- NVIDIA CUDA、AMD ROCm 10、DirectML 和 CPU 路径；
 - 插件中心与 Python / 前端插件运行时。
 
 后续重点：
@@ -336,7 +339,7 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 - 作品分类、视频导出和歌词视频能力；
 - Intel GPU、CPU 性能和多 GPU 调度优化。
 
-完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.0.31 更新说明](docs/release-notes/release_notes_v031.md)。
+完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.0.32 更新说明](docs/release-notes/release_notes_v032.md)。
 
 ## 进一步阅读
 

@@ -11,7 +11,7 @@
 Bug 报告应尽量包含：
 
 - XB-SVCB 版本、Windows 版本和安装方式；
-- Python、GPU 型号、显卡驱动及实际使用的推理后端（CPU、DirectML、cu126 或 cu128）；
+- Python、GPU 型号、显卡驱动及实际使用的推理后端（CPU、ROCm 10、cu126 或 cu128）；
 - 可重复执行的最小步骤、预期结果和实际结果；
 - 完整错误信息及相关日志；
 - 必要时提供经过脱敏的截图或最小音频样本。
@@ -25,7 +25,7 @@ Bug 报告应尽量包含：
 项目主要面向 Windows。基础开发需要：
 
 - Git；
-- Python 3.10.5 或更高版本；
+- 64 位 CPython 3.12.x；
 - [uv](https://docs.astral.sh/uv/)；
 - Node.js `^20.19.0` 或 `>=22.12.0`，以及 npm；
 - 涉及音频处理时需要 ffmpeg；

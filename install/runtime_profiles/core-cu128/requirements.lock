@@ -1,4 +1,4 @@
-# Experimental Windows x86_64 / CPython 3.10 / cu128 profile.
+# Experimental Windows x86_64 / CPython 3.12 / cu128 profile.
 # 146 installed package versions captured on 2026-08-29, plus a fixed
 # hf-xet download helper required by some platform-marker evaluations.
 # No machine-local URLs. AudioTools is supplied by the verified local wheel.

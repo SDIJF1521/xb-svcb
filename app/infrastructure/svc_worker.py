@@ -28,8 +28,10 @@ try:
     from inference_device import (
         patch_directml_checkpoint_load,
         patch_directml_float32,
+        patch_directml_sovits_diffusion_extract,
         patch_directml_sovits_f0_coarse,
         patch_directml_sovits_rmvpe_cpu,
+        patch_directml_sovits_sinegen,
         patch_sovits_fcpe_fallback,
         resolve_torch_device,
     )
@@ -41,8 +43,10 @@ except ImportError:  # package import used by tests/application tooling
     from infrastructure.inference_device import (
         patch_directml_checkpoint_load,
         patch_directml_float32,
+        patch_directml_sovits_diffusion_extract,
         patch_directml_sovits_f0_coarse,
         patch_directml_sovits_rmvpe_cpu,
+        patch_directml_sovits_sinegen,
         patch_sovits_fcpe_fallback,
         resolve_torch_device,
     )
@@ -82,6 +86,27 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--diffusion-config", default="", help="扩散模型配置 .yaml 路径（可选）")
     p.add_argument("--slice-db", type=int, default=-40, help="切片静音阈值 dB")
     return p
+
+
+def _configure_rocm_miopen() -> None:
+    """Avoid unstable gfx12 MIOpen ASM solvers on Windows ROCm 10.
+
+    RX 9070 (gfx1201) can run the So-VITS graph through PyTorch ROCm, but
+    some convolution shapes select an ASM solver that fails with
+    ``hipEventCreate ... unspecified launch failure``.  Generic MIOpen
+    solvers are stable for SVC and match the workaround used by the UVR
+    worker.  ``setdefault`` keeps an explicit user override effective.
+    """
+    defaults = {
+        "MIOPEN_DEBUG_GCN_ASM_KERNELS": "0",
+        "MIOPEN_DEBUG_CONV_DIRECT_ASM_3X3U": "0",
+        "MIOPEN_DEBUG_CONV_DIRECT_ASM_1X1U": "0",
+        "MIOPEN_DEBUG_CONV_IMPLICIT_GEMM_ASM_FWD_V4R1": "0",
+        "MIOPEN_DEBUG_CONV_IMPLICIT_GEMM_ASM_FWD_GTC_XDLOPS": "0",
+        "MIOPEN_FIND_MODE": "FAST",
+    }
+    for name, value in defaults.items():
+        os.environ.setdefault(name, value)
 
 
 def _upstream_svc_device(requested: str, resolved_device):  # noqa: ANN001, ANN202
@@ -172,6 +197,143 @@ def _resolve_diffusion_k_step(
     return effective, limit
 
 
+def _disable_missing_volume_embedding(svc, checkpoint_path: str, torch) -> bool:  # noqa: ANN001
+    """Disable the optional volume embedding when an old checkpoint omits it.
+
+    Some So-VITS-SVC checkpoints carry ``vol_embedding: true`` in a copied
+    config while the actual generator was trained without ``emb_vol``.  The
+    upstream loader leaves that layer randomly initialized.  That causes a
+    dtype error on CPU and, on ROCm, a large DC output because the random
+    layer is fed into the generator.  Treat the checkpoint as authoritative
+    and use the model's normal no-volume path when the optional weights are
+    absent.
+    """
+    if not bool(getattr(svc, "vol_embedding", False)):
+        return False
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        state = checkpoint.get("model", checkpoint) if isinstance(checkpoint, dict) else {}
+        has_volume_weights = isinstance(state, dict) and any(
+            str(key).endswith(("emb_vol.weight", "emb_vol.bias")) for key in state
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"SVC_WARN 无法检查音量嵌入参数，保留配置: {exc}", flush=True)
+        return False
+    if has_volume_weights:
+        return False
+
+    svc.vol_embedding = False
+    net = getattr(svc, "net_g_ms", None)
+    if net is not None:
+        net.vol_embedding = False
+    print(
+        "SVC_WARN checkpoint 缺少 emb_vol.*，已关闭不兼容的随机音量嵌入",
+        flush=True,
+    )
+    return True
+
+
+def _install_svc_tensor_debug(svc, torch) -> None:  # noqa: ANN001
+    """Print finite/value ranges around the generator when explicitly asked."""
+    if os.environ.get("SVC_DEBUG_TENSORS", "").strip().lower() not in {"1", "true", "yes"}:
+        return
+    import functools
+
+    def stats(value) -> str:  # noqa: ANN001
+        if not torch.is_tensor(value):
+            return type(value).__name__
+        value = value.detach()
+        finite = bool(torch.isfinite(value).all().item()) if value.numel() else True
+        if not value.numel():
+            return f"shape={tuple(value.shape)} empty finite={finite}"
+        return (
+            f"shape={tuple(value.shape)} dtype={value.dtype} device={value.device} "
+            f"finite={finite} min={float(torch.nan_to_num(value).min()):.6f} "
+            f"max={float(torch.nan_to_num(value).max()):.6f}"
+        )
+
+    original_get_unit_f0 = svc.get_unit_f0
+
+    @functools.wraps(original_get_unit_f0)
+    def debug_get_unit_f0(*args, **kwargs):  # noqa: ANN001
+        result = original_get_unit_f0(*args, **kwargs)
+        print(
+            "SVC_DEBUG_F0 " + " | ".join(stats(item) for item in result),
+            flush=True,
+        )
+        return result
+
+    svc.get_unit_f0 = debug_get_unit_f0
+    original_infer = svc.net_g_ms.infer
+
+    @functools.wraps(original_infer)
+    def debug_infer(*args, **kwargs):  # noqa: ANN001
+        print(
+            "SVC_DEBUG_INPUT " + " | ".join(stats(item) for item in args[:3]),
+            flush=True,
+        )
+        result = original_infer(*args, **kwargs)
+        print(
+            "SVC_DEBUG_OUTPUT " + " | ".join(stats(item) for item in result),
+            flush=True,
+        )
+        return result
+
+    svc.net_g_ms.infer = debug_infer
+
+
+def _validate_svc_generator(svc, torch) -> None:  # noqa: ANN001
+    """Reject checkpoints whose generator already contains NaN/Inf weights."""
+    net = getattr(svc, "net_g_ms", None)
+    if net is None:
+        return
+    invalid: list[str] = []
+    for name, value in net.named_parameters():
+        if not bool(torch.isfinite(value.detach()).all().item()):
+            invalid.append(name)
+            if len(invalid) >= 4:
+                break
+    if len(invalid) < 4:
+        for name, value in net.named_buffers():
+            if not bool(torch.isfinite(value.detach()).all().item()):
+                invalid.append(name)
+                if len(invalid) >= 4:
+                    break
+    if invalid:
+        details = ", ".join(invalid)
+        raise RuntimeError(
+            "SVC checkpoint 包含 NaN/Inf 权重，模型文件已损坏或未完成下载 "
+            f"(例如: {details})"
+        )
+
+
+def _validate_svc_audio(audio, input_path: str, np) -> tuple[float, float, float, float]:  # noqa: ANN001
+    """Reject non-finite or obvious DC-only output before WAV serialization."""
+    values = np.asarray(audio, dtype=np.float32)
+    if not bool(np.isfinite(values).all()):
+        raise RuntimeError("推理输出包含 NaN/Inf，已阻止写出伪成功音频")
+    flat = values.reshape(-1)
+    if not len(flat):
+        raise RuntimeError("推理输出为空")
+    mean = float(np.mean(flat))
+    std = float(np.std(flat))
+    peak = float(np.max(np.abs(flat)))
+    diff_rms = float(np.sqrt(np.mean(np.diff(flat) ** 2))) if len(flat) > 1 else 0.0
+    try:
+        import soundfile as sf
+
+        source, _ = sf.read(input_path, dtype="float32", always_2d=True)
+        source_rms = float(np.sqrt(np.mean(np.asarray(source) ** 2))) if len(source) else 0.0
+    except Exception:  # noqa: BLE001
+        source_rms = 0.0
+    if source_rms > 1e-4:
+        if std < 1e-5 and peak > 1e-3:
+            raise RuntimeError("推理输出为直流信号，已阻止写出伪成功音频")
+        if abs(mean) > max(0.25, 8.0 * std):
+            raise RuntimeError("推理输出存在异常直流偏置，已阻止写出伪成功音频")
+    return mean, std, peak, diff_rms
+
+
 def main() -> int:
     args = _build_parser().parse_args()
 
@@ -193,8 +355,18 @@ def main() -> int:
     )
 
     try:
+        if str(args.device).strip().lower() == "rocm":
+            # Set before importing torch/audio models so the first MIOpen
+            # convolution cannot select the gfx12 ASM solver.
+            _configure_rocm_miopen()
         import soundfile
         import torch
+
+        # ``auto`` is the normal application route.  ROCm exposes the CUDA
+        # compatibility API, so detect it after importing torch and apply the
+        # same solver workaround before any model is constructed.
+        if getattr(torch.version, "hip", None):
+            _configure_rocm_miopen()
 
         resolved_device = resolve_torch_device(args.device, torch)
         if resolved_device.backend == "directml":
@@ -243,6 +415,13 @@ def main() -> int:
                     # [channels, frames] -> soundfile 约定 [frames, channels]
                     soundfile.write(str(filepath), arr.T, int(sample_rate))
 
+                # TorchAudio 2.11 removed the legacy backend selector. The
+                # upstream so-vits-svc loader still calls it before load();
+                # our soundfile I/O shim already chooses the backend, so a
+                # no-op compatibility entry keeps the loader working.
+                if not hasattr(torchaudio, "set_audio_backend"):
+                    torchaudio.set_audio_backend = lambda *args, **kw: None  # type: ignore[attr-defined]
+
                 torchaudio.load = _ta_load  # type: ignore[assignment]
                 torchaudio.save = _ta_save  # type: ignore[assignment]
             except Exception as _ta_exc:  # noqa: BLE001
@@ -256,12 +435,22 @@ def main() -> int:
             patch_directml_sovits_rmvpe_cpu(sovits_utils)
             print(
                 "XB: So-VITS-SVC checkpoint/F0 粗化使用 DirectML 安全路径；"
-                "RMVPE/FCPE 使用 CPU 稳定路径，"
-                "主模型/扩散/声码器继续使用 AMD DirectML",
+                "RMVPE/FCPE、声源相位与扩散系数索引使用 CPU 稳定路径，"
+                "主模型/扩散网络继续使用 AMD DirectML",
                 flush=True,
             )
 
         from inference.infer_tool import Svc
+        if resolved_device.backend == "directml":
+            from diffusion import diffusion as diffusion_model
+            from vdecoder.hifigan import models as hifigan_models
+            from vdecoder.hifiganwithsnake import models as snake_models
+            from vdecoder.nsf_hifigan import models as diffusion_vocoder_models
+
+            patch_directml_sovits_diffusion_extract(diffusion_model)
+            patch_directml_sovits_sinegen(
+                (hifigan_models, snake_models), diffusion_vocoder_models
+            )
     except Exception as exc:  # noqa: BLE001
         print(f"SVC_ERR 依赖导入失败: {exc}")
         traceback.print_exc()
@@ -286,6 +475,16 @@ def main() -> int:
             spk_mix_enable=False,
             feature_retrieval=False,
         )
+        if resolved_device.backend in {"rocm", "cpu"}:
+            # Some so-vits checkpoints contain half-precision parameters while
+            # the volume/F0 extractor always produces float32 tensors. Keep
+            # the loaded SVC network and its input contract in float32 on
+            # ROCm and CPU; this also avoids CPU's mixed-dtype Linear error.
+            svc.net_g_ms.float()
+            svc.dtype = torch.float32
+        _disable_missing_volume_embedding(svc, args.main_model, torch)
+        _validate_svc_generator(svc, torch)
+        _install_svc_tensor_debug(svc, torch)
     except Exception as exc:  # noqa: BLE001
         print(f"SVC_ERR 模型加载失败: {exc}")
         traceback.print_exc()
@@ -343,6 +542,20 @@ def main() -> int:
     out_path = os.path.abspath(args.output)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     try:
+        # Keep the model output diagnostics before the naturalizer touches the
+        # file.  A saturated DC signal can otherwise look successful merely
+        # because it is finite and has a non-zero peak.
+        import numpy as np
+
+        raw_mean, raw_std, raw_peak, raw_diff = _validate_svc_audio(audio, args.input, np)
+        print(
+            "SVC_RAW_STATS "
+            f"mean={raw_mean:.6f} "
+            f"std={raw_std:.6f} "
+            f"peak={raw_peak:.6f} "
+            f"diff_rms={raw_diff:.6f}",
+            flush=True,
+        )
         soundfile.write(out_path, audio, svc.target_sample, format="WAV")
         natural_stats = naturalize_inference_output(args.input, out_path, "so-vits-svc")
         print(f"SVC_NATURAL {format_naturalizer_stats(natural_stats)}", flush=True)

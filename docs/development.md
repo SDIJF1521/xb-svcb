@@ -45,6 +45,8 @@
 
 ## 安装包构建
 
+构建脚本可用 `-Help` 或 `--help` 查看参数，不启动预检或打包。
+
 轻量校验：
 
     .\installer\build.ps1 -ValidateOnly
@@ -53,7 +55,7 @@
 
     .\installer\build.ps1
 
-顺序构建 CPU、DirectML、CUDA126、CUDA128 四套专用包：
+顺序构建 CPU、ROCm 10、DirectML、CUDA126、CUDA128 五套专用包：
 
     .\installer\build-all-packages.ps1 -Python C:\path\to\python.exe
 
@@ -64,8 +66,8 @@ CUDA 包使用 Git 外部保存的共享核心材料时，构建命令需要额�
 构建流程大致为：
 
 1. 校验应用、前端、版本号和关键运行载荷。
-2. 构建 Vue 前端，并在四套包之间复用同一份结果。
-3. 使用 PyInstaller 生成桌面应用及其内置资源，并在四套包之间复用同一份结果。
+2. 构建 Vue 前端，并在五套包之间复用同一份结果。
+3. 使用 PyInstaller 生成桌面应用及其内置资源，并在五套包之间复用同一份结果。
 4. 构建或复用 JUCE VST3 Host。
 5. 按目标硬件栈筛选离线 wheelhouse，校验 CUDA candidate/compat 材料和运行环境载荷。
 6. 使用 Inno Setup 生成硬件专用 EXE 和多个小于 2GB 的同名前缀 `.bin` 分卷。

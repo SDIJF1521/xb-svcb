@@ -1,19 +1,22 @@
 <#
-  Sequentially build the four dedicated XB-SVCB installer families.
+  Sequentially build the five dedicated XB-SVCB installer families.
 
   Default behavior reuses the existing assets/wheels cache, but rebuilds the
   frontend/application/JUCE outputs once so every installer contains current
   source. Use -ReuseBuildOutputs only for an unchanged, already validated tree.
 
   Examples:
+    ./installer/build-all-packages.ps1 -Help
     ./installer/build-all-packages.ps1
     ./installer/build-all-packages.ps1 -RebuildWheelhouse
-    ./installer/build-all-packages.ps1 -Python C:\Python310\python.exe
+    ./installer/build-all-packages.ps1 -Python C:\Python312\python.exe
     ./installer/build-all-packages.ps1 -RuntimeAssets D:\XB-SVCB\assets\runtime\core-cu128
     ./installer/build-all-packages.ps1 -ReuseBuildOutputs
 #>
 
 param(
+  [Alias('h')]
+  [switch]$Help,
   [switch]$RebuildWheelhouse,
   [switch]$RebuildWeb,
   [switch]$RebuildApp,
@@ -24,12 +27,34 @@ param(
   [string]$RuntimeAssets
 )
 
+if ($Help -or $args -contains '--help') {
+  @'
+Usage: .\installer\build-all-packages.ps1 [options]
+
+Build order: cpu, rocm10, directml, cu126, cu128.
+
+Options:
+  -Python <path>          Use a 64-bit CPython 3.12 executable.
+  -RuntimeAssets <dir>    Supply the shared CUDA core runtime assets.
+  -RebuildWheelhouse      Rebuild the complete five-stack wheelhouse.
+  -RebuildWeb             Rebuild the frontend.
+  -RebuildApp             Rebuild the PyInstaller application.
+  -RebuildJuceHost        Rebuild the JUCE VST3 host.
+  -ReuseBuildOutputs       Reuse existing frontend/app/JUCE outputs.
+  -KeepExistingInstallers Keep existing installer artifacts in dist.
+  -Help, -h, --help       Show this help and exit.
+
+By default, existing wheels are reused and frontend/app/JUCE outputs are rebuilt.
+'@ | Write-Output
+  return
+}
+
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $BuildScript = Join-Path $PSScriptRoot 'build.ps1'
 $WheelhouseScript = Join-Path $Root 'install\prepare_wheelhouse.py'
 $DistDir = Join-Path $Root 'dist'
-$Stacks = @('cpu', 'directml', 'cu126', 'cu128')
+$Stacks = @('cpu', 'rocm10', 'directml', 'cu126', 'cu128')
 
 function Require-File([string]$Path, [string]$Label) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -37,47 +62,47 @@ function Require-File([string]$Path, [string]$Label) {
   }
 }
 
-function Test-Python310([string]$Path) {
+function Test-Python312([string]$Path) {
   if ([string]::IsNullOrWhiteSpace($Path) -or
       -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     return $false
   }
-  & $Path -c "import sys; raise SystemExit(0 if sys.implementation.name == 'cpython' and sys.version_info[:2] == (3, 10) and sys.maxsize > 2**32 else 1)"
+  & $Path -c "import sys; raise SystemExit(0 if sys.implementation.name == 'cpython' and sys.version_info[:2] == (3, 12) and sys.maxsize > 2**32 else 1)"
   return $LASTEXITCODE -eq 0
 }
 
-function Resolve-Python310([string]$ExplicitPath) {
+function Resolve-Python312([string]$ExplicitPath) {
   if ($ExplicitPath) {
     $candidate = [IO.Path]::GetFullPath($ExplicitPath)
-    if (-not (Test-Python310 $candidate)) {
-      throw "-Python must point to a runnable CPython 3.10.x python.exe: $candidate"
+    if (-not (Test-Python312 $candidate)) {
+      throw "-Python must point to a runnable CPython 3.12.x python.exe: $candidate"
     }
     return $candidate
   }
-  if ($env:XB_PYTHON_EXE -and (Test-Python310 $env:XB_PYTHON_EXE)) {
+  if ($env:XB_PYTHON_EXE -and (Test-Python312 $env:XB_PYTHON_EXE)) {
     return [IO.Path]::GetFullPath($env:XB_PYTHON_EXE)
   }
   if (Get-Command py -ErrorAction SilentlyContinue) {
     $candidate = $null
     try {
-      $candidate = (& py -3.10 -c "import sys; print(sys.executable)" 2>$null | Select-Object -First 1)
+      $candidate = (& py -3.12 -c "import sys; print(sys.executable)" 2>$null | Select-Object -First 1)
     } catch {
       $candidate = $null
     }
-    if ($LASTEXITCODE -eq 0 -and (Test-Python310 $candidate)) {
+    if ($LASTEXITCODE -eq 0 -and (Test-Python312 $candidate)) {
       return [IO.Path]::GetFullPath($candidate)
     }
   }
   foreach ($pythonCommand in @(Get-Command python -All -CommandType Application -ErrorAction SilentlyContinue)) {
-    if (Test-Python310 $pythonCommand.Source) {
+    if (Test-Python312 $pythonCommand.Source) {
       return [IO.Path]::GetFullPath($pythonCommand.Source)
     }
   }
-  $candidate = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python310\python.exe'
-  if (Test-Python310 $candidate) {
+  $candidate = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'
+  if (Test-Python312 $candidate) {
     return [IO.Path]::GetFullPath($candidate)
   }
-  throw "CPython 3.10.x was not detected. Pass -Python C:\path\to\python.exe."
+  throw "CPython 3.12.x was not detected. Pass -Python C:\path\to\python.exe."
 }
 
 Require-File $BuildScript 'Installer build script'
@@ -86,25 +111,26 @@ New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
 Set-Location -LiteralPath $Root
 
-Write-Host '==== Validating all four installer configurations ====' -ForegroundColor Cyan
+Write-Host '==== Validating all five installer configurations ====' -ForegroundColor Cyan
 $validationArgs = @{ ValidateOnly = $true }
 if ($RuntimeAssets) {
   $validationArgs.RuntimeAssets = $RuntimeAssets
 }
 & $BuildScript @validationArgs
-$BuildPython = Resolve-Python310 $Python
-Write-Host ("Locked build Python 3.10: {0}" -f $BuildPython) -ForegroundColor Green
+$BuildPython = Resolve-Python312 $Python
+Write-Host ("Locked build Python 3.12: {0}" -f $BuildPython) -ForegroundColor Green
 
 $refreshWeb = (-not $ReuseBuildOutputs) -or $RebuildWeb
 $refreshApp = (-not $ReuseBuildOutputs) -or $RebuildApp
 $refreshJuceHost = (-not $ReuseBuildOutputs) -or $RebuildJuceHost
 
 if ($RebuildWheelhouse) {
-  Write-Host "`n==== Rebuilding the complete four-stack wheelhouse ====" -ForegroundColor Cyan
+  Write-Host "`n==== Rebuilding the complete five-stack wheelhouse ====" -ForegroundColor Cyan
   & $BuildPython $WheelhouseScript `
     --root $Root `
     --clean `
     --stack cpu `
+    --stack rocm10 `
     --stack directml `
     --stack cu126 `
     --stack cu128
@@ -122,6 +148,7 @@ if (-not $KeepExistingInstallers) {
         ($_.Name -like 'XB-SVCB-Setup-*.bin') -or
         ($_.Name -in @(
           'XB-SVCB-Setup-CPU.exe',
+          'XB-SVCB-Setup-ROCm10.exe',
           'XB-SVCB-Setup-DirectML.exe',
           'XB-SVCB-Setup-CUDA126.exe',
           'XB-SVCB-Setup-CUDA128.exe'
@@ -154,6 +181,7 @@ for ($index = 0; $index -lt $Stacks.Count; $index++) {
 
 $expectedExecutables = @(
   'XB-SVCB-Setup-CPU.exe',
+  'XB-SVCB-Setup-ROCm10.exe',
   'XB-SVCB-Setup-DirectML.exe',
   'XB-SVCB-Setup-CUDA126.exe',
   'XB-SVCB-Setup-CUDA128.exe'

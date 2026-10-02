@@ -42,7 +42,7 @@ if defined XB_CUDA_VERSION echo           cuda toolkit: %XB_CUDA_VERSION%
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 9 正在检查 JUCE VST3 Host
 call :CHECK_JUCE_HOST
 
-if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 12 正在检查 Python 3.10
+if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 12 正在检查 Python 3.12
 call :CHECK_PYTHON
 if errorlevel 1 exit /b 1
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 28 正在检查 Git
@@ -113,12 +113,21 @@ exit /b 0
 :RESOLVE_GPU_STACK
 set "DETECTED_GPU_STACK="
 if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="cpu" set "DETECTED_GPU_STACK=cpu"
+if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="rocm10" set "DETECTED_GPU_STACK=rocm10"
 if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="directml" set "DETECTED_GPU_STACK=directml"
 if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="cu126" set "DETECTED_GPU_STACK=cu126"
 if /I "%XB_GPU_STACK_REQUESTED%"=="auto" if /I "%XB_GPU_STACK%"=="cu128" set "DETECTED_GPU_STACK=cu128"
 if /I "%XB_GPU_STACK_REQUESTED%"=="cpu" (
   set "XB_RESOLVED_GPU_STACK=cpu"
   set "XB_GPU_STACK=cpu"
+  set "XB_CUDA_VERSION="
+  set "XB_CUDA_DIR="
+  set "XB_CUDA_BIN="
+  exit /b 0
+)
+if /I "%XB_GPU_STACK_REQUESTED%"=="rocm10" (
+  set "XB_RESOLVED_GPU_STACK=rocm10"
+  set "XB_GPU_STACK=rocm10"
   set "XB_CUDA_VERSION="
   set "XB_CUDA_DIR="
   set "XB_CUDA_BIN="
@@ -150,6 +159,12 @@ if /I not "%XB_GPU_STACK_REQUESTED%"=="auto" if /I not "%XB_GPU_STACK_REQUESTED%
 
 set "XB_RESOLVED_GPU_STACK=%DETECTED_GPU_STACK%"
 set "XB_GPU_STACK=%DETECTED_GPU_STACK%"
+if "%XB_RESOLVED_GPU_STACK%"=="rocm10" (
+  set "XB_CUDA_VERSION="
+  set "XB_CUDA_DIR="
+  set "XB_CUDA_BIN="
+  exit /b 0
+)
 if "%XB_RESOLVED_GPU_STACK%"=="directml" (
   set "XB_CUDA_VERSION="
   set "XB_CUDA_DIR="
@@ -211,7 +226,7 @@ for /f "delims=" %%G in ('powershell.exe -NoProfile -Command "Get-CimInstance Wi
 )
 if not "%DETECTED_GPU_STACK%"=="cpu" exit /b 0
 for /f "delims=" %%G in ('powershell.exe -NoProfile -Command "Get-CimInstance Win32_VideoController ^| Select-Object -ExpandProperty Name" 2^>nul') do (
-  echo %%G | findstr /I /C:"AMD" /C:"Radeon" >nul && set "DETECTED_GPU_STACK=directml"
+  echo %%G | findstr /I /C:"AMD" /C:"Radeon" >nul && set "DETECTED_GPU_STACK=rocm10"
 )
 exit /b 0
 
@@ -238,11 +253,11 @@ if not exist "!PYTHON_DETECTOR!" (
 call "!PYTHON_DETECTOR!"
 if not errorlevel 1 (
   set "PATH=!XB_PYTHON_DIR!;!XB_PYTHON_DIR!\Scripts;!PATH!"
-  echo [ok] Python 3.10.x verified and locked: !XB_PYTHON_EXE!
+  echo [ok] Python 3.12.x verified and locked: !XB_PYTHON_EXE!
   exit /b 0
 )
-echo [fail] A runnable CPython 3.10.x was not found.
-call :MANUAL_GUIDANCE "Python 3.10" "https://www.python.org/downloads/windows/"
+echo [fail] A runnable CPython 3.12.x was not found.
+call :MANUAL_GUIDANCE "Python 3.12" "https://www.python.org/downloads/windows/"
 exit /b 1
 
 :CHECK_GIT
@@ -316,6 +331,10 @@ exit /b 0
 call :RESOLVE_GPU_STACK
 if "%XB_RESOLVED_GPU_STACK%"=="cpu" (
   echo [skip] CUDA check skipped for CPU mode or incompatible GPU.
+  exit /b 0
+)
+if "%XB_RESOLVED_GPU_STACK%"=="rocm10" (
+  echo [skip] CUDA check skipped for AMD ROCm 10 mode.
   exit /b 0
 )
 if "%XB_RESOLVED_GPU_STACK%"=="directml" (

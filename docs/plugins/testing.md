@@ -125,7 +125,7 @@ __pycache__/
 *.xbplugin
 ```
 
-测试文件、源代码、README、`package-lock.json`、`dist/` 和 `vendor/` 不在忽略列表中，会被打入包内。声明 `requirements.txt` 时，打包器会用 Python 3.10 在临时目录重建 `vendor/`。当前没有 `.xbpluginignore`。
+测试文件、源代码、README、`package-lock.json`、`dist/` 和 `vendor/` 不在忽略列表中，会被打入包内。声明 `requirements.txt` 时，打包器会用 Python 3.12 在临时目录重建 `vendor/`。当前没有 `.xbpluginignore`。
 
 `xb-plugin pack` 本身不会重新构建页面或清单；脚手架生成的 `npm run pack` 才会先执行 `validate`。直接运行下面的 CLI 时，要先自行保证构建产物是最新的：
 
@@ -155,7 +155,7 @@ xb-plugin pack .
 
 Python 或混合插件第一次启用时，宿主会启动独立 Worker，并检查：
 
-- 宿主 Python 3.10+ 运行环境和 Python SDK 可用；
+- 宿主 Python 3.12.x 运行环境和 Python SDK 可用；
 - 清单入口可以导入；
 - 入口创建了 `Plugin`；
 - `Plugin` ID 与清单 ID 一致；
