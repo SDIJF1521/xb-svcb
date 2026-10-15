@@ -1667,6 +1667,11 @@ class Api:
         """
         if not str(raw_target or "").strip():
             return None, "请选择目标目录。"
+        # 界面与 HTTP API 都可以传任意字符串；跨平台路径（如 POSIX 上的
+        # D:\XB-SVCB\.xb_svcb）必须先拒绝，否则下面的 mkdir 会就地造出脏目录。
+        rejection = config.data_dir_rejection_reason(raw_target)
+        if rejection is not None:
+            return None, rejection
         try:
             selected = Path(raw_target).expanduser().resolve()
         except OSError:

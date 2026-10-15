@@ -14,7 +14,14 @@ export interface ToolStatus {
   role?: 'core' | 'engine' | 'optional'
 }
 
-export type InferenceDeviceBackend = 'auto' | 'cuda' | 'rocm' | 'directml' | 'cpu'
+export type InferenceDeviceBackend =
+  | 'auto'
+  | 'cuda'
+  | 'rocm'
+  | 'directml'
+  | 'mps'
+  | 'mlx'
+  | 'cpu'
 
 export interface InferenceDeviceOption {
   value: InferenceDeviceBackend
@@ -1116,7 +1123,7 @@ export interface EditorSeparationOptions {
   harmony_removal_enabled?: boolean
   harmony_model?: string
   mute_source?: boolean
-  device?: 'auto' | 'cuda' | 'rocm' | 'directml' | 'cpu'
+  device?: 'auto' | 'cuda' | 'rocm' | 'directml' | 'mps' | 'mlx' | 'cpu'
 }
 
 export interface EditorSilenceSplitOptions {

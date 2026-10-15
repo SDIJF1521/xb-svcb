@@ -98,6 +98,12 @@ assets/tools/ffmpeg/bin/*.exe
 .xb_xvcb/
 .sv-xvcb/
 /plugins/
+# 数据目录指针文件记录的是本机路径，绝不应入库
+data_home.json
+app/data_home.json
+# 旧版本曾在 POSIX 上把 Windows 路径当成相对路径，就地建出形如
+# D:\XB-SVCB\.xb_svcb 的目录；这里兜底忽略单字母盘符开头的条目
+?:*
 /plugin-data/
 .venv-svc/
 .venv-plugins/
@@ -139,3 +145,5 @@ assets/models/**/DeepFilterNet3/enhance.log
 .tmp-pymss-rocm-packages
 
 .tmp-pymss-test
+
+.codebuddy

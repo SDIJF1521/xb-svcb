@@ -138,7 +138,7 @@ class InferenceParams:
     pymss_model: str = ""
     diffusion_ratio: float = 0.5
     speaker: str = ""  # 目标说话人，留空则用模型配置中的第一个
-    device: str = "auto"  # 推理设备：auto / cuda / rocm / directml / cpu
+    device: str = "auto"  # 推理设备：auto / cuda / rocm / directml / mps / mlx / cpu
     # RVC 专属参数
     protect: float = 0.33  # 清辅音/呼吸保护 (0~0.5)
     filter_radius: int = 3  # F0 中值滤波半径 (0~7)

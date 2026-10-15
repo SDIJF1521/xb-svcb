@@ -53,14 +53,15 @@ class UvrTool:
         """分离人声/伴奏。环境就绪时调子进程真实分离；否则降级返回原音频。"""
         out_dir.mkdir(parents=True, exist_ok=True)
         requested_device = str(device or "auto").strip().lower()
-        if requested_device not in {"auto", "cuda", "rocm", "directml", "dml", "cpu"}:
+        if requested_device not in {"auto", "cuda", "rocm", "directml", "dml", "mps", "cpu"}:
             raise ValueError(f"不支持的 UVR 分离设备: {requested_device}")
         worker_device = "directml" if requested_device == "dml" else requested_device
-        strict_accelerator = worker_device in {"cuda", "rocm", "directml"}
+        strict_accelerator = worker_device in {"cuda", "rocm", "directml", "mps"}
         device_labels = {
             "cuda": "CUDA",
             "rocm": "ROCm",
             "directml": "DirectML",
+            "mps": "Apple MPS",
         }
         accelerator_label = device_labels.get(worker_device, worker_device.upper())
         if not self.available or not src or not Path(src).exists():

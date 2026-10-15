@@ -5,6 +5,7 @@
 ## 使用者
 
 - [源码安装与启动](getting-started.md)：环境要求、安装脚本、运行模式、数据目录和常见排障。
+- [macOS 安装与启动](macos-mps.md)：Apple Silicon / MPS 的依赖、`--mps` 配方、底模供给、启动方式、设备与精度、功能差异和排障速查。
 - [Python 3.12 与 ROCm 10 迁移](python312-rocm10.md)：AMD 安装、模型兼容和依赖迁移。
 - [FastAPI 接入](api.md)：服务启动、鉴权、任务接口、上传下载和调用示例。
 - [API 管理变更说明](api-management.md)：域名绑定和多密钥管理的实现背景。
@@ -17,6 +18,8 @@
 - [开发与发布](development.md)：代码结构、测试、前端构建、JUCE Host 和安装包构建。
 - [安装器说明](../installer/README.md)：PyInstaller、运行环境、离线 wheelhouse 和 Inno Setup 分卷。
 - [共享运行时与兼容布局](runtime-consolidation.md)：CUDA 两层共享环境、ROCm 10 的 SVC 共享层、CPU/DirectML 兼容布局及修复边界。
+- [MPS 适配改造说明](macos-mps-changes.md)：为支持 Apple Silicon / MPS 改了哪些文件、每处为什么改、有意不做的部分与验证矩阵。
+- [MPS 运行时配方](../install/runtime_profiles/mps/README.md)：macOS 固定组合、与 Windows 配方的有意差异、已验证结论与已知限制。
 
 ## 插件作者
 

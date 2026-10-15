@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import traceback
@@ -26,12 +27,14 @@ try:
         naturalize_inference_output,
     )
     from inference_device import (
+        ResolvedDevice,
         patch_directml_checkpoint_load,
         patch_directml_float32,
         patch_directml_sovits_diffusion_extract,
         patch_directml_sovits_f0_coarse,
         patch_directml_sovits_rmvpe_cpu,
         patch_directml_sovits_sinegen,
+        patch_onnx_apple_providers,
         patch_sovits_fcpe_fallback,
         resolve_torch_device,
     )
@@ -41,15 +44,76 @@ except ImportError:  # package import used by tests/application tooling
         naturalize_inference_output,
     )
     from infrastructure.inference_device import (
+        ResolvedDevice,
         patch_directml_checkpoint_load,
         patch_directml_float32,
         patch_directml_sovits_diffusion_extract,
         patch_directml_sovits_f0_coarse,
         patch_directml_sovits_rmvpe_cpu,
         patch_directml_sovits_sinegen,
+        patch_onnx_apple_providers,
         patch_sovits_fcpe_fallback,
         resolve_torch_device,
     )
+
+
+_FAIRSEQ_ENCODERS = {
+    "vec768l12",
+    "vec256l9",
+    "hubertsoft",
+    "cnhubertlarge",
+    "dphubert",
+    "wavlmbase+",
+}
+
+
+def _log_speech_encoder(config_path: str, resolved_device: ResolvedDevice) -> None:
+    """记录并适配模型的语音编码器（Apple MPS 下尤其重要）。
+
+    * ONNX 编码器（``*-onnx``）：上游只支持 CUDA/CPU 执行提供器，这里注入
+      CoreML 优先、CPU 兜底，避免在 mps 下把编码器留在 CPU 却不自知。
+    * fairseq 编码器：fairseq 在 macOS 上没有 wheel，缺失时给出明确的安装
+      命令，而不是让上游抛出难以理解的 ImportError。
+    """
+    encoder = ""
+    try:
+        with open(config_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, dict):
+            model_section = data.get("model")
+            if isinstance(model_section, dict):
+                encoder = str(model_section.get("speech_encoder") or "")
+            # 兼容少数把 speech_encoder 写在顶层的导出格式
+            encoder = encoder or str(data.get("speech_encoder") or "")
+    except (OSError, ValueError):
+        return
+    if not encoder:
+        return
+    print(f"XB_SVC_ENCODER {encoder} backend={resolved_device.backend}", flush=True)
+    if resolved_device.backend not in {"mps", "mlx"}:
+        return
+    if "onnx" in encoder.lower():
+        try:
+            import onnxruntime  # noqa: WPS433
+
+            if patch_onnx_apple_providers(onnxruntime, resolved_device.backend):
+                print(
+                    "XB: So-VITS-SVC ONNX 语音编码器使用 CoreML/CPU 执行提供器",
+                    flush=True,
+                )
+        except ImportError:
+            print("SVC_WARN 模型使用 ONNX 编码器，但当前环境未安装 onnxruntime", flush=True)
+        return
+    if encoder not in _FAIRSEQ_ENCODERS:
+        return
+    try:
+        import fairseq  # noqa: F401, WPS433
+    except ImportError:
+        raise RuntimeError(
+            f"模型语音编码器 {encoder} 需要 fairseq，但当前环境未安装。"
+            "可执行 python3.12 install/install.py --mps --only svc --svc-encoder fairseq，"
+            "或改用 *-onnx 编码器的模型配置"
+        ) from None
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -63,7 +127,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--device",
         default="auto",
-        help="推理设备：auto / cuda / rocm / directml / cpu",
+        help="推理设备：auto / cuda / rocm / directml / mps / cpu",
     )
     p.add_argument("--speaker", default="", help="目标说话人，留空取配置首个")
     p.add_argument("--f0", default="rmvpe", help="F0 预测器")
@@ -455,6 +519,11 @@ def main() -> int:
         print(f"SVC_ERR 依赖导入失败: {exc}")
         traceback.print_exc()
         return 3
+
+    # macOS/MPS：语音编码器分流。上游 get_speech_encoder() 同时提供 fairseq 版
+    # （vec768l12 等）与 ONNX 版（*-onnx）编码器；ONNX 版在 mps 下默认落回 CPU
+    # 执行提供器，这里补上 CoreML，并在 fairseq 缺失时给出可执行的修复建议。
+    _log_speech_encoder(args.main_config, resolved_device)
 
     # Keep v0.0.21's native CUDA/CPU auto-selection exactly unchanged. Only
     # DirectML needs an explicit privateuseone device object; ROCm also follows

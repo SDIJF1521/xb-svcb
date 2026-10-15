@@ -587,7 +587,10 @@ def main() -> int:
                 f"{recommended_steps} 步，已自动提升到 {infer_steps} 步以保证质量",
                 flush=True,
             )
-        _patch_torch_load(resolved_device.backend in {"cpu", "directml"})
+        # Apple MPS index maps CUDA-saved checkpoints onto a machine without
+        # CUDA, so their storages must be restored on CPU like the cpu/directml
+        # paths; the model is moved to the selected device afterwards.
+        _patch_torch_load(resolved_device.backend in {"cpu", "directml", "mps"})
         sys.path.insert(0, str(selected_repo))
         os.chdir(repo)
         if resolved_device.backend == "directml":

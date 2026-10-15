@@ -42,6 +42,23 @@ def _subtract_audio(source: Path, removed: Path, destination: Path) -> None:
     save_audio(str(destination), lead, int(source_rate), "wav", {"wav_bit_depth": "FLOAT"})
 
 
+def _mlx_available() -> bool:
+    """Apple MLX is PyMSS' preferred Apple backend (no torch.device equivalent)."""
+    try:
+        import mlx.core  # type: ignore[import-not-found]  # noqa: F401
+    except Exception:  # noqa: BLE001 - optional accelerator
+        return False
+    return True
+
+
+def _mps_available(torch: Any) -> bool:
+    try:
+        mps = getattr(getattr(torch, "backends", None), "mps", None)
+        return bool(getattr(mps, "is_available", lambda: False)())
+    except Exception:  # noqa: BLE001 - optional accelerator
+        return False
+
+
 def _resolve_device(requested: str) -> tuple[str, str]:
     """Resolve devices inside the PyMSS environment, never the app process."""
     requested = str(requested or "auto").strip().lower()
@@ -53,7 +70,15 @@ def _resolve_device(requested: str) -> tuple[str, str]:
     if requested in {"", "auto", "gpu"}:
         if bool(torch.cuda.is_available()):
             return "cuda", "rocm" if getattr(torch.version, "hip", None) else "cuda"
+        if _mlx_available() or _mps_available(torch):
+            # 上游 auto 在 Apple Silicon 上优先 MLX、失败再回退 Torch MPS，
+            # 因此把 auto 原样交给 PyMSS，只用探测结果做日志标注。
+            return "auto", "mlx" if _mlx_available() else "mps"
         return "cpu", "cpu"
+    if requested == "mps":
+        if not _mps_available(torch):
+            raise RuntimeError("已选择 Apple MPS，但 PyMSS 环境的 Torch 没有可用的 MPS 设备")
+        return "mps", "mps"
     if requested in {"cuda", "rocm"}:
         if not bool(torch.cuda.is_available()):
             raise RuntimeError(f"已选择 {requested.upper()}，但 PyMSS 环境中对应 GPU 不可用；AMD 需要 ROCm Torch")
@@ -118,6 +143,23 @@ def main() -> int:
         save_as_folder=False,
         inference_params={"normalize": False},
     )
+    # PyMSS 把「mlx」实现为 MPS 设备上的 MLX 模型后端（inference_params 里
+    # mps_model_backend=mlx_full），所以 backend 与 torch device 要分别记录，
+    # 否则日志会出现「选了 mlx 但显示 mps」的歧义；显式指定设备时也要能对账。
+    torch_device = str(getattr(separator, "device", "") or "")
+    expected = {
+        "mps": "mps",
+        "mlx": "mps",
+        "cuda": "cuda",
+        "rocm": "cuda",
+        "cpu": "cpu",
+    }.get(str(args.device or "auto").strip().lower())
+    actual_type = torch_device.split(":")[0].strip().lower()
+    if expected and actual_type and actual_type != expected:
+        raise RuntimeError(
+            f"已选择 {str(args.device).upper()}，但 PyMSS 实际使用 {torch_device}"
+        )
+    print(f"PYMSS_DEVICE {device_backend} torch={torch_device or 'unknown'}", flush=True)
     try:
         separator.process_folder(str(source))
     finally:
@@ -126,7 +168,13 @@ def main() -> int:
             close()
 
     vocal = _find_stem(raw_dir, "vocal")
-    instrumental = _find_stem(raw_dir, "instrumental") or _find_stem(raw_dir, "other")
+    # 上游把第二轨命名为 "instrument"（instruments: ['vocals', 'instrument']），
+    # 早前只匹配 "instrumental" 会漏掉伴奏轨；"instrument" 同时覆盖两种写法。
+    instrumental = (
+        _find_stem(raw_dir, "instrument")
+        or _find_stem(raw_dir, "instrumental")
+        or _find_stem(raw_dir, "other")
+    )
     if vocal is None:
         # Catalog models may use target_stem names; preserve a useful fallback for a
         # two-stem output while refusing arbitrary non-audio files.
@@ -156,6 +204,7 @@ def main() -> int:
                 "instrumental": str(instrumental_dest) if instrumental_dest else None,
                 "removed_harmony": str(removed_harmony) if removed_harmony else None,
                 "device": device_backend,
+                "torch_device": torch_device or None,
             },
             ensure_ascii=False,
         ),

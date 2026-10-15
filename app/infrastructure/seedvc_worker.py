@@ -32,6 +32,7 @@ try:
         patch_directml_rmvpe_cpu,
         patch_directml_seedvc_f0_coarse,
         resolve_torch_device,
+        supports_fp16,
     )
 except ImportError:  # package import used by tests/application tooling
     from infrastructure.inference_naturalizer import (
@@ -43,6 +44,7 @@ except ImportError:  # package import used by tests/application tooling
         patch_directml_rmvpe_cpu,
         patch_directml_seedvc_f0_coarse,
         resolve_torch_device,
+        supports_fp16,
     )
 from typing import Any, Callable
 
@@ -458,7 +460,7 @@ def main() -> int:
     parser.add_argument(
         "--device",
         default="auto",
-        help="auto / cuda / rocm / directml / cpu",
+        help="auto / cuda / rocm / directml / mps / cpu",
     )
     parser.add_argument("--pitch", type=int, default=0, help="半音变调")
     parser.add_argument("--diffusion-steps", type=int, default=30)
@@ -527,10 +529,10 @@ def main() -> int:
             import torch
 
             resolved_device = resolve_torch_device(args.device, torch)
-            fp16 = fp16 and resolved_device.backend not in {"cpu", "directml"}
+            # MPS/CPU/DirectML have no usable fp16 path for this model stack.
+            fp16 = fp16 and supports_fp16(resolved_device.backend)
             if resolved_device.backend == "directml":
                 patch_directml_no_half(torch)
-                fp16 = False
         except Exception as exc:  # noqa: BLE001
             print(f"SEEDVC_ERR 设备初始化失败: {exc}", flush=True)
             return 3

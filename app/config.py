@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 APP_NAME = "XB-SVCB"
@@ -207,6 +208,39 @@ def _venv_python(venv_dir: Path) -> Path:
     return win if os.name == "nt" else nix
 
 
+def _windows_absolute(text: str) -> bool:
+    return len(text) > 2 and text[1] == ":" and text[0].isalpha() and text[2] in "\\/"
+
+
+def data_dir_rejection_reason(raw: object) -> str | None:
+    """解释为什么 ``raw`` 不能作为当前平台的数据目录；可用时返回 ``None``。
+
+    旧版 Windows 安装会把 ``D:\\XB-SVCB\\.xb_svcb`` 这样的路径写进
+    ``data_home.json``。在 POSIX 上它不是绝对路径，照单全收就会在应用旁边凭空
+    造出一个名字为 ``D:\\XB-SVCB\\.xb_svcb`` 的目录。这里作为**唯一闸门**统一
+    拒绝这类跨平台路径，供指针文件、数据目录对话框与 HTTP API 共用。
+    """
+    text = str(raw or "").strip()
+    if not text or "\x00" in text:
+        return "数据目录为空或包含非法字符。"
+    if os.name != "nt" and _windows_absolute(text):
+        return (
+            f"数据目录 {text} 是 Windows 绝对路径，当前系统不是 Windows；"
+            "已忽略该路径，请改用本机真实目录。"
+        )
+    return None
+
+
+def usable_data_dir(raw: object) -> Path | None:
+    """Interpret a ``data_dir`` recorded in ``data_home.json``; ``None`` if unusable."""
+    if data_dir_rejection_reason(raw) is not None:
+        return None
+    try:
+        return Path(str(raw).strip()).expanduser()
+    except (OSError, ValueError):
+        return None
+
+
 def _external_install_roots() -> list[Path]:
     """Find an adjacent installed runtime when the app is run from a source checkout."""
     roots = [ROOT_DIR]
@@ -217,8 +251,9 @@ def _external_install_roots() -> list[Path]:
         try:
             payload = json.loads(marker.read_text(encoding="utf-8"))
             data_dir = payload.get("data_dir") if isinstance(payload, dict) else None
-            if data_dir:
-                roots.append(Path(str(data_dir)).expanduser().parent)
+            parsed = usable_data_dir(data_dir)
+            if parsed is not None:
+                roots.append(parsed.parent)
         except (OSError, json.JSONDecodeError, TypeError):
             continue
     unique: list[Path] = []
@@ -756,10 +791,11 @@ def _read_data_home_file(path: Path) -> tuple[Path, dict[str, str], float] | Non
     except (OSError, json.JSONDecodeError):
         return None
     raw = data.get("data_dir") if isinstance(data, dict) else None
-    if not raw:
+    target = usable_data_dir(raw)
+    if target is None:
         return None
     try:
-        target = Path(str(raw)).expanduser().resolve()
+        target = target.resolve()
         mtime = path.stat().st_mtime
     except OSError:
         return None
@@ -997,6 +1033,13 @@ def _apply_data_dir(data_dir: Path) -> None:
     global DATA_DIR, MODELS_DIR, WORKS_DIR, TEMP_DIR, MUSIC_DIR, WEBVIEW_DIR
     global MODELS_DB, WORKS_DB, SETTINGS_DB, MODELHUB_DIR, EDITOR_DIR
     global EDITOR_CACHE_DIR, EDITOR_PROJECTS_DB, THEME_MEDIA_DIR, API_UPLOADS_DIR, PLUGINS_DIR, PLUGIN_DATA_DIR
+
+    rejection = data_dir_rejection_reason(data_dir)
+    if rejection is not None:
+        # 这里是所有数据目录派生路径的咽喉点：不拦的话，随后的 mkdir 会在当前
+        # 工作目录里造出 ``D:\XB-SVCB\.xb_svcb`` 这类脏目录并写入整套骨架。
+        warnings.warn(f"已忽略无效数据目录：{rejection}", RuntimeWarning, stacklevel=2)
+        return
 
     DATA_DIR = data_dir.expanduser().resolve()
     MODELS_DIR = DATA_DIR / "models"

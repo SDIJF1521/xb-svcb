@@ -567,7 +567,13 @@ JOB_CREATE_API_DOC = _api_operation_description(
         ("segments", "array", "multi 必填", "[]", "时间区间和 model_ids；多个 ID 表示合唱"),
         ("params.pitch", "integer", "否", "0", "四种框架；半音偏移，范围 -12~12"),
         ("params.f0_method", "string", "否", "rmvpe", "SVC/RVC/DDSP；基频算法，SeedVC 忽略"),
-        ("params.device", "string", "否", "auto", "auto、cuda、rocm、directml 或 cpu"),
+        (
+            "params.device",
+            "string",
+            "否",
+            "auto",
+            "auto、cuda、rocm、directml、mps、mlx 或 cpu",
+        ),
         ("params.uvr_model", "string", "否", "软件默认值", "四种框架；UVR 分离模型文件名"),
         ("params.diffusion_ratio", "number", "否", "0.5", "SVC/SeedVC；范围 0~1，越大质量越高、速度越慢"),
         ("params.speaker", "string", "否", '""', "SVC/DDSP；目标说话人名称或 ID"),
@@ -748,11 +754,13 @@ class InferenceParamsRequest(BaseModel):
         ),
         examples=["rmvpe"],
     )
-    device: Literal["auto", "cuda", "rocm", "directml", "cpu"] = Field(
+    device: Literal["auto", "cuda", "rocm", "directml", "mps", "mlx", "cpu"] = Field(
         default="auto",
         description=(
             "UVR 分离与歌声模型使用的推理设备。auto 按当前隔离环境自动选择；"
-            "cuda 为 NVIDIA，rocm 为 AMD ROCm，directml 为 Windows AMD，cpu 为处理器。"
+            "cuda 为 NVIDIA，rocm 为 AMD ROCm，directml 为 Windows AMD，"
+            "mps 为 macOS Apple GPU，mlx 为 macOS Apple MLX（仅 PyMSS 分离支持），"
+            "cpu 为处理器。"
             "显式选择不可用后端时任务会失败，不会静默回退。DDSP-SVC 在 Windows AMD "
             "环境会使用 CPU 稳定路径。"
         ),
@@ -1199,9 +1207,12 @@ class EditorSeparationRequest(BaseModel):
         description="PyMSS 去混响/人声净化模型名",
     )
     mute_source: bool = Field(default=True, description="分离成功后是否静音原片段")
-    device: Literal["auto", "cuda", "rocm", "directml", "cpu"] = Field(
+    device: Literal["auto", "cuda", "rocm", "directml", "mps", "mlx", "cpu"] = Field(
         default="auto",
-        description="分离推理设备；PyMSS 支持 NVIDIA CUDA、AMD ROCm 和 CPU，不支持 DirectML；auto 根据实际环境选择",
+        description=(
+            "分离推理设备；PyMSS 支持 NVIDIA CUDA、AMD ROCm、Apple MLX/MPS 和 CPU，"
+            "不支持 DirectML；auto 根据实际环境选择"
+        ),
     )
 
 
@@ -1421,8 +1432,11 @@ class ToolStatusResponse(BaseModel):
 
 
 class InferenceDeviceItemResponse(BaseModel):
-    backend: Literal["cuda", "rocm", "directml", "cpu"] = Field(
-        description="设备后端：NVIDIA CUDA、AMD ROCm、Windows AMD DirectML 或 CPU"
+    backend: Literal["cuda", "rocm", "directml", "mps", "mlx", "cpu"] = Field(
+        description=(
+            "设备后端：NVIDIA CUDA、AMD ROCm、Windows AMD DirectML、"
+            "Apple MPS、Apple MLX 或 CPU"
+        )
     )
     name: str = Field(description="显卡或处理器设备名称")
     index: int = Field(description="设备在当前推理环境中的索引")
@@ -1431,11 +1445,11 @@ class InferenceDeviceItemResponse(BaseModel):
 class InferenceDeviceRuntimeResponse(BaseModel):
     ok: bool = Field(description="该框架隔离环境是否探测成功")
     torch_version: str = Field(description="该框架隔离环境中的 PyTorch 版本")
-    backends: list[Literal["cuda", "rocm", "directml", "cpu"]] = Field(
+    backends: list[Literal["cuda", "rocm", "directml", "mps", "mlx", "cpu"]] = Field(
         description="该框架当前可使用的推理后端"
     )
     devices: list[InferenceDeviceItemResponse] = Field(description="已探测到的加速设备")
-    preferred: Literal["cuda", "rocm", "directml", "cpu"] = Field(
+    preferred: Literal["cuda", "rocm", "directml", "mps", "mlx", "cpu"] = Field(
         description="auto 模式为该框架优先选择的后端"
     )
     error: str | None = Field(default=None, description="环境探测失败原因；成功时为 null")
@@ -1443,11 +1457,11 @@ class InferenceDeviceRuntimeResponse(BaseModel):
 
 
 class InferenceDeviceOptionResponse(BaseModel):
-    value: Literal["auto", "cuda", "rocm", "directml", "cpu"] = Field(
+    value: Literal["auto", "cuda", "rocm", "directml", "mps", "mlx", "cpu"] = Field(
         description="提交 params.device 时使用的值"
     )
     label: str = Field(description="设备选项显示名称")
-    backend: Literal["auto", "cuda", "rocm", "directml", "cpu"] = Field(
+    backend: Literal["auto", "cuda", "rocm", "directml", "mps", "mlx", "cpu"] = Field(
         description="该选项对应的推理后端"
     )
     name: str | None = Field(default=None, description="探测到的设备名称；可能为空")
@@ -1455,7 +1469,7 @@ class InferenceDeviceOptionResponse(BaseModel):
 
 
 class InferenceDeviceCapabilitiesResponse(BaseModel):
-    preferred: Literal["cuda", "rocm", "directml", "cpu"] = Field(
+    preferred: Literal["cuda", "rocm", "directml", "mps", "mlx", "cpu"] = Field(
         description="所有框架综合后的首选 GPU 后端；无可用 GPU 时为 cpu"
     )
     options: list[InferenceDeviceOptionResponse] = Field(
@@ -1471,7 +1485,7 @@ class SystemResponse(BaseModel):
     tools: list[ToolStatusResponse] = Field(description="各集成工具及模型引擎状态")
     inference_devices: InferenceDeviceCapabilitiesResponse | None = Field(
         default=None,
-        description="各隔离环境可用的 CUDA、ROCm、DirectML 和 CPU 推理能力",
+        description="各隔离环境可用的 CUDA、ROCm、DirectML、Apple MPS/MLX 和 CPU 推理能力",
     )
 
 

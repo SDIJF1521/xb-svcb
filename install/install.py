@@ -1674,6 +1674,12 @@ def copy_bundled(rel: str, dest: Path) -> bool:
 
     if not src.exists():
         return False
+    if src.is_file() and _is_lfs_pointer(src):
+        # A source checkout keeps weights in git-lfs. Deploying the ~130 byte
+        # stub would look like a successful install while every engine fails at
+        # load time, so refuse it and let the caller download the real file.
+        print(c("y", f"    自带资源仍是 git-lfs 指针，跳过并改为联网获取：{rel}"))
+        return False
     if src.is_dir():
         # 目录：始终合并复制（dirs_exist_ok）。不能因为目标目录已存在就跳过——
         # so-vits-svc 仓库克隆后 pretrain/nsf_hifigan 已存在但只含占位文件，
@@ -1682,10 +1688,18 @@ def copy_bundled(rel: str, dest: Path) -> bool:
         print(f"    自带模型，本地复制目录 {src.name}/ …")
         # Use the same atomic file deployment below. copytree overwrites files
         # in place, which would also modify the source of an existing hardlink.
-        for child in src.iterdir():
+        # 只要有一个子项没有真正部署（例如它仍是 git-lfs 指针），整个目录就报告
+        # False，让调用方回退到联网下载；否则会留下"目录存在但权重是占位文件"的
+        # 半成品安装，这正是 nsf_hifigan 之前静默为空的原因。
+        children_ok = [
             copy_bundled(str(Path(rel) / child.name), dest / child.name)
-        print(c("g", f"    复制完成：{dest.name}/"))
-        return True
+            for child in src.iterdir()
+        ]
+        complete = all(children_ok) and bool(children_ok)
+        print(
+            c("g" if complete else "y", f"    {'复制完成' if complete else '部分子项不可用'}：{dest.name}/")
+        )
+        return complete
     # 文件：大小相同时先保留；只有内容也一致的大权重才允许去重。
     # 这能自愈旧安装器下载到的残缺底模（如 16.5MB 的 ContentVec 应为 1268MB）。
     if _same_size_file(src, dest) and _is_readable_file(dest):
@@ -1721,6 +1735,26 @@ def _is_large_model_file(path: Path) -> bool:
                 and path.is_file() and path.stat().st_size >= 32 * 1024 * 1024)
     except OSError:
         return False
+
+
+LFS_POINTER_MARKER = b"version https://git-lfs.github.com/spec/v1"
+_LFS_POINTER_MAX_BYTES = 4096
+
+
+def _is_lfs_pointer(path: Path) -> bool:
+    """识别 git-lfs 指针文件（约 130 字节、内容为 LFS 规范头）。
+
+    这类文件会被误当成模型权重，必须在部署前拦截；它们的体积远小于任何
+    真实权重，因此只在很小的文件里做内容判断，避免读取大文件。
+    """
+    try:
+        if not path.is_file() or path.stat().st_size > _LFS_POINTER_MAX_BYTES:
+            return False
+        with path.open("rb") as handle:
+            head = handle.read(_LFS_POINTER_MAX_BYTES)
+    except OSError:
+        return False
+    return LFS_POINTER_MARKER in head
 
 
 def _file_sha256(path: Path) -> str:
@@ -3326,6 +3360,61 @@ def step_ddsp(uv: str, gpu_stack: str) -> None:
     _install_ddsp_legacy_runtime(uv, gpu_stack)
 
 
+FCPE_MODEL_URLS = (
+    "https://huggingface.co/datasets/ylzz1997/rmvpe_pretrain_model/resolve/main/fcpe.pt",
+    "https://hf-mirror.com/datasets/ylzz1997/rmvpe_pretrain_model/resolve/main/fcpe.pt",
+)
+FCPE_MIN_BYTES = 20_000_000
+
+
+def fetch_fcpe_model() -> bool:
+    """联网获取 FCPE 高音域自适应权重（仅在非严格模式下调用的兜底路径）。
+
+    权重缺失时应用会把高音域自适应回退到 CREPE（见 conversion_service），因此
+    这里失败只降级、不抛错。
+    """
+    target = PRETRAIN_DIR / "fcpe.pt"
+    try:
+        if target.is_file() and target.stat().st_size >= FCPE_MIN_BYTES:
+            print(c("g", f"    已存在，跳过：{target.name}"))
+            return True
+        download(list(FCPE_MODEL_URLS), target)
+        ready = target.is_file() and target.stat().st_size >= FCPE_MIN_BYTES
+    except Exception as exc:  # noqa: BLE001 - 可选功能，失败仅降级
+        print(c("y", f"    FCPE 下载失败（{exc}）；高音域自适应将回退 CREPE"))
+        return False
+    if ready:
+        print(c("g", "    FCPE 高音域自适应模型就绪"))
+    else:
+        print(c("y", "    FCPE 下载结果异常；高音域自适应将回退 CREPE"))
+    return ready
+
+
+DEEPFILTER_MODEL_URLS = (
+    "https://github.com/Rikorose/DeepFilterNet/raw/main/models/DeepFilterNet3.zip",
+    "https://ghfast.top/https://github.com/Rikorose/DeepFilterNet/raw/main/models/DeepFilterNet3.zip",
+)
+
+
+def _fetch_deepfilter_bundle(model_dir: Path) -> None:
+    """拉取官方 DeepFilterNet3 权重（自带副本缺失或是 git-lfs 指针时使用）。
+
+    官方 zip 解包后形如 ``DeepFilterNet3/config.ini`` 与
+    ``DeepFilterNet3/checkpoints/model_120.ckpt.best``，因此解到 ``model_dir`` 的
+    父目录即可得到与自带副本一致的结构。
+    """
+    cache_dir = model_dir.parent
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    archive = cache_dir / "DeepFilterNet3.zip"
+    archive.unlink(missing_ok=True)  # download() 对已存在文件会直接跳过
+    print(c("y", "    自带 DeepFilterNet3 权重不可用，改为联网获取官方发布包 …"))
+    download(list(DEEPFILTER_MODEL_URLS), archive)
+    try:
+        extract_zip(archive, cache_dir)
+    finally:
+        archive.unlink(missing_ok=True)
+
+
 def _prepare_vocal_deepfilter_model(py: str) -> Path:
     """Deploy and validate the bundled model without consulting the user cache."""
     model_dir = VOCAL_MODELS_DIR / "DeepFilterNet3"
@@ -3333,7 +3422,9 @@ def _prepare_vocal_deepfilter_model(py: str) -> Path:
         "vocal-enhancement/DeepFilterNet/DeepFilterNet/Cache/DeepFilterNet3"
     )
     if not copy_bundled(bundled_rel, model_dir):
-        raise RuntimeError("安装包缺少 DeepFilterNet3 自带模型")
+        # copy_bundled 明确约定「返回 False 交由调用方回退联网下载」：源码签出里
+        # 自带权重是 git-lfs 指针（会被拒绝），安装包也可能缺件。
+        _fetch_deepfilter_bundle(model_dir)
 
     config_file = model_dir / "config.ini"
     checkpoint = model_dir / "checkpoints" / "model_120.ckpt.best"
@@ -3493,7 +3584,12 @@ def step_hub(uv: str, gpu_stack: str) -> None:
     print(c("g", "模型上传组件就绪"))
 
 
-def step_models(uv: str) -> None:
+def step_models(uv: str, *, require_fcpe: bool = True) -> None:
+    """部署底模与 UVR 模型。
+
+    ``require_fcpe=False`` 供源码（git-lfs 指针）环境使用：FCPE 只影响高音域
+    自适应，缺失时会由 so-vits 侧回退 CREPE，不应阻断 macOS 搭建流程。
+    """
     hr("12/12 底模 + UVR 模型（自带优先，缺失才联网下载）")
     PRETRAIN_DIR.mkdir(parents=True, exist_ok=True)
     if ASSETS_MODELS_DIR.exists():
@@ -3543,7 +3639,13 @@ def step_models(uv: str) -> None:
     # 3b) FCPE：高音域素材自动切换，发布安装包必须离线携带。
     print(c("b", "  · FCPE（高音域自适应）"))
     if not copy_bundled("pretrain/fcpe.pt", PRETRAIN_DIR / "fcpe.pt"):
-        raise RuntimeError("安装包缺少高音域 FCPE 模型：assets/models/pretrain/fcpe.pt")
+        message = "安装包缺少高音域 FCPE 模型：assets/models/pretrain/fcpe.pt"
+        if require_fcpe:
+            raise RuntimeError(message)
+        # 源码签出里自带权重是 git-lfs 指针：非严格模式改为联网获取官方权重，
+        # 拿不到也不算失败（应用会自动回退 CREPE）。
+        print(c("y", f"    {message}；尝试联网获取"))
+        fetch_fcpe_model()
 
     # 4) UVR 分离模型：自带优先，缺失再用 audio-separator 联网下载
     print(c("b", "  · UVR 分离模型（5_HP-Karaoke / DeEcho-DeReverb）"))
@@ -3660,6 +3762,17 @@ def main() -> int:
     p.add_argument("--preflight-only", action="store_true",
                    help="仅解析共享依赖并生成约束，不安装包/模型或更新路由；可用 UV_OFFLINE=1 禁止联网")
     p.add_argument(
+        "--mps",
+        action="store_true",
+        help="安装 Apple Silicon (MPS) 推理环境；仅 macOS 可用（等价于 macOS 专用配方入口）",
+    )
+    p.add_argument(
+        "--svc-encoder",
+        choices=["onnx", "fairseq"],
+        default="onnx",
+        help="--mps 下 So-VITS-SVC 语音编码器：onnx（默认，无需本地编译）或 fairseq（从源码编译）",
+    )
+    p.add_argument(
         "--only",
         choices=ORDER,
         nargs="+",
@@ -3683,6 +3796,32 @@ def main() -> int:
     except (OSError, ValueError, KeyError) as exc:
         print(c("r", str(exc)))
         return 1
+
+    if args.mps:
+        # macOS 使用完全独立的配方（PyPI 自带 MPS 的 wheel），不复用 Windows
+        # 平台的锁文件与共享布局，因此在这里直接移交。
+        if not sys.platform.startswith("darwin"):
+            print(c("r", "--mps 仅支持 macOS（Apple Silicon）；"
+                       "Windows 请使用 --cu126/--cu128/--rocm10/--directml/--cpu"))
+            return 2
+        if (args.cpu or args.gpu or args.rocm10 or args.directml or args.cu126
+                or args.cu128 or args.no_cu128):
+            print(c("r", "--mps 不能与 CPU/CUDA/ROCm/DirectML 栈参数同时使用"))
+            return 2
+        if args.consolidated or args.core_compat_wheel or args.core_profile or args.preflight_only:
+            print(c("r", "--mps 不使用共享运行时/预检参数，请去掉 --consolidated/--core-*/--preflight-only"))
+            return 2
+        macos_spec = importlib.util.spec_from_file_location(
+            "xb_install_macos", Path(__file__).with_name("install_macos.py")
+        )
+        macos_module = importlib.util.module_from_spec(macos_spec)
+        sys.modules[macos_spec.name] = macos_module
+        macos_spec.loader.exec_module(macos_module)
+        return macos_module.run_macos_install(
+            root=Path(args.root).expanduser().resolve() if args.root else None,
+            selected=list(selected),
+            encoder=args.svc_encoder,
+        )
 
     hr("XB-SVCB 安装器")
     print(f"安装根目录: {ROOT}")

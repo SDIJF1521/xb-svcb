@@ -22,6 +22,8 @@ const backendLabels: Record<InferenceDeviceBackend, string> = {
   cuda: 'NVIDIA CUDA',
   rocm: 'AMD ROCm',
   directml: 'AMD DirectML',
+  mps: 'Apple MPS',
+  mlx: 'Apple MLX',
   cpu: 'CPU',
 }
 

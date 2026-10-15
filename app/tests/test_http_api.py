@@ -408,7 +408,7 @@ class HttpApiContractTests(unittest.TestCase):
             self.assertIn("default", field, name)
         self.assertEqual(
             inference["device"]["enum"],
-            ["auto", "cuda", "rocm", "directml", "cpu"],
+            ["auto", "cuda", "rocm", "directml", "mps", "mlx", "cpu"],
         )
         self.assertEqual(inference["pitch"]["minimum"], -12)
         self.assertEqual(inference["pitch"]["maximum"], 12)

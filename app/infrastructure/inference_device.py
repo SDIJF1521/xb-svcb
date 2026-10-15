@@ -324,6 +324,26 @@ def patch_directml_audio_ops(torch: Any) -> None:
     torch._xb_directml_audio_patch = True
 
 
+def _env_flag(name: str) -> bool:
+    """Read a boolean override such as ``XB_FORCE_CPU=1``."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Backends that must stay in fp32. PyTorch MPS has no fp16 batch-norm/RMSNorm
+# coverage (and no float64 at all), and DirectML rejects half precision in the
+# audio operators; CPU is kept here so every caller shares one rule.
+_FP32_BACKENDS = frozenset({"cpu", "mps", "directml"})
+
+
+def supports_fp16(backend: str) -> bool:
+    """Return whether a backend may run the fp16 fast path.
+
+    Workers previously compared device strings by hand and kept missing MPS,
+    which loaded SeedVC/RVC checkpoints in half precision on Apple silicon.
+    """
+    return str(backend or "cpu").strip().lower() not in _FP32_BACKENDS
+
+
 def normalize_device(value: str) -> str:
     requested = str(value or "auto").strip().lower()
     aliases = {
@@ -333,6 +353,9 @@ def normalize_device(value: str) -> str:
         "dml": "directml",
         "hip": "rocm",
         "cpu:0": "cpu",
+        "mps:0": "mps",
+        "apple": "mps",
+        "metal": "mps",
     }
     requested = aliases.get(requested, requested)
     if requested.startswith("cuda"):
@@ -385,6 +408,10 @@ def _directml_device(torch: Any) -> Optional[ResolvedDevice]:
 
 def _mps_device(torch: Any) -> Optional[ResolvedDevice]:
     """Resolve Apple's PyTorch MPS backend when running a macOS build."""
+    if _env_flag("XB_MPS_DISABLED"):
+        # Escape hatch for a broken Metal runtime or a driver regression:
+        # every resolver call then behaves as if Apple silicon had no GPU.
+        return None
     try:
         backends = getattr(torch, "backends", None)
         mps = getattr(backends, "mps", None)
@@ -410,6 +437,13 @@ def resolve_torch_device(requested: str = "auto", torch_module: Any = None) -> R
     if normalized == "cpu":
         return ResolvedDevice(torch.device("cpu"), "cpu", "CPU")
 
+    if _env_flag("XB_FORCE_CPU"):
+        print(
+            f"XB_WARN XB_FORCE_CPU 已启用，忽略请求的设备 {requested or 'auto'}，改用 CPU",
+            flush=True,
+        )
+        return ResolvedDevice(torch.device("cpu"), "cpu", "CPU")
+
     if normalized in {"cuda", "rocm"}:
         resolved = _cuda_device(torch, requested)
         if resolved is None:
@@ -427,6 +461,8 @@ def resolve_torch_device(requested: str = "auto", torch_module: Any = None) -> R
         return resolved
 
     if normalized == "mps":
+        if _env_flag("XB_MPS_DISABLED"):
+            raise RuntimeError("XB_MPS_DISABLED 已启用，Apple MPS 被显式禁用；请改用 CPU")
         resolved = _mps_device(torch)
         if resolved is None:
             raise RuntimeError("已选择 Apple MPS，但当前 PyTorch 环境没有可用的 MPS 设备")
@@ -827,6 +863,71 @@ def patch_directml_seedvc_f0_coarse(
     length_regulator_module._xb_directml_f0_coarse_patch = True
 
 
+def resolve_onnx_providers(onnxruntime_module: Any, backend: str) -> Optional[list[str]]:
+    """Return the ONNX Runtime providers that match the resolved backend.
+
+    Upstream so-vits-svc ONNX speech encoders only ever request
+    ``['CUDAExecutionProvider', 'CPUExecutionProvider']`` or
+    ``['CPUExecutionProvider']`` (see ``vencoder/ContentVec768L12_Onnx.py``),
+    so on Apple silicon the encoder stayed on CPU even when the rest of the
+    pipeline ran on MPS. CoreML is the ONNX Runtime accelerator that exists on
+    macOS, so prefer it and keep the CPU fallback.
+    """
+    if str(backend or "").strip().lower() not in {"mps", "mlx"}:
+        return None
+    try:
+        available = [str(item) for item in onnxruntime_module.get_available_providers()]
+    except Exception:  # noqa: BLE001 - optional accelerator probe
+        available = []
+    providers: list[str] = []
+    if "CoreMLExecutionProvider" in available:
+        providers.append("CoreMLExecutionProvider")
+    providers.append("CPUExecutionProvider")
+    return providers
+
+
+def patch_onnx_apple_providers(onnxruntime_module: Any, backend: str) -> bool:
+    """Keep ONNX Runtime work on an Apple accelerator while MPS drives the model.
+
+    Idempotent and strictly opt-in: CUDA/ROCm/cpu requests are left untouched,
+    so Windows behaviour cannot change. Returns whether the patch is active.
+    """
+    providers = resolve_onnx_providers(onnxruntime_module, backend)
+    if providers is None:
+        return False
+    if getattr(onnxruntime_module, "_xb_apple_provider_patch", False):
+        return True
+
+    original_session = onnxruntime_module.InferenceSession
+
+    def session_compat(model: Any, *args: Any, **kwargs: Any) -> Any:
+        # Upstream passes ``providers`` as a keyword; a positional list (which
+        # we do not rewrite) would make an extra keyword ambiguous.
+        if len(args) < 2 and "providers" not in kwargs:
+            kwargs["providers"] = list(providers)
+        return original_session(model, *args, **kwargs)
+
+    onnxruntime_module.InferenceSession = session_compat
+    onnxruntime_module._xb_apple_provider_patch = True
+    return True
+
+
+def _mlx_available() -> bool:
+    """Apple MLX is a PyMSS-only backend with no ``torch.device`` equivalent.
+
+    Probing the module is enough: it is installed together with PyMSS on Apple
+    silicon and absent everywhere else, so an ImportError keeps the cost at
+    zero on the Windows stacks.
+    """
+    if sys.platform != "darwin":
+        return False
+    try:
+        import mlx.core  # type: ignore[import-not-found]  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def runtime_probe() -> dict[str, Any]:
     payload: dict[str, Any] = {
         "ok": False,
@@ -841,6 +942,8 @@ def runtime_probe() -> dict[str, Any]:
         payload["torch_version"] = str(torch.__version__)
         cuda = _cuda_device(torch, "cuda:0")
         directml = _directml_device(torch)
+        mps = _mps_device(torch)
+        mlx = _mlx_available()
         devices: list[dict[str, Any]] = []
         backends = ["cpu"]
         if cuda is not None:
@@ -853,11 +956,25 @@ def runtime_probe() -> dict[str, Any]:
             devices.append(
                 {"backend": "directml", "name": directml.name, "index": directml.index}
             )
+        if mps is not None:
+            backends.append("mps")
+            devices.append({"backend": "mps", "name": mps.name, "index": mps.index})
+        if mlx:
+            backends.append("mlx")
+            devices.append({"backend": "mlx", "name": "Apple MLX", "index": 0})
         payload.update(
             ok=True,
             backends=backends,
             devices=devices,
-            preferred=(cuda.backend if cuda is not None else "directml" if directml is not None else "cpu"),
+            preferred=(
+                cuda.backend
+                if cuda is not None
+                else "directml"
+                if directml is not None
+                else "mps"
+                if mps is not None
+                else "cpu"
+            ),
         )
     except Exception as exc:
         payload["error"] = str(exc)
@@ -990,6 +1107,10 @@ def inference_device_capabilities() -> dict[str, Any]:
     pymss_runtime["devices"] = [d for d in pymss_runtime.get("devices", []) if d.get("backend") != "directml"]
     if pymss_runtime.get("preferred") == "directml":
         pymss_runtime["preferred"] = "cpu"
+    # On Apple silicon PyMSS' own auto order is MLX -> Torch MPS -> CPU, so a
+    # probed MLX runtime is the accurate default for that environment.
+    if "mlx" in pymss_runtime.get("backends", []):
+        pymss_runtime["preferred"] = "mlx"
     frameworks["pymss"] = pymss_runtime
 
     # An explicit DirectML selection opts into DDSP's unvalidated path. Keep
@@ -1005,6 +1126,8 @@ def inference_device_capabilities() -> dict[str, Any]:
         "cuda": "NVIDIA GPU (CUDA)",
         "rocm": "AMD GPU (ROCm)",
         "directml": "AMD GPU (DirectML)",
+        "mps": "Apple MPS",
+        "mlx": "Apple MLX",
         "cpu": "CPU",
     }
     options = [
@@ -1015,7 +1138,7 @@ def inference_device_capabilities() -> dict[str, Any]:
             "frameworks": list(environments),
         }
     ]
-    for backend in ("cuda", "rocm", "directml"):
+    for backend in ("cuda", "rocm", "directml", "mps", "mlx"):
         supported = [
             framework
             for framework, runtime in frameworks.items()
@@ -1048,7 +1171,7 @@ def inference_device_capabilities() -> dict[str, Any]:
     preferred = next(
         (
             backend
-            for backend in ("cuda", "rocm", "directml")
+            for backend in ("cuda", "rocm", "directml", "mps", "mlx")
             if any(runtime.get("preferred") == backend for runtime in frameworks.values())
         ),
         "cpu",
@@ -1063,7 +1186,14 @@ def runtime_device_label(runtime: dict[str, Any], environment_name: str) -> str:
         for item in runtime.get("devices", [])
         if item.get("backend") == backend and item.get("name")
     ]
-    labels = {"cuda": "CUDA", "rocm": "ROCm", "directml": "DirectML", "cpu": "CPU"}
+    labels = {
+        "cuda": "CUDA",
+        "rocm": "ROCm",
+        "directml": "DirectML",
+        "mps": "Apple MPS",
+        "mlx": "Apple MLX",
+        "cpu": "CPU",
+    }
     suffix = f" · {names[0]}" if names else ""
     environment = f" ({environment_name})" if environment_name else ""
     return f"{labels.get(backend, backend)}{suffix}{environment}"

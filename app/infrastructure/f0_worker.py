@@ -65,7 +65,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--device",
         default="auto",
-        help="设备：auto / cuda / rocm / directml / cpu",
+        help="设备：auto / cuda / rocm / directml / mps / cpu",
     )
     return p
 

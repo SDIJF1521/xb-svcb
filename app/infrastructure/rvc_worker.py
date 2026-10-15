@@ -60,6 +60,7 @@ try:
         patch_directml_float32,
         patch_directml_rmvpe_cpu,
         resolve_torch_device,
+        supports_fp16,
     )
 except ImportError:  # package import used by tests/application tooling
     from infrastructure.inference_naturalizer import (
@@ -72,6 +73,7 @@ except ImportError:  # package import used by tests/application tooling
         patch_directml_float32,
         patch_directml_rmvpe_cpu,
         resolve_torch_device,
+        supports_fp16,
     )
 
 
@@ -420,9 +422,14 @@ def _should_force_fp32(
     *,
     rocm_fp32: bool = False,
 ) -> bool:
-    """Return whether this RVC backend needs the fp32 compatibility path."""
+    """Return whether this RVC backend needs the fp32 compatibility path.
+
+    CPU, DirectML and Apple MPS cannot run the fp16 fast path (MPS has no fp16
+    batch-norm/RMSNorm coverage and rvc-python itself switches MPS to fp32),
+    so they all share the single ``supports_fp16`` rule.
+    """
     return (
-        backend in {"cpu", "directml"}
+        not supports_fp16(backend)
         or (backend == "cuda" and torch_version >= (2, 6))
         or (backend == "rocm" and rocm_fp32)
     )
@@ -635,6 +642,20 @@ def main() -> int:
             rvc.device = resolved_device.device
             rvc.config.device = resolved_device.device
             rvc.vc.device = resolved_device.device
+        elif resolved_device.backend == "cpu" and str(
+            getattr(rvc.config, "device", "")
+        ) != "cpu":
+            # rvc-python's Config.device_config() overwrites *any* non-CUDA request
+            # with MPS on Apple silicon, which would silently ignore an explicit
+            # CPU selection (and the CPU fallback switch). Restore it here.
+            rvc.config.device = "cpu"
+            rvc.config.instead = "cpu"
+            rvc.device = resolved_device.device
+            rvc.vc.device = resolved_device.device
+            print(
+                "XB: RVC 已按请求固定为 CPU（rvc-python 在 macOS 上会默认改写为 MPS）",
+                flush=True,
+            )
         if resolved_device.backend == "directml":
             x_pad, x_query, x_center, x_max = _apply_rvc_directml_memory_profile(rvc)
             print(

@@ -95,6 +95,122 @@ def test_explicit_mps_never_silently_falls_back_to_cpu() -> None:
         inference_device.resolve_torch_device("mps", _FakeTorch())
 
 
+def test_auto_prefers_mps_when_apple_gpu_is_the_only_accelerator() -> None:
+    resolved = inference_device.resolve_torch_device("auto", _FakeTorch(mps=True))
+
+    assert resolved.backend == "mps"
+    assert resolved.device == "mps"
+    assert resolved.torch_device_type == "mps"
+
+
+def test_mps_disabled_flag_blocks_the_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XB_MPS_DISABLED", "1")
+
+    with pytest.raises(RuntimeError, match="XB_MPS_DISABLED"):
+        inference_device.resolve_torch_device("mps", _FakeTorch(mps=True))
+    # auto must fall through to CPU instead of failing.
+    assert inference_device.resolve_torch_device("auto", _FakeTorch(mps=True)).backend == "cpu"
+
+
+def test_force_cpu_flag_overrides_any_requested_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XB_FORCE_CPU", "1")
+
+    assert inference_device.resolve_torch_device("mps", _FakeTorch(mps=True)).backend == "cpu"
+    assert inference_device.resolve_torch_device("cuda", _FakeTorch(cuda=True)).backend == "cpu"
+
+
+@pytest.mark.parametrize(
+    ("backend", "expected"),
+    [
+        ("cuda", True),
+        ("rocm", True),
+        ("mps", False),
+        ("cpu", False),
+        ("directml", False),
+        ("", False),
+    ],
+)
+def test_supports_fp16_keeps_apple_and_half_hostile_backends_in_fp32(
+    backend: str, expected: bool
+) -> None:
+    assert inference_device.supports_fp16(backend) is expected
+
+
+class _FakeProbeTorch(_FakeTorch):
+    """``runtime_probe`` also reads ``__version__`` and must not raise."""
+
+    __version__ = "2.8.0"
+
+
+def test_runtime_probe_reports_apple_mps() -> None:
+    with patch.dict(sys.modules, {"torch": _FakeProbeTorch(mps=True), "torch_directml": None}):
+        payload = inference_device.runtime_probe()
+
+    assert payload["ok"] is True
+    assert payload["torch_version"] == "2.8.0"
+    assert "mps" in payload["backends"]
+    assert payload["preferred"] == "mps"
+    assert {"backend": "mps", "name": "Apple MPS", "index": 0} in payload["devices"]
+
+
+def test_runtime_probe_keeps_cpu_when_no_accelerator_exists() -> None:
+    with patch.dict(sys.modules, {"torch": _FakeProbeTorch(), "torch_directml": None}):
+        payload = inference_device.runtime_probe()
+
+    assert payload["backends"] == ["cpu"]
+    assert payload["preferred"] == "cpu"
+
+
+def test_onnx_providers_only_route_apple_backends_to_coreml() -> None:
+    onnxruntime = SimpleNamespace(
+        get_available_providers=lambda: [
+            "CoreMLExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+    )
+
+    assert inference_device.resolve_onnx_providers(onnxruntime, "mps") == [
+        "CoreMLExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    # A CPU-only ONNX Runtime keeps its CPU fallback without the Apple provider.
+    cpu_only = SimpleNamespace(get_available_providers=lambda: ["CPUExecutionProvider"])
+    assert inference_device.resolve_onnx_providers(cpu_only, "mps") == ["CPUExecutionProvider"]
+    for backend in ("cuda", "rocm", "directml", "cpu", "auto", ""):
+        assert inference_device.resolve_onnx_providers(onnxruntime, backend) is None
+
+
+def test_patch_onnx_apple_providers_is_idempotent_and_never_touches_cuda() -> None:
+    calls: list[dict] = []
+
+    def session(model, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        calls.append(kwargs)
+        return "session"
+
+    onnxruntime = SimpleNamespace(
+        InferenceSession=session,
+        get_available_providers=lambda: [
+            "CoreMLExecutionProvider",
+            "CPUExecutionProvider",
+        ],
+    )
+
+    assert inference_device.patch_onnx_apple_providers(onnxruntime, "cuda") is False
+    assert inference_device.patch_onnx_apple_providers(onnxruntime, "mps") is True
+    assert inference_device.patch_onnx_apple_providers(onnxruntime, "mps") is True
+
+    onnxruntime.InferenceSession("vec.onnx")
+    assert calls[-1]["providers"] == [
+        "CoreMLExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+
+    onnxruntime.InferenceSession("vec.onnx", providers=["CUDAExecutionProvider"])
+    assert calls[-1]["providers"] == ["CUDAExecutionProvider"]
+
+
 def test_directml_checkpoint_load_maps_storage_to_cpu() -> None:
     calls: list[tuple[tuple, dict]] = []
 

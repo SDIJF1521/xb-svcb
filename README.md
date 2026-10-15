@@ -16,6 +16,7 @@
 [![Stars](https://img.shields.io/github/stars/SDIJF1521/xb-svcb?style=flat&color=yellow)](https://github.com/SDIJF1521/xb-svcb/stargazers)
 
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#)
+[![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20%C2%B7%20MPS-000000?logo=apple&logoColor=white)](docs/macos-mps.md)
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](#)
 [![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
 [![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
@@ -35,6 +36,8 @@
 ## 项目简介
 
 XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它以 Vue 3 作为界面，以 Python 作为业务核心，并将不同 AI 框架放在独立环境和 Worker 进程中运行。
+
+除 Windows 之外，**macOS（Apple Silicon / MPS）** 也支持从源码搭建运行：推理走 PyTorch MPS，PyMSS 可额外使用 MLX，详见 [macOS 安装与启动](docs/macos-mps.md)。
 
 项目目前支持 So-VITS-SVC、RVC、SeedVC 和 DDSP-SVC 四种歌声转换框架，同时提供 UVR / PyMSS 人声分离、AI 歌声增强、高音保护、在线曲库、模型站、实时系统音频变声和 Audio Editor Lite 音频编辑器。
 
@@ -68,7 +71,7 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 
 ### 从源码安装
 
-源码运行需要 Windows、64 位 CPython 3.12.x、Node.js 20.19+ 或 22.12+。在项目根目录明确选择硬件栈：
+源码运行需要 Windows、64 位 CPython 3.12.x、Node.js 20.19+ 或 22.12+。在项目根目录明确选择硬件栈（macOS 请改用 <code>--mps</code> 配方，见 [macOS 安装与启动](docs/macos-mps.md)）：
 
 Python 3.12 依赖迁移、ROCm 10 官方源和模型兼容范围见 [迁移说明](docs/python312-rocm10.md)。AMD 默认使用官方 `whl-next` 源及 `device-all` 套件，已验证 Windows cp312 wheel 与 PyMSS 的依赖解析；安装成功仍须通过 HIP/GPU 运算校验。
 
@@ -94,21 +97,51 @@ CUDA core 的 UVR、SeedVC、DDSP 是原子组，修复时应一起选择。共�
 
 安装器部署大体积只读底模时优先尝试硬链接，跨卷时回退为复制；已有同尺寸权重只有 SHA-256 一致才会去重。硬链接共享内容，训练或修改权重前须另存副本。此机制不负责删除旧环境。
 
+### macOS（Apple Silicon / MPS）
+
+macOS 使用独立配方，推理走 PyTorch MPS（PyMSS 可额外使用 MLX）。前置依赖为 Homebrew <code>python@3.12</code>、Node.js 22.12+/24 与系统 <code>ffmpeg</code>。**以下命令均在项目根目录执行**：
+
+~~~bash
+cd /path/to/xb-svcb                                    # 进入项目根目录
+brew install python@3.12 node ffmpeg uv                # 一次性系统依赖
+
+python3.12 install/install.py --mps                    # 一键安装（app/plugins/web/各引擎/底模）
+python3.12 install/install.py --mps --only app plugins web models
+python3.12 install/install.py --mps --only uvr pymss svc rvc vocal
+~~~
+
+启动（同样在项目根目录）：<code>app/.venv/bin/python app/main.py</code>（生产模式，加载 <code>web/dist</code>）。
+开发模式、退出与进程清理见下文「启动应用」。
+
+隔离环境与 <code>runtime.json</code> 路由、底模供给、设备与精度策略、实测性能、功能差异和排障速查见 [macOS 安装与启动](docs/macos-mps.md)。
+
 ### 启动应用
+
+> ⚠️ 下面的启动命令使用的是**相对项目根目录**的路径，请在**项目根目录**（<code>app/main.py</code> 所在仓库的根目录）执行。
+> 若要在其它目录启动，请使用绝对路径，例如
+> <code>/你的路径/xb-svcb/app/.venv/bin/python /你的路径/xb-svcb/app/main.py</code>。
 
 生产模式会加载已构建的 <code>web/dist</code>：
 
-~~~bat
-run.bat
+macOS：
+
+~~~bash
+cd /path/to/xb-svcb          # 项目根目录
+app/.venv/bin/python app/main.py
 ~~~
 
-也可以直接运行：
+Windows：
 
 ~~~bat
+cd /d D:\path\to\xb-svcb
+run.bat
+:: 等价于
 app\.venv\Scripts\python.exe app\main.py
 ~~~
 
-开发模式需要两个终端。第一个终端启动前端：
+关闭窗口或按 <code>Ctrl+C</code> 即可退出；退出前建议等当前任务结束，避免中断推理。日志、模型记录与作品保存在用户数据目录（默认 <code>.xb_svcb</code>，见[数据目录与配置](#数据目录与配置)）。
+
+开发模式需要两个终端，同样都在项目根目录执行——第一个终端启动前端：
 
 ~~~bat
 cd web
@@ -118,11 +151,15 @@ npm run dev
 
 第二个终端启动 Python 后端：
 
-~~~bat
+~~~bash
+# macOS
+app/.venv/bin/python app/main.py --dev
+
+# Windows
 app\.venv\Scripts\python.exe app\main.py --dev
 ~~~
 
-开发模式默认连接 <code>http://localhost:5173</code>，也可以通过 <code>XB_DEV_URL</code> 指定前端地址。完整环境说明见[源码安装与启动](docs/getting-started.md)。
+开发模式默认连接 <code>http://localhost:5173</code>，也可以通过 <code>XB_DEV_URL</code> 指定前端地址。完整环境说明见[源码安装与启动](docs/getting-started.md)，macOS 见 [macOS 安装与启动](docs/macos-mps.md)。
 
 ## 基本使用流程
 
@@ -300,6 +337,10 @@ set XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple
 set XB_GH_MIRROR=https://ghfast.top
 ~~~
 
+### macOS 上引擎或分离环境搭建失败
+
+macOS 使用 <code>--mps</code> 配方与隔离环境，常见原因包括 Python 版本不是 3.12.x、缺少系统 <code>ffmpeg</code>、编译依赖（fairseq / deepfilterlib）、librosa 版本或 git-lfs 指针未替换。逐条处理与实测报错对照见 [macOS 安装与启动](docs/macos-mps.md)。
+
 ### 推理提示缺少 pkg_resources
 
 SVC 环境可能缺少兼容版本的 setuptools。RTX 50 系 cu128 安装可执行：
@@ -345,6 +386,8 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 
 - [文档总目录](docs/README.md)
 - [源码安装与启动](docs/getting-started.md)
+- [macOS 安装与启动（Apple Silicon / MPS）](docs/macos-mps.md)
+- [MPS 适配改造说明（改了什么 · 为什么）](docs/macos-mps-changes.md)
 - [系统架构](docs/architecture.md)
 - [启动与推理链路](docs/startup-chain.md)
 - [FastAPI 接入](docs/api.md)

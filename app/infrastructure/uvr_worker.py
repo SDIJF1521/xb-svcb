@@ -31,7 +31,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--device",
         default="auto",
-        help="分离设备：auto / cuda / rocm / directml / cpu",
+        help="分离设备：auto / cuda / rocm / directml / mps / cpu",
     )
     return p
 
@@ -85,6 +85,10 @@ def _torch_backend(torch, device: object) -> str:  # noqa: ANN001
         return "directml"
     if value.startswith("cuda"):
         return "rocm" if getattr(torch.version, "hip", None) else "cuda"
+    # audio-separator 在 Apple Silicon 上自行把 torch_device 设为 mps；
+    # 早前这里漏判会把实际跑在 MPS 的分离误报成 cpu（选 mps 时还会误判失败）。
+    if value.startswith("mps"):
+        return "mps"
     return "cpu"
 
 
@@ -183,7 +187,7 @@ def main() -> int:
         return 2
     if requested_device == "dml":
         requested_device = "directml"
-    if requested_device not in {"auto", "cuda", "rocm", "directml", "cpu"}:
+    if requested_device not in {"auto", "cuda", "rocm", "directml", "mps", "cpu"}:
         print(f"UVR_ERR 不支持的分离设备: {requested_device}")
         return 2
 
@@ -213,15 +217,39 @@ def main() -> int:
 
         directml = None
         use_directml = requested_device == "directml"
-        if requested_device == "auto" and not torch.cuda.is_available():
+        if requested_device == "mps":
+            # audio-separator has no --device flag: on Apple silicon it probes
+            # MPS/CoreML itself, so a successful probe here is the whole check.
             try:
                 from inference_device import resolve_torch_device
 
-                directml = resolve_torch_device("directml", torch)
+                resolved_mps = resolve_torch_device("mps", torch)
+            except (ImportError, RuntimeError) as exc:
+                print(f"UVR_ERR 已选择 Apple MPS，但 UVR 环境不可用: {exc}")
+                return 6
+            if resolved_mps.backend != "mps":
+                print("UVR_ERR 已选择 Apple MPS，但 UVR 环境没有可用的 MPS 设备")
+                return 6
+            print(f"UVR_MPS {resolved_mps.name}", flush=True)
+        if requested_device == "auto" and not torch.cuda.is_available():
+            # torch-directml 只存在于 Windows，macOS 上先确认 MPS 是否可用，
+            # 避免把 Apple 机器误判为需要 DirectML 的 AMD 环境。
+            mps_ready = False
+            try:
+                from inference_device import resolve_torch_device
+
+                mps_ready = resolve_torch_device("mps", torch).backend == "mps"
             except (ImportError, RuntimeError):
-                directml = None
-            else:
-                use_directml = True
+                mps_ready = False
+            if not mps_ready:
+                try:
+                    from inference_device import resolve_torch_device
+
+                    directml = resolve_torch_device("directml", torch)
+                except (ImportError, RuntimeError):
+                    directml = None
+                else:
+                    use_directml = True
 
         if use_directml:
             try:

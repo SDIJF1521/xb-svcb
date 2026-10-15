@@ -9,7 +9,11 @@ from typing import Any, Optional
 
 import config
 from domain import InferenceParams
-from infrastructure.inference_device import environment_device_label
+from infrastructure.inference_device import (
+    environment_device_label,
+    normalize_device,
+    supports_fp16,
+)
 from infrastructure.persistent_worker import PersistentInferenceSession
 
 
@@ -40,6 +44,15 @@ class SeedVcEngine:
         """Map 0..1 to a natural-singing quality range of 20..50 steps."""
         value = max(0.0, min(1.0, float(ratio)))
         return round(20 + value * 30)
+
+    @staticmethod
+    def _fp16_flag(device: str) -> str:
+        """Request the fp16 fast path only for backends that support it.
+
+        ``auto`` cannot be resolved before the worker starts, so it stays
+        permissive here; the worker re-checks the resolved backend.
+        """
+        return "True" if supports_fp16(normalize_device(device)) else "False"
 
     @staticmethod
     def _realtime_diffusion_steps(ratio: float) -> int:
@@ -132,7 +145,7 @@ class SeedVcEngine:
             "--diffusion-steps", str(self._realtime_diffusion_steps(params.diffusion_ratio)),
             "--length-adjust", "1.0",
             "--cfg-rate", "0.55",
-            "--fp16", "False" if (params.device or "").lower() == "cpu" else "True",
+            "--fp16", self._fp16_flag(params.device),
         ]
         if low_latency:
             command.append("--low-latency")
@@ -184,7 +197,7 @@ class SeedVcEngine:
             "--cfg-rate",
             "0.55",
             "--fp16",
-            "False" if (params.device or "").lower() == "cpu" else "True",
+            self._fp16_flag(params.device),
         ]
         if ar_checkpoint:
             cmd.extend(["--ar-checkpoint", ar_checkpoint])
