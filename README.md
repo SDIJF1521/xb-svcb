@@ -28,8 +28,9 @@
 
 <sub>用户交流 / 反馈 QQ 群：**1038366109**</sub>
 
+<sub>项目官网：**[https://xb-svcb.cn](https://xb-svcb.cn)**</sub>
+<sub>项目文档：**[https://sdijf1521.github.io/xb-svcb/](https://sdijf1521.github.io/xb-svcb/)**</sub>
 </div>
-
 ---
 
 ## 项目简介
