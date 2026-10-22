@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 import config
 from domain import ModelFile, ModelInfo, ModelType
 from infrastructure import paths
@@ -22,7 +24,32 @@ class ModelService:
 
     # ---- 查询 ----
     def list(self) -> list[dict[str, Any]]:
-        return [self._normalize_item(item, refresh_size=False) for item in self._repo.all()]
+        items = [self._normalize_item(item, refresh_size=False) for item in self._repo.all()]
+        for item in items:
+            item["speakers"] = self._speaker_options(item)
+        return items
+
+    @staticmethod
+    def _speaker_options(item: dict[str, Any]) -> list[str]:
+        framework = item.get("framework")
+        if framework not in {"so-vits-svc", "ddsp-svc"}:
+            return []
+        config_file = item.get("main_config") or {}
+        config_path = config_file.get("path") if isinstance(config_file, dict) else ""
+        if not config_path:
+            return []
+        try:
+            raw = Path(config_path).read_text(encoding="utf-8")
+            if framework == "so-vits-svc":
+                data = json.loads(raw)
+                speakers = data.get("spk") if isinstance(data, dict) else None
+                return [name for name in speakers if name.strip()] if isinstance(speakers, dict) else []
+            data = yaml.safe_load(raw)
+            model = data.get("model") if isinstance(data, dict) else None
+            count = int(model.get("n_spk", 1)) if isinstance(model, dict) else 1
+            return [str(index) for index in range(1, count + 1)] if 1 <= count <= 4096 else []
+        except (OSError, ValueError, TypeError, yaml.YAMLError):
+            return []
 
     def overview(self) -> dict[str, Any]:
         """返回本地模型库的多框架统一概览。"""

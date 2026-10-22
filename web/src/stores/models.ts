@@ -19,6 +19,7 @@ export interface ModelVM {
   hasDiffusion: boolean
   /** RVC 检索特征文件名（无则为 '—'）。 */
   indexFile: string
+  speakers: string[]
   favorite: boolean
   health: 'ok' | 'warn' | 'error' | 'unknown'
   metadata?: Record<string, unknown>
@@ -48,6 +49,7 @@ function toVM(m: ModelDTO): ModelVM {
     diffusionConfig: m.diffusion_config?.name || '—',
     hasDiffusion: !!m.diffusion_model,
     indexFile: m.index_file?.name || '—',
+    speakers: m.speakers || [],
     favorite: !!m.favorite,
     health: m.metadata?.valid === true ? 'ok' : m.metadata?.valid === false ? 'error' : 'unknown',
     metadata: m.metadata,

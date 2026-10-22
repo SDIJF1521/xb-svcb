@@ -19,6 +19,11 @@ from infrastructure.uvr_tool import SeparationResult
 
 
 class PymssTool:
+    # PyMSS keeps a full Torch model in the child process.  Serializing jobs
+    # avoids intermittent GPU OOM/context failures when two cover jobs start
+    # at the same time (the UI can still queue them normally).
+    _separate_lock = threading.RLock()
+
     _FALLBACK_CATALOG = [
         {
             "name": "bs_roformer_voc_hyperacev2.ckpt",
@@ -126,19 +131,24 @@ class PymssTool:
             )
             if result.returncode != 0:
                 return self._fallback_models(purpose)
-            payload = json.loads((result.stdout or "{}"))
+            # Torch/modelscope may print warnings before the JSON payload.  The
+            # previous full-string json.loads turned a harmless warning into an
+            # empty fallback catalog, making valid models look non-inferable.
+            payload = self._last_json_payload(result.stdout)
             if not isinstance(payload, list):
                 return self._fallback_models(purpose)
             filtered: list[dict[str, Any]] = []
             for item in payload:
+                category = str(item.get("category") or "").strip()
+                primary = str(item.get("primary_category") or "").strip()
+                secondary = str(item.get("secondary_category") or "").strip()
+                if (not primary or not secondary) and "/" in category:
+                    primary, secondary = (part.strip() for part in category.split("/", 1))
                 item_purpose = self._purpose_for_categories(
-                    str(item.get("primary_category") or ""),
-                    str(item.get("secondary_category") or ""),
+                    primary,
+                    secondary,
                 )
-                if not item_purpose or (
-                    str(item.get("secondary_category") or "").strip().lower()
-                    == "vr_backing_vocal"
-                ):
+                if not item_purpose or secondary.casefold() == "vr_backing_vocal":
                     continue
                 item["purpose"] = item_purpose
                 item["purpose_label"] = config.PYMSS_PURPOSE_LABELS[item_purpose]
@@ -148,6 +158,17 @@ class PymssTool:
             return filtered
         except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
             return self._fallback_models(purpose)
+
+    @staticmethod
+    def _last_json_payload(output: str | None) -> Any:
+        """Parse the last JSON line emitted by a noisy isolated runtime."""
+        lines = [line.strip() for line in str(output or "").splitlines() if line.strip()]
+        for line in reversed(lines):
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                continue
+        return None
 
     def download_model(self, model: str, out_dir: Path | None = None, purpose: str = "") -> dict[str, Any]:
         """Download one catalog model through PyMSS's ModelScope downloader."""
@@ -423,14 +444,23 @@ class PymssTool:
             model_purpose = config.PYMSS_PURPOSE_DEREVERB
         if model_purpose not in config.PYMSS_ALLOWED_MODEL_CATEGORIES:
             raise RuntimeError("不支持的 PyMSS 模型用途")
-        known = {
-            alias
-            for item in self.list_models(purpose=model_purpose)
-            for alias in (str(item.get("name") or ""), Path(str(item.get("name") or "")).stem)
-            if alias
-        }
-        if not known or model_name not in known:
+        catalog = self.list_models(purpose=model_purpose)
+        model_aliases: dict[str, str] = {}
+        for item in catalog:
+            full = str(item.get("name") or "").strip()
+            if not full:
+                continue
+            model_aliases[full.casefold()] = full
+            model_aliases[Path(full).stem.casefold()] = full
+        requested_model = model_name.casefold()
+        resolved = model_aliases.get(requested_model)
+        if resolved is None:
+            matches = sorted({full for alias, full in model_aliases.items() if alias.startswith(requested_model)})
+            if len(matches) == 1:
+                resolved = matches[0]
+        if not resolved:
             raise RuntimeError("该模型不属于受支持的 PyMSS 人声处理类别")
+        model_name = resolved
         cmd = [
             str(config.PYMSS_PYTHON), str(config.PYMSS_WORKER),
             "--model", model_name,
@@ -440,25 +470,58 @@ class PymssTool:
         ]
         cmd.extend(["--purpose", model_purpose])
         env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+        # ``auto`` is allowed one CPU retry.  This handles transient CUDA/ROCm
+        # kernel and VRAM failures without silently changing an explicit device.
+        attempts = [requested] if requested != "auto" else ["auto", "cpu"]
+        last_stdout = ""
+        last_stderr = ""
+        with self._separate_lock:
+            for attempt_index, attempt_device in enumerate(attempts):
+                command = [*cmd]
+                command[command.index("--device") + 1] = attempt_device
+                try:
+                    proc = subprocess.run(
+                        command,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        env=env,
+                        timeout=3600,
+                        **config.subprocess_no_window(),
+                    )
+                except (OSError, subprocess.SubprocessError) as exc:
+                    last_stderr = str(exc)
+                    if attempt_index + 1 < len(attempts):
+                        continue
+                    raise RuntimeError(f"PyMSS 分离子进程启动失败: {exc}") from exc
+                last_stdout = proc.stdout or ""
+                last_stderr = proc.stderr or ""
+                try:
+                    with (out_dir / "pymss.log").open("a", encoding="utf-8") as f:
+                        f.write("$ " + " ".join(command) + "\n")
+                        f.write(last_stdout + "\n")
+                        if last_stderr:
+                            f.write("----- stderr -----\n" + last_stderr + "\n")
+                except OSError:
+                    pass
+                result = self._read_result(out_dir)
+                if proc.returncode == 0 and result and self._result_looks_valid(result):
+                    return result
+                if attempt_index + 1 < len(attempts):
+                    try:
+                        (out_dir / "pymss_result.json").unlink(missing_ok=True)
+                    except OSError:
+                        pass
+        raise RuntimeError(f"PyMSS 分离失败: {self._error_tail(last_stdout, last_stderr)}")
+
+    @staticmethod
+    def _result_looks_valid(result: SeparationResult) -> bool:
         try:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                env=env, timeout=3600, **config.subprocess_no_window(),
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise RuntimeError(f"PyMSS 分离子进程启动失败: {exc}") from exc
-        try:
-            with (out_dir / "pymss.log").open("a", encoding="utf-8") as f:
-                f.write("$ " + " ".join(cmd) + "\n")
-                f.write((proc.stdout or "") + "\n")
-                if proc.stderr:
-                    f.write("----- stderr -----\n" + proc.stderr + "\n")
+            path = Path(result.vocals)
+            return path.is_file() and path.stat().st_size > 0
         except OSError:
-            pass
-        result = self._read_result(out_dir)
-        if proc.returncode != 0 or not result or not result.vocals.exists():
-            raise RuntimeError(f"PyMSS 分离失败: {self._error_tail(proc.stdout, proc.stderr)}")
-        return result
+            return False
 
     @staticmethod
     def _read_result(out_dir: Path) -> SeparationResult | None:

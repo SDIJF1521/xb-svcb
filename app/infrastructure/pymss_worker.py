@@ -8,11 +8,91 @@ import shutil
 from pathlib import Path
 
 
-def _find_stem(root: Path, stem: str) -> Path | None:
-    matches = [p for p in root.rglob("*") if p.is_file() and stem in p.stem.lower()]
-    if not matches:
+_AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".ogg", ".aiff", ".aif"}
+
+
+def _audio_files(root: Path) -> list[Path]:
+    return sorted(
+        (p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in _AUDIO_SUFFIXES),
+        key=lambda p: (p.stat().st_mtime_ns, str(p).casefold()),
+    )
+
+
+def _audio_stats(path: Path) -> tuple[float, float, int]:
+    """Return (rms, peak, samples) without relying on a particular output codec."""
+    import numpy as np
+
+    from pymss import load_audio
+
+    audio, _ = load_audio(str(path), sr=44100, mono=False)
+    values = np.asarray(audio, dtype=np.float32)
+    if values.ndim == 1:
+        values = values[None, :]
+    if values.ndim != 2 or values.size == 0 or not np.isfinite(values).all():
+        return 0.0, 0.0, 0
+    flat = values.reshape(-1)
+    return (
+        float(np.sqrt(np.mean(np.square(flat), dtype=np.float64))),
+        float(np.max(np.abs(flat))),
+        int(flat.size),
+    )
+
+
+def _name_score(path: Path, purpose: str, preferred_stem: str = "") -> int:
+    """Prefer explicit PyMSS stem names over arbitrary filesystem order."""
+    name = path.stem.casefold().replace("_", " ").replace("-", " ")
+    preferred = str(preferred_stem or "").casefold().replace("_", " ").replace("-", " ").strip()
+    if purpose == "dereverb":
+        positive = ("no reverb", "noreverb", "no echo", "no noise", "dry", "clean", "dereverb", "deecho")
+        negative = ("reverb", "wet", "echo", "noise", "instrument", "accompan")
+    else:
+        positive = ("vocal", "vocals", "voice", "singing", "lead")
+        negative = ("instrument", "accompan", "karaoke", "music", "other", "reverb")
+    preferred_clean = purpose != "dereverb" or any(
+        token in preferred for token in ("no ", "dry", "clean", "vocals", "vocal")
+    )
+    score = (500 if preferred_clean and preferred and preferred in name else 0) + sum(
+        100 for token in positive if token in name
+    )
+    # ``no noise``/``no echo`` contain the removed-stem word, so protect the
+    # clean label before applying the generic penalty.
+    clean_label = any(token in name for token in ("no noise", "no echo", "no reverb"))
+    score -= sum(120 for token in negative if token in name and not (clean_label and token in {"noise", "echo", "reverb"}))
+    return score
+
+
+def _select_stem(
+    root: Path,
+    purpose: str,
+    reference_rms: float = 0.0,
+    preferred_stem: str = "",
+) -> Path | None:
+    """Select a usable stem and reject silent/wrong-purpose outputs.
+
+    PyMSS model versions use different output names.  The old implementation
+    selected whichever filename containing ``vocal`` had the newest mtime,
+    which made ``(Reverb)`` win nondeterministically over ``(No Reverb)``.
+    """
+    candidates: list[tuple[int, float, float, Path]] = []
+    minimum_rms = max(1.0e-6, reference_rms * 1.0e-4)
+    for path in _audio_files(root):
+        try:
+            rms, peak, samples = _audio_stats(path)
+        except Exception:  # noqa: BLE001 - one malformed stem must not hide valid stems
+            continue
+        if samples <= 0 or peak < 1.0e-5 or rms < minimum_rms:
+            continue
+        candidates.append((_name_score(path, purpose, preferred_stem), rms, peak, path))
+    if not candidates:
         return None
-    return max(matches, key=lambda p: p.stat().st_mtime_ns)
+    candidates.sort(key=lambda item: (item[0], item[1], item[2], str(item[3]).casefold()), reverse=True)
+    return candidates[0][3]
+
+
+def _find_stem(root: Path, stem: str) -> Path | None:
+    """Backward-compatible filename lookup used by older integrations."""
+    matches = [p for p in _audio_files(root) if stem.casefold() in p.stem.casefold()]
+    return max(matches, key=lambda p: p.stat().st_mtime_ns) if matches else None
 
 
 def _subtract_audio(source: Path, removed: Path, destination: Path) -> None:
@@ -100,13 +180,26 @@ def main() -> int:
     source = Path(args.input)
     # Keep all stems in a private directory, then normalize the two names consumed by XB-SVCB.
     raw_dir = out_dir / "pymss-output"
+    # A retry or editor re-run can reuse the same work directory.  Never let a
+    # previous model's stems participate in the current result selection.
+    if raw_dir.exists():
+        shutil.rmtree(raw_dir, ignore_errors=True)
     raw_dir.mkdir(parents=True, exist_ok=True)
+    for stale in (out_dir / "pymss_vocals.wav", out_dir / "pymss_instrumental.wav", out_dir / "pymss_result.json"):
+        try:
+            stale.unlink(missing_ok=True)
+        except OSError:
+            pass
     try:
         import torch
 
         device_name, device_backend = _resolve_device(args.device)
     except (ImportError, RuntimeError) as exc:
         raise RuntimeError(f"PyMSS 设备初始化失败: {exc}") from exc
+    try:
+        reference_rms, _, _ = _audio_stats(source)
+    except Exception:
+        reference_rms = 0.0
     separator = MSSeparator.from_model_name(
         args.model,
         model_dir=str(model_dir),
@@ -118,6 +211,10 @@ def main() -> int:
         save_as_folder=False,
         inference_params={"normalize": False},
     )
+    configured_stems = getattr(getattr(separator, "config", None), "training", {})
+    if hasattr(configured_stems, "get"):
+        configured_stems = configured_stems.get("instruments", ())
+    primary_stem = str(configured_stems[0] if configured_stems else "")
     try:
         separator.process_folder(str(source))
     finally:
@@ -125,18 +222,15 @@ def main() -> int:
         if callable(close):
             close()
 
-    vocal = _find_stem(raw_dir, "vocal")
-    instrumental = _find_stem(raw_dir, "instrumental") or _find_stem(raw_dir, "other")
+    vocal = _select_stem(
+        raw_dir,
+        args.purpose,
+        reference_rms,
+        primary_stem,
+    )
+    instrumental = _find_stem(raw_dir, "instrumental") or _find_stem(raw_dir, "accompaniment") or _find_stem(raw_dir, "other")
     if vocal is None:
-        # Catalog models may use target_stem names; preserve a useful fallback for a
-        # two-stem output while refusing arbitrary non-audio files.
-        candidates = [p for p in raw_dir.rglob("*.wav") if p.is_file()]
-        if candidates:
-            vocal = candidates[0]
-            if len(candidates) > 1:
-                instrumental = candidates[1]
-    if vocal is None:
-        raise RuntimeError("PyMSS 未生成 vocals 音轨")
+        raise RuntimeError("PyMSS 未生成有效人声音轨（输出为空或近似静音）")
     vocals_dest = out_dir / "pymss_vocals.wav"
     removed_harmony = None
     if args.purpose == "harmony_removal":

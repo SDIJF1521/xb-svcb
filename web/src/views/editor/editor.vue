@@ -691,7 +691,10 @@
                 <div class="rerun-param-label">
                   <span>目标说话人 / 音色 ID</span>
                 </div>
-                <input v-model="rerunSpeaker" type="text" placeholder="留空使用模型默认说话人" />
+                <select v-model="rerunSpeaker" aria-label="局部重推理说话人">
+                  <option value="">默认（模型首位）</option>
+                  <option v-for="name in rerunSpeakerOptions" :key="name" :value="name">{{ name }}</option>
+                </select>
               </div>
               <div class="rerun-mini-grid">
                 <div v-if="!isSeedVcRerunModel" class="rerun-mini">
@@ -1521,6 +1524,7 @@ const selectedClipEditable = computed(() => {
 })
 const selectedRerunModel = computed(() => models.value.find((m) => m.id === rerunModelId.value) || null)
 const selectedRerunFramework = computed(() => selectedRerunModel.value?.framework || 'so-vits-svc')
+const rerunSpeakerOptions = computed(() => selectedRerunModel.value?.speakers || [])
 const isRvcRerunModel = computed(() => selectedRerunFramework.value === 'rvc')
 const isSeedVcRerunModel = computed(() => selectedRerunFramework.value === 'seed-vc')
 const isDdspRerunModel = computed(() => selectedRerunFramework.value === 'ddsp-svc')
@@ -1601,7 +1605,7 @@ function currentRerunParams(): InferenceParams {
     device: rerunDevice.value,
     auto_high_pitch_guard: rerunHighPitchGuard.value,
     manual_params_enabled: manual,
-    speaker: manual ? rerunSpeaker.value.trim() : '',
+    speaker: manual && rerunSpeakerOptions.value.includes(rerunSpeaker.value) ? rerunSpeaker.value : '',
     high_pitch_guard_rounds: manual && rerunHighPitchGuard.value ? Math.round(rerunHighPitchGuardRounds.value) : 3,
     f0_filter_threshold: manual ? rerunF0FilterThreshold.value : 0.05,
   }
@@ -3999,6 +4003,9 @@ watch(deviceOptions, (options) => {
 })
 watch(rerunF0Methods, () => {
   rerunF0Method.value = normalizeF0Method(selectedRerunFramework.value, rerunF0Method.value)
+})
+watch([rerunModelId, rerunSpeakerOptions], ([id, options]) => {
+  if (id && !options.includes(rerunSpeaker.value)) rerunSpeaker.value = ''
 })
 
 function calcDuration(p: EditorProject) {

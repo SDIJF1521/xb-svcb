@@ -168,6 +168,8 @@ export interface ModelDTO {
   framework?: string
   /** RVC 检索特征文件（.index），可选。 */
   index_file?: ModelFileDTO | null
+  /** 模型配置中可选的说话人名称或 ID。 */
+  speakers?: string[]
   favorite?: boolean
   tags?: string[]
   metadata?: Record<string, unknown>

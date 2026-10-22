@@ -178,6 +178,40 @@ describe('cover model selection during initialization', () => {
   })
 })
 
+describe('speaker selection', () => {
+  it('offers only speakers from the selected model in single and multi modes', async () => {
+    const voiceModels: ModelDTO[] = [
+      { ...models[0]!, id: 'voice', name: 'Voice', type: 'So-VITS', framework: 'so-vits-svc', speakers: ['Alice', 'Bob'] },
+      { ...models[1]!, id: 'ddsp', name: 'DDSP', type: 'DDSP-SVC', framework: 'ddsp-svc', speakers: ['1', '2'] },
+    ]
+    vi.mocked(api.listModels).mockResolvedValue(voiceModels)
+    vi.mocked(api.getDefaultModel).mockResolvedValue('voice')
+    const wrapper = mountPage()
+    await flushPromises()
+    await wrapper.get('[data-guide="manual-switch"] input').setValue(true)
+
+    const single = wrapper.get('select[aria-label="目标说话人 / 音色 ID"]')
+    expect(single.findAll('option').map((option) => option.attributes('value'))).toEqual(['', 'Alice', 'Bob'])
+    await single.setValue('Bob')
+    await modelButton(wrapper, 'DDSP').trigger('click')
+    await flushPromises()
+    const switched = wrapper.get('select[aria-label="目标说话人 / 音色 ID"]')
+    expect(switched.findAll('option').map((option) => option.attributes('value'))).toEqual(['', '1', '2'])
+    expect((switched.element as HTMLSelectElement).value).toBe('')
+
+    await wrapper.get('[data-guide="multi-mode"]').trigger('click')
+    await modelButton(wrapper, 'DDSP').trigger('click')
+    const voice = wrapper.get('select[aria-label="Voice 的说话人"]')
+    const ddsp = wrapper.get('select[aria-label="DDSP 的说话人"]')
+    expect(voice.findAll('option').map((option) => option.attributes('value'))).toEqual(['', 'Alice', 'Bob'])
+    expect(ddsp.findAll('option').map((option) => option.attributes('value'))).toEqual(['', '1', '2'])
+    await voice.setValue('Alice')
+    await ddsp.setValue('2')
+    expect((voice.element as HTMLSelectElement).value).toBe('Alice')
+    expect((ddsp.element as HTMLSelectElement).value).toBe('2')
+  })
+})
+
 describe('realtime model selection during initialization', () => {
   it('preserves a manual selection when audio device loading finishes', async () => {
     const pending = deferred<Awaited<ReturnType<typeof api.listSystemAudioDevices>>>()

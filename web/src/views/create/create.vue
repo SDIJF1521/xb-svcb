@@ -244,7 +244,10 @@
                 <div class="mp-inline">
                   <div v-if="manualParamsEnabled && (frameworkOf(m.id) === 'so-vits-svc' || frameworkOf(m.id) === 'ddsp-svc')" class="mp-mini mp-speaker">
                     <span>说话人</span>
-                    <input v-model="mp(m.id).speaker" type="text" placeholder="默认" />
+                    <select v-model="mp(m.id).speaker" :aria-label="`${m.name} 的说话人`">
+                      <option value="">默认</option>
+                      <option v-for="name in speakerOptionsFor(m.id)" :key="name" :value="name">{{ name }}</option>
+                    </select>
                   </div>
                   <div v-if="frameworkOf(m.id) !== 'seed-vc'" class="mp-mini">
                     <span>F0</span>
@@ -444,8 +447,11 @@
 
           <div v-if="manualParamsEnabled && (selectedFramework === 'so-vits-svc' || selectedFramework === 'ddsp-svc')" class="field">
             <label class="field-block-label">目标说话人 / 音色 ID</label>
-            <input v-model="speaker" class="text-input" type="text" placeholder="留空使用模型默认说话人" />
-            <div class="field-hint">不同模型的说话人命名可能不同，按模型配置填写名称或数字 ID</div>
+            <select v-model="speaker" class="text-input" aria-label="目标说话人 / 音色 ID">
+              <option value="">默认（模型首位）</option>
+              <option v-for="name in speakerOptionsFor(selectedModel)" :key="name" :value="name">{{ name }}</option>
+            </select>
+            <div v-if="!speakerOptionsFor(selectedModel).length" class="field-hint">模型配置中没有可选说话人，将使用默认说话人</div>
           </div>
 
           <div class="field">
@@ -1260,6 +1266,12 @@ const rvcVersion = ref(str(prefs.rvcVersion, 'v2'))
 function frameworkOf(id: string): string {
   return models.value.find((m) => m.id === id)?.framework || 'so-vits-svc'
 }
+function speakerOptionsFor(id: string): string[] {
+  return models.value.find((m) => m.id === id)?.speakers || []
+}
+function validSpeaker(id: string, value: string): string {
+  return speakerOptionsFor(id).includes(value) ? value : ''
+}
 function frameworkLabel(id: string): string {
   const map: Record<string, string> = {
     'so-vits-svc': 'So-VITS-SVC',
@@ -1471,10 +1483,10 @@ function timelineModelColor(index: number): string {
   return `hsl(${hue} 78% 56%)`
 }
 
-function defaultParams(framework: string): MultiParams {
+function defaultParams(id: string, framework: string): MultiParams {
   return {
     pitch: pitch.value,
-    speaker: speaker.value,
+    speaker: validSpeaker(id, speaker.value),
     formantShift: formantShift.value,
     diffusionRatio: diffusionRatio.value,
     f0Method: normalizeF0Method(framework, f0Method.value),
@@ -1494,7 +1506,7 @@ function mp(id: string): MultiParams {
   const framework = frameworkOf(id)
   let p = modelParams[id]
   if (!p) {
-    p = defaultParams(framework)
+    p = defaultParams(id, framework)
     modelParams[id] = p
   }
   p.f0Method = normalizeF0Method(framework, p.f0Method)
@@ -1518,7 +1530,7 @@ function togglePick(id: string) {
   if (isPicked(id)) {
     selectedMulti.value = selectedMulti.value.filter((x) => x !== id)
   } else {
-    if (!modelParams[id]) modelParams[id] = defaultParams(frameworkOf(id))
+    if (!modelParams[id]) modelParams[id] = defaultParams(id, frameworkOf(id))
     selectedMulti.value = [...selectedMulti.value, id]
   }
 }
@@ -1954,7 +1966,7 @@ function prepareGuideDemo(kind: GuideDemoKind) {
   if (workflow.value === 'full_manual_editor') workflow.value = 'auto_mix'
   const ids = models.value.slice(0, 2).map((item) => item.id)
   selectedMulti.value = ids.length ? ids : selectedMulti.value
-  for (const id of selectedMulti.value) if (!modelParams[id]) modelParams[id] = defaultParams(frameworkOf(id))
+  for (const id of selectedMulti.value) if (!modelParams[id]) modelParams[id] = defaultParams(id, frameworkOf(id))
 
   if (kind === 'multi-timeline') {
     const modelA = selectedMulti.value[0] || ''
@@ -2405,7 +2417,7 @@ function currentParams() {
     pitch: pitch.value,
     highPitchGuardRounds: highPitchGuardRounds.value,
     f0FilterThreshold: f0FilterThreshold.value,
-    speaker: speaker.value,
+    speaker: validSpeaker(selectedModel.value, speaker.value),
     formantShift: formantShift.value,
     f0Method: f0Method.value,
     indexRate: indexRate.value,
@@ -2473,7 +2485,7 @@ function applyParams(raw: Record<string, unknown>) {
     referenceAudio: str(raw.reference_audio, seedVcReferenceAudio.value),
   }
   pitch.value = next.pitch
-  speaker.value = next.speaker
+  speaker.value = validSpeaker(selectedModel.value, next.speaker)
   highPitchGuardRounds.value = next.highPitchGuardRounds
   f0FilterThreshold.value = next.f0FilterThreshold
   autoHighPitchGuard.value = next.autoHighPitchGuard
@@ -2496,7 +2508,7 @@ function applyParams(raw: Record<string, unknown>) {
   for (const id of selectedMulti.value) {
     const p = mp(id)
     p.pitch = next.pitch
-    p.speaker = next.speaker
+    p.speaker = validSpeaker(id, next.speaker)
     p.highPitchGuardRounds = next.highPitchGuardRounds
     p.f0FilterThreshold = next.f0FilterThreshold
     p.formantShift = next.formantShift
@@ -2741,7 +2753,7 @@ const generate = async () => {
         model_id: pm.id,
         params: paramsForFramework(framework, {
           pitch: p.pitch,
-          speaker: p.speaker,
+          speaker: validSpeaker(pm.id, p.speaker),
           formantShift: p.formantShift,
           f0Method: p.f0Method,
           indexRate: p.indexRate,
@@ -2937,6 +2949,12 @@ watch([models, defaultId], ([items, id]) => {
   if (selectedModel.value || !items.length) return
   selectedModel.value = items.find((model) => model.id === id)?.id || items[0]!.id
   if (selectedMulti.value.length === 0) togglePick(selectedModel.value)
+}, { immediate: true })
+watch([selectedModel, models], ([id]) => {
+  if (id) speaker.value = validSpeaker(id, speaker.value)
+  for (const [modelId, params] of Object.entries(modelParams)) {
+    params.speaker = validSpeaker(modelId, params.speaker)
+  }
 }, { immediate: true })
 watch(models, (items) => {
   if (activeGuideDemoKind.value && activeGuideDemoKind.value !== 'enhancement' && items.length) {
@@ -3599,6 +3617,7 @@ onUnmounted(() => {
 .mp-mini span { font-size: 12.5px; color: var(--xb-muted); }
 .mp-mini select {
   flex: 1;
+  min-width: 0;
   padding: 6px 8px;
   border-radius: 8px;
   border: 1px solid var(--xb-border);
@@ -3607,7 +3626,7 @@ onUnmounted(() => {
   outline: none;
   font-size: 13px;
 }
-.mp-mini input, .text-input {
+.text-input {
   min-width: 0;
   padding: 7px 9px;
   border: 1px solid var(--xb-border);
@@ -3616,7 +3635,6 @@ onUnmounted(() => {
   background: rgba(var(--xb-fill-rgb), 0.04);
   color: var(--xb-text);
 }
-.mp-mini input { flex: 1; width: 90px; }
 .text-input { width: 100%; box-sizing: border-box; }
 
 /* 歌词获取 */

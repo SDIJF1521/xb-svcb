@@ -253,11 +253,13 @@ const mockModels: ModelDTO[] = [
   {
     id: 'm1', name: '我的音色 v2', type: 'So-VITS', sample_rate: '44.1kHz', size: '418 MB', imported_at: '06-10',
     main_model: { name: 'G_30000.pth', path: '' }, main_config: { name: 'config.json', path: '' },
+    speakers: ['主唱', '和声'],
     diffusion_model: { name: 'diffusion.pt', path: '' }, diffusion_config: { name: 'diffusion.yaml', path: '' },
   },
   {
     id: 'm2', name: '星野', type: 'So-VITS', sample_rate: '44.1kHz', size: '396 MB', imported_at: '06-08',
     main_model: { name: 'Hoshino_G.pth', path: '' }, main_config: { name: 'config.json', path: '' },
+    speakers: ['星野'],
     diffusion_model: { name: 'model_diff.pt', path: '' }, diffusion_config: { name: 'diff.yaml', path: '' },
   },
   {
