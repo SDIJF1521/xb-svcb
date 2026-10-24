@@ -54,6 +54,8 @@ python install/install.py --directml --only rvc
 
 ROCm RVC 默认保留 rvc-python 的 fp16 GPU 路径。若目标驱动或模型在 fp16 下不稳定，可临时设置 `XB_RVC_ROCM_FP32=1` 重试；worker 日志中的 `RVC_COMPONENT_DEVICES` 和 `RVC_TIMING` 会分别显示组件设备及模型/后处理耗时。
 
+SVC、RVC、SeedVC、DDSP-SVC、UVR、PyMSS、F0 与 Vocal Worker 共享质量优先的 PyTorch 运行策略：关闭梯度记录，固定 CUDA/ROCm 当前设备，使用最高精度的 FP32 矩阵运算，并在 NVIDIA CUDA 上关闭 TF32。CPU 推理默认使用不超过 8 个 Torch 线程，可用 `XB_INFERENCE_CPU_THREADS` 覆盖；各模型的 FP16/FP32 选择和 DirectML 稳定回退仍由对应 Worker 决定。每个 Worker 会输出 `*_RUNTIME` 行，记录实际后端、设备和精度策略。
+
 `--consolidated` 仍由旧公共实现识别，但在发布流程中它表示 CUDA 共享布局，不再作为面向用户的实验开关。旧安装若没有 `XB_RUNTIME_LAYOUT`，无参数运行 `setup_env.bat` 仍保持兼容行为；显式传入 `--cu126`、`--cu128` 或 `--consolidated` 会选择共享入口。
 
 ## 配方与离线材料

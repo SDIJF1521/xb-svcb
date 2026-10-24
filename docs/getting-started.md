@@ -96,6 +96,58 @@ setup_env.bat --only models
 
 安装失败时先保留 `assets\wheels` 和 `install_logs`。只有全部环境通过最终校验后，安装器才自动删除离线 wheels。
 
+### v0.0.32 CUDA128 离线安装修复
+
+若 RTX 50 系安装在 `torch-2.7.1+cu128` 处报错 `The wheel is invalid: Missing .dist-info directory`，这不是 CUDA Toolkit 或显卡驱动错误。先关闭 XB-SVCB，在安装目录打开 PowerShell，并核对安装包释放出的 Torch wheel：
+
+```powershell
+$root = "E:\XB-SVCB" # 改为实际安装目录
+$torchWheel = "$root\assets\wheels\py312\cu128\torch-2.7.1+cu128-cp312-cp312-win_amd64.whl"
+
+(Get-Item $torchWheel).Length
+(Get-FileHash $torchWheel -Algorithm SHA256).Hash
+```
+
+v0.0.32 CUDA128 包的正确结果是：
+
+```text
+大小：3273024349
+SHA256：2BB8C05D48BA815B316879A18195D53A6472A03E297D971E916753F8E1053D30
+```
+
+若大小或哈希不一致，应重新下载完整的 CUDA128 安装包，并确保安装器 EXE 与所有同名前缀 BIN 分卷位于同一目录。不要继续使用损坏的 wheel 修复环境。
+
+若大小和哈希一致，从安装日志或 `installer_env.cmd` 取得锁定的 `XB_PYTHON_EXE` 路径，然后强制重装随包 `uv`、清理 Torch 缓存并重试共享核心组：
+
+```powershell
+$py = "C:\Path\To\Python312\python.exe" # 替换为 XB_PYTHON_EXE
+$uv = "$env:APPDATA\Python\Python312\Scripts\uv.exe"
+
+& $py -m ensurepip --upgrade
+& $py -m pip install --user --force-reinstall --no-index `
+  --find-links "$root\assets\wheels\bootstrap" "uv==0.12.22"
+& $uv --version
+& $uv cache clean torch
+
+Set-Location $root
+.\setup_env.bat --cu128 --only uvr seedvc ddsp
+```
+
+如果 UVR、SeedVC 和 DDSP 均显示成功，但最终校验报告 `missing: ["exceptiongroup"]`，Torch 和 CUDA 已经安装成功，只需补装本地 wheel 后再次执行同一修复入口：
+
+```powershell
+& $uv pip install `
+  --python "$root\runtimes\core-cu128\Scripts\python.exe" `
+  --no-index --no-build `
+  --find-links "$root\assets\wheels\py312\cu128" `
+  "exceptiongroup==1.3.1"
+
+Set-Location $root
+.\setup_env.bat --cu128 --only uvr seedvc ddsp
+```
+
+最终输出应显示共享运行环境完成并写入 `runtime.json`。报告中的 `hf-xet` 属于允许缺失的可选包；DDSP 输出的 `Please install tensorboardX` 也不是本次安装失败原因。
+
 ## 源码环境要求
 
 - Windows。
