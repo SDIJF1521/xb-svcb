@@ -227,6 +227,7 @@ async function pickThemeMedia() {
     return
   }
 
+  mediaLoading.value = true
   try {
     const res = await api.pickThemeMediaFile()
     if (res.ok && res.path) {
@@ -240,9 +241,10 @@ async function pickThemeMedia() {
       return
     }
   } catch {
-    /* fallback to browser file input */
+    themeImageInput.value?.click()
+  } finally {
+    mediaLoading.value = false
   }
-  themeImageInput.value?.click()
 }
 
 function removeThemeImage() {

@@ -60,6 +60,10 @@ _THEME_IMAGE_FORMATS = {
     "avif": (".avif", "image/avif"),
 }
 
+# Data URIs cross the pywebview JS bridge as strings. Keep managed background
+# images compact so high-resolution source files do not exceed that channel.
+_THEME_IMAGE_OPTIMIZE_THRESHOLD = 2 * 1024 * 1024
+
 
 def _sniff_theme_image_format(path: Path) -> str:
     """Return the actual image container instead of trusting its suffix."""
@@ -286,7 +290,8 @@ class Api:
         else:
             return {"ok": False, "error": "仅支持图片或 MP4 视频"}
         try:
-            if max_bytes is not None and src.stat().st_size > max_bytes:
+            source_size = src.stat().st_size
+            if max_bytes is not None and source_size > max_bytes:
                 return {"ok": False, "error": "媒体文件过大，请选择不超过 200MB 的文件"}
         except OSError:
             return {"ok": False, "error": "无法读取媒体文件"}
@@ -294,12 +299,14 @@ class Api:
         paths.ensure_dirs()
         safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", src.stem).strip("._") or "theme_media"
         detected_format = _sniff_theme_image_format(src) if kind == "image" else ""
-        converted = False
-        if kind == "image" and detected_format in _THEME_IMAGE_FORMATS:
+        converted = kind == "image" and (
+            detected_format not in _THEME_IMAGE_FORMATS
+            or source_size > _THEME_IMAGE_OPTIMIZE_THRESHOLD
+        )
+        if converted:
+            target_ext, mime = ".webp", "image/webp"
+        elif kind == "image" and detected_format in _THEME_IMAGE_FORMATS:
             target_ext, mime = _THEME_IMAGE_FORMATS[detected_format]
-        elif kind == "image":
-            target_ext, mime = ".jpg", "image/jpeg"
-            converted = True
         else:
             target_ext = ext
         dst = config.THEME_MEDIA_DIR / f"{time.time_ns()}_{safe_stem}{target_ext}"
@@ -308,7 +315,7 @@ class Api:
                 if not self._transcode_theme_image(src, dst):
                     return {
                         "ok": False,
-                        "error": "图片格式无法直接显示，且自动转换失败；请确认 FFmpeg 可用",
+                        "error": "图片自动优化失败；请确认 FFmpeg 可用或尝试转换为 JPG/WebP",
                     }
             else:
                 shutil.copy2(src, dst)
@@ -340,8 +347,16 @@ class Api:
                     str(src),
                     "-frames:v",
                     "1",
-                    "-q:v",
-                    "2",
+                    "-vf",
+                    "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease",
+                    "-map_metadata",
+                    "-1",
+                    "-c:v",
+                    "libwebp",
+                    "-quality",
+                    "82",
+                    "-compression_level",
+                    "5",
                     str(dst),
                 ],
                 capture_output=True,

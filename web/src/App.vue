@@ -194,15 +194,22 @@ html[data-theme] {
 }
 html,
 body {
+  width: 100%;
+  height: 100%;
   margin: 0;
   padding: 0;
+  overflow: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   background: var(--xb-bg);
   color: var(--xb-text);
   font-family: var(--xb-font);
   transition: background 0.4s ease, color 0.4s ease;
 }
 #app {
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 html {
   scroll-behavior: smooth;
@@ -223,6 +230,12 @@ html {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--xb-scroll-thumb-hover);
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 /* Element Plus 弹层会 teleport 到 body，必须在全局统一主题。 */

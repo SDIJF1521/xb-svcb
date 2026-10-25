@@ -31,12 +31,27 @@ onUnmounted(() => notifications.stop())
 <style scoped>
 .layout {
   position: relative;
-  min-height: 100vh;
-  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
 }
 .layout-main {
   position: relative;
   z-index: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.layout-main::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 .page-slide-enter-active,
 .page-slide-leave-active { transition: opacity .22s ease, transform .22s ease; }

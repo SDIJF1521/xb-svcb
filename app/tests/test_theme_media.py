@@ -15,6 +15,7 @@ class ThemeMediaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             media_root = root / "theme" / "media"
+            media_root.mkdir(parents=True)
             source = root / "large-background.png"
             with source.open("wb") as stream:
                 stream.write(b"\x89PNG\r\n\x1a\n")
@@ -22,18 +23,25 @@ class ThemeMediaTests(unittest.TestCase):
                 stream.write(b"image")
             api = object.__new__(Api)
 
+            def optimize(_src: Path, dst: Path) -> bool:
+                dst.write_bytes(b"optimized")
+                return True
+
             with (
                 patch.object(api, "_open_dialog", return_value=[str(source)]),
+                patch.object(api, "_transcode_theme_image", side_effect=optimize) as transcode,
                 patch("api.bridge.config.THEME_MEDIA_DIR", media_root),
                 patch("api.bridge.paths.ensure_dirs"),
-                patch("api.bridge.shutil.copy2") as copy_file,
             ):
                 result = api.pick_theme_media_file()
 
             self.assertTrue(result["ok"])
             self.assertEqual(result["kind"], "image")
             self.assertEqual(result["name"], source.name)
-            copy_file.assert_called_once_with(source, media_root / result["path"])
+            self.assertTrue(result["converted"])
+            self.assertEqual(result["mime"], "image/webp")
+            self.assertTrue(result["path"].endswith(".webp"))
+            transcode.assert_called_once_with(source, media_root / result["path"])
 
     def test_misnamed_heic_image_is_transcoded_for_browser_display(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -60,8 +68,8 @@ class ThemeMediaTests(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             self.assertTrue(result["converted"])
-            self.assertEqual(result["mime"], "image/jpeg")
-            self.assertTrue(result["path"].endswith(".jpg"))
+            self.assertEqual(result["mime"], "image/webp")
+            self.assertTrue(result["path"].endswith(".webp"))
             transcode.assert_called_once()
             self.assertTrue((media_root / result["path"]).is_file())
 
