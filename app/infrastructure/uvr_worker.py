@@ -20,6 +20,19 @@ import sys
 import traceback
 import wave
 
+try:
+    from inference_device import (
+        ResolvedDevice,
+        configure_torch_inference,
+        resolve_torch_device,
+    )
+except ImportError:  # package import used by tests/application tooling
+    from infrastructure.inference_device import (
+        ResolvedDevice,
+        configure_torch_inference,
+        resolve_torch_device,
+    )
+
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="XB-SVCB UVR 人声分离 worker")
@@ -215,8 +228,6 @@ def main() -> int:
         use_directml = requested_device == "directml"
         if requested_device == "auto" and not torch.cuda.is_available():
             try:
-                from inference_device import resolve_torch_device
-
                 directml = resolve_torch_device("directml", torch)
             except (ImportError, RuntimeError):
                 directml = None
@@ -226,7 +237,6 @@ def main() -> int:
         if use_directml:
             try:
                 import torch_directml
-                from inference_device import resolve_torch_device
 
                 directml = directml or resolve_torch_device("directml", torch)
                 # audio-separator asks torch-directml for its default adapter.
@@ -235,6 +245,14 @@ def main() -> int:
             except (ImportError, RuntimeError) as exc:
                 print(f"UVR_ERR 已选择 DirectML，但 UVR 环境不可用: {exc}")
                 return 6
+        if directml is not None:
+            resolved_runtime = directml
+        elif torch.cuda.is_available():
+            resolved_runtime = resolve_torch_device(requested_device, torch)
+        else:
+            resolved_runtime = ResolvedDevice(torch.device("cpu"), "cpu", "CPU")
+        runtime_profile = configure_torch_inference(torch, resolved_runtime)
+        print(f"UVR_RUNTIME {runtime_profile.summary}", flush=True)
         from audio_separator.separator import Separator
         if use_directml:
             _patch_directml_vr_lstm()

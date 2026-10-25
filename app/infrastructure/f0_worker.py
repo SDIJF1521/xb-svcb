@@ -25,6 +25,7 @@ import traceback
 
 try:
     from inference_device import (
+        configure_torch_inference,
         patch_directml_checkpoint_load,
         patch_directml_float32,
         patch_directml_sovits_rmvpe_cpu,
@@ -33,6 +34,7 @@ try:
     )
 except ImportError:  # package import used by tests/application tooling
     from infrastructure.inference_device import (
+        configure_torch_inference,
         patch_directml_checkpoint_load,
         patch_directml_float32,
         patch_directml_sovits_rmvpe_cpu,
@@ -113,6 +115,8 @@ def main() -> int:
 
     try:
         resolved_device = resolve_torch_device(args.device, torch)
+        runtime_profile = configure_torch_inference(torch, resolved_device)
+        print(f"F0_RUNTIME {runtime_profile.summary}", flush=True)
         device = resolved_device.device
         if resolved_device.backend == "directml":
             patch_directml_float32(torch)

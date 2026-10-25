@@ -301,6 +301,8 @@ set XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple
 set XB_GH_MIRROR=https://ghfast.top
 ~~~
 
+v0.0.32 CUDA128 安装若在 <code>torch-2.7.1+cu128</code> 处提示 <code>Missing .dist-info directory</code>，或组件安装成功后最终校验提示缺少 <code>exceptiongroup</code>，请按[源码安装与启动中的 CUDA128 离线安装修复](docs/getting-started.md#v0032-cuda128-离线安装修复)核对 wheel 哈希、刷新 <code>uv</code> 缓存并补齐依赖。不要切换到旧隔离环境，也不需要重新安装 CUDA Toolkit。
+
 ### 推理提示缺少 pkg_resources
 
 SVC 环境可能缺少兼容版本的 setuptools。RTX 50 系 cu128 安装可执行：

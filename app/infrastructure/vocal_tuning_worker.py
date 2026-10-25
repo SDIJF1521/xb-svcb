@@ -1331,6 +1331,31 @@ def _blend_resynthesis(
     return blended
 
 
+def _restore_resynthesis_channels(
+    original: "np.ndarray",
+    tuned: "np.ndarray",
+) -> "np.ndarray":
+    """把 Praat 的单声道重合成恢复到源声道布局，同时保留侧声道。"""
+    import numpy as np
+
+    dry = np.asarray(original, dtype=np.float64)
+    wet = np.asarray(tuned, dtype=np.float64)
+    if dry.ndim == 1:
+        dry = dry[np.newaxis, :]
+    if wet.ndim == 1:
+        wet = wet[np.newaxis, :]
+    if dry.ndim != 2 or wet.ndim != 2 or dry.shape[-1] != wet.shape[-1]:
+        raise ValueError("PSOLA 声道恢复输入尺寸不一致")
+    if dry.shape[0] == wet.shape[0]:
+        return wet
+    if wet.shape[0] == 1:
+        dry_mid = np.mean(dry, axis=0, keepdims=True)
+        return wet + (dry - dry_mid)
+    if dry.shape[0] == 1:
+        return np.mean(wet, axis=0, keepdims=True)
+    raise ValueError("PSOLA 重合成声道数不受支持")
+
+
 def tune(
     source: Path,
     reference: Path,
@@ -1445,7 +1470,8 @@ def tune(
         shutil.copy2(source, output)
         return stats
 
-    expected_frames = source_sound.values.shape[-1]
+    original = np.asarray(source_sound.values, dtype=np.float64)
+    expected_frames = original.shape[-1]
     resynthesis_mix = _resynthesis_region_curve(
         np.asarray(source_sound.values, dtype=np.float64),
         sample_rate,
@@ -1488,18 +1514,27 @@ def tune(
     call([corrected_tier, source_manipulation], "Replace pitch tier")
     tuned_sound = call(source_manipulation, "Get resynthesis (overlap-add)")
     tuned = np.asarray(tuned_sound.values, dtype=np.float64)
-    original = np.asarray(source_sound.values, dtype=np.float64)
     if tuned.shape[-1] > expected_frames:
         tuned = tuned[..., :expected_frames]
     elif tuned.shape[-1] < expected_frames:
         tuned = np.pad(tuned, ((0, 0), (0, expected_frames - tuned.shape[-1])))
 
-    active = np.max(np.abs(original), axis=0) > 10.0 ** (-55.0 / 20.0)
+    # Praat Manipulation 对多声道 Sound 只返回一个重合成声道。先以原始
+    # 中置声部做响度匹配，再恢复原始侧声道，避免把立体声输入整段降为单声道。
+    level_reference = original
+    if tuned.shape[0] == 1 and original.shape[0] > 1:
+        level_reference = np.mean(original, axis=0, keepdims=True)
+    elif original.shape[0] == 1 and tuned.shape[0] > 1:
+        tuned = np.mean(tuned, axis=0, keepdims=True)
+    active = np.max(np.abs(level_reference), axis=0) > 10.0 ** (-55.0 / 20.0)
     if bool(active.any()):
-        original_rms = float(np.sqrt(np.mean(original[:, active] ** 2) + 1e-12))
+        original_rms = float(
+            np.sqrt(np.mean(level_reference[:, active] ** 2) + 1e-12)
+        )
         tuned_rms = float(np.sqrt(np.mean(tuned[:, active] ** 2) + 1e-12))
         if tuned_rms > 1e-7:
             tuned *= float(np.clip(original_rms / tuned_rms, 0.85, 1.15))
+    tuned = _restore_resynthesis_channels(original, tuned)
     tuned = _blend_resynthesis(original, tuned, resynthesis_mix, sample_rate)
     tuned, gap_stats = _suppress_reference_gap_residual(
         tuned,

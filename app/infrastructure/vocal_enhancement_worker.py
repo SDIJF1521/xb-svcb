@@ -19,6 +19,39 @@ import types
 from collections import namedtuple
 from pathlib import Path
 
+try:
+    from inference_device import (
+        ResolvedDevice,
+        configure_torch_inference,
+        normalize_device,
+        resolve_torch_device,
+    )
+except ImportError:  # package import used by tests/application tooling
+    from infrastructure.inference_device import (
+        ResolvedDevice,
+        configure_torch_inference,
+        normalize_device,
+        resolve_torch_device,
+    )
+
+
+def _configure_vocal_inference_runtime(requested: str):  # noqa: ANN201
+    """Align DeepFilterNet with the task device before importing df.enhance."""
+    import torch
+
+    if normalize_device(requested) == "directml":
+        # DeepFilterNet's complex STFT pipeline has no stable DirectML path.
+        resolved = ResolvedDevice(
+            torch.device("cpu"),
+            "cpu",
+            "CPU DeepFilter 路径（DirectML 任务）",
+        )
+    else:
+        resolved = resolve_torch_device(requested, torch)
+    profile = configure_torch_inference(torch, resolved)
+    os.environ["DF_DEVICE"] = str(resolved.device)
+    return resolved, profile
+
 
 def _install_deepfilter_torchaudio_compat() -> None:
     """Restore the Torchaudio metadata API required by DeepFilterNet 0.5.6."""
@@ -2799,6 +2832,14 @@ def main() -> int:
     parser.add_argument("--loudness-envelope", type=float, default=0.58)
     args = parser.parse_args()
     try:
+        if args.mode != "analyze":
+            resolved_device, runtime_profile = _configure_vocal_inference_runtime(
+                args.device
+            )
+            print(
+                f"VOCAL_RUNTIME {runtime_profile.summary} name={resolved_device.name}",
+                flush=True,
+            )
         source = Path(args.input)
         if args.mode == "analyze":
             if not args.analysis_output:

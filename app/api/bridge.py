@@ -52,6 +52,39 @@ def _safe_filename(name: str) -> str:
     return cleaned[:120] or "翻唱作品"
 
 
+_THEME_IMAGE_FORMATS = {
+    "jpeg": (".jpg", "image/jpeg"),
+    "png": (".png", "image/png"),
+    "webp": (".webp", "image/webp"),
+    "gif": (".gif", "image/gif"),
+    "avif": (".avif", "image/avif"),
+}
+
+
+def _sniff_theme_image_format(path: Path) -> str:
+    """Return the actual image container instead of trusting its suffix."""
+    try:
+        with path.open("rb") as stream:
+            head = stream.read(64)
+    except OSError:
+        return ""
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    if len(head) >= 12 and head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return "webp"
+    if len(head) >= 16 and head[4:8] == b"ftyp":
+        brands = {head[index:index + 4].lower() for index in range(8, min(len(head) - 3, 36), 4)}
+        if brands & {b"avif", b"avis"}:
+            return "avif"
+        if brands & {b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"mif1", b"msf1"}:
+            return "heif"
+    return ""
+
+
 class Api:
     def __init__(
         self,
@@ -229,8 +262,8 @@ class Api:
             "选择主题背景图片或 MP4 动态壁纸",
             multiple=False,
             file_types=(
-                "背景媒体 (*.jpg;*.jpeg;*.png;*.webp;*.gif;*.mp4)",
-                "图片 (*.jpg;*.jpeg;*.png;*.webp;*.gif)",
+                "背景媒体 (*.jpg;*.jpeg;*.png;*.webp;*.gif;*.avif;*.heic;*.heif;*.mp4)",
+                "图片 (*.jpg;*.jpeg;*.png;*.webp;*.gif;*.avif;*.heic;*.heif)",
                 "MP4 视频 (*.mp4)",
                 "所有文件 (*.*)",
             ),
@@ -241,38 +274,88 @@ class Api:
         if not src.exists() or not src.is_file():
             return {"ok": False, "error": "媒体文件不存在"}
         ext = src.suffix.lower()
-        image_mimes = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".webp": "image/webp",
-            ".gif": "image/gif",
-        }
+        image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".heic", ".heif"}
         if ext == ".mp4":
             kind = "video"
             mime = "video/mp4"
             max_bytes = 200 * 1024 * 1024
-        elif ext in image_mimes:
+        elif ext in image_extensions:
             kind = "image"
-            mime = image_mimes[ext]
-            max_bytes = 50 * 1024 * 1024
+            mime = ""
+            max_bytes = None
         else:
             return {"ok": False, "error": "仅支持图片或 MP4 视频"}
         try:
-            if src.stat().st_size > max_bytes:
-                limit = "200MB" if kind == "video" else "50MB"
-                return {"ok": False, "error": f"媒体文件过大，请选择不超过 {limit} 的文件"}
+            if max_bytes is not None and src.stat().st_size > max_bytes:
+                return {"ok": False, "error": "媒体文件过大，请选择不超过 200MB 的文件"}
         except OSError:
             return {"ok": False, "error": "无法读取媒体文件"}
 
         paths.ensure_dirs()
         safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", src.stem).strip("._") or "theme_media"
-        dst = config.THEME_MEDIA_DIR / f"{time.time_ns()}_{safe_stem}{ext}"
+        detected_format = _sniff_theme_image_format(src) if kind == "image" else ""
+        converted = False
+        if kind == "image" and detected_format in _THEME_IMAGE_FORMATS:
+            target_ext, mime = _THEME_IMAGE_FORMATS[detected_format]
+        elif kind == "image":
+            target_ext, mime = ".jpg", "image/jpeg"
+            converted = True
+        else:
+            target_ext = ext
+        dst = config.THEME_MEDIA_DIR / f"{time.time_ns()}_{safe_stem}{target_ext}"
         try:
-            shutil.copy2(src, dst)
+            if converted:
+                if not self._transcode_theme_image(src, dst):
+                    return {
+                        "ok": False,
+                        "error": "图片格式无法直接显示，且自动转换失败；请确认 FFmpeg 可用",
+                    }
+            else:
+                shutil.copy2(src, dst)
         except OSError as exc:
             return {"ok": False, "error": f"复制背景媒体失败：{exc}"}
-        return {"ok": True, "path": dst.name, "kind": kind, "mime": mime, "name": src.name}
+        return {
+            "ok": True,
+            "path": dst.name,
+            "kind": kind,
+            "mime": mime,
+            "name": src.name,
+            "converted": converted,
+        }
+
+    @staticmethod
+    def _transcode_theme_image(src: Path, dst: Path) -> bool:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            return False
+        try:
+            result = subprocess.run(
+                [
+                    ffmpeg,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(src),
+                    "-frames:v",
+                    "1",
+                    "-q:v",
+                    "2",
+                    str(dst),
+                ],
+                capture_output=True,
+                timeout=120,
+                check=False,
+                **config.subprocess_no_window(),
+            )
+        except (OSError, subprocess.SubprocessError):
+            dst.unlink(missing_ok=True)
+            return False
+        if result.returncode == 0 and dst.is_file() and dst.stat().st_size > 0:
+            return True
+        dst.unlink(missing_ok=True)
+        return False
 
     def get_theme_media_data(self, media_path: str) -> str:
         """返回已保存主题媒体的 data URI，供背景图/视频播放。"""
@@ -299,6 +382,7 @@ class Api:
                 ".png": "image/png",
                 ".webp": "image/webp",
                 ".gif": "image/gif",
+                ".avif": "image/avif",
                 ".mp4": "video/mp4",
             }
             mime = mime_by_ext.get(ext)

@@ -529,6 +529,14 @@ export const useThemeStore = defineStore('theme', () => {
 
   function saveCustomTheme(value: CustomTheme, options: ThemeTransitionOptions = {}) {
     const nextCustomTheme = sanitizeCustomTheme(value)
+    const mediaChanged = (
+      nextCustomTheme.bgImage !== customTheme.value.bgImage
+      || nextCustomTheme.bgMediaType !== customTheme.value.bgMediaType
+    )
+    if (mediaChanged) {
+      commitTheme('custom', nextCustomTheme)
+      return
+    }
     const direction: ThemeTransitionDirection = isDarkVisualTheme('custom', nextCustomTheme) ? 'expand-new' : 'contract-old'
     runThemeTransition(
       () => commitTheme('custom', nextCustomTheme, true, false),
@@ -540,6 +548,10 @@ export const useThemeStore = defineStore('theme', () => {
 
   function resetCustomTheme(options: ThemeTransitionOptions = {}) {
     const nextCustomTheme = { ...DEFAULT_CUSTOM_THEME }
+    if (customTheme.value.bgImage) {
+      commitTheme('custom', nextCustomTheme)
+      return
+    }
     const direction: ThemeTransitionDirection = isDarkVisualTheme('custom', nextCustomTheme) ? 'expand-new' : 'contract-old'
     runThemeTransition(
       () => commitTheme('custom', nextCustomTheme, true, false),

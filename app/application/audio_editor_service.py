@@ -2324,7 +2324,9 @@ class AudioEditorService:
             }
         out_dir = self._project_dir(project_id) / "reruns"
         out_dir.mkdir(parents=True, exist_ok=True)
-        infer_params = InferenceParams.from_dict(params or {})
+        infer_params = InferenceParams.from_dict(
+            ModelService.apply_detected_rvc_version(model, params or {})
+        )
         used_params = infer_params.to_dict()
         rerun_key = self._rerun_key(src, clip, model_id, used_params)
         dry = out_dir / f"{clip_id}_{rerun_key}_input.wav"
@@ -3134,7 +3136,7 @@ class AudioEditorService:
             return []
 
     @staticmethod
-    def _model_payload(model: dict[str, Any]) -> dict[str, str]:
+    def _model_payload(model: dict[str, Any]) -> dict[str, Any]:
         framework = config.modelhub_normalize_framework(
             model.get("framework") or config.modelhub_guess_framework(model.get("type"))
         )
@@ -3145,4 +3147,5 @@ class AudioEditorService:
             "diffusion_model_path": (model.get("diffusion_model") or {}).get("path", ""),
             "diffusion_config_path": (model.get("diffusion_config") or {}).get("path", ""),
             "index_path": (model.get("index_file") or {}).get("path", ""),
+            "metadata": model.get("metadata") or {},
         }

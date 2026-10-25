@@ -7,6 +7,14 @@ import json
 import shutil
 from pathlib import Path
 
+try:
+    from inference_device import ResolvedDevice, configure_torch_inference
+except ImportError:  # package import used by tests/application tooling
+    from infrastructure.inference_device import (
+        ResolvedDevice,
+        configure_torch_inference,
+    )
+
 
 _AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".ogg", ".aiff", ".aif"}
 
@@ -194,6 +202,14 @@ def main() -> int:
         import torch
 
         device_name, device_backend = _resolve_device(args.device)
+        if device_backend != "mlx":
+            resolved_device = ResolvedDevice(
+                torch.device(device_name),
+                device_backend,
+                device_backend.upper(),
+            )
+            runtime_profile = configure_torch_inference(torch, resolved_device)
+            print(f"PYMSS_RUNTIME {runtime_profile.summary}", flush=True)
     except (ImportError, RuntimeError) as exc:
         raise RuntimeError(f"PyMSS 设备初始化失败: {exc}") from exc
     try:

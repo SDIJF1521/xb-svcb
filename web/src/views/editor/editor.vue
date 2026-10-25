@@ -3,15 +3,23 @@
     <audio
       ref="audioPrimaryEl"
       hidden
+      preload="auto"
       @ended="onAudioEnded($event)"
       @pause="onAudioPause($event)"
+      @playing="onAudioPlaying($event)"
+      @waiting="onAudioWaiting($event)"
+      @error="onAudioError($event)"
       @timeupdate="onAudioTimeUpdate($event)"
     />
     <audio
       ref="audioSecondaryEl"
       hidden
+      preload="auto"
       @ended="onAudioEnded($event)"
       @pause="onAudioPause($event)"
+      @playing="onAudioPlaying($event)"
+      @waiting="onAudioWaiting($event)"
+      @error="onAudioError($event)"
       @timeupdate="onAudioTimeUpdate($event)"
     />
 
@@ -65,8 +73,8 @@
           <el-icon class="el-icon--left"><RefreshRight /></el-icon>重做
         </el-button>
         <el-button :disabled="!project || (previewing && !playing)" :loading="previewing" round class="cta-btn" @click="playMix">
-          <el-icon class="el-icon--left"><component :is="playing ? VideoPause : VideoPlay" /></el-icon>
-          {{ playing ? '暂停' : '播放' }}
+          <el-icon class="el-icon--left" :class="{ spin: playbackBuffering }"><component :is="playbackBuffering ? Loading : playing ? VideoPause : VideoPlay" /></el-icon>
+          {{ playing ? (playbackBuffering ? '缓冲中' : '暂停') : '播放' }}
         </el-button>
         <el-dropdown :disabled="!project" trigger="click" @command="(cmd: string | number | object) => exportMix(String(cmd))">
           <el-button :disabled="!project" round class="ghost-btn">
@@ -711,7 +719,10 @@
                 </div>
                 <div v-if="isRvcRerunModel" class="rerun-mini">
                   <span>版本</span>
-                  <select v-model="rerunRvcVersion">
+                  <select v-if="detectedRerunRvcVersion" disabled>
+                    <option>自动 · {{ detectedRerunRvcVersion }}</option>
+                  </select>
+                  <select v-else v-model="rerunRvcVersion">
                     <option v-for="v in rvcVersions" :key="v" :value="v">{{ v }}</option>
                   </select>
                 </div>
@@ -840,7 +851,17 @@
           <div class="timeline-main-tools">
             <div class="transport">
               <button title="回到开始" @click="seekStart"><el-icon><DArrowLeft /></el-icon></button>
-              <button title="播放混音" :disabled="previewing && !playing" @click="playMix"><el-icon><component :is="playing ? VideoPause : VideoPlay" /></el-icon></button>
+              <button title="播放混音" :disabled="previewing && !playing" @click="playMix">
+                <el-icon :class="{ spin: previewing || playbackBuffering }"><component :is="previewing || playbackBuffering ? Loading : playing ? VideoPause : VideoPlay" /></el-icon>
+              </button>
+              <button
+                :class="{ active: followPlayhead }"
+                :title="followPlayhead ? '关闭播放头跟随' : '重新跟随播放头'"
+                :aria-pressed="followPlayhead"
+                @click="togglePlayheadFollow"
+              >
+                <el-icon><Aim /></el-icon>
+              </button>
               <span>{{ fmtTime(playhead) }}</span>
             </div>
             <div class="edit-tools">
@@ -895,8 +916,13 @@
           <div class="render-path" :title="renderedPath">{{ renderedPath || '未导出' }}</div>
         </div>
 
-        <div ref="scrollEl" class="timeline-scroll" @pointerdown="onTimelinePointer">
-          <div ref="rulerEl" class="ruler" :style="{ width: timelineWidth + 'px' }">
+        <div ref="scrollEl" class="timeline-scroll" @pointerdown="onTimelinePointer" @scroll="onTimelineScroll">
+          <div
+            ref="rulerEl"
+            class="ruler"
+            :style="{ width: timelineWidth + 'px' }"
+            @contextmenu.prevent.stop="openTimelineContext"
+          >
             <span
               v-for="tick in ticks"
               :key="tick"
@@ -910,7 +936,11 @@
 
           <div class="tracks" data-guide="editor-tracks" :style="{ width: timelineWidth + 'px' }">
             <div v-for="track in project.tracks" :key="track.id" class="track-row">
-              <div class="track-label" @pointerdown.stop>
+              <div
+                class="track-label"
+                @pointerdown.stop
+                @contextmenu.prevent.stop="openTrackContext($event, track, false)"
+              >
                 <button :title="track.locked ? '解除轨道锁定' : '锁定轨道'" :class="{ active: track.locked }" @click="toggleTrackLock(track)">
                   <el-icon><Lock /></el-icon>
                 </button>
@@ -938,7 +968,7 @@
                 </el-tooltip>
               </div>
 
-              <div class="track-lane">
+              <div class="track-lane" @contextmenu.prevent.stop="openTrackContext($event, track, true)">
                 <div
                   v-for="clip in track.clips"
                   :key="clip.id"
@@ -955,6 +985,7 @@
                   :style="[clipStyle(clip), clipRoleStyle(clip)]"
                   @pointerdown.stop="startDrag($event, track, clip, 'move')"
                   @click.stop="selectClip(track.id, clip.id)"
+                  @contextmenu.prevent.stop="openClipContext($event, track, clip)"
                 >
                   <button class="handle left" @pointerdown.stop="startDrag($event, track, clip, 'start')"></button>
                   <div class="wave">
@@ -981,6 +1012,34 @@
             </div>
           </div>
         </div>
+
+        <Teleport to="body">
+          <div
+            v-if="contextMenu.visible"
+            ref="contextMenuEl"
+            class="editor-context-menu"
+            :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+            role="menu"
+            :aria-label="contextMenuLabel"
+            @pointerdown.stop
+            @contextmenu.prevent
+          >
+            <template v-for="item in contextMenuItems" :key="item.id">
+              <i v-if="item.separatorBefore" class="context-separator" aria-hidden="true"></i>
+              <button
+                type="button"
+                role="menuitem"
+                :class="{ danger: item.danger }"
+                :disabled="item.disabled"
+                @click="runContextMenuItem(item)"
+              >
+                <el-icon><component :is="item.icon" /></el-icon>
+                <span>{{ item.label }}</span>
+                <kbd v-if="item.shortcut">{{ item.shortcut }}</kbd>
+              </button>
+            </template>
+          </div>
+        </Teleport>
       </section>
     </div>
 
@@ -995,7 +1054,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import {
@@ -1008,6 +1067,7 @@ import {
   Delete,
   Download,
   FolderAdd,
+  Loading,
   Lock,
   MagicStick,
   Mouse,
@@ -1063,6 +1123,25 @@ interface DragState {
   clipId: string
   original: EditorClip
   originalTrackIndex: number
+}
+type ContextMenuKind = 'clip' | 'track' | 'timeline'
+interface ContextMenuState {
+  visible: boolean
+  x: number
+  y: number
+  kind: ContextMenuKind
+  trackId: string
+  clipId: string
+}
+interface ContextMenuItem {
+  id: string
+  label: string
+  icon: Component
+  shortcut?: string
+  disabled?: boolean
+  danger?: boolean
+  separatorBefore?: boolean
+  run: () => void | Promise<void>
 }
 interface RerunPrefs {
   manualParamsEnabled?: boolean
@@ -1133,6 +1212,8 @@ const silenceMinClipSeconds = ref(0.45)
 const playhead = ref(0)
 const playing = ref(false)
 const previewing = ref(false)
+const playbackBuffering = ref(false)
+const followPlayhead = ref(true)
 const copyingAudio = ref(false)
 const mergingAudio = ref(false)
 const pastingAudio = ref(false)
@@ -1171,6 +1252,15 @@ const pluginMonitorTimelineStart = ref(0)
 const nativeSeekRevision = ref(0)
 const playbackMode = ref<PlaybackMode>('none')
 const timelineSeeking = ref(false)
+const contextMenuEl = ref<HTMLElement | null>(null)
+const contextMenu = ref<ContextMenuState>({
+  visible: false,
+  x: 0,
+  y: 0,
+  kind: 'timeline',
+  trackId: '',
+  clipId: '',
+})
 const activeInspectorPanel = ref<InspectorPanel>('clip')
 const rerunModelId = ref('')
 const renderedPath = ref('')
@@ -1197,6 +1287,14 @@ let activeMixSignature = ''
 let pendingMixSignature = ''
 let liveMixRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let liveMixRenderInFlight = false
+let mixPreloadTimer: ReturnType<typeof setTimeout> | null = null
+let mixPreloadPromise: Promise<string> | null = null
+let mixPreloadSignature = ''
+let cachedMixData = ''
+let cachedMixSignature = ''
+let programmaticTimelineScroll = false
+let programmaticScrollFrame = 0
+let lastTimelineScrollLeft = 0
 let liveControlSaveTimer: ReturnType<typeof setTimeout> | null = null
 let projectSaveChain: Promise<void> = Promise.resolve()
 let pluginStateSyncTimer: ReturnType<typeof setInterval> | null = null
@@ -1214,7 +1312,9 @@ const PLAY_TOGGLE_DEBOUNCE_MS = 350
 const LIVE_MIX_REFRESH_DEBOUNCE_MS = 90
 const LIVE_CONTROL_SAVE_DEBOUNCE_MS = 120
 const MIX_CROSSFADE_MS = 90
+const MIX_PRELOAD_DEBOUNCE_MS = 180
 const PLUGIN_STATE_SYNC_INTERVAL_MS = 120
+const TRACK_LABEL_WIDTH = 160
 const RERUN_PREFS_KEY = 'xb-editor-rerun-params'
 const SEPARATION_PREFS_KEY = 'xb-editor-separation-params'
 const rerunFramework = () => models.value.find((m) => m.id === rerunModelId.value)?.framework || 'so-vits-svc'
@@ -1524,6 +1624,10 @@ const selectedClipEditable = computed(() => {
 })
 const selectedRerunModel = computed(() => models.value.find((m) => m.id === rerunModelId.value) || null)
 const selectedRerunFramework = computed(() => selectedRerunModel.value?.framework || 'so-vits-svc')
+const detectedRerunRvcVersion = computed(() => {
+  const value = String(selectedRerunModel.value?.metadata?.rvc_version || '').toLowerCase()
+  return value === 'v1' || value === 'v2' ? value : ''
+})
 const rerunSpeakerOptions = computed(() => selectedRerunModel.value?.speakers || [])
 const isRvcRerunModel = computed(() => selectedRerunFramework.value === 'rvc')
 const isSeedVcRerunModel = computed(() => selectedRerunFramework.value === 'seed-vc')
@@ -1570,6 +1674,43 @@ const timelineWidth = computed(() => Math.max(980, (project.value?.duration || 6
 const tickStep = computed(() => (zoom.value < 34 ? 10 : zoom.value < 72 ? 5 : zoom.value < 130 ? 2 : 1))
 const splitTarget = computed(() => findSplitTarget())
 const canSplitAtPlayhead = computed(() => !!splitTarget.value)
+const contextMenuLabel = computed(() => {
+  if (contextMenu.value.kind === 'clip') return '片段操作'
+  if (contextMenu.value.kind === 'track') return '音轨操作'
+  return '时间轴操作'
+})
+const contextMenuItems = computed<ContextMenuItem[]>(() => {
+  const state = contextMenu.value
+  const track = project.value?.tracks.find((item) => item.id === state.trackId) || null
+  const clip = track?.clips.find((item) => item.id === state.clipId) || null
+  if (state.kind === 'clip') {
+    return [
+      { id: 'preview', label: '试听片段', icon: VideoPlay, shortcut: 'Space', run: playSelectedClip },
+      { id: 'split', label: '在播放头剪切', icon: Scissor, shortcut: 'Ctrl+K', disabled: !canSplitAtPlayhead.value, run: splitAtPlayhead },
+      { id: 'copy-clip', label: '复制片段音频', icon: CopyDocument, shortcut: 'Ctrl+C', disabled: copyingAudio.value, run: copySelectedClipAudio },
+      { id: 'merge', label: mergingAudio.value ? '正在合并' : '与下一片段合并', icon: Connection, disabled: !canMergeNextClip.value || mergingAudio.value, run: mergeSelectedClipWithNext },
+      { id: 'mute-clip', label: clip?.mute ? '取消片段静音' : '静音片段', icon: Mute, separatorBefore: true, disabled: !clip || !!clip.locked || !!track?.locked, run: toggleClipMute },
+      { id: 'lock-clip', label: clip?.locked ? '解除片段锁定' : '锁定片段', icon: Lock, disabled: !clip || !!track?.locked, run: toggleClipLock },
+      { id: 'delete-clip', label: '删除片段', icon: Delete, shortcut: 'Delete', danger: true, separatorBefore: true, disabled: !selectedClipEditable.value, run: deleteSelectedClip },
+    ]
+  }
+  if (state.kind === 'track') {
+    return [
+      { id: 'import-track', label: '导入音频到此轨', icon: FolderAdd, disabled: !track || !!track.locked, run: () => importAudioToTrack(state.trackId) },
+      { id: 'paste-track', label: '粘贴到播放头', icon: CopyDocument, shortcut: 'Ctrl+V', disabled: !track || !!track.locked || pastingAudio.value, run: () => pasteAudioToTrack(state.trackId) },
+      { id: 'copy-track', label: '复制整轨音频', icon: CopyDocument, disabled: !track?.clips.length || copyingAudio.value, run: copySelectedTrackAudio },
+      { id: 'mute-track', label: track?.mute ? '取消音轨静音' : '静音音轨', icon: Mute, separatorBefore: true, disabled: !track, run: () => { if (track) toggleTrackMute(track) } },
+      { id: 'lock-track', label: track?.locked ? '解除音轨锁定' : '锁定音轨', icon: Lock, disabled: !track, run: () => { if (track) toggleTrackLock(track) } },
+      { id: 'delete-track', label: '删除音轨', icon: Delete, danger: true, separatorBefore: true, disabled: !track || !!track.locked, run: () => track ? deleteTrack(track) : undefined },
+    ]
+  }
+  return [
+    { id: 'play-mix', label: playing.value ? '暂停播放' : '从此处播放', icon: playing.value ? VideoPause : VideoPlay, shortcut: 'Space', disabled: previewing.value && !playing.value, run: playMix },
+    { id: 'paste-timeline', label: '粘贴到播放头', icon: CopyDocument, shortcut: 'Ctrl+V', disabled: !project.value || pastingAudio.value, run: pasteAudioToSelectedTrack },
+    { id: 'seek-start', label: '回到开始', icon: DArrowLeft, separatorBefore: true, run: seekStart },
+    { id: 'follow', label: followPlayhead.value ? '关闭播放头跟随' : '启用播放头跟随', icon: Aim, run: togglePlayheadFollow },
+  ]
+})
 const ticks = computed(() => {
   const total = Math.ceil(project.value?.duration || 0)
   const arr: number[] = []
@@ -1686,7 +1827,10 @@ function applyProject(next: EditorProject | null) {
   waveformLoading.clear()
   selected.value = keepSelection(next)
   router.replace({ path: '/editor', query: { project: next.id } })
-  nextTick(loadWaveforms)
+  nextTick(() => {
+    void loadWaveforms()
+    scheduleMixPreviewPreload()
+  })
   requestLiveMixRefresh()
 }
 
@@ -2194,6 +2338,7 @@ function saveProject(): Promise<void> {
       project.value.duration = calcDuration(project.value)
       project.value.updated_at = saved.updated_at
       requestLiveMixRefresh(mixSignature)
+      scheduleMixPreviewPreload()
     })
   return projectSaveChain
 }
@@ -2238,6 +2383,7 @@ function selectClip(trackId: string, clipId: string) {
 }
 
 function startDrag(e: PointerEvent, track: EditorTrack, clip: EditorClip, mode: DragMode) {
+  if (e.button !== 0) return
   if (!project.value || track.locked || clip.locked) return
   pushHistory()
   selectClip(track.id, clip.id)
@@ -2308,7 +2454,69 @@ function onTimelinePointer(e: PointerEvent) {
   timelineSeeking.value = true
   setPlayheadFromPointer(e)
   window.addEventListener('pointermove', onTimelinePointerMove)
-  window.addEventListener('pointerup', stopTimelinePointer, { once: true })
+  window.addEventListener('pointerup', stopTimelinePointer)
+  window.addEventListener('pointercancel', stopTimelinePointer)
+}
+
+function closeContextMenu() {
+  contextMenu.value.visible = false
+}
+
+function setContextPlayhead(clientX: number) {
+  setPlayheadFromPointer({ clientX })
+}
+
+function openContextMenu(event: MouseEvent, kind: ContextMenuKind, trackId = '', clipId = '') {
+  const padding = 8
+  const estimatedWidth = 238
+  const estimatedHeight = kind === 'clip' ? 330 : kind === 'track' ? 292 : 196
+  contextMenu.value = {
+    visible: true,
+    kind,
+    trackId,
+    clipId,
+    x: clamp(event.clientX, padding, Math.max(padding, window.innerWidth - estimatedWidth - padding)),
+    y: clamp(event.clientY, padding, Math.max(padding, window.innerHeight - estimatedHeight - padding)),
+  }
+  void nextTick(() => {
+    const menu = contextMenuEl.value
+    if (!menu || !contextMenu.value.visible) return
+    contextMenu.value.x = clamp(contextMenu.value.x, padding, Math.max(padding, window.innerWidth - menu.offsetWidth - padding))
+    contextMenu.value.y = clamp(contextMenu.value.y, padding, Math.max(padding, window.innerHeight - menu.offsetHeight - padding))
+    menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true })
+  })
+}
+
+function openTimelineContext(event: MouseEvent) {
+  setContextPlayhead(event.clientX)
+  openContextMenu(event, 'timeline')
+}
+
+function openTrackContext(event: MouseEvent, track: EditorTrack, movePlayhead: boolean) {
+  if (movePlayhead) setContextPlayhead(event.clientX)
+  const firstClip = track.clips[0]
+  if (selected.value?.trackId !== track.id && firstClip) {
+    selectClip(track.id, firstClip.id)
+  }
+  openContextMenu(event, 'track', track.id)
+}
+
+function openClipContext(event: MouseEvent, track: EditorTrack, clip: EditorClip) {
+  setContextPlayhead(event.clientX)
+  selectClip(track.id, clip.id)
+  openContextMenu(event, 'clip', track.id, clip.id)
+}
+
+async function runContextMenuItem(item: ContextMenuItem) {
+  if (item.disabled) return
+  closeContextMenu()
+  await item.run()
+}
+
+function onWindowPointerDown(event: PointerEvent) {
+  const target = event.target instanceof Node ? event.target : null
+  if (target && contextMenuEl.value?.contains(target)) return
+  closeContextMenu()
 }
 
 function shouldIgnoreTimelinePointer(e: PointerEvent, el: HTMLElement) {
@@ -2327,12 +2535,15 @@ function onTimelinePointerMove(e: PointerEvent) {
 }
 
 function stopTimelinePointer() {
+  const wasSeeking = timelineSeeking.value
   window.removeEventListener('pointermove', onTimelinePointerMove)
+  window.removeEventListener('pointerup', stopTimelinePointer)
+  window.removeEventListener('pointercancel', stopTimelinePointer)
   timelineSeeking.value = false
-  syncMixAudioToPlayhead()
+  if (wasSeeking) syncMixAudioToPlayhead()
 }
 
-function setPlayheadFromPointer(e: PointerEvent) {
+function setPlayheadFromPointer(e: { clientX: number }) {
   const el = scrollEl.value
   const ruler = rulerEl.value
   if (!el || !ruler || !project.value) return
@@ -2352,6 +2563,45 @@ function syncMixAudioToPlayhead() {
   if (!el || playbackMode.value !== 'mix' || !el.src) return
   const max = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : project.value?.duration || playhead.value
   el.currentTime = clamp(playhead.value, 0, max)
+}
+
+function setPlayheadFollow(value: boolean, reveal = false) {
+  followPlayhead.value = value
+  try { localStorage.setItem('xb-editor-follow-playhead', value ? '1' : '0') } catch { /* ignore */ }
+  if (value && reveal) followPlayheadIntoView(true)
+}
+
+function togglePlayheadFollow() {
+  setPlayheadFollow(!followPlayhead.value, true)
+}
+
+function onTimelineScroll() {
+  closeContextMenu()
+  const nextLeft = scrollEl.value?.scrollLeft || 0
+  const movedHorizontally = Math.abs(nextLeft - lastTimelineScrollLeft) > 1
+  lastTimelineScrollLeft = nextLeft
+  if (programmaticTimelineScroll) return
+  if (movedHorizontally && playing.value && playbackMode.value === 'mix') setPlayheadFollow(false)
+}
+
+function followPlayheadIntoView(force = false) {
+  const el = scrollEl.value
+  if (!el || !followPlayhead.value || timelineSeeking.value) return
+  const playheadX = TRACK_LABEL_WIDTH + playhead.value * zoom.value
+  const visibleStart = el.scrollLeft + TRACK_LABEL_WIDTH
+  const visibleEnd = el.scrollLeft + el.clientWidth
+  const margin = Math.min(120, Math.max(48, (el.clientWidth - TRACK_LABEL_WIDTH) * 0.18))
+  if (!force && playheadX >= visibleStart + margin && playheadX <= visibleEnd - margin) return
+
+  const laneWidth = Math.max(1, el.clientWidth - TRACK_LABEL_WIDTH)
+  const target = clamp(playheadX - TRACK_LABEL_WIDTH - laneWidth * 0.5, 0, Math.max(0, el.scrollWidth - el.clientWidth))
+  programmaticTimelineScroll = true
+  el.scrollTo({ left: target, behavior: 'auto' })
+  if (programmaticScrollFrame) cancelAnimationFrame(programmaticScrollFrame)
+  programmaticScrollFrame = requestAnimationFrame(() => {
+    programmaticTimelineScroll = false
+    programmaticScrollFrame = 0
+  })
 }
 
 function clipStyle(clip: EditorClip) {
@@ -2802,6 +3052,7 @@ async function syncPluginNativeEditor() {
       const nextPosition = Number(res.monitor.position_seconds)
       if (!timelineSeeking.value && Number.isFinite(nextPosition)) {
         playhead.value = clamp(nextPosition, 0, project.value?.duration || nextPosition)
+        followPlayheadIntoView()
       }
       if (res.monitor.ended) {
         playing.value = false
@@ -3426,6 +3677,7 @@ function isMixPlaybackActive() {
 
 function mixRenderSignature(value: EditorProject) {
   return JSON.stringify({
+    projectId: value.id,
     duration: value.duration,
     sampleRate: value.sample_rate,
     tracks: value.tracks.map((track) => ({
@@ -3478,6 +3730,68 @@ function htmlAudioOutputActive() {
 function pauseHtmlAudioOutputs() {
   audioPrimaryEl.value?.pause()
   audioSecondaryEl.value?.pause()
+}
+
+function clearScheduledMixPreload() {
+  if (mixPreloadTimer) {
+    clearTimeout(mixPreloadTimer)
+    mixPreloadTimer = null
+  }
+}
+
+async function getMixPreviewData(projectId: string, signature: string): Promise<string> {
+  if (cachedMixSignature === signature && cachedMixData) return cachedMixData
+  if (mixPreloadSignature === signature && mixPreloadPromise) return mixPreloadPromise
+
+  mixPreloadSignature = signature
+  const task = api.renderEditorPreview(projectId)
+    .then((data) => {
+      if (!data) throw new Error('后端没有返回预览音频')
+      if (project.value?.id === projectId && mixRenderSignature(project.value) === signature) {
+        cachedMixData = data
+        cachedMixSignature = signature
+      }
+      return data
+    })
+    .finally(() => {
+      if (mixPreloadPromise === task) {
+        mixPreloadPromise = null
+        mixPreloadSignature = ''
+      }
+    })
+  mixPreloadPromise = task
+  return task
+}
+
+function primeMixAudioPlayer(data: string, signature: string) {
+  const el = audioEl.value
+  const currentProject = project.value
+  if (!el || !currentProject || playing.value || playbackMode.value === 'clip' || mixRenderSignature(currentProject) !== signature) return
+  if (el.src === data && activeMixSignature === signature) return
+  resetAudioPlayer(standbyAudioEl())
+  el.preload = 'auto'
+  el.src = data
+  el.load()
+  activeMixSignature = signature
+  playbackMode.value = 'mix'
+}
+
+function scheduleMixPreviewPreload(delay = MIX_PRELOAD_DEBOUNCE_MS) {
+  clearScheduledMixPreload()
+  const currentProject = project.value
+  if (!currentProject || nativeRealtimeReady.value || playing.value) return
+  const projectId = currentProject.id
+  const signature = mixRenderSignature(currentProject)
+  if (cachedMixSignature === signature && cachedMixData) {
+    primeMixAudioPlayer(cachedMixData, signature)
+    return
+  }
+  mixPreloadTimer = setTimeout(() => {
+    mixPreloadTimer = null
+    void getMixPreviewData(projectId, signature)
+      .then((data) => primeMixAudioPlayer(data, signature))
+      .catch(() => { /* foreground playback will surface any render error */ })
+  }, delay)
 }
 
 function scheduleLiveMixRefresh(delay = LIVE_MIX_REFRESH_DEBOUNCE_MS) {
@@ -3589,18 +3903,32 @@ function stopPlayback() {
   resetAudioPlayer(audioSecondaryEl.value)
   activeAudioSlot.value = 0
   playing.value = false
+  playbackBuffering.value = false
   playbackMode.value = 'none'
   if (pluginWindowSessionId.value) void syncPluginNativeEditor()
+}
+
+function pauseMixPlayback() {
+  cancelScheduledLiveMixRefresh()
+  playing.value = false
+  playbackBuffering.value = false
+  if (nativeRealtimeReady.value) {
+    void syncPluginNativeEditor()
+    return
+  }
+  pauseHtmlAudioOutputs()
 }
 
 async function playMix() {
   if (!project.value || !audioEl.value) return
   if (!claimPlayToggle()) return
   if (playing.value) {
-    stopPlayback()
+    pauseMixPlayback()
     return
   }
   if (previewing.value) return
+  timelineSeeking.value = false
+  followPlayheadIntoView(true)
   if (nativeRealtimeReady.value) {
     await saveProject()
     cancelScheduledLiveMixRefresh()
@@ -3615,12 +3943,32 @@ async function playMix() {
     await syncPluginNativeEditor()
     return
   }
+  if (liveControlSaveTimer) await flushLiveControlSave()
+  else await projectSaveChain.catch(() => undefined)
+  if (!project.value) return
+  const signature = mixRenderSignature(project.value)
+  if (playhead.value >= project.value.duration - 0.02) playhead.value = 0
+  const reusable = playbackMode.value === 'mix'
+    && activeMixSignature === signature
+    && !!audioEl.value?.src
+  if (reusable) {
+    const el = audioEl.value
+    if (!el) return
+    playbackBuffering.value = true
+    try {
+      el.currentTime = clamp(playhead.value, 0, project.value.duration)
+      await el.play()
+      playing.value = true
+    } catch (err) {
+      playbackBuffering.value = false
+      ElMessage.error(err instanceof Error ? err.message : '播放失败')
+    }
+    return
+  }
   const requestId = ++mixPreviewRequestId
   previewing.value = true
   try {
-    await saveProject()
-    if (!project.value) return
-    const data = await api.renderEditorPreview(project.value.id)
+    const data = await getMixPreviewData(project.value.id, signature)
     if (requestId !== mixPreviewRequestId) return
     if (!data) {
       ElMessage.error('预览渲染失败')
@@ -3638,11 +3986,13 @@ async function playMix() {
     el.volume = 1
     el.src = data
     el.currentTime = Math.max(0, playhead.value)
+    playbackBuffering.value = true
     await el.play()
     playing.value = true
-    activeMixSignature = mixRenderSignature(project.value)
+    activeMixSignature = signature
   } catch (err) {
     playbackMode.value = 'none'
+    playbackBuffering.value = false
     ElMessage.error(err instanceof Error ? err.message : '播放失败')
   } finally {
     if (requestId === mixPreviewRequestId) previewing.value = false
@@ -3820,14 +4170,28 @@ function onAudioPause(event: Event) {
   if (!isActiveAudioEvent(event)) return
   if (audioEl.value?.ended) playing.value = false
 }
+function onAudioPlaying(event: Event) {
+  if (!isActiveAudioEvent(event)) return
+  playbackBuffering.value = false
+  playing.value = true
+}
+function onAudioWaiting(event: Event) {
+  if (!isActiveAudioEvent(event) || audioEl.value?.paused) return
+  playbackBuffering.value = true
+}
+function onAudioError(event: Event) {
+  if (!isActiveAudioEvent(event)) return
+  playbackBuffering.value = false
+  playing.value = false
+}
 function onAudioEnded(event: Event) {
   if (!isActiveAudioEvent(event)) return
   cancelScheduledLiveMixRefresh()
-  activeMixSignature = ''
   clipPlaybackClipId = ''
   previewing.value = false
+  playbackBuffering.value = false
   playing.value = false
-  playbackMode.value = 'none'
+  if (playbackMode.value === 'clip') playbackMode.value = 'none'
   if (project.value) playhead.value = project.value.duration
 }
 function onAudioTimeUpdate(event: Event) {
@@ -3835,6 +4199,7 @@ function onAudioTimeUpdate(event: Event) {
   const el = audioEl.value
   if (!el || playbackMode.value !== 'mix' || timelineSeeking.value) return
   playhead.value = clamp(el.currentTime, 0, project.value?.duration || el.currentTime)
+  followPlayheadIntoView()
 }
 
 async function loadWaveforms() {
@@ -4048,15 +4413,35 @@ function isTypingTarget(target: EventTarget | null) {
   return !!el?.closest('input, textarea, select, [contenteditable="true"]')
 }
 function onKey(e: KeyboardEvent) {
-  if (!project.value || (!e.ctrlKey && !e.metaKey)) return
+  if (!project.value || isTypingTarget(e.target)) return
   const key = e.key.toLowerCase()
-  if (key === 'z') {
+  const command = e.ctrlKey || e.metaKey
+  if (key === 'escape' && contextMenu.value.visible) {
     e.preventDefault()
-    undo()
-  } else if (key === 'y') {
+    closeContextMenu()
+  } else if (!command && e.code === 'Space') {
+    e.preventDefault()
+    void playMix()
+  } else if (!command && key === 'delete') {
+    e.preventDefault()
+    deleteSelectedClip()
+  } else if (command && key === 'z' && e.shiftKey) {
     e.preventDefault()
     redo()
-  } else if (key === 'v' && !isTypingTarget(e.target)) {
+  } else if (command && key === 'z') {
+    e.preventDefault()
+    undo()
+  } else if (command && key === 'y') {
+    e.preventDefault()
+    redo()
+  } else if (command && key === 'k') {
+    e.preventDefault()
+    void splitAtPlayhead()
+  } else if (command && key === 'c') {
+    e.preventDefault()
+    if (selectedClip.value) void copySelectedClipAudio()
+    else if (selectedTrack.value) void copySelectedTrackAudio()
+  } else if (command && key === 'v') {
     e.preventDefault()
     void pasteAudioToSelectedTrack()
   }
@@ -4073,19 +4458,31 @@ watch(
 
 onMounted(() => {
   window.addEventListener('keydown', onKey)
+  window.addEventListener('blur', stopTimelinePointer)
+  window.addEventListener('blur', closeContextMenu)
+  window.addEventListener('resize', closeContextMenu)
+  window.addEventListener('pointerdown', onWindowPointerDown, true)
+  try { followPlayhead.value = localStorage.getItem('xb-editor-follow-playhead') !== '0' } catch { /* ignore */ }
   loadInitial()
 })
 onUnmounted(() => {
   cancelScheduledLiveMixRefresh()
+  clearScheduledMixPreload()
   if (liveControlSaveTimer) clearTimeout(liveControlSaveTimer)
   resetAudioPlayer(audioPrimaryEl.value)
   resetAudioPlayer(audioSecondaryEl.value)
   stopPluginStateSync()
   void closePluginNativeEditor()
   window.removeEventListener('keydown', onKey)
+  window.removeEventListener('blur', stopTimelinePointer)
+  window.removeEventListener('blur', closeContextMenu)
+  window.removeEventListener('resize', closeContextMenu)
+  window.removeEventListener('pointerdown', onWindowPointerDown, true)
   window.removeEventListener('pointermove', onDragMove)
   window.removeEventListener('pointermove', onTimelinePointerMove)
   window.removeEventListener('pointerup', stopTimelinePointer)
+  window.removeEventListener('pointercancel', stopTimelinePointer)
+  if (programmaticScrollFrame) cancelAnimationFrame(programmaticScrollFrame)
   if (clipStopTimer) clearTimeout(clipStopTimer)
   if (waveformZoomTimer) clearTimeout(waveformZoomTimer)
 })
@@ -4312,9 +4709,11 @@ onUnmounted(() => {
 }
 .clip-title button.active,
 .clip-actions button.active,
+.transport button.active,
 .track-label button.active {
   color: var(--xb-primary);
   border-color: var(--xb-primary);
+  background: rgba(var(--xb-primary-rgb), 0.12);
 }
 .clip-actions button:disabled,
 .transport button:disabled,
@@ -4940,6 +5339,9 @@ onUnmounted(() => {
   color: var(--xb-primary);
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
+.editor-head .spin,
+.transport .spin { animation: editor-spin 0.9s linear infinite; }
+@keyframes editor-spin { to { transform: rotate(360deg); } }
 .edit-tools {
   display: flex;
   align-items: center;
@@ -4982,6 +5384,63 @@ onUnmounted(() => {
   position: relative;
   overflow: auto;
   max-height: 720px;
+}
+.editor-context-menu {
+  position: fixed;
+  z-index: 4000;
+  width: 230px;
+  padding: 6px;
+  border: 1px solid var(--xb-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--xb-bg-2) 96%, transparent);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(18px);
+}
+.editor-context-menu button {
+  width: 100%;
+  height: 34px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--xb-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.editor-context-menu button:hover:not(:disabled),
+.editor-context-menu button:focus-visible {
+  outline: none;
+  color: var(--xb-primary);
+  background: rgba(var(--xb-primary-rgb), 0.12);
+}
+.editor-context-menu button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.editor-context-menu button.danger { color: var(--xb-accent); }
+.editor-context-menu button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.editor-context-menu kbd {
+  color: var(--xb-muted);
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font-size: 10px;
+  font-weight: 500;
+}
+.context-separator {
+  display: block;
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--xb-border);
 }
 .ruler {
   position: sticky;

@@ -26,6 +26,7 @@ try:
         naturalize_inference_output,
     )
     from inference_device import (
+        configure_torch_inference,
         patch_directml_checkpoint_load,
         patch_directml_float32,
         patch_directml_sovits_diffusion_extract,
@@ -41,6 +42,7 @@ except ImportError:  # package import used by tests/application tooling
         naturalize_inference_output,
     )
     from infrastructure.inference_device import (
+        configure_torch_inference,
         patch_directml_checkpoint_load,
         patch_directml_float32,
         patch_directml_sovits_diffusion_extract,
@@ -369,6 +371,8 @@ def main() -> int:
             _configure_rocm_miopen()
 
         resolved_device = resolve_torch_device(args.device, torch)
+        runtime_profile = configure_torch_inference(torch, resolved_device)
+        print(f"SVC_RUNTIME {runtime_profile.summary}", flush=True)
         if resolved_device.backend == "directml":
             patch_directml_float32(torch)
             patch_directml_checkpoint_load(torch)

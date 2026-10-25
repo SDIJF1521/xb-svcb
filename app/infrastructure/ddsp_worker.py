@@ -22,13 +22,25 @@ try:
         format_naturalizer_stats,
         naturalize_inference_output,
     )
-    from inference_device import ResolvedDevice, normalize_device, patch_directml_no_half, resolve_torch_device
+    from inference_device import (
+        ResolvedDevice,
+        configure_torch_inference,
+        normalize_device,
+        patch_directml_no_half,
+        resolve_torch_device,
+    )
 except ImportError:  # package import used by tests/application tooling
     from infrastructure.inference_naturalizer import (
         format_naturalizer_stats,
         naturalize_inference_output,
     )
-    from infrastructure.inference_device import ResolvedDevice, normalize_device, patch_directml_no_half, resolve_torch_device
+    from infrastructure.inference_device import (
+        ResolvedDevice,
+        configure_torch_inference,
+        normalize_device,
+        patch_directml_no_half,
+        resolve_torch_device,
+    )
 from typing import Any
 
 
@@ -563,6 +575,8 @@ def main() -> int:
             print("XB: DDSP-SVC DirectML 实验推理可能产生数值失真；请试听输出", flush=True)
         else:
             resolved_device = detected_device
+        runtime_profile = configure_torch_inference(torch, resolved_device)
+        print(f"DDSP_RUNTIME {runtime_profile.summary}", flush=True)
     except Exception as exc:  # noqa: BLE001
         print(f"DDSP_ERR 设备初始化失败: {exc}", flush=True)
         return 2

@@ -3,7 +3,7 @@
     <div class="header-inner">
       <!-- 品牌 -->
       <router-link class="brand" to="/">
-        <span class="logo"><el-icon><Headset /></el-icon></span>
+        <span class="logo"><img src="/log.png" alt="" /></span>
         <span class="brand-text">XB-<b>SVCB</b></span>
       </router-link>
 
@@ -249,7 +249,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { Headset, Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Picture, Close, Right, Download, Loading, Scissor, ArrowDown, Connection, Grid, MagicStick } from '@element-plus/icons-vue'
+import { Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Picture, Close, Right, Download, Loading, Scissor, ArrowDown, Connection, Grid, MagicStick } from '@element-plus/icons-vue'
 import ThemeSwitcher from '@/components/theme/ThemeSwitcher.vue'
 import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
@@ -483,13 +483,37 @@ onUnmounted(() => {
 }
 .logo {
   width: 36px; height: 36px;
-  display: grid;
-  place-items: center;
-  border-radius: 10px;
-  background: linear-gradient(135deg, var(--xb-primary), var(--xb-primary-2));
-  font-size: 19px;
-  color: var(--xb-on-primary);
-  box-shadow: 0 0 20px rgba(var(--xb-primary-rgb), 0.5);
+  flex: 0 0 36px;
+  padding: 2px;
+  border-radius: 50%;
+  background: var(--xb-brand-gradient);
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px rgba(var(--xb-fill-rgb), 0.1),
+    0 0 18px rgba(var(--xb-primary-rgb), 0.42);
+  transition: box-shadow 0.2s ease;
+}
+.logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  filter: saturate(1.04) contrast(1.03);
+  transition: filter 0.2s ease;
+}
+.brand:hover .logo {
+  box-shadow:
+    0 0 0 1px rgba(var(--xb-fill-rgb), 0.16),
+    0 0 22px rgba(var(--xb-primary-rgb), 0.58);
+}
+:global(html[data-theme='anime']) .logo {
+  box-shadow:
+    0 0 0 1px rgba(var(--xb-primary-rgb), 0.18),
+    0 4px 14px rgba(var(--xb-primary-rgb), 0.3);
+}
+:global(html[data-theme='anime']) .logo img {
+  filter: brightness(1.12) saturate(0.92) contrast(0.96);
 }
 .brand-text {
   font-size: 19px;

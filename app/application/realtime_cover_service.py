@@ -1279,6 +1279,9 @@ class RealtimeCoverService:
             if framework not in self._FRAMEWORKS:
                 continue
             seen.add(model_id)
+            model_params = ModelService.apply_detected_rvc_version(
+                record, dict(entry.get("params") or {})
+            )
             result.append(
                 {
                     "model_id": model_id,
@@ -1288,7 +1291,7 @@ class RealtimeCoverService:
                     "main_config_path": (record.get("main_config") or {}).get("path", ""),
                     "index_path": (record.get("index_file") or {}).get("path", ""),
                     "metadata": record.get("metadata") or {},
-                    "params": dict(entry.get("params") or {}),
+                    "params": model_params,
                 }
             )
         return result

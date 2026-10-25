@@ -126,7 +126,10 @@
               </label>
               <label v-if="frameworkOf(id) === 'rvc'" class="select-field">
                 <span>模型版本</span>
-                <select v-model="paramsFor(id).rvcVersion" :disabled="sessionActive">
+                <select v-if="detectedRvcVersionFor(id)" disabled>
+                  <option>自动 · {{ detectedRvcVersionFor(id) }}</option>
+                </select>
+                <select v-else v-model="paramsFor(id).rvcVersion" :disabled="sessionActive">
                   <option value="v2">v2</option>
                   <option value="v1">v1</option>
                 </select>
@@ -317,6 +320,10 @@ let scheduledDuration = 0
 const scheduledSources: AudioBufferSourceNode[] = []
 
 function frameworkOf(id: string) { return models.value.find((model) => model.id === id)?.framework || '' }
+function detectedRvcVersionFor(id: string) {
+  const value = String(models.value.find((model) => model.id === id)?.metadata?.rvc_version || '').toLowerCase()
+  return value === 'v1' || value === 'v2' ? value : ''
+}
 function frameworkName(framework?: string) { return framework === 'seed-vc' ? 'SeedVC' : 'RVC' }
 function modelName(id: string) { return models.value.find((model) => model.id === id)?.name || id }
 function baseName(path: string) { return path.split(/[/\\]/).pop() || path }

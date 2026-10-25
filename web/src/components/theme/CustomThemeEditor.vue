@@ -38,8 +38,12 @@
           <el-icon v-if="!modelValue.bgImage"><Picture /></el-icon>
         </div>
         <div class="theme-image-actions">
-          <button class="pf-btn" type="button" @click="pickThemeMedia">
-            <el-icon><Picture /></el-icon><span>{{ modelValue.bgImage ? '更换背景' : '添加背景' }}</span>
+          <button class="pf-btn" type="button" :disabled="mediaLoading" @click="pickThemeMedia">
+            <el-icon :class="{ 'is-loading': mediaLoading }">
+              <Loading v-if="mediaLoading" />
+              <Picture v-else />
+            </el-icon>
+            <span>{{ mediaLoading ? '处理中...' : modelValue.bgImage ? '更换背景' : '添加背景' }}</span>
           </button>
           <button v-if="modelValue.bgImage" class="pf-btn" type="button" @click="removeThemeImage">
             <el-icon><Close /></el-icon><span>移除</span>
@@ -48,7 +52,7 @@
         <input
           ref="themeImageInput"
           type="file"
-          accept="image/*,video/mp4"
+          accept="image/*,.heic,.heif,video/mp4"
           hidden
           @change="onThemeMediaFile"
         />
@@ -125,10 +129,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Check, Close, MagicStick, Picture } from '@element-plus/icons-vue'
+import { Check, Close, Loading, MagicStick, Picture } from '@element-plus/icons-vue'
 import { api, isDesktop } from '@/api'
 import { CUSTOM_THEME_FIELDS } from '@/stores/theme'
 import type { CustomTheme, CustomThemeField } from '@/stores/theme'
+import { convertHeifThemeImage, detectThemeImageFile } from '@/utils/themeMedia'
 
 defineOptions({ name: 'CustomThemeEditor' })
 
@@ -148,6 +153,7 @@ const emit = defineEmits<{
 const customThemeFields = CUSTOM_THEME_FIELDS
 const themeImageInput = ref<HTMLInputElement>()
 const mediaPreviewSrc = ref('')
+const mediaLoading = ref(false)
 let mediaResolveTicket = 0
 const isVideoMedia = computed(() => props.modelValue.bgMediaType === 'video')
 
@@ -225,6 +231,7 @@ async function pickThemeMedia() {
     const res = await api.pickThemeMediaFile()
     if (res.ok && res.path) {
       patchCustomTheme({ bgImage: res.path, bgMediaType: res.kind === 'video' ? 'video' : 'image' })
+      if (res.converted) ElMessage.success('已自动转换图片格式并应用背景')
       return
     }
     if (res.cancelled) return
@@ -280,18 +287,32 @@ function readThemeVideo(file: File): Promise<string> {
   })
 }
 
-function onThemeMediaFile(e: Event) {
+async function onThemeMediaFile(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
   const isVideo = file.type === 'video/mp4' || file.name.toLowerCase().endsWith('.mp4')
-  const reader = isVideo ? readThemeVideo(file) : resizeThemeImage(file)
-  reader
-    .then((dataUrl) => {
-      patchCustomTheme({ bgImage: dataUrl, bgMediaType: isVideo ? 'video' : 'image' })
-    })
-    .catch(() => ElMessage.error('读取背景媒体失败'))
+  mediaLoading.value = true
+  try {
+    if (isVideo) {
+      const dataUrl = await readThemeVideo(file)
+      patchCustomTheme({ bgImage: dataUrl, bgMediaType: 'video' })
+      return
+    }
+
+    const format = await detectThemeImageFile(file)
+    const converted = format === 'heif'
+    const browserFile = converted ? await convertHeifThemeImage(file) : file
+    const dataUrl = await resizeThemeImage(browserFile)
+    patchCustomTheme({ bgImage: dataUrl, bgMediaType: 'image' })
+    if (converted) ElMessage.success('已自动转换 HEIC 图片并应用背景')
+  } catch (error) {
+    const detail = error instanceof Error && error.message ? `：${error.message}` : ''
+    ElMessage.error(`读取背景媒体失败${detail}`)
+  } finally {
+    mediaLoading.value = false
+  }
 }
 </script>
 

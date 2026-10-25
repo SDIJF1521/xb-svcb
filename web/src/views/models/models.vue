@@ -257,6 +257,12 @@
                 <span v-if="m.health !== 'unknown'" class="health-tag" :class="m.health">{{ m.health === 'ok' ? '已检测' : '需修复' }}</span>
                 <span v-if="m.hasDiffusion" class="diff-tag">扩散</span>
                 <span v-if="m.framework === 'rvc' && m.indexFile !== '—'" class="diff-tag">index</span>
+                <span
+                  v-if="m.framework === 'rvc'"
+                  class="rvc-version-tag"
+                  :class="{ pending: !detectedRvcVersion(m) }"
+                  :title="rvcVersionTitle(m)"
+                >{{ detectedRvcVersion(m) ? `自动 ${detectedRvcVersion(m)}` : '版本待检测' }}</span>
               </div>
               <div class="row-sub">{{ m.type }} · {{ m.sr }} · {{ m.size }} · {{ m.date }}</div>
             </div>
@@ -756,9 +762,20 @@ function baseName(p: string): string {
   return p ? p.split(/[/\\]/).pop() || p : ''
 }
 
+function detectedRvcVersion(model: ModelVM): string {
+  const value = String(model.metadata?.rvc_version || '').toLowerCase()
+  return value === 'v1' || value === 'v2' ? value : ''
+}
+
+function rvcVersionTitle(model: ModelVM): string {
+  const version = detectedRvcVersion(model)
+  if (version) return `已从模型 checkpoint 自动识别为 ${version}`
+  return String(model.metadata?.rvc_version_detail || '点击“检测并修复元数据”重新识别 RVC 版本')
+}
+
 const suggestedName = computed(() => baseName(imp.value.mainModel).replace(/\.[^.]+$/, ''))
 const importHint = computed(() => {
-  if (impFramework.value === 'rvc') return '主模型(.pth) 必填，检索文件(.index) 可选'
+  if (impFramework.value === 'rvc') return '主模型(.pth) 必填，检索文件(.index) 可选；v1/v2 将自动检测'
   if (impFramework.value === 'seed-vc') return 'checkpoint + 配置必填；参考音频在推理时选择'
   if (impFramework.value === 'ddsp-svc') return 'DDSP / Diffusion / Rectified Flow checkpoint + config.yaml'
   return '主模型 + 配置为必填，扩散模型可选'
@@ -812,7 +829,8 @@ async function doImport() {
       index_file: isRvc ? imp.value.indexFile || null : null,
     })
     if (created) {
-      ElMessage.success('已导入：' + created.name)
+      const detected = String(created.metadata?.rvc_version || '')
+      ElMessage.success('已导入：' + created.name + (isRvc && detected ? `（自动识别 ${detected}）` : ''))
       resetImport()
     } else {
       ElMessage.error('导入失败，请检查所选文件')
@@ -838,7 +856,12 @@ async function inspectModel(m: ModelVM, repair: boolean) {
     return
   }
   if (res.ok) {
-    ElMessage.success(repair ? '模型元数据已检测并修复' : '模型检测通过')
+    const version = String(res.model?.metadata?.rvc_version || '')
+    ElMessage.success(
+      repair
+        ? `模型元数据已检测并修复${version ? `，RVC ${version}` : ''}`
+        : `模型检测通过${version ? `，RVC ${version}` : ''}`,
+    )
   } else {
     ElMessage.warning((res.issues || []).map((i) => i.message).join('；') || '模型需要修复')
   }
@@ -1502,7 +1525,7 @@ onUnmounted(() => {
   font-weight: 700;
 }
 .mini-tag.media { color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.1); }
-.def-tag, .diff-tag, .fw-tag, .fav-tag, .health-tag, .ver-tag { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 6px; font-size: 11px; font-weight: 700; vertical-align: middle; }
+.def-tag, .diff-tag, .fw-tag, .fav-tag, .health-tag, .ver-tag, .rvc-version-tag { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 6px; font-size: 11px; font-weight: 700; vertical-align: middle; }
 .def-tag { color: var(--xb-on-primary); background: var(--xb-primary); }
 .diff-tag { color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), 0.14); border: 1px solid rgba(var(--xb-primary-rgb), 0.35); }
 .fw-tag { color: var(--xb-accent); background: rgba(var(--xb-accent-rgb), 0.14); border: 1px solid rgba(var(--xb-accent-rgb), 0.35); }
@@ -1510,6 +1533,8 @@ onUnmounted(() => {
 .fav-tag { color: #f5a524; background: rgba(245, 165, 36, 0.14); border: 1px solid rgba(245, 165, 36, 0.35); }
 .health-tag.ok { color: #27c08a; background: rgba(39, 192, 138, 0.14); border: 1px solid rgba(39, 192, 138, 0.35); }
 .health-tag.error { color: var(--xb-accent); background: rgba(var(--xb-accent-rgb), 0.12); border: 1px solid rgba(var(--xb-accent-rgb), 0.3); }
+.rvc-version-tag { color: var(--xb-success); background: rgba(var(--xb-success-rgb), 0.12); border: 1px solid rgba(var(--xb-success-rgb), 0.32); }
+.rvc-version-tag.pending { color: var(--xb-warn); background: rgba(var(--xb-warn-rgb), 0.1); border-color: rgba(var(--xb-warn-rgb), 0.3); }
 
 /* 架构筛选下拉 */
 .fw-field { flex-shrink: 0; }

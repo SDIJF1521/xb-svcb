@@ -68,15 +68,17 @@ function deleteStoredMedia(path: string) {
 }
 
 function updateCustomDraft(value: CustomTheme) {
-  const previousMedia = customDraft.value.bgImage
+  const mediaChanged = (
+    customDraft.value.bgImage !== value.bgImage
+    || customDraft.value.bgMediaType !== value.bgMediaType
+  )
   customDraft.value = value
-  if (
-    previousMedia
-    && previousMedia !== value.bgImage
-    && previousMedia !== persistedMedia.value
-  ) {
-    deleteStoredMedia(previousMedia)
-  }
+  if (!mediaChanged) return
+
+  const previousMedia = persistedMedia.value
+  themeStore.saveCustomTheme(value)
+  persistedMedia.value = value.bgImage
+  if (previousMedia !== value.bgImage) deleteStoredMedia(previousMedia)
 }
 
 function togglePanel() {

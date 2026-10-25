@@ -47,6 +47,7 @@ export interface ThemeMediaPickResult {
   kind?: 'image' | 'video'
   mime?: string
   name?: string
+  converted?: boolean
 }
 
 export interface SystemStatus {

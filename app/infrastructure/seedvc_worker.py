@@ -28,6 +28,7 @@ try:
         naturalize_inference_output,
     )
     from inference_device import (
+        configure_torch_inference,
         patch_directml_no_half,
         patch_directml_rmvpe_cpu,
         patch_directml_seedvc_f0_coarse,
@@ -39,6 +40,7 @@ except ImportError:  # package import used by tests/application tooling
         naturalize_inference_output,
     )
     from infrastructure.inference_device import (
+        configure_torch_inference,
         patch_directml_no_half,
         patch_directml_rmvpe_cpu,
         patch_directml_seedvc_f0_coarse,
@@ -527,6 +529,8 @@ def main() -> int:
             import torch
 
             resolved_device = resolve_torch_device(args.device, torch)
+            runtime_profile = configure_torch_inference(torch, resolved_device)
+            print(f"SEEDVC_RUNTIME {runtime_profile.summary}", flush=True)
             fp16 = fp16 and resolved_device.backend not in {"cpu", "directml"}
             if resolved_device.backend == "directml":
                 patch_directml_no_half(torch)

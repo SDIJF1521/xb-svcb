@@ -263,7 +263,10 @@
                   </div>
                   <div v-if="frameworkOf(m.id) === 'rvc'" class="mp-mini">
                     <span>版本</span>
-                    <select v-model="mp(m.id).rvcVersion">
+                    <select v-if="detectedRvcVersionFor(m.id)" disabled>
+                      <option>自动 · {{ detectedRvcVersionFor(m.id) }}</option>
+                    </select>
+                    <select v-else v-model="mp(m.id).rvcVersion">
                       <option v-for="v in rvcVersions" :key="v" :value="v">{{ v }}</option>
                     </select>
                   </div>
@@ -547,6 +550,12 @@
               <label class="field-block-label">RVC 模型版本</label>
               <div class="seg">
                 <button
+                  v-if="detectedRvcVersionFor(selectedModel)"
+                  class="seg-item active"
+                  disabled
+                >自动 · {{ detectedRvcVersionFor(selectedModel) }}</button>
+                <button
+                  v-else
                   v-for="v in rvcVersions"
                   :key="v"
                   class="seg-item"
@@ -1017,12 +1026,16 @@
             <div class="player-cover">
               <el-icon><Headset /></el-icon>
             </div>
-            <div class="waveform" :class="{ playing: isPlaying }">
+            <div class="waveform" :class="{ playing: isPlaying, loading: previewAudioLoading }">
               <span v-for="n in 56" :key="n" :style="barStyle(n)"></span>
+              <div v-if="previewAudioLoading" class="preview-audio-loading" role="status" aria-label="正在加载试听音频">
+                <el-icon class="spin"><Loading /></el-icon>
+              </div>
             </div>
             <div class="player-ctrl">
-              <button class="play-main" :disabled="!done" @click="onTogglePlay">
-                <el-icon v-if="!isPlaying"><VideoPlay /></el-icon>
+              <button class="play-main" :disabled="!done || previewAudioLoading" :aria-busy="previewAudioLoading" @click="onTogglePlay">
+                <el-icon v-if="previewAudioLoading" class="spin"><Loading /></el-icon>
+                <el-icon v-else-if="!isPlaying"><VideoPlay /></el-icon>
                 <el-icon v-else><VideoPause /></el-icon>
               </button>
               <el-button round class="ghost-btn" :disabled="!done" @click="onExport">
@@ -1040,9 +1053,13 @@
           <audio
             ref="audioEl"
             style="display: none"
-            @play="isPlaying = true"
-            @pause="isPlaying = false"
-            @ended="isPlaying = false"
+            @play="onPreviewPlay"
+            @playing="onPreviewPlaying"
+            @waiting="onPreviewWaiting"
+            @stalled="onPreviewWaiting"
+            @pause="onPreviewPause"
+            @ended="onPreviewEnded"
+            @error="onPreviewError"
             @loadedmetadata="onPreviewMetadata"
             @timeupdate="onPreviewTimeUpdate"
           />
@@ -1265,6 +1282,10 @@ const rvcVersion = ref(str(prefs.rvcVersion, 'v2'))
 /* 模型框架辅助：用于单/多模型参数面板按框架切换、下拉显示框架标签 */
 function frameworkOf(id: string): string {
   return models.value.find((m) => m.id === id)?.framework || 'so-vits-svc'
+}
+function detectedRvcVersionFor(id: string): string {
+  const value = String(models.value.find((m) => m.id === id)?.metadata?.rvc_version || '').toLowerCase()
+  return value === 'v1' || value === 'v2' ? value : ''
 }
 function speakerOptionsFor(id: string): string[] {
   return models.value.find((m) => m.id === id)?.speakers || []
@@ -2364,6 +2385,7 @@ const canGenerate = computed(() => {
 
 const audioEl = ref<HTMLAudioElement | null>(null)
 const audioLoadedFor = ref<string | null>(null)
+const previewAudioLoading = ref(false)
 const previewCurrentTime = ref(0)
 const previewDuration = ref(0)
 function formatPreviewTime(value: number) {
@@ -2376,6 +2398,28 @@ function onPreviewMetadata() {
 function onPreviewTimeUpdate() {
   previewCurrentTime.value = Number(audioEl.value?.currentTime || 0)
 }
+function onPreviewPlay() {
+  isPlaying.value = true
+}
+function onPreviewPlaying() {
+  isPlaying.value = true
+  previewAudioLoading.value = false
+}
+function onPreviewWaiting() {
+  if (!audioEl.value?.paused) previewAudioLoading.value = true
+}
+function onPreviewPause() {
+  isPlaying.value = false
+}
+function onPreviewEnded() {
+  isPlaying.value = false
+  previewAudioLoading.value = false
+}
+function onPreviewError() {
+  isPlaying.value = false
+  previewAudioLoading.value = false
+  audioLoadedFor.value = null
+}
 function seekPreview() {
   if (audioEl.value) audioEl.value.currentTime = previewCurrentTime.value
 }
@@ -2384,20 +2428,30 @@ const editorOpenedFor = ref<string | null>(null)
 async function onTogglePlay() {
   const work = currentWork.value
   const el = audioEl.value
-  if (!work || work.status !== 'done' || !el) return
-  if (audioLoadedFor.value !== work.id) {
-    const data = await api.getWorkAudio(work.id)
-    if (!data) {
-      ElMessage.error('无法加载生成的音频')
-      return
-    }
-    el.src = data
-    audioLoadedFor.value = work.id
-    previewCurrentTime.value = 0
-    previewDuration.value = 0
+  if (!work || work.status !== 'done' || !el || previewAudioLoading.value) return
+  if (!el.paused) {
+    el.pause()
+    previewAudioLoading.value = false
+    return
   }
-  if (el.paused) await el.play()
-  else el.pause()
+
+  previewAudioLoading.value = true
+  try {
+    if (audioLoadedFor.value !== work.id) {
+      const data = await api.getWorkAudio(work.id)
+      if (!data) throw new Error('无法加载生成的音频')
+      el.src = data
+      el.load()
+      audioLoadedFor.value = work.id
+      previewCurrentTime.value = 0
+      previewDuration.value = 0
+    }
+    await el.play()
+  } catch (error) {
+    previewAudioLoading.value = false
+    isPlaying.value = false
+    ElMessage.error(error instanceof Error && error.message ? error.message : '音频播放失败')
+  }
 }
 
 async function onExport() {
@@ -4289,6 +4343,7 @@ input[type='range'] {
   box-shadow: 0 0 26px rgba(var(--xb-primary-rgb), 0.4);
 }
 .waveform {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4305,6 +4360,18 @@ input[type='range'] {
 .waveform.playing span {
   opacity: 1;
   animation: bar 1s ease-in-out infinite alternate;
+}
+.waveform.loading span {
+  opacity: 0.12;
+  animation: none;
+}
+.preview-audio-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--xb-primary);
+  font-size: 28px;
 }
 @keyframes bar { from { transform: scaleY(0.35); } to { transform: scaleY(1); } }
 .player-ctrl {

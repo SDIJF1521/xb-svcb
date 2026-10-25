@@ -138,6 +138,31 @@ class ResolvedDevice:
         return str(getattr(self.device, "type", str(self.device).split(":", 1)[0]))
 
 
+@dataclass(frozen=True)
+class TorchInferenceProfile:
+    """Runtime settings shared by the isolated PyTorch inference workers."""
+
+    backend: str
+    device: str
+    gradients: str = "off"
+    cpu_threads: Optional[int] = None
+    float32_matmul_precision: str = "default"
+    tf32: str = "default"
+
+    @property
+    def summary(self) -> str:
+        fields = [
+            f"backend={self.backend}",
+            f"device={self.device}",
+            f"gradients={self.gradients}",
+            f"matmul={self.float32_matmul_precision}",
+            f"tf32={self.tf32}",
+        ]
+        if self.cpu_threads is not None:
+            fields.append(f"cpu_threads={self.cpu_threads}")
+        return " ".join(fields)
+
+
 class _DirectMLComplexTensor:
     """CPU complex tensor whose real-valued views return to DirectML."""
 
@@ -417,7 +442,7 @@ def resolve_torch_device(requested: str = "auto", torch_module: Any = None) -> R
         if normalized == "rocm" and resolved.backend != "rocm":
             raise RuntimeError("已选择 AMD ROCm，但当前推理环境安装的是 NVIDIA CUDA")
         if normalized == "cuda" and resolved.backend == "rocm":
-            return resolved
+            raise RuntimeError("已选择 NVIDIA CUDA，但当前推理环境安装的是 AMD ROCm")
         return resolved
 
     if normalized == "directml":
@@ -448,6 +473,81 @@ def resolve_torch_device(requested: str = "auto", torch_module: Any = None) -> R
     if resolved is not None:
         return resolved
     return ResolvedDevice(torch.device("cpu"), "cpu", "CPU")
+
+
+def configure_torch_inference(
+    torch: Any,
+    resolved: ResolvedDevice,
+) -> TorchInferenceProfile:
+    """Apply quality-first settings that are safe across model families.
+
+    Model-specific dtype choices remain with each worker. This function only
+    disables autograd, pins CUDA/HIP's process-wide current device, keeps fp32
+    matrix operations on the highest precision path, and prevents CPU workers
+    from oversubscribing large logical-core machines.
+    """
+    gradients = "off"
+    try:
+        torch.set_grad_enabled(False)
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        gradients = "unchanged"
+
+    backend = resolved.backend
+    device = str(resolved.device)
+    cpu_threads: Optional[int] = None
+    matmul_precision = "default"
+    tf32 = "default"
+
+    if backend == "cpu":
+        logical_cpus = max(1, int(os.cpu_count() or 1))
+        default_threads = max(1, min(8, logical_cpus))
+        try:
+            cpu_threads = max(
+                1,
+                int(os.environ.get("XB_INFERENCE_CPU_THREADS", default_threads)),
+            )
+        except (TypeError, ValueError):
+            cpu_threads = default_threads
+        try:
+            torch.set_num_threads(cpu_threads)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            pass
+        try:
+            torch.set_num_interop_threads(1)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            pass
+
+    if backend in {"cuda", "rocm"}:
+        # Several upstream projects create tensors with an unqualified
+        # ``cuda`` device even when a non-zero adapter was selected.
+        try:
+            torch.cuda.set_device(resolved.device)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            pass
+        try:
+            torch.set_float32_matmul_precision("highest")
+            matmul_precision = "highest"
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            pass
+
+    if backend == "cuda":
+        # TF32 is fast, but its reduced mantissa can audibly change vocoder and
+        # diffusion output. Half-precision model paths remain model-controlled.
+        try:
+            torch.backends.cudnn.allow_tf32 = False
+            torch.backends.cuda.matmul.allow_tf32 = False
+            tf32 = "off"
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            pass
+
+    return TorchInferenceProfile(
+        backend=backend,
+        device=device,
+        gradients=gradients,
+        cpu_threads=cpu_threads,
+        float32_matmul_precision=matmul_precision,
+        tf32=tf32,
+    )
 
 
 def patch_directml_float32(torch: Any) -> None:

@@ -3324,6 +3324,39 @@ def test_psola_crossfade_compensates_phase_cancellation_without_leaking() -> Non
     assert np.isfinite(compensated).all()
 
 
+def test_psola_mono_resynthesis_restores_stereo_layout_and_side_signal() -> None:
+    frames = 1000
+    time = np.arange(frames, dtype=np.float64) / frames
+    dry_mid = 0.20 * np.sin(2.0 * np.pi * 5.0 * time)
+    dry_side = 0.04 * np.cos(2.0 * np.pi * 7.0 * time)
+    original = np.vstack([dry_mid + dry_side, dry_mid - dry_side])
+    tuned_mid = (0.15 * np.sin(2.0 * np.pi * 5.0 * time + 0.2))[np.newaxis, :]
+
+    restored = vocal_tuning_worker._restore_resynthesis_channels(
+        original,
+        tuned_mid,
+    )
+
+    assert restored.shape == original.shape
+    assert np.allclose(np.mean(restored, axis=0), tuned_mid[0])
+    assert np.allclose((restored[0] - restored[1]) * 0.5, dry_side)
+
+
+def test_psola_multichannel_resynthesis_downmixes_for_mono_source() -> None:
+    original = np.zeros((1, 12), dtype=np.float64)
+    tuned = np.vstack(
+        [
+            np.linspace(-0.2, 0.3, 12),
+            np.linspace(0.1, 0.4, 12),
+        ]
+    )
+
+    restored = vocal_tuning_worker._restore_resynthesis_channels(original, tuned)
+
+    assert restored.shape == original.shape
+    assert np.allclose(restored[0], np.mean(tuned, axis=0))
+
+
 def test_reference_gap_cleanup_attenuates_model_only_short_burst() -> None:
     sample_rate = 2000
     time = np.arange(sample_rate * 3, dtype=np.float64) / sample_rate
