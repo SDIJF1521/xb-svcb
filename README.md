@@ -2,6 +2,8 @@
 
 **简体中文** | [English](README.en.md) | [日本語](README.ja.md)
 
+<img src="assets/icon/xb-svcb.png" width="180" alt="XB-SVCB Logo" />
+
 # 🎤 XB-SVCB · AI 翻唱工具
 
 #### 开箱即用的桌面级 AI 翻唱工作站
@@ -351,9 +353,9 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 
 感谢每一位参与 XB-SVCB 开发和维护的贡献者。
 
-> <a href="https://github.com/SDIJF1521" title="YGXB"><img src="https://github.com/SDIJF1521.png?size=96" width="96" height="96" alt="YGXB" style="border-radius: 50%;" /></a>&nbsp;&nbsp;<a href="https://github.com/emptyelse" title="emptyelse"><img src="https://github.com/emptyelse.png?size=96" width="96" height="96" alt="emptyelse" style="border-radius: 50%;" /></a>&nbsp;&nbsp;<img src="assets/contributors/lizhi.svg" width="96" height="96" alt="lizhi" title="lizhi" />&nbsp;&nbsp;<img src="assets/contributors/gfmtx.svg" width="96" height="96" alt="GFMTX" title="GFMTX" />
+> <a href="https://github.com/SDIJF1521" title="SDIJF1521 · YGXB"><img src="https://images.weserv.nl/?url=github.com/SDIJF1521.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="SDIJF1521" /></a>&nbsp;&nbsp;<a href="https://github.com/emptyelse" title="emptyelse"><img src="https://images.weserv.nl/?url=github.com/emptyelse.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="emptyelse" /></a>&nbsp;&nbsp;<a href="https://github.com/GFMAA" title="GFMAA"><img src="https://images.weserv.nl/?url=github.com/GFMAA.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="GFMAA" /></a>&nbsp;&nbsp;<a href="https://github.com/SugarCatCat" title="SugarCatCat · 糖猫猫"><img src="https://images.weserv.nl/?url=github.com/SugarCatCat.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="SugarCatCat" /></a>
 
-贡献者：**YGXB · emptyelse · lizhi · GFMTX**。点击已关联 GitHub 账户的头像可查看个人主页；完整记录见[贡献者页面](https://github.com/SDIJF1521/xb-svcb/graphs/contributors)。欢迎阅读 [贡献指南](CONTRIBUTING.md) 并参与项目。
+贡献者：**SDIJF1521（YGXB） · emptyelse · GFMAA · SugarCatCat（糖猫猫）**。点击头像可查看个人主页；完整记录见[贡献者页面](https://github.com/SDIJF1521/xb-svcb/graphs/contributors)。欢迎阅读 [贡献指南](CONTRIBUTING.md) 并参与项目。
 
 ## 进一步阅读
 

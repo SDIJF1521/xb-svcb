@@ -2,6 +2,8 @@
 
 [简体中文](README.md) | [English](README.en.md) | **日本語**
 
+<img src="assets/icon/xb-svcb.png" width="180" alt="XB-SVCB Logo" />
+
 # XB-SVCB · AIカバー制作ツール
 
 #### すぐに使えるデスクトップ向けAIカバー制作環境
@@ -222,9 +224,9 @@ npm run build
 
 XB-SVCB の開発と保守に参加してくださったすべての皆様に感謝します。
 
-> <a href="https://github.com/SDIJF1521" title="YGXB"><img src="https://github.com/SDIJF1521.png?size=96" width="96" height="96" alt="YGXB" style="border-radius: 50%;" /></a>&nbsp;&nbsp;<a href="https://github.com/emptyelse" title="emptyelse"><img src="https://github.com/emptyelse.png?size=96" width="96" height="96" alt="emptyelse" style="border-radius: 50%;" /></a>&nbsp;&nbsp;<img src="assets/contributors/lizhi.svg" width="96" height="96" alt="lizhi" title="lizhi" />&nbsp;&nbsp;<img src="assets/contributors/gfmtx.svg" width="96" height="96" alt="GFMTX" title="GFMTX" />
+> <a href="https://github.com/SDIJF1521" title="SDIJF1521 · YGXB"><img src="https://images.weserv.nl/?url=github.com/SDIJF1521.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="SDIJF1521" /></a>&nbsp;&nbsp;<a href="https://github.com/emptyelse" title="emptyelse"><img src="https://images.weserv.nl/?url=github.com/emptyelse.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="emptyelse" /></a>&nbsp;&nbsp;<a href="https://github.com/GFMAA" title="GFMAA"><img src="https://images.weserv.nl/?url=github.com/GFMAA.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="GFMAA" /></a>&nbsp;&nbsp;<a href="https://github.com/SugarCatCat" title="SugarCatCat · 糖猫猫"><img src="https://images.weserv.nl/?url=github.com/SugarCatCat.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="SugarCatCat" /></a>
 
-コントリビューター：**YGXB · emptyelse · lizhi · GFMTX**。GitHub アカウントにリンクされたアバターからプロフィールを、[コントリビューター履歴](https://github.com/SDIJF1521/xb-svcb/graphs/contributors)からすべての記録を確認できます。プロジェクトへの参加方法は[コントリビューションガイド](CONTRIBUTING.md)を参照してください。
+コントリビューター：**SDIJF1521（YGXB） · emptyelse · GFMAA · SugarCatCat（糖猫猫）**。アバターから GitHub プロフィールを、[コントリビューター履歴](https://github.com/SDIJF1521/xb-svcb/graphs/contributors)からすべての記録を確認できます。プロジェクトへの参加方法は[コントリビューションガイド](CONTRIBUTING.md)を参照してください。
 
 ## 謝辞
 
