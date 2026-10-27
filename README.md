@@ -33,6 +33,7 @@
 <sub>项目官网：**[https://xb-svcb.cn](https://xb-svcb.cn)**</sub>
 <sub>项目文档：**[https://sdijf1521.github.io/xb-svcb/](https://sdijf1521.github.io/xb-svcb/)**</sub>
 </div>
+
 ---
 
 ## 项目简介
@@ -345,6 +346,14 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 - Intel GPU、CPU 性能和多 GPU 调度优化。
 
 完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.0.32 更新说明](docs/release-notes/release_notes_v032.md)。
+
+## 🤝 贡献者
+
+感谢每一位参与 XB-SVCB 开发和维护的贡献者。
+
+> <a href="https://github.com/SDIJF1521" title="YGXB"><img src="https://github.com/SDIJF1521.png?size=96" width="96" height="96" alt="YGXB" style="border-radius: 50%;" /></a>&nbsp;&nbsp;<a href="https://github.com/emptyelse" title="emptyelse"><img src="https://github.com/emptyelse.png?size=96" width="96" height="96" alt="emptyelse" style="border-radius: 50%;" /></a>&nbsp;&nbsp;<img src="assets/contributors/lizhi.svg" width="96" height="96" alt="lizhi" title="lizhi" />&nbsp;&nbsp;<img src="assets/contributors/gfmtx.svg" width="96" height="96" alt="GFMTX" title="GFMTX" />
+
+贡献者：**YGXB · emptyelse · lizhi · GFMTX**。点击已关联 GitHub 账户的头像可查看个人主页；完整记录见[贡献者页面](https://github.com/SDIJF1521/xb-svcb/graphs/contributors)。欢迎阅读 [贡献指南](CONTRIBUTING.md) 并参与项目。
 
 ## 进一步阅读
 

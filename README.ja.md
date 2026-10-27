@@ -218,6 +218,14 @@ npm run build
 
 全バージョンの履歴は[リリースノート](docs/release-notes/)を参照してください。
 
+## コントリビューター
+
+XB-SVCB の開発と保守に参加してくださったすべての皆様に感謝します。
+
+> <a href="https://github.com/SDIJF1521" title="YGXB"><img src="https://github.com/SDIJF1521.png?size=96" width="96" height="96" alt="YGXB" style="border-radius: 50%;" /></a>&nbsp;&nbsp;<a href="https://github.com/emptyelse" title="emptyelse"><img src="https://github.com/emptyelse.png?size=96" width="96" height="96" alt="emptyelse" style="border-radius: 50%;" /></a>&nbsp;&nbsp;<img src="assets/contributors/lizhi.svg" width="96" height="96" alt="lizhi" title="lizhi" />&nbsp;&nbsp;<img src="assets/contributors/gfmtx.svg" width="96" height="96" alt="GFMTX" title="GFMTX" />
+
+コントリビューター：**YGXB · emptyelse · lizhi · GFMTX**。GitHub アカウントにリンクされたアバターからプロフィールを、[コントリビューター履歴](https://github.com/SDIJF1521/xb-svcb/graphs/contributors)からすべての記録を確認できます。プロジェクトへの参加方法は[コントリビューションガイド](CONTRIBUTING.md)を参照してください。
+
 ## 謝辞
 
 - 同梱・デモ用音声モデルの大部分は**白菜工厂1145号员工**氏から提供されました。モデルの著作権は各作者に帰属します。各モデルのライセンスまたは許諾範囲内で使用してください。

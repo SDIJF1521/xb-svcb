@@ -218,6 +218,14 @@ The core multi-framework inference workflow, timeline-based multi-singer covers,
 
 See the [release-notes directory](docs/release-notes/) for the full version history.
 
+## Contributors
+
+Thanks to everyone who has contributed to the development and maintenance of XB-SVCB.
+
+> <a href="https://github.com/SDIJF1521" title="YGXB"><img src="https://github.com/SDIJF1521.png?size=96" width="96" height="96" alt="YGXB" style="border-radius: 50%;" /></a>&nbsp;&nbsp;<a href="https://github.com/emptyelse" title="emptyelse"><img src="https://github.com/emptyelse.png?size=96" width="96" height="96" alt="emptyelse" style="border-radius: 50%;" /></a>&nbsp;&nbsp;<img src="assets/contributors/lizhi.svg" width="96" height="96" alt="lizhi" title="lizhi" />&nbsp;&nbsp;<img src="assets/contributors/gfmtx.svg" width="96" height="96" alt="GFMTX" title="GFMTX" />
+
+Contributors: **YGXB · emptyelse · lizhi · GFMTX**. Click an avatar linked to a GitHub account to view its profile, or see the complete [contributor history](https://github.com/SDIJF1521/xb-svcb/graphs/contributors). See the [contributing guide](CONTRIBUTING.md) to participate in the project.
+
 ## Acknowledgements
 
 - Most bundled and demonstration voice models were provided by **白菜工厂1145号员工**. Model copyrights remain with their respective authors; use each model only within its license or authorization.
