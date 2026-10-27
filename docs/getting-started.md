@@ -6,13 +6,13 @@
 
 ## 选择安装包
 
-| 设备                       | 安装包  | 运行时布局                                  |
-| -------------------------- | ------- | ------------------------------------------- |
-| 无兼容 GPU                 | CPU     | 隔离兼容环境                                |
-| Windows AMD Radeon（首选） | ROCm 10 | SVC/RVC/Vocal 共享，其余隔离                 |
+| 设备                       | 安装包   | 运行时布局                                  |
+| -------------------------- | -------- | ------------------------------------------- |
+| 无兼容 GPU                 | CPU      | 隔离兼容环境                                |
+| Windows AMD Radeon（首选） | ROCm 10  | SVC/RVC/Vocal 共享，其余隔离                |
 | Windows AMD（可选）        | DirectML | 隔离兼容环境；DDSP 自动使用 CPU             |
-| NVIDIA RTX 40 系及以下     | CUDA126 | `core-cu126` + `svc-cu126` 两层共享环境 |
-| NVIDIA RTX 50 系 Blackwell | CUDA128 | `core-cu128` + `svc-cu128` 两层共享环境 |
+| NVIDIA RTX 40 系及以下     | CUDA126  | `core-cu126` + `svc-cu126` 两层共享环境 |
+| NVIDIA RTX 50 系 Blackwell | CUDA128  | `core-cu128` + `svc-cu128` 两层共享环境 |
 
 项目最低 CUDA wheel 栈为 cu126，不再使用 cu121。每套专用包只携带自己的硬件 wheels，但应用、模型和引擎源码相同。
 

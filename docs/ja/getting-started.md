@@ -1,69 +1,94 @@
 [简体中文](../getting-started.md) | [English](../en/getting-started.md) | **日本語**
 
-# インストール、ソース実行、トラブルシューティング
+# インストール、ソース起動、修復
 
-通常の利用では、ハードウェアに対応したインストーラーを推奨します。ソースからの構築は、開発者およびエンジンを変更する利用者向けです。
+通常の利用者は、ハードウェアに対応する専用インストーラーをダウンロードしてください。ソースからの起動は、開発者およびエンジンを変更する必要がある利用者向けです。
 
-## パッケージを選ぶ
+## インストーラーを選ぶ
 
-| ハードウェア | パッケージ | ランタイム構成 |
+| ハードウェア | インストーラー | ランタイム構成 |
 | --- | --- | --- |
-| 対応GPUなし | CPU | 分離された互換環境 |
-| Windows AMD Radeon（推奨） | ROCm 10 | SVC / RVC / Vocalを共有、その他は分離 |
-| Windows AMD（代替） | DirectML | 分離環境、DDSP自動モードはCPUを使用 |
-| NVIDIA RTX 40シリーズ以前 | CUDA126 | `core-cu126` + `svc-cu126`共有環境 |
-| NVIDIA RTX 50シリーズ（Blackwell） | CUDA128 | `core-cu128` + `svc-cu128`共有環境 |
+| 対応 GPU なし | CPU | 分離された互換環境 |
+| Windows AMD Radeon（推奨） | ROCm 10 | SVC / RVC / Vocal を共有、その他は分離 |
+| Windows AMD（任意） | DirectML | 分離された互換環境、DDSP は自動的に CPU を使用 |
+| NVIDIA RTX 40 シリーズ以前 | CUDA126 | `core-cu126` + `svc-cu126` の 2 層共有環境 |
+| NVIDIA RTX 50 シリーズ Blackwell | CUDA128 | `core-cu128` + `svc-cu128` の 2 層共有環境 |
 
-対応するCUDA wheelの最小構成はcu126で、cu121は使用しません。各ハードウェア向けパッケージには対応するwheelだけが含まれます。アプリケーション、モデル資産、エンジンのソースは共通です。
+CUDA wheel スタックの最小構成は cu126 で、cu121 は使用しません。各専用パッケージには対象ハードウェア用の wheel だけが含まれ、アプリケーション、モデル、エンジンのソースコードは共通です。
 
-インストーラーには完全なPython環境は含まれません。64ビットCPython 3.12.xを選択してください。自動検出が正しくない場合は、`python.exe`を手動で指定します。`uv`の事前インストールは不要で、同梱wheelから自動的に導入されます。
+インストーラーには完全な Python は含まれません。64 ビット CPython 3.12.x を選択してください。自動検出が正しくない場合は、インストールウィザードで `python.exe` を手動指定できます。`uv` を事前にインストールする必要はなく、同梱の起動用 wheel からインストールされます。
 
-インストーラーのEXEと、**同じファイル名接頭辞を持つすべてのBIN分割ファイル**をダウンロードし、同じディレクトリに置いてからEXEを実行してください。
+## インストール後のランタイム環境
 
-## インストール後のランタイム構成
-
-CUDA126 / CUDA128は共有層を使用します。
+CUDA126 / CUDA128 は既定でランタイムを共有します。
 
 | ディレクトリ | コンポーネント |
 | --- | --- |
 | `runtimes/core-cu126` / `core-cu128` | UVR、SeedVC、DDSP-SVC |
 | `runtimes/svc-cu126` / `svc-cu128` | So-VITS-SVC、RVC、Vocal / DeepFilterNet3 |
 
-CPUでは`.venv-uvr`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-vocal`などの分離環境を使います。DirectMLも分離構成ですが、RVCは`.venv-rvc-directml`を使います。ROCm 10ではSVC、RVC、Vocalが`runtimes/svc-rocm10`を共有し、その他は分離されます。
+CPU では `.venv-uvr`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-vocal` などの分離ディレクトリを使用します。DirectML も分離構成ですが、RVC は `.venv-rvc-directml` を使用します。ROCm 10 では SVC / RVC / Vocal が `runtimes/svc-rocm10` を共有し、その他のコンポーネントは分離されます。アプリケーションは `runtime.json` から実際のインタープリターを特定します。ディレクトリ名だけでインストール完了を判断しないでください。
 
-アプリケーションは`runtime.json`から実際のインタープリターを取得します。ディレクトリ名だけでインストール済みかどうかを判断しないでください。[共有ランタイムと互換構成](runtime-consolidation.md)を参照してください。
+完全な構成と旧インストールとの互換規則については、[共有ランタイムと互換構成](runtime-consolidation.md)を参照してください。
 
-## ソース環境の要件
+## 旧バージョン 0.0.31 のみ：RTX 50 インストール修復
 
-- Windows。
-- 現在の`cp312-win_amd64`オフラインwheelに対応する64ビットCPython 3.12.x。
-- フロントエンドのビルドにはNode.js 20.19+または22.12+。
-- オフラインwheelhouseとモデル資産がない場合は、PyPI、モデル配布元、上流リポジトリへの接続。
-- ソース版の音声処理にはFFmpeg。
-- VST3 HostのビルドにはCMake、C++17対応Visual Studio Build Tools、JUCE。
+0.0.32 の CUDA128 レシピにはすでに `gin-config` が含まれているため、以下の旧版パッチは不要です。アップグレードできず、0.0.31 がこの依存関係の不足によってインストールに失敗する場合に限り、旧インストールディレクトリで PowerShell から実行してください。
 
-リポジトリのルートでハードウェア構成を明示的に選びます。
+```powershell
+Set-Location 'インストールディレクトリ'
 
-```bat
-setup_env.bat --cu128
-setup_env.bat --cu126
-setup_env.bat --cpu
-setup_env.bat --rocm10
-setup_env.bat --directml
+$lock = Join-Path (Get-Location) 'install\runtime_profiles\core-cu128\requirements.lock'
+$profile = Join-Path (Get-Location) 'install\runtime_profiles\core-cu128\profile.json'
+
+if (!(Test-Path -LiteralPath $lock) -or !(Test-Path -LiteralPath $profile)) {
+    throw 'core-cu128 のレシピファイルが見つかりません。現在のディレクトリがインストール先であることを確認してください。'
+}
+
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+
+Copy-Item -LiteralPath $lock -Destination ($lock + '.bak') -Force
+Copy-Item -LiteralPath $profile -Destination ($profile + '.bak') -Force
+
+$text = [System.IO.File]::ReadAllText($lock)
+
+if ($text -notmatch '(?m)^gin-config==') {
+    $match = [regex]::Match($text, '(?m)^fsspec==[^\r\n]*')
+    if (!$match.Success) {
+        throw 'ロックファイルの形式が想定と異なります。'
+    }
+
+    $newline = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $text = $text.Insert(
+        $match.Index + $match.Length,
+        $newline + 'gin-config==0.5.0'
+    )
+
+    [System.IO.File]::WriteAllText($lock, $text, $utf8)
+}
+
+$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $lock).Hash.ToLowerInvariant()
+$json = [System.IO.File]::ReadAllText($profile) | ConvertFrom-Json
+$json.lock_sha256 = $hash
+
+[System.IO.File]::WriteAllText(
+    $profile,
+    ($json | ConvertTo-Json -Depth 10),
+    $utf8
+)
+
+.\setup_env.bat
 ```
 
-CUDAは二つの共有ランタイム層を使用します。ROCm 10はSVC共有層を含む互換構成、CPU / DirectMLは分離環境を使用します。上級者は内部エントリを直接実行できます。
+スタートメニューから「実行環境の構築 / 修復」を実行するか、インストールディレクトリで次を実行します。
 
 ```bat
-setup_shared_env.bat --cu128
-python install\install.py --cpu
-python install\install.py --rocm10
-python install\install.py --directml
+setup_env.bat
 ```
 
-セットアップは繰り返し実行できます。`install/install.py`に共通コンポーネントと旧構成の互換コードが含まれていても、新しいCUDA環境が旧分離構成になるわけではありません。
+インストーラーはハードウェアスタックと構成を `installer_env.cmd` に記録します。そのため、CUDA パッケージで引数なしの修復を実行しても共有環境が使用され、旧式の 6 個の分離環境が誤って作成されることはありません。
 
-コンポーネント単位で導入・修復する場合:
+非アトミックなコンポーネントだけを修復する場合は `--only` を使用できます。CUDA core の UVR、SeedVC、DDSP は必ず一組として修復してください。
 
 ```bat
 setup_env.bat --only uvr seedvc ddsp
@@ -71,96 +96,33 @@ setup_env.bat --only svc rvc vocal
 setup_env.bat --only models
 ```
 
-UVR、SeedVC、DDSPはCUDA coreの一単位なので、まとめて修復してください。失敗時は`assets\wheels`と`install_logs`を保存してください。全環境が最終検証を通過した場合に限り、インストーラーがオフラインwheelを削除します。
+インストールに失敗した場合は、`assets\wheels` と `install_logs` を保持してください。すべての環境が最終検証に合格した場合に限り、インストーラーがオフライン wheel を自動削除します。
 
-## アプリケーションを起動
+### v0.0.32 CUDA128 オフラインインストール修復
 
-本番モード:
-
-```bat
-run.bat
-```
-
-同等のPowerShellコマンド:
+RTX 50 シリーズへのインストール中、`torch-2.7.1+cu128` で `The wheel is invalid: Missing .dist-info directory` と表示された場合、CUDA Toolkit や GPU ドライバーの問題ではありません。XB-SVCB を終了し、インストールディレクトリで PowerShell を開いて、インストーラーが展開した Torch wheel を確認してください。
 
 ```powershell
-& .\app\.venv\Scripts\python.exe .\app\main.py
-```
-
-フロントエンド開発では、一つ目のターミナルでViteを起動します。
-
-```powershell
-Set-Location .\web
-npm install
-npm run dev
-```
-
-別のターミナルでPythonバックエンドを起動します。
-
-```powershell
-& .\app\.venv\Scripts\python.exe .\app\main.py --dev
-```
-
-本番モードは`web/dist/index.html`を読み込みます。開発モードは既定で`http://localhost:5173`へ接続し、`XB_DEV_URL`で別のURLを指定できます。
-
-## ユーザーデータ
-
-既定のユーザーデータディレクトリは`.xb_svcb`です。モデルライブラリ、作品、編集プロジェクト、ダウンロード、設定、ログ、キャッシュを保存します。十分な空き容量のあるディスクを選んでください。アプリ内で移動するか、`XB_DATA_DIR`で変更できます。通常、アプリの更新で上書きされることはありません。
-
-## トラブルシューティング
-
-### Pythonが見つからない、または拒否される
-
-オフラインwheelが`cp312-win_amd64`向けのため、インストーラーは動作する64ビットCPython 3.12.xのみを受け付けます。別のAIプロジェクト用仮想環境ではなく、通常のPythonまたはCondaインタープリターを推奨します。
-
-### フロントエンドが見つからない
-
-ソース版の本番モードには`web/dist/index.html`が必要です。
-
-```powershell
-Set-Location .\web
-npm install
-npm run build
-```
-
-### ランタイム構築に失敗する
-
-インストール先の`install_logs`を確認してください。オンライン修復では、再実行前にミラーを設定できます。
-
-```bat
-set XB_HF_MIRROR=https://hf-mirror.com
-set XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple
-set XB_GH_MIRROR=https://ghfast.top
-setup_env.bat
-```
-
-インストーラーは選択したハードウェア構成を`installer_env.cmd`へ保存します。インストール済みCUDAパッケージから引数なしでセットアップを実行しても、共有構成が維持されます。
-
-### CUDA128でTorch wheelが不正と表示される
-
-v0.0.32で`torch-2.7.1+cu128`の導入時に`The wheel is invalid: Missing .dist-info directory`と表示される場合、CUDA Toolkitやドライバーではなくパッケージファイルの破損です。XB-SVCBを終了し、インストール先を変更してPowerShellでwheelを確認します。
-
-```powershell
-$root = "E:\XB-SVCB"
+$root = "E:\XB-SVCB" # 実際のインストールディレクトリに置き換える
 $torchWheel = "$root\assets\wheels\py312\cu128\torch-2.7.1+cu128-cp312-cp312-win_amd64.whl"
 
 (Get-Item $torchWheel).Length
 (Get-FileHash $torchWheel -Algorithm SHA256).Hash
 ```
 
-v0.0.32 CUDA128の正しい値:
+v0.0.32 CUDA128 パッケージの正しい値は次のとおりです。
 
 ```text
 サイズ: 3273024349
 SHA256: 2BB8C05D48BA815B316879A18195D53A6472A03E297D971E916753F8E1053D30
 ```
 
-いずれかが異なる場合は、CUDA128パッケージ全体を再ダウンロードし、EXEと対応するすべてのBIN分割ファイルが同じディレクトリにあることを確認してください。破損したwheelで修復を続けないでください。
+サイズまたはハッシュが異なる場合は、完全な CUDA128 インストーラーを再度ダウンロードし、インストーラー EXE と同じファイル名接頭辞を持つすべての BIN 分割ファイルを同じディレクトリに置いてください。破損した wheel を使って環境の修復を続けないでください。
 
-両方が一致する場合は、セットアップログまたは`installer_env.cmd`から固定された`XB_PYTHON_EXE`を確認し、同梱`uv`の再導入、Torchキャッシュの削除、共有coreグループの再構築を行います。
+サイズとハッシュが一致する場合は、インストールログまたは `installer_env.cmd` から固定された `XB_PYTHON_EXE` のパスを取得します。その後、同梱の `uv` を強制的に再インストールし、Torch キャッシュを削除して、共有 core グループを再試行します。
 
 ```powershell
-$py = "C:\Path\To\Python312\python.exe"
+$py = "C:\Path\To\Python312\python.exe" # XB_PYTHON_EXE に置き換える
 $uv = "$env:APPDATA\Python\Python312\Scripts\uv.exe"
 
 & $py -m ensurepip --upgrade
@@ -173,7 +135,7 @@ Set-Location $root
 .\setup_env.bat --cu128 --only uvr seedvc ddsp
 ```
 
-3コンポーネントが成功しても最終検証で`missing: ["exceptiongroup"]`と表示される場合は、同梱wheelを導入して再検証します。
+UVR、SeedVC、DDSP がすべて成功しても、最終検証で `missing: ["exceptiongroup"]` と報告される場合、Torch と CUDA のインストールは成功しています。ローカル wheel を追加してから、同じ修復エントリをもう一度実行してください。
 
 ```powershell
 & $uv pip install `
@@ -186,24 +148,101 @@ Set-Location $root
 .\setup_env.bat --cu128 --only uvr seedvc ddsp
 ```
 
-`hf-xet`は欠けていても問題ありません。DDSPの`Please install tensorboardX`も、このセットアップ失敗の原因ではありません。
+最終出力では、共有ランタイム環境の構築完了と `runtime.json` の書き込みが表示されます。`hf-xet` は不足が許容される任意パッケージです。DDSP が出力する `Please install tensorboardX` も、今回のインストール失敗の原因ではありません。
 
-### 推論時に`pkg_resources`が見つからない
+## ソース環境の要件
 
-SVC環境に互換バージョンのsetuptoolsが必要な場合があります。CUDA128環境では次を実行します。
+- Windows。
+- インストーラーと現在のオフライン wheel に使用する 64 ビット CPython 3.12.x。
+- フロントエンドのビルドにのみ必要な Node.js 20.19+ または 22.12+。
+- PyPI、モデル配布元、上流リポジトリへの接続、または準備済みのオフライン wheelhouse とモデル資産。
+- VST3 Host のビルドには CMake、Visual C++ Build Tools、JUCE。
 
-```powershell
-uv pip install --python <インストール先>\runtimes\svc-cu128\Scripts\python.exe "setuptools<81" wheel
+ソースルートで環境を明示的に選択します。
+
+```bat
+setup_env.bat --cu128
+setup_env.bat --cu126
+setup_env.bat --cpu
+setup_env.bat --rocm10
+setup_env.bat --directml
 ```
 
-### FFmpegが見つからない
+CUDA 引数は 2 層の共有セットアップを呼び出します。ROCm 10 は SVC 共有層を含む互換セットアップを呼び出し、CPU / DirectML は分離セットアップを呼び出します。開発者は内部エントリを直接実行することもできます。
 
-インストーラー版にはFFmpegが含まれます。ソース版では`PATH`に`ffmpeg`を追加するか、完全なWindowsビルドを`assets/tools/ffmpeg`へ配置してください。
+```bat
+setup_shared_env.bat --cu128
+python install\install.py --cpu
+python install\install.py --rocm10
+python install\install.py --directml
+```
 
-### フロントエンドの変更が表示されない
+各手順は繰り返し実行できます。`install/install.py` には共通コンポーネントの実装と旧インストール用の互換コードが残っていますが、新しい CUDA インストールが既定で分離構成を使用するという意味ではありません。
 
-`web/dist`を再ビルドし、アプリケーションを完全に終了してから再起動します。開発中はViteサーバーと`--dev`の利用を推奨します。
+## 起動
 
-### 旧v0.0.31 CUDA128のセットアップ
+本番モード:
 
-v0.0.32には`gin-config`が含まれています。手動でのlockfile修正は、v0.0.31を維持する必要がある環境だけが対象です。旧版の手順は[正式な中国語ガイド](../getting-started.md#仅旧版-0031rtx-50-安装修复)を参照するか、v0.0.32へ更新してください。
+```bat
+run.bat
+```
+
+同等のコマンド:
+
+```powershell
+& .\app\.venv\Scripts\python.exe .\app\main.py
+```
+
+フロントエンド開発モード:
+
+```powershell
+Set-Location .\web
+npm install
+npm run dev
+```
+
+続いて、別のターミナルで次を実行します。
+
+```powershell
+& .\app\.venv\Scripts\python.exe .\app\main.py --dev
+```
+
+本番モードは `web/dist/index.html` を読み込みます。開発モードは既定で `http://localhost:5173` に接続します。
+
+## データディレクトリ
+
+既定のデータディレクトリは `.xb_svcb` です。モデルライブラリ、作品、編集プロジェクト、ダウンロード、設定、ログ、キャッシュを保存します。十分な空き容量のあるディスクに配置してください。アプリ内の移行機能または `XB_DATA_DIR` で場所を変更できます。
+
+## よくある問題
+
+### Python が見つからない
+
+オフライン wheel が `cp312-win_amd64` 向けであるため、インストーラーは実行可能な 64 ビット CPython 3.12.x のみを受け付けます。別の AI プロジェクトの `.venv` ではなく、通常の Python または Conda インタープリターを選んでください。
+
+### フロントエンドがない
+
+ソース版の本番モードには `web/dist/index.html` が必要です。
+
+```powershell
+Set-Location .\web
+npm run build
+```
+
+### AI 環境の構築に失敗する
+
+インストールディレクトリの `install_logs` を確認してください。オンライン修復では、先にミラーを設定できます。
+
+```bat
+set XB_HF_MIRROR=https://hf-mirror.com
+set XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple
+set XB_GH_MIRROR=https://ghfast.top
+setup_env.bat
+```
+
+### FFmpeg が見つからない
+
+インストーラーパッケージには FFmpeg が含まれます。ソースから実行する場合は、システムの `PATH` に `ffmpeg` を追加するか、完全な Windows ビルドを `assets/tools/ffmpeg` に配置してください。
+
+### フロントエンドを変更しても古いページが表示される
+
+`web/dist` を再ビルドし、アプリケーションを完全に終了してから起動してください。開発中は Vite に接続する `--dev` を推奨します。
