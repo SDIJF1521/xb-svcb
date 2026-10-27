@@ -12,7 +12,7 @@
         v-for="role in roles"
         :key="role.id"
         class="role-card"
-        :class="{ selected: role.id === selectedRoleId }"
+        :class="{ selected: role.id === activeRoleId }"
         :style="{ '--role-color': role.color }"
       >
         <div class="role-top">
@@ -30,6 +30,17 @@
             placeholder="角色名"
             @change="updateRole(role.id, { name: inputValue($event) })"
           />
+          <button
+            type="button"
+            class="role-effects"
+            :class="{ active: role.id === activeRoleId }"
+            :title="`管理 ${role.name} 的角色效果`"
+            @click="emit('select', role.id)"
+          >
+            <el-icon><Operation /></el-icon>
+            <span>效果</span>
+            <b>{{ role.effects?.length || 0 }}</b>
+          </button>
           <button
             type="button"
             class="role-delete"
@@ -79,7 +90,16 @@
           @click="emit('assign', role.id)"
         >
           <el-icon><Select /></el-icon>
-          <span>{{ role.id === selectedRoleId ? '已分配到片段' : '分配给选中片段' }}</span>
+          <span>{{ role.id === assignedRoleId ? '已分配到片段' : '分配给选中片段' }}</span>
+        </button>
+        <button
+          type="button"
+          class="assign-btn track-assign-btn"
+          :disabled="!hasSelectedTrack"
+          @click="emit('assignTrack', role.id)"
+        >
+          <el-icon><Connection /></el-icon>
+          <span>{{ role.id === assignedTrackRoleId ? '取消音轨固定角色' : '固定到当前音轨' }}</span>
         </button>
       </article>
     </div>
@@ -92,7 +112,7 @@
 </template>
 
 <script setup lang="ts">
-import { Delete, Plus, Select, UserFilled } from '@element-plus/icons-vue'
+import { Connection, Delete, Operation, Plus, Select, UserFilled } from '@element-plus/icons-vue'
 import type { EditorRole } from '@/api'
 
 interface RoleModelOption {
@@ -105,8 +125,11 @@ defineOptions({ name: 'EditorRoleManager' })
 defineProps<{
   roles: EditorRole[]
   models: RoleModelOption[]
-  selectedRoleId: string
+  assignedRoleId: string
+  activeRoleId: string
   hasSelectedClip: boolean
+  hasSelectedTrack: boolean
+  assignedTrackRoleId: string
 }>()
 
 const emit = defineEmits<{
@@ -114,6 +137,8 @@ const emit = defineEmits<{
   update: [id: string, patch: Partial<EditorRole>]
   remove: [id: string]
   assign: [id: string]
+  select: [id: string]
+  assignTrack: [id: string]
 }>()
 
 function inputValue(e: Event) {
@@ -145,7 +170,8 @@ function updateRole(id: string, patch: Partial<EditorRole>) {
   font-weight: 800;
 }
 .section-head button,
-.role-delete {
+.role-delete,
+.role-effects {
   width: 28px;
   height: 28px;
   display: grid;
@@ -157,7 +183,9 @@ function updateRole(id: string, patch: Partial<EditorRole>) {
   cursor: pointer;
 }
 .section-head button:hover,
-.role-delete:hover:not(:disabled) {
+.role-delete:hover:not(:disabled),
+.role-effects:hover,
+.role-effects.active {
   color: var(--xb-primary);
   border-color: var(--xb-primary);
 }
@@ -182,9 +210,19 @@ function updateRole(id: string, patch: Partial<EditorRole>) {
 }
 .role-top {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 28px;
+  grid-template-columns: 28px minmax(0, 1fr) 58px 28px;
   gap: 8px;
   align-items: center;
+}
+.role-effects {
+  position: relative;
+  width: 58px;
+  grid-auto-flow: column;
+  gap: 2px;
+  font-size: 10px;
+}
+.role-effects b {
+  font-size: 9px;
 }
 .role-color {
   width: 28px;

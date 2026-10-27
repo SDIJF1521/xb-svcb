@@ -37,7 +37,7 @@
       :host-status="pluginHostStatus"
       :loading="pluginHostLoading"
       :session-id="pluginWindowSessionId"
-      :editable="selectedClipEditable"
+      :editable="effectScopeEditable"
       @closed="onPluginDialogClose"
       @refresh="refreshPluginHostStatus"
       @inspect="inspectActivePlugin"
@@ -76,7 +76,7 @@
           <el-icon class="el-icon--left" :class="{ spin: playbackBuffering }"><component :is="playbackBuffering ? Loading : playing ? VideoPause : VideoPlay" /></el-icon>
           {{ playing ? (playbackBuffering ? '缓冲中' : '暂停') : '播放' }}
         </el-button>
-        <el-dropdown :disabled="!project" trigger="click" @command="(cmd: string | number | object) => exportMix(String(cmd))">
+        <el-dropdown :disabled="!project" trigger="click" @command="(cmd: string | number | object) => handleExportCommand(String(cmd))">
           <el-button :disabled="!project" round class="ghost-btn">
             <el-icon class="el-icon--left"><Download /></el-icon>{{ exportLabel }}
           </el-button>
@@ -85,6 +85,7 @@
               <el-dropdown-item command="wav">WAV</el-dropdown-item>
               <el-dropdown-item command="mp3">MP3</el-dropdown-item>
               <el-dropdown-item command="flac">FLAC</el-dropdown-item>
+              <el-dropdown-item command="project" divided>工程文件 (.xbproject)</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -150,12 +151,17 @@
           <EditorRoleManager
             :roles="projectRoles"
             :models="models"
-            :selected-role-id="selectedClipRoleId"
+            :assigned-role-id="assignedClipRoleId"
+            :active-role-id="effectRoleId"
             :has-selected-clip="!!selectedClip"
+            :has-selected-track="!!selectedTrack"
+            :assigned-track-role-id="selectedTrackRoleId"
             @add="addRole"
             @update="updateRole"
             @remove="removeRole"
             @assign="assignRoleToSelectedClip"
+            @select="selectRoleEffects"
+            @assign-track="assignRoleToSelectedTrack"
           />
         </div>
 
@@ -168,17 +174,23 @@
           />
         </div>
 
-        <div v-if="selectedClip && selectedTrack" class="clip-block" data-guide="editor-clip">
+        <div v-if="selectedTrack || selectedEffectRole" class="clip-block" data-guide="editor-clip">
           <div class="clip-title">
-            <span>{{ selectedClip.name || '片段' }}</span>
-            <button :class="{ active: selectedClip.locked }" title="锁定片段" @click="toggleClipLock">
-              <el-icon><Lock /></el-icon>
-            </button>
+            <span>{{ selectedClip?.name || effectScopeTarget }}</span>
+            <div v-if="selectedClip" class="clip-title-actions">
+              <button :class="{ active: selectedClip.locked }" title="锁定片段" @click="toggleClipLock">
+                <el-icon><Lock /></el-icon>
+              </button>
+              <button title="取消片段选择" @click="clearClipSelection">
+                <el-icon><Close /></el-icon>
+              </button>
+            </div>
           </div>
           <div class="inspector-tabs">
             <button
               type="button"
               :class="{ active: activeInspectorPanel === 'clip' }"
+              :disabled="!selectedClip"
               @click="activeInspectorPanel = 'clip'"
             >
               片段
@@ -193,6 +205,7 @@
             <button
               type="button"
               :class="{ active: activeInspectorPanel === 'vocal' }"
+              :disabled="!selectedClip"
               @click="activeInspectorPanel = 'vocal'"
             >
               人声
@@ -200,6 +213,7 @@
             <button
               type="button"
               :class="{ active: activeInspectorPanel === 'rerun' }"
+              :disabled="!selectedClip"
               @click="activeInspectorPanel = 'rerun'"
             >
               重推理
@@ -207,13 +221,14 @@
             <button
               type="button"
               :class="{ active: activeInspectorPanel === 'enhance' }"
+              :disabled="!selectedClip"
               @click="activeInspectorPanel = 'enhance'"
             >
               AI 增强
             </button>
           </div>
 
-          <div v-if="activeInspectorPanel === 'clip'" class="clip-panel">
+          <div v-if="activeInspectorPanel === 'clip' && selectedClip" class="clip-panel">
           <div class="field-grid">
             <label>开始</label>
             <input type="number" step="0.01" :value="round(selectedClip.start)" :disabled="!selectedClipEditable" @change="setClipNumber('start', $event)" />
@@ -304,17 +319,43 @@
           </div>
 
           <div v-if="activeInspectorPanel === 'effects'" class="effects-box" data-guide="editor-effects">
-            <div class="effects-section-head">
+            <div class="effect-scope-segment" aria-label="效果作用范围">
+              <button
+                type="button"
+                :class="{ active: effectScope === 'clip' }"
+                :disabled="!selectedClip"
+                @click="setEffectScope('clip')"
+              >片段 <b>{{ selectedClip?.effects.length || 0 }}</b></button>
+              <button
+                type="button"
+                :class="{ active: effectScope === 'track' }"
+                :disabled="!selectedTrack"
+                @click="setEffectScope('track')"
+              >整轨 <b>{{ selectedTrack?.effects?.length || 0 }}</b></button>
+              <button
+                type="button"
+                :class="{ active: effectScope === 'role' }"
+                :disabled="!selectedClipRoleId"
+                title="先为片段分配角色"
+                @click="setEffectScope('role')"
+              >角色 <b>{{ selectedEffectRole?.effects?.length || 0 }}</b></button>
+            </div>
+            <div class="effect-scope-target">
+              <span>{{ effectScope === 'clip' ? '片段效果' : effectScope === 'track' ? '整轨效果' : '角色效果' }}</span>
+              <b>{{ effectScopeTarget }}</b>
+            </div>
+
+            <div v-if="effectScope === 'clip' && selectedClip" class="effects-section-head">
               <label>音量包络</label>
               <el-switch
-                :model-value="!!selectedClip.volume_envelope?.length"
+                :model-value="!!selectedClip?.volume_envelope?.length"
                 :disabled="!selectedClipEditable"
                 @change="toggleVolumeEnvelope"
               />
             </div>
-            <div v-if="selectedClip.volume_envelope?.length" class="envelope-list">
+            <div v-if="effectScope === 'clip' && selectedClip?.volume_envelope?.length" class="envelope-list">
               <div
-                v-for="(point, index) in selectedClip.volume_envelope"
+                v-for="(point, index) in selectedClip?.volume_envelope || []"
                 :key="`${index}-${point.time}`"
                 class="envelope-point"
               >
@@ -341,7 +382,7 @@
                 <b>{{ point.volume.toFixed(2) }}x</b>
                 <button
                   title="删除节点"
-                  :disabled="!selectedClipEditable || (selectedClip.volume_envelope?.length || 0) <= 2"
+                  :disabled="!selectedClipEditable || (selectedClip?.volume_envelope?.length || 0) <= 2"
                   @click="removeEnvelopePoint(index)"
                 >
                   <el-icon><Delete /></el-icon>
@@ -364,31 +405,31 @@
               <button
                 v-for="effect in effectCatalog"
                 :key="effect.type"
-                :disabled="!selectedClipEditable"
-                @click="addClipEffect(effect.type)"
+                :disabled="!effectScopeEditable"
+                @click="addScopedEffect(effect.type)"
               >
                 <el-icon><Plus /></el-icon>
                 <span>{{ effect.label }}</span>
               </button>
             </div>
 
-            <div v-if="selectedClip.effects.length" class="effect-rack">
-              <div v-for="effect in selectedClip.effects" :key="effect.id" class="effect-item">
+            <div v-if="activeEffects.length" class="effect-rack">
+              <div v-for="effect in activeEffects" :key="effect.id" class="effect-item">
                 <div class="effect-item-head">
                   <button
                     :class="{ active: effect.enabled }"
-                    :disabled="!selectedClipEditable"
+                    :disabled="!effectScopeEditable"
                     :title="effect.enabled ? '关闭效果' : '开启效果'"
-                    @click="toggleClipEffect(effect)"
+                    @click="toggleScopedEffect(effect)"
                   >
                     <el-icon><SwitchButton /></el-icon>
                   </button>
                   <span>{{ effectLabel(effect.type) }}</span>
                   <button
                     class="danger"
-                    :disabled="!selectedClipEditable"
+                    :disabled="!effectScopeEditable"
                     title="删除效果"
-                    @click="removeClipEffect(effect.id)"
+                    @click="removeScopedEffect(effect.id)"
                   >
                     <el-icon><Delete /></el-icon>
                   </button>
@@ -397,12 +438,12 @@
                   <div class="plugin-path-row">
                     <input
                       :value="String(effect.params.path || '')"
-                      :disabled="!selectedClipEditable"
+                      :disabled="!effectScopeEditable"
                       placeholder="VST3 / AU 路径"
                       @change="setPluginPath(effect, $event)"
                     />
                     <button
-                      :disabled="!selectedClipEditable"
+                      :disabled="!effectScopeEditable"
                       title="选择插件"
                       @click="pickPluginFile(effect)"
                     >
@@ -411,13 +452,14 @@
                   </div>
                   <input
                     :value="pluginParamJson(effect)"
-                    :disabled="!selectedClipEditable"
+                    :disabled="!effectScopeEditable"
                     placeholder='{"gain":0.5}'
                     @change="setPluginParamJson(effect, $event)"
                   />
                   <button
                     class="effect-add-wide"
                     :disabled="!effect.params.path"
+                    title="打开插件窗口"
                     @click="openPluginDialog(effect)"
                   >
                     <el-icon><SwitchButton /></el-icon>
@@ -435,7 +477,7 @@
                     :max="control.max"
                     :step="control.step"
                     :value="effectParamNumber(effect, control)"
-                    :disabled="!selectedClipEditable || !effect.enabled"
+                    :disabled="!effectScopeEditable || !effect.enabled"
                     @pointerdown="pushHistory"
                     @input="onEffectRangeInput(effect, control, $event)"
                     @change="flushLiveControlSave"
@@ -443,6 +485,7 @@
                 </div>
               </div>
             </div>
+            <div v-else class="effect-rack-empty">当前作用范围尚未添加效果</div>
           </div>
 
           <div v-if="activeInspectorPanel === 'vocal'" class="stem-box" data-guide="editor-vocal">
@@ -935,10 +978,16 @@
           </div>
 
           <div class="tracks" data-guide="editor-tracks" :style="{ width: timelineWidth + 'px' }">
-            <div v-for="track in project.tracks" :key="track.id" class="track-row">
+            <div
+              v-for="track in project.tracks"
+              :key="track.id"
+              class="track-row"
+              :class="{ selected: selectedTrack?.id === track.id }"
+            >
               <div
                 class="track-label"
                 @pointerdown.stop
+                @click="selectTrack(track.id)"
                 @contextmenu.prevent.stop="openTrackContext($event, track, false)"
               >
                 <button :title="track.locked ? '解除轨道锁定' : '锁定轨道'" :class="{ active: track.locked }" @click="toggleTrackLock(track)">
@@ -966,9 +1015,21 @@
                     <span class="track-name-text">{{ track.name }}</span>
                   </span>
                 </el-tooltip>
+                <button
+                  class="track-fx-btn"
+                  :class="{ active: selectedTrack?.id === track.id && effectScope === 'track' }"
+                  :title="`管理 ${track.name} 的整轨效果`"
+                  @click.stop="selectTrack(track.id)"
+                >
+                  <span>FX</span><b>{{ track.effects?.length || 0 }}</b>
+                </button>
               </div>
 
-              <div class="track-lane" @contextmenu.prevent.stop="openTrackContext($event, track, true)">
+              <div
+                class="track-lane"
+                :data-track-id="track.id"
+                @contextmenu.prevent.stop="openTrackContext($event, track, true)"
+              >
                 <div
                   v-for="clip in track.clips"
                   :key="clip.id"
@@ -1050,6 +1111,11 @@
       </section>
     </div>
 
+    <div v-else-if="initialLoading" class="empty-state glass editor-loading-state">
+      <el-icon class="spin"><Loading /></el-icon>
+      <p>{{ initialLoadingText }}</p>
+    </div>
+
     <div v-else class="empty-state glass">
       <el-icon><Scissor /></el-icon>
       <p>暂无编辑工程</p>
@@ -1079,6 +1145,7 @@ import {
   MagicStick,
   Mouse,
   Mute,
+  Operation,
   Plus,
   RefreshLeft,
   RefreshRight,
@@ -1119,6 +1186,7 @@ defineOptions({ name: 'AudioEditorPage' })
 
 type DragMode = 'move' | 'start' | 'end'
 type PlaybackMode = 'none' | 'mix' | 'clip'
+type EffectScope = 'clip' | 'track' | 'role'
 type LyricSourceMode = 'manual' | 'api' | 'file'
 type InspectorPanel = 'clip' | 'effects' | 'vocal' | 'rerun' | 'enhance'
 interface Selection { trackId: string; clipId: string }
@@ -1208,7 +1276,10 @@ const systemStore = useSystemStore()
 const { models } = storeToRefs(modelsStore)
 
 const project = ref<EditorProject | null>(null)
+const initialLoading = ref(true)
+const initialLoadingText = ref('正在打开编辑工程')
 const selected = ref<Selection | null>(null)
+const effectRoleId = ref('')
 const waveformMap = ref<Record<string, number[]>>({})
 const zoom = ref(64)
 const snapEnabled = ref(true)
@@ -1270,6 +1341,7 @@ const contextMenu = ref<ContextMenuState>({
   clipId: '',
 })
 const activeInspectorPanel = ref<InspectorPanel>('clip')
+const effectScope = ref<EffectScope>('clip')
 const rerunModelId = ref('')
 const renderedPath = ref('')
 const audioPrimaryEl = ref<HTMLAudioElement | null>(null)
@@ -1297,7 +1369,6 @@ let activeMixSignature = ''
 let pendingMixSignature = ''
 let liveMixRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let liveMixRenderInFlight = false
-let mixPreloadTimer: ReturnType<typeof setTimeout> | null = null
 let mixPreloadPromise: Promise<string> | null = null
 let mixPreloadSignature = ''
 let cachedMixData = ''
@@ -1311,6 +1382,11 @@ let pluginStateSyncTimer: ReturnType<typeof setInterval> | null = null
 let pluginStateSyncInFlight = false
 let pluginSafetyWarningShown = false
 let waveformZoomTimer: ReturnType<typeof setTimeout> | null = null
+let deferredWaveformTimer: ReturnType<typeof setTimeout> | null = null
+let visibleWaveformTimer: ReturnType<typeof setTimeout> | null = null
+let projectLoadRequestId = 0
+let activeProjectLoadKey = ''
+let editorDependenciesStarted = false
 const waveformLoading = new Set<string>()
 const waveformQueue: Array<{ clip: EditorClip; key: string; projectId: string; resolve: () => void }> = []
 let waveformWorkers = 0
@@ -1322,7 +1398,6 @@ const PLAY_TOGGLE_DEBOUNCE_MS = 350
 const LIVE_MIX_REFRESH_DEBOUNCE_MS = 90
 const LIVE_CONTROL_SAVE_DEBOUNCE_MS = 120
 const MIX_CROSSFADE_MS = 90
-const MIX_PRELOAD_DEBOUNCE_MS = 180
 const PLUGIN_STATE_SYNC_INTERVAL_MS = 120
 const TRACK_LABEL_WIDTH = 160
 const RERUN_PREFS_KEY = 'xb-editor-rerun-params'
@@ -1587,14 +1662,23 @@ const selectedClip = computed(() => {
   if (!track || !selected.value) return null
   return track.clips.find((c) => c.id === selected.value?.clipId) || null
 })
+const projectRoles = computed(() => project.value?.roles || [])
+const assignedClipRoleId = computed(() => roleIdFromMetadata(selectedClip.value?.metadata))
+const selectedClipRoleId = computed(() =>
+  assignedClipRoleId.value || roleIdFromMetadata(selectedTrack.value?.metadata),
+)
+const selectedTrackRoleId = computed(() => roleIdFromMetadata(selectedTrack.value?.metadata))
+const selectedEffectRole = computed(() => roleById(effectRoleId.value || selectedClipRoleId.value))
+const activeEffects = computed(() => {
+  if (effectScope.value === 'track') return selectedTrack.value?.effects || []
+  if (effectScope.value === 'role') return selectedEffectRole.value?.effects || []
+  return selectedClip.value?.effects || []
+})
 const activePluginEffect = computed(() => {
-  const clip = selectedClip.value
-  if (!clip || !activePluginEffectId.value) return null
-  return clip.effects.find((effect) => effect.id === activePluginEffectId.value) || null
+  if (!activePluginEffectId.value) return null
+  return activeEffects.value.find((effect) => effect.id === activePluginEffectId.value) || null
 })
 const activePluginPath = computed(() => String(activePluginEffect.value?.params.path || ''))
-const projectRoles = computed(() => project.value?.roles || [])
-const selectedClipRoleId = computed(() => roleIdFromMetadata(selectedClip.value?.metadata))
 const activeTemplateId = computed(() => {
   const value = project.value?.metadata?.timeline_template_id
   return typeof value === 'string' ? value : ''
@@ -1631,6 +1715,16 @@ const selectedClipEditable = computed(() => {
   const clip = selectedClip.value
   const track = selectedTrack.value
   return !!clip && !clip.locked && !track?.locked
+})
+const effectScopeEditable = computed(() => {
+  if (effectScope.value === 'track') return !!selectedTrack.value && !selectedTrack.value.locked
+  if (effectScope.value === 'role') return !!selectedEffectRole.value && !!project.value
+  return selectedClipEditable.value
+})
+const effectScopeTarget = computed(() => {
+  if (effectScope.value === 'track') return selectedTrack.value?.name || '未选择音轨'
+  if (effectScope.value === 'role') return selectedEffectRole.value?.name || '片段未分配角色'
+  return selectedClip.value?.name || '未选择片段'
 })
 const selectedRerunModel = computed(() => models.value.find((m) => m.id === rerunModelId.value) || null)
 const selectedRerunFramework = computed(() => selectedRerunModel.value?.framework || 'so-vits-svc')
@@ -1709,7 +1803,8 @@ const contextMenuItems = computed<ContextMenuItem[]>(() => {
       { id: 'import-track', label: '导入音频到此轨', icon: FolderAdd, disabled: !track || !!track.locked, run: () => importAudioToTrack(state.trackId) },
       { id: 'paste-track', label: '粘贴到播放头', icon: CopyDocument, shortcut: 'Ctrl+V', disabled: !track || !!track.locked || pastingAudio.value, run: () => pasteAudioToTrack(state.trackId) },
       { id: 'copy-track', label: '复制整轨音频', icon: CopyDocument, disabled: !track?.clips.length || copyingAudio.value, run: copySelectedTrackAudio },
-      { id: 'mute-track', label: track?.mute ? '取消音轨静音' : '静音音轨', icon: Mute, separatorBefore: true, disabled: !track, run: () => { if (track) toggleTrackMute(track) } },
+      { id: 'track-effects', label: '管理整轨效果', icon: Operation, separatorBefore: true, disabled: !track, run: () => { if (track) selectTrack(track.id) } },
+      { id: 'mute-track', label: track?.mute ? '取消音轨静音' : '静音音轨', icon: Mute, disabled: !track, run: () => { if (track) toggleTrackMute(track) } },
       { id: 'lock-track', label: track?.locked ? '解除音轨锁定' : '锁定音轨', icon: Lock, disabled: !track, run: () => { if (track) toggleTrackLock(track) } },
       { id: 'delete-track', label: '删除音轨', icon: Delete, danger: true, separatorBefore: true, disabled: !track || !!track.locked, run: () => track ? deleteTrack(track) : undefined },
     ]
@@ -1831,15 +1926,21 @@ function applyProject(next: EditorProject | null) {
   if (!next) return
   ensureEditorProjectStructure(next)
   project.value = next
+  initialLoading.value = false
   syncSeparationPrefsFromProject(next)
+  if (deferredWaveformTimer) {
+    clearTimeout(deferredWaveformTimer)
+    deferredWaveformTimer = null
+  }
   waveformQueue.splice(0).forEach((task) => task.resolve())
-  waveformMap.value = {}
   waveformLoading.clear()
+  waveformMap.value = waveformCacheForProject(next)
   selected.value = keepSelection(next)
-  router.replace({ path: '/editor', query: { project: next.id } })
+  if (!route.query.work && route.query.project !== next.id) {
+    void router.replace({ path: '/editor', query: { project: next.id } })
+  }
   nextTick(() => {
     void loadWaveforms()
-    scheduleMixPreviewPreload()
   })
   requestLiveMixRefresh()
 }
@@ -1854,7 +1955,6 @@ function syncSeparationPrefsFromProject(next: EditorProject) {
   if (typeof settings.pymss_model === 'string') separationPymssModel.value = settings.pymss_model
   if (typeof settings.harmony_model === 'string') separationHarmonyModel.value = settings.harmony_model
   separationHarmonyEnabled.value = settings.harmony_removal_enabled === true
-  void refreshSeparationStatus()
 }
 
 function ensureEditorProjectStructure(next: EditorProject) {
@@ -1866,6 +1966,7 @@ function ensureEditorProjectStructure(next: EditorProject) {
   }
   for (const track of next.tracks || []) {
     track.metadata = track.metadata || {}
+    track.effects = sanitizeClipEffects(track.effects)
     track.clips = track.clips || []
     for (const clip of track.clips) {
       clip.metadata = clip.metadata || {}
@@ -1921,6 +2022,7 @@ function sanitizeRoles(input: EditorRole[] | undefined): EditorRole[] {
       id: typeof role.id === 'string' && role.id ? role.id : makeId('role_'),
       name: typeof role.name === 'string' && role.name.trim() ? role.name.trim().slice(0, 18) : `角色 ${index + 1}`,
       color: isHexColor(role.color) ? role.color : rolePaletteColor(index),
+      effects: sanitizeClipEffects(role.effects),
       model_id: typeof role.model_id === 'string' && role.model_id ? role.model_id : undefined,
       pitch: typeof role.pitch === 'number' && Number.isFinite(role.pitch) ? clamp(Math.round(role.pitch), -24, 24) : 0,
       notes: typeof role.notes === 'string' ? role.notes.slice(0, 40) : '',
@@ -1941,6 +2043,7 @@ function createRole(name = '新角色', color = DEFAULT_ROLE_COLOR): EditorRole 
     id: makeId('role_'),
     name,
     color,
+    effects: [],
     model_id: models.value[0]?.id,
     pitch: 0,
     notes: '',
@@ -2021,6 +2124,7 @@ async function removeRole(id: string) {
   }
   pushHistory()
   project.value.roles = projectRoles.value.filter((item) => item.id !== id)
+  if (effectRoleId.value === id) effectRoleId.value = ''
   for (const track of project.value.tracks) {
     if (roleIdFromMetadata(track.metadata) === id) {
       track.metadata = { ...(track.metadata || {}) }
@@ -2038,6 +2142,20 @@ async function removeRole(id: string) {
 
 async function assignRoleToSelectedClip(id: string) {
   await setSelectedClipRole(id)
+}
+
+async function assignRoleToSelectedTrack(id: string) {
+  const track = selectedTrack.value
+  if (!track || track.locked) {
+    ElMessage.warning(track?.locked ? '音轨已锁定' : '请先选择音轨')
+    return
+  }
+  pushHistory()
+  track.metadata = { ...(track.metadata || {}) }
+  if (roleIdFromMetadata(track.metadata) === id) delete track.metadata.role_id
+  else track.metadata.role_id = id
+  renderedPath.value = ''
+  await saveProject()
 }
 
 function onSelectedClipRoleChange(e: Event) {
@@ -2124,28 +2242,69 @@ async function applyTimelineTemplate(templateId: string) {
 function keepSelection(next: EditorProject): Selection | null {
   if (!selected.value) return null
   const track = next.tracks.find((t) => t.id === selected.value?.trackId)
-  if (track?.clips.some((c) => c.id === selected.value?.clipId)) return selected.value
+  if (!track) return null
+  if (!selected.value.clipId || track.clips.some((c) => c.id === selected.value?.clipId)) return selected.value
   return null
 }
 
-async function loadInitial() {
-  await Promise.all([
+function loadEditorDependencies() {
+  if (editorDependenciesStarted) return
+  editorDependenciesStarted = true
+  void Promise.all([
     modelsStore.load().catch(() => undefined),
     loadSeparationModels(),
     systemStore.loaded ? Promise.resolve() : systemStore.load().catch(() => undefined),
   ])
+}
+
+async function loadProjectRoute(kind: 'project' | 'work', id: string) {
+  const key = `${kind}:${id}`
+  if (!id || activeProjectLoadKey === key) return
+  if (kind === 'project' && project.value?.id === id) {
+    initialLoading.value = false
+    return
+  }
+  const requestId = ++projectLoadRequestId
+  activeProjectLoadKey = key
+  initialLoading.value = true
+  initialLoadingText.value = kind === 'work' ? '正在准备作品时间轴' : '正在打开编辑工程'
+  try {
+    const loaded = kind === 'work'
+      ? await api.createEditorProjectFromWork(id)
+      : await api.getEditorProject(id)
+    if (requestId !== projectLoadRequestId) return
+    if (loaded) applyProject(loaded)
+    else {
+      initialLoading.value = false
+      ElMessage.error(kind === 'work' ? '无法从该作品创建编辑工程' : '编辑工程不存在或已被删除')
+    }
+  } catch (err) {
+    if (requestId !== projectLoadRequestId) return
+    initialLoading.value = false
+    ElMessage.error(
+      err instanceof Error
+        ? `编辑工程加载失败：${err.message}`
+        : '编辑工程加载失败',
+    )
+  } finally {
+    if (requestId === projectLoadRequestId) activeProjectLoadKey = ''
+  }
+}
+
+async function loadInitial() {
   const projectId = typeof route.query.project === 'string' ? route.query.project : ''
   const workId = typeof route.query.work === 'string' ? route.query.work : ''
   if (projectId) {
-    applyProject(await api.getEditorProject(projectId))
+    await loadProjectRoute('project', projectId)
+    loadEditorDependencies()
     return
   }
   if (workId) {
-    const created = await api.createEditorProjectFromWork(workId)
-    if (created) applyProject(created)
-    else ElMessage.error('无法从该作品创建编辑工程')
+    await loadProjectRoute('work', workId)
+    loadEditorDependencies()
     return
   }
+  initialLoading.value = false
   await router.replace('/editor/projects')
 }
 
@@ -2348,7 +2507,6 @@ function saveProject(): Promise<void> {
       project.value.duration = calcDuration(project.value)
       project.value.updated_at = saved.updated_at
       requestLiveMixRefresh(mixSignature)
-      scheduleMixPreviewPreload()
     })
   return projectSaveChain
 }
@@ -2387,9 +2545,41 @@ async function redo() {
 
 function selectClip(trackId: string, clipId: string) {
   selected.value = { trackId, clipId }
+  effectRoleId.value = ''
   const track = project.value?.tracks.find((t) => t.id === trackId)
   const clip = track?.clips.find((c) => c.id === clipId)
   if (clip) loadWaveform(clip)
+}
+
+function selectTrack(trackId: string) {
+  selected.value = { trackId, clipId: '' }
+  effectRoleId.value = ''
+  effectScope.value = 'track'
+  activeInspectorPanel.value = 'effects'
+}
+
+function setEffectScope(scope: EffectScope) {
+  effectScope.value = scope
+  if (scope !== 'role') effectRoleId.value = ''
+}
+
+function selectRoleEffects(roleId: string) {
+  effectRoleId.value = roleId
+  effectScope.value = 'role'
+  activeInspectorPanel.value = 'effects'
+}
+
+function clearClipSelection() {
+  if (!selected.value?.clipId) return false
+  selected.value = { trackId: selected.value.trackId, clipId: '' }
+  effectScope.value = 'track'
+  activeInspectorPanel.value = 'effects'
+  return true
+}
+
+function clearEditorSelection() {
+  selected.value = null
+  effectRoleId.value = ''
 }
 
 function startDrag(e: PointerEvent, track: EditorTrack, clip: EditorClip, mode: DragMode) {
@@ -2461,6 +2651,9 @@ function onTimelinePointer(e: PointerEvent) {
   const el = scrollEl.value
   if (!el || !project.value) return
   if (shouldIgnoreTimelinePointer(e, el)) return
+  const target = e.target instanceof Element ? e.target : null
+  const lane = target?.closest<HTMLElement>('.track-lane')
+  if (lane?.dataset.trackId && !target?.closest('.clip')) selectTrack(lane.dataset.trackId)
   timelineSeeking.value = true
   setPlayheadFromPointer(e)
   window.addEventListener('pointermove', onTimelinePointerMove)
@@ -2504,10 +2697,7 @@ function openTimelineContext(event: MouseEvent) {
 
 function openTrackContext(event: MouseEvent, track: EditorTrack, movePlayhead: boolean) {
   if (movePlayhead) setContextPlayhead(event.clientX)
-  const firstClip = track.clips[0]
-  if (selected.value?.trackId !== track.id && firstClip) {
-    selectClip(track.id, firstClip.id)
-  }
+  selectTrack(track.id)
   openContextMenu(event, 'track', track.id)
 }
 
@@ -2592,6 +2782,13 @@ function onTimelineScroll() {
   lastTimelineScrollLeft = nextLeft
   if (programmaticTimelineScroll) return
   if (movedHorizontally && playing.value && playbackMode.value === 'mix') setPlayheadFollow(false)
+  if (movedHorizontally) {
+    if (visibleWaveformTimer) clearTimeout(visibleWaveformTimer)
+    visibleWaveformTimer = setTimeout(() => {
+      visibleWaveformTimer = null
+      void loadWaveforms()
+    }, 120)
+  }
 }
 
 function followPlayheadIntoView(force = false) {
@@ -2818,13 +3015,24 @@ function cloneEffects(effects: EditorClipEffect[] | undefined): EditorClipEffect
   return (effects || []).map(cloneEffect)
 }
 
-async function addClipEffect(type: EditorEffectType) {
-  const clip = selectedClip.value
-  if (!clip || !selectedClipEditable.value) return
+function replaceActiveEffects(effects: EditorClipEffect[]) {
+  if (effectScope.value === 'track') {
+    if (selectedTrack.value) selectedTrack.value.effects = effects
+    return
+  }
+  if (effectScope.value === 'role') {
+    if (selectedEffectRole.value) selectedEffectRole.value.effects = effects
+    return
+  }
+  if (selectedClip.value) selectedClip.value.effects = effects
+}
+
+async function addScopedEffect(type: EditorEffectType) {
+  if (!effectScopeEditable.value) return
   const def = effectDefinition(type)
   pushHistory()
-  clip.effects = [
-    ...(clip.effects || []),
+  replaceActiveEffects([
+    ...activeEffects.value,
     {
       id: makeId('fx_'),
       type,
@@ -2832,30 +3040,29 @@ async function addClipEffect(type: EditorEffectType) {
       enabled: true,
       params: { ...(def?.defaults || {}) },
     },
-  ]
+  ])
   renderedPath.value = ''
   await saveProject()
 }
 
-async function toggleClipEffect(effect: EditorClipEffect) {
-  if (!selectedClipEditable.value) return
+async function toggleScopedEffect(effect: EditorClipEffect) {
+  if (!effectScopeEditable.value) return
   pushHistory()
   effect.enabled = !effect.enabled
   renderedPath.value = ''
   await saveProject()
 }
 
-async function removeClipEffect(effectId: string) {
-  const clip = selectedClip.value
-  if (!clip || !selectedClipEditable.value) return
+async function removeScopedEffect(effectId: string) {
+  if (!effectScopeEditable.value) return
   pushHistory()
-  clip.effects = (clip.effects || []).filter((effect) => effect.id !== effectId)
+  replaceActiveEffects(activeEffects.value.filter((effect) => effect.id !== effectId))
   renderedPath.value = ''
   await saveProject()
 }
 
 function onEffectRangeInput(effect: EditorClipEffect, control: EffectControl, e: Event) {
-  if (!selectedClipEditable.value) return
+  if (!effectScopeEditable.value) return
   const value = Number((e.target as HTMLInputElement).value)
   if (!Number.isFinite(value)) return
   effect.params = { ...(effect.params || {}), [control.key]: value }
@@ -2863,7 +3070,7 @@ function onEffectRangeInput(effect: EditorClipEffect, control: EffectControl, e:
 }
 
 async function setPluginPath(effect: EditorClipEffect, e: Event) {
-  if (!selectedClipEditable.value) return
+  if (!effectScopeEditable.value) return
   const path = (e.target as HTMLInputElement).value.trim()
   pushHistory()
   effect.params = { ...(effect.params || {}), path }
@@ -2872,7 +3079,7 @@ async function setPluginPath(effect: EditorClipEffect, e: Event) {
 }
 
 async function pickPluginFile(effect: EditorClipEffect) {
-  if (!selectedClipEditable.value) return
+  if (!effectScopeEditable.value) return
   const path = await api.pickEffectPluginFile()
   if (!path) return
   pushHistory()
@@ -2894,7 +3101,7 @@ function pluginParamJson(effect: EditorClipEffect) {
 }
 
 async function setPluginParamJson(effect: EditorClipEffect, e: Event) {
-  if (!selectedClipEditable.value) return
+  if (!effectScopeEditable.value) return
   const text = (e.target as HTMLInputElement).value.trim() || '{}'
   let parameters: Record<string, unknown>
   try {
@@ -2954,15 +3161,18 @@ async function inspectActivePlugin() {
 }
 
 async function openPluginNativeEditor() {
-  if (!project.value || !selected.value || !activePluginEffect.value || pluginWindowSessionId.value) return
+  if (!project.value || !activePluginEffect.value || pluginWindowSessionId.value) return
+  if (effectScope.value !== 'role' && !selected.value) return
   pluginHostLoading.value = true
   try {
     const res = await api.openEditorEffectPlugin(
       project.value.id,
-      selected.value.trackId,
-      selected.value.clipId,
+      selected.value?.trackId || '',
+      selected.value?.clipId || '',
       activePluginEffect.value.id,
       'editor-plugin-dialog',
+      effectScope.value,
+      selectedEffectRole.value?.id || '',
     )
     pluginHostStatus.value = res
     if (!res.ok || !res.session_id) {
@@ -2971,8 +3181,8 @@ async function openPluginNativeEditor() {
     }
     pluginWindowSessionId.value = res.session_id
     pluginSafetyWarningShown = false
-    pluginMonitorClipId.value = selectedClip.value?.id || ''
-    pluginMonitorTimelineStart.value = selectedClip.value?.start || 0
+    pluginMonitorClipId.value = effectScope.value === 'clip' ? selectedClip.value?.id || '' : ''
+    pluginMonitorTimelineStart.value = effectScope.value === 'clip' ? selectedClip.value?.start || 0 : 0
     if (res.realtime_ready && res.monitor?.audio_output_ready && playbackMode.value === 'mix') {
       const current = audioEl.value
       const continuePlaying = playing.value || htmlAudioOutputActive()
@@ -3695,9 +3905,11 @@ function mixRenderSignature(value: EditorProject) {
     projectId: value.id,
     duration: value.duration,
     sampleRate: value.sample_rate,
+    roleEffects: (value.roles || []).map((role) => ({ id: role.id, effects: role.effects || [] })),
     tracks: value.tracks.map((track) => ({
       volume: track.volume,
       mute: track.mute,
+      effects: track.effects || [],
       clips: track.clips.map((clip) => ({
         file: clip.file,
         start: clip.start,
@@ -3709,6 +3921,7 @@ function mixRenderSignature(value: EditorProject) {
         fadeOut: clip.fade_out,
         channel: clip.channel,
         timeStretch: clip.time_stretch,
+        roleId: roleIdFromMetadata(clip.metadata) || roleIdFromMetadata(track.metadata),
         envelope: clip.volume_envelope,
         effects: clip.effects,
       })),
@@ -3767,13 +3980,6 @@ function pauseHtmlAudioOutputs() {
   audioSecondaryEl.value?.pause()
 }
 
-function clearScheduledMixPreload() {
-  if (mixPreloadTimer) {
-    clearTimeout(mixPreloadTimer)
-    mixPreloadTimer = null
-  }
-}
-
 async function getMixPreviewData(projectId: string, signature: string): Promise<string> {
   if (cachedMixSignature === signature && cachedMixData) return cachedMixData
   if (mixPreloadSignature === signature && mixPreloadPromise) return mixPreloadPromise
@@ -3796,37 +4002,6 @@ async function getMixPreviewData(projectId: string, signature: string): Promise<
     })
   mixPreloadPromise = task
   return task
-}
-
-function primeMixAudioPlayer(data: string, signature: string) {
-  const el = audioEl.value
-  const currentProject = project.value
-  if (!el || !currentProject || playing.value || playbackMode.value === 'clip' || mixRenderSignature(currentProject) !== signature) return
-  if (el.src === data && activeMixSignature === signature) return
-  resetAudioPlayer(standbyAudioEl())
-  el.preload = 'auto'
-  el.src = data
-  el.load()
-  activeMixSignature = signature
-  playbackMode.value = 'mix'
-}
-
-function scheduleMixPreviewPreload(delay = MIX_PRELOAD_DEBOUNCE_MS) {
-  clearScheduledMixPreload()
-  const currentProject = project.value
-  if (!currentProject || nativeRealtimeReady.value || playing.value) return
-  const projectId = currentProject.id
-  const signature = mixRenderSignature(currentProject)
-  if (cachedMixSignature === signature && cachedMixData) {
-    primeMixAudioPlayer(cachedMixData, signature)
-    return
-  }
-  mixPreloadTimer = setTimeout(() => {
-    mixPreloadTimer = null
-    void getMixPreviewData(projectId, signature)
-      .then((data) => primeMixAudioPlayer(data, signature))
-      .catch(() => { /* foreground playback will surface any render error */ })
-  }, delay)
 }
 
 function scheduleLiveMixRefresh(delay = LIVE_MIX_REFRESH_DEBOUNCE_MS) {
@@ -3928,7 +4103,6 @@ function stopPlayback() {
   clipPreviewRequestId += 1
   stopClipPreviewTicker()
   clipPreviewPosition.value = 0
-  clearScheduledMixPreload()
   cancelScheduledLiveMixRefresh()
   mixPreviewRequestId += 1
   activeMixSignature = ''
@@ -4063,7 +4237,6 @@ async function playClip(trackId: string, clipId: string) {
   playbackBuffering.value = true
   try {
     await saveProject()
-    clearScheduledMixPreload()
     if (requestId !== clipPreviewRequestId || project.value?.id !== currentProject.id) return
 
     const data = await api.getEditorClipAudio(currentProject.id, clip.id)
@@ -4116,6 +4289,26 @@ async function exportMix(fmt: string) {
   } else {
     ElMessage.info('已取消导出')
   }
+}
+
+async function exportProjectBundle() {
+  if (!project.value) return
+  await saveProject()
+  const result = await api.exportEditorProjectBundle(project.value.id)
+  if (result.cancelled) return
+  if (!result.ok) {
+    ElMessage.error(result.error || '工程导出失败')
+    return
+  }
+  ElMessage.success('工程已导出到：' + result.path)
+}
+
+async function handleExportCommand(command: string) {
+  if (command === 'project') {
+    await exportProjectBundle()
+    return
+  }
+  await exportMix(command)
 }
 
 async function exitEditor() {
@@ -4298,9 +4491,15 @@ function onAudioTimeUpdate(event: Event) {
 
 async function loadWaveforms() {
   if (!project.value) return
+  if (deferredWaveformTimer) {
+    clearTimeout(deferredWaveformTimer)
+    deferredWaveformTimer = null
+  }
   const selectedId = selected.value?.clipId
-  const clips = project.value.tracks.flatMap((track) => track.clips)
-  clips.sort((a, b) => Number(b.id === selectedId) - Number(a.id === selectedId))
+  const entries = project.value.tracks.flatMap((track) =>
+    track.clips.map((clip) => ({ clip, audible: !track.mute && !clip.mute })),
+  )
+  const clips = entries.map((entry) => entry.clip)
   const projectId = project.value.id
   const needed = new Set(clips.map((clip) => waveformKey(clip)))
   // Zooming or editing changes the key. Drop queued work for old keys so a
@@ -4315,7 +4514,59 @@ async function loadWaveforms() {
       }
     }
   }
-  clips.forEach((clip) => { void loadWaveform(clip) })
+
+  const scrollLeft = scrollEl.value?.scrollLeft || 0
+  const viewportWidth = Math.max(320, (scrollEl.value?.clientWidth || 960) - TRACK_LABEL_WIDTH)
+  const visibleStart = Math.max(0, scrollLeft / zoom.value)
+  const visibleEnd = visibleStart + viewportWidth / zoom.value
+  const priority = entries
+    .filter(({ clip, audible }) => (
+      clip.id === selectedId
+      || (audible && clip.end >= visibleStart && clip.start <= visibleEnd)
+    ))
+    .sort((a, b) => Number(b.clip.id === selectedId) - Number(a.clip.id === selectedId))
+    .slice(0, 10)
+    .map((entry) => entry.clip)
+  const priorityIds = new Set(priority.map((clip) => clip.id))
+  priority.forEach((clip) => { void loadWaveform(clip) })
+
+  const deferred = entries
+    .filter(({ clip }) => !priorityIds.has(clip.id) && !waveformMap.value[waveformKey(clip)]?.length)
+    .sort((a, b) => Number(b.audible) - Number(a.audible))
+    .map((entry) => entry.clip)
+  scheduleDeferredWaveforms(projectId, deferred)
+}
+
+function scheduleDeferredWaveforms(projectId: string, clips: EditorClip[], index = 0) {
+  if (index >= clips.length) return
+  deferredWaveformTimer = setTimeout(() => {
+    deferredWaveformTimer = null
+    if (project.value?.id !== projectId) return
+    clips.slice(index, index + 2).forEach((clip) => { void loadWaveform(clip) })
+    scheduleDeferredWaveforms(projectId, clips, index + 2)
+  }, index === 0 ? 1800 : 320)
+}
+
+function waveformCacheForProject(value: EditorProject) {
+  const result: Record<string, number[]> = {}
+  const cached = Object.values(value.waveform_cache || {}) as Array<{
+    clip_id?: string
+    bins?: number
+    peaks?: number[]
+  }>
+  for (const track of value.tracks || []) {
+    for (const clip of track.clips || []) {
+      const bins = waveformBins(clip)
+      const hit = cached.find((item) => (
+        item?.clip_id === clip.id
+        && Number(item.bins) === bins
+        && Array.isArray(item.peaks)
+        && item.peaks.length > 0
+      ))
+      if (hit?.peaks) result[waveformKey(clip)] = hit.peaks
+    }
+  }
+  return result
 }
 
 function dropWaveformKey(key: string) {
@@ -4510,9 +4761,19 @@ function onKey(e: KeyboardEvent) {
   if (!project.value || isTypingTarget(e.target)) return
   const key = e.key.toLowerCase()
   const command = e.ctrlKey || e.metaKey
-  if (key === 'escape' && contextMenu.value.visible) {
+  if (key === 'escape') {
+    if (contextMenu.value.visible) {
+      e.preventDefault()
+      closeContextMenu()
+    } else if (clearClipSelection()) {
+      e.preventDefault()
+    } else if (selected.value || effectRoleId.value) {
+      e.preventDefault()
+      clearEditorSelection()
+    }
+  } else if (command && e.shiftKey && key === 'a') {
     e.preventDefault()
-    closeContextMenu()
+    clearEditorSelection()
   } else if (!command && e.code === 'Space') {
     e.preventDefault()
     void playMix()
@@ -4542,10 +4803,12 @@ function onKey(e: KeyboardEvent) {
 }
 
 watch(
-  () => route.query.project,
-  async (id) => {
-    if (typeof id === 'string' && id && id !== project.value?.id) {
-      applyProject(await api.getEditorProject(id))
+  () => [route.query.project, route.query.work] as const,
+  ([projectId, workId]) => {
+    if (typeof projectId === 'string' && projectId) {
+      void loadProjectRoute('project', projectId)
+    } else if (typeof workId === 'string' && workId) {
+      void loadProjectRoute('work', workId)
     }
   },
 )
@@ -4561,7 +4824,6 @@ onMounted(() => {
 })
 onUnmounted(() => {
   cancelScheduledLiveMixRefresh()
-  clearScheduledMixPreload()
   stopClipPreviewTicker()
   if (liveControlSaveTimer) clearTimeout(liveControlSaveTimer)
   resetAudioPlayer(audioPrimaryEl.value)
@@ -4580,6 +4842,8 @@ onUnmounted(() => {
   if (programmaticScrollFrame) cancelAnimationFrame(programmaticScrollFrame)
   if (clipStopTimer) clearTimeout(clipStopTimer)
   if (waveformZoomTimer) clearTimeout(waveformZoomTimer)
+  if (deferredWaveformTimer) clearTimeout(deferredWaveformTimer)
+  if (visibleWaveformTimer) clearTimeout(visibleWaveformTimer)
 })
 </script>
 
@@ -4787,6 +5051,11 @@ onUnmounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.clip-title-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 5px;
+}
 .clip-title button,
 .clip-actions button,
 .transport button,
@@ -4865,6 +5134,10 @@ onUnmounted(() => {
 .inspector-tabs button:hover {
   color: var(--xb-on-primary);
   background: var(--xb-brand-gradient);
+}
+.inspector-tabs button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 .stem-box,
 .rerun-box,
@@ -5023,6 +5296,60 @@ onUnmounted(() => {
 .clip-block .effects-box {
   margin-top: 12px;
 }
+.effect-scope-segment {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--xb-border);
+  border-radius: 8px;
+  background: rgba(var(--xb-fill-rgb), 0.04);
+}
+.effect-scope-segment button {
+  min-width: 0;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--xb-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.effect-scope-segment button b {
+  margin-left: 3px;
+  color: currentColor;
+  font-size: 10px;
+}
+.effect-scope-segment button:hover,
+.effect-scope-segment button.active {
+  color: var(--xb-on-primary);
+  background: var(--xb-brand-gradient);
+}
+.effect-scope-segment button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.effect-scope-target {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--xb-primary);
+  background: rgba(var(--xb-primary-rgb), 0.07);
+  color: var(--xb-muted);
+  font-size: 11px;
+}
+.effect-scope-target b {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--xb-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .effects-section-head {
   display: flex;
   align-items: center;
@@ -5091,6 +5418,14 @@ onUnmounted(() => {
 .envelope-list {
   display: grid;
   gap: 8px;
+}
+.effect-rack-empty {
+  padding: 14px 10px;
+  border: 1px dashed var(--xb-border);
+  border-radius: 8px;
+  color: var(--xb-muted);
+  font-size: 11px;
+  text-align: center;
 }
 .effect-item {
   display: grid;
@@ -5575,6 +5910,12 @@ onUnmounted(() => {
   min-height: 72px;
   border-bottom: 1px solid rgba(var(--xb-fill-rgb), 0.07);
 }
+.track-row.selected {
+  background: rgba(var(--xb-primary-rgb), 0.035);
+}
+.track-row.selected .track-label {
+  box-shadow: inset 3px 0 0 var(--xb-primary);
+}
 .track-label {
   position: sticky;
   left: 0;
@@ -5611,11 +5952,30 @@ onUnmounted(() => {
 .track-label button:nth-of-type(5) {
   grid-column: 5;
 }
+.track-label .track-fx-btn {
+  width: auto;
+  min-width: 38px;
+  height: 20px;
+  grid-column: 5;
+  grid-row: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  justify-self: end;
+  padding: 0 4px;
+  color: var(--xb-primary);
+  font-size: 9px;
+  font-weight: 900;
+}
+.track-fx-btn b {
+  font-size: 9px;
+}
 .track-name {
   display: flex;
   align-items: center;
   gap: 5px;
-  grid-column: 1 / -1;
+  grid-column: 1 / 5;
   grid-row: 1;
   min-width: 0;
   max-width: 100%;
@@ -5824,6 +6184,9 @@ onUnmounted(() => {
 .empty-state .el-icon {
   font-size: 42px;
   color: var(--xb-primary);
+}
+.editor-loading-state .spin {
+  animation: editor-spin 0.9s linear infinite;
 }
 .empty-state p {
   margin: 0;

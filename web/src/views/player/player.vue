@@ -16,9 +16,19 @@
         </div>
         <div class="head-actions">
           <button class="text-btn" @click="router.push('/works')">作品库</button>
-          <button class="icon-btn" title="下载作品" @click="downloadWork">
-            <el-icon><Download /></el-icon>
-          </button>
+          <el-dropdown trigger="click" @command="(fmt: string | number | object) => downloadWork(String(fmt) as WorkAudioExportFormat)">
+            <button class="icon-btn" title="选择格式下载作品">
+              <el-icon><Download /></el-icon>
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="wav">WAV 无损</el-dropdown-item>
+                <el-dropdown-item command="flac">FLAC 无损压缩</el-dropdown-item>
+                <el-dropdown-item command="mp3">MP3 通用格式</el-dropdown-item>
+                <el-dropdown-item command="m4a">M4A 移动设备</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </header>
 
@@ -189,7 +199,15 @@ import {
   VideoPlay,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { api, pickColor, type LyricLine, type MusicSearchItem, type MusicSource, type WorkDTO } from '@/api'
+import {
+  api,
+  pickColor,
+  type LyricLine,
+  type MusicSearchItem,
+  type MusicSource,
+  type WorkAudioExportFormat,
+  type WorkDTO,
+} from '@/api'
 import { useWorksStore } from '@/stores/works'
 
 defineOptions({ name: 'PlayerPage' })
@@ -514,9 +532,9 @@ function goBack() {
   else router.push('/works')
 }
 
-async function downloadWork() {
+async function downloadWork(format: WorkAudioExportFormat) {
   if (!work.value) return
-  const dest = await api.exportWork(work.value.id)
+  const dest = await api.exportWork(work.value.id, format)
   if (dest) ElMessage.success(`已导出到：${dest}`)
 }
 

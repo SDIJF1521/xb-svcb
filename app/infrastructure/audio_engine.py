@@ -149,6 +149,175 @@ class FFmpegEngine:
         cache_dir: Path,
         output_format: str = "wav",
     ) -> bool:
+        """Render clip, role and track effect scopes through separate buses."""
+        roles = {
+            str(role.get("id") or ""): role
+            for role in (project.get("roles") or [])
+            if isinstance(role, dict) and str(role.get("id") or "")
+        }
+        has_bus_effects = any(
+            self._has_enabled_effects(track.get("effects"))
+            for track in (project.get("tracks") or [])
+            if isinstance(track, dict)
+        ) or any(self._has_enabled_effects(role.get("effects")) for role in roles.values())
+        if not has_bus_effects:
+            return self._render_flat_timeline(project, dst, cache_dir, output_format)
+        return self._render_scoped_timeline(project, roles, dst, cache_dir, output_format)
+
+    def _render_scoped_timeline(
+        self,
+        project: dict[str, Any],
+        roles: dict[str, dict[str, Any]],
+        dst: Path,
+        cache_dir: Path,
+        output_format: str,
+    ) -> bool:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        sample_rate = int(project.get("sample_rate") or 44100)
+        duration = max(0.05, float(project.get("duration") or 0.05))
+        track_buses: list[Path] = []
+
+        for track_index, track in enumerate(project.get("tracks", []) or []):
+            if not isinstance(track, dict) or track.get("mute"):
+                continue
+            groups: dict[str, list[dict[str, Any]]] = {}
+            track_metadata = track.get("metadata") if isinstance(track.get("metadata"), dict) else {}
+            track_role_id = str(track_metadata.get("role_id") or "")
+            for clip in track.get("clips", []) or []:
+                if not isinstance(clip, dict) or clip.get("mute"):
+                    continue
+                metadata = clip.get("metadata") if isinstance(clip.get("metadata"), dict) else {}
+                role_id = str(metadata.get("role_id") or track_role_id)
+                role = roles.get(role_id)
+                group_key = role_id if role and self._has_enabled_effects(role.get("effects")) else "__dry__"
+                groups.setdefault(group_key, []).append(clip)
+            if not groups:
+                continue
+
+            role_buses: list[Path] = []
+            for group_index, (group_key, clips) in enumerate(groups.items()):
+                group_project = {
+                    "sample_rate": sample_rate,
+                    "duration": duration,
+                    "tracks": [{**track, "effects": [], "clips": clips, "mute": False, "volume": 1.0}],
+                }
+                group_hash = self.cache_key(
+                    {"scope": "role", "track": track.get("id"), "role": group_key, "project": group_project}
+                )
+                dry_bus = cache_dir / f"bus_role_{track_index:03d}_{group_index:03d}_{group_hash}.wav"
+                if not dry_bus.exists() and not self._render_flat_timeline(group_project, dry_bus, cache_dir, "wav"):
+                    return False
+                role = roles.get(group_key)
+                role_effects = role.get("effects") if role else []
+                if self._has_enabled_effects(role_effects):
+                    fx_hash = self.cache_key({"input": group_hash, "effects": role_effects})
+                    wet_bus = cache_dir / f"bus_role_fx_{fx_hash}.wav"
+                    if not wet_bus.exists():
+                        self._effects.render_file(
+                            dry_bus,
+                            role_effects,
+                            wet_bus,
+                            cache_dir,
+                            sample_rate,
+                        )
+                    role_buses.append(wet_bus if wet_bus.exists() else dry_bus)
+                else:
+                    role_buses.append(dry_bus)
+
+            track_hash = self.cache_key(
+                {
+                    "scope": "track",
+                    "track": track.get("id"),
+                    "volume": track.get("volume", 1.0),
+                    "inputs": [str(path) for path in role_buses],
+                }
+            )
+            dry_track = cache_dir / f"bus_track_{track_index:03d}_{track_hash}.wav"
+            track_bus_project = self._bus_project(role_buses, duration, sample_rate)
+            for bus_track in track_bus_project["tracks"]:
+                bus_track["volume"] = track.get("volume", 1.0)
+            if not dry_track.exists() and not self._render_flat_timeline(
+                track_bus_project,
+                dry_track,
+                cache_dir,
+                "wav",
+            ):
+                return False
+
+            track_effects = track.get("effects")
+            if self._has_enabled_effects(track_effects):
+                fx_hash = self.cache_key({"input": track_hash, "effects": track_effects})
+                wet_track = cache_dir / f"bus_track_fx_{fx_hash}.wav"
+                if not wet_track.exists():
+                    self._effects.render_file(
+                        dry_track,
+                        track_effects,
+                        wet_track,
+                        cache_dir,
+                        sample_rate,
+                    )
+                track_buses.append(wet_track if wet_track.exists() else dry_track)
+            else:
+                track_buses.append(dry_track)
+
+        if not track_buses:
+            return self.silence(dst, duration, sample_rate=sample_rate)
+        return self._render_flat_timeline(
+            self._bus_project(track_buses, duration, sample_rate),
+            dst,
+            cache_dir,
+            output_format,
+        )
+
+    @staticmethod
+    def _has_enabled_effects(raw: Any) -> bool:
+        return isinstance(raw, list) and any(
+            isinstance(effect, dict)
+            and str(effect.get("type") or "").strip()
+            and effect.get("enabled", True) is not False
+            for effect in raw
+        )
+
+    @staticmethod
+    def _bus_project(paths: list[Path], duration: float, sample_rate: int) -> dict[str, Any]:
+        return {
+            "sample_rate": sample_rate,
+            "duration": duration,
+            "tracks": [
+                {
+                    "id": f"bus-track-{index}",
+                    "volume": 1.0,
+                    "mute": False,
+                    "effects": [],
+                    "clips": [
+                        {
+                            "id": f"bus-clip-{index}",
+                            "file": str(path),
+                            "start": 0.0,
+                            "end": duration,
+                            "offset": 0.0,
+                            "volume": 1.0,
+                            "mute": False,
+                            "effects": [],
+                            "fade_in": 0.0,
+                            "fade_out": 0.0,
+                            "channel": "stereo",
+                            "time_stretch": 1.0,
+                            "metadata": {},
+                        }
+                    ],
+                }
+                for index, path in enumerate(paths)
+            ],
+        }
+
+    def _render_flat_timeline(
+        self,
+        project: dict[str, Any],
+        dst: Path,
+        cache_dir: Path,
+        output_format: str = "wav",
+    ) -> bool:
         """把可序列化 Project 渲染为混音文件。"""
         if not self.ffmpeg:
             return False

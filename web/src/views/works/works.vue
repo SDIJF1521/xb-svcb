@@ -75,7 +75,21 @@
         <span class="col-time work-dim">{{ w.time }}</span>
         <span class="col-ops">
           <button class="op" title="重命名" @click="onRename(w.id, w.title)"><el-icon><EditPen /></el-icon></button>
-          <button class="op" :disabled="w.status !== 'done'" title="下载" @click="onDownload(w.id)"><el-icon><Download /></el-icon></button>
+          <el-dropdown
+            :disabled="w.status !== 'done'"
+            trigger="click"
+            @command="(fmt: string | number | object) => onDownload(w.id, String(fmt) as WorkAudioExportFormat)"
+          >
+            <button class="op" :disabled="w.status !== 'done'" title="选择格式下载" @click.stop><el-icon><Download /></el-icon></button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="wav">WAV 无损</el-dropdown-item>
+                <el-dropdown-item command="flac">FLAC 无损压缩</el-dropdown-item>
+                <el-dropdown-item command="mp3">MP3 通用格式</el-dropdown-item>
+                <el-dropdown-item command="m4a">M4A 移动设备</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <button class="op" :disabled="w.status !== 'done'" title="进入音频编辑" @click="onEdit(w.id)"><el-icon><Scissor /></el-icon></button>
           <button
             v-if="w.status === 'done' && w.workflow !== 'ai_enhancement'"
@@ -127,7 +141,7 @@ import {
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
 import { useWorksStore } from '@/stores/works'
-import type { JobStatus } from '@/api'
+import type { JobStatus, WorkAudioExportFormat } from '@/api'
 
 defineOptions({ name: 'WorksPage' })
 
@@ -168,8 +182,8 @@ const statusText = (s: JobStatus) =>
 
 const openPlayer = (id: string) => router.push({ path: '/player', query: { work: id } })
 
-const onDownload = async (id: string) => {
-  const dest = await api.exportWork(id)
+const onDownload = async (id: string, format: WorkAudioExportFormat) => {
+  const dest = await api.exportWork(id, format)
   if (dest) ElMessage.success('已导出到：' + dest)
   else ElMessage.info('已取消导出')
 }

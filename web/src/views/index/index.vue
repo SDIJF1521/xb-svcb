@@ -208,9 +208,23 @@
           <span class="work-status" :class="w.status">{{ statusText(w.status) }}</span>
           <span class="work-time">{{ w.time }}</span>
           <div class="work-ops">
-            <button title="下载" :disabled="w.status !== 'done'" @click="onDownload(w.id)">
-              <el-icon><Download /></el-icon>
-            </button>
+            <el-dropdown
+              :disabled="w.status !== 'done'"
+              trigger="click"
+              @command="(fmt: string | number | object) => onDownload(w.id, String(fmt) as WorkAudioExportFormat)"
+            >
+              <button title="选择格式下载" :disabled="w.status !== 'done'" @click.stop>
+                <el-icon><Download /></el-icon>
+              </button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="wav">WAV 无损</el-dropdown-item>
+                  <el-dropdown-item command="flac">FLAC 无损压缩</el-dropdown-item>
+                  <el-dropdown-item command="mp3">MP3 通用格式</el-dropdown-item>
+                  <el-dropdown-item command="m4a">M4A 移动设备</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-dropdown trigger="click" @command="(cmd: string) => onCommand(cmd, w.id, w.title)">
               <button title="更多" @click.stop><el-icon><MoreFilled /></el-icon></button>
               <template #dropdown>
@@ -274,7 +288,7 @@ import { useSystemStore } from '@/stores/system'
 import { useModelsStore } from '@/stores/models'
 import { useWorksStore } from '@/stores/works'
 import { api } from '@/api'
-import type { DataMigrationProgress, DataStorageStatus, JobStatus } from '@/api'
+import type { DataMigrationProgress, DataStorageStatus, JobStatus, WorkAudioExportFormat } from '@/api'
 import { setPendingAudio } from '@/utils/pendingAudio'
 import { importDroppedAudio } from '@/utils/audioImport'
 
@@ -338,8 +352,8 @@ const statusText = (s: JobStatus) =>
 // 进入独立音乐播放页，播放页会负责音频、歌词和 MV 画面。
 const openPlayer = (id: string) => router.push({ path: '/player', query: { work: id } })
 
-const onDownload = async (id: string) => {
-  const dest = await api.exportWork(id)
+const onDownload = async (id: string, format: WorkAudioExportFormat) => {
+  const dest = await api.exportWork(id, format)
   if (dest) ElMessage.success('已导出到：' + dest)
   else ElMessage.info('已取消导出')
 }

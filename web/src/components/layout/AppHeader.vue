@@ -515,6 +515,11 @@ onUnmounted(() => {
 :global(html[data-theme='anime']) .logo img {
   filter: brightness(1.12) saturate(0.92) contrast(0.96);
 }
+:global(html[data-theme='brand']) .logo {
+  box-shadow:
+    0 0 0 1px rgba(var(--xb-accent-rgb), 0.18),
+    0 0 22px rgba(var(--xb-primary-rgb), 0.52);
+}
 .brand-text {
   font-size: 19px;
   font-weight: 600;

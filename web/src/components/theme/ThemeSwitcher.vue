@@ -7,7 +7,7 @@
       @click="onThemeToggle"
     >
       <span class="theme-knob">
-        <el-icon><component :is="theme === 'anime' ? Sunny : theme === 'custom' ? Brush : Moon" /></el-icon>
+        <el-icon><component :is="theme === 'anime' ? Sunny : theme === 'brand' ? Headset : theme === 'custom' ? Brush : Moon" /></el-icon>
       </span>
       <span class="theme-name">{{ themeLabel }}</span>
     </button>
@@ -46,7 +46,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Brush, Moon, Sunny } from '@element-plus/icons-vue'
+import { Brush, Headset, Moon, Sunny } from '@element-plus/icons-vue'
 import { api } from '@/api'
 import CustomThemeEditor from '@/components/theme/CustomThemeEditor.vue'
 import ThemePresetList from '@/components/theme/ThemePresetList.vue'
@@ -172,6 +172,7 @@ onUnmounted(() => {
   transition: transform 0.4s ease;
 }
 .theme-toggle.anime .theme-knob { transform: rotate(360deg); }
+.theme-toggle.brand .theme-knob { transform: rotate(12deg); }
 .theme-toggle.custom .theme-knob { transform: rotate(180deg); }
 .theme-name { display: none; }
 .theme-edit {

@@ -15,6 +15,7 @@ import type {
   HttpApiKeyResult,
   InferenceDeviceRuntime,
   WorkDTO,
+  WorkAudioExportFormat,
   PipelineStep,
   MusicSearchResult,
   MusicSongResult,
@@ -54,6 +55,7 @@ import type {
   EditorPluginTransport,
   EditorProject,
   EditorProjectSummary,
+  EditorProjectTransferResult,
   EditorTrack,
   RealtimeCoverPayload,
   RealtimeCoverStatus,
@@ -1192,9 +1194,9 @@ export const mock = {
     console.info('[mock] getStemAudio', id, kind)
     return ''
   },
-  exportWork(id: string): string {
-    console.info('[mock] exportWork', id)
-    return ''
+  exportWork(id: string, fmt: WorkAudioExportFormat = 'wav'): string {
+    console.info('[mock] exportWork', id, fmt)
+    return `C:/exports/${id}.${fmt}`
   },
 
   // ---- 音乐资源获取（浏览器开发环境模拟）----
@@ -1660,6 +1662,19 @@ export const mock = {
     mockEditorFuture[project.id] = []
     return cloneProject(project)
   },
+  exportEditorProjectBundle(projectId: string): EditorProjectTransferResult {
+    const project = mockEditorProjects.find((item) => item.id === projectId)
+    return project
+      ? { ok: true, path: `C:/exports/${projectId}.xbproject` }
+      : { ok: false, error: '工程不存在' }
+  },
+  importEditorProjectBundle(): EditorProjectTransferResult {
+    const project = makeEditorProject('导入的音频工程')
+    mockEditorProjects.unshift(project)
+    mockEditorHistory[project.id] = []
+    mockEditorFuture[project.id] = []
+    return { ok: true, path: 'C:/imports/demo.xbproject', project: cloneProject(project) }
+  },
   createEditorProjectFromWork(workId: string): EditorProject | null {
     const work = mockWorks.find((w) => w.id === workId)
     if (!work) return null
@@ -1921,8 +1936,10 @@ export const mock = {
     clipId: string,
     effectId: string,
     parentWindow = '',
+    effectScope: 'clip' | 'track' | 'role' = 'clip',
+    roleId = '',
   ): EditorPluginWindowResult {
-    console.info('[mock] openEditorEffectPlugin', projectId, trackId, clipId, effectId, parentWindow)
+    console.info('[mock] openEditorEffectPlugin', projectId, trackId, clipId, effectId, parentWindow, effectScope, roleId)
     return {
       ...this.getEditorPluginHostStatus(),
       session_id: rid('juce_'),

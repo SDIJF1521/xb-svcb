@@ -40,6 +40,7 @@ class EditorTrack:
     name: str
     type: str
     clips: list[dict[str, Any]] = field(default_factory=list)
+    effects: list[dict[str, Any]] = field(default_factory=list)
     locked: bool = False
     mute: bool = False
     volume: float = 1.0

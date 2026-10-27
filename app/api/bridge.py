@@ -1198,24 +1198,34 @@ class Api:
         b64 = base64.b64encode(data).decode("ascii")
         return f"data:{mime};base64,{b64}"
 
-    def export_work(self, work_id: str) -> str:
-        """弹出保存对话框，把成品音频另存到用户选择的位置，返回保存路径。
-
-        默认文件名取作品标题（与重命名后的名称保持一致），后缀沿用成品格式。
-        """
+    def export_work(self, work_id: str, fmt: str = "wav") -> str:
+        """按指定格式导出翻唱成品，返回用户选择的保存路径。"""
         src = self._stem_path(work_id, "output")
         if src is None:
             return ""
         work = self._works.get(work_id) or {}
         title = (work.get("title") or src.stem).strip()
-        ext = src.suffix or ".wav"
+        output_format = str(fmt or "wav").strip().lower().lstrip(".")
+        if output_format not in {"wav", "mp3", "flac", "m4a"}:
+            output_format = "wav"
+        ext = f".{output_format}"
         filename = f"{_safe_filename(title)}{ext}"
-        dest = self._save_dialog("导出翻唱作品", filename)
+        dest = self._save_dialog(f"导出翻唱作品 · {output_format.upper()}", filename)
         if not dest:
             return ""
+        dest_path = Path(dest)
+        if dest_path.suffix.lower() != ext:
+            dest_path = dest_path.with_suffix(ext)
         try:
-            shutil.copyfile(src, dest)
-            return dest
+            if src.resolve() == dest_path.resolve():
+                return str(dest_path) if src.suffix.lower() == ext else ""
+            if src.suffix.lower() == ext:
+                shutil.copyfile(src, dest_path)
+                return str(dest_path)
+            if FfmpegTool().convert(src, dest_path):
+                return str(dest_path)
+            dest_path.unlink(missing_ok=True)
+            return ""
         except OSError:
             return ""
 
@@ -1352,6 +1362,43 @@ class Api:
     def create_editor_project_from_work(self, work_id: str) -> dict[str, Any] | None:
         return self._editor.create_from_work(work_id)
 
+    def export_editor_project_bundle(self, project_id: str) -> dict[str, Any]:
+        project = self._editor.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        title = str(project.get("title") or "音频编辑工程").strip()
+        destination = self._save_dialog(
+            "导出音频编辑工程",
+            f"{_safe_filename(title)}.xbproject",
+        )
+        if not destination:
+            return {"ok": False, "cancelled": True}
+        target = Path(destination)
+        if target.suffix.lower() != ".xbproject":
+            target = target.with_suffix(".xbproject")
+        try:
+            exported = self._editor.export_bundle(project_id, target)
+            return {"ok": True, "path": str(exported)}
+        except Exception as exc:  # noqa: BLE001 - 将打包错误返回给桌面端界面
+            return {"ok": False, "error": str(exc) or "工程导出失败"}
+
+    def import_editor_project_bundle(self) -> dict[str, Any]:
+        selected = self._open_dialog(
+            "导入音频编辑工程",
+            multiple=False,
+            file_types=(
+                "音频编辑工程 (*.xbproject)",
+                "所有文件 (*.*)",
+            ),
+        )
+        if not selected:
+            return {"ok": False, "cancelled": True}
+        try:
+            project = self._editor.import_bundle(Path(selected[0]))
+            return {"ok": True, "path": selected[0], "project": project}
+        except Exception as exc:  # noqa: BLE001 - 将损坏包等读取错误返回给桌面端界面
+            return {"ok": False, "error": str(exc) or "工程导入失败"}
+
     def add_editor_track(
         self, project_id: str, name: str | None = None, kind: str = "audio"
     ) -> dict[str, Any]:
@@ -1406,6 +1453,8 @@ class Api:
         clip_id: str,
         effect_id: str,
         parent_window: str = "",
+        effect_scope: str = "clip",
+        role_id: str = "",
     ) -> dict[str, Any]:
         return self._editor.open_effect_plugin_editor(
             project_id,
@@ -1413,6 +1462,8 @@ class Api:
             clip_id,
             effect_id,
             parent_window,
+            effect_scope,
+            role_id,
         )
 
     def close_editor_effect_plugin(self, session_id: str) -> dict[str, Any]:

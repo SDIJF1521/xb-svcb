@@ -329,6 +329,8 @@ export interface WorkDTO {
   history?: InferenceHistoryItem[]
 }
 
+export type WorkAudioExportFormat = 'wav' | 'mp3' | 'flac' | 'm4a'
+
 export interface InferenceHistoryItem {
   work_id?: string
   title?: string
@@ -939,6 +941,7 @@ export interface EditorRole {
   id: string
   name: string
   color: string
+  effects?: EditorClipEffect[]
   model_id?: string
   pitch?: number
   notes?: string
@@ -990,6 +993,7 @@ export interface EditorTrack {
   name: string
   type: EditorTrackType | string
   clips: EditorClip[]
+  effects?: EditorClipEffect[]
   locked?: boolean
   mute?: boolean
   volume?: number
@@ -1015,6 +1019,14 @@ export interface EditorProjectSummary {
   duration: number
   tracks: number
   updated_at: string
+}
+
+export interface EditorProjectTransferResult {
+  ok: boolean
+  cancelled?: boolean
+  error?: string
+  path?: string
+  project?: EditorProject
 }
 
 export interface EditorWaveform {

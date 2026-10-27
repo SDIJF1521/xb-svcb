@@ -11,7 +11,7 @@ export default {
 <style>
 /* ============================================================
    主题系统：所有颜色走语义化变量，由 <html data-theme> 切换。
-   两套主题：cyber（赛博霓虹·暗）/ anime（二次元·蓝粉·亮）
+   预设主题：cyber（青蓝霓虹）/ brand（XB 声纹）/ anime（二次元）
    ============================================================ */
 
 /* —— 赛博主题（默认，也作为根回退） —— */
@@ -59,6 +59,48 @@ html[data-theme='cyber'] {
   --xb-particle-size: 3.5px;
 
   --xb-font: 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+}
+
+/* —— XB 品牌主题（取自 Logo 的樱粉声波、紫电与冰蓝高光） —— */
+html[data-theme='brand'] {
+  --xb-bg: #070711;
+  --xb-bg-2: #111022;
+  --xb-bg-rgb: 7, 7, 17;
+  --xb-panel: rgba(24, 17, 42, 0.62);
+  --xb-border: rgba(255, 79, 175, 0.24);
+  --xb-text: #f8f5ff;
+  --xb-muted: #a99cbd;
+  --xb-primary: #ff4faf;
+  --xb-primary-2: #9b5cff;
+  --xb-accent: #ff789c;
+
+  --xb-on-primary: #ffffff;
+  --xb-primary-rgb: 255, 79, 175;
+  --xb-secondary-rgb: 155, 92, 255;
+  --xb-accent-rgb: 255, 120, 156;
+  --xb-fill-rgb: 229, 218, 255;
+  --xb-success: #45d8b0;
+  --xb-success-rgb: 69, 216, 176;
+  --xb-warn: #ffb454;
+  --xb-warn-rgb: 255, 180, 84;
+
+  --xb-hero-gradient: linear-gradient(120deg, #ff4faf 0%, #9b5cff 52%, #7edcff 100%);
+  --xb-brand-gradient: linear-gradient(135deg, #ff4faf, #9b5cff 66%, #7edcff);
+  --xb-scroll-track: #070711;
+  --xb-scroll-thumb: #2a183b;
+  --xb-scroll-thumb-hover: #4b285f;
+
+  --xb-deco-1: #ff4faf;
+  --xb-deco-2: #7edcff;
+  --xb-deco-3: #9b5cff;
+  --xb-grid-rgb: 255, 79, 175;
+  --xb-grid-opacity: 0.045;
+  --xb-orb-opacity: 0.3;
+  --xb-custom-bg-image: none;
+  --xb-custom-image-opacity: 0;
+  --xb-image-overlay: 0.5;
+  --xb-particle-opacity: 0;
+  --xb-particle-size: 3.5px;
 }
 
 /* —— 二次元主题（蓝粉·亮） —— */

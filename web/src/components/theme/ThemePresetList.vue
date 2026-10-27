@@ -38,6 +38,9 @@ function themeSwatchStyle(name: ThemeName): Record<string, string> {
   if (name === 'anime') {
     return { '--sw-1': '#5b9cff', '--sw-2': '#8a7bff', '--sw-3': '#ff84bd' }
   }
+  if (name === 'brand') {
+    return { '--sw-1': '#ff4faf', '--sw-2': '#9b5cff', '--sw-3': '#7edcff' }
+  }
   if (name === 'custom') {
     return {
       '--sw-1': props.customTheme.primary,

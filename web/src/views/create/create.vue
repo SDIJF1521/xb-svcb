@@ -1038,9 +1038,23 @@
                 <el-icon v-else-if="!isPlaying"><VideoPlay /></el-icon>
                 <el-icon v-else><VideoPause /></el-icon>
               </button>
-              <el-button round class="ghost-btn" :disabled="!done" @click="onExport">
-                <el-icon class="el-icon--left"><Download /></el-icon>导出
-              </el-button>
+              <el-dropdown
+                :disabled="!done"
+                trigger="click"
+                @command="(fmt: string | number | object) => onExport(String(fmt) as WorkAudioExportFormat)"
+              >
+                <el-button round class="ghost-btn" :disabled="!done">
+                  <el-icon class="el-icon--left"><Download /></el-icon>导出
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="wav">WAV 无损</el-dropdown-item>
+                    <el-dropdown-item command="flac">FLAC 无损压缩</el-dropdown-item>
+                    <el-dropdown-item command="mp3">MP3 通用格式</el-dropdown-item>
+                    <el-dropdown-item command="m4a">M4A 移动设备</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
               <el-button v-if="editorAvailable" round class="ghost-btn" @click="openCurrentWorkEditor">
                 <el-icon class="el-icon--left"><Operation /></el-icon>进入编辑器
               </el-button>
@@ -1146,6 +1160,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   api,
   isDesktop,
+  type WorkAudioExportFormat,
   type WorkDTO,
   type PipelineStep,
   type DownloadedMusic,
@@ -2454,10 +2469,10 @@ async function onTogglePlay() {
   }
 }
 
-async function onExport() {
+async function onExport(format: WorkAudioExportFormat) {
   const work = currentWork.value
   if (!work || work.status !== 'done') return
-  const dest = await api.exportWork(work.id)
+  const dest = await api.exportWork(work.id, format)
   if (dest) ElMessage.success('已导出到：' + dest)
   else ElMessage.info('已取消导出')
 }

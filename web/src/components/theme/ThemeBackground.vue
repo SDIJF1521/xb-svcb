@@ -15,6 +15,7 @@
     <div class="orb orb-1"></div>
     <div class="orb orb-2"></div>
     <div class="orb orb-3"></div>
+    <div class="brand-watermark"></div>
     <div class="custom-particles">
       <span
         v-for="n in customParticleCount"
@@ -184,6 +185,21 @@ html[data-theme='custom'] .custom-bg-video-overlay {
   background: var(--xb-deco-3);
   bottom: -220px; left: 40%;
   opacity: calc(var(--xb-orb-opacity) * 0.8);
+}
+.brand-watermark {
+  display: none;
+}
+html[data-theme='brand'] .brand-watermark {
+  position: absolute;
+  right: clamp(-90px, -4vw, -30px);
+  bottom: clamp(-100px, -7vw, -50px);
+  width: min(48vw, 560px);
+  aspect-ratio: 1;
+  display: block;
+  background: url('/log.png') center / contain no-repeat;
+  opacity: 0.075;
+  filter: saturate(1.1) contrast(1.08);
+  mask-image: linear-gradient(135deg, transparent 5%, #000 42%, #000 100%);
 }
 .custom-particles {
   position: absolute;

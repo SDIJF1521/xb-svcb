@@ -9,9 +9,21 @@ wheels/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
 
 # ===== Local scratch / extracted reference docs =====
 .tmp/
+/.tmp-*/
+*.tmp
+*.temp
+*.bak
+*.orig
 
 # 虚拟环境
 .venv/
@@ -24,10 +36,19 @@ app/.venv/
 node_modules/
 web/dist/
 web/dist-ssr/
+web/.vite/
+web/playwright-report/
+web/test-results/
 *.local
 .eslintcache
 *.tsbuildinfo
 *.xbplugin
+
+# 本地环境变量；示例模板继续纳入版本库。
+.env
+.env.*
+!.env.example
+!.env.*.example
 
 # ===== 插件 SDK 示例 / 打包生成物 =====
 plugin-sdk/examples/**/dist/
@@ -132,10 +153,3 @@ assets/models/**/DeepFilterNet3/enhance.log
 
 # 安装器本体不入库：超过 GitHub LFS / Release 之外的 2GiB 单文件上限处理，
 # 改为构建后上传到 GitHub Releases 分发（见 README）。dist/* 已忽略，无需额外规则。
-.tmp-amd-rocm10-venv
-
-.tmp-amd-rocm10
-
-.tmp-pymss-rocm-packages
-
-.tmp-pymss-test

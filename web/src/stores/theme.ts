@@ -1,7 +1,7 @@
 import { computed, nextTick, ref } from 'vue'
 import { defineStore } from 'pinia'
 
-export type ThemeName = 'cyber' | 'anime' | 'custom'
+export type ThemeName = 'cyber' | 'brand' | 'anime' | 'custom'
 
 export interface CustomTheme {
   name: string
@@ -54,6 +54,7 @@ const THEME_TRANSITION_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)'
 const HEX_RE = /^#[0-9a-f]{6}$/i
 
 export const THEMES: { value: ThemeName; label: string; desc: string }[] = [
+  { value: 'brand', label: 'XB 声纹', desc: '暗色 · 樱粉紫电' },
   { value: 'cyber', label: '赛博霓虹', desc: '暗色 · 青蓝霓虹' },
   { value: 'anime', label: '二次元', desc: '亮色 · 蓝粉少女' },
   { value: 'custom', label: '自定义', desc: '自己调配颜色' },
@@ -93,6 +94,51 @@ export const DEFAULT_CUSTOM_THEME: CustomTheme = {
   particleDensity: 28,
   particleSize: 3.2,
 }
+
+const CUSTOM_THEME_COLOR_KEYS: CustomThemeColorKey[] = [
+  'bg',
+  'bg2',
+  'text',
+  'muted',
+  'primary',
+  'primary2',
+  'accent',
+  'onPrimary',
+  'fill',
+  'success',
+  'warn',
+]
+
+// Remove the two short-lived palettes that were shipped while correcting
+// Sunny Garden. User-edited palettes do not match every color and are kept.
+const TEMP_SKY_GARDEN_PALETTES: Array<Record<CustomThemeColorKey, string>> = [
+  {
+    bg: '#f6fbfd',
+    bg2: '#e8f4f5',
+    text: '#173847',
+    muted: '#587686',
+    primary: '#167ead',
+    primary2: '#258768',
+    accent: '#d95070',
+    onPrimary: '#ffffff',
+    fill: '#244b59',
+    success: '#1d815f',
+    warn: '#b96c22',
+  },
+  {
+    bg: '#f6fbfd',
+    bg2: '#e8f4f5',
+    text: '#173847',
+    muted: '#587686',
+    primary: '#0f719e',
+    primary2: '#1f7a5d',
+    accent: '#c63f63',
+    onPrimary: '#ffffff',
+    fill: '#244b59',
+    success: '#1d815f',
+    warn: '#b96c22',
+  },
+]
 
 const CUSTOM_CSS_VARS = [
   '--xb-bg',
@@ -183,15 +229,23 @@ function sanitizeCustomTheme(value: unknown): CustomTheme {
 }
 
 function readStoredTheme(): ThemeName {
-  if (typeof localStorage === 'undefined') return 'cyber'
+  if (typeof localStorage === 'undefined') return 'brand'
   const value = localStorage.getItem(STORAGE_KEY) as ThemeName | null
-  return value === 'anime' || value === 'custom' || value === 'cyber' ? value : 'cyber'
+  return value === 'anime' || value === 'brand' || value === 'custom' || value === 'cyber' ? value : 'brand'
 }
 
 function readStoredCustomTheme(): CustomTheme {
   if (typeof localStorage === 'undefined') return { ...DEFAULT_CUSTOM_THEME }
   try {
-    return sanitizeCustomTheme(JSON.parse(localStorage.getItem(CUSTOM_STORAGE_KEY) || 'null'))
+    const stored = sanitizeCustomTheme(JSON.parse(localStorage.getItem(CUSTOM_STORAGE_KEY) || 'null'))
+    const isTemporarySkyGarden = stored.name === '晴空花园' && TEMP_SKY_GARDEN_PALETTES.some(
+      (palette) => CUSTOM_THEME_COLOR_KEYS.every((key) => stored[key] === palette[key]),
+    )
+    if (!isTemporarySkyGarden) return stored
+    const restored = { ...stored }
+    for (const key of CUSTOM_THEME_COLOR_KEYS) restored[key] = DEFAULT_CUSTOM_THEME[key]
+    localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify(restored))
+    return restored
   } catch {
     return { ...DEFAULT_CUSTOM_THEME }
   }
@@ -305,12 +359,12 @@ function persistTheme(name: ThemeName, customTheme?: CustomTheme) {
 
 function chromeThemeFor(name: ThemeName, customTheme: CustomTheme): 'cyber' | 'anime' {
   if (name === 'custom') return luminance(customTheme.bg) > 0.5 ? 'anime' : 'cyber'
-  return name
+  return name === 'anime' ? 'anime' : 'cyber'
 }
 
 function isDarkVisualTheme(name: ThemeName, customTheme: CustomTheme): boolean {
   if (name === 'custom') return luminance(customTheme.bg) <= 0.5
-  return name === 'cyber'
+  return name === 'cyber' || name === 'brand'
 }
 
 /** 通知 pywebview 后端给原生窗口标题栏/边框上色（桌面运行时才有 pywebview）。 */
@@ -513,7 +567,9 @@ export const useThemeStore = defineStore('theme', () => {
   }
 
   function toggle(event?: MouseEvent) {
-    setTheme(theme.value === 'cyber' ? 'anime' : 'cyber', { event })
+    const order: ThemeName[] = ['brand', 'cyber', 'anime']
+    const index = order.indexOf(theme.value)
+    setTheme(order[(index + 1) % order.length] || 'brand', { event })
   }
 
   function previewCustomTheme(value: CustomTheme, options: ThemeTransitionOptions = {}) {

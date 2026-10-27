@@ -19,6 +19,7 @@ import type {
   HttpApiTestResult,
   HttpApiKeyResult,
   WorkDTO,
+  WorkAudioExportFormat,
   MusicSearchResult,
   MusicSongResult,
   MusicDownloadResult,
@@ -41,6 +42,7 @@ import type {
   ModelFramework,
   EditorProject,
   EditorProjectSummary,
+  EditorProjectTransferResult,
   EditorAudioPasteResult,
   EditorWaveform,
   EditorAudioCopyResult,
@@ -378,8 +380,8 @@ export const api = {
   getStemAudio: (id: string, kind: 'output' | 'instrumental' | 'vocals') =>
     invoke<string>('get_stem_audio', [id, kind], () => mock.getStemAudio(id, kind)),
 
-  exportWork: (id: string) =>
-    invoke<string>('export_work', [id], () => mock.exportWork(id)),
+  exportWork: (id: string, fmt: WorkAudioExportFormat = 'wav') =>
+    invoke<string>('export_work', [id, fmt], () => mock.exportWork(id, fmt)),
 
   // ---- 音乐资源获取 ----
   getMusicApiKey: () =>
@@ -568,6 +570,16 @@ export const api = {
       mock.createEditorProjectFromWork(workId),
     ),
 
+  exportEditorProjectBundle: (projectId: string) =>
+    invoke<EditorProjectTransferResult>('export_editor_project_bundle', [projectId], () =>
+      mock.exportEditorProjectBundle(projectId),
+    ),
+
+  importEditorProjectBundle: () =>
+    invoke<EditorProjectTransferResult>('import_editor_project_bundle', [], () =>
+      mock.importEditorProjectBundle(),
+    ),
+
   addEditorTrack: (projectId: string, name?: string, kind = 'audio') =>
     invoke<EditorTrackMutationResult>('add_editor_track', [projectId, name, kind], () =>
       mock.addEditorTrack(projectId, name, kind),
@@ -637,11 +649,13 @@ export const api = {
     clipId: string,
     effectId: string,
     parentWindow = '',
+    effectScope: 'clip' | 'track' | 'role' = 'clip',
+    roleId = '',
   ) =>
     invoke<EditorPluginWindowResult>(
       'open_editor_effect_plugin',
-      [projectId, trackId, clipId, effectId, parentWindow],
-      () => mock.openEditorEffectPlugin(projectId, trackId, clipId, effectId, parentWindow),
+      [projectId, trackId, clipId, effectId, parentWindow, effectScope, roleId],
+      () => mock.openEditorEffectPlugin(projectId, trackId, clipId, effectId, parentWindow, effectScope, roleId),
     ),
 
   closeEditorEffectPlugin: (sessionId: string) =>
