@@ -1,3 +1,5 @@
+[简体中文](runtime-consolidation.md) | [English](en/runtime-consolidation.md) | [日本語](ja/runtime-consolidation.md)
+
 # 共享运行时与兼容布局
 
 本文是当前运行环境布局的唯一说明。早期空间盘点、缓存恢复和实验安装记录已合并到这里；历史版本行为保留在 `docs/release-notes/`。

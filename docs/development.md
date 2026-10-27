@@ -1,3 +1,5 @@
+[简体中文](development.md) | [English](en/development.md) | [日本語](ja/development.md)
+
 # 开发与发布
 
 ## 推荐工作流

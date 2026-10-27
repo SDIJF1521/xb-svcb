@@ -1,3 +1,5 @@
+[简体中文](publishing.md) | [English](../en/plugins/publishing.md) | [日本語](../ja/plugins/publishing.md)
+
 # 打包、发布与市场
 
 XB-SVCB 插件通常以 `.xbplugin` 文件发布。该文件当前是 ZIP 压缩包；GitHub 市场只是一个 JSON 索引，宿主读取索引后从 GitHub 下载对应插件包。

@@ -1,3 +1,5 @@
+[简体中文](testing.md) | [English](../en/plugins/testing.md) | [日本語](../ja/plugins/testing.md)
+
 # 测试与调试
 
 插件测试需要分层进行。TypeScript 通过、清单有效或成功生成 `.xbplugin`，都不能单独证明插件能在 XB-SVCB 中运行。发布前至少要完成静态检查、插件单元测试和一次真实宿主安装检查。

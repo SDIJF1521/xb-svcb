@@ -1,3 +1,5 @@
+[简体中文](startup-chain.md) | [English](en/startup-chain.md) | [日本語](ja/startup-chain.md)
+
 # 启动与模型推理链路
 
 本文说明 Python 后端和模型运行时的实际启动关系。详细时序图见[启动与推理时序图](archify/xb-svcb-startup-inference.sequence.html)。

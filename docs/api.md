@@ -1,3 +1,5 @@
+[简体中文](api.md) | [English](en/api.md) | [日本語](ja/api.md)
+
 # XB-SVCB FastAPI 接入文档
 
 适用版本：XB-SVCB 0.0.32

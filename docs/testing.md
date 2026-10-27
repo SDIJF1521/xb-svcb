@@ -1,3 +1,5 @@
+[简体中文](testing.md) | [English](en/testing.md) | [日本語](ja/testing.md)
+
 # 测试分组与验收边界
 
 从项目根目录运行。测试工具和 SciPy 使用 uv 临时叠加环境，不往主程序环境安装 Torch：

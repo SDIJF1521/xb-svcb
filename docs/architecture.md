@@ -1,3 +1,5 @@
+[简体中文](architecture.md) | [English](en/architecture.md) | [日本語](ja/architecture.md)
+
 # 系统架构
 
 XB-SVCB 是一个本地优先的桌面应用。前端负责交互和状态展示，Python 负责业务编排，重型模型和音频工具通过隔离 Worker 执行。

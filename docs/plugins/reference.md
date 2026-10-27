@@ -1,4 +1,4 @@
-d
+[简体中文](reference.md) | [English](../en/plugins/reference.md) | [日本語](../ja/plugins/reference.md)
 
 # API 速查
 

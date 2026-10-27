@@ -1,3 +1,5 @@
+[简体中文](getting-started.md) | [English](../en/plugins/getting-started.md) | [日本語](../ja/plugins/getting-started.md)
+
 # 快速开始
 
 本章从空目录创建一个 Vue 3 前端插件，解释生成的每个关键文件，并完成类型检查、构建、打包和安装。

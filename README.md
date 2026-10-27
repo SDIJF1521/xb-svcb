@@ -1,5 +1,7 @@
 <div align="center">
 
+**简体中文** | [English](README.en.md) | [日本語](README.ja.md)
+
 # 🎤 XB-SVCB · AI 翻唱工具
 
 #### 开箱即用的桌面级 AI 翻唱工作站

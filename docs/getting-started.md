@@ -1,3 +1,5 @@
+[简体中文](getting-started.md) | [English](en/getting-started.md) | [日本語](ja/getting-started.md)
+
 # 安装、源码启动与修复
 
 普通用户应下载与硬件匹配的专用安装包。源码方式面向开发者和需要修改引擎的人。

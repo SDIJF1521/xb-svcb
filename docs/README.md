@@ -1,3 +1,5 @@
+[简体中文](README.md) | [English](en/README.md) | [日本語](ja/README.md)
+
 # XB-SVCB 文档
 
 这里按使用者、开发者和插件作者整理项目文档。根目录 README 只保留项目概览和入口，具体内容从下面选择。

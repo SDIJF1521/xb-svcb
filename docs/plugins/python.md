@@ -1,3 +1,5 @@
+[简体中文](python.md) | [English](../en/plugins/python.md) | [日本語](../ja/plugins/python.md)
+
 # Python 插件开发
 
 本文面向 XB-SVCB 的纯 Python 插件和混合插件后端开发者。按照本文操作，可以在不阅读主项目源码的情况下完成插件创建、动作与钩子编写、持久化、依赖打包、测试、调试和发布。

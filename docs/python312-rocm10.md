@@ -1,3 +1,5 @@
+[简体中文](python312-rocm10.md) | [English](en/python312-rocm10.md) | [日本語](ja/python312-rocm10.md)
+
 # Python 3.12 与 AMD ROCm 10
 
 应用、插件和全部推理子环境统一使用 **64 位 CPython 3.12.x**。安装器发现旧解释器时按原有流程重建对应虚拟环境；模型和项目数据无需转换。离线发布必须重新准备 `py312` wheelhouse，不能直接改名或复制 `cp310-cp310` wheel。带 `abi3` 标记的 wheel 按其真实兼容标签处理。
