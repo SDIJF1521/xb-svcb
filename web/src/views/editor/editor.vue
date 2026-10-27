@@ -980,6 +980,7 @@
                       muted: clip.mute || track.mute,
                       locked: clip.locked || track.locked,
                       'has-role': !!clipRole(clip),
+                      'clip-previewing': playbackMode === 'clip' && clipPlaybackClipId === clip.id,
                     },
                   ]"
                   :style="[clipStyle(clip), clipRoleStyle(clip)]"
@@ -997,6 +998,12 @@
                   </div>
                   <span v-if="clip.fade_in > 0" class="fade-guide fade-in" :style="fadeStyle(clip.fade_in, clip)"></span>
                   <span v-if="clip.fade_out > 0" class="fade-guide fade-out" :style="fadeStyle(clip.fade_out, clip)"></span>
+                  <i
+                    v-if="playbackMode === 'clip' && clipPlaybackClipId === clip.id"
+                    class="clip-preview-playhead"
+                    :style="clipPreviewPlayheadStyle(clip)"
+                    aria-hidden="true"
+                  ></i>
                   <span v-if="clipChannel(clip) !== 'stereo'" class="channel-pill">{{ channelLabel(clipChannel(clip)) }}</span>
                   <span
                     v-if="clipRole(clip)"
@@ -1210,6 +1217,7 @@ const silenceThresholdDb = ref(-40)
 const minSilenceSeconds = ref(0.35)
 const silenceMinClipSeconds = ref(0.45)
 const playhead = ref(0)
+const clipPreviewPosition = ref(0)
 const playing = ref(false)
 const previewing = ref(false)
 const playbackBuffering = ref(false)
@@ -1281,8 +1289,10 @@ const future = ref<EditorProject[]>([])
 const drag = ref<DragState | null>(null)
 let clipStopTimer: ReturnType<typeof setTimeout> | null = null
 let clipPlaybackClipId = ''
+let clipPreviewFrame = 0
 let lastPlayToggleAt = 0
 let mixPreviewRequestId = 0
+let clipPreviewRequestId = 0
 let activeMixSignature = ''
 let pendingMixSignature = ''
 let liveMixRefreshTimer: ReturnType<typeof setTimeout> | null = null
@@ -1685,7 +1695,7 @@ const contextMenuItems = computed<ContextMenuItem[]>(() => {
   const clip = track?.clips.find((item) => item.id === state.clipId) || null
   if (state.kind === 'clip') {
     return [
-      { id: 'preview', label: '试听片段', icon: VideoPlay, shortcut: 'Space', run: playSelectedClip },
+      { id: 'preview', label: '试听片段', icon: VideoPlay, run: () => playClip(state.trackId, state.clipId) },
       { id: 'split', label: '在播放头剪切', icon: Scissor, shortcut: 'Ctrl+K', disabled: !canSplitAtPlayhead.value, run: splitAtPlayhead },
       { id: 'copy-clip', label: '复制片段音频', icon: CopyDocument, shortcut: 'Ctrl+C', disabled: copyingAudio.value, run: copySelectedClipAudio },
       { id: 'merge', label: mergingAudio.value ? '正在合并' : '与下一片段合并', icon: Connection, disabled: !canMergeNextClip.value || mergingAudio.value, run: mergeSelectedClipWithNext },
@@ -2622,6 +2632,11 @@ function clipSourceDuration(clip: EditorClip) {
 
 function clipPixelWidth(clip: EditorClip) {
   return Math.max(30, clipDuration(clip) * zoom.value)
+}
+
+function clipPreviewPlayheadStyle(clip: EditorClip) {
+  const progress = clamp(clipPreviewPosition.value / clipDuration(clip), 0, 1)
+  return { left: `${progress * 100}%` }
 }
 
 function waveformBins(clip: EditorClip) {
@@ -3722,6 +3737,26 @@ function resetAudioPlayer(el: HTMLAudioElement | null) {
   el.load()
 }
 
+function stopClipPreviewTicker() {
+  if (!clipPreviewFrame) return
+  cancelAnimationFrame(clipPreviewFrame)
+  clipPreviewFrame = 0
+}
+
+function startClipPreviewTicker() {
+  stopClipPreviewTicker()
+  const update = () => {
+    const el = audioEl.value
+    if (!el || playbackMode.value !== 'clip' || el.paused || el.ended) {
+      clipPreviewFrame = 0
+      return
+    }
+    clipPreviewPosition.value = Math.max(0, el.currentTime)
+    clipPreviewFrame = requestAnimationFrame(update)
+  }
+  clipPreviewFrame = requestAnimationFrame(update)
+}
+
 function htmlAudioOutputActive() {
   return [audioPrimaryEl.value, audioSecondaryEl.value]
     .some((el) => !!el?.src && !el.paused)
@@ -3890,6 +3925,10 @@ async function refreshLiveMixPreview() {
 }
 
 function stopPlayback() {
+  clipPreviewRequestId += 1
+  stopClipPreviewTicker()
+  clipPreviewPosition.value = 0
+  clearScheduledMixPreload()
   cancelScheduledLiveMixRefresh()
   mixPreviewRequestId += 1
   activeMixSignature = ''
@@ -3923,7 +3962,8 @@ async function playMix() {
   if (!project.value || !audioEl.value) return
   if (!claimPlayToggle()) return
   if (playing.value) {
-    pauseMixPlayback()
+    if (playbackMode.value === 'mix') pauseMixPlayback()
+    else stopPlayback()
     return
   }
   if (previewing.value) return
@@ -4000,32 +4040,70 @@ async function playMix() {
 }
 
 async function playSelectedClip() {
-  if (!project.value || !selectedClip.value || !audioEl.value) return
-  await saveProject()
-  if (!project.value || !selectedClip.value) return
-  const clip = selectedClip.value
-  const data = await api.getEditorClipAudio(project.value.id, clip.id)
-  if (!data) {
-    ElMessage.error('无法加载片段音频')
+  const selection = selected.value
+  if (!selection) return
+  await playClip(selection.trackId, selection.clipId)
+}
+
+async function playClip(trackId: string, clipId: string) {
+  const currentProject = project.value
+  const track = currentProject?.tracks.find((item) => item.id === trackId)
+  const clip = track?.clips.find((item) => item.id === clipId)
+  if (!currentProject || !clip || !audioEl.value) {
+    ElMessage.error('找不到要试听的片段')
     return
   }
+
   stopPlayback()
-  if (clipStopTimer) clearTimeout(clipStopTimer)
-  const el = audioEl.value
-  if (!el) return
+  const requestId = clipPreviewRequestId
   playbackMode.value = 'clip'
   clipPlaybackClipId = clip.id
-  el.src = data
-  el.currentTime = 0
-  await el.play()
-  playing.value = true
-  const previewDuration = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : Math.max(0, clip.end - clip.start)
-  clipStopTimer = setTimeout(() => {
-    el.pause()
-    clipPlaybackClipId = ''
-    playing.value = false
+  clipPreviewPosition.value = 0
+  previewing.value = true
+  playbackBuffering.value = true
+  try {
+    await saveProject()
+    clearScheduledMixPreload()
+    if (requestId !== clipPreviewRequestId || project.value?.id !== currentProject.id) return
+
+    const data = await api.getEditorClipAudio(currentProject.id, clip.id)
+    if (requestId !== clipPreviewRequestId || project.value?.id !== currentProject.id) return
+    if (!data) throw new Error('后端没有返回片段音频')
+
+    const el = audioEl.value
+    if (!el) throw new Error('音频播放器未就绪')
+    el.src = data
+    el.currentTime = 0
+    await el.play()
+    if (requestId !== clipPreviewRequestId) {
+      el.pause()
+      return
+    }
+    playing.value = true
+    const previewDuration = Number.isFinite(el.duration) && el.duration > 0
+      ? el.duration
+      : Math.max(0, clip.end - clip.start)
+    clipStopTimer = setTimeout(() => {
+      if (requestId !== clipPreviewRequestId) return
+      el.pause()
+      clipPlaybackClipId = ''
+      clipPreviewPosition.value = 0
+      playing.value = false
+      playbackMode.value = 'none'
+      clipStopTimer = null
+    }, Math.max(80, previewDuration * 1000))
+  } catch (err) {
+    if (requestId !== clipPreviewRequestId) return
     playbackMode.value = 'none'
-  }, Math.max(80, previewDuration * 1000))
+    clipPlaybackClipId = ''
+    clipPreviewPosition.value = 0
+    ElMessage.error(err instanceof Error ? `片段试听失败：${err.message}` : '片段试听失败')
+  } finally {
+    if (requestId === clipPreviewRequestId) {
+      previewing.value = false
+      playbackBuffering.value = false
+    }
+  }
 }
 
 async function exportMix(fmt: string) {
@@ -4168,12 +4246,14 @@ function isActiveAudioEvent(event: Event) {
 }
 function onAudioPause(event: Event) {
   if (!isActiveAudioEvent(event)) return
+  if (playbackMode.value === 'clip') stopClipPreviewTicker()
   if (audioEl.value?.ended) playing.value = false
 }
 function onAudioPlaying(event: Event) {
   if (!isActiveAudioEvent(event)) return
   playbackBuffering.value = false
   playing.value = true
+  if (playbackMode.value === 'clip') startClipPreviewTicker()
 }
 function onAudioWaiting(event: Event) {
   if (!isActiveAudioEvent(event) || audioEl.value?.paused) return
@@ -4181,23 +4261,37 @@ function onAudioWaiting(event: Event) {
 }
 function onAudioError(event: Event) {
   if (!isActiveAudioEvent(event)) return
+  stopClipPreviewTicker()
   playbackBuffering.value = false
   playing.value = false
+  if (playbackMode.value === 'clip') {
+    clipPlaybackClipId = ''
+    clipPreviewPosition.value = 0
+    playbackMode.value = 'none'
+  }
 }
 function onAudioEnded(event: Event) {
   if (!isActiveAudioEvent(event)) return
+  const endedMode = playbackMode.value
+  stopClipPreviewTicker()
   cancelScheduledLiveMixRefresh()
   clipPlaybackClipId = ''
+  clipPreviewPosition.value = 0
   previewing.value = false
   playbackBuffering.value = false
   playing.value = false
-  if (playbackMode.value === 'clip') playbackMode.value = 'none'
-  if (project.value) playhead.value = project.value.duration
+  if (endedMode === 'clip') playbackMode.value = 'none'
+  if (endedMode === 'mix' && project.value) playhead.value = project.value.duration
 }
 function onAudioTimeUpdate(event: Event) {
   if (!isActiveAudioEvent(event)) return
   const el = audioEl.value
-  if (!el || playbackMode.value !== 'mix' || timelineSeeking.value) return
+  if (!el) return
+  if (playbackMode.value === 'clip') {
+    clipPreviewPosition.value = Math.max(0, el.currentTime)
+    return
+  }
+  if (playbackMode.value !== 'mix' || timelineSeeking.value) return
   playhead.value = clamp(el.currentTime, 0, project.value?.duration || el.currentTime)
   followPlayheadIntoView()
 }
@@ -4468,6 +4562,7 @@ onMounted(() => {
 onUnmounted(() => {
   cancelScheduledLiveMixRefresh()
   clearScheduledMixPreload()
+  stopClipPreviewTicker()
   if (liveControlSaveTimer) clearTimeout(liveControlSaveTimer)
   resetAudioPlayer(audioPrimaryEl.value)
   resetAudioPlayer(audioSecondaryEl.value)
@@ -5587,6 +5682,33 @@ onUnmounted(() => {
 .clip.selected {
   border-color: var(--xb-primary);
   box-shadow: 0 0 0 1px var(--xb-primary), 0 0 18px rgba(var(--xb-primary-rgb), 0.25);
+}
+.clip.clip-previewing {
+  border-color: var(--xb-warn);
+  box-shadow: 0 0 0 1px var(--xb-warn), 0 0 18px rgba(var(--xb-warn-rgb), 0.3);
+}
+.clip-preview-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 5;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--xb-warn);
+  box-shadow: 0 0 8px rgba(var(--xb-warn-rgb), 0.9);
+  pointer-events: none;
+}
+.clip-preview-playhead::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--xb-warn);
+  transform: translateX(-50%);
 }
 .clip.muted {
   opacity: 0.42;
