@@ -469,6 +469,7 @@ const mockWorks: WorkDTO[] = [
 
 const cloneProject = (p: EditorProject): EditorProject => JSON.parse(JSON.stringify(p)) as EditorProject
 const mockEditorProjects: EditorProject[] = []
+const mockRerunJobs: Record<string, EditorRerunResult & { log?: string }> = {}
 const mockEditorHistory: Record<string, EditorProject[]> = {}
 const mockEditorFuture: Record<string, EditorProject[]> = {}
 const mockMinRerunClipSeconds = 1
@@ -2377,7 +2378,23 @@ export const mock = {
       rerun_loudness_envelope: enhance?.enabled ? (enhance.loudness_envelope ?? 0.58) : 0,
     }
     project.updated_at = now()
-    return { ok: true, project: cloneProject(project), clip: { ...clip } }
+    const jobId = `mock_rerun_${Date.now()}`
+    mockRerunJobs[jobId] = {
+      ok: true,
+      status: 'done',
+      progress: 100,
+      message: '片段替换完成，工程已保存',
+      project: cloneProject(project),
+      clip: { ...clip },
+      log: '[00:00:00] 开始校验片段与模型\n[00:00:01] 模型推理完成\n[00:00:01] 片段替换完成，工程已保存\n',
+    }
+    return { ok: true, job_id: jobId, status: 'done', progress: 100, message: '片段替换完成，工程已保存' }
+  },
+  getEditorRerunStatus(jobId: string): EditorRerunResult {
+    return mockRerunJobs[jobId] || { ok: false, error: '重推理任务不存在' }
+  },
+  getEditorRerunLog(jobId: string): string {
+    return mockRerunJobs[jobId]?.log || ''
   },
   enhanceEditorClip(
     projectId: string,

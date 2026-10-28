@@ -880,6 +880,11 @@
             >
               <el-icon class="el-icon--left"><Cpu /></el-icon>替换片段
             </el-button>
+            <div v-if="rerunJobId" class="rerun-progress" aria-live="polite">
+              <div class="rerun-progress-head"><span>{{ rerunMessage || '正在处理' }}</span><b>{{ rerunProgress }}%</b></div>
+              <div class="rerun-progress-track"><i :style="{ width: `${rerunProgress}%` }"></i></div>
+              <pre v-if="rerunLog" class="rerun-log">{{ rerunLog }}</pre>
+            </div>
           </div>
         </div>
 
@@ -1297,6 +1302,10 @@ const copyingAudio = ref(false)
 const mergingAudio = ref(false)
 const pastingAudio = ref(false)
 const rerunning = ref(false)
+const rerunJobId = ref('')
+const rerunProgress = ref(0)
+const rerunMessage = ref('')
+const rerunLog = ref('')
 const enhancingClip = ref(false)
 const silenceSplitting = ref(false)
 const separating = ref(false)
@@ -1360,6 +1369,7 @@ const history = ref<EditorProject[]>([])
 const future = ref<EditorProject[]>([])
 const drag = ref<DragState | null>(null)
 let clipStopTimer: ReturnType<typeof setTimeout> | null = null
+let rerunPollTimer: ReturnType<typeof setInterval> | null = null
 let clipPlaybackClipId = ''
 let clipPreviewFrame = 0
 let lastPlayToggleAt = 0
@@ -4356,6 +4366,10 @@ async function rerunClip() {
     return
   }
   rerunning.value = true
+  rerunJobId.value = ''
+  rerunProgress.value = 0
+  rerunMessage.value = '正在提交重推理任务'
+  rerunLog.value = ''
   const res = await api.rerunEditorClip(
     project.value.id,
     selected.value.trackId,
@@ -4378,21 +4392,45 @@ async function rerunClip() {
         }
       : { enabled: false },
   )
-  rerunning.value = false
-  if (!res.ok || !res.project) {
+  if (!res.ok || !res.job_id) {
+    rerunning.value = false
     ElMessage.error(res.error || '局部重推理失败')
     return
   }
-  applyProject(res.project)
-  const removed = res.clip?.metadata?.rerun_removed_plugin_effects
-  const removedCount = Array.isArray(removed) ? removed.length : 0
-  const enhanced = res.clip?.metadata?.rerun_enhanced
-  const enhanceErr = res.clip?.metadata?.rerun_enhance_error
-  let msg = '片段已替换'
-  if (enhanced) msg = `片段已替换，已应用 ${res.clip?.metadata?.rerun_enhance_level || 'basic'} 美声`
-  if (enhanceErr) msg += `（美声失败：${enhanceErr}）`
-  if (removedCount > 0 && !enhanced) msg = `片段已替换，已移除 ${removedCount} 个插件效果避免污染干声`
-  ElMessage.success(msg)
+  rerunJobId.value = res.job_id
+  await pollRerun(res.job_id)
+}
+
+async function pollRerun(jobId: string) {
+  const refresh = async () => {
+    const status = await api.getEditorRerunStatus(jobId)
+    rerunProgress.value = Number(status.progress || 0)
+    rerunMessage.value = status.message || (status.status === 'done' ? '处理完成' : '正在处理')
+    rerunLog.value = await api.getEditorRerunLog(jobId)
+    if (status.status === 'done' || status.status === 'failed') {
+      if (rerunPollTimer) clearInterval(rerunPollTimer)
+      rerunPollTimer = null
+      rerunning.value = false
+      if (status.status === 'failed' || !status.project) {
+        ElMessage.error(status.error || '局部重推理失败')
+        return true
+      }
+      applyProject(status.project)
+      const removed = status.clip?.metadata?.rerun_removed_plugin_effects
+      const enhanceErr = status.clip?.metadata?.rerun_enhance_error
+      const enhanced = status.clip?.metadata?.rerun_enhanced
+      const removedCount = Array.isArray(removed) ? removed.length : 0
+      let msg = '片段已替换'
+      if (enhanced) msg = `片段已替换，已应用 ${status.clip?.metadata?.rerun_enhance_level || 'basic'} 美声`
+      if (enhanceErr) msg += `（美声失败：${enhanceErr}）`
+      if (removedCount > 0 && !enhanced) msg = `片段已替换，已移除 ${removedCount} 个插件效果避免污染干声`
+      ElMessage.success(msg)
+      return true
+    }
+    return false
+  }
+  if (await refresh()) return
+  rerunPollTimer = setInterval(() => void refresh(), 500)
 }
 
 async function enhanceSelectedClip() {
@@ -4844,6 +4882,7 @@ onUnmounted(() => {
   if (waveformZoomTimer) clearTimeout(waveformZoomTimer)
   if (deferredWaveformTimer) clearTimeout(deferredWaveformTimer)
   if (visibleWaveformTimer) clearTimeout(visibleWaveformTimer)
+  if (rerunPollTimer) clearInterval(rerunPollTimer)
 })
 </script>
 
@@ -5722,6 +5761,44 @@ onUnmounted(() => {
   color: var(--xb-warn);
   font-size: 12px;
   line-height: 1.5;
+}
+.rerun-progress {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 9px;
+  border: 1px solid var(--xb-border);
+  border-radius: 7px;
+  background: rgba(var(--xb-fill-rgb), .04);
+}
+.rerun-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--xb-muted);
+  font-size: 11px;
+}
+.rerun-progress-head b { color: var(--xb-primary); }
+.rerun-progress-track {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: rgba(var(--xb-fill-rgb), .12);
+}
+.rerun-progress-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--xb-primary);
+  transition: width .25s ease;
+}
+.rerun-log {
+  max-height: 120px;
+  margin: 2px 0 0;
+  overflow: auto;
+  color: var(--xb-muted);
+  font: 10px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
 }
 .mini {
   width: 100%;

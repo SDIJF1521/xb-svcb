@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import config
@@ -62,6 +63,7 @@ class VocalEnhancementProcessor:
         loudness_envelope: float = DEFAULT_LOUDNESS_ENVELOPE,
         skip_repair: bool = False,
         preserve_model_high_band: bool = False,
+        progress_callback=None,
     ) -> Path:
         normalized_level = str(level or self.LEVEL_BASIC).strip().lower()
         if normalized_level not in self.LEVELS:
@@ -164,16 +166,31 @@ class VocalEnhancementProcessor:
                 cmd.append("--preserve-model-high-band")
 
             try:
-                proc = subprocess.run(
+                proc = subprocess.Popen(
                     cmd,
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
                     env=env,
-                    timeout=3600,
                     **config.subprocess_no_window(),
                 )
+                started_at = time.monotonic()
+                while proc.poll() is None:
+                    if progress_callback:
+                        # The worker does not expose frame-level progress. Keep
+                        # the UI moving through the active stage without ever
+                        # claiming the stage is complete before the process exits.
+                        elapsed = time.monotonic() - started_at
+                        progress_callback(min(87, 74 + int(min(13, elapsed / 8.0))))
+                    if time.monotonic() - started_at > 3600:
+                        proc.kill()
+                        raise subprocess.TimeoutExpired(cmd, 3600)
+                    time.sleep(0.5)
+                stdout, stderr = proc.communicate()
+                proc.stdout = stdout
+                proc.stderr = stderr
             except (OSError, subprocess.SubprocessError) as exc:
                 raise RuntimeError(f"AI 歌声增强子进程启动失败: {exc}") from exc
 

@@ -29,7 +29,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -1396,6 +1396,11 @@ class EditorOperationResponse(BaseModel):
     harmony_removed: bool | None = Field(default=None, description="是否已完成 PyMSS 和声去除")
     removed_track_id: str | None = Field(default=None, description="被删除的音轨 ID")
     merged_clip_ids: list[str] | None = Field(default=None, description="被合并的片段 ID")
+    job_id: str | None = Field(default=None, description="后台编辑器任务 ID")
+    status: str | None = Field(default=None, description="后台编辑器任务状态")
+    progress: int | None = Field(default=None, description="后台编辑器任务进度")
+    message: str | None = Field(default=None, description="后台编辑器任务当前阶段")
+    log_path: str | None = Field(default=None, description="后台编辑器任务日志路径")
 
 
 class EditorWaveformResponse(BaseModel):
@@ -2974,6 +2979,34 @@ def create_http_app(
             request.vocal_enhancement.model_dump(),
         )
         return _editor_result(result, project_id)
+
+    @router.get(
+        "/editor/reruns/{job_id}",
+        response_model=EditorOperationResponse,
+        tags=["编辑器"],
+        summary="查询局部重推理进度",
+    )
+    def get_editor_rerun_status(
+        job_id: str = ApiPath(..., description="局部重推理任务 ID"),
+    ) -> dict[str, Any]:
+        result = facade.get_editor_rerun_status(job_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="重推理任务不存在")
+        return _public_editor_operation(result, str(result.get("project_id") or ""))
+
+    @router.get(
+        "/editor/reruns/{job_id}/log",
+        response_class=PlainTextResponse,
+        tags=["编辑器"],
+        summary="读取局部重推理日志",
+    )
+    def get_editor_rerun_log(
+        job_id: str = ApiPath(..., description="局部重推理任务 ID"),
+    ) -> PlainTextResponse:
+        log = facade.get_editor_rerun_log(job_id)
+        if log is None:
+            raise HTTPException(status_code=404, detail="重推理任务不存在")
+        return PlainTextResponse(log)
 
     @router.post(
         "/editor/projects/{project_id}/tracks/{track_id}/clips/merge",

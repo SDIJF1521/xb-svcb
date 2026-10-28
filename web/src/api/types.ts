@@ -1122,6 +1122,11 @@ export interface EditorRerunResult {
   error?: string
   project?: EditorProject
   clip?: EditorClip
+  job_id?: string
+  status?: 'queued' | 'running' | 'done' | 'failed'
+  progress?: number
+  message?: string
+  log_path?: string
 }
 
 export interface EditorSeparationOptions {

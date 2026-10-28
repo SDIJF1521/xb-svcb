@@ -1584,6 +1584,12 @@ class Api:
     ) -> dict[str, Any]:
         return self._editor.rerun_clip(project_id, track_id, clip_id, model_id, params or {}, enhance or {})
 
+    def get_editor_rerun_status(self, job_id: str) -> dict[str, Any] | None:
+        return self._editor.rerun_status(job_id)
+
+    def get_editor_rerun_log(self, job_id: str) -> str | None:
+        return self._editor.rerun_log(job_id)
+
     def enhance_editor_clip(
         self,
         project_id: str,

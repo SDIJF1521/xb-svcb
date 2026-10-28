@@ -89,6 +89,7 @@ import {
   Right,
   Scissor,
 } from '@element-plus/icons-vue'
+import 'element-plus/es/components/message-box/style/css'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, type EditorProjectSummary } from '@/api'
 
@@ -192,6 +193,7 @@ async function deleteProject(item: EditorProjectSummary) {
         confirmButtonText: '删除工程',
         cancelButtonText: '取消',
         type: 'warning',
+        customClass: 'editor-delete-confirm',
       },
     )
   } catch {
@@ -410,6 +412,77 @@ onMounted(loadProjects)
 }
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+:global(.editor-delete-confirm.el-message-box) {
+  width: min(430px, calc(100vw - 32px));
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(var(--xb-accent-rgb), .38);
+  border-radius: 12px;
+  background: var(--xb-bg-2);
+  box-shadow: 0 22px 64px rgba(var(--xb-bg-rgb), .58), 0 0 0 1px rgba(var(--xb-fill-rgb), .06) inset;
+}
+:global(.editor-delete-confirm .el-message-box__header) {
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid rgba(var(--xb-fill-rgb), .1);
+  background: linear-gradient(110deg, rgba(var(--xb-accent-rgb), .13), transparent 70%);
+}
+:global(.editor-delete-confirm .el-message-box__title) {
+  color: var(--xb-text);
+  font-size: 16px;
+  font-weight: 800;
+}
+:global(.editor-delete-confirm .el-message-box__headerbtn) {
+  top: 14px;
+  right: 14px;
+}
+:global(.editor-delete-confirm .el-message-box__headerbtn .el-message-box__close) {
+  color: var(--xb-muted);
+}
+:global(.editor-delete-confirm .el-message-box__headerbtn:hover .el-message-box__close) {
+  color: var(--xb-text);
+}
+:global(.editor-delete-confirm .el-message-box__content) {
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 20px 8px;
+}
+:global(.editor-delete-confirm .el-message-box__status) {
+  margin-top: 2px;
+  color: var(--xb-accent);
+}
+:global(.editor-delete-confirm .el-message-box__message) {
+  color: var(--xb-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+:global(.editor-delete-confirm .el-message-box__btns) {
+  gap: 9px;
+  padding: 14px 20px 18px;
+}
+:global(.editor-delete-confirm .el-button) {
+  min-width: 82px;
+  height: 34px;
+  border-radius: 7px;
+  font-weight: 700;
+}
+:global(.editor-delete-confirm .el-button--default) {
+  border-color: var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), .05);
+  color: var(--xb-text);
+}
+:global(.editor-delete-confirm .el-button--default:hover) {
+  border-color: var(--xb-primary);
+  color: var(--xb-primary);
+}
+:global(.editor-delete-confirm .el-button--primary) {
+  border-color: transparent;
+  background: var(--xb-accent);
+  color: var(--xb-on-accent, #fff);
+  box-shadow: 0 7px 18px rgba(var(--xb-accent-rgb), .22);
+}
+:global(.editor-delete-confirm .el-button--primary:hover) {
+  filter: brightness(1.08);
 }
 @media (max-width: 760px) {
   .projects-head {

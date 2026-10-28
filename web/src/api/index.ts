@@ -767,6 +767,12 @@ export const api = {
       mock.rerunEditorClip(projectId, trackId, clipId, modelId, params, enhance),
     ),
 
+  getEditorRerunStatus: (jobId: string) =>
+    invoke<EditorRerunResult>('get_editor_rerun_status', [jobId], () => mock.getEditorRerunStatus(jobId)),
+
+  getEditorRerunLog: (jobId: string) =>
+    invoke<string>('get_editor_rerun_log', [jobId], () => mock.getEditorRerunLog(jobId)),
+
   enhanceEditorClip: (
     projectId: string,
     trackId: string,

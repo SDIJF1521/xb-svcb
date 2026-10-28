@@ -66,6 +66,8 @@ class AudioEditorService:
         self._plugin_sessions: dict[str, dict[str, str]] = {}
         self._engines = engines
         self._vocal_enhancement = vocal_enhancement or VocalEnhancementProcessor()
+        self._rerun_jobs: dict[str, dict[str, Any]] = {}
+        self._rerun_jobs_lock = threading.RLock()
 
     def list(self) -> list[dict[str, Any]]:
         self._cleanup_orphan_project_dirs()
@@ -2561,7 +2563,7 @@ class AudioEditorService:
         framework = config.modelhub_normalize_framework(model.get("framework"))
         return {"rvc": 760.0, "seed-vc": 980.0, "ddsp-svc": 1040.0, "so-vits-svc": 1120.0}.get(framework, 1000.0)
 
-    def rerun_clip(
+    def _execute_rerun_clip(
         self,
         project_id: str,
         track_id: str,
@@ -2569,7 +2571,16 @@ class AudioEditorService:
         model_id: str,
         params: dict[str, Any] | None = None,
         enhance: dict[str, Any] | None = None,
+        progress: Any = None,
+        log: Any = None,
     ) -> dict[str, Any]:
+        def report(value: int, message: str) -> None:
+            if progress:
+                progress(value, message)
+            if log:
+                log(message)
+
+        report(5, "开始校验片段与模型")
         project = self._repo.get(project_id)
         model = self._models.get(model_id) if model_id else None
         if not project or not model:
@@ -2590,6 +2601,7 @@ class AudioEditorService:
             }
         out_dir = self._project_dir(project_id) / "reruns"
         out_dir.mkdir(parents=True, exist_ok=True)
+        report(12, "正在准备局部音频")
         infer_params = InferenceParams.from_dict(
             ModelService.apply_detected_rvc_version(model, params or {})
         )
@@ -2610,6 +2622,7 @@ class AudioEditorService:
             sample_rate=int(project.get("sample_rate") or 44100),
         ):
             return {"ok": False, "error": "片段裁剪失败"}
+        report(25, "片段裁剪完成，开始模型推理")
         model_payload = self._model_payload(model)
         engine = self._engines.for_model(model_payload)
         try:
@@ -2624,6 +2637,7 @@ class AudioEditorService:
             )
         except Exception as exc:  # noqa: BLE001 - 需要把推理错误回传给前端
             return {"ok": False, "error": str(exc)}
+        report(70, "模型推理完成")
 
         # 可选增强：以裁剪出的原始干声保护高级层的辅音、呼吸和宽带平衡。
         enhance_used = False
@@ -2631,6 +2645,7 @@ class AudioEditorService:
         enhance_error = ""
         enhance_cfg = enhance or {}
         if enhance_cfg.get("enabled") and self._vocal_enhancement.available:
+            report(74, "正在执行 AI 歌声增强")
             enhance_level = "advanced" if str(enhance_cfg.get("level") or "basic").lower() == "advanced" else "basic"
             pitch_correction = self._vocal_enhancement.normalize_strength(
                 enhance_cfg.get("pitch_correction", 0.45), 0.45
@@ -2683,12 +2698,14 @@ class AudioEditorService:
                     ai_exciter=ai_exciter,
                     stereo_width=stereo_width,
                     loudness_envelope=loudness_envelope,
+                    progress_callback=lambda value: report(value, "正在执行 AI 歌声增强"),
                 )
                 if enhanced_out.is_file():
                     out = enhanced_out
                     enhance_used = True
             except Exception as exc:  # noqa: BLE001 - 美声失败不应阻塞重推理
                 enhance_error = str(exc)
+            report(88, "AI 歌声增强处理完成")
 
         next_project = copy.deepcopy(project)
         next_track, next_idx, next_clip = self._find_clip_ref(next_project, track_id, clip_id)
@@ -2735,7 +2752,80 @@ class AudioEditorService:
         next_track["clips"][next_idx] = next_clip
         next_project["waveform_cache"] = {}
         saved = self.save(next_project, push_history=True)
+        report(100, "片段替换完成，工程已保存")
         return {"ok": True, "project": saved, "clip": next_clip}
+
+    def rerun_clip(
+        self,
+        project_id: str,
+        track_id: str,
+        clip_id: str,
+        model_id: str,
+        params: dict[str, Any] | None = None,
+        enhance: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Queue a local rerun so the editor can show progress and logs."""
+        job_id = f"rerun_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+        log_path = self._project_dir(project_id) / "reruns" / f"{job_id}.log"
+        state: dict[str, Any] = {
+            "id": job_id,
+            "project_id": project_id,
+            "status": "queued",
+            "progress": 0,
+            "message": "等待开始",
+            "log_path": str(log_path),
+            "project": None,
+            "clip": None,
+            "error": None,
+        }
+        with self._rerun_jobs_lock:
+            self._rerun_jobs[job_id] = state
+
+        def write_log(message: str) -> None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"[{datetime.now().strftime('%H:%M:%S')}] {message}\n")
+
+        def update(value: int, message: str) -> None:
+            with self._rerun_jobs_lock:
+                state["progress"] = max(0, min(100, int(value)))
+                state["message"] = message
+
+        def worker() -> None:
+            update(1, "开始重推理")
+            write_log("=== 编辑器局部重推理开始 ===")
+            try:
+                result = self._execute_rerun_clip(
+                    project_id, track_id, clip_id, model_id, params, enhance,
+                    progress=update, log=write_log,
+                )
+                with self._rerun_jobs_lock:
+                    state.update(result)
+                    state["status"] = "done" if result.get("ok") else "failed"
+                    state["error"] = result.get("error")
+                write_log("=== 重推理成功 ===" if result.get("ok") else f"=== 重推理失败：{result.get('error')} ===")
+            except Exception as exc:  # noqa: BLE001
+                with self._rerun_jobs_lock:
+                    state.update(status="failed", error=str(exc), message="重推理失败")
+                write_log(f"=== 重推理异常：{exc} ===")
+
+        threading.Thread(target=worker, name=f"editor-rerun-{job_id}", daemon=True).start()
+        return {"ok": True, "job_id": job_id, "status": "queued", "progress": 0, "message": "等待开始", "log_path": str(log_path)}
+
+    def rerun_status(self, job_id: str) -> dict[str, Any] | None:
+        with self._rerun_jobs_lock:
+            state = self._rerun_jobs.get(job_id)
+            return copy.deepcopy(state) if state else None
+
+    def rerun_log(self, job_id: str) -> str | None:
+        state = self.rerun_status(job_id)
+        if not state:
+            return None
+        path = Path(str(state.get("log_path") or ""))
+        try:
+            return path.read_text(encoding="utf-8") if path.is_file() else ""
+        except OSError:
+            return ""
 
     def enhance_clip(
         self,
