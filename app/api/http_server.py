@@ -74,6 +74,9 @@ API_OVERVIEW_DESCRIPTION = r"""
 下面的程序会依次完成：检查服务、上传歌曲、读取模型、按当前环境创建任务、轮询进度、
 下载最终混音并清理上传文件。若选择到的唯一模型是 SeedVC，还会自动上传 `reference.wav`。
 
+高音保护默认开启。普通翻唱在开启全参数时，如果 `high_pitch_guard_rounds` 设为 `0`，
+仍由系统自动使用默认保护轮次；实时翻唱沿用 `0` 表示不进行保护重试的现有语义。
+
 先安装依赖：`pip install requests`
 
 ```python
@@ -127,6 +130,9 @@ try:
             "pitch": 0,
             "f0_method": "rmvpe",
             "device": "auto",
+            "manual_params_enabled": True,
+            "auto_high_pitch_guard": True,
+            "high_pitch_guard_rounds": 0,
         },
     }
     if model["framework"] == "seed-vc":
@@ -579,8 +585,10 @@ JOB_CREATE_API_DOC = _api_operation_description(
         ("params.reference_audio", "string", "否", '""', "仅 SeedVC；本机参考音频绝对路径"),
         ("params.ddsp_infer_steps", "integer", "否", "50", "仅 DDSP；采样步数，最小 1，推荐 50~100"),
         ("params.ddsp_formant_shift", "number", "否", "0", "仅 DDSP；共振峰半音偏移，范围 -2~2"),
-        ("params.auto_high_pitch_guard", "boolean", "否", "true", "翻唱/实时变声；极高音先保共振峰降调，翻唱后升回原调并补偿响度"),
-        ("params.high_pitch_guard_rounds", "integer", "否", "3", "高音保护重试轮次，范围 0~8"),
+        ("params.auto_high_pitch_guard", "boolean", "否", "true", "开启高音保护；极高音先保共振峰降调，翻唱后升回原调并补偿响度"),
+        ("params.high_pitch_guard_rounds", "integer", "否", "3", "高音保护重试轮次，范围 0~8；普通翻唱全参数模式下设为 0 时由系统自动接管，实时翻唱保持 0 表示不重试"),
+        ("params.f0_filter_threshold", "number", "否", "0.05", "全参数模式下的 F0 过滤阈值，范围 0~1"),
+        ("params.manual_params_enabled", "boolean", "否", "false", "是否启用全参数手动调整；关闭时使用软件默认高级参数"),
         ("vocal_enhancement.enabled", "boolean", "否", "false", "启用自然修音、AI 角色共振峰与歌声增强"),
         ("vocal_enhancement.level", "string", "否", "basic", "basic 或 advanced"),
         ("vocal_enhancement.pitch_correction", "number", "否", "0.45", "自然修音强度，范围 0~1"),
@@ -634,6 +642,9 @@ JOB_CREATE_API_DOC = _api_operation_description(
     "pitch": 0,
     "f0_method": "rmvpe",
     "device": "auto",
+    "manual_params_enabled": true,
+    "auto_high_pitch_guard": true,
+    "high_pitch_guard_rounds": 0,
     "index_rate": 0.75,
     "rms_mix": 0.25,
     "protect": 0.33,
@@ -854,13 +865,21 @@ class InferenceParamsRequest(BaseModel):
     )
     auto_high_pitch_guard: bool = Field(
         default=True,
-        description="高音保护：极高音先保共振峰降调，经过模型翻唱后再升回原调，并补偿高音响度。",
+        description=(
+            "高音保护：极高音先保共振峰降调，经过模型翻唱后再升回原调并补偿高音响度。"
+            "普通翻唱和编辑器重推理默认开启；实时翻唱保持实时模式的独立处理策略。"
+        ),
+        examples=[True, False],
     )
     high_pitch_guard_rounds: int = Field(
         default=3,
         ge=0,
         le=8,
-        description="高音保护重试轮次；0 表示不进行保护重试。",
+        description=(
+            "高音保护重试轮次，范围 0~8；普通翻唱在全参数模式下设为 0 时由系统接管并使用默认保护轮次，"
+            "实时翻唱保持 0 表示不进行保护重试。"
+        ),
+        examples=[0, 3],
     )
     high_pitch_threshold: float = Field(
         default=0.0,
@@ -877,7 +896,11 @@ class InferenceParamsRequest(BaseModel):
     )
     manual_params_enabled: bool = Field(
         default=False,
-        description="是否启用全参数手动调整。",
+        description=(
+            "是否启用全参数手动调整。关闭时使用软件默认高级参数；开启后可设置高音保护轮次、"
+            "F0 过滤阈值和目标说话人等高级字段。"
+        ),
+        examples=[False, True],
     )
 
 
@@ -2985,6 +3008,21 @@ def create_http_app(
         response_model=EditorOperationResponse,
         tags=["编辑器"],
         summary="查询局部重推理进度",
+        description=_api_operation_description(
+            "查询编辑器局部重推理的状态、阶段进度和完成结果。",
+            "GET",
+            "/api/v1/editor/reruns/{job_id}",
+            [("job_id", "string", "是", "-", "局部重推理接口返回的任务 ID")],
+            [
+                ("job_id", "string", "后台任务 ID"),
+                ("status", "string", "queued、running、done 或 failed"),
+                ("progress", "integer", "阶段进度，范围 0~100"),
+                ("message", "string|null", "当前处理阶段"),
+                ("project", "object|null", "完成后的编辑工程"),
+                ("error", "string|null", "失败原因"),
+            ],
+            '{"ok": true, "job_id": "rerun_demo", "status": "running", "progress": 42, "message": "正在执行模型推理"}',
+        ),
     )
     def get_editor_rerun_status(
         job_id: str = ApiPath(..., description="局部重推理任务 ID"),
@@ -2999,6 +3037,16 @@ def create_http_app(
         response_class=PlainTextResponse,
         tags=["编辑器"],
         summary="读取局部重推理日志",
+        description=_api_operation_description(
+            "读取编辑器局部重推理任务的运行日志。",
+            "GET",
+            "/api/v1/editor/reruns/{job_id}/log",
+            [("job_id", "string", "是", "-", "局部重推理接口返回的任务 ID")],
+            [("响应体", "text", "按时间追加的重推理日志文本")],
+            "[11:45:37] 开始校验片段与模型\n[11:45:40] 正在执行模型推理",
+            response_example_language="text",
+            note="任务运行期间可以重复读取，日志会随着处理阶段追加。",
+        ),
     )
     def get_editor_rerun_log(
         job_id: str = ApiPath(..., description="局部重推理任务 ID"),

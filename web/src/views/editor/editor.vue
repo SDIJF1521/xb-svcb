@@ -778,9 +778,10 @@
               <div v-if="rerunManualParamsEnabled && rerunHighPitchGuard" class="rerun-param advanced-rerun-param">
                 <div class="rerun-param-label">
                   <span>高音保护轮次</span>
-                  <b>{{ rerunHighPitchGuardRounds }} 轮</b>
+                  <b>{{ highPitchGuardRoundsText(rerunHighPitchGuardRounds) }}</b>
                 </div>
                 <input v-model.number="rerunHighPitchGuardRounds" type="range" min="0" max="8" step="1" />
+                <small class="rerun-hint">{{ rerunHighPitchGuardRounds === 0 ? '轮次为 0 时由系统自动接管，行为与普通模式一致' : '每轮失败后会根据实际哑音位置自动降低内部保护起点' }}</small>
               </div>
               <div v-if="rerunManualParamsEnabled" class="rerun-param advanced-rerun-param">
                 <div class="rerun-param-label">
@@ -1845,6 +1846,9 @@ function modelFrameworkLabel(framework: string | undefined) {
 }
 function qualitySteps(ratio: number): number {
   return Math.round(20 + Math.max(0, Math.min(1, ratio || 0)) * 30)
+}
+function highPitchGuardRoundsText(rounds: number): string {
+  return Math.round(rounds || 0) === 0 ? '自动（系统接管）' : `${Math.round(rounds)} 轮`
 }
 function ddspQualitySteps(ratio: number): number {
   return Math.round(50 + Math.max(0, Math.min(1, ratio || 0)) * 50)

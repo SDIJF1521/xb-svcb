@@ -687,7 +687,7 @@ class RealtimeCoverService:
         """Retry a realtime block when the model mutes a voiced high-note span."""
         threshold = self._model_high_pitch_threshold(params, model)
         params.high_pitch_threshold = threshold
-        guard_rounds = ConversionService._high_pitch_guard_rounds(params)
+        guard_rounds = ConversionService._high_pitch_guard_rounds(params, realtime=True)
         attempts = 1 + guard_rounds if params.auto_high_pitch_guard else 1
         history: list[dict[str, Any]] = []
         rendered = output

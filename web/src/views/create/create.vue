@@ -203,10 +203,10 @@
                 <label class="mp-guard high-pitch-toggle-field" data-guide="high-pitch-toggle">
                   <input v-model="mp(m.id).autoHighPitchGuard" type="checkbox" />
                   <span>自动高音保护</span>
-                  <small>确认高音失配时按轮次重试</small>
+                  <small>{{ mp(m.id).highPitchGuardRounds === 0 ? '轮次为 0 时由系统自动接管' : '确认高音失配时按轮次重试' }}</small>
                 </label>
                 <div v-if="manualParamsEnabled && mp(m.id).autoHighPitchGuard" class="mp-row mp-threshold">
-                  <label>保护轮次 {{ mp(m.id).highPitchGuardRounds }} 轮</label>
+                  <label>保护轮次 {{ highPitchGuardRoundsText(mp(m.id).highPitchGuardRounds) }}</label>
                   <input v-model.number="mp(m.id).highPitchGuardRounds" type="range" min="0" max="8" step="1" :disabled="!manualParamsEnabled" />
                 </div>
                 <div v-if="manualParamsEnabled" class="mp-row mp-threshold">
@@ -468,10 +468,10 @@
           <div v-if="manualParamsEnabled && autoHighPitchGuard" class="field">
             <div class="field-row">
               <label>高音保护轮次</label>
-              <span class="field-val">{{ highPitchGuardRounds }} 轮</span>
+              <span class="field-val">{{ highPitchGuardRoundsText(highPitchGuardRounds) }}</span>
             </div>
             <input type="range" min="0" max="8" step="1" v-model.number="highPitchGuardRounds" />
-            <div class="field-hint">每轮失败后会根据实际哑音位置自动降低内部保护起点</div>
+            <div class="field-hint">{{ highPitchGuardRounds === 0 ? '轮次为 0 时由系统自动接管，行为与普通模式一致' : '每轮失败后会根据实际哑音位置自动降低内部保护起点' }}</div>
           </div>
 
           <div v-if="manualParamsEnabled" class="field">
@@ -1320,6 +1320,9 @@ function frameworkLabel(id: string): string {
 }
 function qualitySteps(ratio: number): number {
   return Math.round(20 + Math.max(0, Math.min(1, ratio || 0)) * 30)
+}
+function highPitchGuardRoundsText(rounds: number): string {
+  return Math.round(rounds || 0) === 0 ? '自动（系统接管）' : `${Math.round(rounds)} 轮`
 }
 function ddspQualitySteps(ratio: number): number {
   return Math.round(50 + Math.max(0, Math.min(1, ratio || 0)) * 50)

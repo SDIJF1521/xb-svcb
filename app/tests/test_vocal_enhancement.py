@@ -869,6 +869,19 @@ def test_high_pitch_guard_rounds_are_opt_in_and_clamped() -> None:
         )
         == 2
     )
+    assert (
+        ConversionService._high_pitch_guard_rounds(
+            InferenceParams(manual_params_enabled=True, high_pitch_guard_rounds=0)
+        )
+        == ConversionService._DROPOUT_RECOVERY_MAX_ATTEMPTS - 1
+    )
+    assert (
+        ConversionService._high_pitch_guard_rounds(
+            InferenceParams(manual_params_enabled=True, high_pitch_guard_rounds=0),
+            realtime=True,
+        )
+        == 0
+    )
 
 
 def test_guard_drop_escalates_only_after_high_note_retry_still_exceeds_range() -> None:
