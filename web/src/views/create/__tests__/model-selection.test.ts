@@ -201,8 +201,12 @@ describe('speaker selection', () => {
 
     await wrapper.get('[data-guide="multi-mode"]').trigger('click')
     await modelButton(wrapper, 'DDSP').trigger('click')
-    const voice = wrapper.get('select[aria-label="Voice 的说话人"]')
-    const ddsp = wrapper.get('select[aria-label="DDSP 的说话人"]')
+    const speakerSelects = wrapper.findAll('.multi-model .mp-speaker select')
+    expect(speakerSelects).toHaveLength(2)
+    const [voice, ddsp] = speakerSelects
+    expect(voice).toBeDefined()
+    expect(ddsp).toBeDefined()
+    if (!voice || !ddsp) throw new Error('Expected speaker selectors for both selected models')
     expect(voice.findAll('option').map((option) => option.attributes('value'))).toEqual(['', 'Alice', 'Bob'])
     expect(ddsp.findAll('option').map((option) => option.attributes('value'))).toEqual(['', '1', '2'])
     await voice.setValue('Alice')

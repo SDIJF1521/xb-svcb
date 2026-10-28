@@ -3,13 +3,13 @@
     <button
       class="theme-toggle"
       :class="theme"
-      :title="`当前：${themeLabel}（点击切换主题）`"
+      :title="translateUiText(`当前：${translateUiText(themeLabel)}（点击切换主题）`)"
       @click="onThemeToggle"
     >
       <span class="theme-knob">
         <el-icon><component :is="theme === 'anime' ? Sunny : theme === 'brand' ? Headset : theme === 'custom' ? Brush : Moon" /></el-icon>
       </span>
-      <span class="theme-name">{{ themeLabel }}</span>
+      <span class="theme-name">{{ translateUiText(themeLabel) }}</span>
     </button>
     <button
       class="theme-edit"
@@ -52,6 +52,7 @@ import CustomThemeEditor from '@/components/theme/CustomThemeEditor.vue'
 import ThemePresetList from '@/components/theme/ThemePresetList.vue'
 import { cloneCustomTheme, DEFAULT_CUSTOM_THEME, useThemeStore } from '@/stores/theme'
 import type { CustomTheme, ThemeName } from '@/stores/theme'
+import { translateUiText } from '@/i18n'
 
 defineOptions({ name: 'ThemeSwitcher' })
 

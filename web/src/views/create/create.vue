@@ -48,10 +48,10 @@
               <span class="workflow-no">{{ item.no }}</span>
               <span class="workflow-copy">
                 <span class="workflow-title">
-                  {{ item.title }}
-                  <i v-if="item.tag">{{ item.tag }}</i>
+                  {{ translateUiText(item.title) }}
+                  <i v-if="item.tag">{{ translateUiText(item.tag) }}</i>
                 </span>
-                <span class="workflow-desc">{{ item.desc }}</span>
+                <span class="workflow-desc">{{ translateUiText(item.desc) }}</span>
               </span>
             </button>
           </div>
@@ -159,10 +159,10 @@
             <label class="manual-param-switch" data-guide="manual-switch">
               <input v-model="manualParamsEnabled" type="checkbox" />
               <span>全参数手动调整</span>
-              <small>{{ manualParamsEnabled ? '已启用' : '基础可调 · 高级默认' }}</small>
+              <small>{{ translateUiText(manualParamsEnabled ? '已启用' : '基础可调 · 高级默认') }}</small>
             </label>
           </div>
-          <p class="field-tip">勾选本次要混合的模型（可跨框架：So-VITS-SVC / RVC / SeedVC 同曲混用），每个模型可单独展开设置参数</p>
+          <p class="field-tip">{{ translateUiText('勾选本次要混合的模型（可跨框架：So-VITS-SVC / RVC / SeedVC 同曲混用），每个模型可单独展开设置参数') }}</p>
           <div v-if="availableFrameworks.length > 1" class="model-filter">
             <button class="filter-chip" :class="{ on: modelFilter === '' }" @click="modelFilter = ''">全部</button>
             <button
@@ -197,55 +197,55 @@
 
               <div v-if="isPicked(m.id)" class="mp-params" data-guide="multi-model-params">
                 <div class="mp-row">
-                  <label>变调 {{ mp(m.id).pitch > 0 ? '+' + mp(m.id).pitch : mp(m.id).pitch }}</label>
+                  <label>{{ translateUiText('变调') }} {{ mp(m.id).pitch > 0 ? '+' + mp(m.id).pitch : mp(m.id).pitch }}</label>
                   <input type="range" min="-12" max="12" step="1" v-model.number="mp(m.id).pitch" />
                 </div>
                 <label class="mp-guard high-pitch-toggle-field" data-guide="high-pitch-toggle">
                   <input v-model="mp(m.id).autoHighPitchGuard" type="checkbox" />
-                  <span>自动高音保护</span>
-                  <small>{{ mp(m.id).highPitchGuardRounds === 0 ? '轮次为 0 时由系统自动接管' : '确认高音失配时按轮次重试' }}</small>
+                  <span>{{ translateUiText('自动高音保护') }}</span>
+                  <small>{{ translateUiText(mp(m.id).highPitchGuardRounds === 0 ? '轮次为 0 时由系统自动接管' : '确认高音失配时按轮次重试') }}</small>
                 </label>
                 <div v-if="manualParamsEnabled && mp(m.id).autoHighPitchGuard" class="mp-row mp-threshold">
-                  <label>保护轮次 {{ highPitchGuardRoundsText(mp(m.id).highPitchGuardRounds) }}</label>
+                  <label>{{ translateUiText('保护轮次') }} {{ translateUiText(highPitchGuardRoundsText(mp(m.id).highPitchGuardRounds)) }}</label>
                   <input v-model.number="mp(m.id).highPitchGuardRounds" type="range" min="0" max="8" step="1" :disabled="!manualParamsEnabled" />
                 </div>
                 <div v-if="manualParamsEnabled" class="mp-row mp-threshold">
-                  <label>F0 过滤阈值 {{ mp(m.id).f0FilterThreshold.toFixed(2) }}</label>
+                  <label>{{ translateUiText('F0 过滤阈值') }} {{ mp(m.id).f0FilterThreshold.toFixed(2) }}</label>
                   <input v-model.number="mp(m.id).f0FilterThreshold" type="range" min="0" max="1" step="0.01" :disabled="!manualParamsEnabled" />
                 </div>
                 <template v-if="frameworkOf(m.id) !== 'rvc'">
                   <div class="mp-row" data-guide="ratio-control">
-                    <label v-if="frameworkOf(m.id) === 'seed-vc'">扩散步数 {{ qualitySteps(mp(m.id).diffusionRatio) }}</label>
-                    <label v-else-if="frameworkOf(m.id) === 'ddsp-svc'">采样步数 {{ ddspQualitySteps(mp(m.id).diffusionRatio) }}</label>
-                    <label v-else>扩散占比 {{ Math.round(mp(m.id).diffusionRatio * 100) }}%</label>
+                    <label v-if="frameworkOf(m.id) === 'seed-vc'">{{ translateUiText('扩散步数') }} {{ qualitySteps(mp(m.id).diffusionRatio) }}</label>
+                    <label v-else-if="frameworkOf(m.id) === 'ddsp-svc'">{{ translateUiText('采样步数') }} {{ ddspQualitySteps(mp(m.id).diffusionRatio) }}</label>
+                    <label v-else>{{ translateUiText('扩散占比') }} {{ Math.round(mp(m.id).diffusionRatio * 100) }}%</label>
                     <input type="range" min="0" max="1" step="0.05" v-model.number="mp(m.id).diffusionRatio" />
                   </div>
                   <div v-if="frameworkOf(m.id) === 'ddsp-svc'" class="mp-row">
-                    <label>共振峰偏移 {{ signedFormantShift(mp(m.id).formantShift) }}</label>
+                    <label>{{ translateUiText('共振峰偏移') }} {{ signedFormantShift(mp(m.id).formantShift) }}</label>
                     <input type="range" min="-2" max="2" step="0.05" v-model.number="mp(m.id).formantShift" />
                   </div>
                   <div v-if="frameworkOf(m.id) === 'seed-vc'" class="mp-ref">
-                    <span>参考音频</span>
+                    <span>{{ translateUiText('参考音频') }}</span>
                     <button type="button" class="mini-picker" @click="pickMultiReference(m.id)">
-                      {{ baseName(mp(m.id).referenceAudio) || '选择音色参考' }}
+                      {{ baseName(mp(m.id).referenceAudio) || translateUiText('选择音色参考') }}
                     </button>
                   </div>
                 </template>
                 <template v-else>
                   <div class="mp-row">
-                    <label>清辅音保护 {{ mp(m.id).protect.toFixed(2) }}</label>
+                    <label>{{ translateUiText('清辅音保护') }} {{ mp(m.id).protect.toFixed(2) }}</label>
                     <input type="range" min="0" max="0.5" step="0.01" v-model.number="mp(m.id).protect" />
                   </div>
                   <div class="mp-row">
-                    <label>检索比率 {{ mp(m.id).indexRate.toFixed(2) }}</label>
+                    <label>{{ translateUiText('检索比率') }} {{ mp(m.id).indexRate.toFixed(2) }}</label>
                     <input type="range" min="0" max="1" step="0.05" v-model.number="mp(m.id).indexRate" />
                   </div>
                 </template>
                 <div class="mp-inline">
                   <div v-if="manualParamsEnabled && (frameworkOf(m.id) === 'so-vits-svc' || frameworkOf(m.id) === 'ddsp-svc')" class="mp-mini mp-speaker">
-                    <span>说话人</span>
-                    <select v-model="mp(m.id).speaker" :aria-label="`${m.name} 的说话人`">
-                      <option value="">默认</option>
+                    <span>{{ translateUiText('说话人') }}</span>
+                    <select v-model="mp(m.id).speaker" :aria-label="translateUiText(`${m.name} 的说话人`)">
+                      <option value="">{{ translateUiText('默认') }}</option>
                       <option v-for="name in speakerOptionsFor(m.id)" :key="name" :value="name">{{ name }}</option>
                     </select>
                   </div>
@@ -256,15 +256,15 @@
                     </select>
                   </div>
                   <div class="mp-mini">
-                    <span>设备</span>
+                    <span>{{ translateUiText('设备') }}</span>
                     <select v-model="mp(m.id).device">
                       <option v-for="d in deviceOptionsFor(frameworkOf(m.id))" :key="d.v" :value="d.v">{{ d.label }}</option>
                     </select>
                   </div>
                   <div v-if="frameworkOf(m.id) === 'rvc'" class="mp-mini">
-                    <span>版本</span>
+                    <span>{{ translateUiText('版本') }}</span>
                     <select v-if="detectedRvcVersionFor(m.id)" disabled>
-                      <option>自动 · {{ detectedRvcVersionFor(m.id) }}</option>
+                      <option>{{ translateUiText('自动') }} · {{ detectedRvcVersionFor(m.id) }}</option>
                     </select>
                     <select v-else v-model="mp(m.id).rvcVersion">
                       <option v-for="v in rvcVersions" :key="v" :value="v">{{ v }}</option>
@@ -398,7 +398,7 @@
           </div>
 
           <div class="fw-banner">
-            当前模型框架：<b>{{ frameworkLabel(selectedFramework) }}</b>
+            {{ translateUiText('当前模型框架：') }}<b>{{ frameworkLabel(selectedFramework) }}</b>
           </div>
 
           <div v-if="selectedFramework === 'seed-vc'" class="field">
@@ -418,9 +418,9 @@
                   <i class="ratio-diff">{{ selectedFramework === 'ddsp-svc' ? ddspQualitySteps(diffusionRatio) : qualitySteps(diffusionRatio) }} 步</i>
                 </template>
                 <template v-else>
-                  <i class="ratio-main">主 {{ Math.round((1 - diffusionRatio) * 100) }}%</i>
+                  <i class="ratio-main">{{ translateUiText('主') }} {{ Math.round((1 - diffusionRatio) * 100) }}%</i>
                   ·
-                  <i class="ratio-diff">扩散 {{ Math.round(diffusionRatio * 100) }}%</i>
+                  <i class="ratio-diff">{{ translateUiText('扩散') }} {{ Math.round(diffusionRatio * 100) }}%</i>
                 </template>
               </span>
             </div>
@@ -468,7 +468,7 @@
           <div v-if="manualParamsEnabled && autoHighPitchGuard" class="field">
             <div class="field-row">
               <label>高音保护轮次</label>
-              <span class="field-val">{{ highPitchGuardRoundsText(highPitchGuardRounds) }}</span>
+              <span class="field-val">{{ translateUiText(highPitchGuardRoundsText(highPitchGuardRounds)) }}</span>
             </div>
             <input type="range" min="0" max="8" step="1" v-model.number="highPitchGuardRounds" />
             <div class="field-hint">{{ highPitchGuardRounds === 0 ? '轮次为 0 时由系统自动接管，行为与普通模式一致' : '每轮失败后会根据实际哑音位置自动降低内部保护起点' }}</div>
@@ -571,25 +571,25 @@
         <section v-else class="card glass" data-guide="multi-lyrics">
           <div class="card-head">
             <span class="step-no">04</span>
-            <h2>歌词分句指派</h2>
+            <h2>{{ translateUiText('歌词分句指派') }}</h2>
           </div>
-          <p class="field-tip">按歌名在线获取，或导入带时间轴的歌词文件（.lrc），再为每句指派演唱模型</p>
+          <p class="field-tip">{{ translateUiText('按歌名在线获取，或导入带时间轴的歌词文件（.lrc），再为每句指派演唱模型') }}</p>
 
           <div class="lyric-fetch">
             <input
               v-model="songQuery"
               class="lyric-input"
               type="text"
-              placeholder="歌曲名 / 歌手，用于获取歌词"
+              :placeholder="translateUiText('歌曲名 / 歌手，用于获取歌词')"
               @keyup.enter="fetchLyrics"
             />
-            <input v-model.number="songIndex" class="lyric-n" type="number" min="1" max="20" title="搜索结果序号" />
+            <input v-model.number="songIndex" class="lyric-n" type="number" min="1" max="20" :title="translateUiText('搜索结果序号')" />
             <el-select v-model="lyricSrc" class="lyric-src">
               <el-option v-for="s in lyricSources" :key="s.id" :label="s.name" :value="s.id" />
             </el-select>
-            <el-button round class="ghost-btn" :loading="lyricLoading" @click="fetchLyrics">获取歌词</el-button>
-            <el-button round class="ghost-btn" @click="pickLrc">
-              <el-icon class="el-icon--left"><Upload /></el-icon>导入歌词文件
+            <el-button round class="ghost-btn fetch-lyrics-btn" :loading="lyricLoading" @click="fetchLyrics">{{ translateUiText('获取歌词') }}</el-button>
+            <el-button round class="ghost-btn import-lyrics-btn" @click="pickLrc">
+              <el-icon class="el-icon--left"><Upload /></el-icon>{{ translateUiText('导入歌词文件') }}
             </el-button>
             <input
               ref="lrcInput"
@@ -603,36 +603,36 @@
           <!-- 对齐校验 -->
           <div v-if="lyrics.length" class="align-bar" :class="alignStatus.type">
             <el-icon><Clock /></el-icon>
-            <span class="align-text">{{ alignStatus.text }}</span>
+            <span class="align-text">{{ translateUiText(alignStatus.text) }}</span>
             <div class="offset-ctrl">
-              <label>整体偏移 {{ offset > 0 ? '+' : '' }}{{ offset.toFixed(1) }}s</label>
+              <label>{{ translateUiText('整体偏移') }} {{ offset > 0 ? '+' : '' }}{{ offset.toFixed(1) }}s</label>
               <input type="range" min="-10" max="10" step="0.1" v-model.number="offset" />
             </div>
           </div>
 
           <!-- 快捷指派 -->
           <div v-if="segments.length && pickedModels.length" class="assign-quick">
-            <span class="muted">批量：</span>
+            <span class="muted">{{ translateUiText('批量：') }}</span>
             <button
               v-for="pm in pickedModels"
               :key="pm.id"
               class="quick-btn"
               :style="{ '--mc': pm.color }"
               @click="assignAll(pm.id)"
-            >全指派给 {{ pm.name }}</button>
-            <span class="muted assign-tip">每段可多选模型 → 合唱同唱一段</span>
+            >{{ translateUiText('全指派给') }} {{ pm.name }}</button>
+            <span class="muted assign-tip">{{ translateUiText('每段可多选模型 → 合唱同唱一段') }}</span>
           </div>
 
           <!-- 可视化时间轴（缩略预览，编辑在弹窗中进行，避免撑破内联布局）-->
           <div v-if="segments.length && pickedModels.length" class="timeline-wrap" data-guide="multi-timeline">
             <div class="timeline-head">
-              <span class="tl-title"><el-icon><Operation /></el-icon> 时间轴</span>
+              <span class="tl-title"><el-icon><Operation /></el-icon> {{ translateUiText('时间轴') }}</span>
               <div class="tl-tools">
-                <button class="tl-zoom" title="撤销" :disabled="!canUndo" @click="undo"><el-icon><RefreshLeft /></el-icon></button>
-                <button class="tl-zoom" title="重做" :disabled="!canRedo" @click="redo"><el-icon><RefreshRight /></el-icon></button>
-                <button class="tl-zoom" title="复原为初始切分" @click="resetTimeline"><el-icon><Refresh /></el-icon></button>
-                <button class="tl-enlarge" title="放大编辑时间轴" @click="openTlDialog">
-                  <el-icon><FullScreen /></el-icon>放大编辑
+                <button class="tl-zoom" :title="translateUiText('撤销')" :disabled="!canUndo" @click="undo"><el-icon><RefreshLeft /></el-icon></button>
+                <button class="tl-zoom" :title="translateUiText('重做')" :disabled="!canRedo" @click="redo"><el-icon><RefreshRight /></el-icon></button>
+                <button class="tl-zoom" :title="translateUiText('复原为初始切分')" @click="resetTimeline"><el-icon><Refresh /></el-icon></button>
+                <button class="tl-enlarge" :title="translateUiText('放大编辑时间轴')" @click="openTlDialog">
+                  <el-icon><FullScreen /></el-icon>{{ translateUiText('放大编辑') }}
                 </button>
               </div>
             </div>
@@ -640,11 +640,11 @@
               <span v-for="pm in pickedModels" :key="pm.id" class="tl-leg">
                 <span class="tl-leg-dot" :style="{ background: pm.color }">{{ pickedIndex(pm.id) + 1 }}</span>{{ pm.name }}
               </span>
-              <span class="tl-leg"><span class="tl-leg-dot idle"></span>间奏</span>
+              <span class="tl-leg"><span class="tl-leg-dot idle"></span>{{ translateUiText('间奏') }}</span>
             </div>
             <!-- 内联缩略预览：色块按比例铺满，固定高度 + overflow:hidden，配合已钳制的 left/width 百分比
                  与固定的总时长，任何极端片段都被裁进容器内，绝不撑破布局。点击进入弹窗编辑。 -->
-            <div class="tl-mini" title="点击放大编辑时间轴" @click="openTlDialog">
+            <div class="tl-mini" :title="translateUiText('点击放大编辑时间轴')" @click="openTlDialog">
               <div
                 v-for="blk in timelineBlocks"
                 :key="blk.id"
@@ -653,13 +653,13 @@
                 :style="{ left: blk.leftPct + '%', width: blk.widthPct + '%', ...blockStyle(blk.ids) }"
               ></div>
             </div>
-            <p class="tl-hint muted">缩略预览。点击「放大编辑」可拖动边界 / 缩放 / 拆分合并；撤销 / 重做 / 复原随时回退误操作。</p>
+            <p class="tl-hint muted">{{ translateUiText('缩略预览。点击「放大编辑」可拖动边界 / 缩放 / 拆分合并；撤销 / 重做 / 复原随时回退误操作。') }}</p>
           </div>
 
           <!-- 放大编辑弹窗 -->
           <el-dialog
             v-model="tlDialog"
-            title="时间轴编辑"
+            :title="translateUiText('时间轴编辑')"
             width="92%"
             top="5vh"
             append-to-body
@@ -673,17 +673,17 @@
                 <span v-for="pm in pickedModels" :key="pm.id" class="tl-leg">
                   <span class="tl-leg-dot" :style="{ background: pm.color }">{{ pickedIndex(pm.id) + 1 }}</span>{{ pm.name }}
                 </span>
-                <span class="tl-leg"><span class="tl-leg-dot idle"></span>间奏</span>
+                <span class="tl-leg"><span class="tl-leg-dot idle"></span>{{ translateUiText('间奏') }}</span>
               </div>
               <div class="tl-tools">
-                <button class="tl-zoom" title="撤销" :disabled="!canUndo" @click="undo"><el-icon><RefreshLeft /></el-icon></button>
-                <button class="tl-zoom" title="重做" :disabled="!canRedo" @click="redo"><el-icon><RefreshRight /></el-icon></button>
-                <button class="tl-enlarge" title="复原为初始切分" @click="resetTimeline"><el-icon><Refresh /></el-icon>复原</button>
+                <button class="tl-zoom" :title="translateUiText('撤销')" :disabled="!canUndo" @click="undo"><el-icon><RefreshLeft /></el-icon></button>
+                <button class="tl-zoom" :title="translateUiText('重做')" :disabled="!canRedo" @click="redo"><el-icon><RefreshRight /></el-icon></button>
+                <button class="tl-enlarge" :title="translateUiText('复原为初始切分')" @click="resetTimeline"><el-icon><Refresh /></el-icon>{{ translateUiText('复原') }}</button>
                 <span class="tl-sep"></span>
-                <button class="tl-zoom" title="缩小" @click="zoomOut"><el-icon><ZoomOut /></el-icon></button>
+                <button class="tl-zoom" :title="translateUiText('缩小')" @click="zoomOut"><el-icon><ZoomOut /></el-icon></button>
                 <span class="tl-zoom-val">{{ Math.round(zoom * 100) }}%</span>
-                <button class="tl-zoom" title="放大" @click="zoomIn"><el-icon><ZoomIn /></el-icon></button>
-                <button class="tl-zoom" title="重置缩放" @click="zoomReset"><el-icon><FullScreen /></el-icon></button>
+                <button class="tl-zoom" :title="translateUiText('放大')" @click="zoomIn"><el-icon><ZoomIn /></el-icon></button>
+                <button class="tl-zoom" :title="translateUiText('重置缩放')" @click="zoomReset"><el-icon><FullScreen /></el-icon></button>
               </div>
             </div>
             <!-- 横向可滚动的缩放视口：trackEl 量取的是固定宽度的外层视口，
@@ -719,22 +719,22 @@
                       >
                         <span
                           class="tl-grip l"
-                          title="拖动调整起点（吸附歌词时间）"
+                          :title="translateUiText('拖动调整起点（吸附歌词时间）')"
                           @pointerdown="beginDrag(blk.seg, 'start', $event)"
                           @click.stop
                         ></span>
                         <span v-if="blk.ids.length > 1" class="tl-block-chorus">{{ blk.ids.length }}</span>
-                        <span class="tl-block-label">{{ blk.label }}</span>
+                        <span class="tl-block-label">{{ translateUiText(blk.label) }}</span>
                         <span
                           class="tl-grip r"
-                          title="拖动调整终点（吸附歌词时间）"
+                          :title="translateUiText('拖动调整终点（吸附歌词时间）')"
                           @pointerdown="beginDrag(blk.seg, 'end', $event)"
                           @click.stop
                         ></span>
                       </div>
                     </template>
                     <div class="pick-pop">
-                      <p class="pick-hint">{{ fmtTime(blk.start) }} – {{ fmtTime(blk.end) }} · {{ blk.text || '（无歌词）' }}</p>
+                      <p class="pick-hint">{{ fmtTime(blk.start) }} – {{ fmtTime(blk.end) }} · {{ blk.text || translateUiText('（无歌词）') }}</p>
                       <button
                         v-for="pm in pickedModels"
                         :key="pm.id"
@@ -748,17 +748,17 @@
                         <el-icon v-if="isAssigned(blk.id, pm.id)" class="pick-check"><Check /></el-icon>
                       </button>
                       <div class="pick-acts">
-                        <button class="pick-act" title="从中点拆分" @click="splitSegment(blk.seg)">
-                          <el-icon><Scissor /></el-icon>拆分
+                        <button class="pick-act" :title="translateUiText('从中点拆分')" @click="splitSegment(blk.seg)">
+                          <el-icon><Scissor /></el-icon>{{ translateUiText('拆分') }}
                         </button>
-                        <button class="pick-act" title="与后一段合并" @click="mergeWithNext(blk.seg)">
-                          <el-icon><Connection /></el-icon>合并
+                        <button class="pick-act" :title="translateUiText('与后一段合并')" @click="mergeWithNext(blk.seg)">
+                          <el-icon><Connection /></el-icon>{{ translateUiText('合并') }}
                         </button>
-                        <button class="pick-act" title="设为间奏（不唱）" @click="clearSegModels(blk.id)">
-                          <el-icon><Mute /></el-icon>间奏
+                        <button class="pick-act" :title="translateUiText('设为间奏（不唱）')" @click="clearSegModels(blk.id)">
+                          <el-icon><Mute /></el-icon>{{ translateUiText('间奏') }}
                         </button>
-                        <button class="pick-act danger" title="删除该片段" @click="removeSegment(blk.seg)">
-                          <el-icon><Delete /></el-icon>删除
+                        <button class="pick-act danger" :title="translateUiText('删除该片段')" @click="removeSegment(blk.seg)">
+                          <el-icon><Delete /></el-icon>{{ translateUiText('删除') }}
                         </button>
                       </div>
                     </div>
@@ -767,7 +767,7 @@
               </div>
               </div>
             </div>
-            <p class="tl-hint muted">拖动色块左右边缘调整起止（自动吸附歌词时间）；点击色块指派模型 / 拆分 / 合并 / 删除；缩放放大局部精修；左上角可撤销 / 重做 / 复原。</p>
+            <p class="tl-hint muted">{{ translateUiText('拖动色块左右边缘调整起止（自动吸附歌词时间）；点击色块指派模型 / 拆分 / 合并 / 删除；缩放放大局部精修；左上角可撤销 / 重做 / 复原。') }}</p>
           </el-dialog>
 
           <!-- 片段逐段（与时间轴同一数据源）-->
@@ -779,10 +779,10 @@
               :class="{ 'is-chorus': blk.ids.length > 1, 'is-idle': !blk.ids.length }"
             >
               <span class="ly-time">{{ fmtTime(blk.start) }}<br />{{ fmtTime(blk.end) }}</span>
-              <span class="ly-text" :title="blk.text">{{ blk.text || '（无歌词）' }}</span>
+              <span class="ly-text" :title="blk.text">{{ blk.text || translateUiText('（无歌词）') }}</span>
               <div class="ly-assign">
                 <span v-if="blk.ids.length > 1" class="chorus-tag">
-                  <el-icon><Microphone /></el-icon>合唱 ×{{ blk.ids.length }}
+                  <el-icon><Microphone /></el-icon>{{ translateUiText('合唱') }} ×{{ blk.ids.length }}
                 </span>
                 <span
                   v-for="id in visibleChips(blk.seg)"
@@ -792,7 +792,7 @@
                 >
                   <span class="chip-dot" :style="{ background: modelColor(id) }"></span>
                   <span class="chip-name">{{ modelName(id) }}</span>
-                  <button class="chip-x" title="移除" @click.stop="removeAssign(blk.id, id)">
+                  <button class="chip-x" :title="translateUiText('移除')" @click.stop="removeAssign(blk.id, id)">
                     <el-icon><Close /></el-icon>
                   </button>
                 </span>
@@ -800,8 +800,8 @@
                   v-if="blk.ids.length > visibleChips(blk.seg).length || (isExpanded(blk.id) && blk.ids.length > 3)"
                   class="more-chip"
                   @click.stop="toggleExpand(blk.id)"
-                >{{ isExpanded(blk.id) ? '收起' : '+' + (blk.ids.length - 3) }}</button>
-                <span v-if="!blk.ids.length" class="idle-chip">间奏 · 不唱</span>
+                >{{ isExpanded(blk.id) ? translateUiText('收起') : '+' + (blk.ids.length - 3) }}</button>
+                <span v-if="!blk.ids.length" class="idle-chip">{{ translateUiText('间奏 · 不唱') }}</span>
                 <el-popover
                   placement="bottom-end"
                   :width="232"
@@ -809,12 +809,12 @@
                   popper-class="assign-popover"
                 >
                   <template #reference>
-                    <button class="add-chip" :title="blk.ids.length ? '增减演唱模型' : '指派模型'">
+                    <button class="add-chip" :title="translateUiText(blk.ids.length ? '增减演唱模型' : '指派模型')">
                       <el-icon><Plus /></el-icon>
                     </button>
                   </template>
                   <div class="pick-pop">
-                    <p class="pick-hint">点选模型演唱本段，多选即「合唱」</p>
+                    <p class="pick-hint">{{ translateUiText('点选模型演唱本段，多选即「合唱」') }}</p>
                     <button
                       v-for="pm in pickedModels"
                       :key="pm.id"
@@ -830,15 +830,15 @@
                   </div>
                 </el-popover>
                 <div class="seg-ops">
-                  <button class="seg-op" title="从中点拆分" @click.stop="splitSegment(blk.seg)"><el-icon><Scissor /></el-icon></button>
-                  <button class="seg-op" title="与后一段合并" @click.stop="mergeWithNext(blk.seg)"><el-icon><Connection /></el-icon></button>
-                  <button class="seg-op danger" title="删除片段" @click.stop="removeSegment(blk.seg)"><el-icon><Delete /></el-icon></button>
+                  <button class="seg-op" :title="translateUiText('从中点拆分')" @click.stop="splitSegment(blk.seg)"><el-icon><Scissor /></el-icon></button>
+                  <button class="seg-op" :title="translateUiText('与后一段合并')" @click.stop="mergeWithNext(blk.seg)"><el-icon><Connection /></el-icon></button>
+                  <button class="seg-op danger" :title="translateUiText('删除片段')" @click.stop="removeSegment(blk.seg)"><el-icon><Delete /></el-icon></button>
                 </div>
               </div>
             </div>
           </div>
           <div v-else-if="lyricTried && !lyricLoading" class="lyric-empty">
-            未获取到歌词，请检查歌名 / 序号 / 曲库后重试，或导入 .lrc 歌词文件。
+            {{ translateUiText('未获取到歌词，请检查歌名 / 序号 / 曲库后重试，或导入 .lrc 歌词文件。') }}
           </div>
         </section>
 
@@ -868,8 +868,8 @@
             >
               <el-icon><Brush /></el-icon>
               <span class="enhancement-level-copy">
-                <b>基础层 · Clean Voice</b>
-                <span class="engine-list"><i>限量降噪</i><i>并行轻母带</i></span>
+                <b>{{ translateUiText('基础层') }} · Clean Voice</b>
+                <span class="engine-list"><i>{{ translateUiText('限量降噪') }}</i><i>{{ translateUiText('并行轻母带') }}</i></span>
               </span>
               <el-icon v-if="vocalEnhancementLevel === 'basic'" class="level-check"><Select /></el-icon>
             </button>
@@ -881,8 +881,8 @@
             >
               <el-icon><Cpu /></el-icon>
               <span class="enhancement-level-copy">
-                <b>高级层 · Natural Voice</b>
-                <span class="engine-list"><i>真实细节保护</i><i>宽带校正</i><i>自然度母带</i></span>
+                <b>{{ translateUiText('高级层') }} · Natural Voice</b>
+                <span class="engine-list"><i>{{ translateUiText('真实细节保护') }}</i><i>{{ translateUiText('宽带校正') }}</i><i>{{ translateUiText('自然度母带') }}</i></span>
               </span>
               <el-icon v-if="vocalEnhancementLevel === 'advanced'" class="level-check"><Select /></el-icon>
             </button>
@@ -1094,8 +1094,8 @@
                 <span v-else>{{ i + 1 }}</span>
               </div>
               <div class="pl-text">
-                <div class="pl-label">{{ p.label }}</div>
-                <div class="pl-desc">{{ stepDesc(p.key) }}</div>
+                <div class="pl-label">{{ translateUiText(p.label) }}</div>
+                <div class="pl-desc">{{ translateUiText(stepDesc(p.key)) }}</div>
               </div>
             </div>
           </div>
@@ -1157,6 +1157,7 @@ import {
   Cpu,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { translateUiText } from '@/i18n'
 import {
   api,
   isDesktop,
@@ -1356,7 +1357,7 @@ const filteredModels = computed(() =>
 function deviceOptionsFor(framework: string) {
   return systemStore.optionsForFramework([framework, 'uvr']).map((item) => ({
     v: item.value,
-    label: item.label,
+    label: translateUiText(item.label),
     name: item.name,
   }))
 }
@@ -1364,9 +1365,9 @@ const deviceOptions = computed(() => deviceOptionsFor(selectedFramework.value))
 const device = ref(str(prefs.device, 'auto'))
 const deviceHint = computed(() => {
   const selected = deviceOptions.value.find((item) => item.v === device.value) || deviceOptions.value[0]
-  if (!selected) return '当前环境未报告可用推理设备'
+  if (!selected) return translateUiText('当前环境未报告可用推理设备')
   const name = selected.name ? ` · ${selected.name}` : ''
-  return `当前环境：${selected.label}${name}`
+  return translateUiText(`当前环境：${selected.label}${name}`)
 })
 
 function normalizeDeviceForFramework(value: string, framework: string): string {
@@ -4471,6 +4472,57 @@ input[type='range'] {
 }
 .error-actions { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
 
+/* Locale-aware sizing: translated controls should not inherit Chinese-only widths. */
+:global(html[data-locale='en-US'] .lyric-fetch),
+:global(html[data-locale='ja-JP'] .lyric-fetch) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 58px minmax(120px, 140px) auto;
+}
+:global(html[data-locale='en-US'] .lyric-fetch .ghost-btn),
+:global(html[data-locale='ja-JP'] .lyric-fetch .ghost-btn) { white-space: nowrap; }
+:global(html[data-locale='en-US'] .import-lyrics-btn),
+:global(html[data-locale='ja-JP'] .import-lyrics-btn) {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+:global(html[data-locale='en-US'] .assign-tip),
+:global(html[data-locale='ja-JP'] .assign-tip) {
+  flex: 1 0 100%;
+  margin-left: 0;
+  line-height: 1.45;
+}
+:global(html[data-locale='en-US'] .field-tip),
+:global(html[data-locale='ja-JP'] .field-tip),
+:global(html[data-locale='en-US'] .tl-hint),
+:global(html[data-locale='ja-JP'] .tl-hint) {
+  max-width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+:global(html[data-locale='en-US'] .field-tip),
+:global(html[data-locale='en-US'] .tl-hint) { line-height: 1.55; }
+:global(html[data-locale='ja-JP'] .field-tip),
+:global(html[data-locale='ja-JP'] .tl-hint) { line-height: 1.7; }
+:global(html[data-locale='en-US'] .align-bar),
+:global(html[data-locale='ja-JP'] .align-bar) {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+:global(html[data-locale='en-US'] .align-text),
+:global(html[data-locale='ja-JP'] .align-text) {
+  min-width: 0;
+  line-height: 1.5;
+}
+:global(html[data-locale='en-US'] .offset-ctrl),
+:global(html[data-locale='ja-JP'] .offset-ctrl) {
+  grid-column: 2;
+  width: min(100%, 300px);
+  justify-self: end;
+}
+:global(html[data-locale='ja-JP'] .quick-btn) { font-size: 11.5px; }
+
 @media (max-width: 980px) {
   .layout { grid-template-columns: 1fr; }
   .preview { position: static; }
@@ -4499,6 +4551,14 @@ input[type='range'] {
   .harmony-copy > span { max-width: 230px; }
   .harmony-picker > .pymss-picker { grid-template-columns: 1fr; }
   .harmony-picker > .pymss-picker .preprocess-label-row { grid-column: 1; }
+  :global(html[data-locale='en-US'] .lyric-fetch),
+  :global(html[data-locale='ja-JP'] .lyric-fetch) { grid-template-columns: minmax(0, 1fr) 54px; }
+  :global(html[data-locale='en-US'] .lyric-src),
+  :global(html[data-locale='ja-JP'] .lyric-src) { grid-column: 1 / -1; width: 100%; }
+  :global(html[data-locale='en-US'] .fetch-lyrics-btn),
+  :global(html[data-locale='ja-JP'] .fetch-lyrics-btn) { grid-column: 1; width: 100%; }
+  :global(html[data-locale='en-US'] .import-lyrics-btn),
+  :global(html[data-locale='ja-JP'] .import-lyrics-btn) { grid-column: 2; width: 100%; }
 }
 </style>
 
@@ -4570,4 +4630,10 @@ input[type='range'] {
 .tl-dialog .el-dialog__title { color: var(--xb-text); font-weight: 700; }
 .tl-dialog .el-dialog__headerbtn .el-dialog__close { color: var(--xb-muted); }
 .tl-dialog .el-dialog__headerbtn:hover .el-dialog__close { color: var(--xb-primary); }
+html[data-locale='en-US'] .tl-dialog .tl-hint { line-height: 1.55; }
+html[data-locale='ja-JP'] .tl-dialog .tl-hint { line-height: 1.7; }
+html[data-locale='en-US'] .assign-popover .pick-acts,
+html[data-locale='ja-JP'] .assign-popover .pick-acts { flex-wrap: wrap; }
+html[data-locale='en-US'] .assign-popover .pick-act,
+html[data-locale='ja-JP'] .assign-popover .pick-act { flex: 1 1 calc(50% - 3px); min-width: 92px; }
 </style>

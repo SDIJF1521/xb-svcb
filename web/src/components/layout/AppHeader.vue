@@ -23,11 +23,11 @@
           <button
             class="nav-more"
             :class="{ active: libraryActive, open: openMenu === 'navMore' }"
-            title="资料库"
+            :title="t('nav.library')"
             @click="toggleMenu('navMore')"
           >
             <el-icon><FolderOpened /></el-icon>
-            <span>资料库</span>
+            <span>{{ t('nav.library') }}</span>
             <el-icon class="nav-more-arrow"><ArrowDown /></el-icon>
           </button>
           <transition name="pop">
@@ -61,7 +61,7 @@
             <input
               v-model="searchQuery"
               type="text"
-              placeholder="搜索作品、模型…"
+              :placeholder="t('header.search')"
               @focus="onSearchFocus"
               @input="onSearchInput"
               @keyup.enter="onSearchEnter"
@@ -91,7 +91,7 @@
               </div>
               <div v-else class="pop-empty">
                 <el-icon><Search /></el-icon>
-                <span>没有匹配「{{ searchQuery }}」的结果</span>
+                <span>{{ t('header.noResult', { query: searchQuery }) }}</span>
               </div>
             </div>
           </transition>
@@ -99,9 +99,10 @@
 
         <div class="env-status" :class="{ degraded: !allReady }" :title="envTitle">
           <span class="env-dot"></span>
-          <span>{{ allReady ? '环境就绪' : '降级模式' }}</span>
+          <span>{{ allReady ? t('header.ready') : t('header.degraded') }}</span>
         </div>
 
+        <LocaleSwitcher />
         <ThemeSwitcher />
 
         <!-- 后台传输（模型上传 / 下载）-->
@@ -163,7 +164,7 @@
           <button
             class="icon-btn"
             :class="{ active: openMenu === 'notif' }"
-            title="消息"
+            :title="translateUiText('消息')"
             @click="toggleMenu('notif')"
           >
             <el-icon><Bell /></el-icon>
@@ -172,9 +173,9 @@
           <transition name="pop">
             <div v-if="openMenu === 'notif'" class="popover notif-pop">
               <div class="pop-head">
-                <span>消息通知</span>
+                <span>{{ translateUiText('消息通知') }}</span>
                 <button v-if="notifications.length" class="pop-link" @click="markAllRead">
-                  全部已读
+                  {{ translateUiText('全部已读') }}
                 </button>
               </div>
               <div v-if="notifications.length" class="notif-list">
@@ -186,15 +187,15 @@
                 >
                   <span class="notif-dot" :class="n.tone"></span>
                   <span class="notif-body">
-                    <span class="notif-title">{{ n.title }}</span>
-                    <span class="notif-text">{{ n.text }}</span>
+                    <span class="notif-title">{{ translateUiText(n.title) }}</span>
+                    <span class="notif-text">{{ translateUiText(n.text) }}</span>
                   </span>
-                  <span class="notif-time">{{ n.time }}</span>
+                  <span class="notif-time">{{ translateUiText(n.time) }}</span>
                 </button>
               </div>
               <div v-else class="pop-empty">
                 <el-icon><Bell /></el-icon>
-                <span>暂无消息</span>
+                <span>{{ translateUiText('暂无消息') }}</span>
               </div>
             </div>
           </transition>
@@ -251,6 +252,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Picture, Close, Right, Download, Loading, Scissor, ArrowDown, Connection, Grid, MagicStick } from '@element-plus/icons-vue'
 import ThemeSwitcher from '@/components/theme/ThemeSwitcher.vue'
+import LocaleSwitcher from '@/components/layout/LocaleSwitcher.vue'
+import { translateUiText, useI18n } from '@/i18n'
 import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
 import { useModelsStore } from '@/stores/models'
@@ -262,24 +265,25 @@ defineOptions({ name: 'AppHeader' })
 
 const router = useRouter()
 const route = useRoute()
+const { t } = useI18n()
 
-const primaryNavItems = [
-  { label: '首页', to: '/', icon: HomeFilled },
-  { label: 'AI 翻唱', to: '/create', icon: Microphone },
-  { label: 'AI 增强', to: '/enhancement', icon: MagicStick },
-  { label: '音频编辑', to: '/editor/projects', icon: Scissor },
-]
+const primaryNavItems = computed(() => [
+  { label: t('nav.home'), to: '/', icon: HomeFilled },
+  { label: t('nav.cover'), to: '/create', icon: Microphone },
+  { label: t('nav.enhancement'), to: '/enhancement', icon: MagicStick },
+  { label: t('nav.editor'), to: '/editor/projects', icon: Scissor },
+])
 
-const libraryNavItems = [
-  { label: '资源获取', desc: '找歌与伴奏素材', to: '/music', icon: Download },
-  { label: '我的模型', desc: '管理声音模型', to: '/models', icon: FolderOpened },
-  { label: '我的作品', desc: '查看生成任务', to: '/works', icon: Files },
-  { label: 'API 接入', desc: '外部程序调用与测试', to: '/api', icon: Connection },
-  { label: '插件中心', desc: '市场、扩展与开发入口', to: '/plugins', icon: Grid },
-]
+const libraryNavItems = computed(() => [
+  { label: t('nav.music'), desc: t('nav.musicDesc'), to: '/music', icon: Download },
+  { label: t('nav.models'), desc: t('nav.modelsDesc'), to: '/models', icon: FolderOpened },
+  { label: t('nav.works'), desc: t('nav.worksDesc'), to: '/works', icon: Files },
+  { label: t('nav.api'), desc: t('nav.apiDesc'), to: '/api', icon: Connection },
+  { label: t('nav.plugins'), desc: t('nav.pluginsDesc'), to: '/plugins', icon: Grid },
+])
 
 const libraryActive = computed(() =>
-  libraryNavItems.some((item) => route.path === item.to || route.path.startsWith(`${item.to}/`)),
+  libraryNavItems.value.some((item) => route.path === item.to || route.path.startsWith(`${item.to}/`)),
 )
 
 const systemStore = useSystemStore()
@@ -288,7 +292,9 @@ const { tools } = storeToRefs(systemStore)
 const notificationsStore = useNotificationsStore()
 const { notifications, hasUnread, allReady } = storeToRefs(notificationsStore)
 const envTitle = computed(() =>
-  tools.value.map((t) => `${t.name}: ${t.status}`).join('  |  ') || '正在检测集成工具…',
+  tools.value
+    .map((tool) => `${translateUiText(tool.name)}: ${translateUiText(tool.status)}`)
+    .join('  |  ') || t('header.checking'),
 )
 
 /* ----- 后台传输任务中心 ----- */
@@ -354,14 +360,14 @@ const searchResults = computed<SearchResult[]>(() => {
   for (const m of models.value) {
     if (res.filter((r) => r.kind === 'model').length >= 5) break
     if (m.name.toLowerCase().includes(q) || m.type.toLowerCase().includes(q)) {
-      res.push({ id: `m_${m.id}`, label: m.name, sub: `模型 · ${m.type}`, kind: 'model', to: '/models' })
+      res.push({ id: `m_${m.id}`, label: m.name, sub: `${t('header.model')} · ${m.type}`, kind: 'model', to: '/models' })
     }
   }
   let wc = 0
   for (const w of works.value) {
     if (wc >= 6) break
     if (w.title.toLowerCase().includes(q) || w.model.toLowerCase().includes(q)) {
-      res.push({ id: `w_${w.id}`, label: w.title, sub: `作品 · ${w.model}`, kind: 'work', to: '/works' })
+      res.push({ id: `w_${w.id}`, label: w.title, sub: `${t('header.work')} · ${w.model}`, kind: 'work', to: '/works' })
       wc++
     }
   }

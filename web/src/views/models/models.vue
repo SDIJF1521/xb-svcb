@@ -48,7 +48,7 @@
       <div class="block">
         <div class="block-head">
           <h2>多框架统一管理</h2>
-          <span class="muted">{{ modelsStore.overview?.total || 0 }} 个模型 · {{ modelsStore.overview?.total_size || '—' }}</span>
+          <span class="muted">{{ modelsStore.overview?.total || 0 }} {{ translateUiText('个模型') }} · {{ modelsStore.overview?.total_size || '—' }}</span>
         </div>
         <div class="framework-grid">
           <button
@@ -72,7 +72,7 @@
               <i :class="{ ready: fw.supported }">{{ fw.supported ? '可推理' : '预留' }}</i>
             </span>
             <strong>{{ fw.count }}</strong>
-            <small>{{ fw.size }}<template v-if="fw.default_model_name"> · 默认 {{ fw.default_model_name }}</template></small>
+            <small>{{ fw.size }}<template v-if="fw.default_model_name"> · {{ translateUiText('默认') }} {{ fw.default_model_name }}</template></small>
           </button>
         </div>
       </div>
@@ -310,26 +310,26 @@
       <div v-if="!hasToken" class="notice glass">
         <el-icon class="notice-ic"><Key /></el-icon>
         <div class="notice-main">
-          <div class="notice-title">尚未配置模型上传令牌</div>
+          <div class="notice-title">{{ translateUiText('尚未配置模型上传令牌') }}</div>
           <div class="notice-sub">
-            浏览和下载无需本地令牌；分享到自己的 ModelScope 仓库时再配置访问令牌。
+            {{ translateUiText('浏览和下载无需本地令牌；分享到自己的 ModelScope 仓库时再配置访问令牌。') }}
           </div>
         </div>
-        <el-button round class="cta-btn" @click="openSettings">前往设置</el-button>
+        <el-button round class="cta-btn" @click="openSettings">{{ translateUiText('前往设置') }}</el-button>
       </div>
 
       <div class="toolbar glass">
         <div class="fw-field">
-          <el-select v-model="hubFramework" class="fw-select" placeholder="架构" @change="onFrameworkChange">
-            <el-option label="全部架构" value="" />
+          <el-select v-model="hubFramework" class="fw-select" :placeholder="translateUiText('架构')" @change="onFrameworkChange">
+            <el-option :label="translateUiText('全部架构')" value="" />
             <el-option v-for="f in frameworks" :key="f.id" :label="f.name" :value="f.id" />
           </el-select>
         </div>
         <div class="rank-field">
-          <el-select v-model="hubSort" class="rank-select" placeholder="排序">
-            <el-option label="综合排序" value="score" />
-            <el-option label="下载排行" value="downloads" />
-            <el-option label="最近更新" value="recent" />
+          <el-select v-model="hubSort" class="rank-select" :placeholder="translateUiText('排序')">
+            <el-option :label="translateUiText('综合排序')" value="score" />
+            <el-option :label="translateUiText('下载排行')" value="downloads" />
+            <el-option :label="translateUiText('最近更新')" value="recent" />
           </el-select>
         </div>
         <div class="search">
@@ -337,7 +337,7 @@
           <input
             v-model="hubQuery"
             type="text"
-            placeholder="搜索模型站中的翻唱模型（留空浏览全部）…"
+            :placeholder="translateUiText('搜索模型站中的翻唱模型（留空浏览全部）…')"
             @keyup.enter="doHubSearch"
           />
           <button v-if="hubQuery" class="search-clear" title="清除" @click="hubQuery = ''">
@@ -345,13 +345,13 @@
           </button>
         </div>
         <el-button round class="cta-btn" :loading="hubSearching" @click="doHubSearch">
-          <el-icon v-if="!hubSearching" class="el-icon--left"><Search /></el-icon>搜索
+          <el-icon v-if="!hubSearching" class="el-icon--left"><Search /></el-icon>{{ translateUiText('搜索') }}
         </el-button>
       </div>
 
       <p class="hub-hint muted">
         <el-icon><InfoFilled /></el-icon>
-        仅展示由本软件上传、且通过清单校验的模型，避免无关模型干扰。下载后会自动导入「本地模型」。
+        {{ translateUiText('仅展示由本软件上传、且通过清单校验的模型，避免无关模型干扰。下载后会自动导入「本地模型」。') }}
       </p>
 
       <div v-if="hubItems.length" class="list glass">
@@ -362,19 +362,19 @@
               {{ it.name }}
               <span class="fw-tag">{{ it.framework_label || it.framework || 'SVC' }}</span>
               <span v-if="it.version" class="ver-tag">v{{ it.version }}</span>
-              <span v-if="it.has_diffusion" class="diff-tag">扩散</span>
+              <span v-if="it.has_diffusion" class="diff-tag">{{ translateUiText('扩散') }}</span>
               <span class="health-tag" :class="it.dependency_ok === false ? 'error' : 'ok'">
-                {{ it.dependency_ok === false ? '依赖缺失' : '依赖 OK' }}
+                {{ translateUiText(it.dependency_ok === false ? '依赖缺失' : '依赖 OK') }}
               </span>
             </div>
             <div class="row-sub">
-              {{ it.sample_rate || '44.1kHz' }} · 作者 {{ it.author }}
-              · {{ countText(it.download_count) }} 下载
+              {{ it.sample_rate || '44.1kHz' }} · {{ translateUiText('作者') }} {{ it.author }}
+              · {{ countText(it.download_count) }} {{ translateUiText('下载') }}
             </div>
             <div v-if="(it.tags || []).length || it.preview_audio || (it.screenshots || []).length" class="row-tags">
               <span v-for="tag in (it.tags || []).slice(0, 4)" :key="tag" class="mini-tag">{{ tag }}</span>
-              <span v-if="it.preview_audio" class="mini-tag media"><el-icon><Headset /></el-icon>试听</span>
-              <span v-if="(it.screenshots || []).length" class="mini-tag media"><el-icon><Picture /></el-icon>{{ it.screenshots?.length }} 图</span>
+              <span v-if="it.preview_audio" class="mini-tag media"><el-icon><Headset /></el-icon>{{ translateUiText('试听') }}</span>
+              <span v-if="(it.screenshots || []).length" class="mini-tag media"><el-icon><Picture /></el-icon>{{ it.screenshots?.length }} {{ translateUiText('图') }}</span>
             </div>
             <div v-if="dlJob(it.repo_id)?.status === 'running'" class="row-prog">
               <el-progress
@@ -384,26 +384,26 @@
                 striped
                 striped-flow
               />
-              <span class="prog-msg">{{ dlJob(it.repo_id)?.msg || '下载中…' }}</span>
+              <span class="prog-msg">{{ translateUiText(dlJob(it.repo_id)?.msg || '下载中…') }}</span>
             </div>
             <div v-else-if="dlJob(it.repo_id)?.status === 'failed'" class="row-prog failed">
-              <span class="prog-msg">{{ dlJob(it.repo_id)?.error || '下载中断，可继续下载' }}</span>
+              <span class="prog-msg">{{ translateUiText(dlJob(it.repo_id)?.error || '下载中断，可继续下载') }}</span>
             </div>
           </div>
           <div class="row-ops">
             <button
               class="op"
               :disabled="!it.preview_audio || hubPreviewLoading === it.repo_id"
-              :title="it.preview_audio ? (hubPlayingRepo === it.repo_id ? '暂停试听' : '试听模型') : '暂无试听'"
+              :title="translateUiText(it.preview_audio ? (hubPlayingRepo === it.repo_id ? '暂停试听' : '试听模型') : '暂无试听')"
               @click="toggleHubPreview(it)"
             >
               <el-icon v-if="hubPreviewLoading === it.repo_id" class="spin"><Loading /></el-icon>
               <el-icon v-else><Headset /></el-icon>
             </button>
-            <button class="op" title="模型详情" @click="showHubDetail(it)">
+            <button class="op" :title="translateUiText('模型详情')" @click="showHubDetail(it)">
               <el-icon><InfoFilled /></el-icon>
             </button>
-            <a v-if="it.url && it.url !== '#'" :href="it.url" target="_blank" rel="noreferrer" class="op" title="在 ModelScope 查看">
+            <a v-if="it.url && it.url !== '#'" :href="it.url" target="_blank" rel="noreferrer" class="op" :title="translateUiText('在 ModelScope 查看')">
               <el-icon><Link /></el-icon>
             </a>
             <el-button
@@ -413,23 +413,23 @@
             >
               <el-icon v-if="dlJob(it.repo_id)?.status === 'done'" class="el-icon--left"><CircleCheck /></el-icon>
               <el-icon v-else-if="dlJob(it.repo_id)?.status !== 'running'" class="el-icon--left"><Download /></el-icon>
-              {{ dlJob(it.repo_id)?.status === 'done' ? '查看本地' : dlJob(it.repo_id)?.status === 'failed' ? '继续下载' : '下载导入' }}
+              {{ translateUiText(dlJob(it.repo_id)?.status === 'done' ? '查看本地' : dlJob(it.repo_id)?.status === 'failed' ? '继续下载' : '下载导入') }}
             </el-button>
           </div>
         </div>
         <div v-if="hubHasMore" class="load-more">
           <el-button round class="ghost-btn" :loading="hubLoadingMore" @click="loadMoreHub">
-            加载更多
+            {{ translateUiText('加载更多') }}
           </el-button>
         </div>
       </div>
       <div v-else-if="hubSearched && !hubSearching" class="empty glass">
         <el-icon class="empty-icon"><Connection /></el-icon>
-        <p class="empty-title">没有找到相关模型</p>
-        <p class="empty-sub">换个关键词，或把你的模型「分享到模型站」让社区也能用</p>
+        <p class="empty-title">{{ translateUiText('没有找到相关模型') }}</p>
+        <p class="empty-sub">{{ translateUiText('换个关键词，或把你的模型「分享到模型站」让社区也能用') }}</p>
       </div>
       <div v-else-if="!hubSearched" class="empty glass small">
-        <span>点击「搜索」浏览模型站中的社区翻唱模型。</span>
+        <span>{{ translateUiText('点击「搜索」浏览模型站中的社区翻唱模型。') }}</span>
       </div>
     </template>
 
@@ -438,32 +438,32 @@
       <div class="notice glass">
         <el-icon class="notice-ic"><Connection /></el-icon>
         <div class="notice-main">
-          <div class="notice-title">PyMSS 音乐源分离模型站</div>
-          <div class="notice-sub">仅提供人声分离与去混响 / 人声净化模型。下载后可在翻唱页「前期人声处理」中选择。</div>
+          <div class="notice-title">{{ translateUiText('PyMSS 音乐源分离模型站') }}</div>
+          <div class="notice-sub">{{ translateUiText('仅提供人声分离与去混响 / 人声净化模型。下载后可在翻唱页「前期人声处理」中选择。') }}</div>
         </div>
-        <el-button round class="ghost-btn" :loading="pymssLoading" @click="loadPymssModels">刷新</el-button>
+        <el-button round class="ghost-btn" :loading="pymssLoading" @click="loadPymssModels">{{ translateUiText('刷新') }}</el-button>
       </div>
       <div class="pymss-purpose-tabs">
-        <button class="tab" :class="{ on: pymssPurpose === 'vocal_separation' }" @click="pymssPurpose = 'vocal_separation'">人声分离</button>
-        <button class="tab" :class="{ on: pymssPurpose === 'dereverb' }" @click="pymssPurpose = 'dereverb'">去混响 / 人声净化</button>
-        <el-input v-model="pymssQuery" class="pymss-search" clearable placeholder="搜索模型名称，例如 dereverb_mel_band_roformer_anvuew" />
+        <button class="tab" :class="{ on: pymssPurpose === 'vocal_separation' }" @click="pymssPurpose = 'vocal_separation'">{{ translateUiText('人声分离') }}</button>
+        <button class="tab" :class="{ on: pymssPurpose === 'dereverb' }" @click="pymssPurpose = 'dereverb'">{{ translateUiText('去混响 / 人声净化') }}</button>
+        <el-input v-model="pymssQuery" class="pymss-search" clearable :placeholder="translateUiText('搜索模型名称，例如 dereverb_mel_band_roformer_anvuew')" />
       </div>
       <div class="list glass">
         <div v-for="item in filteredPymssItems" :key="item.name" class="row">
           <div class="row-cover hub"><el-icon><Operation /></el-icon></div>
           <div class="row-main">
             <div class="row-title">{{ item.name }} <span class="fw-tag">{{ item.architecture || 'PyMSS' }}</span></div>
-            <div class="row-sub"><span class="purpose-label">{{ item.purpose_label || (item.purpose === 'dereverb' || item.purpose === 'harmony_removal' ? '去混响 / 人声净化' : '人声分离') }}</span> · 目标音轨 {{ item.target_stem || 'vocals' }}</div>
+            <div class="row-sub"><span class="purpose-label">{{ translateUiText(item.purpose_label || (item.purpose === 'dereverb' || item.purpose === 'harmony_removal' ? '去混响 / 人声净化' : '人声分离')) }}</span> · {{ translateUiText('目标音轨') }} {{ item.target_stem || 'vocals' }}</div>
             <div v-if="pymssJob(item.name)?.status === 'running'" class="row-prog">
               <el-progress :percentage="Math.round(pymssJob(item.name)?.pct || 0)" :stroke-width="5" :show-text="false" striped striped-flow />
-              <span class="prog-msg">{{ pymssJob(item.name)?.message || '下载中…' }}</span>
+              <span class="prog-msg">{{ translateUiText(pymssJob(item.name)?.message || '下载中…') }}</span>
             </div>
-            <div v-else-if="pymssJob(item.name)?.status === 'failed'" class="row-prog failed"><span class="prog-msg">{{ pymssJob(item.name)?.error || '下载失败，可重试' }}</span></div>
+            <div v-else-if="pymssJob(item.name)?.status === 'failed'" class="row-prog failed"><span class="prog-msg">{{ translateUiText(pymssJob(item.name)?.error || '下载失败，可重试') }}</span></div>
           </div>
           <div class="row-ops">
-            <span class="health-tag" :class="item.downloaded ? 'ok' : 'error'">{{ item.downloaded ? '已下载' : '未下载' }}</span>
+            <span class="health-tag" :class="item.downloaded ? 'ok' : 'error'">{{ translateUiText(item.downloaded ? '已下载' : '未下载') }}</span>
             <el-button round size="small" class="cta-btn" :loading="pymssDownloading === item.name" @click="downloadPymss(item)">
-              <el-icon v-if="pymssDownloading !== item.name" class="el-icon--left"><Download /></el-icon>{{ item.downloaded ? '重新下载' : '下载模型' }}
+              <el-icon v-if="pymssDownloading !== item.name" class="el-icon--left"><Download /></el-icon>{{ translateUiText(item.downloaded ? '重新下载' : '下载模型') }}
             </el-button>
             <el-button
               v-if="item.downloaded"
@@ -475,11 +475,11 @@
               :disabled="pymssDownloading === item.name || pymssJob(item.name)?.status === 'running'"
               @click="deletePymss(item)"
             >
-              <el-icon v-if="pymssDeleting !== item.name" class="el-icon--left"><Delete /></el-icon>删除
+              <el-icon v-if="pymssDeleting !== item.name" class="el-icon--left"><Delete /></el-icon>{{ translateUiText('删除') }}
             </el-button>
           </div>
         </div>
-        <div v-if="!filteredPymssItems.length && !pymssLoading" class="empty small"><span>未读取到该用途的 PyMSS 模型，请先安装 PyMSS 环境。</span></div>
+        <div v-if="!filteredPymssItems.length && !pymssLoading" class="empty small"><span>{{ translateUiText('未读取到该用途的 PyMSS 模型，请先安装 PyMSS 环境。') }}</span></div>
       </div>
     </template>
 
@@ -680,6 +680,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, type HubModelItem, type HubModelUpdateItem, type ModelFramework, type PymssDownloadJob, type PymssModel, type PymssStatus } from '@/api'
 import { useModelsStore, type ModelVM } from '@/stores/models'
 import { useTransfersStore } from '@/stores/transfers'
+import { translateUiText } from '@/i18n'
 
 defineOptions({ name: 'ModelsPage' })
 

@@ -20,7 +20,7 @@
               <h2>选择增强目标</h2>
               <p>可使用作品库成品，也可直接导入翻唱音频</p>
             </div>
-            <span class="count">{{ availableWorks.length }} 首</span>
+            <span class="count">{{ availableWorks.length }} {{ translateUiText('首作品') }}</span>
           </div>
 
           <div class="target-switch" role="group" aria-label="增强目标来源">
@@ -55,8 +55,8 @@
           <button v-else class="source-picker target-picker" :class="{ ready: !!targetAudioPath }" @click="pickTargetAudio">
             <span class="source-icon"><el-icon><Upload /></el-icon></span>
             <span class="source-copy">
-              <strong>{{ targetAudioPath ? targetAudioName : '选择待增强的翻唱音频' }}</strong>
-              <small>{{ targetAudioPath || '导入用户已有的翻唱成品或人声音频' }}</small>
+              <strong>{{ targetAudioPath ? targetAudioName : translateUiText('选择待增强的翻唱音频') }}</strong>
+              <small>{{ targetAudioPath || translateUiText('导入用户已有的翻唱成品或人声音频') }}</small>
             </span>
             <span class="pick-command">{{ targetAudioPath ? '更换' : '选择' }}</span>
           </button>
@@ -81,8 +81,8 @@
           <button v-if="originalMode === 'local'" class="source-picker" :class="{ ready: !!originalAudioPath }" @click="pickOriginalAudio">
             <span class="source-icon"><el-icon><Upload /></el-icon></span>
             <span class="source-copy">
-              <strong>{{ originalAudioPath ? originalAudioName : '选择原始歌曲音频' }}</strong>
-              <small>{{ originalAudioPath || '支持 WAV、FLAC、MP3、M4A 等常见音频格式' }}</small>
+              <strong>{{ originalAudioPath ? originalAudioName : translateUiText('选择原始歌曲音频') }}</strong>
+              <small>{{ originalAudioPath || translateUiText('支持 WAV、FLAC、MP3、M4A 等常见音频格式') }}</small>
             </span>
             <span class="pick-command">{{ originalAudioPath ? '更换' : '选择' }}</span>
           </button>
@@ -115,7 +115,7 @@
             <span class="step-no">03</span>
             <div>
               <h2>增强参数</h2>
-              <p>原曲参考用于音高、节奏、音色与动态校正</p>
+              <p>{{ translateUiText('原曲参考用于音高、节奏、音色与动态校正') }}</p>
             </div>
           </div>
 
@@ -131,7 +131,7 @@
           <div class="control-grid">
             <label v-for="item in visibleControls" :key="item.key" class="control">
               <span class="control-label">
-                <span>{{ item.label }}</span><b>{{ Math.round(controls[item.key] * 100) }}%</b>
+                <span>{{ translateUiText(item.label) }}</span><b>{{ Math.round(controls[item.key] * 100) }}%</b>
               </span>
               <input v-model.number="controls[item.key]" type="range" min="0" max="1" step="0.01" />
             </label>
@@ -167,7 +167,7 @@
                 <el-icon v-if="step.status === 'done'"><Check /></el-icon>
                 <el-icon v-else-if="step.status === 'active'" class="spin"><Loading /></el-icon>
               </span>
-              <span>{{ step.label }}</span>
+              <span>{{ translateUiText(step.label) }}</span>
             </div>
           </div>
           <p v-if="currentJob.error" class="job-error">{{ currentJob.error }}</p>
@@ -210,6 +210,7 @@ import { ElMessage } from 'element-plus'
 import { api, type JobStatus, type MusicSearchItem, type MusicSource, type VocalEnhancementLevel, type WorkDTO } from '@/api'
 import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
+import { translateUiText } from '@/i18n'
 
 defineOptions({ name: 'AiEnhancementPage' })
 

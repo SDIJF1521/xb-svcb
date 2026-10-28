@@ -72,7 +72,7 @@
         <el-button :disabled="!project" round class="ghost-btn" @click="redo">
           <el-icon class="el-icon--left"><RefreshRight /></el-icon>重做
         </el-button>
-        <el-button :disabled="!project || (previewing && !playing)" :loading="previewing" round class="cta-btn" @click="playMix">
+        <el-button :disabled="!project || (previewing && !playing)" round class="cta-btn editor-play-btn" @click="playMix">
           <el-icon class="el-icon--left" :class="{ spin: playbackBuffering }"><component :is="playbackBuffering ? Loading : playing ? VideoPause : VideoPlay" /></el-icon>
           {{ playing ? (playbackBuffering ? '缓冲中' : '暂停') : '播放' }}
         </el-button>
@@ -176,7 +176,7 @@
 
         <div v-if="selectedTrack || selectedEffectRole" class="clip-block" data-guide="editor-clip">
           <div class="clip-title">
-            <span>{{ selectedClip?.name || effectScopeTarget }}</span>
+            <span>{{ translateUiText(selectedClip?.name || effectScopeTarget) }}</span>
             <div v-if="selectedClip" class="clip-title-actions">
               <button :class="{ active: selectedClip.locked }" title="锁定片段" @click="toggleClipLock">
                 <el-icon><Lock /></el-icon>
@@ -193,14 +193,14 @@
               :disabled="!selectedClip"
               @click="activeInspectorPanel = 'clip'"
             >
-              片段
+              {{ translateUiText('片段') }}
             </button>
             <button
               type="button"
               :class="{ active: activeInspectorPanel === 'effects' }"
               @click="activeInspectorPanel = 'effects'"
             >
-              效果
+              {{ translateUiText('效果') }}
             </button>
             <button
               type="button"
@@ -208,7 +208,7 @@
               :disabled="!selectedClip"
               @click="activeInspectorPanel = 'vocal'"
             >
-              人声
+              {{ translateUiText('人声') }}
             </button>
             <button
               type="button"
@@ -216,7 +216,7 @@
               :disabled="!selectedClip"
               @click="activeInspectorPanel = 'rerun'"
             >
-              重推理
+              {{ translateUiText('重推理') }}
             </button>
             <button
               type="button"
@@ -224,7 +224,7 @@
               :disabled="!selectedClip"
               @click="activeInspectorPanel = 'enhance'"
             >
-              AI 增强
+              {{ translateUiText('AI 增强') }}
             </button>
           </div>
 
@@ -244,11 +244,11 @@
                 v-for="option in channelOptions"
                 :key="option.value"
                 :class="{ active: clipChannel(selectedClip) === option.value }"
-                :title="option.title"
+                :title="translateUiText(option.title)"
                 :disabled="!selectedClipEditable"
                 @click="setClipChannel(option.value)"
               >
-                {{ option.label }}
+                {{ translateUiText(option.label) }}
               </button>
             </div>
           </div>
@@ -261,7 +261,7 @@
             >
               <option value="">未分配</option>
               <option v-for="role in projectRoles" :key="role.id" :value="role.id">
-                {{ role.name }}
+                {{ translateUiText(role.name) }}
               </option>
             </select>
           </div>
@@ -325,24 +325,24 @@
                 :class="{ active: effectScope === 'clip' }"
                 :disabled="!selectedClip"
                 @click="setEffectScope('clip')"
-              >片段 <b>{{ selectedClip?.effects.length || 0 }}</b></button>
+              >{{ translateUiText('片段') }} <b>{{ selectedClip?.effects.length || 0 }}</b></button>
               <button
                 type="button"
                 :class="{ active: effectScope === 'track' }"
                 :disabled="!selectedTrack"
                 @click="setEffectScope('track')"
-              >整轨 <b>{{ selectedTrack?.effects?.length || 0 }}</b></button>
+              >{{ translateUiText('整轨') }} <b>{{ selectedTrack?.effects?.length || 0 }}</b></button>
               <button
                 type="button"
                 :class="{ active: effectScope === 'role' }"
                 :disabled="!selectedClipRoleId"
                 title="先为片段分配角色"
                 @click="setEffectScope('role')"
-              >角色 <b>{{ selectedEffectRole?.effects?.length || 0 }}</b></button>
+              >{{ translateUiText('角色') }} <b>{{ selectedEffectRole?.effects?.length || 0 }}</b></button>
             </div>
             <div class="effect-scope-target">
-              <span>{{ effectScope === 'clip' ? '片段效果' : effectScope === 'track' ? '整轨效果' : '角色效果' }}</span>
-              <b>{{ effectScopeTarget }}</b>
+              <span>{{ translateUiText(effectScope === 'clip' ? '片段效果' : effectScope === 'track' ? '整轨效果' : '角色效果') }}</span>
+              <b>{{ translateUiText(effectScopeTarget) }}</b>
             </div>
 
             <div v-if="effectScope === 'clip' && selectedClip" class="effects-section-head">
@@ -409,7 +409,7 @@
                 @click="addScopedEffect(effect.type)"
               >
                 <el-icon><Plus /></el-icon>
-                <span>{{ effect.label }}</span>
+                <span>{{ translateUiText(effect.label) }}</span>
               </button>
             </div>
 
@@ -468,7 +468,7 @@
                 </div>
                 <div v-for="control in effectControls(effect)" :key="control.key" class="effect-control">
                   <div class="effect-control-label">
-                    <span>{{ control.label }}</span>
+                    <span>{{ translateUiText(control.label) }}</span>
                     <b>{{ effectParamText(effect, control) }}</b>
                   </div>
                   <input
@@ -494,7 +494,7 @@
               <span class="stem-engine-badge">{{ separationEngine === 'pymss' ? 'PyMSS' : 'UVR' }}</span>
             </div>
             <div class="editor-separation-panel">
-              <div class="editor-separation-label">分离引擎</div>
+              <div class="editor-separation-label">{{ translateUiText('分离引擎') }}</div>
               <div class="editor-separation-engines">
                 <button
                   type="button"
@@ -503,7 +503,7 @@
                 >
                   <span class="editor-engine-mark">U</span>
                   <span>UVR</span>
-                  <small>通用</small>
+                  <small>{{ translateUiText('通用') }}</small>
                 </button>
                 <button
                   type="button"
@@ -512,45 +512,45 @@
                 >
                   <span class="editor-engine-mark">P</span>
                   <span>PyMSS</span>
-                  <small>高质量</small>
+                  <small>{{ translateUiText('高质量') }}</small>
                 </button>
               </div>
               <template v-if="separationEngine === 'pymss'">
                 <div class="editor-separation-field">
                   <div class="editor-field-head">
-                    <span>人声分离模型</span>
-                    <router-link to="/models?tab=pymss">模型站 <el-icon><Right /></el-icon></router-link>
+                    <span>{{ translateUiText('人声分离模型') }}</span>
+                    <router-link to="/models?tab=pymss">{{ translateUiText('模型站') }} <el-icon><Right /></el-icon></router-link>
                   </div>
                   <select v-model="separationPymssModel" :disabled="!downloadedSeparationPymssModels.length">
-                    <option value="">选择已下载的模型</option>
+                    <option value="">{{ translateUiText('选择已下载的模型') }}</option>
                     <option v-for="item in downloadedSeparationPymssModels" :key="item.name" :value="item.name">
                       {{ item.name }}
                     </option>
                   </select>
                   <span class="editor-separation-status" :class="{ ready: separationPymssStatus?.ok }">
-                    <i></i>{{ separationStatusText }}
+                    <i></i>{{ translateUiText(separationStatusText) }}
                   </span>
                 </div>
                 <label class="editor-harmony-toggle">
                   <input v-model="separationHarmonyEnabled" type="checkbox" :disabled="!separationPymssModel" />
-                  <span>分离后去混响 / 净化人声</span>
+                  <span>{{ translateUiText('分离后去混响 / 净化人声') }}</span>
                   <small>PyMSS Dereverb</small>
                 </label>
                 <div v-if="separationHarmonyEnabled" class="editor-separation-field harmony-field">
                   <div class="editor-field-head">
-                    <span>去混响 / 人声净化模型</span>
-                    <router-link to="/models?tab=pymss">下载模型 <el-icon><Right /></el-icon></router-link>
+                    <span>{{ translateUiText('去混响 / 人声净化模型') }}</span>
+                    <router-link to="/models?tab=pymss">{{ translateUiText('下载模型') }} <el-icon><Right /></el-icon></router-link>
                   </div>
                   <select v-model="separationHarmonyModel" :disabled="!downloadedSeparationHarmonyModels.length">
-                    <option value="">选择已下载的模型</option>
+                    <option value="">{{ translateUiText('选择已下载的模型') }}</option>
                     <option v-for="item in downloadedSeparationHarmonyModels" :key="item.name" :value="item.name">
                       {{ item.name }}
                     </option>
                   </select>
-                  <span v-if="!downloadedSeparationHarmonyModels.length" class="editor-separation-status">请先在模型站下载去混响模型</span>
+                  <span v-if="!downloadedSeparationHarmonyModels.length" class="editor-separation-status">{{ translateUiText('请先在模型站下载去混响模型') }}</span>
                 </div>
               </template>
-              <span v-if="separationEngine === 'uvr'" class="editor-separation-hint">使用编辑器默认 UVR 模型，可在翻唱工作台调整详细配置。</span>
+              <span v-if="separationEngine === 'uvr'" class="editor-separation-hint">{{ translateUiText('使用编辑器默认 UVR 模型，可在翻唱工作台调整详细配置。') }}</span>
             </div>
             <el-button
               :disabled="!selectedClipEditable || separating || !separationReady"
@@ -559,7 +559,7 @@
               class="ghost-btn mini"
               @click="separateSelectedClip"
             >
-              <el-icon class="el-icon--left"><MagicStick /></el-icon>{{ separationEngine === 'pymss' ? '用 PyMSS 分离' : '用 UVR 分离' }}
+              <el-icon class="el-icon--left"><MagicStick /></el-icon>{{ translateUiText(separationEngine === 'pymss' ? '用 PyMSS 分离' : '用 UVR 分离') }}
             </el-button>
             <div class="lyric-source-tabs">
               <button
@@ -567,7 +567,7 @@
                 :class="{ active: lyricSourceMode === 'manual' }"
                 @click="setLyricSourceMode('manual')"
               >
-                粘贴
+                {{ translateUiText('粘贴') }}
               </button>
               <button
                 type="button"
@@ -581,15 +581,15 @@
                 :class="{ active: lyricSourceMode === 'file' }"
                 @click="setLyricSourceMode('file')"
               >
-                文件
+                {{ translateUiText('文件') }}
               </button>
             </div>
             <div v-if="lyricSourceMode === 'api'" class="lyric-api-panel">
-              <input v-model="lyricApiKeyword" placeholder="歌曲名 / 歌手" />
+              <input v-model="lyricApiKeyword" :placeholder="translateUiText('歌曲名 / 歌手')" />
               <div class="lyric-api-row">
                 <input v-model.number="lyricApiIndex" type="number" min="1" step="1" />
                 <select v-model="lyricApiSource">
-                  <option value="">默认源</option>
+                  <option value="">{{ translateUiText('默认源') }}</option>
                   <option v-for="source in lyricSources" :key="source.id" :value="source.id">
                     {{ source.name }}
                   </option>
@@ -602,7 +602,7 @@
                 class="ghost-btn mini"
                 @click="fetchLyricsFromApi"
               >
-                获取歌词
+                {{ translateUiText('获取歌词') }}
               </el-button>
             </div>
             <div v-if="lyricSourceMode === 'file'" class="lyric-file-panel">
@@ -613,15 +613,15 @@
                 class="ghost-btn mini"
                 @click="importLyricsFile"
               >
-                导入 TXT / LRC
+                {{ translateUiText('导入 TXT / LRC') }}
               </el-button>
               <span v-if="lyricFileName" class="lyric-file-name">{{ lyricFileName }}</span>
             </div>
-            <textarea v-model="lyricSplitText" class="lyric-input" rows="5" placeholder="普通 TXT 每行一句，或粘贴带时间戳的 LRC"></textarea>
+            <textarea v-model="lyricSplitText" class="lyric-input" rows="5" :placeholder="translateUiText('普通 TXT 每行一句，或粘贴带时间戳的 LRC')"></textarea>
             <div class="lyric-controls">
               <select v-if="lyricHasTimestamps" v-model="lyricTimeMode">
-                <option value="project">工程时间</option>
-                <option value="clip">片段时间</option>
+                <option value="project">{{ translateUiText('工程时间') }}</option>
+                <option value="clip">{{ translateUiText('片段时间') }}</option>
               </select>
               <el-button
                 :disabled="!selectedClipEditable || lyricSplitting || !lyricSplitText.trim()"
@@ -630,7 +630,7 @@
                 class="ghost-btn mini"
                 @click="splitSelectedClipByLyrics"
               >
-                <el-icon class="el-icon--left"><Scissor /></el-icon>{{ lyricHasTimestamps ? '歌词切分' : '自动切句' }}
+                <el-icon class="el-icon--left"><Scissor /></el-icon>{{ translateUiText(lyricHasTimestamps ? '歌词切分' : '自动切句') }}
               </el-button>
             </div>
           </div>
@@ -644,10 +644,10 @@
               <button type="button" class="enhance-level" :class="{ active: rerunEnhanceLevel === 'basic' }" @click="rerunEnhanceLevel = 'basic'">基础层</button>
               <button type="button" class="enhance-level" :class="{ active: rerunEnhanceLevel === 'advanced' }" @click="rerunEnhanceLevel = 'advanced'">高级层</button>
             </div>
-            <div class="rerun-mini"><span>设备</span><select v-model="rerunDevice"><option v-for="d in deviceOptions" :key="d.value" :value="d.value">{{ d.label }}</option></select></div>
+            <div class="rerun-mini"><span>设备</span><select v-model="rerunDevice"><option v-for="d in deviceOptions" :key="d.value" :value="d.value">{{ translateUiText(d.label) }}</option></select></div>
             <div class="rerun-enhance-controls">
               <div v-for="control in editorEnhanceControls" :key="control.key" class="rerun-param">
-                <div class="rerun-param-label"><span>{{ control.label }}</span><b>{{ Math.round(control.value() * 100) }}%</b></div>
+                <div class="rerun-param-label"><span>{{ translateUiText(control.label) }}</span><b>{{ Math.round(control.value() * 100) }}%</b></div>
                 <input :value="control.value()" type="range" min="0" max="1" step="0.05" @input="control.set(Number(($event.target as HTMLInputElement).value))" />
               </div>
             </div>
@@ -757,7 +757,7 @@
                 <div class="rerun-mini">
                   <span>设备</span>
                   <select v-model="rerunDevice">
-                    <option v-for="d in deviceOptions" :key="d.value" :value="d.value">{{ d.label }}</option>
+                    <option v-for="d in deviceOptions" :key="d.value" :value="d.value">{{ translateUiText(d.label) }}</option>
                   </select>
                 </div>
                 <div v-if="isRvcRerunModel" class="rerun-mini">
@@ -882,7 +882,7 @@
               <el-icon class="el-icon--left"><Cpu /></el-icon>替换片段
             </el-button>
             <div v-if="rerunJobId" class="rerun-progress" aria-live="polite">
-              <div class="rerun-progress-head"><span>{{ rerunMessage || '正在处理' }}</span><b>{{ rerunProgress }}%</b></div>
+              <div class="rerun-progress-head"><span>{{ translateUiText(rerunMessage || '正在处理') }}</span><b>{{ rerunProgress }}%</b></div>
               <div class="rerun-progress-track"><i :style="{ width: `${rerunProgress}%` }"></i></div>
               <pre v-if="rerunLog" class="rerun-log">{{ rerunLog }}</pre>
             </div>
@@ -939,7 +939,7 @@
                 @click="mergeSelectedClipWithNext"
               >
                 <el-icon><Connection /></el-icon>
-                <span>{{ mergingAudio ? '合并中' : '合并下一段' }}</span>
+                <span>{{ translateUiText(mergingAudio ? '合并中' : '合并下一段') }}</span>
               </button>
               <button
                 class="split-btn"
@@ -1011,20 +1011,20 @@
                 <button title="删除音轨" class="danger" :disabled="track.locked" @click="deleteTrack(track)">
                   <el-icon><Delete /></el-icon>
                 </button>
-                <el-tooltip :content="track.name" placement="right" :show-after="250">
-                  <span class="track-name" :title="track.name">
+                <el-tooltip :content="translateUiText(track.name)" placement="right" :show-after="250">
+                  <span class="track-name" :title="translateUiText(track.name)">
                     <i
                       v-if="trackRole(track)"
                       class="track-role-dot"
                       :style="{ '--role-color': trackRole(track)?.color }"
                     ></i>
-                    <span class="track-name-text">{{ track.name }}</span>
+                    <span class="track-name-text">{{ translateUiText(track.name) }}</span>
                   </span>
                 </el-tooltip>
                 <button
                   class="track-fx-btn"
                   :class="{ active: selectedTrack?.id === track.id && effectScope === 'track' }"
-                  :title="`管理 ${track.name} 的整轨效果`"
+                  :title="translateUiText(`管理 ${track.name} 的整轨效果`)"
                   @click.stop="selectTrack(track.id)"
                 >
                   <span>FX</span><b>{{ track.effects?.length || 0 }}</b>
@@ -1077,9 +1077,9 @@
                     class="role-pill"
                     :style="{ '--role-color': clipRole(clip)?.color }"
                   >
-                    {{ clipRole(clip)?.name }}
+                    {{ translateUiText(clipRole(clip)?.name || '') }}
                   </span>
-                  <span class="clip-name">{{ clip.name }}</span>
+                  <span class="clip-name">{{ translateUiText(clip.name) }}</span>
                   <button class="handle right" @pointerdown.stop="startDrag($event, track, clip, 'end')"></button>
                 </div>
               </div>
@@ -1108,7 +1108,7 @@
                 @click="runContextMenuItem(item)"
               >
                 <el-icon><component :is="item.icon" /></el-icon>
-                <span>{{ item.label }}</span>
+                <span>{{ translateUiText(item.label) }}</span>
                 <kbd v-if="item.shortcut">{{ item.shortcut }}</kbd>
               </button>
             </template>
@@ -1167,6 +1167,7 @@ import EditorPluginDialog from '@/components/editor/EditorPluginDialog.vue'
 import EditorRoleManager from '@/components/editor/EditorRoleManager.vue'
 import TimelineTemplatePanel from '@/components/editor/TimelineTemplatePanel.vue'
 import { api } from '@/api'
+import { translateUiText } from '@/i18n'
 import { useModelsStore } from '@/stores/models'
 import { useSystemStore } from '@/stores/system'
 import { f0MethodsForFramework, normalizeF0Method } from '@/utils/f0'
@@ -4398,7 +4399,7 @@ async function rerunClip() {
   )
   if (!res.ok || !res.job_id) {
     rerunning.value = false
-    ElMessage.error(res.error || '局部重推理失败')
+    ElMessage.error(translateUiText(res.error || '局部重推理失败'))
     return
   }
   rerunJobId.value = res.job_id
@@ -4410,13 +4411,19 @@ async function pollRerun(jobId: string) {
     const status = await api.getEditorRerunStatus(jobId)
     rerunProgress.value = Number(status.progress || 0)
     rerunMessage.value = status.message || (status.status === 'done' ? '处理完成' : '正在处理')
-    rerunLog.value = await api.getEditorRerunLog(jobId)
+    rerunLog.value = (await api.getEditorRerunLog(jobId))
+      .split(/\r?\n/u)
+      .map((line) => {
+        const match = line.match(/^(\[[^\]]+\]\s*)(.*)$/u)
+        return match ? `${match[1]}${translateUiText(match[2] || '')}` : translateUiText(line)
+      })
+      .join('\n')
     if (status.status === 'done' || status.status === 'failed') {
       if (rerunPollTimer) clearInterval(rerunPollTimer)
       rerunPollTimer = null
       rerunning.value = false
       if (status.status === 'failed' || !status.project) {
-        ElMessage.error(status.error || '局部重推理失败')
+        ElMessage.error(translateUiText(status.error || '局部重推理失败'))
         return true
       }
       applyProject(status.project)
@@ -4428,7 +4435,7 @@ async function pollRerun(jobId: string) {
       if (enhanced) msg = `片段已替换，已应用 ${status.clip?.metadata?.rerun_enhance_level || 'basic'} 美声`
       if (enhanceErr) msg += `（美声失败：${enhanceErr}）`
       if (removedCount > 0 && !enhanced) msg = `片段已替换，已移除 ${removedCount} 个插件效果避免污染干声`
-      ElMessage.success(msg)
+      ElMessage.success(translateUiText(msg))
       return true
     }
     return false
@@ -4931,6 +4938,15 @@ onUnmounted(() => {
   border: none !important;
   color: var(--xb-on-primary) !important;
   font-weight: 700;
+}
+.editor-play-btn {
+  min-width: 96px;
+  justify-content: center;
+}
+.editor-play-btn :deep(.el-icon) {
+  width: 1em;
+  height: 1em;
+  flex: 0 0 1em;
 }
 .ghost-btn {
   background: rgba(var(--xb-fill-rgb), 0.04) !important;
@@ -5599,6 +5615,27 @@ onUnmounted(() => {
   gap: 8px;
   align-items: center;
 }
+:global(html[data-locale='en-US'] .editor-separation-engines button),
+:global(html[data-locale='ja-JP'] .editor-separation-engines button) {
+  height: auto;
+  min-height: 38px;
+}
+:global(html[data-locale='en-US'] .editor-harmony-toggle),
+:global(html[data-locale='ja-JP'] .editor-harmony-toggle) {
+  flex-wrap: wrap;
+  line-height: 1.4;
+}
+:global(html[data-locale='en-US'] .editor-harmony-toggle small),
+:global(html[data-locale='ja-JP'] .editor-harmony-toggle small) {
+  flex-basis: 100%;
+  margin-left: 22px;
+}
+:global(html[data-locale='en-US'] .lyric-source-tabs button) { font-size: 12px; }
+:global(html[data-locale='ja-JP'] .lyric-source-tabs button) { font-size: 11.5px; }
+:global(html[data-locale='en-US'] .lyric-controls) { grid-template-columns: 116px minmax(0, 1fr); }
+:global(html[data-locale='ja-JP'] .lyric-controls) { grid-template-columns: 124px minmax(0, 1fr); }
+:global(html[data-locale='en-US'] .lyric-input) { line-height: 1.55; }
+:global(html[data-locale='ja-JP'] .lyric-input) { line-height: 1.7; }
 .rerun-param-head {
   display: flex;
   align-items: center;
@@ -5844,6 +5881,16 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.transport > button:nth-child(2) {
+  width: 32px;
+  min-width: 32px;
+  flex: 0 0 32px;
+}
+.transport > button:nth-child(2) .el-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
 }
 .transport span {
   min-width: 48px;

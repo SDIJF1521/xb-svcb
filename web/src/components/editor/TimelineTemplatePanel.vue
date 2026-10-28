@@ -2,7 +2,7 @@
   <section class="template-panel">
     <div class="section-head">
       <span>时间轴模板</span>
-      <small>{{ templates.length }} 个</small>
+      <small>{{ templates.length }} {{ translateUiText('个') }}</small>
     </div>
 
     <div class="template-list">
@@ -19,10 +19,10 @@
           <el-icon><CollectionTag /></el-icon>
         </span>
         <span class="template-copy">
-          <b>{{ template.name }}</b>
-          <small>{{ template.description }}</small>
+          <b>{{ translateUiText(template.name) }}</b>
+          <small>{{ translateUiText(template.description) }}</small>
         </span>
-        <span class="template-meta">{{ template.tracks.length }} 轨</span>
+        <span class="template-meta">{{ template.tracks.length }} {{ translateUiText('轨') }}</span>
       </button>
     </div>
   </section>
@@ -31,6 +31,7 @@
 <script setup lang="ts">
 import { CollectionTag } from '@element-plus/icons-vue'
 import type { EditorTimelineTemplate } from '@/api'
+import { translateUiText } from '@/i18n'
 
 defineOptions({ name: 'TimelineTemplatePanel' })
 

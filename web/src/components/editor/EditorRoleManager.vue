@@ -25,7 +25,7 @@
           />
           <input
             class="role-name"
-            :value="role.name"
+            :value="translateUiText(role.name)"
             maxlength="18"
             placeholder="角色名"
             @change="updateRole(role.id, { name: inputValue($event) })"
@@ -34,7 +34,7 @@
             type="button"
             class="role-effects"
             :class="{ active: role.id === activeRoleId }"
-            :title="`管理 ${role.name} 的角色效果`"
+            :title="roleEffectsTitle(role.name)"
             @click="emit('select', role.id)"
           >
             <el-icon><Operation /></el-icon>
@@ -77,7 +77,7 @@
 
         <input
           class="role-note"
-          :value="role.notes || ''"
+          :value="translateUiText(role.notes || '')"
           maxlength="40"
           placeholder="备注，如：主歌 / 副歌 / 和声"
           @change="updateRole(role.id, { notes: inputValue($event) })"
@@ -90,7 +90,7 @@
           @click="emit('assign', role.id)"
         >
           <el-icon><Select /></el-icon>
-          <span>{{ role.id === assignedRoleId ? '已分配到片段' : '分配给选中片段' }}</span>
+          <span>{{ translateUiText(role.id === assignedRoleId ? '已分配到片段' : '分配给选中片段') }}</span>
         </button>
         <button
           type="button"
@@ -99,7 +99,7 @@
           @click="emit('assignTrack', role.id)"
         >
           <el-icon><Connection /></el-icon>
-          <span>{{ role.id === assignedTrackRoleId ? '取消音轨固定角色' : '固定到当前音轨' }}</span>
+          <span>{{ translateUiText(role.id === assignedTrackRoleId ? '取消音轨固定角色' : '固定到当前音轨') }}</span>
         </button>
       </article>
     </div>
@@ -114,6 +114,7 @@
 <script setup lang="ts">
 import { Connection, Delete, Operation, Plus, Select, UserFilled } from '@element-plus/icons-vue'
 import type { EditorRole } from '@/api'
+import { translateUiText } from '@/i18n'
 
 interface RoleModelOption {
   id: string
@@ -148,6 +149,10 @@ function inputValue(e: Event) {
 function numberValue(e: Event) {
   const value = Number((e.target as HTMLInputElement).value)
   return Number.isFinite(value) ? Math.max(-24, Math.min(24, Math.round(value))) : 0
+}
+
+function roleEffectsTitle(roleName: string) {
+  return `${translateUiText('管理角色效果')}: ${translateUiText(roleName)}`
 }
 
 function updateRole(id: string, patch: Partial<EditorRole>) {

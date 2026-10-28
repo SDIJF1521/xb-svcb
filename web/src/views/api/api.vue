@@ -3,12 +3,12 @@
     <header class="page-head">
       <div>
         <p class="eyebrow">DEVELOPER ACCESS</p>
-        <h1>API 接入</h1>
-        <p class="subtitle">FastAPI 服务默认关闭，只在本次软件运行期间由你手动启用。</p>
+        <h1>{{ translateUiText('API 接入') }}</h1>
+        <p class="subtitle">{{ translateUiText('FastAPI 服务默认关闭，只在本次软件运行期间由你手动启用。') }}</p>
       </div>
       <div class="head-actions">
         <span class="service-state" :class="{ running: status.running }">
-          <i></i>{{ status.running ? '服务运行中' : '服务已停止' }}
+          <i></i>{{ translateUiText(status.running ? '服务运行中' : '服务已停止') }}
         </span>
         <el-button
           v-if="!status.running"
@@ -17,7 +17,7 @@
           @click="startServer"
         >
           <el-icon><VideoPlay /></el-icon>
-          启动服务
+          {{ translateUiText('启动服务') }}
         </el-button>
         <el-button
           v-else
@@ -27,7 +27,7 @@
           @click="stopServer"
         >
           <el-icon><SwitchButton /></el-icon>
-          停止服务
+          {{ translateUiText('停止服务') }}
         </el-button>
       </div>
     </header>
@@ -35,27 +35,27 @@
     <section class="control-band" data-guide="api-service">
       <div class="section-title">
         <div>
-          <h2>服务配置</h2>
-          <p>修改监听范围或端口前需要先停止服务。</p>
+          <h2>{{ translateUiText('服务配置') }}</h2>
+          <p>{{ translateUiText('修改监听范围或端口前需要先停止服务。') }}</p>
         </div>
         <el-button :disabled="status.running" :loading="busy === 'save'" @click="saveConfig">
           <el-icon><DocumentChecked /></el-icon>
-          保存配置
+          {{ translateUiText('保存配置') }}
         </el-button>
       </div>
 
       <div class="settings-grid">
         <label class="field-group">
-          <span>监听范围</span>
+          <span>{{ translateUiText('监听范围') }}</span>
           <el-radio-group v-model="draft.scope" :disabled="status.running">
-            <el-radio-button value="local">仅本机</el-radio-button>
-            <el-radio-button value="lan">局域网</el-radio-button>
+            <el-radio-button value="local">{{ translateUiText('仅本机') }}</el-radio-button>
+            <el-radio-button value="lan">{{ translateUiText('局域网') }}</el-radio-button>
           </el-radio-group>
           <small>{{ scopeHint }}</small>
         </label>
 
         <label class="field-group port-field">
-          <span>监听端口</span>
+          <span>{{ translateUiText('监听端口') }}</span>
           <el-input-number
             v-model="draft.port"
             :min="1024"
@@ -63,18 +63,18 @@
             controls-position="right"
             :disabled="status.running"
           />
-          <small>防火墙或其他程序占用端口时，请更换端口。</small>
+          <small>{{ translateUiText('防火墙或其他程序占用端口时，请更换端口。') }}</small>
         </label>
 
         <div class="field-group domain-field">
-          <span>绑定域名</span>
+          <span>{{ translateUiText('绑定域名') }}</span>
           <el-input
             v-model="draft.domain"
-            placeholder="例如 test.juzidc.cn"
+            :placeholder="translateUiText('例如 test.juzidc.cn')"
             :style="domainInputStyle"
             :disabled="status.running || draft.scope === 'local'"
           />
-          <small>{{ draft.scope === 'local' ? '仅局域网监听模式支持绑定域名。' : '使用前请将域名 DNS 解析到本机公网IP。' }}</small>
+          <small>{{ translateUiText(draft.scope === 'local' ? '仅局域网监听模式支持绑定域名。' : '使用前请将域名 DNS 解析到本机公网IP。') }}</small>
         </div>
 
       </div>
@@ -82,13 +82,13 @@
 
 
       <div class="address-block">
-        <span class="address-label">访问地址</span>
+        <span class="address-label">{{ translateUiText('访问地址') }}</span>
         <div class="address-list">
           <button
             v-for="url in status.base_urls"
             :key="url"
             class="address-row"
-            title="复制地址"
+            :title="translateUiText('复制地址')"
             @click="copyText(url, '访问地址')"
           >
             <code>{{ url }}</code>
@@ -98,7 +98,7 @@
         <div class="runtime-actions">
           <el-button :disabled="!status.running" :loading="busy === 'test'" @click="testServer">
             <el-icon><Connection /></el-icon>
-            连通性测试
+            {{ translateUiText('连通性测试') }}
           </el-button>
           <el-button :disabled="!status.running" @click="openDocs('docs')">
             <el-icon><Notebook /></el-icon>
@@ -116,18 +116,18 @@
         <span>{{ testResult.message || testResult.error }}</span>
         <code v-if="testResult.ok">{{ testResult.latency_ms }} ms · {{ testResult.model_count }} 个模型</code>
       </div>
-      <p v-if="status.last_error && !status.running" class="last-error">{{ status.last_error }}</p>
+      <p v-if="status.last_error && !status.running" class="last-error">{{ translateUiText(status.last_error) }}</p>
     </section>
 
     <section class="key-band" data-guide="api-keys">
       <div class="section-title">
         <div>
-          <h2>API 密钥</h2>
-          <p>每个密钥可单独设置有效期和启用状态，修改前请先停止服务。</p>
+          <h2>{{ translateUiText('API 密钥') }}</h2>
+          <p>{{ translateUiText('每个密钥可单独设置有效期和启用状态，修改前请先停止服务。') }}</p>
         </div>
         <el-button type="primary" plain :disabled="status.running" @click="openKeyDialog()">
           <el-icon><Plus /></el-icon>
-          添加密钥
+          {{ translateUiText('添加密钥') }}
         </el-button>
       </div>
       <div class="key-list">
@@ -135,73 +135,73 @@
           <div class="key-card-head">
             <strong>{{ item.name }}</strong>
             <el-tag :type="item.enabled && !item.expired ? 'success' : 'info'" size="small">
-              {{ item.expired ? '已过期' : item.enabled ? '已启用' : '已禁用' }}
+              {{ translateUiText(item.expired ? '已过期' : item.enabled ? '已启用' : '已禁用') }}
             </el-tag>
           </div>
           <div class="key-secret-row">
-            <code title="单击复制完整 API 密钥" @click="copyApiKey(item)">{{ visibleKeys[item.id] ? item.secret : maskKey(item.secret) }}</code>
-            <el-button text title="复制 API 密钥" @click="copyApiKey(item)">
+            <code :title="translateUiText('单击复制完整 API 密钥')" @click="copyApiKey(item)">{{ visibleKeys[item.id] ? item.secret : maskKey(item.secret) }}</code>
+            <el-button text :title="translateUiText('复制 API 密钥')" @click="copyApiKey(item)">
               <el-icon><CopyDocument /></el-icon>
             </el-button>
-            <el-button text :title="visibleKeys[item.id] ? '隐藏 API 密钥' : '显示 API 密钥'" @click="toggleKeyVisible(item.id)">
+            <el-button text :title="translateUiText(visibleKeys[item.id] ? '隐藏 API 密钥' : '显示 API 密钥')" @click="toggleKeyVisible(item.id)">
               <el-icon><Hide v-if="visibleKeys[item.id]" /><View v-else /></el-icon>
             </el-button>
           </div>
           <div class="key-card-info">
-            <span>创建于 {{ formatKeyDate(item.created_at) }}</span>
-            <span>{{ item.expires_at ? `到期于 ${formatKeyDate(item.expires_at)}` : '永不过期' }}</span>
+            <span>{{ translateUiText('创建于') }} {{ formatKeyDate(item.created_at) }}</span>
+            <span>{{ item.expires_at ? `${translateUiText('到期于')} ${formatKeyDate(item.expires_at)}` : translateUiText('永不过期') }}</span>
           </div>
           <div class="key-card-actions">
             <el-switch
               :model-value="item.enabled"
               :disabled="status.running || item.expired"
-              active-text="启用"
-              inactive-text="禁用"
+              :active-text="translateUiText('启用')"
+              :inactive-text="translateUiText('禁用')"
               @change="toggleKey(item, Boolean($event))"
             />
             <el-button text :disabled="status.running" @click="openKeyDialog(item)">
-              <el-icon><Edit /></el-icon>编辑
+              <el-icon><Edit /></el-icon>{{ translateUiText('编辑') }}
             </el-button>
             <el-button text type="danger" :disabled="status.running || status.api_keys.length <= 1" @click="removeKey(item)">
-              <el-icon><Delete /></el-icon>删除
+              <el-icon><Delete /></el-icon>{{ translateUiText('删除') }}
             </el-button>
           </div>
         </article>
-        <el-empty v-if="!status.api_keys.length" description="暂无 API 密钥" :image-size="64" />
+        <el-empty v-if="!status.api_keys.length" :description="translateUiText('暂无 API 密钥')" :image-size="64" />
       </div>
     </section>
 
-    <el-dialog v-model="keyDialogVisible" :title="editingKeyId ? '编辑 API Key' : '添加 API Key'" width="min(460px, calc(100vw - 32px))">
+    <el-dialog v-model="keyDialogVisible" :title="translateUiText(editingKeyId ? '编辑 API Key' : '添加 API Key')" width="min(460px, calc(100vw - 32px))">
       <el-form label-position="top">
-        <el-form-item label="名称">
-          <el-input v-model="keyForm.name" maxlength="40" show-word-limit placeholder="例如：生产环境" />
+        <el-form-item :label="translateUiText('名称')">
+          <el-input v-model="keyForm.name" maxlength="40" show-word-limit :placeholder="translateUiText('例如：生产环境')" />
         </el-form-item>
-        <el-form-item label="有效期">
+        <el-form-item :label="translateUiText('有效期')">
           <el-date-picker
             v-model="keyForm.expires_at"
             type="datetime"
             value-format="YYYY-MM-DDTHH:mm:ss"
             format="YYYY-MM-DD HH:mm"
-            placeholder="留空表示永不过期"
+            :placeholder="translateUiText('留空表示永不过期')"
             clearable
             style="width: 100%"
           />
         </el-form-item>
-        <el-form-item label="状态">
-          <el-switch v-model="keyForm.enabled" active-text="启用" inactive-text="禁用" />
+        <el-form-item :label="translateUiText('状态')">
+          <el-switch v-model="keyForm.enabled" :active-text="translateUiText('启用')" :inactive-text="translateUiText('禁用')" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="keyDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="busy === 'key-save'" @click="saveKey">保存</el-button>
+        <el-button @click="keyDialogVisible = false">{{ translateUiText('取消') }}</el-button>
+        <el-button type="primary" :loading="busy === 'key-save'" @click="saveKey">{{ translateUiText('保存') }}</el-button>
       </template>
     </el-dialog>
 
     <section class="docs-band" data-guide="api-docs">
     <div class="section-title">
       <div>
-        <h2>调用文档</h2>
-        <p>典型流程：上传音频、读取模型、创建任务、轮询状态、下载成品。</p>
+        <h2>{{ translateUiText('调用文档') }}</h2>
+        <p>{{ translateUiText('典型流程：上传音频、读取模型、创建任务、轮询状态、下载成品。') }}</p>
       </div>
       <el-segmented v-model="sampleLanguage" :options="sampleOptions" />
     </div>
@@ -210,7 +210,7 @@
       <div class="code-panel">
         <div class="code-head">
           <span>{{ sampleLanguage === 'python' ? 'Python · requests' : 'PowerShell · Invoke-RestMethod' }}</span>
-          <button title="复制示例" @click="copyText(activeSample, '调用示例')">
+          <button :title="translateUiText('复制示例')" @click="copyText(activeSample, '调用示例')">
             <el-icon><CopyDocument /></el-icon>
           </button>
         </div>
@@ -219,14 +219,14 @@
 
       <div class="endpoint-panel">
         <div class="endpoint-head">
-          <span>v1 接口</span>
-          <small>所有受保护接口均需 X-API-Key</small>
+          <span>{{ translateUiText('v1 接口') }}</span>
+          <small>{{ translateUiText('所有受保护接口均需 X-API-Key') }}</small>
         </div>
         <div class="endpoint-list">
           <div v-for="item in endpoints" :key="item.method + item.path" class="endpoint-row">
             <span class="method" :class="item.method.toLowerCase()">{{ item.method }}</span>
             <code>{{ item.path }}</code>
-            <span>{{ item.label }}</span>
+            <span>{{ translateUiText(item.label) }}</span>
           </div>
         </div>
       </div>
@@ -235,18 +235,18 @@
     <div class="notes-grid">
       <div>
         <el-icon><UploadFilled /></el-icon>
-        <span>上传限制</span>
-        <p>不设置文件大小上限，按流式写入磁盘；支持 WAV、FLAC、MP3、M4A、AAC、OGG、Opus 及常见视频容器。</p>
+        <span>{{ translateUiText('上传限制') }}</span>
+        <p>{{ translateUiText('不设置文件大小上限，按流式写入磁盘；支持 WAV、FLAC、MP3、M4A、AAC、OGG、Opus 及常见视频容器。') }}</p>
       </div>
       <div>
         <el-icon><Lock /></el-icon>
-        <span>外部访问</span>
-        <p>局域网模式监听所有网卡。仅在可信网络使用，并在调用方妥善保存 API Key。</p>
+        <span>{{ translateUiText('外部访问') }}</span>
+        <p>{{ translateUiText('局域网模式监听所有网卡。仅在可信网络使用，并在调用方妥善保存 API Key。') }}</p>
       </div>
       <div>
         <el-icon><Timer /></el-icon>
-        <span>异步任务</span>
-        <p>创建接口返回 202；轮询任务到 done 后，再通过 result_url 下载音频。</p>
+        <span>{{ translateUiText('异步任务') }}</span>
+        <p>{{ translateUiText('创建接口返回 202；轮询任务到 done 后，再通过 result_url 下载音频。') }}</p>
       </div>
     </div>
     </section>
@@ -276,8 +276,11 @@ import {
   WarningFilled,
 } from '@element-plus/icons-vue'
 import { api, type HttpApiKey, type HttpApiKeyResult, type HttpApiScope, type HttpApiStatus, type HttpApiTestResult } from '@/api'
+import { translateUiText, useI18n } from '@/i18n'
 
 defineOptions({ name: 'ApiAccess' })
+
+const { locale } = useI18n()
 
 const emptyStatus: HttpApiStatus = {
   running: false,
@@ -310,16 +313,48 @@ let refreshTimer: number | undefined
 let initialized = false
 
 const baseUrl = computed(() => status.base_urls[0] || `http://127.0.0.1:${status.port}`)
-const scopeHint = computed(() =>
-  draft.scope === 'local'
-    ? '只有当前电脑上的程序可以调用。'
-    : '同一局域网内的设备可以通过本机 IP 调用。',
-)
+const scopeHint = computed(() => {
+  locale.value
+  return draft.scope === 'local'
+    ? translateUiText('只有当前电脑上的程序可以调用。')
+    : translateUiText('同一局域网内的设备可以通过本机 IP 调用。')
+})
 
 const domainInputStyle = computed(() => {
   const hintLength = 'for example test.juzidc.cn'.length
   const length = Math.max(draft.domain.length, hintLength)
   return { width: `${Math.min(420, Math.max(190, length * 8 + 28))}px`, maxWidth: '100%' }
+})
+
+const sampleCopy = computed(() => {
+  if (locale.value === 'ja-JP') {
+    return {
+      upload: '元音声をアップロード',
+      create: 'モデルを取得してカバータスクを作成',
+      wait: 'タスク完了まで待機',
+      download: '完成音声をダウンロード',
+      jobFailed: 'タスクに失敗しました',
+      powershellUpload: 'PowerShell 7：元音声をアップロード',
+    }
+  }
+  if (locale.value === 'en-US') {
+    return {
+      upload: 'Upload source audio',
+      create: 'Get a model and create a cover job',
+      wait: 'Wait for the job to finish',
+      download: 'Download the result',
+      jobFailed: 'Job failed',
+      powershellUpload: 'PowerShell 7: upload source audio',
+    }
+  }
+  return {
+    upload: '上传源音频',
+    create: '获取模型并创建翻唱任务',
+    wait: '等待任务完成',
+    download: '下载成品',
+    jobFailed: '任务失败',
+    powershellUpload: 'PowerShell 7：上传源音频',
+  }
 })
 
 const pythonSample = computed(() => `import time
@@ -329,7 +364,7 @@ import requests
 BASE_URL = "${baseUrl.value}"
 HEADERS = {"X-API-Key": "${status.api_key || '<API_KEY>'}"}
 
-# 1. 上传源音频
+# 1. ${sampleCopy.value.upload}
 with open("song.wav", "rb") as audio:
     upload = requests.post(
         f"{BASE_URL}/api/v1/uploads",
@@ -338,7 +373,7 @@ with open("song.wav", "rb") as audio:
         timeout=None,
     ).json()
 
-# 2. 获取模型并创建翻唱任务
+# 2. ${sampleCopy.value.create}
 models = requests.get(f"{BASE_URL}/api/v1/models", headers=HEADERS).json()
 job = requests.post(
     f"{BASE_URL}/api/v1/jobs",
@@ -350,7 +385,7 @@ job = requests.post(
     },
 ).json()
 
-# 3. 等待任务完成
+# 3. ${sampleCopy.value.wait}
 while True:
     current = requests.get(
         f"{BASE_URL}/api/v1/jobs/{job['id']}", headers=HEADERS
@@ -360,9 +395,9 @@ while True:
     time.sleep(2)
 
 if current["status"] != "done":
-    raise RuntimeError(current.get("error") or "任务失败")
+    raise RuntimeError(current.get("error") or "${sampleCopy.value.jobFailed}")
 
-# 4. 下载成品
+# 4. ${sampleCopy.value.download}
 result = requests.get(f"{BASE_URL}{current['result_url']}", headers=HEADERS, timeout=None)
 result.raise_for_status()
 Path("cover.wav").write_bytes(result.content)`)
@@ -370,7 +405,7 @@ Path("cover.wav").write_bytes(result.content)`)
 const powershellSample = computed(() => `$BaseUrl = "${baseUrl.value}"
 $Headers = @{ "X-API-Key" = "${status.api_key || '<API_KEY>'}" }
 
-# PowerShell 7：上传源音频
+# ${sampleCopy.value.powershellUpload}
 $Upload = Invoke-RestMethod -Method Post \`
   -Uri "$BaseUrl/api/v1/uploads" \`
   -Headers $Headers \`
@@ -454,11 +489,11 @@ async function saveKey() {
       : await api.createHttpApiKey(payload)
     applyKeyResult(result)
     if (!result.ok) {
-      ElMessage.error(result.error || 'API Key operation failed')
+      ElMessage.error(translateUiText(result.error || 'API 密钥操作失败'))
       return
     }
     keyDialogVisible.value = false
-    ElMessage.success(editingKeyId.value ? 'API Key updated' : 'API Key created')
+    ElMessage.success(translateUiText(editingKeyId.value ? 'API 密钥已更新' : 'API 密钥已创建'))
   } finally {
     busy.value = ''
   }
@@ -467,14 +502,14 @@ async function saveKey() {
 async function toggleKey(item: HttpApiKey, enabled: boolean) {
   const result = await api.updateHttpApiKey(item.id, { enabled })
   applyKeyResult(result)
-  if (!result.ok) ElMessage.error(result.error || 'API Key operation failed')
+  if (!result.ok) ElMessage.error(translateUiText(result.error || 'API 密钥操作失败'))
 }
 
 async function removeKey(item: HttpApiKey) {
-  if (!window.confirm(`Delete API Key "${item.name}"?`)) return
+  if (!window.confirm(translateUiText(`确定删除 API Key「${item.name}」吗？`))) return
   const result = await api.deleteHttpApiKey(item.id)
   applyKeyResult(result)
-  result.ok ? ElMessage.success('API Key deleted') : ElMessage.error(result.error || 'API Key operation failed')
+  result.ok ? ElMessage.success(translateUiText('API 密钥已删除')) : ElMessage.error(translateUiText(result.error || 'API 密钥操作失败'))
 }
 
 function applyStatus(next: HttpApiStatus, syncDraft = true) {
@@ -492,7 +527,7 @@ async function refreshStatus(silent = false) {
     applyStatus(next, !initialized || next.running)
     initialized = true
   } catch (error) {
-    if (!silent) ElMessage.error(error instanceof Error ? error.message : '读取 API 状态失败')
+    if (!silent) ElMessage.error(translateUiText(error instanceof Error ? error.message : '读取 API 状态失败'))
   }
 }
 
@@ -501,7 +536,7 @@ async function saveConfig() {
   try {
     const result = await api.configureHttpApi({ ...draft })
     applyStatus(result)
-    result.ok ? ElMessage.success('API 配置已保存') : ElMessage.error(result.error || '保存失败')
+    result.ok ? ElMessage.success(translateUiText('API 配置已保存')) : ElMessage.error(translateUiText(result.error || '保存失败'))
   } finally {
     busy.value = ''
   }
@@ -513,9 +548,9 @@ async function startServer() {
   try {
     const result = await api.startHttpApi({ ...draft })
     applyStatus(result)
-    result.ok ? ElMessage.success(result.message || 'API 服务已启动') : ElMessage.error(result.error || '启动失败')
+    result.ok ? ElMessage.success(translateUiText(result.message || 'API 服务已启动')) : ElMessage.error(translateUiText(result.error || '启动失败'))
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : 'API 服务启动失败')
+    ElMessage.error(translateUiText(error instanceof Error ? error.message : 'API 服务启动失败'))
   } finally {
     busy.value = ''
   }
@@ -527,7 +562,7 @@ async function stopServer() {
   try {
     const result = await api.stopHttpApi()
     applyStatus(result)
-    result.ok ? ElMessage.success('API 服务已停止') : ElMessage.error(result.error || '停止失败')
+    result.ok ? ElMessage.success(translateUiText('API 服务已停止')) : ElMessage.error(translateUiText(result.error || '停止失败'))
   } finally {
     busy.value = ''
   }
@@ -539,8 +574,8 @@ async function testServer() {
   try {
     testResult.value = await api.testHttpApi()
     testResult.value.ok
-      ? ElMessage.success('连通性测试通过')
-      : ElMessage.error(testResult.value.error || '连通性测试失败')
+      ? ElMessage.success(translateUiText('连通性测试通过'))
+      : ElMessage.error(translateUiText(testResult.value.error || '连通性测试失败'))
   } finally {
     busy.value = ''
   }
@@ -548,7 +583,7 @@ async function testServer() {
 
 async function openDocs(kind: 'docs' | 'redoc') {
   const opened = await api.openHttpApiDocs(kind)
-  if (!opened) ElMessage.error('无法打开接口文档，请确认 API 服务正在运行')
+  if (!opened) ElMessage.error(translateUiText('无法打开接口文档，请确认 API 服务正在运行'))
 }
 
 async function copyText(value: string, label: string) {
@@ -565,7 +600,7 @@ async function copyText(value: string, label: string) {
     document.execCommand('copy')
     node.remove()
   }
-  ElMessage.success(`${label}已复制`)
+  ElMessage.success(translateUiText(`${label}已复制`))
 }
 
 onMounted(async () => {

@@ -62,7 +62,7 @@
               v-else-if="w.status === 'failed'"
               :title="w.error || ''"
             >
-              {{ w.error || '推理失败，点击日志按钮查看详情' }}
+              {{ translateUiText(w.error || '推理失败，点击日志按钮查看详情') }}
             </div>
             <div class="work-sub" v-else>{{ w.format }} · {{ w.size }}</div>
           </div>
@@ -97,7 +97,7 @@
             title="AI 增强"
             @click="onEnhance(w.id)"
           ><el-icon><MagicStick /></el-icon></button>
-          <button class="op" v-if="w.status === 'failed'" title="打开日志" @click="onOpenLog(w.id)"><el-icon><Document /></el-icon></button>
+          <button class="op" v-if="w.status === 'failed'" :title="translateUiText('打开日志')" @click="onOpenLog(w.id)"><el-icon><Document /></el-icon></button>
           <button
             v-if="w.workflow !== 'realtime_cover'"
             class="op"
@@ -141,6 +141,7 @@ import {
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
 import { useWorksStore } from '@/stores/works'
+import { translateUiText } from '@/i18n'
 import type { JobStatus, WorkAudioExportFormat } from '@/api'
 
 defineOptions({ name: 'WorksPage' })

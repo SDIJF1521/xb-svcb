@@ -1,11 +1,22 @@
 <template>
-  <router-view />
+  <el-config-provider :locale="elementLocale">
+    <router-view />
+  </el-config-provider>
 </template>
 
-<script>
-export default {
-  name: 'App',
-}
+<script setup lang="ts">
+import { computed } from 'vue'
+import en from 'element-plus/es/locale/lang/en'
+import ja from 'element-plus/es/locale/lang/ja'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import { useI18n } from '@/i18n'
+
+defineOptions({ name: 'App' })
+
+const { locale } = useI18n()
+const elementLocale = computed(() => (
+  locale.value === 'en-US' ? en : locale.value === 'ja-JP' ? ja : zhCn
+))
 </script>
 
 <style>
@@ -181,6 +192,9 @@ html[data-theme='custom'] {
   --xb-particle-opacity: 0.62;
   --xb-particle-size: 3.2px;
 }
+
+html[lang^='en'] { --xb-font: Inter, 'Segoe UI', system-ui, sans-serif; }
+html[lang^='ja'] { --xb-font: 'Yu Gothic UI', 'Meiryo UI', Meiryo, system-ui, sans-serif; }
 
 /* Element Plus 默认变量定义在 :root；使用更高优先级覆盖，避免控件回到白底默认主题。 */
 html:root,

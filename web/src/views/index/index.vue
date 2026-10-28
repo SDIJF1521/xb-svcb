@@ -159,20 +159,20 @@
           </div>
           <div class="tool-info">
             <div class="tool-name">
-              <span class="tool-name-text">{{ t.name }}</span>
+              <span class="tool-name-text">{{ translateUiText(t.name) }}</span>
               <span class="tool-ver" :title="t.version">{{ t.version }}</span>
             </div>
-            <div class="tool-desc">{{ t.desc }}</div>
-            <span class="tool-status" :class="t.ok ? 'ok' : 'warn'" :title="t.status">
+            <div class="tool-desc">{{ translateUiText(t.desc) }}</div>
+            <span class="tool-status" :class="t.ok ? 'ok' : 'warn'" :title="translateUiText(t.status)">
               <el-icon><component :is="t.ok ? CircleCheckFilled : WarningFilled" /></el-icon>
-              <span class="tool-status-text">{{ t.status }}</span>
+              <span class="tool-status-text">{{ translateUiText(t.status) }}</span>
             </span>
             <router-link
               v-if="t.key === 'pymss' && !t.ok"
               class="tool-action"
               :to="{ path: '/models', query: { tab: 'pymss' } }"
             >
-              <el-icon><FolderOpened /></el-icon>模型管理
+              <el-icon><FolderOpened /></el-icon>{{ translateUiText('模型管理') }}
             </router-link>
           </div>
         </div>
@@ -291,6 +291,7 @@ import { api } from '@/api'
 import type { DataMigrationProgress, DataStorageStatus, JobStatus, WorkAudioExportFormat } from '@/api'
 import { setPendingAudio } from '@/utils/pendingAudio'
 import { importDroppedAudio } from '@/utils/audioImport'
+import { translateUiText } from '@/i18n'
 
 defineOptions({ name: 'Index' })
 
@@ -1097,6 +1098,18 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+:global(html[data-locale='en-US'] .tool-status),
+:global(html[data-locale='ja-JP'] .tool-status) {
+  width: 100%;
+  border-radius: 8px;
+}
+:global(html[data-locale='en-US'] .tool-status-text),
+:global(html[data-locale='ja-JP'] .tool-status-text) {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  line-height: 1.35;
 }
 .tool-status.ok { color: var(--xb-success); background: rgba(var(--xb-success-rgb), 0.12); }
 .tool-status.warn { color: var(--xb-warn); background: rgba(var(--xb-warn-rgb), 0.12); }
