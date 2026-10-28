@@ -77,7 +77,7 @@ interface GuideStep {
   prepare?: 'multi' | 'multi-timeline' | 'enhancement' | 'open-player'
 }
 
-const STORAGE_KEY = 'xb-first-use-guide-v3'
+const STORAGE_KEY = 'xb-first-use-guide-v4'
 const router = useRouter()
 const route = useRoute()
 const visible = ref(false)
@@ -86,8 +86,12 @@ const currentStep = ref(0)
 const hasTarget = ref(false)
 const targetRect = ref<DOMRect | null>(null)
 let focusRaf = 0
+let trackingRaf = 0
+let targetElement: HTMLElement | null = null
+let targetResizeObserver: ResizeObserver | null = null
+let targetMutationObserver: MutationObserver | null = null
 
-const steps: GuideStep[] = [
+const allSteps: GuideStep[] = [
   { section: '首页 · 01', targetLabel: 'AI 翻唱快捷入口', title: '从这里开始一次完整翻唱', description: 'AI 翻唱工作台负责导入歌曲、选择音色、设置推理并生成作品。点击快捷入口进入空白工作台；从首页拖入音频则会把该文件一并带入。', details: [{ label: '点击卡片', value: '进入空白工作台' }, { label: '拖拽音频', value: '自动跳转并预填这首歌' }], route: '/', selector: '[data-guide="home-ai-cover"]', placement: 'right', icon: Microphone },
   { section: '首页 · 02', targetLabel: '首页音频拖拽区', title: '拖入音频会自动带入翻唱', description: '把歌曲拖到首页这个区域，软件会校验格式，然后跳转到 AI 翻唱并显示刚才的文件。直接点击区域仍然只是打开空白工作台。', details: [{ label: '格式', value: 'MP3、WAV、FLAC、M4A、OGG、AAC' }, { label: '大小', value: '不设固定大小上限' }], route: '/', selector: '[data-guide="home-dropzone"]', placement: 'bottom', icon: UploadFilled },
   { section: '翻唱工作台 · 03', targetLabel: '单模型 / 多模型模式', title: '先决定整首歌还是逐句分配', description: '单模型适合整首歌保持一个音色，步骤少、最容易成功。多模型会显示歌词时间轴，可以按句选择不同音色，也可以多选形成合唱。', details: [{ label: '单模型', value: '整首统一音色，适合快速生成' }, { label: '多模型', value: '逐句分配模型，适合角色切换与和声' }, { label: '切换', value: '已填写的歌曲与常用参数会保留' }], route: '/create', selector: '[data-guide="cover-mode"]', placement: 'right', icon: Operation },
@@ -126,6 +130,9 @@ const steps: GuideStep[] = [
   { section: 'API 接入 · 42', targetLabel: '调用文档', title: '按文档接入上传、任务和下载', description: '调用文档提供 Python 和 PowerShell 示例，以及完整的 v1 接口列表。典型流程是上传音频、读取模型、创建任务、轮询状态，最后下载成品。', details: [{ label: '示例', value: '切换语言后复制完整请求代码' }, { label: '异步任务', value: '创建返回 202，轮询到 done 再下载' }, { label: '接口', value: '健康检查、模型、上传、任务、结果和重试' }], route: '/api', selector: '[data-guide="api-docs"]', placement: 'top', icon: FolderOpened },
 ]
 
+// Keep the first-use tour focused on the shortest path to a generated cover.
+const steps = allSteps.slice(0, 10)
+
 const activeStep = computed(() => steps[currentStep.value] ?? steps[0]!)
 const focusStyle = computed(() => {
   const rect = targetRect.value
@@ -162,16 +169,29 @@ function wait(ms: number) { return new Promise<void>((resolve) => window.setTime
 function findTarget() {
   const selectors = activeStep.value.selector.split(',').map((item) => item.trim()).filter(Boolean)
   for (const selector of selectors) {
-    const target = document.querySelector<HTMLElement>(selector)
-    if (target) return target
+    const targets = document.querySelectorAll<HTMLElement>(selector)
+    for (const target of targets) {
+      const rect = target.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0 && getComputedStyle(target).visibility !== 'hidden') return target
+    }
   }
   return null
+}
+
+function observeTarget(target: HTMLElement | null) {
+  if (target === targetElement) return
+  targetResizeObserver?.disconnect()
+  targetElement = target
+  if (!target || typeof ResizeObserver === 'undefined') return
+  targetResizeObserver = new ResizeObserver(() => updateFocus())
+  targetResizeObserver.observe(target)
 }
 
 async function locateTarget() {
   locating.value = true
   hasTarget.value = false
   targetRect.value = null
+  observeTarget(null)
   let target: HTMLElement | null = null
   for (let attempt = 0; attempt < 75; attempt += 1) {
     target = findTarget()
@@ -179,10 +199,15 @@ async function locateTarget() {
     await wait(40)
   }
   if (target) {
+    observeTarget(target)
     target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
     await wait(220)
-    targetRect.value = target.getBoundingClientRect()
-    hasTarget.value = targetRect.value.width > 0 && targetRect.value.height > 0
+    // Conditional Vue blocks can replace the node while the page scrolls.
+    target = findTarget()
+    observeTarget(target)
+    const rect = target?.getBoundingClientRect() ?? null
+    targetRect.value = rect
+    hasTarget.value = !!rect && rect.width > 0 && rect.height > 0
   }
   locating.value = false
 }
@@ -261,6 +286,11 @@ function finish() {
   visible.value = false
   hasTarget.value = false
   targetRect.value = null
+  targetResizeObserver?.disconnect()
+  targetMutationObserver?.disconnect()
+  targetElement = null
+  if (trackingRaf) cancelAnimationFrame(trackingRaf)
+  trackingRaf = 0
   try {
     localStorage.setItem(STORAGE_KEY, '1')
   } catch {
@@ -271,13 +301,41 @@ function finish() {
 function skip() { finish() }
 
 function updateFocus() {
-  if (!visible.value || !hasTarget.value) return
+  if (!visible.value) return
   if (focusRaf) cancelAnimationFrame(focusRaf)
   focusRaf = requestAnimationFrame(() => {
     focusRaf = 0
     const target = findTarget()
-    if (target) targetRect.value = target.getBoundingClientRect()
+    observeTarget(target)
+    if (target) {
+      targetRect.value = target.getBoundingClientRect()
+      hasTarget.value = targetRect.value.width > 0 && targetRect.value.height > 0
+    } else {
+      targetRect.value = null
+      hasTarget.value = false
+    }
   })
+}
+
+function trackTargetPosition() {
+  trackingRaf = 0
+  if (!visible.value) return
+  let target = targetElement && targetElement.isConnected ? targetElement : null
+  if (target) {
+    const currentRect = target.getBoundingClientRect()
+    if (currentRect.width <= 0 || currentRect.height <= 0) target = null
+  }
+  target ||= findTarget()
+  if (target) {
+    observeTarget(target)
+    const rect = target.getBoundingClientRect()
+    const previous = targetRect.value
+    if (!previous || previous.top !== rect.top || previous.left !== rect.left || previous.width !== rect.width || previous.height !== rect.height) {
+      targetRect.value = rect
+      hasTarget.value = rect.width > 0 && rect.height > 0
+    }
+  }
+  trackingRaf = requestAnimationFrame(trackTargetPosition)
 }
 
 watch(() => route.path, () => {
@@ -286,7 +344,11 @@ watch(() => route.path, () => {
 
 onMounted(() => {
   window.addEventListener('resize', updateFocus, { passive: true })
-  window.addEventListener('scroll', updateFocus, { passive: true })
+  window.addEventListener('scroll', updateFocus, { passive: true, capture: true })
+  if (typeof MutationObserver !== 'undefined') {
+    targetMutationObserver = new MutationObserver(() => updateFocus())
+    targetMutationObserver.observe(document.body, { childList: true, subtree: true })
+  }
   let shouldShow = false
   try {
     shouldShow = localStorage.getItem(STORAGE_KEY) !== '1'
@@ -296,6 +358,7 @@ onMounted(() => {
   if (shouldShow) {
     window.setTimeout(() => {
       visible.value = true
+      trackingRaf = requestAnimationFrame(trackTargetPosition)
       void goToStep(0)
     }, 240)
   }
@@ -303,8 +366,12 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', updateFocus)
-  window.removeEventListener('scroll', updateFocus)
+  window.removeEventListener('scroll', updateFocus, true)
+  targetResizeObserver?.disconnect()
+  targetMutationObserver?.disconnect()
+  targetElement = null
   if (focusRaf) cancelAnimationFrame(focusRaf)
+  if (trackingRaf) cancelAnimationFrame(trackingRaf)
 })
 </script>
 

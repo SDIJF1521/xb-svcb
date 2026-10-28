@@ -5,7 +5,7 @@
       <div>
         <p class="eyebrow">// AI 翻唱</p>
         <h1>歌声转换工作台</h1>
-        <p class="page-sub">上传歌曲 → 选择 S模型 → 调整参数 → 一键生成翻唱</p>
+        <p class="page-sub">上传歌曲 → 选择模型 → 调整参数 → 一键生成翻唱</p>
       </div>
     </div>
 
