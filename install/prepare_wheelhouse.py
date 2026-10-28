@@ -1040,6 +1040,8 @@ def _download_batch(root: Path, installer, batch: DownloadBatch) -> None:
             )
     if "rvc-python==0.1.5+xb312" in batch.packages:
         spec = importlib.util.spec_from_file_location("xb_rvc_compat_build", Path(__file__).with_name("build_rvc_compat.py"))
+        if spec is None or spec.loader is None:
+            raise RuntimeError("无法加载 RVC 兼容构建模块")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         module.prepare(batch.dest, [batch.dest])

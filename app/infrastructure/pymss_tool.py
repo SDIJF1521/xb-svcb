@@ -174,6 +174,9 @@ class PymssTool:
         """Download one catalog model through PyMSS's ModelScope downloader."""
         if not self.available:
             return {"ok": False, "error": "PyMSS 环境未安装"}
+        model_dir = config.PYMSS_MODEL_DIR
+        if model_dir is None:
+            return {"ok": False, "error": "PyMSS 模型目录未配置"}
         name = str(model or config.PYMSS_DEFAULT_MODEL).strip()
         if not name:
             return {"ok": False, "error": "未指定 PyMSS 模型"}
@@ -203,7 +206,7 @@ class PymssTool:
         cmd = [
             str(config.PYMSS_PYTHON), str(config.PYMSS_WORKER),
             "--download", "--model", name,
-            "--model-dir", str(config.PYMSS_MODEL_DIR),
+            "--model-dir", str(model_dir),
         ]
         if out_dir:
             cmd.extend(["--out-dir", str(out_dir)])
@@ -222,7 +225,7 @@ class PymssTool:
             return {"ok": False, "error": f"PyMSS 模型下载启动失败: {exc}"}
         if proc.returncode != 0:
             return {"ok": False, "error": self._error_tail(proc.stdout, proc.stderr)}
-        marker_dir = config.PYMSS_MODEL_DIR / ".xb-downloaded"
+        marker_dir = model_dir / ".xb-downloaded"
         try:
             marker_dir.mkdir(parents=True, exist_ok=True)
             marker = marker_dir / f"{Path(name).stem.lower()}.json"

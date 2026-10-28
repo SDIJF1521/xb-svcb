@@ -1,0 +1,36 @@
+{
+  "include": [
+    "app",
+    "install",
+    "installer",
+    "plugin-sdk/python"
+  ],
+  "exclude": [
+    "**/.venv",
+    "**/.venv-*",
+    "**/__pycache__",
+    "**/site-packages",
+    "app/tests",
+    "build",
+    "dist",
+    "engines",
+    "native/**/build",
+    "runtimes",
+    "test-plugins",
+    "tests",
+    "web"
+  ],
+  "ignore": [
+    "app/tests",
+    "app/infrastructure/*_worker.py"
+  ],
+  "pythonVersion": "3.12",
+  "venvPath": "app",
+  "venv": ".venv",
+  "typeCheckingMode": "basic",
+  "extraPaths": [
+    "app",
+    "plugin-sdk/python",
+    "runtimes/core-cu126/Lib/site-packages"
+  ]
+}

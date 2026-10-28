@@ -83,6 +83,8 @@ def main() -> None:
             background_color=config.APP_BG,
             text_select=False,
         )
+        if window is None:
+            raise RuntimeError("无法创建应用窗口")
         # 注入窗口引用，供原生文件对话框使用
         api.set_window(window)
 

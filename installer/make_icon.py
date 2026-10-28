@@ -36,7 +36,7 @@ def main() -> None:
     src = Image.open(SRC)
     sq = squarify(src)
     # 高质量放大到 256 作为基准
-    base = sq.resize((256, 256), Image.LANCZOS)
+    base = sq.resize((256, 256), Image.Resampling.LANCZOS)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     base.save(OUT, format="ICO", sizes=[(s, s) for s in SIZES])
     base.save(OUT.with_suffix(".png"))

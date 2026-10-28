@@ -68,12 +68,15 @@ class UvrTool:
                 raise RuntimeError(f"已选择 {accelerator_label}，但 UVR 分离环境未就绪")
             return SeparationResult(vocals=Path(src), instrumental=None, simulated=True)
 
-        model_name = model if model and (config.UVR_MODEL_DIR / model).exists() else config.UVR_MODEL
+        model_dir = config.UVR_MODEL_DIR
+        if model_dir is None:
+            raise RuntimeError("UVR 模型目录未配置")
+        model_name = model if model and (model_dir / model).exists() else config.UVR_MODEL
         cmd = [
             str(config.UVR_PYTHON),
             str(config.UVR_WORKER),
             "--model-dir",
-            str(config.UVR_MODEL_DIR),
+            str(model_dir),
             "--model",
             model_name,
             "--input",
@@ -142,7 +145,10 @@ class UvrTool:
         """Keep UVR loaded while processing mixed system-audio blocks."""
         if not self.available:
             raise RuntimeError("实时人声分离环境或模型未就绪")
-        model_name = model if model and (config.UVR_MODEL_DIR / model).exists() else config.UVR_MODEL
+        model_dir = config.UVR_MODEL_DIR
+        if model_dir is None:
+            raise RuntimeError("UVR 模型目录未配置")
+        model_name = model if model and (model_dir / model).exists() else config.UVR_MODEL
         directory = Path(out_dir or config.TEMP_DIR / "realtime-uvr")
         directory.mkdir(parents=True, exist_ok=True)
         requested_device = str(device or "auto").strip().lower()
@@ -152,7 +158,7 @@ class UvrTool:
             str(config.UVR_PYTHON),
             str(config.UVR_WORKER),
             "--server",
-            "--model-dir", str(config.UVR_MODEL_DIR),
+            "--model-dir", str(model_dir),
             "--model", model_name,
             "--out-dir", str(directory),
             "--device", requested_device,

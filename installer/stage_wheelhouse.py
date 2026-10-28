@@ -67,12 +67,19 @@ def validate_rocm_wheels(directory: Path) -> None:
                 tree = ast.parse(archive.read("torch/version.py").decode("utf-8"))
             versions = {}
             for node in tree.body:
-                targets = node.targets if isinstance(node, ast.Assign) else (
-                    [node.target] if isinstance(node, ast.AnnAssign) else []
-                )
+                if isinstance(node, ast.Assign):
+                    targets = node.targets
+                    value = node.value
+                elif isinstance(node, ast.AnnAssign):
+                    targets = [node.target]
+                    value = node.value
+                else:
+                    continue
+                if value is None:
+                    continue
                 for target in targets:
                     if isinstance(target, ast.Name) and target.id in {"hip", "rocm"}:
-                        versions[target.id] = ast.literal_eval(node.value)
+                        versions[target.id] = ast.literal_eval(value)
             hip, rocm = versions.get("hip"), versions.get("rocm")
             if not isinstance(hip, str) or not hip or not isinstance(rocm, str) or rocm.split(".")[0] != "10":
                 raise ValueError(f"expected ROCm 10 with HIP, got ROCm {rocm!r}, HIP {hip!r}")

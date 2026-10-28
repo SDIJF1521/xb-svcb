@@ -26,6 +26,8 @@ MAX_TOTAL_BYTES = 200 * 1024 * 1024
 
 def recipe_module(root: Path):
     spec = importlib.util.spec_from_file_location("xb_core_recipe", root / "install/core_recipe.py")
+    if spec is None or spec.loader is None:
+        raise RuntimeError("无法加载核心安装配方")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -154,6 +156,8 @@ def validate(root: Path, sandbox: Path, uv: str, fill_small_cache: bool,
             if match:
                 filename = urllib.parse.unquote(urllib.parse.urlparse(match[0]).path.rsplit("/", 1)[-1])
                 spec = importlib.util.spec_from_file_location("xb_recover_cache", root / "install/recover_cached_wheel.py")
+                if spec is None or spec.loader is None:
+                    raise RuntimeError("无法加载 wheel 缓存恢复模块")
                 recovery = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(recovery)
                 try:
@@ -267,8 +271,9 @@ def validate_compat_only(root: Path, sandbox: Path, uv: str) -> dict:
 
 def main() -> int:
     for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--sandbox", type=Path, required=True)

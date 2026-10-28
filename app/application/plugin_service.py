@@ -224,7 +224,9 @@ class PluginService:
         runtime = str(manifest.get("runtime") or "frontend")
         if runtime not in {"python", "hybrid"}:
             return {"ready": True, "error": ""}
-        entry = str(((manifest.get("python") or {}).get("entry") or "")).strip()
+        raw_python = manifest.get("python")
+        python_config = raw_python if isinstance(raw_python, dict) else {}
+        entry = str(python_config.get("entry") or "").strip()
         entry_path = PluginService._safe_plugin_file(folder, entry, {".py"})
         if not entry_path:
             return {"ready": False, "error": "Python 入口不存在或路径非法"}
@@ -233,7 +235,6 @@ class PluginService:
                 return {"ready": False, "error": "Python 入口超过 2 MB 限制"}
         except OSError:
             return {"ready": False, "error": "无法读取 Python 入口"}
-        python_config = manifest.get("python") if isinstance(manifest.get("python"), dict) else {}
         requirements = str(python_config.get("requirements") or "").strip()
         if requirements and not PluginService._safe_plugin_file(folder, requirements, {".txt"}):
             return {"ready": False, "error": "Python requirements 文件不存在或路径非法"}
@@ -456,8 +457,10 @@ class PluginService:
         if any(not self._valid_action(action) for action in actions if isinstance(action, dict)) or any(not isinstance(action, dict) for action in actions):
             return None
         runtime = str(item.get("runtime") or "frontend")
-        python_config = item.get("python") if isinstance(item.get("python"), dict) else {}
-        frontend_config = item.get("frontend") if isinstance(item.get("frontend"), dict) else {}
+        raw_python = item.get("python")
+        python_config = raw_python if isinstance(raw_python, dict) else {}
+        raw_frontend = item.get("frontend")
+        frontend_config = raw_frontend if isinstance(raw_frontend, dict) else {}
         permissions = item.get("permissions", [])
         if runtime not in _ALLOWED_RUNTIMES:
             return None
@@ -521,7 +524,9 @@ class PluginService:
         if not config.PLUGIN_WORKER.is_file() or not config.PLUGIN_SDK_DIR.is_dir():
             return {"ok": False, "error": "Python 插件 Worker 或 SDK 缺失。"}
         plugin_dir = Path(plugin["path"]).resolve()
-        entry = (plugin_dir / str((plugin.get("python") or {}).get("entry") or "")).resolve()
+        raw_python = plugin.get("python")
+        python_config = raw_python if isinstance(raw_python, dict) else {}
+        entry = (plugin_dir / str(python_config.get("entry") or "")).resolve()
         if plugin_dir not in entry.parents or not entry.is_file():
             return {"ok": False, "error": "Python 插件入口不存在或路径非法。"}
         try:
@@ -529,7 +534,6 @@ class PluginService:
                 return {"ok": False, "error": "Python 插件入口超过 2 MB 限制。"}
         except OSError:
             return {"ok": False, "error": "无法读取 Python 插件入口。"}
-        python_config = plugin.get("python") if isinstance(plugin.get("python"), dict) else {}
         requirements = str(python_config.get("requirements") or "").strip()
         requirements_path = self._safe_plugin_file(plugin_dir, requirements, {".txt"}) if requirements else None
         if requirements and not requirements_path:

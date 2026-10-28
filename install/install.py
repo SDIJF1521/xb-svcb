@@ -334,6 +334,8 @@ def _recipe_module():
     # Load the sibling file even when embedded/imported outside the repo root.
     # Do not rely on another test or caller having modified sys.path.
     spec = importlib.util.spec_from_file_location("xb_installer_core_recipe", Path(__file__).with_name("core_recipe.py"))
+    if spec is None or spec.loader is None:
+        raise RuntimeError("无法加载安装配方 core_recipe.py")
     recipe = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(recipe)
     return recipe
@@ -2021,6 +2023,7 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
 
     # audio-separator 的不同 extra 分别部署 CUDA / DirectML / CPU provider。
     if use_cuda:
+        assert torch_index is not None
         # 安装 audio-separator 时也带上 PyTorch wheel 源，避免依赖解析把 CUDA torch 换成 PyPI CPU 版。
         # onnx2torch-py313 declares a broad torchvision range; without constraints
         # uv may select a newer torchvision whose metadata forces a newer,
@@ -3080,6 +3083,8 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
 
 def _prepare_rvc_compat(gpu_stack: str) -> Path:
     spec = importlib.util.spec_from_file_location("xb_rvc_compat", Path(__file__).with_name("build_rvc_compat.py"))
+    if spec is None or spec.loader is None:
+        raise RuntimeError("无法加载 RVC 兼容构建模块")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.prepare(

@@ -61,7 +61,7 @@ class SingleInstance:
             ok = False
         return focus_window(self.window_title) or ok
 
-    def start_listener(self, on_focus: Callable[[], None]) -> None:
+    def start_listener(self, on_focus: Callable[[], object]) -> None:
         if os.name != "nt":
             return
         try:

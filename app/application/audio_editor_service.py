@@ -25,7 +25,10 @@ from infrastructure.juce_vst3_host import JuceVst3Host
 from infrastructure.pymss_tool import PymssTool
 from infrastructure.storage import ListRepository
 from infrastructure.uvr_tool import UvrTool
-from infrastructure.vocal_enhancement import VocalEnhancementProcessor
+from infrastructure.vocal_enhancement import (
+    VocalEnhancementControls,
+    VocalEnhancementProcessor,
+)
 
 from .model_service import ModelService
 
@@ -1524,7 +1527,16 @@ class AudioEditorService:
         effect = self._find_effect(target, effect_id)
         if not effect:
             return {"ok": False, "error": "效果器不存在", **self._plugin_host.status()}
-        monitor = self._prepare_plugin_monitor(project, track, clip, effect_id) if scope == "clip" else {}
+        if scope == "clip":
+            if not isinstance(track, dict) or not isinstance(clip, dict):
+                return {
+                    "ok": False,
+                    "error": "片段不存在",
+                    **self._plugin_host.status(),
+                }
+            monitor = self._prepare_plugin_monitor(project, track, clip, effect_id)
+        else:
+            monitor = {}
         result = self._plugin_host.show_editor(
             effect,
             project_id=project_id,
@@ -2881,7 +2893,7 @@ class AudioEditorService:
 
         cfg = options or {}
         level = "advanced" if str(cfg.get("level") or "advanced").lower() == "advanced" else "basic"
-        strengths = {
+        strengths: VocalEnhancementControls = {
             "pitch_correction": self._vocal_enhancement.normalize_strength(
                 cfg.get("pitch_correction", 0.45), 0.45
             ),

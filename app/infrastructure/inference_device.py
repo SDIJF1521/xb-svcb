@@ -255,12 +255,18 @@ def patch_directml_audio_ops(torch: Any) -> None:
         return result.to(target)
 
     def fft_compat(input_tensor: Any, *args: Any, **kwargs: Any) -> Any:
+        if original_fft is None:
+            raise RuntimeError("torch.fft.fft is unavailable")
         return complex_fft_compat(original_fft, input_tensor, *args, **kwargs)
 
     def rfft_compat(input_tensor: Any, *args: Any, **kwargs: Any) -> Any:
+        if original_rfft is None:
+            raise RuntimeError("torch.fft.rfft is unavailable")
         return complex_fft_compat(original_rfft, input_tensor, *args, **kwargs)
 
     def irfft_compat(input_tensor: Any, *args: Any, **kwargs: Any) -> Any:
+        if original_irfft is None:
+            raise RuntimeError("torch.fft.irfft is unavailable")
         if isinstance(input_tensor, _DirectMLComplexTensor):
             result = original_irfft(
                 input_tensor.tensor,

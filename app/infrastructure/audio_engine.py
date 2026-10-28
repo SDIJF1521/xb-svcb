@@ -181,12 +181,16 @@ class FFmpegEngine:
             if not isinstance(track, dict) or track.get("mute"):
                 continue
             groups: dict[str, list[dict[str, Any]]] = {}
-            track_metadata = track.get("metadata") if isinstance(track.get("metadata"), dict) else {}
+            raw_track_metadata = track.get("metadata")
+            track_metadata = (
+                raw_track_metadata if isinstance(raw_track_metadata, dict) else {}
+            )
             track_role_id = str(track_metadata.get("role_id") or "")
             for clip in track.get("clips", []) or []:
                 if not isinstance(clip, dict) or clip.get("mute"):
                     continue
-                metadata = clip.get("metadata") if isinstance(clip.get("metadata"), dict) else {}
+                raw_metadata = clip.get("metadata")
+                metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
                 role_id = str(metadata.get("role_id") or track_role_id)
                 role = roles.get(role_id)
                 group_key = role_id if role and self._has_enabled_effects(role.get("effects")) else "__dry__"
@@ -208,7 +212,7 @@ class FFmpegEngine:
                 if not dry_bus.exists() and not self._render_flat_timeline(group_project, dry_bus, cache_dir, "wav"):
                     return False
                 role = roles.get(group_key)
-                role_effects = role.get("effects") if role else []
+                role_effects = self._effect_list(role.get("effects") if role else None)
                 if self._has_enabled_effects(role_effects):
                     fx_hash = self.cache_key({"input": group_hash, "effects": role_effects})
                     wet_bus = cache_dir / f"bus_role_fx_{fx_hash}.wav"
@@ -244,7 +248,7 @@ class FFmpegEngine:
             ):
                 return False
 
-            track_effects = track.get("effects")
+            track_effects = self._effect_list(track.get("effects"))
             if self._has_enabled_effects(track_effects):
                 fx_hash = self.cache_key({"input": track_hash, "effects": track_effects})
                 wet_track = cache_dir / f"bus_track_fx_{fx_hash}.wav"
@@ -268,6 +272,12 @@ class FFmpegEngine:
             cache_dir,
             output_format,
         )
+
+    @staticmethod
+    def _effect_list(raw: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw, list):
+            return []
+        return [item for item in raw if isinstance(item, dict)]
 
     @staticmethod
     def _has_enabled_effects(raw: Any) -> bool:

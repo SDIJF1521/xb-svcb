@@ -9,8 +9,22 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from typing import Callable, TypedDict
 
 import config
+
+
+class VocalEnhancementControls(TypedDict):
+    """Validated strengths accepted by :meth:`VocalEnhancementProcessor.enhance`."""
+
+    pitch_correction: float
+    timing_alignment: float
+    timbre_focus: float
+    ai_eq: float
+    ai_compressor: float
+    ai_exciter: float
+    stereo_width: float
+    loudness_envelope: float
 
 
 class VocalEnhancementProcessor:
@@ -63,7 +77,7 @@ class VocalEnhancementProcessor:
         loudness_envelope: float = DEFAULT_LOUDNESS_ENVELOPE,
         skip_repair: bool = False,
         preserve_model_high_band: bool = False,
-        progress_callback=None,
+        progress_callback: Callable[[int], None] | None = None,
     ) -> Path:
         normalized_level = str(level or self.LEVEL_BASIC).strip().lower()
         if normalized_level not in self.LEVELS:
@@ -189,16 +203,20 @@ class VocalEnhancementProcessor:
                         raise subprocess.TimeoutExpired(cmd, 3600)
                     time.sleep(0.5)
                 stdout, stderr = proc.communicate()
-                proc.stdout = stdout
-                proc.stderr = stderr
+                completed = subprocess.CompletedProcess(
+                    cmd,
+                    int(proc.returncode or 0),
+                    stdout,
+                    stderr,
+                )
             except (OSError, subprocess.SubprocessError) as exc:
                 raise RuntimeError(f"AI 歌声增强子进程启动失败: {exc}") from exc
 
-            self._append_log(log_file, cmd, proc, "AI 歌声增强")
-            if proc.returncode != 0 or not output.is_file():
-                detail = self._error_tail(proc.stdout, proc.stderr)
+            self._append_log(log_file, cmd, completed, "AI 歌声增强")
+            if completed.returncode != 0 or not output.is_file():
+                detail = self._error_tail(completed.stdout, completed.stderr)
                 raise RuntimeError(
-                    f"AI 歌声增强失败（子进程退出码 {proc.returncode}）: {detail}"
+                    f"AI 歌声增强失败（子进程退出码 {completed.returncode}）: {detail}"
                 )
         return output
 

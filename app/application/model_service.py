@@ -195,13 +195,14 @@ class ModelService:
                 return None
             if is_seedvc or is_ddsp:
                 companion = payload.get("diffusion_model")
-                diffusion_model = copy(companion, f"companion_{Path(companion).name}" if companion else None)
+                companion_name = f"companion_{Path(str(companion)).name}" if companion else None
+                diffusion_model = copy(companion, companion_name)
                 diffusion_config = copy(payload.get("diffusion_config"), "companion_config.yaml") if is_ddsp else None
                 if (companion and diffusion_model is None) or (is_ddsp and companion and diffusion_config is None):
                     shutil.rmtree(dst_dir, ignore_errors=True)
                     return None
                 try:
-                    self._preserve_model_assets(Path(main_config_src), Path(main_config.path))
+                    self._preserve_model_assets(Path(str(main_config_src)), Path(main_config.path))
                     if diffusion_config:
                         self._preserve_model_assets(Path(payload["diffusion_config"]), Path(diffusion_config.path))
                 except (OSError, ValueError):
@@ -321,7 +322,10 @@ class ModelService:
 
         visit(data)
         if copied:
-            destination.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            serialized = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+            if not isinstance(serialized, str):
+                raise TypeError("YAML serializer did not return text")
+            destination.write_text(serialized, encoding="utf-8")
 
     @staticmethod
     def _infer_pitch_profile(config_path: str, framework: str) -> dict[str, float] | None:

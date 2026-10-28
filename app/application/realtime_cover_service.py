@@ -451,8 +451,8 @@ class RealtimeCoverService:
     def _run_system(self, session_id: str) -> None:
         session = self._sessions[session_id]
         directory = Path(session["directory"])
-        worker = None
-        separator = None
+        worker: Any | None = None
+        separator: Any | None = None
         try:
             import numpy as np
 

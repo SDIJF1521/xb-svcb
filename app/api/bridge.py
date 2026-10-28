@@ -19,7 +19,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import config
 from application import (
@@ -1939,7 +1939,7 @@ class Api:
             if window is None:
                 return []
             result = window.create_file_dialog(
-                webview.OPEN_DIALOG,
+                cast(int, webview.OPEN_DIALOG),
                 allow_multiple=multiple,
                 file_types=file_types,
             )
@@ -1959,7 +1959,7 @@ class Api:
             if window is None:
                 return ""
             result = window.create_file_dialog(
-                webview.SAVE_DIALOG,
+                cast(int, webview.SAVE_DIALOG),
                 save_filename=filename,
             )
             if not result:
@@ -1977,7 +1977,7 @@ class Api:
                 window = webview.windows[0]
             if window is None:
                 return ""
-            result = window.create_file_dialog(webview.FOLDER_DIALOG)
+            result = window.create_file_dialog(cast(int, webview.FOLDER_DIALOG))
             if not result:
                 return ""
             return result if isinstance(result, str) else str(result[0])
