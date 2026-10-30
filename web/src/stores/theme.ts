@@ -50,6 +50,7 @@ const STORAGE_KEY = 'xb-theme'
 const CUSTOM_STORAGE_KEY = 'xb-custom-theme'
 const THEME_TRANSITION_DURATION = 480
 const THEME_TRANSITION_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)'
+let themeTransitionGeneration = 0
 
 const HEX_RE = /^#[0-9a-f]{6}$/i
 
@@ -448,17 +449,37 @@ function animateSnapshotReveal(overlay: HTMLElement, x: number, y: number, radiu
   })
 }
 
+function clearThemeTransitionArtifacts() {
+  if (typeof document === 'undefined') return
+  document.querySelectorAll('.theme-snapshot-overlay').forEach((node) => node.remove())
+  document.documentElement.classList.remove('theme-transitioning', 'theme-transition-expand', 'theme-transition-contract')
+  for (const name of [
+    '--theme-transition-x',
+    '--theme-transition-y',
+    '--theme-transition-radius',
+    '--theme-transition-from-bg',
+    '--theme-transition-to-bg',
+  ]) {
+    document.documentElement.style.removeProperty(name)
+  }
+}
+
 function runThemeTransition(
   commit: () => void,
   event?: MouseEvent,
   direction: ThemeTransitionDirection = 'expand-new',
   onFinished: () => void = () => {},
 ) {
+  const generation = ++themeTransitionGeneration
   if (typeof document === 'undefined' || typeof window === 'undefined') {
     commit()
     onFinished()
     return
   }
+  // A second click can arrive while the browser is still running the
+  // previous transition. Drop its visual shell and make the latest state
+  // authoritative instead of letting startViewTransition reject the commit.
+  clearThemeTransitionArtifacts()
   if (shouldReduceMotion()) {
     commit()
     onFinished()
@@ -477,6 +498,7 @@ function runThemeTransition(
     document.documentElement.classList.add('theme-transitioning', layerClass)
 
     const cleanup = () => {
+      if (generation !== themeTransitionGeneration) return
       document.documentElement.classList.remove('theme-transitioning', layerClass)
       document.documentElement.style.removeProperty('--theme-transition-x')
       document.documentElement.style.removeProperty('--theme-transition-y')
@@ -515,7 +537,11 @@ function runThemeTransition(
       transition.finished.then(() => window.requestAnimationFrame(cleanup), cleanup)
       return
     } catch {
-      document.documentElement.classList.remove('theme-transitioning', layerClass)
+      // Chromium rejects overlapping view transitions. The state change must
+      // still happen even when the animation cannot be created.
+      commit()
+      cleanup()
+      return
     }
   }
 
@@ -531,8 +557,10 @@ function runThemeTransition(
     .then(() => animateSnapshotReveal(snapshot, x, y, radius))
     .finally(() => {
       snapshot.remove()
-      document.documentElement.classList.remove('theme-transitioning')
-      onFinished()
+      if (generation === themeTransitionGeneration) {
+        document.documentElement.classList.remove('theme-transitioning')
+        onFinished()
+      }
     })
 }
 

@@ -82,6 +82,38 @@ describe('theme transitions', () => {
     expect(document.documentElement.classList.contains('theme-transitioning')).toBe(false)
   })
 
+  it('commits the latest theme when a transition is interrupted by a rapid switch', async () => {
+    let finishTransition = () => {}
+    const finished = new Promise<void>((resolve) => {
+      finishTransition = resolve
+    })
+    let transitionCalls = 0
+    const startViewTransition = vi.fn((callback: () => void | Promise<void>): TestViewTransition => {
+      transitionCalls += 1
+      if (transitionCalls > 1) throw new Error('transition already running')
+      const ready = Promise.resolve(callback()).then(() => undefined)
+      return { ready, finished }
+    })
+
+    Object.defineProperty(document, 'startViewTransition', {
+      configurable: true,
+      value: startViewTransition,
+    })
+
+    const store = useThemeStore()
+    store.setTheme('cyber')
+    store.setTheme('anime')
+
+    expect(store.theme).toBe('anime')
+    expect(document.documentElement.dataset.theme).toBe('anime')
+    expect(startViewTransition).toHaveBeenCalledTimes(2)
+
+    finishTransition()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(document.documentElement.classList.contains('theme-transitioning')).toBe(false)
+  })
+
   it('applies and persists background media changes immediately', () => {
     localStorage.setItem('xb-theme', 'custom')
     localStorage.setItem('xb-custom-theme', JSON.stringify({

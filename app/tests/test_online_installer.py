@@ -116,6 +116,12 @@ def test_online_inno_script_localizes_and_verifies_downloads() -> None:
     assert "ForceDirectories(DownloadDirectory)" in script
     assert "CopyFile(TempPath, DestinationPath, False)" in script
     assert "DownloadedSetup := AddBackslash(DownloadDirectory) + SetupName" in script
+    assert "PlanPage := CreateCustomPage" in script
+    assert "OnlinePlanCache" in script
+    assert "GetSHA256OfFile(DestinationPath)" in script
+    assert "ManifestPrepared" in script
+    assert "if PendingArtifactCount = 0 then" in script
+    assert "OnlineInstalling" in script
 
     custom = script.split("[CustomMessages]", 1)[1].split("[Code]", 1)[0]
     catalogs: dict[str, set[str]] = {

@@ -57,8 +57,11 @@ watch(
   () => [customTheme.value.bgImage, customTheme.value.bgMediaType] as const,
   async ([media]) => {
     const ticket = ++mediaResolveTicket
+    // Do not keep rendering the previous file while the replacement is being
+    // resolved. This matters when the user changes backgrounds repeatedly:
+    // an older bridge request may finish after the newer selection.
+    customMediaSrc.value = ''
     if (!media) {
-      customMediaSrc.value = ''
       return
     }
     if (media.startsWith('data:')) {

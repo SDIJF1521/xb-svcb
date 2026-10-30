@@ -1,5 +1,5 @@
-; XB-SVCB online bootstrapper. It downloads one complete hardware-specific
-; offline installer set from a public HTTPS directory and launches it.
+; XB-SVCB online bootstrapper. It plans, resumes, verifies, and launches one
+; complete hardware-specific offline installer set from a public HTTPS directory.
 
 #define MyAppName "XB-SVCB"
 #define MyAppVersion "0.1.0"
@@ -98,6 +98,33 @@ ja.OnlineInstallerFailed=セットアップは正常に完了しませんでし�
 zhcn.OnlinePreparing=正在读取发布清单并准备下载…
 en.OnlinePreparing=Reading the release manifest and preparing downloads...
 ja.OnlinePreparing=リリースマニフェストを読み込み、ダウンロードを準備しています...
+zhcn.OnlinePlanTitle=确认安装计划
+en.OnlinePlanTitle=Review the installation plan
+ja.OnlinePlanTitle=インストール計画の確認
+zhcn.OnlinePlanSubtitle=安装器会准备完整离线安装包，然后启动正式安装向导
+en.OnlinePlanSubtitle=Setup prepares the complete offline package, then opens the full installation wizard
+ja.OnlinePlanSubtitle=完全なオフラインパッケージを準備してから、本体のインストールウィザードを開きます
+zhcn.OnlinePlanPrompt=请确认硬件版本和下载位置。已有并通过校验的分卷会自动复用，不会重复下载。
+en.OnlinePlanPrompt=Review the hardware build and download location. Existing verified volumes are reused automatically.
+ja.OnlinePlanPrompt=ハードウェア版と保存先を確認してください。検証済みの既存ファイルは自動的に再利用されます。
+zhcn.OnlinePlanHardware=硬件版本：%1
+en.OnlinePlanHardware=Hardware build: %1
+ja.OnlinePlanHardware=ハードウェア版: %1
+zhcn.OnlinePlanPackage=完整安装包：%1（%2 个文件）
+en.OnlinePlanPackage=Complete package: %1 (%2 files)
+ja.OnlinePlanPackage=完全パッケージ: %1 (%2 ファイル)
+zhcn.OnlinePlanCache=已缓存并验证：%1 个文件；本次需要下载：%2 个文件
+en.OnlinePlanCache=Verified in cache: %1 files; to download now: %2 files
+ja.OnlinePlanCache=キャッシュ検証済み: %1 ファイル。今回のダウンロード: %2 ファイル
+zhcn.OnlinePlanLocation=下载位置：%1
+en.OnlinePlanLocation=Download location: %1
+ja.OnlinePlanLocation=ダウンロード先: %1
+zhcn.OnlinePlanReady=准备就绪。点击“安装”后开始准备文件。
+en.OnlinePlanReady=Ready. Select Install to prepare the files.
+ja.OnlinePlanReady=準備完了です。「インストール」を選択してファイルを準備します。
+zhcn.OnlineInstalling=正在启动正式安装向导…
+en.OnlineInstalling=Launching the full installation wizard...
+ja.OnlineInstalling=本体のインストールウィザードを起動しています...
 
 [Code]
 const
@@ -106,12 +133,20 @@ const
 
 var
   HardwarePage: TInputOptionWizardPage;
+  PlanPage: TWizardPage;
+  PlanInfoLabel: TNewStaticText;
+  PlanDetailLabel: TNewStaticText;
   DownloadPage: TDownloadWizardPage;
   SelectedStack: String;
   DownloadDirectory: String;
   DownloadedSetup: String;
   DownloadedArtifactCount: Integer;
+  PendingArtifactCount: Integer;
+  CachedArtifactCount: Integer;
+  TotalArtifactBytes: Int64;
   DownloadedArtifactNames: array[0..MaxArtifactCount - 1] of String;
+  DownloadedArtifactCached: array[0..MaxArtifactCount - 1] of Boolean;
+  ManifestPrepared: Boolean;
   ArtifactsReady: Boolean;
 
 function M(const Key: String): String;
@@ -245,6 +280,60 @@ begin
     'XB-SVCB-Downloads\{#MyAppVersion}\' + SelectedStack;
 end;
 
+function FormatPackageSize(const Bytes: Int64): String;
+begin
+  if Bytes >= 1073741824 then
+    Result := IntToStr((Bytes + 1073741823) div 1073741824) + ' GB'
+  else
+    Result := IntToStr((Bytes + 1048575) div 1048576) + ' MB';
+end;
+
+function StackDisplayName(const Stack: String): String;
+begin
+  if Stack = 'cu126' then
+    Result := M('OnlineCuda126')
+  else if Stack = 'cu128' then
+    Result := M('OnlineCuda128')
+  else if Stack = 'rocm10' then
+    Result := M('OnlineRocm10')
+  else if Stack = 'directml' then
+    Result := M('OnlineDirectML')
+  else
+    Result := M('OnlineCpu');
+end;
+
+procedure ResetArtifactPlan();
+var
+  Index: Integer;
+begin
+  DownloadedArtifactCount := 0;
+  PendingArtifactCount := 0;
+  CachedArtifactCount := 0;
+  TotalArtifactBytes := 0;
+  for Index := 0 to MaxArtifactCount - 1 do
+  begin
+    DownloadedArtifactNames[Index] := '';
+    DownloadedArtifactCached[Index] := False;
+  end;
+end;
+
+procedure UpdatePlanPage();
+begin
+  if PlanInfoLabel = nil then
+    Exit;
+  PlanInfoLabel.Caption :=
+    M1('OnlinePlanHardware', StackDisplayName(SelectedStack)) + #13#10 +
+    M2('OnlinePlanPackage', FormatPackageSize(TotalArtifactBytes),
+      IntToStr(DownloadedArtifactCount)) + #13#10 +
+    M2('OnlinePlanCache', IntToStr(CachedArtifactCount),
+      IntToStr(PendingArtifactCount)) + #13#10 +
+    M1('OnlinePlanLocation', DownloadDirectory);
+  if PendingArtifactCount = 0 then
+    PlanDetailLabel.Caption := M('OnlinePlanReady')
+  else
+    PlanDetailLabel.Caption := M('OnlinePreparing');
+end;
+
 procedure InvalidManifest(const Detail: String);
 begin
   SuppressibleMsgBox(M1('OnlineManifestInvalid', Detail), mbCriticalError, MB_OK, IDOK);
@@ -282,9 +371,12 @@ function PrepareArtifactDownloads(): Boolean;
 var
   ManifestPath, SectionName, VersionValue, CountValue: String;
   SetupName, FileName, HashValue, ExistingName: String;
+  DestinationPath: String;
+  SizeValue: String;
   Count, Index, Previous: Integer;
 begin
   Result := False;
+  ResetArtifactPlan();
   ManifestPath := ExpandConstant('{tmp}\') + ManifestName;
   VersionValue := GetIniString('release', 'version', '', ManifestPath);
   if VersionValue <> '{#MyAppVersion}' then
@@ -343,7 +435,20 @@ begin
       end;
     end;
     DownloadedArtifactNames[Index] := FileName;
-    DownloadPage.Add(ArtifactUrl(FileName), FileName, HashValue);
+    SizeValue := GetIniString(SectionName, 'size' + IntToStr(Index), '0', ManifestPath);
+    TotalArtifactBytes := TotalArtifactBytes + StrToInt64Def(SizeValue, 0);
+    DestinationPath := AddBackslash(DownloadDirectory) + FileName;
+    if FileExists(DestinationPath) and
+       (CompareText(GetSHA256OfFile(DestinationPath), HashValue) = 0) then
+    begin
+      DownloadedArtifactCached[Index] := True;
+      Inc(CachedArtifactCount);
+    end
+    else
+    begin
+      Inc(PendingArtifactCount);
+      DownloadPage.Add(ArtifactUrl(FileName), FileName, HashValue);
+    end;
   end;
 
   if CompareText(
@@ -354,6 +459,8 @@ begin
   end;
 
   DownloadedSetup := AddBackslash(DownloadDirectory) + SetupName;
+  ManifestPrepared := True;
+  UpdatePlanPage();
   Result := True;
 end;
 
@@ -363,16 +470,25 @@ var
   Index: Integer;
 begin
   Result := False;
+  if PendingArtifactCount = 0 then
+  begin
+    ArtifactsReady := True;
+    Result := True;
+    Exit;
+  end;
   DownloadPage.Show;
   try
     try
       DownloadPage.Download;
       for Index := 0 to DownloadedArtifactCount - 1 do
       begin
+        if DownloadedArtifactCached[Index] then
+          Continue;
         TempPath := AddBackslash(ExpandConstant('{tmp}')) +
           DownloadedArtifactNames[Index];
         DestinationPath := AddBackslash(DownloadDirectory) +
           DownloadedArtifactNames[Index];
+        DeleteFile(DestinationPath);
         if (not FileExists(TempPath)) or
            (not CopyFile(TempPath, DestinationPath, False)) then
         begin
@@ -408,11 +524,14 @@ begin
   Result := ArtifactsReady;
   if Result then
     Exit;
-  SelectedStack := StackFromSelection();
-  if not DownloadManifest() then
-    Exit;
-  if not PrepareArtifactDownloads() then
-    Exit;
+  if not ManifestPrepared then
+  begin
+    SelectedStack := StackFromSelection();
+    if not DownloadManifest() then
+      Exit;
+    if not PrepareArtifactDownloads() then
+      Exit;
+  end;
   Result := DownloadArtifacts();
   if Result then
     ArtifactsReady := True;
@@ -423,6 +542,9 @@ var
   ResultCode: Integer;
 begin
   Result := False;
+  WizardForm.StatusLabel.Caption := M('OnlineInstalling');
+  WizardForm.FilenameLabel.Caption := DownloadedSetup;
+  WizardForm.Update;
   if not Exec(DownloadedSetup, '/SP- /LANG=' + ActiveLanguage(),
     ExpandConstant('{tmp}'), SW_SHOW, ewWaitUntilTerminated, ResultCode) then
   begin
@@ -454,6 +576,26 @@ begin
   HardwarePage.Add(M('OnlineDirectML'));
   HardwarePage.SelectedValueIndex := 0;
 
+  PlanPage := CreateCustomPage(
+    HardwarePage.ID, M('OnlinePlanTitle'), M('OnlinePlanSubtitle'));
+  PlanInfoLabel := TNewStaticText.Create(PlanPage);
+  PlanInfoLabel.AutoSize := False;
+  PlanInfoLabel.WordWrap := True;
+  PlanInfoLabel.Left := 0;
+  PlanInfoLabel.Top := 0;
+  PlanInfoLabel.Width := PlanPage.SurfaceWidth;
+  PlanInfoLabel.Height := ScaleY(96);
+  PlanInfoLabel.Parent := PlanPage.Surface;
+  PlanDetailLabel := TNewStaticText.Create(PlanPage);
+  PlanDetailLabel.AutoSize := False;
+  PlanDetailLabel.WordWrap := True;
+  PlanDetailLabel.Left := 0;
+  PlanDetailLabel.Top := PlanInfoLabel.Top + PlanInfoLabel.Height + ScaleY(12);
+  PlanDetailLabel.Width := PlanPage.SurfaceWidth;
+  PlanDetailLabel.Height := ScaleY(48);
+  PlanDetailLabel.Caption := M('OnlinePlanPrompt');
+  PlanDetailLabel.Parent := PlanPage.Surface;
+
   DownloadPage := CreateDownloadPage(
     M('OnlineDownloadTitle'), M('OnlineDownloadSubtitle'), nil);
   DownloadPage.ShowBaseNameInsteadOfUrl := True;
@@ -468,7 +610,22 @@ begin
     begin
       SelectedStack := '';
       DownloadedSetup := '';
+      ManifestPrepared := False;
       ArtifactsReady := False;
+    end;
+    SelectedStack := StackFromSelection();
+    if not ManifestPrepared then
+    begin
+      if not DownloadManifest() then
+      begin
+        Result := False;
+        Exit;
+      end;
+      if not PrepareArtifactDownloads() then
+      begin
+        Result := False;
+        Exit;
+      end;
     end;
   end
   else if CurPageID = wpReady then
