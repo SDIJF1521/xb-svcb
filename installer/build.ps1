@@ -23,7 +23,7 @@
     ./installer/build.ps1 -SkipAppBuild     # skip when dist/XB-SVCB already built
     ./installer/build.ps1 -SkipWheelhouse   # skip only when assets/wheels is already prepared
     ./installer/build.ps1 -Stacks cu126     # build one hardware-specific package
-    ./installer/build.ps1 -Stacks cu128 -Python C:\Python312\python.exe
+    ./installer/build.ps1 -Stacks cu128 -Python C:\path\to\python.exe
     ./installer/build.ps1 -Stacks cu126 -RuntimeAssets D:\XB-SVCB\assets\runtime\core-cu128
     ./installer/build.ps1 -Stacks rocm10
     ./installer/build.ps1 -Stacks directml
@@ -68,7 +68,7 @@ By default, wheelhouse preparation clears assets/wheels before downloading.
 Use -SkipWheelhouse only after preparing the selected stack's wheels.
 
 Examples:
-  .\installer\build.ps1 -Stacks directml -Python C:\Python312\python.exe
+  .\installer\build.ps1 -Stacks directml -Python C:\path\to\python.exe
   .\installer\build.ps1 -Stacks directml -SkipWheelhouse -SkipWebBuild
   .\installer\build.ps1 -ValidateOnly -Stacks directml
 '@ | Write-Output
@@ -138,6 +138,69 @@ function Require-FileSize([string]$Path, [long]$MinimumBytes, [string]$Label) {
   $item = Get-Item -LiteralPath $Path
   if ($item.Length -lt $MinimumBytes) {
     throw "$Label is incomplete: $Path ($($item.Length) bytes; expected at least $MinimumBytes)"
+  }
+}
+
+function Copy-ModelIfIncomplete(
+  [string]$Source,
+  [string]$Destination,
+  [long]$MinimumBytes,
+  [string]$Label
+) {
+  if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
+    return
+  }
+  $sourceItem = Get-Item -LiteralPath $Source
+  if ($sourceItem.Length -lt $MinimumBytes) {
+    return
+  }
+  $destinationItem = Get-Item -LiteralPath $Destination -ErrorAction SilentlyContinue
+  if ($destinationItem -and $destinationItem.Length -ge $MinimumBytes) {
+    return
+  }
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
+  Copy-Item -LiteralPath $Source -Destination $Destination -Force
+  Write-Host ("Synchronized external model asset: {0}" -f $Label) -ForegroundColor Cyan
+}
+
+function Ensure-ExternalModelAssets {
+  <#
+    Model weights are intentionally ignored by Git.  A developer may already
+    have the same verified files in the runtime trees created by install.py;
+    reuse those files to repair an absent or Git-LFS pointer in assets/models.
+    No model is downloaded or added to version control here.
+  #>
+  $modelRoot = Join-Path $Root 'assets\models'
+  $sources = @(
+    @{ Source = 'engines\ddsp-svc\pretrain\contentvec\pytorch_model.bin'; Destination = 'pretrain\checkpoint_best_legacy_500.pt'; Minimum = 314572800; Label = 'DDSP ContentVec' },
+    @{ Source = 'engines\so-vits-svc\pretrain\rmvpe.pt'; Destination = 'pretrain\rmvpe.pt'; Minimum = 314572800; Label = 'RMVPE' },
+    @{ Source = 'engines\so-vits-svc\pretrain\fcpe.pt'; Destination = 'pretrain\fcpe.pt'; Minimum = 67108864; Label = 'FCPE' },
+    @{ Source = 'engines\so-vits-svc\pretrain\nsf_hifigan\config.json'; Destination = 'pretrain\nsf_hifigan\config.json'; Minimum = 500; Label = 'NSF-HiFiGAN config' },
+    @{ Source = 'engines\so-vits-svc\pretrain\nsf_hifigan\model'; Destination = 'pretrain\nsf_hifigan\model'; Minimum = 33554432; Label = 'NSF-HiFiGAN weights' },
+    @{ Source = 'engines\so-vits-svc\pretrain\nsf_hifigan\NOTICE.txt'; Destination = 'pretrain\nsf_hifigan\NOTICE.txt'; Minimum = 100; Label = 'NSF-HiFiGAN notice' },
+    @{ Source = 'engines\so-vits-svc\pretrain\nsf_hifigan\NOTICE.zh-CN.txt'; Destination = 'pretrain\nsf_hifigan\NOTICE.zh-CN.txt'; Minimum = 100; Label = 'NSF-HiFiGAN Chinese notice' },
+    @{ Source = 'engines\ddsp-svc\pretrain\nsf_hifigan\config.json'; Destination = 'pretrain\pc_nsf_hifigan\config.json'; Minimum = 500; Label = 'PC-NSF-HiFiGAN config' },
+    @{ Source = 'engines\ddsp-svc\pretrain\nsf_hifigan\model'; Destination = 'pretrain\pc_nsf_hifigan\model.ckpt'; Minimum = 33554432; Label = 'PC-NSF-HiFiGAN weights' },
+    @{ Source = 'engines\seed-vc\checkpoints\campplus_cn_common.bin'; Destination = 'seedvc\campplus_cn_common.bin'; Minimum = 20971520; Label = 'SeedVC CampPlus' },
+    @{ Source = 'engines\seed-vc\checkpoints\local_whisper_small\config.json'; Destination = 'seedvc\whisper-small\config.json'; Minimum = 1000; Label = 'SeedVC Whisper config' },
+    @{ Source = 'engines\seed-vc\checkpoints\local_whisper_small\preprocessor_config.json'; Destination = 'seedvc\whisper-small\preprocessor_config.json'; Minimum = 1000; Label = 'SeedVC Whisper preprocessor' },
+    @{ Source = 'engines\seed-vc\checkpoints\local_whisper_small\model.safetensors'; Destination = 'seedvc\whisper-small\model.safetensors'; Minimum = 943718400; Label = 'SeedVC Whisper weights' },
+    @{ Source = 'engines\seed-vc\checkpoints\local_bigvgan_v2_44khz_128band_512x\config.json'; Destination = 'seedvc\bigvgan_v2_44khz_128band_512x\config.json'; Minimum = 1000; Label = 'SeedVC BigVGAN config' },
+    @{ Source = 'engines\seed-vc\checkpoints\local_bigvgan_v2_44khz_128band_512x\bigvgan_generator.pt'; Destination = 'seedvc\bigvgan_v2_44khz_128band_512x\bigvgan_generator.pt'; Minimum = 419430400; Label = 'SeedVC BigVGAN weights' },
+    @{ Source = 'models\uvr\5_HP-Karaoke-UVR.pth'; Destination = 'uvr\5_HP-Karaoke-UVR.pth'; Minimum = 100000000; Label = 'UVR Karaoke model' },
+    @{ Source = 'models\uvr\UVR-DeEcho-DeReverb.pth'; Destination = 'uvr\UVR-DeEcho-DeReverb.pth'; Minimum = 180000000; Label = 'UVR DeEcho model' },
+    @{ Source = 'models\uvr\download_checks.json'; Destination = 'uvr\download_checks.json'; Minimum = 1000; Label = 'UVR download checks' },
+    @{ Source = 'models\uvr\mdx_model_data.json'; Destination = 'uvr\mdx_model_data.json'; Minimum = 1000; Label = 'UVR MDX metadata' },
+    @{ Source = 'models\uvr\vr_model_data.json'; Destination = 'uvr\vr_model_data.json'; Minimum = 1000; Label = 'UVR VR metadata' },
+    @{ Source = 'models\vocal-enhancement\DeepFilterNet3\config.ini'; Destination = 'vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\config.ini'; Minimum = 1024; Label = 'DeepFilterNet config' },
+    @{ Source = 'models\vocal-enhancement\DeepFilterNet3\checkpoints\model_120.ckpt.best'; Destination = 'vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\checkpoints\model_120.ckpt.best'; Minimum = 8388608; Label = 'DeepFilterNet weights' }
+  )
+  foreach ($item in $sources) {
+    Copy-ModelIfIncomplete `
+      (Join-Path $Root $item.Source) `
+      (Join-Path $modelRoot $item.Destination) `
+      $item.Minimum `
+      $item.Label
   }
 }
 
@@ -211,6 +274,7 @@ function Assert-CoreRuntimeAssets {
     'assets/runtime/core-cu128/candidate/numpy-2.2.6-cp312-cp312-win_amd64.whl',
     'assets/runtime/core-cu128/candidate/protobuf-7.36.0-cp310-abi3-win_amd64.whl',
     'assets/runtime/core-cu128/candidate/tensorboardx-2.6.5-py3-none-any.whl',
+    'assets/runtime/core-cu128/candidate/onnx_weekly-1.23.0.dev20260831-cp312-abi3-win_amd64.whl',
     'assets/runtime/core-cu128/compat/descript_audiotools-0.7.2+xb1-py3-none-any.whl'
   )
   foreach ($relative in $requiredRelative) {
@@ -298,7 +362,7 @@ function Resolve-BuildPython312([string]$ExplicitPath) {
   if ($ExplicitPath) {
     $resolved = [IO.Path]::GetFullPath($ExplicitPath)
     if (-not (Test-Python312 $resolved)) {
-      throw "-Python must point to a runnable CPython 3.12.x python.exe: $resolved"
+      throw "-Python must point to a runnable 64-bit CPython 3.12.x python.exe: $resolved. Omit -Python to use automatic detection."
     }
     return $resolved
   }
@@ -442,6 +506,69 @@ function Ensure-FfmpegPayload([string]$PayloadDir) {
       Copy-Item -LiteralPath $noticePath -Destination (Join-Path $PayloadDir $notice) -Force
     }
   }
+}
+
+function Stage-Python312Runtime(
+  [string]$PythonExe,
+  [string]$PayloadDir
+) {
+  $sourceRoot = (& $PythonExe -c "import sys; print(sys.base_prefix)").Trim()
+  if ($LASTEXITCODE -ne 0 -or -not $sourceRoot) {
+    throw "Unable to resolve the CPython 3.12 base runtime from: $PythonExe"
+  }
+  $sourceRoot = [IO.Path]::GetFullPath($sourceRoot)
+  $sourcePython = Join-Path $sourceRoot 'python.exe'
+  if (-not (Test-Python312 $sourcePython)) {
+    throw "Resolved base runtime is not runnable 64-bit CPython 3.12: $sourcePython"
+  }
+
+  $sourceDll = Join-Path $sourceRoot 'python312.dll'
+  Require-File $sourceDll 'CPython 3.12 runtime DLL'
+  $sourceSignature = @(
+    $sourceRoot
+    (Get-Item -LiteralPath $sourcePython).Length
+    (Get-Item -LiteralPath $sourceDll).Length
+    (Get-FileHash -LiteralPath $sourceDll -Algorithm SHA256).Hash
+  ) -join '|'
+  $signaturePath = "$PayloadDir.source.txt"
+  $cachedSignature = if (Test-Path -LiteralPath $signaturePath -PathType Leaf) {
+    (Get-Content -LiteralPath $signaturePath -Raw).Trim()
+  } else { '' }
+  $cachedFiles = @(
+    (Join-Path $PayloadDir 'python.exe')
+    (Join-Path $PayloadDir 'python312.dll')
+    (Join-Path $PayloadDir 'Lib\venv\__init__.py')
+    (Join-Path $PayloadDir 'Lib\ensurepip\__init__.py')
+  )
+  if (($cachedSignature -eq $sourceSignature) -and
+      @($cachedFiles | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) }).Count -eq 0) {
+    Write-Host ("Reusing bundled CPython 3.12 runtime: {0}" -f $PayloadDir) -ForegroundColor DarkGray
+    return
+  }
+
+  if (Test-Path -LiteralPath $PayloadDir) {
+    Remove-Item -LiteralPath $PayloadDir -Recurse -Force
+  }
+  New-Item -ItemType Directory -Force -Path $PayloadDir | Out-Null
+
+  Write-Host ("Staging bundled CPython 3.12 runtime from {0}..." -f $sourceRoot) -ForegroundColor Cyan
+  & robocopy.exe $sourceRoot $PayloadDir /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP `
+    /XD (Join-Path $sourceRoot 'Lib\site-packages') (Join-Path $sourceRoot 'Scripts') '__pycache__' `
+    /XF '*.pyc' '*.pyo' '*.pdb'
+  $robocopyExit = $LASTEXITCODE
+  if ($robocopyExit -gt 7) {
+    throw "Failed to stage the bundled CPython runtime (robocopy exit code $robocopyExit)."
+  }
+
+  $payloadPython = Join-Path $PayloadDir 'python.exe'
+  if (-not (Test-Python312 $payloadPython)) {
+    throw "Staged bundled Python is not runnable CPython 3.12: $payloadPython"
+  }
+  & $payloadPython -c "import ensurepip, ssl, sqlite3, venv; print('BUNDLED_PYTHON_OK')"
+  if ($LASTEXITCODE -ne 0) {
+    throw "Staged bundled Python is missing a required standard-library module: $PayloadDir"
+  }
+  Set-Content -LiteralPath $signaturePath -Value $sourceSignature -Encoding ASCII -NoNewline
 }
 
 function Ensure-DdspContentvecPayload([string]$Path) {
@@ -619,7 +746,9 @@ Require-WorkerContract `
   "Formant pitch worker source" `
   @("--high-threshold", "FORMANT_PITCH_OK") `
   @("--out-npy", "F0_OK")
-Require-File (Join-Path $Root "docs\release-notes\release_notes_v032.md") "v0.0.32 release notes"
+Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_0.md") "v0.1.0 Simplified Chinese release notes"
+Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_0.en.md") "v0.1.0 English release notes"
+Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_0.ja.md") "v0.1.0 Japanese release notes"
 Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
 Require-File (Join-Path $Root "install\detect_python.bat") "Python runtime detector"
@@ -679,15 +808,14 @@ function Assert-WheelhouseProfile([string]$SelectedStack) {
   if (Test-Path -LiteralPath $legacy) {
     throw "旧 cu121 wheelhouse remains: $legacy. Run the cleanup command before packaging."
   }
-  if ($SelectedStack -in @('cu126', 'cu128')) {
-    foreach ($name in @(
-      'onnx_weekly-1.23.0.dev20260831-cp312-abi3-win_amd64.whl',
-      'numpy-2.2.6-cp312-cp312-win_amd64.whl',
-      'tensorboardx-2.6.5-py3-none-any.whl'
-    )) {
-      Require-File (Join-Path $wheelRoot ("py312\{0}\{1}" -f $SelectedStack, $name)) `
-        ("$SelectedStack wheelhouse candidate $name")
-    }
+  # CUDA candidate/compatibility wheels belong to the verified shared-core
+  # payload under assets/runtime/core-cu128. Assert-CoreRuntimeAssets validates
+  # their hashes and sizes; they are intentionally not duplicated in the
+  # per-stack Python wheelhouse.
+  & $buildPython (Join-Path $Root 'install\prepare_wheelhouse.py') `
+    --root $Root --check --stack $SelectedStack
+  if ($LASTEXITCODE -ne 0) {
+    throw "Wheelhouse completion profile is invalid for $SelectedStack. Rebuild that stack before packaging."
   }
 }
 if ((Get-Content -LiteralPath $installScriptPath -Raw) -notmatch 'def _resolved_file_path\(path: Path\) -> Path \| None:') {
@@ -705,7 +833,9 @@ if ((Get-Content -LiteralPath $licensePath -Raw) -notmatch 'GNU GENERAL PUBLIC L
   throw "LICENSE must contain the complete GNU GPL version 3 text."
 }
 
-# Reject Git LFS pointers or partial DDSP/SeedVC snapshots before producing a release.
+# Repair ignored assets/models from complete runtime copies before rejecting
+# pointer placeholders or partial external model snapshots.
+Ensure-ExternalModelAssets
 Require-FileSize (Join-Path $Root "assets\models\pretrain\rmvpe.pt") 314572800 "Bundled SeedVC RMVPE"
 Require-FileSize (Join-Path $Root "assets\models\pretrain\fcpe.pt") 67108864 "Bundled high-range FCPE"
 $pcVocoderConfigPath = Join-Path $Root "assets\models\pretrain\pc_nsf_hifigan\config.json"
@@ -760,6 +890,7 @@ Write-Host ("Build Python 3.12: {0}" -f $buildPython) -ForegroundColor Green
 # receive these files through Inno Setup's split data volumes and never fetch the
 # engine repositories or FFmpeg themselves.
 Ensure-FfmpegPayload (Join-Path $Root "assets\tools\ffmpeg")
+Stage-Python312Runtime $buildPython (Join-Path $Root '.tmp\python312-runtime')
 Ensure-EngineSource `
   (Join-Path $Root "engines\so-vits-svc") `
   "inference\infer_tool.py" `
@@ -786,6 +917,8 @@ Ensure-EngineSource `
 if ($LASTEXITCODE -ne 0) { throw 'Failed to stage SeedVC V1/V2 sources' }
 Require-File (Join-Path $Root "assets\tools\ffmpeg\bin\ffmpeg.exe") "Bundled FFmpeg"
 Require-File (Join-Path $Root "assets\tools\ffmpeg\bin\ffprobe.exe") "Bundled ffprobe"
+Require-File (Join-Path $Root ".tmp\python312-runtime\python.exe") "Bundled CPython 3.12"
+Require-File (Join-Path $Root ".tmp\python312-runtime\python312.dll") "Bundled CPython 3.12 DLL"
 Require-FileSize `
   (Join-Path $Root "engines\ddsp-svc\pretrain\contentvec\pytorch_model.bin") `
   314572800 `

@@ -2,7 +2,7 @@
 
 # XB-SVCB FastAPI Integration
 
-Applies to XB-SVCB 0.0.32.
+Applies to XB-SVCB 0.1.0.
 
 ## Startup and Security
 

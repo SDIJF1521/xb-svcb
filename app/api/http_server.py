@@ -1224,7 +1224,7 @@ class EditorSeparationRequest(BaseModel):
     mute_source: bool = Field(default=True, description="分离成功后是否静音原片段")
     device: Literal["auto", "cuda", "rocm", "directml", "cpu"] = Field(
         default="auto",
-        description="分离推理设备；PyMSS 支持 NVIDIA CUDA、AMD ROCm 和 CPU，不支持 DirectML；auto 根据实际环境选择",
+        description="分离推理设备；PyMSS 支持 NVIDIA CUDA、AMD ROCm 和 CPU，不使用 DirectML 后端；DirectML 安装环境会回退 CPU，auto 根据实际环境选择",
     )
 
 

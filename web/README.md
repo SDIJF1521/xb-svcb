@@ -1,8 +1,14 @@
 # XB-SVCB Vue 前端
 
-版本：`0.0.32`
+版本：`0.1.0`
 
 这里是 XB-SVCB 桌面应用的 Vue 3 + Vite 前端。生产构建产物会由 `installer/xb-svcb-app.spec` 打进 `XB-SVCB.exe`。
+
+## v0.1.0 版本说明
+
+- 前端版本与应用本体、Python 锁文件、EXE 版本资源和安装器版本统一为 `0.1.0`。
+- 新增简体中文、English、日本語界面切换，并持久化用户选择。
+- 详细更新内容见 [v0.1.0 更新说明](../docs/release-notes/release_notes_v0_1_0.md)。
 
 ## v0.0.32 版本说明
 

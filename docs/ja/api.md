@@ -2,7 +2,7 @@
 
 # XB-SVCB FastAPI連携
 
-対象: XB-SVCB 0.0.32
+対象: XB-SVCB 0.1.0
 
 ## 起動とセキュリティ
 

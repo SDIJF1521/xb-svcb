@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -150,29 +152,34 @@ def test_installer_explicitly_packages_and_validates_python_detector() -> None:
     assert "install\\detect_python.bat')) then" in script
     assert "function PythonPathCommandAvailable" in script
     assert "\\windowsapps\\" in script
-    assert ".venv-plugins Python 不可运行" in script
-    assert "UVR Python 不可运行" in script
+    assert "M1('PythonNotRunnable', '.venv-plugins')" in script
+    assert "M1('PythonNotRunnable', 'UVR')" in script
     assert 'if defined XB_PYTHON_DIR if exist "%XB_PYTHON_DIR%\\python.exe" set "XB_PYTHON_EXE=' not in prereqs
 
 
-def test_installer_detects_and_locks_an_external_python312() -> None:
+def test_installer_packages_and_locks_bundled_python312() -> None:
     script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
     build = (ROOT / "installer" / "build.ps1").read_text(encoding="utf-8")
     build_all = (ROOT / "installer" / "build-all-packages.ps1").read_text(encoding="utf-8")
     detector = DETECTOR.read_text(encoding="utf-8")
 
-    assert 'Source: "..\\assets\\tools\\python312\\*"' not in script
+    assert 'Source: "..\\.tmp\\python312-runtime\\*"' in script
+    assert 'DestDir: "{app}\\tools\\python312"' in script
     assert "PythonPathPage := CreateInputFilePage(" in script
-    assert "PythonPathPage.Values[0] := DetectPython312Executable();" in script
+    assert "PythonPathPage.Values[0] := ExpandConstant('{app}\\tools\\python312\\python.exe');" in script
     assert "sys.version_info[:2] == (3, 12)" in script
     assert "BatchEscape(SelectedPython)" in script
-    assert "PathJoin(AppDir, 'tools\\python312\\python.exe')" not in script
+    assert "PathJoin(AppDir, 'tools\\python312\\python.exe')" in script
+    assert "Stage-Python312Runtime $buildPython" in build
+    assert "Lib\\site-packages" in build
+    assert "ForceDirectories" in script
     assert "[string]$Python" in build
     assert "Resolve-BuildPython312 $Python" in build
     assert "[string]$Python" in build_all
     assert "py.exe may exist without a registered 3.12 runtime" in build
     assert "& $BuildScript -Python $BuildPython @buildArgs" in build_all
     assert "py -3.12" in detector
+    assert '%~dp0..\\tools\\python312\\python.exe' in detector
     assert "sys.version_info[:2] == (3, 12)" in detector
 
 
@@ -188,6 +195,38 @@ def test_installer_detects_vbcable_and_provides_manual_official_download() -> No
     assert ":CHECK_VBCABLE" in prereqs
     assert "https://vb-audio.com/Cable/" in prereqs
     assert "XB_VBCABLE_READY" in prereqs
+
+
+def test_installer_localization_catalog_covers_all_supported_languages() -> None:
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'Name: "zhcn"; MessagesFile: "languages\\ChineseSimplified.isl"' in script
+    assert 'Name: "en"; MessagesFile: "compiler:Default.isl"' in script
+    assert 'Name: "ja"; MessagesFile: "languages\\Japanese.isl"' in script
+    assert "ShowLanguageDialog=yes" in script
+    assert "LanguageDetectionMethod=uilanguage" in script
+
+    language_dir = ROOT / "installer" / "languages"
+    chinese = (language_dir / "ChineseSimplified.isl").read_text(encoding="utf-8")
+    japanese = (language_dir / "Japanese.isl").read_text(encoding="utf-8")
+    assert "LanguageID=$0804" in chinese
+    assert "LanguageID=$0411" in japanese
+
+    section = script.split("[CustomMessages]", 1)[1].split("[Tasks]", 1)[0]
+    catalogs: dict[str, set[str]] = {language: set() for language in ("zhcn", "en", "ja")}
+    for language, key in re.findall(r"^(zhcn|en|ja)\.([A-Za-z0-9]+)=", section, re.MULTILINE):
+        catalogs[language].add(key)
+
+    assert catalogs["zhcn"]
+    assert catalogs["zhcn"] == catalogs["en"] == catalogs["ja"]
+
+    code = script.split("[Code]", 1)[1]
+    referenced = set(re.findall(r"\bM(?:[1-4])?\('([A-Za-z0-9]+)'", code))
+    referenced.update(re.findall(r"\{cm:([A-Za-z0-9]+)", script))
+    assert referenced <= catalogs["en"]
+
+    cjk_literals = re.findall(r"'[^'\r\n]*[\u4e00-\u9fff][^'\r\n]*'", code)
+    assert cjk_literals == []
 
 
 def test_installer_entrypoints_suppress_uv_cross_drive_hardlink_warning() -> None:
@@ -222,12 +261,35 @@ def test_ffmpeg_file_check_does_not_expand_app_before_directory_initialization()
     assert "CommandSucceeds('ffmpeg -version')" in function
     assert "CommandSucceeds('ffprobe -version')" in function
     assert "{app}" not in function
+    ffmpeg_source = next(
+        line for line in script.splitlines()
+        if 'Source: "..\\assets\\tools\\ffmpeg\\*"' in line
+    )
+    assert "Check:" not in ffmpeg_source
+    assert "tools\\ffmpeg\\bin\\ffmpeg.exe" in script
+    assert "tools\\ffmpeg\\bin\\ffprobe.exe" in script
+    prereqs = (ROOT / "install_prereqs.bat").read_text(encoding="utf-8")
+    bundled_check = prereqs.index('"!XB_FFMPEG_BIN!\\ffmpeg.exe" -version')
+    system_check = prereqs.index("ffmpeg -version >nul")
+    assert bundled_check < system_check
 
 
 def test_setup_env_exports_verified_python312_for_runtime_venvs() -> None:
     setup_env = (ROOT / "setup_env.bat").read_text(encoding="utf-8")
 
     assert 'set "XB_PYTHON_312_EXE=%XB_PYTHON_EXE%"' in setup_env
+    assert 'set "XB_PYTHON_EXE=%~dp0tools\\python312\\python.exe"' in setup_env
+
+
+def test_shared_runtime_audit_allows_ddsp_cold_start() -> None:
+    shared = (ROOT / "install" / "install_shared.py").read_text(encoding="utf-8")
+    installer = (ROOT / "install" / "install.py").read_text(encoding="utf-8")
+
+    for source in (shared, installer):
+        assert '"--timeout"' in source
+        assert '"90"' in source
+        assert '"--ddsp-timeout"' in source
+        assert '"180"' in source
 
 
 def test_cuda_installer_repairs_keep_the_shared_runtime_layout() -> None:
@@ -357,7 +419,9 @@ def test_directml_wheel_plan_includes_cpu_legacy_and_rvc_compat(tmp_path: Path, 
 
     plan = wheelhouse.build_plan(tmp_path, {"directml"})
 
-    assert not any("pymss" in batch.label for batch in plan)
+    assert any(batch.label == "pymss cpu package" and
+               batch.dest == tmp_path / "assets/wheels/pymss/py312/cpu" and
+               batch.packages == ("pymss==2.0.18",) for batch in plan)
     assert any(batch.label == "svc directml source wheels" and
                batch.packages == ("fairseq-fixed==0.12.3.1",) for batch in plan)
     assert any(batch.label == "rvc directml" and
@@ -367,7 +431,7 @@ def test_directml_wheel_plan_includes_cpu_legacy_and_rvc_compat(tmp_path: Path, 
                batch.packages == ("torch==2.5.1", "torchaudio==2.5.1") for batch in plan)
 
 
-def test_directml_default_install_skips_pymss(tmp_path: Path, monkeypatch) -> None:
+def test_directml_default_install_includes_pymss(tmp_path: Path, monkeypatch) -> None:
     installer = _load_install_module()
     events = []
     monkeypatch.setattr(installer.sys, "argv", ["install.py", "--root", str(tmp_path), "--directml"])
@@ -379,18 +443,25 @@ def test_directml_default_install_skips_pymss(tmp_path: Path, monkeypatch) -> No
     )
 
     assert installer.main() == 0
-    assert events == [name for name in installer.ORDER if name != "pymss"]
+    assert events == installer.ORDER
 
 
-def test_directml_explicit_pymss_install_is_rejected(tmp_path: Path, monkeypatch) -> None:
+def test_directml_explicit_pymss_install_is_allowed(tmp_path: Path, monkeypatch) -> None:
     installer = _load_install_module()
+    events = []
     monkeypatch.setattr(
         installer.sys, "argv",
         ["install.py", "--root", str(tmp_path), "--directml", "--only", "pymss"],
     )
-    monkeypatch.setattr(installer, "ensure_uv", lambda: pytest.fail("unsupported runtime installed"))
+    monkeypatch.setattr(installer, "ensure_uv", lambda: "uv")
+    monkeypatch.setattr(
+        installer,
+        "STEPS",
+        {"pymss": lambda _uv, stack: events.append(("pymss", stack))},
+    )
 
-    assert installer.main() == 2
+    assert installer.main() == 0
+    assert events == [("pymss", "directml")]
 
 
 def test_directml_installer_build_and_repair_contract() -> None:
@@ -979,6 +1050,20 @@ def test_setup_env_uses_install_py_as_the_single_progress_source() -> None:
     assert "if Target < EnvProgressCurrent then" in script
 
 
+def test_setup_batch_keeps_inno_responsive_while_waiting_for_process() -> None:
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    start = script.index("function RunSetupBatch(")
+    end = script.index("procedure AppendInstallValidation", start)
+    runner = script[start:end]
+
+    assert "ewNoWait" in runner
+    assert "OpenProcess(ProcessQueryLimitedInformation" in runner
+    assert "ReadInstallLogDelta(LogPath, SeenText, PendingLine)" in runner
+    assert "GetExitCodeProcess(ProcessHandle, ExitCode)" in runner
+    assert "until ExitCode <> ProcessStillActive;" in runner
+    assert "ExecAndLogOutput" not in runner
+
+
 def test_setup_env_failure_hint_matches_gpu_stack() -> None:
     setup_env = (ROOT / "setup_env.bat").read_text(encoding="utf-8")
 
@@ -1028,6 +1113,7 @@ def test_installer_packages_and_uses_bundled_wheelhouse() -> None:
     assert 'set "XB_WHEELHOUSE="' in setup_env
     assert 'set "XB_WHEELHOUSE_STRICT=0"' in setup_env
     assert "assets\\runtime\\core-cu128\\candidate\\protobuf-7.36.0-cp310-abi3-win_amd64.whl" in script
+    assert "assets\\runtime\\core-cu128\\candidate\\onnx_weekly-1.23.0.dev20260831-cp312-abi3-win_amd64.whl" in script
     assert "assets\\runtime\\core-cu128\\compat\\descript_audiotools-0.7.2+xb1-py3-none-any.whl" in script
 
 
@@ -1040,12 +1126,16 @@ def test_release_builder_enforces_current_runtime_materials_and_app_build() -> N
     assert "onnx-weekly==1.23.0.dev20260831" in build
     assert "Get-FileHash" in build
     assert "assets/runtime/core-cu128/candidate/protobuf-7.36.0" in build
+    assert "assets/runtime/core-cu128/candidate/onnx_weekly-1.23.0.dev20260831" in build
     assert "[string]$RuntimeAssets" in build
     assert "Ensure-CoreRuntimeAssets $RuntimeAssets" in build
     assert "[string]$RuntimeAssets" in build_all
     assert "RuntimeAssets = $RuntimeAssets" in build_all
     assert "[switch]$ReuseBuildOutputs" in build_all
     assert "$refreshApp = (-not $ReuseBuildOutputs) -or $RebuildApp" in build_all
+    assert "function Get-IncompleteWheelhouseStacks" in build_all
+    assert "Preparing missing wheelhouse stacks" in build_all
+    assert "Get-IncompleteWheelhouseStacks" in build_all
 
 
 def test_wheelhouse_binary_download_uses_managed_tool_python(
@@ -1173,6 +1263,31 @@ def test_wheelhouse_build_python_recreates_stale_matching_version(
     assert commands[1][:6] == [str(build_py), "-m", "pip", "install", "--upgrade", "pip==24.0"]
 
 
+def test_wheelhouse_build_python_skips_satisfied_toolchain_upgrade(
+    tmp_path: Path, monkeypatch
+) -> None:
+    wheelhouse = _load_wheelhouse_module()
+    build_py = tmp_path / ".tmp" / "wheelhouse-build-envs" / "py312" / "Scripts" / "python.exe"
+    build_py.parent.mkdir(parents=True)
+    build_py.write_bytes(b"ready")
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(wheelhouse, "_BUILD_PYTHONS", {})
+    monkeypatch.setattr(wheelhouse, "_python_works", lambda py: py == build_py)
+    monkeypatch.setattr(wheelhouse, "_ensure_pip", lambda _py: None)
+    monkeypatch.setattr(wheelhouse, "_build_toolchain_ready", lambda py: py == build_py)
+    monkeypatch.setattr(wheelhouse, "_run", commands.append)
+
+    result = wheelhouse._ensure_build_python(
+        tmp_path,
+        SimpleNamespace(PYPI_MIRROR="", PYPI_FALLBACK_INDEX="https://pypi.org/simple"),
+        "3.12",
+    )
+
+    assert result == build_py
+    assert commands == []
+
+
 def test_wheelhouse_download_can_skip_dependency_resolution(tmp_path: Path, monkeypatch) -> None:
     wheelhouse = _load_wheelhouse_module()
     tool_py = tmp_path / "tools" / "Scripts" / "python.exe"
@@ -1252,7 +1367,7 @@ def test_wheelhouse_clean_runs_before_generating_requirements(
 
     monkeypatch.setattr(wheelhouse, "_load_installer", lambda root: object())
     monkeypatch.setattr(wheelhouse, "build_plan", fake_build_plan)
-    monkeypatch.setattr(wheelhouse, "_write_manifest", lambda root, batches: None)
+    monkeypatch.setattr(wheelhouse, "_write_manifest", lambda root, batches, profiles: None)
     monkeypatch.setattr(
         wheelhouse.sys,
         "argv",
@@ -1286,12 +1401,12 @@ def test_pymss_installer_uses_the_same_isolated_runtime(
     monkeypatch.setattr(installer, "make_pip", fake_make_pip)
     monkeypatch.setattr(installer, "hr", lambda message: None)
 
-    for stack in ("cpu", "cu126", "cu128"):
+    for stack in ("cpu", "directml", "cu126", "cu128"):
         pip_calls.clear()
         make_pip_calls.clear()
         installer.step_pymss("uv", stack)
 
-        expected_pymss_stack = stack
+        expected_pymss_stack = "cpu" if stack == "directml" else stack
         assert make_pip_calls == [
             {
                 "component": "pymss",
@@ -1378,4 +1493,5 @@ def test_installer_build_all_help_exits_before_build_checks(tmp_path: Path, flag
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Usage: .\\installer\\build-all-packages.ps1" in result.stdout
     assert "-RebuildWheelhouse" in result.stdout
+    assert "-CleanWheelhouse" in result.stdout
     assert "Validating all five installer configurations" not in result.stdout

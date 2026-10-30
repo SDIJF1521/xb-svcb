@@ -37,7 +37,20 @@ Torch, torchvision, and torchaudio use their own official version numbers; do no
 
 Offline staging reads `torch/version.py` inside the wheel, verifies the ROCm 10 and HIP markers, and rejects DirectML dependencies. The verified official Windows cp312 wheel reports `torch.version.rocm == '10.0.0'` and `torch.version.hip == '7.15.26333'`. These numbers differ; the HIP major version cannot replace the ROCm major version. Packaging stops when sources and versions do not match.
 
-PyMSS installs the same ROCm stack in a separate `.venv-pymss` for AMD acceleration. `auto` detects HIP and reports `rocm`; explicit `rocm` fails when unavailable. PyMSS does not support DirectML. SVC/RVC/Vocal share `runtimes/svc-rocm10`; a separate DirectML package and RVC DirectML environment remain optional but cannot mix with ROCm Torch.
+## Offline Release Cache and Network Recovery
+
+Release-side `-RebuildWheelhouse` incrementally completes the cache. Only the explicit `-CleanWheelhouse` option deletes all CPU, ROCm, DirectML, and CUDA caches. CPU SVC/RVC groups are prepared before ROCm so an AMD-index failure cannot leave an unpackageable partial CPU stack. ROCm PyMSS and DDSP component groups hardlink the shared ROCm Torch/SDK wheels, and staging deduplicates them by filename instead of downloading or packaging the large runtime repeatedly.
+
+Resume an interrupted ROCm DDSP batch with:
+
+```powershell
+& C:\python3.12.9\python.exe .\install\prepare_wheelhouse.py `
+  --root . --stack rocm10 --from-batch "ddsp legacy rocm10 torch"
+```
+
+When `ProxyError('Cannot connect to proxy')` or a TLS handshake timeout appears before `ResolutionImpossible`, the latter is usually a secondary pip error caused by an unreadable index, not a real conflict between the pinned versions. Check `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `XB_TORCH_ROCM_INDEX` in the current PowerShell session. After fixing network access, rerun the incremental command without deleting completed ROCm wheels.
+
+PyMSS installs the same ROCm stack in a separate `.venv-pymss` for AMD acceleration. `auto` detects HIP and reports `rocm`; explicit `rocm` fails when unavailable. PyMSS does not use a DirectML backend: the DirectML package carries an isolated CPU Torch 2.7.1 wheel set and runs PyMSS on CPU, avoiding a conflict with the Torch 2.4.1 pin required by `torch-directml`. SVC/RVC/Vocal share `runtimes/svc-rocm10`; a separate DirectML package and RVC DirectML environment remain optional but cannot mix with ROCm Torch.
 
 ## DDSP and SeedVC Models
 

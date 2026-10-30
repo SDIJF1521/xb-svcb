@@ -29,6 +29,13 @@ def test_checked_in_profile_is_portable_and_pins_all_versions():
     assert profile["optional_packages"] == ["hf-xet"]
     assert not profile["rollback_is_known_healthy"]
     assert not profile["full_model_inference_validated"]
+    assert any(
+        artifact["path"].endswith(
+            "onnx_weekly-1.23.0.dev20260831-cp312-abi3-win_amd64.whl"
+        )
+        and artifact["group"] == "candidate"
+        for artifact in profile["artifacts"]
+    )
     for artifact in profile["artifacts"]:
         assert not Path(artifact["path"]).is_absolute()
         assert ".tmp" not in artifact["path"]

@@ -245,6 +245,8 @@ if not errorlevel 1 (
 exit /b 0
 
 :CHECK_PYTHON
+set "XB_PYTHON_EXE=%~dp0tools\python312\python.exe"
+set "XB_PYTHON_DIR=%~dp0tools\python312"
 set "PYTHON_DETECTOR=%~dp0install\detect_python.bat"
 if not exist "!PYTHON_DETECTOR!" (
   echo [fail] Python detector not found: !PYTHON_DETECTOR!
@@ -275,6 +277,13 @@ call :RESOLVE_PATHS
 exit /b 0
 
 :CHECK_FFMPEG
+if defined XB_FFMPEG_BIN if exist "!XB_FFMPEG_BIN!\ffmpeg.exe" if exist "!XB_FFMPEG_BIN!\ffprobe.exe" (
+  "!XB_FFMPEG_BIN!\ffmpeg.exe" -version >nul 2>&1 && "!XB_FFMPEG_BIN!\ffprobe.exe" -version >nul 2>&1
+  if not errorlevel 1 (
+    echo [ok] bundled ffmpeg/ffprobe found: !XB_FFMPEG_BIN!
+    exit /b 0
+  )
+)
 ffmpeg -version >nul 2>&1 && ffprobe -version >nul 2>&1 && (
   set "XB_FFMPEG_BIN="
   for /f "delims=" %%P in ('where ffmpeg 2^>nul') do if not defined XB_FFMPEG_BIN set "XB_FFMPEG_BIN=%%~dpP"
@@ -292,10 +301,6 @@ ffmpeg -version >nul 2>&1 && ffprobe -version >nul 2>&1 && (
   ) else (
     echo [ok] system ffmpeg found; bundled deployment skipped: !XB_FFMPEG_BIN!\ffmpeg.exe
   )
-  exit /b 0
-)
-if defined XB_FFMPEG_BIN if exist "%XB_FFMPEG_BIN%\ffmpeg.exe" if exist "%XB_FFMPEG_BIN%\ffprobe.exe" (
-  echo [ok] bundled ffmpeg/ffprobe found: %XB_FFMPEG_BIN%
   exit /b 0
 )
 echo [fail] A working ffmpeg/ffprobe pair was not found in PATH and the bundled payload is missing.

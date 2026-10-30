@@ -12,7 +12,7 @@ NVIDIA CUDA126 / CUDA128は既定で二つの共有環境を使用します。RO
 | --- | --- | --- |
 | CPU | 分離互換 | `.venv-uvr`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-vocal` |
 | ROCm 10 | SVCグループ共有 | SVC/RVC/Vocalは`runtimes/svc-rocm10`、他はPyMSSを含む`.venv-*` |
-| DirectML | 分離互換 | `.venv-*`。DDSPは自動的にCPU、PyMSSはDirectML非対応 |
+| DirectML | 分離互換 | `.venv-*`。DDSPは自動的にCPUを使用し、PyMSSは独立環境でCPUへフォールバック |
 | CUDA126 | 二層共有 | `runtimes/core-cu126`、`runtimes/svc-cu126` |
 | CUDA128 | 二層共有 | `runtimes/core-cu128`、`runtimes/svc-cu128` |
 
@@ -101,7 +101,7 @@ CUDA128 core配方を導入せず解決:
 導入済み共有環境を検査:
 
 ```powershell
-& .\runtimes\core-cu128\Scripts\python.exe -B .\install\audit_runtime.py --root . --require-cuda
+& .\runtimes\core-cu128\Scripts\python.exe -B .\install\audit_runtime.py --root . --require-cuda --timeout 90 --ddsp-timeout 180
 & uv pip check --python .\runtimes\core-cu128\Scripts\python.exe
 & uv pip check --python .\runtimes\svc-cu128\Scripts\python.exe
 ```

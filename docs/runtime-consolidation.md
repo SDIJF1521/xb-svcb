@@ -12,7 +12,7 @@ NVIDIA CUDA126 和 CUDA128 默认使用两层共享环境。ROCm 10 的 SVC/RVC/
 | ------- | -------- | ---------------------------------------------------------------------------------------------- |
 | CPU     | 隔离兼容 | `.venv-uvr`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-vocal` |
 | ROCm 10 | SVC 组共享 | `runtimes/svc-rocm10` 用于 SVC/RVC/Vocal；其他组件用 `.venv-*`，包含独立 PyMSS |
-| DirectML | 隔离兼容 | `.venv-*`；DDSP 自动用 CPU，PyMSS 不支持 DirectML |
+| DirectML | 隔离兼容 | `.venv-*`；DDSP 自动用 CPU，PyMSS 在独立环境中回退到 CPU |
 | CUDA126 | 两层共享 | `runtimes/core-cu126`、`runtimes/svc-cu126`                                                |
 | CUDA128 | 两层共享 | `runtimes/core-cu128`、`runtimes/svc-cu128`                                                |
 
@@ -105,7 +105,7 @@ CUDA 安装包构建还必须携带 `assets/runtime/core-cu128/candidate` 和 `c
 检查已安装共享环境：
 
 ```powershell
-& .\runtimes\core-cu128\Scripts\python.exe -B .\install\audit_runtime.py --root . --require-cuda
+& .\runtimes\core-cu128\Scripts\python.exe -B .\install\audit_runtime.py --root . --require-cuda --timeout 90 --ddsp-timeout 180
 & uv pip check --python .\runtimes\core-cu128\Scripts\python.exe
 & uv pip check --python .\runtimes\svc-cu128\Scripts\python.exe
 ```

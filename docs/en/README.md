@@ -4,7 +4,7 @@
 
 This index groups documentation for users, contributors, and plugin authors. The English project overview is available in the [root README](../../README.en.md).
 
-All Markdown documents under `docs/` are available in English except versioned release notes. Package-level documents outside `docs/` are marked when they remain Chinese.
+All current Markdown documentation under `docs/` is available in English. Release notes through v0.0.32 remain Chinese-only; releases from v0.1.0 onward include English and Japanese. Package-level documents outside `docs/` are marked when they remain Chinese.
 
 ## Users
 
@@ -12,7 +12,7 @@ All Markdown documents under `docs/` are available in English except versioned r
 - [Python 3.12 and ROCm 10 migration](python312-rocm10.md): AMD installation, model compatibility, and dependency migration.
 - [FastAPI integration](api.md): server startup, authentication, task endpoints, uploads, downloads, and examples.
 - [API management changes](api-management.md): domain binding and multiple API key support.
-- [Bundled model assets](../../assets/models/README.md) **Chinese**: base models, sources, and missing-asset behavior.
+- Model weights, manifests, and configurations are maintained in the external model community and must be synchronized to local `assets/models/` before a release build.
 
 ## Contributors
 
@@ -38,7 +38,8 @@ All Markdown documents under `docs/` are available in English except versioned r
 
 ## Release Notes
 
-Release history is kept in [`docs/release-notes`](../release-notes/). Release notes are currently published in Chinese and retain their versioned filenames.
+Release history is kept in [`docs/release-notes`](../release-notes/). Starting with v0.1.0, release notes are published in Simplified Chinese, English, and Japanese.
 
+- [v0.1.0](../release-notes/release_notes_v0_1_0.en.md): creation and inference, audio editor, multilingual UI and installer, online setup, and model-repository changes.
 - [v0.0.32](../release-notes/release_notes_v032.md): Python 3.12, ROCm 10, and DirectML inference fixes.
 - [v0.0.31](../release-notes/release_notes_v031.md): shared runtimes, first-run onboarding, and high-note / belting stability.

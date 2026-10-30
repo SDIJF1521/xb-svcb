@@ -6,7 +6,9 @@ import csv
 import hashlib
 import io
 import json
-import urllib.request
+import os
+import subprocess
+import sys
 import zipfile
 from email import policy
 from email.parser import BytesParser
@@ -21,6 +23,11 @@ REPLACEMENTS = {
     "numpy<=1.23.5": "numpy>=1.26.4,<2",
     "omegaconf==2.0.6": "omegaconf==2.3.0",
 }
+DEFAULT_INDEXES = (
+    "https://pypi.tuna.tsinghua.edu.cn/simple",
+    "https://mirrors.cloud.tencent.com/pypi/simple",
+    "https://pypi.org/simple",
+)
 
 
 def digest(data: bytes) -> str:
@@ -74,7 +81,72 @@ def build(source: Path, output: Path) -> Path:
     return destination
 
 
-def prepare(output: Path, sources: list[Path], *, offline: bool = False) -> Path:
+def _index_urls(explicit: list[str] | tuple[str, ...] | None = None) -> list[str]:
+    candidates = list(explicit or ())
+    if not candidates:
+        candidates.extend(
+            value
+            for value in (
+                os.environ.get("XB_PYPI_MIRROR"),
+                os.environ.get("PIP_INDEX_URL"),
+                os.environ.get("UV_DEFAULT_INDEX"),
+                *DEFAULT_INDEXES,
+            )
+            if value
+        )
+    result: list[str] = []
+    for value in candidates:
+        normalized = str(value).strip().rstrip("/")
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result or list(DEFAULT_INDEXES)
+
+
+def _download_source_wheel(
+    output: Path,
+    *,
+    python: str | Path | None = None,
+    index_urls: list[str] | tuple[str, ...] | None = None,
+) -> Path:
+    output.mkdir(parents=True, exist_ok=True)
+    indexes = _index_urls(index_urls)
+    command = [
+        str(python or sys.executable),
+        "-m",
+        "pip",
+        "download",
+        "--dest",
+        str(output),
+        "--no-deps",
+        "--only-binary=:all:",
+        "--prefer-binary",
+        "--disable-pip-version-check",
+        "--retries",
+        "5",
+        "--timeout",
+        "60",
+        "--index-url",
+        indexes[0],
+    ]
+    for index in indexes[1:]:
+        command += ["--extra-index-url", index]
+    command.append("rvc-python==0.1.5")
+    print("$ " + " ".join(command), flush=True)
+    subprocess.run(command, check=True)
+    source = output / "rvc_python-0.1.5-py3-none-any.whl"
+    if not source.is_file():
+        raise RuntimeError(f"pip did not produce the expected RVC source wheel: {source}")
+    return source
+
+
+def prepare(
+    output: Path,
+    sources: list[Path],
+    *,
+    offline: bool = False,
+    python: str | Path | None = None,
+    index_urls: list[str] | tuple[str, ...] | None = None,
+) -> Path:
     for directory in sources:
         ready = directory / WHEEL_NAME
         if ready.is_file():
@@ -84,14 +156,9 @@ def prepare(output: Path, sources: list[Path], *, offline: bool = False) -> Path
     if source is None:
         if offline:
             raise RuntimeError("Python 3.12 RVC compatibility wheel is missing; rebuild the wheelhouse")
-        with urllib.request.urlopen("https://pypi.org/pypi/rvc-python/0.1.5/json", timeout=30) as response:
-            metadata = json.load(response)
-        artifact = next(item for item in metadata["urls"] if item["filename"] == source_name)
-        with urllib.request.urlopen(artifact["url"], timeout=60) as response:
-            data = response.read()
-        if hashlib.sha256(data).hexdigest() != artifact["digests"]["sha256"]:
-            raise ValueError("RVC download checksum mismatch")
-        output.mkdir(parents=True, exist_ok=True)
-        source = output / source_name
-        source.write_bytes(data)
+        source = _download_source_wheel(
+            output,
+            python=python,
+            index_urls=index_urls,
+        )
     return build(source, output)

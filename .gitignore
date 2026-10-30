@@ -128,27 +128,10 @@ runtime.json
 
 .vscode
 
-# ===== 例外：已有自带模型继续纳入版本库 =====
-# 保留安装器要附带的 SVC / RVC 底模、UVR 模型与 DeepFilterNet 权重；大文件通过 Git LFS 管理。
-# 这些例外要放在最后，覆盖前面的 dist/*、*.pt、*.pth 等忽略规则。
-#
-# 注意：单文件体积很大（安装器约 2GB、ContentVec 1.27GB），GitHub 单文件上限 100MB，
-#       直接 push 会被拒绝。若要托管到 GitHub，请用 Git LFS 跟踪这些大文件：
-#         git lfs install
-#         git lfs track "assets/models/**" "dist/XB-SVCB-Setup.exe"
-#       （或仅本地/内网仓库保留，发布走 GitHub Releases 等外部分发）
-
-# 自带模型（安装器附带资源，走 Git LFS）
-!assets/models/
-!assets/models/**
-
-# SeedVC 离线权重仅保留在本机构建环境，并通过 GitHub Release 安装分卷发布。
-# JSON 配置仍纳入版本库，避免源码缺少模型结构与预处理配置。
-assets/models/seedvc/**/*.bin
-assets/models/seedvc/**/*.pt
-assets/models/seedvc/**/*.safetensors
-# DeepFilterNet writes this runtime log next to its model; it is not a bundled resource.
-assets/models/**/DeepFilterNet3/enhance.log
+# ===== 外部模型资产 =====
+# 模型权重由外部模型社区维护，不进入 Git，也不再使用 Git LFS。
+# 本地/发布构建可以把社区模型完整同步到 assets/models，但整个目录均不纳入版本控制。
+/assets/models/
 
 # 安装器本体不入库：超过 GitHub LFS / Release 之外的 2GiB 单文件上限处理，
 # 改为构建后上传到 GitHub Releases 分发（见 README）。dist/* 已忽略，无需额外规则。

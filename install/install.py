@@ -217,8 +217,9 @@ TORCHVISION_PREBLACKWELL_VER = "0.22.1"
 # PyMSS wheelhouse aligned to the actual runtime stack.
 TORCH_PYMSS_CUDA_INDEX = "https://download.pytorch.org/whl/cu126"
 
-# PyMSS supports AMD through HIP-enabled PyTorch. Its isolated environment
-# follows the selected CUDA/ROCm stack; DirectML is not a PyMSS backend.
+# PyMSS supports AMD acceleration through HIP-enabled PyTorch. Its isolated
+# environment follows CUDA/ROCm; a DirectML installation uses CPU Torch because
+# the current PyMSS Torch requirement is incompatible with torch-directml.
 PYMSS_VERSION = "2.0.18"
 PYMSS_TORCH_VER = "2.7.1"
 PYMSS_TORCHAUDIO_VER = "2.7.1"
@@ -2086,8 +2087,6 @@ def step_pymss(uv: str, gpu_stack: str) -> None:
     user can choose a catalog model instead of consuming disk space up front.
     """
     hr("5/12 可选 PyMSS 分离环境 .venv-pymss")
-    if gpu_stack == "directml":
-        raise RuntimeError("PyMSS 的 AMD 加速需要 ROCm，请使用 --rocm10，或显式选择 --cpu")
     ensure_venv(uv, PYMSS_VENV, PYTHON_FOR_ENGINES)
     py = str(venv_python(PYMSS_VENV))
     # PyMSS 2.0.x requires Torch 2.7.1. Pre-Blackwell NVIDIA uses cu126 and
@@ -2097,6 +2096,8 @@ def step_pymss(uv: str, gpu_stack: str) -> None:
         pymss_stack = "cu128"
     elif gpu_stack == "cu126":
         pymss_stack = "cu126"
+    elif gpu_stack == "directml":
+        pymss_stack = "cpu"
     else:
         pymss_stack = gpu_stack
     pip = make_pip(
@@ -3720,12 +3721,6 @@ def main() -> int:
         print(c("y", "未检测到兼容 NVIDIA/AMD 显卡，已改用 CPU 版 torch。"))
     if args.no_cu128 and detected_stack == "cu128":
         print(c("y", "检测到 NVIDIA 显卡，忽略旧 CUDA 栈请求，统一改用 cu128。"))
-    if detected_stack == "directml" and "pymss" in selected:
-        if args.only:
-            print(c("r", "PyMSS 不支持 DirectML；请从 --only 中移除 pymss"))
-            return 2
-        selected = [step for step in selected if step != "pymss"]
-        print(c("y", "DirectML 不支持 PyMSS，已跳过该步骤。"))
     installer_progress(8, "Checking GPU runtime")
     if detected_stack == "cu128":
         mode = c("g", "CUDA · Blackwell/50系 (cu128 + torch" + TORCH_BLACKWELL_VER + ")")
@@ -3847,7 +3842,8 @@ def main() -> int:
                 if not recipe_check["ok"]:
                     raise RuntimeError("共享环境偏离固定配方：" + json.dumps(recipe_check, ensure_ascii=False))
             run([str(venv_python(CORE_VENV)), str(Path(__file__).with_name("audit_runtime.py")),
-                 "--root", str(ROOT), *(["--require-cuda"] if detected_stack != "cpu" else [])])
+                 "--root", str(ROOT), "--timeout", "90", "--ddsp-timeout", "180",
+                 *(["--require-cuda"] if detected_stack != "cpu" else [])])
             if CORE_COMPAT_WHEEL is not None:
                 run([str(venv_python(CORE_VENV)), str(Path(__file__).with_name("probe_core_compat.py")),
                      "--root", str(ROOT), "--output", str(ROOT / ".tmp" / "core-compat-installed-probes.json")])

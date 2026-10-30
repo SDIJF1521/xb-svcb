@@ -30,10 +30,14 @@ REQUIRED_COMPONENT_GROUPS = {
 
 def wheel_belongs_to_stack(relative_path: Path, stack: str) -> bool:
     parts = tuple(part.lower() for part in relative_path.parts[:-1])
-    if stack == "directml" and parts and parts[0] == "pymss":
-        return False
-    if stack == "directml" and parts == ("ddsp-legacy", "py312", "cpu"):
-        return True
+    if stack == "directml":
+        if parts in {
+            ("pymss", "py312", "cpu"),
+            ("ddsp-legacy", "py312", "cpu"),
+        }:
+            return True
+        if parts and parts[0] == "pymss":
+            return False
     if "bootstrap" in parts or "common" in parts:
         return True
     if any(part.startswith("py") and part[2:].isdigit() and part != "py312" for part in parts):
@@ -52,6 +56,46 @@ def _safe_output(root: Path, output: Path, source: Path) -> Path:
     if output == staging_root or staging_root not in output.parents:
         raise ValueError(f"staging output must be a child of {staging_root}: {output}")
     return output
+
+
+def validate_completion_profile(source: Path, stack: str) -> dict[str, object]:
+    manifest_path = source / "wheelhouse.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"wheelhouse manifest not found: {manifest_path}") from exc
+    except (json.JSONDecodeError, OSError) as exc:
+        raise RuntimeError(f"wheelhouse manifest is unreadable: {manifest_path}: {exc}") from exc
+
+    profiles = manifest.get("profiles") if manifest.get("schema") == 2 else None
+    profile = profiles.get(stack) if isinstance(profiles, dict) else None
+    if not isinstance(profile, dict):
+        raise RuntimeError(
+            f"wheelhouse completion profile is missing for {stack}; "
+            "run prepare_wheelhouse.py for this stack before packaging"
+        )
+    if not isinstance(profile.get("plan_signature"), str) or not profile["plan_signature"]:
+        raise RuntimeError(f"wheelhouse completion profile has no dependency signature: {stack}")
+    wheels = profile.get("wheels")
+    if not isinstance(wheels, list) or not wheels:
+        raise RuntimeError(f"wheelhouse completion profile contains no wheels: {stack}")
+    for item in wheels:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str) or not isinstance(item.get("size"), int):
+            raise RuntimeError(f"wheelhouse completion profile contains an invalid record: {stack}")
+        relative = Path(item["path"])
+        if relative.is_absolute() or ".." in relative.parts or relative.suffix.lower() != ".whl":
+            raise RuntimeError(f"wheelhouse completion profile contains an unsafe path: {relative}")
+        wheel = source / relative
+        try:
+            actual_size = wheel.stat().st_size
+        except OSError as exc:
+            raise RuntimeError(f"recorded wheel is missing for {stack}: {relative.as_posix()}") from exc
+        if actual_size != item["size"]:
+            raise RuntimeError(
+                f"recorded wheel size changed for {stack}: {relative.as_posix()} "
+                f"({actual_size} bytes, expected {item['size']})"
+            )
+    return profile
 
 
 def validate_rocm_wheels(directory: Path) -> None:
@@ -117,9 +161,8 @@ def stage_wheelhouse(root: Path, stack: str, output: Path) -> dict[str, object]:
 
     root = root.resolve()
     source = root / "assets" / "wheels"
-    if not (source / "wheelhouse.json").is_file():
-        raise FileNotFoundError(f"wheelhouse manifest not found: {source / 'wheelhouse.json'}")
     output = _safe_output(root, output, source)
+    source_profile = validate_completion_profile(source, stack)
 
     if output.exists():
         shutil.rmtree(output)
@@ -157,6 +200,33 @@ def stage_wheelhouse(root: Path, stack: str, output: Path) -> dict[str, object]:
             copied += 1
         groups[relative.parent.as_posix()] += 1
 
+    expected_paths: set[Path] = set()
+    for item in source_profile["wheels"]:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            continue
+        relative = Path(item["path"])
+        if not wheel_belongs_to_stack(relative, stack):
+            continue
+        if stack == "rocm10" and (
+            len(relative.parts) >= 4
+            and relative.parts[0] in {"pymss", "ddsp-legacy"}
+            and relative.name.lower() in shared_names
+        ):
+            continue
+        expected_paths.add(relative)
+    staged_paths = {
+        wheel.relative_to(output)
+        for wheel in output.rglob("*.whl")
+    }
+    missing_profile_wheels = sorted(expected_paths - staged_paths)
+    if missing_profile_wheels:
+        preview = ", ".join(path.as_posix() for path in missing_profile_wheels[:5])
+        suffix = " ..." if len(missing_profile_wheels) > 5 else ""
+        raise RuntimeError(
+            f"wheelhouse completion profile contains wheels excluded from {stack} staging: "
+            f"{preview}{suffix}"
+        )
+
     required = output / "py312" / stack
     if not required.is_dir() or not any(required.glob("*.whl")):
         raise RuntimeError(f"selected wheelhouse group is empty: {required}")
@@ -177,12 +247,13 @@ def stage_wheelhouse(root: Path, stack: str, output: Path) -> dict[str, object]:
                 "rebuild the wheelhouse before packaging"
             )
     if stack == "directml":
-        legacy = output / "ddsp-legacy" / "py312" / "cpu"
-        if not legacy.is_dir() or not any(legacy.glob("*.whl")):
-            raise RuntimeError(
-                f"selected wheelhouse component group is empty: {legacy}; "
-                "rebuild the wheelhouse before packaging"
-            )
+        for component in ("pymss", "ddsp-legacy"):
+            cpu_group = output / component / "py312" / "cpu"
+            if not cpu_group.is_dir() or not any(cpu_group.glob("*.whl")):
+                raise RuntimeError(
+                    f"selected wheelhouse component group is empty: {cpu_group}; "
+                    "rebuild the wheelhouse before packaging"
+                )
 
     if stack == "rocm10":
         for group in groups:
@@ -199,6 +270,7 @@ def stage_wheelhouse(root: Path, stack: str, output: Path) -> dict[str, object]:
         "platform": "win_amd64",
         "package_stack": stack,
         "source": "filtered from the developer assets/wheels cache",
+        "source_plan_signature": source_profile["plan_signature"],
         "groups": [
             {"path": path, "wheel_count": count}
             for path, count in sorted(groups.items())

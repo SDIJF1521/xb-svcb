@@ -26,7 +26,7 @@
 
 <br/>
 
-### ⬇️ [**选择硬件专用安装包 · CPU / ROCm 10 / DirectML / CUDA126 / CUDA128**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+### ⬇️ [**下载在线安装器 · 自动选择 CPU / AMD / NVIDIA 版本**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
 
 <sub>Windows 一键安装 · 内置前端与底模 · 无需手动配置 Python / Node</sub>
 
@@ -63,14 +63,14 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 
 ### 使用安装包
 
-普通用户建议直接使用 GitHub Releases 安装：
+普通用户建议直接使用 GitHub Releases 中的 `XB-SVCB-Online-Setup.exe`：
 
-1. 按硬件选择 CPU、ROCm 10、DirectML、CUDA126 或 CUDA128 安装包，并下载该包的 EXE 和全部同名前缀 BIN 文件。
-2. 运行 EXE，选择应用安装目录和用户数据目录。
+1. 运行在线安装器，使用自动检测或手动选择 CPU、ROCm 10、DirectML、CUDA126、CUDA128。
+2. 等待对应的完整安装包下载并通过 SHA-256 校验，然后选择应用安装目录和用户数据目录。
 3. 选择或手动指定 64 位 CPython 3.12.x，勾选「安装后立即搭建运行环境」。
 4. 通过桌面或开始菜单中的 XB-SVCB 启动应用。
 
-安装包内已包含前端、FFmpeg、模型框架源码、关键底模和对应硬件栈的离线 Python 依赖。NVIDIA 40 系及以下选择 CUDA126，RTX 50 系选择 CUDA128；两种 CUDA 包默认创建两层共享运行时。Windows AMD 首选 ROCm 10，也可按需选择 DirectML；无兼容 GPU 时选择 CPU。DirectML 包不提供 PyMSS 加速，DDSP 自动模式使用 CPU。
+需要离线安装时，按硬件下载专用包的 EXE 和全部同名前缀 BIN 文件，并放在同一目录。安装包内已包含前端、FFmpeg、模型框架源码、关键底模和对应硬件栈的离线 Python 依赖。NVIDIA 40 系及以下选择 CUDA126，RTX 50 系选择 CUDA128；两种 CUDA 包默认创建两层共享运行时。Windows AMD 首选 ROCm 10，也可按需选择 DirectML；无兼容 GPU 时选择 CPU。DirectML 包中的 PyMSS 和 DDSP 自动模式使用 CPU 推理；PyMSS 不会使用 DirectML 加速。
 
 ### 从源码安装
 
@@ -326,7 +326,7 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 
 ## Roadmap
 
-当前版本：**v0.0.32**
+当前版本：**v0.1.0**
 
 已完成的核心方向：
 
@@ -347,7 +347,7 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 - 作品分类、视频导出和歌词视频能力；
 - Intel GPU、CPU 性能和多 GPU 调度优化。
 
-完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.0.32 更新说明](docs/release-notes/release_notes_v032.md)。
+完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.1.0 更新说明](docs/release-notes/release_notes_v0_1_0.md)。
 
 ## 🤝 贡献者
 

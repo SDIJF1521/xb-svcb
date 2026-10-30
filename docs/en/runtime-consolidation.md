@@ -12,7 +12,7 @@ NVIDIA CUDA126 and CUDA128 use two shared environments by default. SVC/RVC/Vocal
 | --- | --- | --- |
 | CPU | Isolated compatibility | `.venv-uvr`, `.venv-svc`, `.venv-rvc`, `.venv-seedvc`, `.venv-ddsp`, `.venv-vocal` |
 | ROCm 10 | Shared SVC group | `runtimes/svc-rocm10` for SVC/RVC/Vocal; `.venv-*` for other components, including separate PyMSS |
-| DirectML | Isolated compatibility | `.venv-*`; DDSP automatically uses CPU and PyMSS does not support DirectML |
+| DirectML | Isolated compatibility | `.venv-*`; DDSP automatically uses CPU, and PyMSS falls back to CPU in its isolated environment |
 | CUDA126 | Two shared layers | `runtimes/core-cu126`, `runtimes/svc-cu126` |
 | CUDA128 | Two shared layers | `runtimes/core-cu128`, `runtimes/svc-cu128` |
 
@@ -103,7 +103,7 @@ Resolve the CUDA128 core recipe without installing:
 Audit installed shared environments:
 
 ```powershell
-& .\runtimes\core-cu128\Scripts\python.exe -B .\install\audit_runtime.py --root . --require-cuda
+& .\runtimes\core-cu128\Scripts\python.exe -B .\install\audit_runtime.py --root . --require-cuda --timeout 90 --ddsp-timeout 180
 & uv pip check --python .\runtimes\core-cu128\Scripts\python.exe
 & uv pip check --python .\runtimes\svc-cu128\Scripts\python.exe
 ```

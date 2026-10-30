@@ -37,7 +37,20 @@ Torch、torchvision、torchaudioは固有の公式versionを使い、同じと�
 
 オフライン一時配置ではwheel内の`torch/version.py`からROCm 10とHIP markerを確認し、DirectML依存ディレクトリの混入を拒否します。検証済み公式Windows cp312 wheelは`torch.version.rocm == '10.0.0'`、`torch.version.hip == '7.15.26333'`です。数値は異なり、HIP majorをROCm majorの代わりにできません。sourceとversionが不一致ならパッケージ作成を停止します。
 
-PyMSSは独立`.venv-pymss`に同じROCmスタックを導入してAMD高速化します。`auto`はHIPを検出して`rocm`と報告し、明示的`rocm`が利用不能なら失敗します。PyMSSはDirectML非対応です。ROCm 10のSVC/RVC/Vocalは`runtimes/svc-rocm10`を共有します。独立DirectMLパッケージとRVC DirectML環境は選択できますが、ROCm Torchとは混在できません。
+## オフライン配布cacheとnetwork復旧
+
+配布側の`-RebuildWheelhouse`はcacheを増分補完します。CPU、ROCm、DirectML、CUDAの全cacheを削除するのは、明示的な`-CleanWheelhouse`だけです。CPUのSVC/RVC groupはROCmより前に生成されるため、AMD indexの失敗でCPU stackが不完全なまま残りません。ROCmのPyMSSとDDSP component groupは共有ROCm Torch/SDK wheelをhardlinkで再利用し、一時配置時にfilenameで重複排除します。
+
+中断したROCm DDSP batchは次のcommandで再開できます。
+
+```powershell
+& C:\python3.12.9\python.exe .\install\prepare_wheelhouse.py `
+  --root . --stack rocm10 --from-batch "ddsp legacy rocm10 torch"
+```
+
+`ResolutionImpossible`より前に`ProxyError('Cannot connect to proxy')`またはTLS handshake timeoutが出る場合、固定versionの実際の競合ではなく、indexを読めないためにpipが出した二次errorであることが通常です。現在のPowerShellにある`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`XB_TORCH_ROCM_INDEX`を確認し、network修正後は完了済みROCm wheelを削除せず増分commandを再実行してください。
+
+PyMSSは独立`.venv-pymss`に同じROCmスタックを導入してAMD高速化します。`auto`はHIPを検出して`rocm`と報告し、明示的`rocm`が利用不能なら失敗します。PyMSSはDirectMLバックエンドを使用しません。DirectMLパッケージは独立したCPU Torch 2.7.1 wheelを同梱し、PyMSSをCPUで実行することで、`torch-directml`が固定するTorch 2.4.1との混在を避けます。ROCm 10のSVC/RVC/Vocalは`runtimes/svc-rocm10`を共有します。独立DirectMLパッケージとRVC DirectML環境は選択できますが、ROCm Torchとは混在できません。
 
 ## DDSPとSeedVCモデル
 

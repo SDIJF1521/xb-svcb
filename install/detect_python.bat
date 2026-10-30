@@ -10,6 +10,11 @@ set "XB_PYTHON_CANDIDATE_DIR=%XB_PYTHON_DIR%"
 set "XB_PYTHON_EXE="
 set "XB_PYTHON_DIR="
 
+rem Installed packages always prefer the bundled CPython runtime. This keeps
+rem setup and later repairs independent from global Python installations.
+call :TRY_PYTHON "%~dp0..\tools\python312\python.exe"
+if defined XB_PYTHON_DETECTED goto PYTHON_FOUND
+
 rem Honour an explicit executable or directory before probing global commands.
 if defined XB_PYTHON_CANDIDATE_EXE call :TRY_PYTHON "%XB_PYTHON_CANDIDATE_EXE%"
 if defined XB_PYTHON_DETECTED goto PYTHON_FOUND

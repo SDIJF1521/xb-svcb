@@ -26,6 +26,29 @@ def _wheel(root: Path, relative: str) -> None:
     path.write_bytes(relative.encode("ascii"))
 
 
+def _write_profile(root: Path, stack: str) -> None:
+    wheel_root = root / "assets" / "wheels"
+    wheels = [
+        {
+            "path": path.relative_to(wheel_root).as_posix(),
+            "size": path.stat().st_size,
+        }
+        for path in sorted(wheel_root.rglob("*.whl"))
+    ]
+    manifest = {
+        "schema": 2,
+        "profiles": {
+            stack: {
+                "plan_signature": f"test-{stack}",
+                "wheels": wheels,
+            }
+        },
+    }
+    (wheel_root / "wheelhouse.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+
+
 def _cuda_torch_wheel(root: Path, relative: str, tag: str = "cp312") -> None:
     path = root / "assets" / "wheels" / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -41,7 +64,6 @@ def test_stage_wheelhouse_keeps_only_selected_stack(tmp_path: Path) -> None:
     stager = _load_stager()
     wheel_root = tmp_path / "assets" / "wheels"
     wheel_root.mkdir(parents=True)
-    (wheel_root / "wheelhouse.json").write_text("{}", encoding="utf-8")
     _wheel(tmp_path, "bootstrap/uv.whl")
     _wheel(tmp_path, "common/metadata.whl")
     _wheel(tmp_path, "py312/cpu/torch-cpu.whl")
@@ -52,6 +74,7 @@ def test_stage_wheelhouse_keeps_only_selected_stack(tmp_path: Path) -> None:
     _wheel(tmp_path, "ddsp-legacy/py312/cu128/fairseq-fixed.whl")
     _wheel(tmp_path, "pymss/py312/cu126/pymss-cu126.whl")
     _wheel(tmp_path, "svc/py39/cu128/obsolete.whl")
+    _write_profile(tmp_path, "cu128")
 
     output = tmp_path / ".tmp" / "installer-wheelhouse"
     result = stager.stage_wheelhouse(tmp_path, "cu128", output)
@@ -77,13 +100,13 @@ def test_cuda_staging_rejects_retagged_python310_torch(tmp_path: Path) -> None:
     stager = _load_stager()
     wheel_root = tmp_path / "assets" / "wheels"
     wheel_root.mkdir(parents=True)
-    (wheel_root / "wheelhouse.json").write_text("{}", encoding="utf-8")
     _wheel(tmp_path, "bootstrap/uv.whl")
     _cuda_torch_wheel(
         tmp_path,
         "py312/cu128/torch-2.7.1+cu128-cp312-cp312-win_amd64.whl",
         tag="cp310",
     )
+    _write_profile(tmp_path, "cu128")
 
     output = tmp_path / ".tmp" / "installer-wheelhouse"
     try:
@@ -98,11 +121,11 @@ def test_cpu_staging_requires_python312_component_groups(tmp_path: Path) -> None
     stager = _load_stager()
     wheel_root = tmp_path / "assets" / "wheels"
     wheel_root.mkdir(parents=True)
-    (wheel_root / "wheelhouse.json").write_text("{}", encoding="utf-8")
     _wheel(tmp_path, "bootstrap/uv.whl")
     _wheel(tmp_path, "py312/cpu/torch-cpu.whl")
     _wheel(tmp_path, "svc/py39/cpu/obsolete-svc.whl")
     _wheel(tmp_path, "rvc/py39/cpu/obsolete-rvc.whl")
+    _write_profile(tmp_path, "cpu")
 
     output = tmp_path / ".tmp" / "installer-wheelhouse"
     try:
@@ -114,11 +137,10 @@ def test_cpu_staging_requires_python312_component_groups(tmp_path: Path) -> None
         raise AssertionError("stale Python 3.9 CPU wheelhouse was accepted")
 
 
-def test_directml_staging_keeps_cpu_legacy_without_other_stack_wheels(tmp_path: Path) -> None:
+def test_directml_staging_keeps_cpu_fallbacks_without_other_stack_wheels(tmp_path: Path) -> None:
     stager = _load_stager()
     wheel_root = tmp_path / "assets" / "wheels"
     wheel_root.mkdir(parents=True)
-    (wheel_root / "wheelhouse.json").write_text("{}", encoding="utf-8")
     expected = {
         "bootstrap/uv.whl",
         "common/metadata.whl",
@@ -126,6 +148,7 @@ def test_directml_staging_keeps_cpu_legacy_without_other_stack_wheels(tmp_path: 
         "ddsp/py312/directml/torch-cpu.whl",
         "vocal/py312/directml/torch-cpu.whl",
         "hub/py312/directml/modelscope.whl",
+        "pymss/py312/cpu/pymss-cpu.whl",
         "ddsp-legacy/py312/cpu/torch-cpu.whl",
     }
     for path in expected | {
@@ -136,6 +159,7 @@ def test_directml_staging_keeps_cpu_legacy_without_other_stack_wheels(tmp_path: 
         "svc/py312/cpu/other.whl",
     }:
         _wheel(tmp_path, path)
+    _write_profile(tmp_path, "directml")
 
     output = tmp_path / ".tmp" / "installer-wheelhouse"
     result = stager.stage_wheelhouse(tmp_path, "directml", output)
@@ -149,15 +173,16 @@ def test_directml_staging_requires_cpu_legacy_group(tmp_path: Path) -> None:
     stager = _load_stager()
     wheel_root = tmp_path / "assets" / "wheels"
     wheel_root.mkdir(parents=True)
-    (wheel_root / "wheelhouse.json").write_text("{}", encoding="utf-8")
     for path in (
         "bootstrap/uv.whl",
         "py312/directml/torch_directml-0.2.5.whl",
         "ddsp/py312/directml/torch-cpu.whl",
         "vocal/py312/directml/torch-cpu.whl",
         "hub/py312/directml/modelscope.whl",
+        "pymss/py312/cpu/pymss-cpu.whl",
     ):
         _wheel(tmp_path, path)
+    _write_profile(tmp_path, "directml")
 
     output = tmp_path / ".tmp" / "installer-wheelhouse"
     try:
@@ -168,13 +193,37 @@ def test_directml_staging_requires_cpu_legacy_group(tmp_path: Path) -> None:
         raise AssertionError("DirectML wheelhouse without DDSP legacy CPU wheels was accepted")
 
 
+def test_directml_staging_requires_cpu_pymss_group(tmp_path: Path) -> None:
+    stager = _load_stager()
+    wheel_root = tmp_path / "assets" / "wheels"
+    wheel_root.mkdir(parents=True)
+    for path in (
+        "bootstrap/uv.whl",
+        "py312/directml/torch_directml-0.2.5.whl",
+        "ddsp/py312/directml/torch-cpu.whl",
+        "vocal/py312/directml/torch-cpu.whl",
+        "hub/py312/directml/modelscope.whl",
+        "ddsp-legacy/py312/cpu/torch-cpu.whl",
+    ):
+        _wheel(tmp_path, path)
+    _write_profile(tmp_path, "directml")
+
+    output = tmp_path / ".tmp" / "installer-wheelhouse"
+    try:
+        stager.stage_wheelhouse(tmp_path, "directml", output)
+    except RuntimeError as exc:
+        assert str(output / "pymss" / "py312" / "cpu") in str(exc)
+    else:
+        raise AssertionError("DirectML wheelhouse without PyMSS CPU wheels was accepted")
+
+
 def test_directml_staging_requires_directml_torch_wheel(tmp_path: Path) -> None:
     stager = _load_stager()
     wheel_root = tmp_path / "assets" / "wheels"
     wheel_root.mkdir(parents=True)
-    (wheel_root / "wheelhouse.json").write_text("{}", encoding="utf-8")
     _wheel(tmp_path, "bootstrap/uv.whl")
     _wheel(tmp_path, "py312/directml/other.whl")
+    _write_profile(tmp_path, "directml")
 
     output = tmp_path / ".tmp" / "installer-wheelhouse"
     try:
@@ -189,9 +238,9 @@ def test_stage_wheelhouse_rejects_output_outside_repo_tmp(tmp_path: Path) -> Non
     stager = _load_stager()
     wheel_root = tmp_path / "assets" / "wheels"
     wheel_root.mkdir(parents=True)
-    (wheel_root / "wheelhouse.json").write_text("{}", encoding="utf-8")
     _wheel(tmp_path, "bootstrap/uv.whl")
     _wheel(tmp_path, "py312/cpu/torch-cpu.whl")
+    _write_profile(tmp_path, "cpu")
 
     try:
         stager.stage_wheelhouse(tmp_path, "cpu", tmp_path / "unsafe-output")
@@ -199,3 +248,25 @@ def test_stage_wheelhouse_rejects_output_outside_repo_tmp(tmp_path: Path) -> Non
         assert "must be a child" in str(exc)
     else:
         raise AssertionError("unsafe staging output was accepted")
+
+
+def test_stage_wheelhouse_rejects_partial_cache_with_stale_completion_profile(
+    tmp_path: Path,
+) -> None:
+    stager = _load_stager()
+    _wheel(tmp_path, "bootstrap/uv.whl")
+    _wheel(tmp_path, "py312/cpu/torch-cpu.whl")
+    _wheel(tmp_path, "svc/py312/cpu/svc.whl")
+    _wheel(tmp_path, "rvc/py312/cpu/rvc.whl")
+    _wheel(tmp_path, "pymss/py312/cpu/pymss.whl")
+    _wheel(tmp_path, "ddsp-legacy/py312/cpu/ddsp.whl")
+    _write_profile(tmp_path, "cpu")
+    (tmp_path / "assets/wheels/svc/py312/cpu/svc.whl").unlink()
+
+    output = tmp_path / ".tmp" / "installer-wheelhouse"
+    try:
+        stager.stage_wheelhouse(tmp_path, "cpu", output)
+    except RuntimeError as exc:
+        assert "recorded wheel is missing" in str(exc)
+    else:
+        raise AssertionError("partial wheel cache passed its completion profile")

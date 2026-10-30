@@ -56,7 +56,39 @@ def test_import_audit_handles_timeout(tmp_path, monkeypatch):
         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
 
     monkeypatch.setattr(audit.subprocess, "run", timeout)
-    assert not audit.probe("seedvc", "import inference", tmp_path, 1)["ok"]
+    result = audit.probe("seedvc", "import inference", tmp_path, 1)
+    assert not result["ok"]
+    assert result["timed_out"] is True
+    assert result["timeout_seconds"] == 1
+    assert result["error"] == "Import audit exceeded 1 seconds"
+
+
+def test_ddsp_import_uses_its_longer_cold_start_timeout(tmp_path, monkeypatch):
+    audit = load_helper("audit_runtime")
+    seen: list[tuple[str, int]] = []
+
+    def fake_probe(name, code, cwd, timeout):
+        seen.append((name, timeout))
+        return {"name": name, "ok": True}
+
+    monkeypatch.setattr(audit, "probe", fake_probe)
+    monkeypatch.setattr(audit, "dependency_issues", lambda: [])
+    monkeypatch.setattr(
+        audit.metadata,
+        "version",
+        lambda _name: (_ for _ in ()).throw(audit.metadata.PackageNotFoundError),
+    )
+
+    report = audit.audit(tmp_path, timeout=90, ddsp_timeout=180)
+
+    assert report["ok"] is True
+    assert seen == [
+        ("torch", 90),
+        ("uvr_mdx", 90),
+        ("uvr_vr", 90),
+        ("seedvc", 90),
+        ("ddsp", 180),
+    ]
 
 
 @pytest.mark.parametrize("payload", [[], {"version": 2}, {"version": 1, "python": []},

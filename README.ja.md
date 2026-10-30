@@ -22,7 +22,7 @@ AIカバー制作の全工程を一つのワークフローで実行できます
 [![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
 [![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
 
-### [ハードウェア別インストーラー: CPU / ROCm 10 / DirectML / CUDA126 / CUDA128](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+### [オンラインインストーラー: CPU / AMD / NVIDIA を自動選択](https://github.com/SDIJF1521/xb-svcb/releases/latest)
 
 <sub>Windows向けワンクリックインストール。フロントエンドと基本モデルを同梱し、Python / Node.jsの手動設定は不要です。</sub>
 
@@ -58,14 +58,14 @@ So-VITS-SVC、RVC、SeedVC、DDSP-SVCをサポートしています。また、U
 
 ### インストーラーを使う
 
-通常の利用では、GitHub Releasesの最新版を推奨します。
+通常の利用では、GitHub Releasesの最新版から`XB-SVCB-Online-Setup.exe`をダウンロードしてください。
 
-1. CPU、ROCm 10、DirectML、CUDA126、CUDA128からハードウェアに合うパッケージを選び、EXEと同じ接頭辞を持つすべてのBINファイルをダウンロードします。
-2. EXEを実行し、アプリケーションのインストール先とユーザーデータの保存先を選択します。
+1. オンラインインストーラーを実行し、自動検出を使用するか、CPU、ROCm 10、DirectML、CUDA126、CUDA128を手動で選択します。
+2. 対応する完全パッケージのダウンロードとSHA-256検証が完了したら、アプリケーションのインストール先とユーザーデータの保存先を選択します。
 3. 64ビットCPython 3.12.xを選択するか自動検出を使い、「インストール後に実行環境を構築」を有効にします。
 4. デスクトップまたはスタートメニューからXB-SVCBを起動します。
 
-パッケージには、ビルド済みフロントエンド、FFmpeg、各エンジンのソース、主要な基本モデル、選択したハードウェア向けのオフラインPython依存関係が含まれます。NVIDIA RTX 40シリーズ以前はCUDA126、RTX 50シリーズはCUDA128、Windows AMDではROCm 10を優先し、必要に応じてDirectMLを選択してください。対応GPUがない場合はCPUを使用します。DirectMLではPyMSSの高速化は利用できず、DDSPの自動モードはCPUを使用します。
+完全なオフラインインストールでは、ハードウェア別パッケージのEXEと同じ接頭辞を持つすべてのBINファイルをダウンロードし、同じディレクトリに置いてください。パッケージには、ビルド済みフロントエンド、FFmpeg、各エンジンのソース、主要な基本モデル、選択したハードウェア向けのオフラインPython依存関係が含まれます。NVIDIA RTX 40シリーズ以前はCUDA126、RTX 50シリーズはCUDA128、Windows AMDではROCm 10を優先し、必要に応じてDirectMLを選択してください。対応GPUがない場合はCPUを使用します。DirectMLパッケージではPyMSSとDDSPの自動モードがCPU推論を使用し、PyMSSはDirectMLで高速化しません。
 
 ### ソースからインストール
 
@@ -214,11 +214,11 @@ npm run build
 
 ## ロードマップ
 
-現在のバージョン: **v0.0.32**
+現在のバージョン: **v0.1.0**
 
 複数フレームワークでの推論、タイムライン式の複数歌手カバー、Audio Editor Lite、ModelScopeモデルハブ、FastAPI連携、CUDA / ROCm 10 / DirectML / CPU対応、プラグインランタイムは実装済みです。今後は歌詞の自動認識とタイムライン生成、モデルメタデータの標準化、プロジェクトの入出力と自動保存、対応フレームワークの追加、動画・歌詞動画の書き出し、Intel GPU / CPU / マルチGPUの最適化に取り組みます。
 
-全バージョンの履歴は[リリースノート](docs/release-notes/)を参照してください。
+全バージョンの履歴は[リリースノート](docs/release-notes/)を参照してください。現行版は[v0.1.0リリースノート](docs/release-notes/release_notes_v0_1_0.ja.md)で確認できます。
 
 ## コントリビューター
 

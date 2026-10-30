@@ -2,7 +2,7 @@
 
 用法：
     python installer/make_icon.py [源png] [输出ico]
-默认：assets/icon/source.png -> assets/icon/xb-svcb.ico
+默认：assets/icon/source.png -> web/public/favicon.ico
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "assets" / "icon" / "source.png"
-OUT = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "assets" / "icon" / "xb-svcb.ico"
+OUT = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "web" / "public" / "favicon.ico"
 
 SIZES = [16, 24, 32, 48, 64, 128, 256]
 

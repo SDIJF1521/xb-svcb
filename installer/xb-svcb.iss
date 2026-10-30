@@ -22,9 +22,9 @@
 ;  应用界面本身由 exe 自带，无需 Node / Python。
 ; ============================================================
 
-#define MyAppName "XB-SVCB AI 翻唱工具"
+#define MyAppName "XB-SVCB"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.0.32"
+#define MyAppVersion "0.1.0"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 #ifndef XB_PACKAGE_STACK
@@ -62,16 +62,403 @@ SlicesPerDisk=1
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+ShowLanguageDialog=yes
+LanguageDetectionMethod=uilanguage
 ; 安装器与卸载项图标
-SetupIconFile=..\assets\icon\xb-svcb.ico
+SetupIconFile=..\web\public\favicon.ico
 UninstallDisplayIcon={app}\{#MyAppExe}
 
 [Languages]
-; 默认使用随 Inno 自带的 Default.isl，保证任何机器都能编译。
-; 如需简体中文向导：把 ChineseSimplified.isl 放入 Inno 的 Languages 目录后，
-; 取消下一行注释（该翻译为非官方语言包，需自行下载）。
-; Name: "chs"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; Vendor non-English language files so release builds do not depend on the
+; optional translations installed on a particular build machine.
+Name: "zhcn"; MessagesFile: "languages\ChineseSimplified.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
+Name: "ja"; MessagesFile: "languages\Japanese.isl"
+
+[CustomMessages]
+zhcn.CreateDesktopIcon=创建桌面快捷方式
+en.CreateDesktopIcon=Create a desktop shortcut
+ja.CreateDesktopIcon=デスクトップにショートカットを作成する
+zhcn.AdditionalIcons=快捷方式：
+en.AdditionalIcons=Shortcuts:
+ja.AdditionalIcons=ショートカット:
+zhcn.RepairEnvironment=搭建/修复运行环境
+en.RepairEnvironment=Set up or repair runtime
+ja.RepairEnvironment=ランタイムをセットアップまたは修復
+zhcn.UninstallApp=卸载 %1
+en.UninstallApp=Uninstall %1
+ja.UninstallApp=%1 をアンインストール
+zhcn.LaunchApp=立即启动 %1
+en.LaunchApp=Launch %1 now
+ja.LaunchApp=%1 を今すぐ起動
+
+zhcn.Detected=已检测到
+en.Detected=Detected
+ja.Detected=検出済み
+zhcn.NotDetected=未检测到
+en.NotDetected=Not detected
+ja.NotDetected=未検出
+zhcn.LockedPython=已锁定 %1
+en.LockedPython=Selected %1
+ja.LockedPython=%1 を選択済み
+zhcn.PythonMissing=安装包内置 Python 缺失或不可运行
+en.PythonMissing=The bundled Python runtime is missing or not runnable
+ja.PythonMissing=同梱 Python ランタイムが見つからないか実行できません
+zhcn.OpenDownloadFailed=无法打开下载页面：%1%n请复制链接到浏览器中打开。
+en.OpenDownloadFailed=Could not open the download page: %1%nCopy the link and open it in your browser.
+ja.OpenDownloadFailed=ダウンロードページを開けませんでした: %1%nリンクをコピーしてブラウザーで開いてください。
+zhcn.UvAutoInstallInfo=uv 会使用安装包内置 Python 3.12.x 自动准备，无需手动下载。
+en.UvAutoInstallInfo=uv is prepared automatically with bundled Python 3.12.x. No manual download is required.
+ja.UvAutoInstallInfo=uv は同梱 Python 3.12.x で自動的に準備されます。手動ダウンロードは不要です。
+
+zhcn.EnvironmentPageTitle=环境检查与前置依赖
+en.EnvironmentPageTitle=Environment and prerequisites
+ja.EnvironmentPageTitle=環境と前提条件
+zhcn.EnvironmentPageSubtitle=先检查运行环境，再选择安装路径
+en.EnvironmentPageSubtitle=Check the runtime before choosing the install location
+ja.EnvironmentPageSubtitle=インストール先を選択する前にランタイムを確認します
+zhcn.EnvironmentSummaryIntro=安装器会先检查运行环境，再进入安装路径选择。当前检测结果：
+en.EnvironmentSummaryIntro=Setup checks the runtime before the install location. Current results:
+ja.EnvironmentSummaryIntro=インストール先を選択する前にランタイムを確認します。現在の結果:
+zhcn.BundledFfmpegHint=（未检测到时使用安装包内置版本）
+en.BundledFfmpegHint= (the bundled version will be used if missing)
+ja.BundledFfmpegHint= (未検出の場合は同梱版を使用します)
+zhcn.UvHint=（安装时自动准备；不会托管 Python）
+en.UvHint= (prepared automatically during setup; Python is not managed)
+ja.UvHint= (セットアップ中に自動準備されます。Python は管理しません)
+zhcn.VbCableHint=（系统音频变声可选，未安装时请手动安装）
+en.VbCableHint= (optional for system-wide voice conversion; install manually if needed)
+ja.VbCableHint= (システム音声変換では任意です。必要な場合は手動でインストールしてください)
+zhcn.JuceBundled=随安装包内置，安装后检查
+en.JuceBundled=Bundled; verified after installation
+ja.JuceBundled=同梱済み。インストール後に確認します
+zhcn.PythonSelectionHint=Python 3.12.x 已随安装包提供，无需另外安装或选择。
+en.PythonSelectionHint=Python 3.12.x is included with setup; no separate installation or selection is required.
+ja.PythonSelectionHint=Python 3.12.x はセットアップに同梱されるため、別途インストールまたは選択する必要はありません。
+zhcn.BuildRuntimeOption=安装后立即搭建运行环境（创建 AI 子环境、复制自带模型；仅 Python 依赖需联网，耗时较长）
+en.BuildRuntimeOption=Set up the runtime after installation (creates AI environments and copies bundled models; Python packages require internet access and may take time)
+ja.BuildRuntimeOption=インストール後にランタイムをセットアップする (AI 環境を作成して同梱モデルをコピーします。Python パッケージにはインターネット接続が必要で時間がかかります)
+zhcn.ConfigureEnvironmentOption=配置 PATH / CUDA_PATH / VSINSTALLDIR 等用户环境变量（不安装软件）
+en.ConfigureEnvironmentOption=Configure user environment variables such as PATH / CUDA_PATH / VSINSTALLDIR (does not install system software)
+ja.ConfigureEnvironmentOption=PATH / CUDA_PATH / VSINSTALLDIR などのユーザー環境変数を設定する (システムソフトウェアはインストールしません)
+zhcn.ShowDetailsOption=在安装器窗口显示详细安装信息（可选；完整日志仍会写入安装目录）
+en.ShowDetailsOption=Show detailed setup output (optional; the full log is always saved in the install directory)
+ja.ShowDetailsOption=セットアップの詳細を表示する (任意。完全なログはインストール先に保存されます)
+
+zhcn.GpuPageTitle=GPU 推理栈
+en.GpuPageTitle=GPU inference stack
+ja.GpuPageTitle=GPU 推論スタック
+zhcn.GpuPageSubtitle=选择本机要使用的推理依赖栈
+en.GpuPageSubtitle=Choose the inference stack for this computer
+ja.GpuPageSubtitle=このコンピューターで使用する推論スタックを選択します
+zhcn.GpuPageDescription=安装器会复核实际显卡：NVIDIA 使用匹配的 CUDA 栈，AMD Radeon 使用 ROCm 10；没有兼容 GPU 时安装 CPU 版。
+en.GpuPageDescription=Setup verifies the installed GPU: NVIDIA uses the matching CUDA stack, AMD Radeon uses ROCm 10, and systems without a compatible GPU use the CPU build.
+ja.GpuPageDescription=セットアップが GPU を確認します。NVIDIA は対応する CUDA、AMD Radeon は ROCm 10、対応 GPU がない場合は CPU 版を使用します。
+zhcn.GpuAuto=自动检测（推荐）
+en.GpuAuto=Auto detect (recommended)
+ja.GpuAuto=自動検出 (推奨)
+zhcn.GpuCpu=CPU 模式
+en.GpuCpu=CPU mode
+ja.GpuCpu=CPU モード
+zhcn.GpuCuda126=NVIDIA 50 系以下：共享 CUDA 12.6（cu126）
+en.GpuCuda126=NVIDIA pre-50 series: shared CUDA 12.6 (cu126)
+ja.GpuCuda126=NVIDIA 50 シリーズ未満: 共有 CUDA 12.6 (cu126)
+zhcn.GpuCuda128=NVIDIA 50 系 Blackwell：CUDA 12.8（cu128）
+en.GpuCuda128=NVIDIA 50 series Blackwell: CUDA 12.8 (cu128)
+ja.GpuCuda128=NVIDIA 50 シリーズ Blackwell: CUDA 12.8 (cu128)
+zhcn.GpuRocm10=AMD Radeon：ROCm 10
+en.GpuRocm10=AMD Radeon: ROCm 10
+ja.GpuRocm10=AMD Radeon: ROCm 10
+zhcn.GpuLabelCuda128=NVIDIA 50 系 / Blackwell，固定使用 CUDA 12.8（cu128 torch）
+en.GpuLabelCuda128=NVIDIA 50 series / Blackwell using CUDA 12.8 (cu128 torch)
+ja.GpuLabelCuda128=NVIDIA 50 シリーズ / Blackwell、CUDA 12.8 (cu128 torch)
+zhcn.GpuLabelCuda126=NVIDIA 50 系以下兼容显卡，使用共享 CUDA 12.6（cu126 torch）
+en.GpuLabelCuda126=Compatible pre-50-series NVIDIA GPU using shared CUDA 12.6 (cu126 torch)
+ja.GpuLabelCuda126=NVIDIA 50 シリーズ未満の対応 GPU、共有 CUDA 12.6 (cu126 torch)
+zhcn.GpuLabelRocm10=AMD Radeon，使用 ROCm 10 与 ROCm Torch
+en.GpuLabelRocm10=AMD Radeon using ROCm 10 and ROCm Torch
+ja.GpuLabelRocm10=AMD Radeon、ROCm 10 と ROCm Torch
+zhcn.GpuLabelDirectml=AMD Radeon，使用 Windows DirectML
+en.GpuLabelDirectml=AMD Radeon using Windows DirectML
+ja.GpuLabelDirectml=AMD Radeon、Windows DirectML
+zhcn.GpuLabelCpu=CPU 或未检测到兼容 GPU，安装 CPU 版 torch
+en.GpuLabelCpu=CPU or no compatible GPU detected; installs the CPU build of torch
+ja.GpuLabelCpu=CPU または対応 GPU が未検出。CPU 版 torch をインストールします
+
+zhcn.DownloadPageTitle=下载前置依赖
+en.DownloadPageTitle=Download prerequisites
+ja.DownloadPageTitle=前提条件のダウンロード
+zhcn.DownloadPageSubtitle=Python 和 FFmpeg 已内置；其他系统依赖由用户安装
+en.DownloadPageSubtitle=Python and FFmpeg are bundled; install other system dependencies manually
+ja.DownloadPageSubtitle=Python と FFmpeg は同梱済みです。その他のシステム依存関係は手動でインストールします
+zhcn.DownloadPageIntro=安装器已内置 Python 3.12 和 FFmpeg，不会自动运行 winget 或弹出其他系统安装程序。通过右侧按钮获取缺失的其他系统依赖，安装后点击“重新检测”。
+en.DownloadPageIntro=Setup includes Python 3.12 and FFmpeg and does not run winget or launch other system installers. Use the buttons to obtain other missing system dependencies, then select "Check again".
+ja.DownloadPageIntro=Python 3.12 と FFmpeg は同梱されています。winget や他のシステムインストーラーは自動実行しません。右側のボタンから不足している他の依存関係を入手し、インストール後に「再確認」を選択してください。
+zhcn.DownloadPython=安装包已内置
+en.DownloadPython=Included with setup
+ja.DownloadPython=セットアップに同梱
+zhcn.OpenGitDownload=打开 Git 下载
+en.OpenGitDownload=Open Git download
+ja.OpenGitDownload=Git のダウンロードを開く
+zhcn.AutoInstall=自动安装
+en.AutoInstall=Automatic
+ja.AutoInstall=自動インストール
+zhcn.OpenCppDownload=打开 C++ 下载
+en.OpenCppDownload=Open C++ download
+ja.OpenCppDownload=C++ のダウンロードを開く
+zhcn.OpenCudaDownload=打开 CUDA 下载
+en.OpenCudaDownload=Open CUDA download
+ja.OpenCudaDownload=CUDA のダウンロードを開く
+zhcn.OpenDriverDownload=打开驱动下载
+en.OpenDriverDownload=Open driver download
+ja.OpenDriverDownload=ドライバーのダウンロードを開く
+zhcn.OpenVbCableDownload=打开 VB-CABLE 下载
+en.OpenVbCableDownload=Open VB-CABLE download
+ja.OpenVbCableDownload=VB-CABLE のダウンロードを開く
+zhcn.CheckAgain=重新检测
+en.CheckAgain=Check again
+ja.CheckAgain=再確認
+
+zhcn.PythonPageTitle=内置 Python 3.12
+en.PythonPageTitle=Bundled Python 3.12
+ja.PythonPageTitle=同梱 Python 3.12
+zhcn.PythonPageSubtitle=安装器将使用随软件提供的 Python 运行时
+en.PythonPageSubtitle=Setup uses the Python runtime shipped with the application
+ja.PythonPageSubtitle=アプリに同梱された Python ランタイムを使用します
+zhcn.PythonPageDescription=无需单独安装或选择 Python。安装器固定使用内置的 64 位 CPython 3.12.x。
+en.PythonPageDescription=No separate Python installation or selection is required. Setup always uses bundled 64-bit CPython 3.12.x.
+ja.PythonPageDescription=Python を別途インストールまたは選択する必要はありません。同梱の 64 ビット CPython 3.12.x を常に使用します。
+zhcn.BundledPython=内置 Python（随安装器提供）
+en.BundledPython=Bundled Python (included with setup)
+ja.BundledPython=同梱 Python（セットアップに含まれます）
+zhcn.PrereqPathTitle=前置依赖安装/查找路径
+en.PrereqPathTitle=Prerequisite locations
+ja.PrereqPathTitle=前提条件の場所
+zhcn.PrereqPathSubtitle=选择依赖安装位置或已有路径
+en.PrereqPathSubtitle=Select existing dependency locations
+ja.PrereqPathSubtitle=既存の依存関係の場所を選択します
+zhcn.PrereqPathDescription=如果刚安装的依赖尚未加入 PATH，可在这里填写其安装目录；安装器不会在这些位置自动安装。
+en.PrereqPathDescription=If a newly installed dependency is not yet on PATH, enter its directory here. Setup will not install software into these locations.
+ja.PrereqPathDescription=インストールした依存関係が PATH に未登録の場合は場所を指定してください。セットアップはこれらの場所へソフトウェアをインストールしません。
+zhcn.CudaPathTitle=CUDA Toolkit 路径
+en.CudaPathTitle=CUDA Toolkit location
+ja.CudaPathTitle=CUDA Toolkit の場所
+zhcn.CudaPathSubtitle=选择 CUDA Toolkit 安装位置或已有目录
+en.CudaPathSubtitle=Select the CUDA Toolkit installation or an existing directory
+ja.CudaPathSubtitle=CUDA Toolkit のインストール先または既存の場所を選択します
+zhcn.CudaPathDescription=此页面只对 NVIDIA 显卡显示：50 系固定推荐 CUDA 12.8，50 系以下固定推荐 CUDA 12.6；PyTorch wheel 已包含推理运行库，Toolkit 用于配套工具链。
+en.CudaPathDescription=This page is shown only for NVIDIA GPUs. CUDA 12.8 is recommended for the 50 series and CUDA 12.6 for earlier GPUs. PyTorch wheels include the inference runtime; the Toolkit provides supporting tools.
+ja.CudaPathDescription=NVIDIA GPU でのみ表示されます。50 シリーズは CUDA 12.8、それ以前は CUDA 12.6 を推奨します。推論ランタイムは PyTorch wheel に含まれ、Toolkit は補助ツール用です。
+zhcn.DataPageTitle=选择用户数据存储位置
+en.DataPageTitle=Choose the user data location
+ja.DataPageTitle=ユーザーデータの保存先
+zhcn.DataPageSubtitle=模型、作品、下载素材、编辑工程与主题媒体保存在哪里？
+en.DataPageSubtitle=Where should models, works, downloads, editor projects, and theme media be stored?
+ja.DataPageSubtitle=モデル、作品、ダウンロード、編集プロジェクト、テーマメディアの保存先を選択します
+zhcn.DataPageDescription=建议选择空间充足的磁盘。该目录后续也可以在软件首页迁移。
+en.DataPageDescription=Choose a drive with enough free space. You can migrate this directory later from the app home page.
+ja.DataPageDescription=十分な空き容量のあるドライブを選択してください。後からアプリのホーム画面で移行できます。
+zhcn.DetailsPageTitle=详细安装信息
+en.DetailsPageTitle=Detailed setup output
+ja.DetailsPageTitle=セットアップの詳細
+zhcn.DetailsPageSubtitle=运行环境搭建输出
+en.DetailsPageSubtitle=Runtime setup output
+ja.DetailsPageSubtitle=ランタイムセットアップの出力
+zhcn.DetailsWaiting=安装详情会显示在这里；完整日志也会保存到安装目录。
+en.DetailsWaiting=Setup details appear here. The full log is also saved in the install directory.
+ja.DetailsWaiting=セットアップの詳細がここに表示されます。完全なログはインストール先にも保存されます。
+zhcn.RuntimeNotStarted=尚未开始搭建运行环境。
+en.RuntimeNotStarted=Runtime setup has not started.
+ja.RuntimeNotStarted=ランタイムのセットアップはまだ開始されていません。
+zhcn.FieldPython=Python 3.12.x：
+en.FieldPython=Python 3.12.x:
+ja.FieldPython=Python 3.12.x:
+zhcn.FieldGit=Git：
+en.FieldGit=Git:
+ja.FieldGit=Git:
+zhcn.FieldUv=uv：
+en.FieldUv=uv:
+ja.FieldUv=uv:
+zhcn.FieldCpp=Microsoft C++ Build Tools：
+en.FieldCpp=Microsoft C++ Build Tools:
+ja.FieldCpp=Microsoft C++ Build Tools:
+zhcn.FieldCuda=CUDA Toolkit：
+en.FieldCuda=CUDA Toolkit:
+ja.FieldCuda=CUDA Toolkit:
+zhcn.FieldDriver=显卡驱动：
+en.FieldDriver=GPU driver:
+ja.FieldDriver=GPU ドライバー:
+zhcn.FieldVbCable=VB-CABLE 虚拟音频线：
+en.FieldVbCable=VB-CABLE virtual audio cable:
+ja.FieldVbCable=VB-CABLE 仮想オーディオケーブル:
+zhcn.FieldGpuStack=GPU 推理栈：
+en.FieldGpuStack=GPU inference stack:
+ja.FieldGpuStack=GPU 推論スタック:
+zhcn.FieldJuce=JUCE VST3 Host：
+en.FieldJuce=JUCE VST3 Host:
+ja.FieldJuce=JUCE VST3 Host:
+zhcn.UvDetected=uv：已检测到
+en.UvDetected=uv: Detected
+ja.UvDetected=uv: 検出済み
+zhcn.UvPrepareWithPython=uv：安装时使用所选 Python 自动准备
+en.UvPrepareWithPython=uv: Will be prepared automatically using the selected Python
+ja.UvPrepareWithPython=uv: 選択した Python を使用して自動準備します
+zhcn.UvWaitingForPython=uv：等待 Python 安装完成后自动安装
+en.UvWaitingForPython=uv: Will be installed automatically after Python is available
+ja.UvWaitingForPython=uv: Python の準備後に自動インストールします
+zhcn.VbCableStatusHint=（系统音频变声需要；普通歌曲翻唱不需要）
+en.VbCableStatusHint= (required for system-wide voice conversion; not needed for regular song covers)
+ja.VbCableStatusHint= (システム音声変換に必要です。通常の楽曲カバーには不要です)
+zhcn.DownloadCuda=下载 CUDA %1
+en.DownloadCuda=Download CUDA %1
+ja.DownloadCuda=CUDA %1 をダウンロード
+zhcn.AmdDriverConfirm=AMD Radeon 驱动：请确认已安装
+en.AmdDriverConfirm=AMD Radeon driver: Confirm it is installed
+ja.AmdDriverConfirm=AMD Radeon ドライバー: インストール済みか確認してください
+zhcn.NvidiaDriverConfirm=NVIDIA 显卡驱动：请确认已安装
+en.NvidiaDriverConfirm=NVIDIA GPU driver: Confirm it is installed
+ja.NvidiaDriverConfirm=NVIDIA GPU ドライバー: インストール済みか確認してください
+zhcn.PythonExecutableLabel=Python 3.12 python.exe：
+en.PythonExecutableLabel=Python 3.12 python.exe:
+ja.PythonExecutableLabel=Python 3.12 python.exe:
+zhcn.GitDirectoryLabel=Git 目录：
+en.GitDirectoryLabel=Git directory:
+ja.GitDirectoryLabel=Git ディレクトリ:
+zhcn.FfmpegDirectoryLabel=FFmpeg 目录（分卷内置，系统已安装则跳过）：
+en.FfmpegDirectoryLabel=FFmpeg directory (bundled; skipped when a system copy exists):
+ja.FfmpegDirectoryLabel=FFmpeg ディレクトリ (同梱済み。システムにある場合はスキップ):
+zhcn.CppDirectoryLabel=C++ Build Tools 目录：
+en.CppDirectoryLabel=C++ Build Tools directory:
+ja.CppDirectoryLabel=C++ Build Tools ディレクトリ:
+zhcn.CudaDirectoryLabel=CUDA Toolkit 目录：
+en.CudaDirectoryLabel=CUDA Toolkit directory:
+ja.CudaDirectoryLabel=CUDA Toolkit ディレクトリ:
+zhcn.DataDirectoryLabel=用户数据目录：
+en.DataDirectoryLabel=User data directory:
+ja.DataDirectoryLabel=ユーザーデータディレクトリ:
+zhcn.RunningInstallStep=正在执行安装步骤...
+en.RunningInstallStep=Running setup step...
+ja.RunningInstallStep=セットアップ処理を実行しています...
+zhcn.FullLogFile=完整日志文件：%1
+en.FullLogFile=Full log file: %1
+ja.FullLogFile=完全なログファイル: %1
+zhcn.InvalidPython=请选择一个可运行的 64 位 CPython 3.12.x python.exe。
+en.InvalidPython=Select a working 64-bit CPython 3.12.x python.exe.
+ja.InvalidPython=実行可能な 64 ビット CPython 3.12.x python.exe を選択してください。
+zhcn.CannotCreateDataDir=无法创建用户数据目录：%1%n请换一个有写入权限、空间充足的位置。
+en.CannotCreateDataDir=Could not create the user data directory: %1%nChoose a writable location with enough free space.
+ja.CannotCreateDataDir=ユーザーデータディレクトリを作成できませんでした: %1%n書き込み可能で十分な空き容量のある場所を選択してください。
+zhcn.MissingPrereqConfirm=仍有一个或多个前置依赖未检测到。可以在下一页填写已有安装路径，也可以返回并安装缺失项。是否继续？
+en.MissingPrereqConfirm=One or more prerequisites are still missing. You can enter existing locations on the next page or go back and install the missing items. Continue?
+ja.MissingPrereqConfirm=未検出の前提条件があります。次のページで既存の場所を指定するか、戻って不足項目をインストールできます。続行しますか？
+zhcn.FinishedLog=运行环境安装详情已写入：%1%n安装过程不会打开 PowerShell 或命令行窗口；如需排查失败，请查看该日志。
+en.FinishedLog=Runtime setup details were saved to: %1%nSetup did not open PowerShell or a command window. Use this log to investigate failures.
+ja.FinishedLog=ランタイムセットアップの詳細を保存しました: %1%nPowerShell やコマンドウィンドウは開いていません。問題の調査にはこのログを使用してください。
+zhcn.LastLogSummary=最后日志摘要：
+en.LastLogSummary=Last log summary:
+ja.LastLogSummary=最後のログ概要:
+zhcn.LogStep=步骤：%1
+en.LogStep=Step: %1
+ja.LogStep=処理: %1
+zhcn.LogStarted=开始时间：%1
+en.LogStarted=Started: %1
+ja.LogStarted=開始時刻: %1
+zhcn.LogArguments=参数：%1
+en.LogArguments=Arguments: %1
+ja.LogArguments=引数: %1
+zhcn.LogFile=日志文件：%1
+en.LogFile=Log file: %1
+ja.LogFile=ログファイル: %1
+zhcn.DetailsLog=安装详情日志：%1
+en.DetailsLog=Setup details log: %1
+ja.DetailsLog=セットアップ詳細ログ: %1
+zhcn.BatchFailed=%1 执行失败，退出码：%2%n安装文件已经复制完成。可以稍后从开始菜单运行“搭建/修复运行环境”重试。%n%n详细日志：%3
+en.BatchFailed=%1 failed with exit code %2.%nThe application files were copied. Retry later from "Set up or repair runtime" in the Start menu.%n%nLog: %3
+ja.BatchFailed=%1 が終了コード %2 で失敗しました。%nアプリケーションファイルはコピー済みです。後でスタートメニューの「ランタイムをセットアップまたは修復」から再試行できます。%n%nログ: %3
+zhcn.StepCompleted=%1完成
+en.StepCompleted=%1 complete
+ja.StepCompleted=%1 完了
+zhcn.BundledValidationTitle=应用本体与内置组件校验
+en.BundledValidationTitle=Application and bundled component validation
+ja.BundledValidationTitle=アプリケーションと同梱コンポーネントの検証
+zhcn.BundledValidationOk=[ok] 应用本体、前端、AI workers、FFmpeg、引擎源码、离线模型、Python wheels 与 JUCE Host 完整。
+en.BundledValidationOk=[ok] Application, frontend, AI workers, FFmpeg, engine sources, offline models, Python wheels, and JUCE Host are complete.
+ja.BundledValidationOk=[ok] アプリ、フロントエンド、AI worker、FFmpeg、エンジンソース、オフラインモデル、Python wheel、JUCE Host は完全です。
+zhcn.BundledValidationFailed=[fail] 发布包缺少必要组件：
+en.BundledValidationFailed=[fail] Required package components are missing:
+ja.BundledValidationFailed=[fail] 必要なパッケージコンポーネントが不足しています:
+zhcn.BundledValidationDialog=安装包缺少必要组件，部分功能将不可用：%n%1%n%n请重新下载安装器的完整分卷文件。
+en.BundledValidationDialog=Required package components are missing and some features will be unavailable:%n%1%n%nDownload the complete installer and all matching split files again.
+ja.BundledValidationDialog=必要なパッケージコンポーネントが不足しているため、一部機能を利用できません:%n%1%n%n完全なインストーラーと対応する分割ファイルを再ダウンロードしてください。
+zhcn.RuntimeValidationTitle=%1 运行环境最终校验
+en.RuntimeValidationTitle=%1 runtime final validation
+ja.RuntimeValidationTitle=%1 ランタイムの最終検証
+zhcn.RuntimeReady=[ok] %1 运行环境可被软件识别。
+en.RuntimeReady=[ok] The %1 runtime is available to the app.
+ja.RuntimeReady=[ok] %1 ランタイムをアプリで使用できます。
+zhcn.RuntimeIncomplete=[fail] %1 运行环境不完整，软件会显示降级模式。
+en.RuntimeIncomplete=[fail] The %1 runtime is incomplete; the app will use degraded mode.
+ja.RuntimeIncomplete=[fail] %1 ランタイムが不完全なため、アプリは縮退モードになります。
+zhcn.InstallDirectory=安装目录：%1
+en.InstallDirectory=Install directory: %1
+ja.InstallDirectory=インストール先: %1
+zhcn.MissingItems=缺失项：
+en.MissingItems=Missing items:
+ja.MissingItems=不足項目:
+zhcn.PythonNotRunnable=%1 Python 不可运行
+en.PythonNotRunnable=%1 Python is not runnable
+ja.PythonNotRunnable=%1 Python を実行できません
+zhcn.RepairSuggestion=建议：从开始菜单运行“搭建/修复运行环境”，或在安装目录执行 %1。
+en.RepairSuggestion=Suggestion: Run "Set up or repair runtime" from the Start menu, or run %1 in the install directory.
+ja.RepairSuggestion=スタートメニューの「ランタイムをセットアップまたは修復」を実行するか、インストール先で %1 を実行してください。
+zhcn.RuntimeValidationDialog=%1 运行环境最终校验失败。%n%n缺失项：%n%2%n%n可稍后在安装目录执行：%3%n%n详细日志：%4
+en.RuntimeValidationDialog=%1 runtime validation failed.%n%nMissing items:%n%2%n%nRun this later in the install directory: %3%n%nLog: %4
+ja.RuntimeValidationDialog=%1 ランタイムの検証に失敗しました。%n%n不足項目:%n%2%n%n後でインストール先から実行してください: %3%n%nログ: %4
+zhcn.TorchMissingPython=[fail] %1 缺少 Python：%2
+en.TorchMissingPython=[fail] %1 is missing Python: %2
+ja.TorchMissingPython=[fail] %1 に Python がありません: %2
+zhcn.TorchReady=[ok] %1 Torch 可导入且设备栈匹配。
+en.TorchReady=[ok] %1 Torch imports successfully and matches the device stack.
+ja.TorchReady=[ok] %1 の Torch を読み込め、デバイススタックも一致しています。
+zhcn.TorchInvalid=[fail] %1 Torch 损坏、未完成或与所选 GPU 栈不匹配。
+en.TorchInvalid=[fail] %1 Torch is corrupt, incomplete, or does not match the selected GPU stack.
+ja.TorchInvalid=[fail] %1 の Torch が破損、不完全、または選択した GPU スタックと一致しません。
+zhcn.TorchValidationTitle=AI 运行环境真实 Torch 校验
+en.TorchValidationTitle=AI runtime Torch validation
+ja.TorchValidationTitle=AI ランタイムの Torch 検証
+zhcn.AllRuntimeFailed=一个或多个 AI 环境没有完整安装，软件会显示降级模式。%n请不要直接启动软件；先从开始菜单运行“搭建/修复运行环境”，或在安装目录重新执行 setup_env.bat。%n%n详细日志：%1
+en.AllRuntimeFailed=One or more AI runtimes were not installed completely, so the app will use degraded mode.%nBefore launching the app, run "Set up or repair runtime" from the Start menu or run setup_env.bat in the install directory.%n%nLog: %1
+ja.AllRuntimeFailed=1 つ以上の AI ランタイムが完全にインストールされていないため、アプリは縮退モードになります。%nアプリを起動する前に、スタートメニューの「ランタイムをセットアップまたは修復」またはインストール先の setup_env.bat を実行してください。%n%nログ: %1
+zhcn.WheelsAlreadyRemoved=[ok] 离线 wheels 已不存在，无需清理。
+en.WheelsAlreadyRemoved=[ok] Offline wheels are already absent; no cleanup is needed.
+ja.WheelsAlreadyRemoved=[ok] オフライン wheel は既に削除されています。
+zhcn.WheelsRemoved=[ok] 运行环境校验通过，已自动删除离线 wheels：%1
+en.WheelsRemoved=[ok] Runtime validation passed and offline wheels were removed: %1
+ja.WheelsRemoved=[ok] ランタイム検証に合格し、オフライン wheel を削除しました: %1
+zhcn.WheelsCleanupFailed=[warn] 运行环境已就绪，但离线 wheels 清理失败，可稍后手动删除：%1
+en.WheelsCleanupFailed=[warn] The runtime is ready, but offline wheel cleanup failed. Delete them manually later: %1
+ja.WheelsCleanupFailed=[warn] ランタイムは準備できましたが、オフライン wheel の削除に失敗しました。後で手動削除してください: %1
+zhcn.RuntimeCacheCleaned=运行环境搭建完成，已清理安装缓存
+en.RuntimeCacheCleaned=Runtime setup complete; installation cache cleaned
+ja.RuntimeCacheCleaned=ランタイムのセットアップが完了し、インストールキャッシュを削除しました
+zhcn.RuntimePreparing=准备搭建运行环境…
+en.RuntimePreparing=Preparing runtime setup...
+ja.RuntimePreparing=ランタイムセットアップを準備しています...
+zhcn.PrereqsConfiguring=正在检测前置依赖并配置环境变量…
+en.PrereqsConfiguring=Checking prerequisites and configuring environment variables...
+ja.PrereqsConfiguring=前提条件を確認し、環境変数を設定しています...
+zhcn.RuntimeBuilding=正在搭建运行环境（创建子环境、复制模型、安装 Python 依赖）…
+en.RuntimeBuilding=Setting up runtimes (creating environments, copying models, and installing Python packages)...
+ja.RuntimeBuilding=ランタイムをセットアップしています (環境作成、モデルのコピー、Python パッケージのインストール)...
+zhcn.RuntimeValidationPartial=部分运行环境校验失败，请查看安装详情日志
+en.RuntimeValidationPartial=Some runtime checks failed. Review the setup details log
+ja.RuntimeValidationPartial=一部のランタイム検証に失敗しました。セットアップ詳細ログを確認してください
+zhcn.PluginsName=Python 插件
+en.PluginsName=Python plugins
+ja.PluginsName=Python プラグイン
+zhcn.VocalName=AI 歌声增强
+en.VocalName=AI vocal enhancement
+ja.VocalName=AI ボーカル補正
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkablealone
@@ -99,9 +486,10 @@ Source: "..\setup_env.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\setup_shared_env.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\install_prereqs.bat"; DestDir: "{app}"; Flags: ignoreversion
 ; 应用图标（供 .bat 快捷方式引用；exe 已内嵌同一图标）
-Source: "..\assets\icon\xb-svcb.ico"; DestDir: "{app}"; Flags: ignoreversion
-; FFmpeg 随分卷离线携带。系统 PATH 已有 ffmpeg 时跳过释放；否则安装到应用 tools 目录。
-Source: "..\assets\tools\ffmpeg\*"; DestDir: "{app}\tools\ffmpeg"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression skipifsourcedoesntexist; Check: not SystemFfmpegAvailable
+Source: "..\web\public\favicon.ico"; DestDir: "{app}"; DestName: "xb-svcb.ico"; Flags: ignoreversion
+; Python 与 FFmpeg 都随分卷离线携带，不依赖用户机器上的全局安装。
+Source: "..\.tmp\python312-runtime\*"; DestDir: "{app}\tools\python312"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
+Source: "..\assets\tools\ffmpeg\*"; DestDir: "{app}\tools\ffmpeg"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
 ; 三个歌声引擎源码随分卷携带。模型由 assets/models 统一提供，排除仓库元数据、缓存、
 ; 示例与重复权重，安装后 install.py 会检测到源码并跳过 Git/ZIP 获取。
 Source: "..\.tmp\bundled-engines\so-vits-svc\*"; DestDir: "{app}\engines\so-vits-svc"; Flags: recursesubdirs createallsubdirs ignoreversion
@@ -115,19 +503,21 @@ Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubd
 Source: "..\.tmp\installer-wheelhouse\*"; DestDir: "{app}\assets\wheels"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\docs\release-notes\release_notes_v032.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
+Source: "..\docs\release-notes\release_notes_v0_1_0.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
+Source: "..\docs\release-notes\release_notes_v0_1_0.en.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
+Source: "..\docs\release-notes\release_notes_v0_1_0.ja.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
 Source: "..\docs\api.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 #endif
 
 [Icons]
 Name: "{group}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\xb-svcb.ico"
-Name: "{group}\搭建/修复运行环境"; Filename: "{app}\setup_env.bat"; WorkingDir: "{app}"; IconFilename: "{app}\xb-svcb.ico"
-Name: "{group}\卸载 {#MyAppShort}"; Filename: "{uninstallexe}"
+Name: "{group}\{cm:RepairEnvironment}"; Filename: "{app}\setup_env.bat"; WorkingDir: "{app}"; IconFilename: "{app}\xb-svcb.ico"
+Name: "{group}\{cm:UninstallApp,{#MyAppShort}}"; Filename: "{uninstallexe}"
 Name: "{commondesktop}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\xb-svcb.ico"
 
 [Run]
 ; 提供安装完成后直接启动选项（默认不勾）
-Filename: "{app}\{#MyAppExe}"; Description: "立即启动 {#MyAppShort}"; \
+Filename: "{app}\{#MyAppExe}"; Description: "{cm:LaunchApp,{#MyAppShort}}"; \
   WorkingDir: "{app}"; Flags: postinstall shellexec skipifsilent unchecked
 
 [UninstallDelete]
@@ -153,6 +543,18 @@ const
   CudaToolkitBlackwellVersion = '12.8';
   CudaToolkitPreBlackwellUrl = 'https://developer.nvidia.com/cuda-12-6-0-download-archive';
   CudaToolkitBlackwellUrl = 'https://developer.nvidia.com/cuda-12-8-0-download-archive';
+  ProcessQueryLimitedInformation = $1000;
+  ProcessStillActive = 259;
+
+function OpenProcess(DesiredAccess: Longword; InheritHandle: Boolean;
+  ProcessId: Longword): Longword;
+  external 'OpenProcess@kernel32.dll stdcall';
+
+function GetExitCodeProcess(ProcessHandle: Longword; var ExitCode: Longword): Longword;
+  external 'GetExitCodeProcess@kernel32.dll stdcall';
+
+function CloseHandle(Handle: Longword): Longword;
+  external 'CloseHandle@kernel32.dll stdcall';
 
 var
   DataDirPage: TInputDirWizardPage;
@@ -191,6 +593,31 @@ var
   EnvProgressTicks: Integer;
   EnvProgressMarkerSeen: Boolean;
   DetectedGpuStackCache: String;
+
+function M(const Key: String): String;
+begin
+  Result := CustomMessage(Key);
+end;
+
+function M1(const Key, Value: String): String;
+begin
+  Result := FmtMessage(CustomMessage(Key), [Value]);
+end;
+
+function M2(const Key, Value1, Value2: String): String;
+begin
+  Result := FmtMessage(CustomMessage(Key), [Value1, Value2]);
+end;
+
+function M3(const Key, Value1, Value2, Value3: String): String;
+begin
+  Result := FmtMessage(CustomMessage(Key), [Value1, Value2, Value3]);
+end;
+
+function M4(const Key, Value1, Value2, Value3, Value4: String): String;
+begin
+  Result := FmtMessage(CustomMessage(Key), [Value1, Value2, Value3, Value4]);
+end;
 
 function JsonEscape(const S: String): String;
 var
@@ -665,15 +1092,15 @@ end;
 function GpuStackLabel(const Stack: String): String;
 begin
   if Stack = 'cu128' then
-    Result := 'NVIDIA 50 系 / Blackwell，固定使用 CUDA 12.8（cu128 torch）'
+    Result := M('GpuLabelCuda128')
   else if Stack = 'cu126' then
-    Result := 'NVIDIA 50 系以下兼容显卡，使用共享 CUDA 12.6（cu126 torch）'
+    Result := M('GpuLabelCuda126')
   else if Stack = 'rocm10' then
-    Result := 'AMD Radeon，使用 ROCm 10 与 ROCm Torch'
+    Result := M('GpuLabelRocm10')
   else if Stack = 'directml' then
-    Result := 'AMD Radeon，使用 Windows DirectML'
+    Result := M('GpuLabelDirectml')
   else
-    Result := 'CPU 或未检测到兼容 GPU，安装 CPU 版 torch';
+    Result := M('GpuLabelCpu');
 end;
 
 function NvidiaGpuDetected(): Boolean;
@@ -707,35 +1134,31 @@ end;
 function StatusText(Ok: Boolean): String;
 begin
   if Ok then
-    Result := '已检测到'
+    Result := M('Detected')
   else
-    Result := '未检测到';
+    Result := M('NotDetected');
 end;
 
 function EnvironmentCheckSummary(): String;
 var
-  DetectedStack, PythonExe, PythonStatus: String;
+  DetectedStack, PythonStatus: String;
 begin
   DetectedStack := InstallerGpuStackName();
-  PythonExe := DetectPython312Executable();
-  if PythonExe <> '' then
-    PythonStatus := '已检测到 ' + PythonExe
-  else
-    PythonStatus := '未检测到，请稍后选择 python.exe';
+  PythonStatus := M('BundledPython');
   Result :=
-    '安装器会先检查运行环境，再进入安装路径选择。当前检测结果：' + #13#10 +
-    '  Python 3.12.x：' + PythonStatus + #13#10 +
-    '  Git：' + StatusText(CmdAvailable('git')) + #13#10 +
-    '  ffmpeg / ffprobe：' + StatusText(SystemFfmpegAvailable()) + '（未检测到时使用安装包内置版本）' + #13#10 +
-    '  uv：' + StatusText(CmdAvailable('uv')) + '（安装时自动准备；不会托管 Python）' + #13#10;
+    M('EnvironmentSummaryIntro') + #13#10 +
+    '  ' + M('FieldPython') + ' ' + PythonStatus + #13#10 +
+    '  ' + M('FieldGit') + ' ' + StatusText(CmdAvailable('git')) + #13#10 +
+    '  ffmpeg / ffprobe: ' + StatusText(SystemFfmpegAvailable()) + M('BundledFfmpegHint') + #13#10 +
+    '  ' + M('FieldUv') + ' ' + StatusText(CmdAvailable('uv')) + M('UvHint') + #13#10;
   if (DetectedStack = 'cu126') or (DetectedStack = 'cu128') then
-    Result := Result + '  CUDA Toolkit ' + DetectedCudaVersion() + '：' +
+    Result := Result + '  CUDA Toolkit ' + DetectedCudaVersion() + ': ' +
       StatusText(CudaToolkitAvailable(DetectedCudaVersion(), DefaultCudaToolkitDirForStack(DetectedStack))) + #13#10;
   Result := Result +
-    '  VB-CABLE：' + StatusText(VbCableAvailable()) + '（系统音频变声可选，未安装时请手动安装）' + #13#10 +
-    '  JUCE VST3 Host：随安装包内置，安装后检查' + #13#10 +
-    '  GPU 推理栈：' + GpuStackLabel(DetectedStack) + #13#10 +
-    'Python 采用用户已安装的 3.12.x；可以使用自动检测结果，也可以手动指定 python.exe。';
+    '  VB-CABLE: ' + StatusText(VbCableAvailable()) + M('VbCableHint') + #13#10 +
+    '  ' + M('FieldJuce') + ' ' + M('JuceBundled') + #13#10 +
+    '  ' + M('FieldGpuStack') + ' ' + GpuStackLabel(DetectedStack) + #13#10 +
+    M('PythonSelectionHint');
 end;
 
 procedure OpenDownloadUrl(const URL: String);
@@ -743,8 +1166,7 @@ var
   ErrorCode: Integer;
 begin
   if not ShellExec('open', URL, '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode) then
-    MsgBox('无法打开下载页面：' + URL + #13#10 +
-      '请复制链接到浏览器中打开。', mbError, MB_OK);
+    MsgBox(M1('OpenDownloadFailed', URL), mbError, MB_OK);
 end;
 
 procedure PythonDownloadClick(Sender: TObject);
@@ -759,8 +1181,7 @@ end;
 
 procedure UvDownloadClick(Sender: TObject);
 begin
-  MsgBox('uv 会在锁定 Python 3.12.x 后自动安装到当前用户目录，无需手动下载。',
-    mbInformation, MB_OK);
+  MsgBox(M('UvAutoInstallInfo'), mbInformation, MB_OK);
 end;
 
 procedure CppDownloadClick(Sender: TObject);
@@ -835,36 +1256,28 @@ begin
     UvStandalonePath := PathJoin(UserProfilePath, '.local\bin\uv.exe')
   else
     UvStandalonePath := '';
-  SelectedPython := PythonPathPage.Values[0];
-  if not PythonFileAvailable(SelectedPython) then
-  begin
-    SelectedPython := DetectPython312Executable();
-    if SelectedPython <> '' then
-      PythonPathPage.Values[0] := SelectedPython;
-  end;
-  PythonReady := PythonFileAvailable(SelectedPython);
+  SelectedPython := ExpandConstant('{app}\tools\python312\python.exe');
+  PythonPathPage.Values[0] := SelectedPython;
+  PythonReady := True;
   PythonDir := ExtractFileDir(SelectedPython);
   UvPythonScriptsPath := PathJoin(PythonDir, 'Scripts\uv.exe');
   UvUserScriptsPath := ExpandConstant('{userappdata}\Python\Python312\Scripts\uv.exe');
-  if PythonReady then
-    PythonStatusLabel.Caption := 'Python 3.12.x：已锁定 ' + SelectedPython
-  else
-    PythonStatusLabel.Caption := 'Python 3.12.x：未检测到，请下载或手动选择';
-  GitStatusLabel.Caption := 'Git：' +
+  PythonStatusLabel.Caption := M('FieldPython') + ' ' + M('BundledPython');
+  GitStatusLabel.Caption := M('FieldGit') + ' ' +
     StatusText(CommandOrFileAvailable('git', GitPath,
       ExpandConstant('{autopf}\Git\cmd\git.exe'), ''));
   if CommandOrFileAvailable('uv', UvStandalonePath, UvPythonScriptsPath, UvUserScriptsPath) or
      FileExists(UvPythonScriptsPath) then
-    UvStatusLabel.Caption := 'uv：已检测到'
+    UvStatusLabel.Caption := M('UvDetected')
   else if PythonReady then
-    UvStatusLabel.Caption := 'uv：安装时使用所选 Python 自动准备'
+    UvStatusLabel.Caption := M('UvPrepareWithPython')
   else
-    UvStatusLabel.Caption := 'uv：等待 Python 安装完成后自动安装';
-  CppStatusLabel.Caption := 'Microsoft C++ Build Tools：' +
+    UvStatusLabel.Caption := M('UvWaitingForPython');
+  CppStatusLabel.Caption := M('FieldCpp') + ' ' +
     StatusText(CmdAvailable('cl') or
       FileExists(ExpandConstant('{pf32}\Microsoft Visual Studio\Installer\vswhere.exe')));
-  VbCableStatusLabel.Caption := 'VB-CABLE：' + StatusText(VbCableAvailable()) +
-    '（系统音频变声需要；普通歌曲翻唱不需要）';
+  VbCableStatusLabel.Caption := 'VB-CABLE: ' + StatusText(VbCableAvailable()) +
+    M('VbCableStatusHint');
 
   DetectedStack := InstallerGpuStackName();
   IsNvidia := (DetectedStack = 'cu126') or (DetectedStack = 'cu128');
@@ -879,21 +1292,21 @@ begin
     CudaPath := CudaPathPage.Values[0];
     if CudaPath = '' then
       CudaPath := DefaultCudaToolkitDirForStack(DetectedStack);
-    CudaDownloadButton.Caption := '下载 CUDA ' + CudaVersion;
+    CudaDownloadButton.Caption := M1('DownloadCuda', CudaVersion);
     if CudaToolkitAvailable(CudaVersion, CudaPath) then
-      CudaStatusLabel.Caption := 'CUDA Toolkit ' + CudaVersion + '：已检测到'
+      CudaStatusLabel.Caption := 'CUDA Toolkit ' + CudaVersion + ': ' + M('Detected')
     else
-      CudaStatusLabel.Caption := 'CUDA Toolkit ' + CudaVersion + '：未检测到';
+      CudaStatusLabel.Caption := 'CUDA Toolkit ' + CudaVersion + ': ' + M('NotDetected');
   end
   else
   begin
     CudaStatusLabel.Caption := '';
-    CudaDownloadButton.Caption := '打开 CUDA 下载';
+    CudaDownloadButton.Caption := M('OpenCudaDownload');
   end;
   if IsAmd then
-    DriverStatusLabel.Caption := 'AMD Radeon 驱动：请确认已安装'
+    DriverStatusLabel.Caption := M('AmdDriverConfirm')
   else if IsNvidia then
-    DriverStatusLabel.Caption := 'NVIDIA 显卡驱动：请确认已安装'
+    DriverStatusLabel.Caption := M('NvidiaDriverConfirm')
   else
     DriverStatusLabel.Caption := '';
 end;
@@ -907,8 +1320,7 @@ function RequiredPrereqMissing(): Boolean;
 var
   DetectedStack, CudaPath: String;
 begin
-  Result := (not PythonFileAvailable(PythonPathPage.Values[0])) or
-    not CommandOrFileAvailable('git', ExpandConstant('{localappdata}\Programs\Git\cmd\git.exe'),
+  Result := not CommandOrFileAvailable('git', ExpandConstant('{localappdata}\Programs\Git\cmd\git.exe'),
       ExpandConstant('{autopf}\Git\cmd\git.exe'), '') or
     not (CmdAvailable('cl') or
       FileExists(ExpandConstant('{pf32}\Microsoft Visual Studio\Installer\vswhere.exe')));
@@ -1003,7 +1415,7 @@ begin
     if Target < EnvProgressCurrent then
       Target := EnvProgressCurrent;
     if Detail = '' then
-      Detail := '正在执行安装步骤...';
+      Detail := M('RunningInstallStep');
 
     EnvProgressMarkerSeen := True;
     SetEnvProgress(Target, TailText(Detail, 120));
@@ -1016,7 +1428,7 @@ begin
   if (DetailsMemo <> nil) and ShowInstallDetails() then
     DetailsMemo.Text := InstallDetailText;
   if (DetailsInfoLabel <> nil) and ShowInstallDetails() then
-    DetailsInfoLabel.Caption := '完整日志文件：' + LastInstallLog;
+    DetailsInfoLabel.Caption := M1('FullLogFile', LastInstallLog);
 end;
 
 procedure AppendInstallDetail(const Line: String);
@@ -1060,6 +1472,60 @@ begin
   AppendInstallDetail(Line);
 end;
 
+procedure ConsumeInstallLogChunk(const Chunk: String; var PendingLine: String);
+var
+  Line: String;
+  NewLinePos: Integer;
+begin
+  if Chunk = '' then
+    Exit;
+  PendingLine := PendingLine + Chunk;
+  while True do
+  begin
+    NewLinePos := Pos(#10, PendingLine);
+    if NewLinePos = 0 then
+      Break;
+    Line := Copy(PendingLine, 1, NewLinePos - 1);
+    Delete(PendingLine, 1, NewLinePos);
+    if (Length(Line) > 0) and (Line[Length(Line)] = #13) then
+      Delete(Line, Length(Line), 1);
+    AppendInstallDetail(Line);
+  end;
+end;
+
+function ReadInstallLogDelta(const LogPath: String; var SeenText, PendingLine: String): Boolean;
+var
+  LogText: AnsiString;
+  CurrentText, Delta: String;
+begin
+  Result := False;
+  if not LoadStringFromFile(LogPath, LogText) then
+    Exit;
+  CurrentText := String(LogText);
+  if (Length(CurrentText) < Length(SeenText)) or
+     (Copy(CurrentText, 1, Length(SeenText)) <> SeenText) then
+  begin
+    SeenText := '';
+    PendingLine := '';
+  end;
+  Delta := Copy(CurrentText, Length(SeenText) + 1, Length(CurrentText));
+  SeenText := CurrentText;
+  if Delta <> '' then
+  begin
+    ConsumeInstallLogChunk(Delta, PendingLine);
+    Result := True;
+  end;
+end;
+
+procedure FlushInstallLogLine(var PendingLine: String);
+begin
+  if PendingLine <> '' then
+  begin
+    AppendInstallDetail(PendingLine);
+    PendingLine := '';
+  end;
+end;
+
 function InitializeSetup(): Boolean;
 begin
   Result := True;
@@ -1069,38 +1535,38 @@ procedure InitializeWizard();
 begin
   PrereqPage := CreateInputOptionPage(
     wpWelcome,
-    '环境检查与前置依赖',
-    '先检查运行环境，再选择安装路径',
+    M('EnvironmentPageTitle'),
+    M('EnvironmentPageSubtitle'),
     EnvironmentCheckSummary(),
     False,
     False
   );
-  PrereqPage.Add('安装后立即搭建运行环境（创建 AI 子环境、复制自带模型；仅 Python 依赖需联网，耗时较长）');
-  PrereqPage.Add('配置 PATH / CUDA_PATH / VSINSTALLDIR 等用户环境变量（不安装软件）');
-  PrereqPage.Add('在安装器窗口显示详细安装信息（可选；完整日志仍会写入安装目录）');
+  PrereqPage.Add(M('BuildRuntimeOption'));
+  PrereqPage.Add(M('ConfigureEnvironmentOption'));
+  PrereqPage.Add(M('ShowDetailsOption'));
   PrereqPage.Values[0] := True;
   PrereqPage.Values[1] := True;
   PrereqPage.Values[2] := False;
 
   GpuStackPage := CreateInputOptionPage(
     wpSelectDir,
-    'GPU 推理栈',
-    '选择本机要使用的推理依赖栈',
-    '安装器会复核实际显卡：NVIDIA 使用匹配的 CUDA 栈，AMD Radeon 使用 ROCm 10；没有兼容 GPU 时安装 CPU 版。',
+    M('GpuPageTitle'),
+    M('GpuPageSubtitle'),
+    M('GpuPageDescription'),
     True,
     False
   );
-  GpuStackPage.Add('自动检测（推荐）');
-  GpuStackPage.Add('CPU 模式');
-  GpuStackPage.Add('NVIDIA 50 系以下：共享 CUDA 12.6（cu126）');
-  GpuStackPage.Add('NVIDIA 50 系 Blackwell：CUDA 12.8（cu128）');
-  GpuStackPage.Add('AMD Radeon：ROCm 10');
+  GpuStackPage.Add(M('GpuAuto'));
+  GpuStackPage.Add(M('GpuCpu'));
+  GpuStackPage.Add(M('GpuCuda126'));
+  GpuStackPage.Add(M('GpuCuda128'));
+  GpuStackPage.Add(M('GpuRocm10'));
   GpuStackPage.Values[0] := True;
 
   PrereqDownloadPage := CreateCustomPage(
     GpuStackPage.ID,
-    '下载前置依赖',
-    '系统依赖由用户安装，uv 在 Python 可用后自动安装'
+    M('DownloadPageTitle'),
+    M('DownloadPageSubtitle')
   );
 
   PrereqDownloadIntro := TNewStaticText.Create(PrereqDownloadPage);
@@ -1110,25 +1576,24 @@ begin
   PrereqDownloadIntro.Top := 0;
   PrereqDownloadIntro.Width := PrereqDownloadPage.SurfaceWidth;
   PrereqDownloadIntro.Height := ScaleY(48);
-  PrereqDownloadIntro.Caption :=
-    '安装器不会自动运行 winget、弹出系统安装程序或修改系统软件。点击右侧按钮打开下载页面，'
-    + '完成安装后点击“重新检测”，再继续下一步。uv 会在 Python 可用后自动安装。';
+  PrereqDownloadIntro.Caption := M('DownloadPageIntro');
   PrereqDownloadIntro.Parent := PrereqDownloadPage.Surface;
 
-  CreateDownloadRow('Python 3.12.x：', '下载 Python 3.12', 56, PythonStatusLabel, PythonDownloadButton);
+  CreateDownloadRow(M('FieldPython'), M('DownloadPython'), 56, PythonStatusLabel, PythonDownloadButton);
   PythonDownloadButton.OnClick := @PythonDownloadClick;
-  CreateDownloadRow('Git：', '打开 Git 下载', 88, GitStatusLabel, GitDownloadButton);
+  PythonDownloadButton.Enabled := False;
+  CreateDownloadRow(M('FieldGit'), M('OpenGitDownload'), 88, GitStatusLabel, GitDownloadButton);
   GitDownloadButton.OnClick := @GitDownloadClick;
-  CreateDownloadRow('uv：', '自动安装', 120, UvStatusLabel, UvDownloadButton);
+  CreateDownloadRow(M('FieldUv'), M('AutoInstall'), 120, UvStatusLabel, UvDownloadButton);
   UvDownloadButton.OnClick := @UvDownloadClick;
   UvDownloadButton.Enabled := False;
-  CreateDownloadRow('Microsoft C++ Build Tools：', '打开 C++ 下载', 152, CppStatusLabel, CppDownloadButton);
+  CreateDownloadRow(M('FieldCpp'), M('OpenCppDownload'), 152, CppStatusLabel, CppDownloadButton);
   CppDownloadButton.OnClick := @CppDownloadClick;
-  CreateDownloadRow('CUDA Toolkit：', '打开 CUDA 下载', 184, CudaStatusLabel, CudaDownloadButton);
+  CreateDownloadRow(M('FieldCuda'), M('OpenCudaDownload'), 184, CudaStatusLabel, CudaDownloadButton);
   CudaDownloadButton.OnClick := @CudaDownloadClick;
-  CreateDownloadRow('显卡驱动：', '打开驱动下载', 216, DriverStatusLabel, DriverDownloadButton);
+  CreateDownloadRow(M('FieldDriver'), M('OpenDriverDownload'), 216, DriverStatusLabel, DriverDownloadButton);
   DriverDownloadButton.OnClick := @DriverDownloadClick;
-  CreateDownloadRow('VB-CABLE 虚拟音频线：', '打开 VB-CABLE 下载', 248, VbCableStatusLabel, VbCableDownloadButton);
+  CreateDownloadRow(M('FieldVbCable'), M('OpenVbCableDownload'), 248, VbCableStatusLabel, VbCableDownloadButton);
   VbCableDownloadButton.OnClick := @VbCableDownloadClick;
 
   RefreshPrereqButton := TNewButton.Create(PrereqDownloadPage);
@@ -1136,57 +1601,56 @@ begin
   RefreshPrereqButton.Height := ScaleY(28);
   RefreshPrereqButton.Left := PrereqDownloadPage.SurfaceWidth - RefreshPrereqButton.Width;
   RefreshPrereqButton.Top := ScaleY(286);
-  RefreshPrereqButton.Caption := '重新检测';
+  RefreshPrereqButton.Caption := M('CheckAgain');
   RefreshPrereqButton.OnClick := @RefreshPrereqClick;
   RefreshPrereqButton.Parent := PrereqDownloadPage.Surface;
 
   PythonPathPage := CreateInputFilePage(
     PrereqDownloadPage.ID,
-    '选择 Python 3.12',
-    '锁定本次安装使用的 Python 解释器',
-    '安装器只接受 CPython 3.12.x。可以采用自动检测结果，也可以浏览并选择其他 python.exe。'
+    M('PythonPageTitle'),
+    M('PythonPageSubtitle'),
+    M('PythonPageDescription')
   );
-  PythonPathPage.Add('Python 3.12 python.exe：',
+  PythonPathPage.Add(M('PythonExecutableLabel'),
     'Python executable|python.exe|Executable files|*.exe|All files|*.*', '.exe');
-  PythonPathPage.Values[0] := DetectPython312Executable();
+  PythonPathPage.Values[0] := ExpandConstant('{app}\tools\python312\python.exe');
 
   PrereqPathPage := CreateInputDirPage(
     PythonPathPage.ID,
-    '前置依赖安装/查找路径',
-    '选择依赖安装位置或已有路径',
-    '如果刚安装的依赖尚未加入 PATH，可在这里填写其安装目录；安装器不会在这些位置自动安装。',
+    M('PrereqPathTitle'),
+    M('PrereqPathSubtitle'),
+    M('PrereqPathDescription'),
     False,
     ''
   );
-  PrereqPathPage.Add('Git 目录：');
-  PrereqPathPage.Add('FFmpeg 目录（分卷内置，系统已安装则跳过）：');
-  PrereqPathPage.Add('C++ Build Tools 目录：');
+  PrereqPathPage.Add(M('GitDirectoryLabel'));
+  PrereqPathPage.Add(M('FfmpegDirectoryLabel'));
+  PrereqPathPage.Add(M('CppDirectoryLabel'));
 
   CudaPathPage := CreateInputDirPage(
     PrereqPathPage.ID,
-    'NVIDIA CUDA Toolkit',
-    '选择 CUDA Toolkit 安装位置或已有目录',
-    '此页面只对 NVIDIA 显卡显示：50 系固定推荐 CUDA 12.8，50 系以下固定推荐 CUDA 12.6；'
-    + 'PyTorch wheel 已包含推理运行库，Toolkit 用于配套工具链。',
+    M('CudaPathTitle'),
+    M('CudaPathSubtitle'),
+    M('CudaPathDescription'),
     False,
     ''
   );
-  CudaPathPage.Add('CUDA Toolkit 目录：');
+  CudaPathPage.Add(M('CudaDirectoryLabel'));
 
   DataDirPage := CreateInputDirPage(
     CudaPathPage.ID,
-    '选择用户数据存储位置',
-    '模型、作品、下载素材、编辑工程与主题媒体保存在哪里？',
-    '建议选择空间充足的磁盘。该目录后续也可以在软件首页迁移。',
+    M('DataPageTitle'),
+    M('DataPageSubtitle'),
+    M('DataPageDescription'),
     False,
     ''
   );
-  DataDirPage.Add('用户数据目录：');
+  DataDirPage.Add(M('DataDirectoryLabel'));
 
   DetailsPage := CreateCustomPage(
     wpInstalling,
-    '详细安装信息',
-    '运行环境搭建输出'
+    M('DetailsPageTitle'),
+    M('DetailsPageSubtitle')
   );
 
   DetailsInfoLabel := TNewStaticText.Create(DetailsPage);
@@ -1194,7 +1658,7 @@ begin
   DetailsInfoLabel.WordWrap := True;
   DetailsInfoLabel.Width := DetailsPage.SurfaceWidth;
   DetailsInfoLabel.Height := ScaleY(32);
-  DetailsInfoLabel.Caption := '安装详情会显示在这里；完整日志也会保存到安装目录。';
+  DetailsInfoLabel.Caption := M('DetailsWaiting');
   DetailsInfoLabel.Parent := DetailsPage.Surface;
 
   DetailsMemo := TNewMemo.Create(DetailsPage);
@@ -1203,7 +1667,7 @@ begin
   DetailsMemo.Height := DetailsPage.SurfaceHeight - DetailsMemo.Top;
   DetailsMemo.ScrollBars := ssVertical;
   DetailsMemo.ReadOnly := True;
-  DetailsMemo.Text := '尚未开始搭建运行环境。';
+  DetailsMemo.Text := M('RuntimeNotStarted');
   DetailsMemo.Parent := DetailsPage.Surface;
 end;
 
@@ -1293,8 +1757,7 @@ begin
       PrereqPathPage.Values[2] := ExpandConstant('{pf32}\Microsoft Visual Studio\2022\BuildTools');
   end;
   if CurPageID = PythonPathPage.ID then
-    if PythonPathPage.Values[0] = '' then
-      PythonPathPage.Values[0] := DetectPython312Executable();
+    PythonPathPage.Values[0] := ExpandConstant('{app}\tools\python312\python.exe');
   if CurPageID = PrereqDownloadPage.ID then
   begin
     if CudaPathPage.Values[0] = '' then
@@ -1317,11 +1780,10 @@ begin
   begin
     if LastInstallLog <> '' then
       WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
-        '运行环境安装详情已写入：' + LastInstallLog + #13#10 +
-        '安装过程不会打开 PowerShell 或命令行窗口；如需排查失败，请查看该日志。';
+        M1('FinishedLog', LastInstallLog);
     if LastInstallSummary <> '' then
       WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
-        '最后日志摘要：' + #13#10 + LastInstallSummary;
+        M('LastLogSummary') + #13#10 + LastInstallSummary;
   end;
   if CurPageID = DetailsPage.ID then
     RefreshDetailsMemo();
@@ -1332,8 +1794,9 @@ begin
   Result := False;
   if PageID = GpuStackPage.ID then
     Result := ('{#XB_PACKAGE_STACK}' <> 'universal') or (not BuildEnvSelected());
-  if (PageID = PrereqDownloadPage.ID) or (PageID = PythonPathPage.ID) or
-     (PageID = PrereqPathPage.ID) then
+  if PageID = PythonPathPage.ID then
+    Result := True;
+  if (PageID = PrereqDownloadPage.ID) or (PageID = PrereqPathPage.ID) then
     Result := (not BuildEnvSelected()) and (not EnvConfigureSelected());
   if PageID = CudaPathPage.ID then
     Result := (not BuildEnvSelected()) or (not NvidiaGpuDetected());
@@ -1350,9 +1813,7 @@ begin
   begin
     if not PythonFileAvailable(PythonPathPage.Values[0]) then
     begin
-      MsgBox('请选择一个可运行的 CPython 3.12.x python.exe。' + #13#10 +
-        '当前离线依赖只支持 64 位 Python 3.12.x。',
-        mbError, MB_OK);
+      MsgBox(M('InvalidPython'), mbError, MB_OK);
       Result := False;
       Exit;
     end;
@@ -1362,9 +1823,7 @@ begin
     DataDir := ResolveInstallerDataDir(DataDirPage.Values[0]);
     if not ForceDirectories(DataDir) then
     begin
-      MsgBox('无法创建用户数据目录：' + DataDir + #13#10 +
-        '请换一个有写入权限、空间充足的位置。',
-        mbError, MB_OK);
+      MsgBox(M1('CannotCreateDataDir', DataDir), mbError, MB_OK);
       Result := False;
       Exit;
     end;
@@ -1374,8 +1833,7 @@ begin
   begin
     RefreshPrereqDownloadStatus;
     if RequiredPrereqMissing() then
-      if MsgBox('仍有一个或多个前置依赖未检测到。你可以先在下一页填写已有安装路径，'
-        + '也可以返回下载并安装缺失项。要继续吗？', mbConfirmation, MB_YESNO) <> IDYES then
+      if MsgBox(M('MissingPrereqConfirm'), mbConfirmation, MB_YESNO) <> IDYES then
         Result := False;
   end;
 end;
@@ -1389,7 +1847,7 @@ begin
     RuntimeLayout := 'shared'
   else
     RuntimeLayout := 'isolated';
-  SelectedPython := PythonPathPage.Values[0];
+  SelectedPython := ExpandConstant('{app}\tools\python312\python.exe');
   SelectedPythonDir := ExtractFileDir(SelectedPython);
   Payload := '@echo off' + #13#10 +
     'set "XB_FROM_INSTALLER=1"' + #13#10 +
@@ -1422,9 +1880,13 @@ end;
 
 function RunSetupBatch(const BatchName, Args, Status: String; ProgressStart, ProgressEnd: Integer): Boolean;
 var
-  ResultCode: Integer;
+  ResultCode, ProcessId: Integer;
+  ProcessHandle: Longword;
+  ExitCode: Longword;
+  PollTicks: Integer;
   CmdLine, LogDir, LogPath, StepName: String;
-  LogText: AnsiString;
+  SeenText, PendingLine: String;
+  FinalLogText: AnsiString;
 begin
   BeginEnvProgress(Status, ProgressStart, ProgressEnd);
   StepName := BatchName;
@@ -1442,36 +1904,89 @@ begin
     False);
   AppendInstallDetail('');
   AppendInstallDetail('============================================================');
-  AppendInstallDetail('步骤：' + BatchName);
-  AppendInstallDetail('开始时间：' + GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':'));
-  AppendInstallDetail('参数：' + Args);
-  AppendInstallDetail('日志文件：' + LogPath);
+  AppendInstallDetail(M1('LogStep', BatchName));
+  AppendInstallDetail(M1('LogStarted', GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':')));
+  AppendInstallDetail(M1('LogArguments', Args));
+  AppendInstallDetail(M1('LogFile', LogPath));
   AppendInstallDetail('------------------------------------------------------------');
-  WizardForm.FilenameLabel.Caption := '安装详情日志：' + LogPath;
+  WizardForm.FilenameLabel.Caption := M1('DetailsLog', LogPath);
   CmdLine := '/c call "' + ExpandConstant('{app}\') + BatchName + '"';
   if Args <> '' then
     CmdLine := CmdLine + ' ' + Args;
+  CmdLine := CmdLine + ' >> "' + LogPath + '" 2>&1';
+  ProcessHandle := 0;
+  ProcessId := 0;
+  PollTicks := 0;
+  SeenText := '';
+  PendingLine := '';
+  if LoadStringFromFile(LogPath, FinalLogText) then
+    SeenText := FinalLogText;
   try
-    Result := ExecAndLogOutput(ExpandConstant('{cmd}'), CmdLine, ExpandConstant('{app}'),
-      SW_HIDE, ewWaitUntilTerminated, ResultCode, @InstallOutputLog);
+    { Start the batch asynchronously. The polling loop below keeps the Inno
+      window repainting while uv/pip performs long wheel installs. }
+    Result := Exec(ExpandConstant('{cmd}'), CmdLine, ExpandConstant('{app}'),
+      SW_HIDE, ewNoWait, ProcessId);
+    if Result then
+    begin
+      ProcessHandle := OpenProcess(ProcessQueryLimitedInformation, False, ProcessId);
+      if ProcessHandle = 0 then
+      begin
+        Result := False;
+        ResultCode := -1;
+        AppendInstallDetail('[installer] Could not monitor setup process ' + IntToStr(ProcessId));
+      end;
+    end
+    else
+    begin
+      ResultCode := ProcessId;
+      AppendInstallDetail('[installer] ' + SysErrorMessage(ResultCode));
+    end;
+
+    if Result then
+    begin
+      repeat
+        ReadInstallLogDelta(LogPath, SeenText, PendingLine);
+        Inc(PollTicks);
+        if PollTicks >= 8 then
+        begin
+          PollTicks := 0;
+          if EnvProgressCurrent < EnvProgressEnd - 1 then
+            SetEnvProgress(EnvProgressCurrent + 1, M('RunningInstallStep'));
+        end;
+        WizardForm.Update;
+        Sleep(250);
+        ExitCode := ProcessStillActive;
+        if GetExitCodeProcess(ProcessHandle, ExitCode) = 0 then
+        begin
+          Result := False;
+          ResultCode := -1;
+          AppendInstallDetail('[installer] Could not read setup process status');
+          Break;
+        end;
+      until ExitCode <> ProcessStillActive;
+      if Result then
+        ResultCode := ExitCode;
+      ReadInstallLogDelta(LogPath, SeenText, PendingLine);
+      FlushInstallLogLine(PendingLine);
+      CloseHandle(ProcessHandle);
+    end;
   except
     AppendInstallDetail('[installer] ' + GetExceptionMessage);
     ResultCode := -1;
     Result := False;
+    if ProcessHandle <> 0 then
+      CloseHandle(ProcessHandle);
   end;
   CurrentLogPath := '';
-  if LoadStringFromFile(LogPath, LogText) then
-    LastInstallSummary := TailText(LogText, 1600);
+  if LoadStringFromFile(LogPath, FinalLogText) then
+    LastInstallSummary := TailText(FinalLogText, 1600);
   if (not Result) or (ResultCode <> 0) then
   begin
-    MsgBox(BatchName + ' 执行失败，退出码：' + IntToStr(ResultCode) + #13#10 +
-      '安装文件已经复制完成。你可以稍后从开始菜单运行“搭建/修复运行环境”重试。' + #13#10#13#10 +
-      '详细日志：' + LogPath,
-      mbError, MB_OK);
+    MsgBox(M3('BatchFailed', BatchName, IntToStr(ResultCode), LogPath), mbError, MB_OK);
     Result := False;
   end;
   if Result then
-    FinishEnvProgress(Status + '完成');
+    FinishEnvProgress(M1('StepCompleted', Status));
 end;
 
 procedure AppendInstallValidation(const Line: String);
@@ -1499,16 +2014,16 @@ begin
 
   AppendInstallValidation('');
   AppendInstallValidation('------------------------------------------------------------');
-  AppendInstallValidation('应用本体与内置组件校验');
+  AppendInstallValidation(M('BundledValidationTitle'));
 
   if not FileExists(PathJoin(AppDir, '{#MyAppExe}')) then
-    Missing := AddMissingRuntimeFile(Missing, '应用本体', PathJoin(AppDir, '{#MyAppExe}'));
+    Missing := AddMissingRuntimeFile(Missing, 'Application executable', PathJoin(AppDir, '{#MyAppExe}'));
   if not FileExists(PathJoin(InternalDir, 'web\dist\index.html')) then
-    Missing := AddMissingRuntimeFile(Missing, '前端入口', PathJoin(InternalDir, 'web\dist\index.html'));
+    Missing := AddMissingRuntimeFile(Missing, 'Web frontend entry', PathJoin(InternalDir, 'web\dist\index.html'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\plugin_worker.py')) then
-    Missing := AddMissingRuntimeFile(Missing, 'Python 插件 worker', PathJoin(InternalDir, 'infrastructure\plugin_worker.py'));
+    Missing := AddMissingRuntimeFile(Missing, 'Python plugin worker', PathJoin(InternalDir, 'infrastructure\plugin_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'plugin_sdk_python\xb_svcb_plugin\__init__.py')) then
-    Missing := AddMissingRuntimeFile(Missing, 'Python 插件 SDK', PathJoin(InternalDir, 'plugin_sdk_python\xb_svcb_plugin\__init__.py'));
+    Missing := AddMissingRuntimeFile(Missing, 'Python plugin SDK', PathJoin(InternalDir, 'plugin_sdk_python\xb_svcb_plugin\__init__.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\uvr_worker.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'UVR worker', PathJoin(InternalDir, 'infrastructure\uvr_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\pymss_worker.py')) then
@@ -1522,27 +2037,31 @@ begin
   if not FileExists(PathJoin(InternalDir, 'infrastructure\ddsp_worker.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC worker', PathJoin(InternalDir, 'infrastructure\ddsp_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\vocal_enhancement_worker.py')) then
-    Missing := AddMissingRuntimeFile(Missing, 'AI 歌声增强 worker', PathJoin(InternalDir, 'infrastructure\vocal_enhancement_worker.py'));
+    Missing := AddMissingRuntimeFile(Missing, 'AI vocal enhancement worker', PathJoin(InternalDir, 'infrastructure\vocal_enhancement_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\formant_pitch_worker.py')) then
-    Missing := AddMissingRuntimeFile(Missing, '高音保护 worker', PathJoin(InternalDir, 'infrastructure\formant_pitch_worker.py'));
+    Missing := AddMissingRuntimeFile(Missing, 'High-note protection worker', PathJoin(InternalDir, 'infrastructure\formant_pitch_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\vocal_tuning_worker.py')) then
-    Missing := AddMissingRuntimeFile(Missing, 'AI 对齐/自然修音 worker', PathJoin(InternalDir, 'infrastructure\vocal_tuning_worker.py'));
+    Missing := AddMissingRuntimeFile(Missing, 'AI alignment and tuning worker', PathJoin(InternalDir, 'infrastructure\vocal_tuning_worker.py'));
   if not FileExists(PathJoin(AppDir, 'install\configure_user_env.py')) then
-    Missing := AddMissingRuntimeFile(Missing, '用户环境配置工具', PathJoin(AppDir, 'install\configure_user_env.py'));
+    Missing := AddMissingRuntimeFile(Missing, 'User environment configuration tool', PathJoin(AppDir, 'install\configure_user_env.py'));
   if not FileExists(PathJoin(AppDir, 'install\detect_python.bat')) then
-    Missing := AddMissingRuntimeFile(Missing, 'Python 运行时检测工具', PathJoin(AppDir, 'install\detect_python.bat'));
-  if not SystemFfmpegAvailable() then
-    Missing := AddMissingRuntimeFile(Missing, 'FFmpeg/ffprobe 分卷载荷', PathJoin(AppDir, 'tools\ffmpeg\bin'));
+    Missing := AddMissingRuntimeFile(Missing, 'Python runtime detector', PathJoin(AppDir, 'install\detect_python.bat'));
+  if not PythonFileAvailable(PathJoin(AppDir, 'tools\python312\python.exe')) then
+    Missing := AddMissingRuntimeFile(Missing, 'Bundled CPython 3.12 runtime', PathJoin(AppDir, 'tools\python312\python.exe'));
+  if not FileExists(PathJoin(AppDir, 'tools\ffmpeg\bin\ffmpeg.exe')) then
+    Missing := AddMissingRuntimeFile(Missing, 'Bundled FFmpeg executable', PathJoin(AppDir, 'tools\ffmpeg\bin\ffmpeg.exe'));
+  if not FileExists(PathJoin(AppDir, 'tools\ffmpeg\bin\ffprobe.exe')) then
+    Missing := AddMissingRuntimeFile(Missing, 'Bundled ffprobe executable', PathJoin(AppDir, 'tools\ffmpeg\bin\ffprobe.exe'));
   if not FileExists(PathJoin(AppDir, 'engines\so-vits-svc\inference\infer_tool.py')) then
-    Missing := AddMissingRuntimeFile(Missing, 'So-VITS-SVC 分卷源码', PathJoin(AppDir, 'engines\so-vits-svc\inference\infer_tool.py'));
+    Missing := AddMissingRuntimeFile(Missing, 'So-VITS-SVC bundled source', PathJoin(AppDir, 'engines\so-vits-svc\inference\infer_tool.py'));
   if not FileExists(PathJoin(AppDir, 'engines\seed-vc\inference.py')) then
-    Missing := AddMissingRuntimeFile(Missing, 'SeedVC 分卷源码', PathJoin(AppDir, 'engines\seed-vc\inference.py'));
+    Missing := AddMissingRuntimeFile(Missing, 'SeedVC bundled source', PathJoin(AppDir, 'engines\seed-vc\inference.py'));
   if not FileExists(PathJoin(AppDir, 'engines\ddsp-svc\main_reflow.py')) then
-    Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC 分卷源码', PathJoin(AppDir, 'engines\ddsp-svc\main_reflow.py'));
+    Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC bundled source', PathJoin(AppDir, 'engines\ddsp-svc\main_reflow.py'));
   if not FileExists(PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt')) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC RMVPE', PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt'));
   if not FileExists(PathJoin(AppDir, 'assets\models\pretrain\fcpe.pt')) then
-    Missing := AddMissingRuntimeFile(Missing, '高音域 FCPE', PathJoin(AppDir, 'assets\models\pretrain\fcpe.pt'));
+    Missing := AddMissingRuntimeFile(Missing, 'High-range FCPE', PathJoin(AppDir, 'assets\models\pretrain\fcpe.pt'));
   if not FileExists(PathJoin(AppDir, 'assets\models\seedvc\campplus_cn_common.bin')) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC CampPlus', PathJoin(AppDir, 'assets\models\seedvc\campplus_cn_common.bin'));
   if not FileExists(PathJoin(AppDir, 'assets\models\seedvc\whisper-small\model.safetensors')) then
@@ -1550,37 +2069,38 @@ begin
   if not FileExists(PathJoin(AppDir, 'assets\models\seedvc\bigvgan_v2_44khz_128band_512x\bigvgan_generator.pt')) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC BigVGAN', PathJoin(AppDir, 'assets\models\seedvc\bigvgan_v2_44khz_128band_512x\bigvgan_generator.pt'));
   if not FileExists(PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\checkpoints\model_120.ckpt.best')) then
-    Missing := AddMissingRuntimeFile(Missing, 'DeepFilterNet 权重', PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\checkpoints\model_120.ckpt.best'));
+    Missing := AddMissingRuntimeFile(Missing, 'DeepFilterNet weights', PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\checkpoints\model_120.ckpt.best'));
   if not FileExists(PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\config.ini')) then
-    Missing := AddMissingRuntimeFile(Missing, 'DeepFilterNet 配置', PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\config.ini'));
+    Missing := AddMissingRuntimeFile(Missing, 'DeepFilterNet configuration', PathJoin(AppDir, 'assets\models\vocal-enhancement\DeepFilterNet\DeepFilterNet\Cache\DeepFilterNet3\config.ini'));
   if not FileExists(PathJoin(AppDir, 'assets\wheels\wheelhouse.json')) then
-    Missing := AddMissingRuntimeFile(Missing, 'Python whl 离线依赖清单', PathJoin(AppDir, 'assets\wheels\wheelhouse.json'));
+    Missing := AddMissingRuntimeFile(Missing, 'Offline Python wheel manifest', PathJoin(AppDir, 'assets\wheels\wheelhouse.json'));
   { CUDA shared installs need the exact candidate/compatibility wheels that
     install_shared.py passes to uv. Keep this check at install time too, so
     an old or incomplete split package cannot report a false overall [ok]. }
   if (InstallerGpuStackName() = 'cu126') or (InstallerGpuStackName() = 'cu128') then
   begin
     if not FileExists(PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\numpy-2.2.6-cp312-cp312-win_amd64.whl')) then
-      Missing := AddMissingRuntimeFile(Missing, 'CUDA 共享核心 NumPy candidate', PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\numpy-2.2.6-cp312-cp312-win_amd64.whl'));
+      Missing := AddMissingRuntimeFile(Missing, 'CUDA shared-core NumPy candidate', PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\numpy-2.2.6-cp312-cp312-win_amd64.whl'));
     if not FileExists(PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\protobuf-7.36.0-cp310-abi3-win_amd64.whl')) then
-      Missing := AddMissingRuntimeFile(Missing, 'CUDA 共享核心 protobuf candidate', PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\protobuf-7.36.0-cp310-abi3-win_amd64.whl'));
+      Missing := AddMissingRuntimeFile(Missing, 'CUDA shared-core protobuf candidate', PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\protobuf-7.36.0-cp310-abi3-win_amd64.whl'));
     if not FileExists(PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\tensorboardx-2.6.5-py3-none-any.whl')) then
-      Missing := AddMissingRuntimeFile(Missing, 'CUDA 共享核心 TensorBoardX candidate', PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\tensorboardx-2.6.5-py3-none-any.whl'));
+      Missing := AddMissingRuntimeFile(Missing, 'CUDA shared-core TensorBoardX candidate', PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\tensorboardx-2.6.5-py3-none-any.whl'));
+    if not FileExists(PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\onnx_weekly-1.23.0.dev20260831-cp312-abi3-win_amd64.whl')) then
+      Missing := AddMissingRuntimeFile(Missing, 'CUDA shared-core ONNX Weekly candidate', PathJoin(AppDir, 'assets\runtime\core-cu128\candidate\onnx_weekly-1.23.0.dev20260831-cp312-abi3-win_amd64.whl'));
     if not FileExists(PathJoin(AppDir, 'assets\runtime\core-cu128\compat\descript_audiotools-0.7.2+xb1-py3-none-any.whl')) then
-      Missing := AddMissingRuntimeFile(Missing, 'CUDA 共享核心 AudioTools compat wheel', PathJoin(AppDir, 'assets\runtime\core-cu128\compat\descript_audiotools-0.7.2+xb1-py3-none-any.whl'));
+      Missing := AddMissingRuntimeFile(Missing, 'CUDA shared-core AudioTools compatibility wheel', PathJoin(AppDir, 'assets\runtime\core-cu128\compat\descript_audiotools-0.7.2+xb1-py3-none-any.whl'));
   end;
   if not FileExists(PathJoin(AppDir, 'engines\juce-vst3-host\xb-juce-vst3-host.exe')) then
     Missing := AddMissingRuntimeFile(Missing, 'JUCE VST3 Host', PathJoin(AppDir, 'engines\juce-vst3-host\xb-juce-vst3-host.exe'));
 
   Result := Missing = '';
   if Result then
-    AppendInstallValidation('[ok] 应用本体、前端、AI workers、FFmpeg、SVC/DDSP/SeedVC 分卷源码、离线模型、Python whl 与 JUCE Host 完整。')
+    AppendInstallValidation(M('BundledValidationOk'))
   else
   begin
-    AppendInstallValidation('[fail] 发布包缺少必要组件：');
+    AppendInstallValidation(M('BundledValidationFailed'));
     AppendInstallValidation(Missing);
-    MsgBox('安装包缺少必要组件，部分功能将不可用：' + #13#10 + Missing + #13#10#13#10 +
-      '请重新下载安装器的完整分卷文件。', mbError, MB_OK);
+    MsgBox(M1('BundledValidationDialog', Missing), mbError, MB_OK);
   end;
 end;
 
@@ -1597,27 +2117,27 @@ begin
 
   AppendInstallValidation('');
   AppendInstallValidation('------------------------------------------------------------');
-  AppendInstallValidation('Python 插件运行环境最终校验');
+  AppendInstallValidation(M1('RuntimeValidationTitle', M('PluginsName')));
 
   if not FileExists(PluginPython) then
     Missing := AddMissingRuntimeFile(Missing, '.venv-plugins Python', PluginPython);
   if FileExists(PluginPython) and not PythonFileAvailable(PluginPython) then
-    Missing := AddMissingRuntimeFile(Missing, '.venv-plugins Python 不可运行', PluginPython);
+    Missing := AddMissingRuntimeFile(Missing, M1('PythonNotRunnable', '.venv-plugins'), PluginPython);
   if not FileExists(PluginWorker) then
-    Missing := AddMissingRuntimeFile(Missing, 'Python 插件 worker', PluginWorker);
+    Missing := AddMissingRuntimeFile(Missing, 'Python plugin worker', PluginWorker);
   if not FileExists(PluginSdk) then
-    Missing := AddMissingRuntimeFile(Missing, 'Python 插件 SDK', PluginSdk);
+    Missing := AddMissingRuntimeFile(Missing, 'Python plugin SDK', PluginSdk);
 
   Result := Missing = '';
   if Result then
-    AppendInstallValidation('[ok] Python 与混合插件运行环境可被软件识别。')
+    AppendInstallValidation(M1('RuntimeReady', M('PluginsName')))
   else
   begin
-    AppendInstallValidation('[fail] Python 插件运行环境不完整：');
+    AppendInstallValidation(M1('RuntimeIncomplete', M('PluginsName')));
     AppendInstallValidation(Missing);
-    AppendInstallValidation('建议：在安装目录执行 setup_env.bat --only plugins。');
-    MsgBox('Python 插件运行环境最终校验失败。' + #13#10 + Missing + #13#10#13#10 +
-      '可稍后在安装目录执行：setup_env.bat --only plugins', mbError, MB_OK);
+    AppendInstallValidation(M1('RepairSuggestion', 'setup_env.bat --only plugins'));
+    MsgBox(M4('RuntimeValidationDialog', M('PluginsName'), Missing,
+      'setup_env.bat --only plugins', LastInstallLog), mbError, MB_OK);
   end;
 end;
 
@@ -1668,37 +2188,32 @@ begin
 
   AppendInstallValidation('');
   AppendInstallValidation('------------------------------------------------------------');
-  AppendInstallValidation('UVR 运行环境最终校验');
-  AppendInstallValidation('安装目录：' + AppDir);
+  AppendInstallValidation(M1('RuntimeValidationTitle', 'UVR'));
+  AppendInstallValidation(M1('InstallDirectory', AppDir));
 
   if not FileExists(UvrPython) then
     Missing := AddMissingRuntimeFile(Missing, 'UVR Python', UvrPython);
   if FileExists(UvrPython) and not PythonFileAvailable(UvrPython) then
-    Missing := AddMissingRuntimeFile(Missing, 'UVR Python 不可运行', UvrPython);
+    Missing := AddMissingRuntimeFile(Missing, M1('PythonNotRunnable', 'UVR'), UvrPython);
   if not FileExists(UvrWorker) then
     Missing := AddMissingRuntimeFile(Missing, 'UVR worker', UvrWorker);
   if not FileExists(UvrModel) then
-    Missing := AddMissingRuntimeFile(Missing, 'UVR 分离模型', UvrModel);
+    Missing := AddMissingRuntimeFile(Missing, 'UVR separation model', UvrModel);
 
   Result := Missing = '';
   if Result then
   begin
-    AppendInstallValidation('[ok] UVR 运行环境可被软件识别。');
+    AppendInstallValidation(M1('RuntimeReady', 'UVR'));
     Exit;
   end;
 
-  AppendInstallValidation('[fail] UVR 运行环境不完整，软件会显示“降级模式 / UVR 未安装”。');
-  AppendInstallValidation('缺失项：');
+  AppendInstallValidation(M1('RuntimeIncomplete', 'UVR'));
+  AppendInstallValidation(M('MissingItems'));
   AppendInstallValidation(Missing);
-  AppendInstallValidation('建议：从开始菜单运行“搭建/修复运行环境”，或在安装目录执行 setup_env.bat --only uvr seedvc ddsp models。');
+  AppendInstallValidation(M1('RepairSuggestion', 'setup_env.bat --only uvr seedvc ddsp models'));
 
-  MsgBox('UVR 运行环境最终校验失败。' + #13#10 +
-    '安装器命令已执行完成，但软件仍无法识别完整 UVR 环境。' + #13#10#13#10 +
-    '缺失项：' + #13#10 + Missing + #13#10#13#10 +
-    '请稍后从开始菜单运行“搭建/修复运行环境”，或在安装目录执行：' + #13#10 +
-    'setup_env.bat --only uvr seedvc ddsp models' + #13#10#13#10 +
-    '详细日志：' + LastInstallLog,
-    mbError, MB_OK);
+  MsgBox(M4('RuntimeValidationDialog', 'UVR', Missing,
+    'setup_env.bat --only uvr seedvc ddsp models', LastInstallLog), mbError, MB_OK);
 end;
 
 function ValidateSeedVcRuntime(): Boolean;
@@ -1713,12 +2228,12 @@ begin
 
   AppendInstallValidation('');
   AppendInstallValidation('------------------------------------------------------------');
-  AppendInstallValidation('SeedVC 运行环境最终校验');
+  AppendInstallValidation(M1('RuntimeValidationTitle', 'SeedVC'));
 
   if not FileExists(SeedPython) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC Python', SeedPython);
   if FileExists(SeedPython) and not PythonFileAvailable(SeedPython) then
-    Missing := AddMissingRuntimeFile(Missing, 'SeedVC Python 不可运行', SeedPython);
+    Missing := AddMissingRuntimeFile(Missing, M1('PythonNotRunnable', 'SeedVC'), SeedPython);
   if not FileExists(SeedWorker) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC worker', SeedWorker);
   if not FileExists(SeedInference) then
@@ -1727,20 +2242,17 @@ begin
   Result := Missing = '';
   if Result then
   begin
-    AppendInstallValidation('[ok] SeedVC 运行环境可被软件识别。');
+    AppendInstallValidation(M1('RuntimeReady', 'SeedVC'));
     Exit;
   end;
 
-  AppendInstallValidation('[fail] SeedVC 运行环境不完整，软件会显示“降级模式”。');
-  AppendInstallValidation('缺失项：');
+  AppendInstallValidation(M1('RuntimeIncomplete', 'SeedVC'));
+  AppendInstallValidation(M('MissingItems'));
   AppendInstallValidation(Missing);
-  AppendInstallValidation('建议：从开始菜单运行“搭建/修复运行环境”，或执行 setup_env.bat --only uvr seedvc ddsp。');
+  AppendInstallValidation(M1('RepairSuggestion', 'setup_env.bat --only uvr seedvc ddsp'));
 
-  MsgBox('SeedVC 运行环境最终校验失败。' + #13#10 +
-    '缺失项：' + #13#10 + Missing + #13#10#13#10 +
-    '可稍后在安装目录执行：setup_env.bat --only uvr seedvc ddsp' + #13#10#13#10 +
-    '详细日志：' + LastInstallLog,
-    mbError, MB_OK);
+  MsgBox(M4('RuntimeValidationDialog', 'SeedVC', Missing,
+    'setup_env.bat --only uvr seedvc ddsp', LastInstallLog), mbError, MB_OK);
 end;
 
 function ValidateDdspRuntime(): Boolean;
@@ -1755,12 +2267,12 @@ begin
 
   AppendInstallValidation('');
   AppendInstallValidation('------------------------------------------------------------');
-  AppendInstallValidation('DDSP-SVC 运行环境最终校验');
+  AppendInstallValidation(M1('RuntimeValidationTitle', 'DDSP-SVC'));
 
   if not FileExists(DdspPython) then
     Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC Python', DdspPython);
   if FileExists(DdspPython) and not PythonFileAvailable(DdspPython) then
-    Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC Python 不可运行', DdspPython);
+    Missing := AddMissingRuntimeFile(Missing, M1('PythonNotRunnable', 'DDSP-SVC'), DdspPython);
   if not FileExists(DdspWorker) then
     Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC worker', DdspWorker);
   if not FileExists(DdspInference) then
@@ -1769,14 +2281,14 @@ begin
   Result := Missing = '';
   if Result then
   begin
-    AppendInstallValidation('[ok] DDSP-SVC 运行环境可被软件识别。');
+    AppendInstallValidation(M1('RuntimeReady', 'DDSP-SVC'));
     Exit;
   end;
 
-  AppendInstallValidation('[fail] DDSP-SVC 运行环境不完整，软件会显示“降级模式”。');
-  AppendInstallValidation('缺失项：');
+  AppendInstallValidation(M1('RuntimeIncomplete', 'DDSP-SVC'));
+  AppendInstallValidation(M('MissingItems'));
   AppendInstallValidation(Missing);
-  AppendInstallValidation('建议：从开始菜单运行“搭建/修复运行环境”，或执行 setup_env.bat --only uvr seedvc ddsp。');
+  AppendInstallValidation(M1('RepairSuggestion', 'setup_env.bat --only uvr seedvc ddsp'));
 end;
 
 function ValidateVocalRuntime(): Boolean;
@@ -1793,32 +2305,32 @@ begin
 
   AppendInstallValidation('');
   AppendInstallValidation('------------------------------------------------------------');
-  AppendInstallValidation('AI 歌声增强运行环境最终校验');
+  AppendInstallValidation(M1('RuntimeValidationTitle', M('VocalName')));
 
   if not FileExists(VocalPython) then
-    Missing := AddMissingRuntimeFile(Missing, 'AI 歌声增强 Python', VocalPython);
+    Missing := AddMissingRuntimeFile(Missing, M('VocalName') + ' Python', VocalPython);
   if FileExists(VocalPython) and not PythonFileAvailable(VocalPython) then
-    Missing := AddMissingRuntimeFile(Missing, 'AI 歌声增强 Python 不可运行', VocalPython);
+    Missing := AddMissingRuntimeFile(Missing, M1('PythonNotRunnable', M('VocalName')), VocalPython);
   if not FileExists(VocalWorker) then
-    Missing := AddMissingRuntimeFile(Missing, 'AI 歌声增强 worker', VocalWorker);
+    Missing := AddMissingRuntimeFile(Missing, 'AI vocal enhancement worker', VocalWorker);
   if not FileExists(TuningWorker) then
-    Missing := AddMissingRuntimeFile(Missing, 'AI 对齐/自然修音 worker', TuningWorker);
+    Missing := AddMissingRuntimeFile(Missing, 'AI alignment and tuning worker', TuningWorker);
   if not FileExists(FormantWorker) then
-    Missing := AddMissingRuntimeFile(Missing, '高音保护 worker', FormantWorker);
+    Missing := AddMissingRuntimeFile(Missing, 'High-note protection worker', FormantWorker);
   if not FileExists(VocalReady) then
-    Missing := AddMissingRuntimeFile(Missing, 'runtime.ready 标记', VocalReady);
+    Missing := AddMissingRuntimeFile(Missing, 'runtime.ready marker', VocalReady);
 
   Result := Missing = '';
   if Result then
   begin
-    AppendInstallValidation('[ok] AI 歌声增强运行环境可被软件识别。');
+    AppendInstallValidation(M1('RuntimeReady', M('VocalName')));
     Exit;
   end;
 
-  AppendInstallValidation('[fail] AI 歌声增强运行环境不完整，软件会显示“降级模式”。');
-  AppendInstallValidation('缺失项：');
+  AppendInstallValidation(M1('RuntimeIncomplete', M('VocalName')));
+  AppendInstallValidation(M('MissingItems'));
   AppendInstallValidation(Missing);
-  AppendInstallValidation('建议：从开始菜单运行“搭建/修复运行环境”，或执行 setup_env.bat --only vocal。');
+  AppendInstallValidation(M1('RepairSuggestion', 'setup_env.bat --only vocal'));
 end;
 
 function ValidateTorchRuntime(const PythonPath, RuntimeLabel: String;
@@ -1830,7 +2342,7 @@ begin
   Result := False;
   if not FileExists(PythonPath) then
   begin
-    AppendInstallValidation('[fail] ' + RuntimeLabel + ' 缺少 Python：' + PythonPath);
+    AppendInstallValidation(M2('TorchMissingPython', RuntimeLabel, PythonPath));
     Exit;
   end;
 
@@ -1846,9 +2358,9 @@ begin
   Result := Exec(PythonPath, '-c "' + CheckCode + '"', ExpandConstant('{app}'),
     SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
   if Result then
-    AppendInstallValidation('[ok] ' + RuntimeLabel + ' Torch 可导入且设备栈匹配。')
+    AppendInstallValidation(M1('TorchReady', RuntimeLabel))
   else
-    AppendInstallValidation('[fail] ' + RuntimeLabel + ' Torch 损坏、未完成或与所选 GPU 栈不匹配。');
+    AppendInstallValidation(M1('TorchInvalid', RuntimeLabel));
 end;
 
 function ValidateAllInferenceRuntimes(): Boolean;
@@ -1860,7 +2372,7 @@ begin
   Result := True;
   AppendInstallValidation('');
   AppendInstallValidation('------------------------------------------------------------');
-  AppendInstallValidation('六个 AI 运行环境真实 Torch 校验');
+  AppendInstallValidation(M('TorchValidationTitle'));
 
   CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'uvr', '.venv-uvr\Scripts\python.exe'), 'UVR', True);
   Result := Result and CurrentReady;
@@ -1877,14 +2389,11 @@ begin
   Result := Result and CurrentReady;
   CurrentReady := ValidateTorchRuntime(PathJoin(AppDir, '.venv-ddsp-legacy\Scripts\python.exe'), 'DDSP-SVC legacy', False);
   Result := Result and CurrentReady;
-  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'vocal', '.venv-vocal\Scripts\python.exe'), 'AI 歌声增强', False);
+  CurrentReady := ValidateTorchRuntime(RuntimePython(AppDir, 'vocal', '.venv-vocal\Scripts\python.exe'), M('VocalName'), False);
   Result := Result and CurrentReady;
 
   if not Result then
-    MsgBox('一个或多个 AI 环境没有完整安装，软件会显示降级模式。' + #13#10 +
-      '请不要直接启动软件；先从开始菜单运行“搭建/修复运行环境”，' + #13#10 +
-      '或在安装目录重新执行 setup_env.bat。' + #13#10#13#10 +
-      '详细日志：' + LastInstallLog, mbError, MB_OK);
+    MsgBox(M1('AllRuntimeFailed', LastInstallLog), mbError, MB_OK);
 end;
 
 procedure CleanupBundledWheelhouse();
@@ -1894,16 +2403,16 @@ begin
   WheelhouseDir := ExpandConstant('{app}\assets\wheels');
   if not DirExists(WheelhouseDir) then
   begin
-    AppendInstallValidation('[ok] 离线 wheels 已不存在，无需清理。');
+    AppendInstallValidation(M('WheelsAlreadyRemoved'));
     Exit;
   end;
   if DelTree(WheelhouseDir, True, True, True) then
   begin
-    AppendInstallValidation('[ok] 运行环境校验通过，已自动删除离线 wheels：' + WheelhouseDir);
-    SetEnvProgress(100, '运行环境搭建完成，已清理安装缓存');
+    AppendInstallValidation(M1('WheelsRemoved', WheelhouseDir));
+    SetEnvProgress(100, M('RuntimeCacheCleaned'));
   end
   else
-    AppendInstallValidation('[warn] 运行环境已就绪，但离线 wheels 清理失败，可稍后手动删除：' + WheelhouseDir);
+    AppendInstallValidation(M1('WheelsCleanupFailed', WheelhouseDir));
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -1927,7 +2436,7 @@ begin
 
     if BuildEnvSelected() or EnvConfigureSelected() then
     begin
-      SetEnvProgress(0, '准备搭建运行环境…');
+      SetEnvProgress(0, M('RuntimePreparing'));
       WriteInstallerEnv();
       PrereqsReady := True;
       if EnvConfigureSelected() then
@@ -1936,12 +2445,12 @@ begin
           SetupProgressStart := 35
         else
           SetupProgressStart := 100;
-        PrereqsReady := RunSetupBatch('install_prereqs.bat', '', '正在检测前置依赖并配置环境变量…', 0, SetupProgressStart);
+        PrereqsReady := RunSetupBatch('install_prereqs.bat', '', M('PrereqsConfiguring'), 0, SetupProgressStart);
       end
       else
         SetupProgressStart := 0;
       if BuildEnvSelected() and PrereqsReady and
-         RunSetupBatch('setup_env.bat', GpuInstallArgs(), '正在搭建运行环境（创建子环境、复制模型、安装 Python 依赖）…', SetupProgressStart, 100) then
+         RunSetupBatch('setup_env.bat', GpuInstallArgs(), M('RuntimeBuilding'), SetupProgressStart, 100) then
       begin
         PluginReady := ValidatePluginRuntime();
         UvrReady := ValidateUvrRuntime();
@@ -1951,7 +2460,7 @@ begin
         InferenceReady := ValidateAllInferenceRuntimes();
         if (not PluginReady) or (not UvrReady) or (not SeedVcReady) or (not DdspReady) or (not VocalReady) or
            (not InferenceReady) then
-          SetEnvProgress(100, '部分运行环境校验失败，请查看安装详情日志')
+          SetEnvProgress(100, M('RuntimeValidationPartial'))
         else
           CleanupBundledWheelhouse();
       end;

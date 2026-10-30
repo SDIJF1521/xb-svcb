@@ -2,7 +2,13 @@
 
 # Installation, Source Startup, and Repair
 
-Most users should download the dedicated installer that matches their hardware. Running from source is intended for developers and users who need to modify an engine.
+Most users should use the online installer, which selects the hardware package automatically. Dedicated offline installers remain available. Running from source is intended for developers and users who need to modify an engine.
+
+## Online Installation
+
+Run `XB-SVCB-Online-Setup.exe` and choose **Auto detect (recommended)**, or select a hardware build manually. The bootstrapper downloads only that complete EXE/BIN set, verifies every file with SHA-256, and then starts the localized offline setup. Keep the network connection available and allow access to the release HTTPS download host.
+
+The bootstrapper does not store OSS credentials on the computer. Verified EXE/BIN files are retained in `XB-SVCB-Downloads\0.1.0\<hardware-stack>\` next to the online installer and launched from there; this directory is not removed when the bootstrapper exits. The folder containing the online installer must be writable. If a download is interrupted or verification fails, run it again. The retained EXE and all same-prefix BIN files can also be kept as a complete offline package.
 
 ## Choose an Installer
 
@@ -16,7 +22,7 @@ Most users should download the dedicated installer that matches their hardware. 
 
 The minimum CUDA wheel stack is cu126; cu121 is no longer used. Each dedicated package contains only the wheels for its hardware, while the application, models, and engine source code are the same.
 
-The installer does not include a complete Python distribution. Select 64-bit CPython 3.12.x. If automatic detection is incorrect, manually select `python.exe` in the installation wizard. `uv` does not need to be preinstalled; the installer installs it from the bundled bootstrap wheel.
+The installer includes a complete 64-bit CPython 3.12.x runtime and always uses `tools\python312\python.exe` under the installation directory. Users do not need to install or select Python separately. `uv` does not need to be preinstalled; setup installs it from the bundled bootstrap wheel.
 
 ## Runtime Environment After Installation
 
@@ -153,7 +159,7 @@ The final output should report that the shared runtime environment is complete a
 ## Source Environment Requirements
 
 - Windows.
-- 64-bit CPython 3.12.x for the installer and the current offline wheels.
+- Source operation and release builds require 64-bit CPython 3.12.x; normal installations use the bundled runtime.
 - Node.js 20.19+ or 22.12+, required only to build the frontend.
 - Access to PyPI, model sources, and upstream repositories, or a prepared offline wheelhouse and model assets.
 - CMake, Visual C++ Build Tools, and JUCE when building the VST3 Host.
@@ -217,7 +223,7 @@ The default data directory is `.xb_svcb`. It stores the model library, works, ed
 
 ### Python Cannot Be Found
 
-The installer accepts only a working 64-bit CPython 3.12.x interpreter because the offline wheels target `cp312-win_amd64`. Prefer a standard Python or Conda interpreter; do not select a `.venv` that belongs to another AI project.
+The offline wheels target `cp312-win_amd64`, so setup always uses its bundled 64-bit CPython 3.12.x runtime. Developers only need to provide Python 3.12 when running from source or producing release packages.
 
 ### Frontend Is Missing
 

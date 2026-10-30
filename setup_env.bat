@@ -34,6 +34,8 @@ rem The selected installer emits the authoritative 0-100 progress stream.
 rem These wrapper messages deliberately stay at the local start position so
 rem they cannot jump ahead and then move backwards when install.py starts.
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 0 正在查找 Python 运行时
+set "XB_PYTHON_EXE=%~dp0tools\python312\python.exe"
+set "XB_PYTHON_DIR=%~dp0tools\python312"
 set "PYTHON_DETECTOR=%~dp0install\detect_python.bat"
 if not exist "%PYTHON_DETECTOR%" (
   echo [XB-SVCB] Python detector not found: %PYTHON_DETECTOR%

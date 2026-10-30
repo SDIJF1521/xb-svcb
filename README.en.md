@@ -22,7 +22,7 @@ Create a complete AI song cover in one workflow. Supports **So-VITS-SVC and RVC 
 [![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
 [![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
 
-### [Download the installer for your hardware: CPU / ROCm 10 / DirectML / CUDA126 / CUDA128](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+### [Download the online installer: automatic CPU / AMD / NVIDIA selection](https://github.com/SDIJF1521/xb-svcb/releases/latest)
 
 <sub>One-click Windows installation with the frontend and base models included. No manual Python or Node.js setup required.</sub>
 
@@ -58,14 +58,14 @@ The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UV
 
 ### Installer
 
-For normal use, install the latest release from GitHub:
+For normal use, download `XB-SVCB-Online-Setup.exe` from the latest GitHub release:
 
-1. Choose the CPU, ROCm 10, DirectML, CUDA126, or CUDA128 package for your hardware. Download its EXE and every BIN file sharing the same filename prefix.
-2. Run the EXE and select both the application directory and user-data directory.
+1. Run the online installer and use automatic detection, or manually select CPU, ROCm 10, DirectML, CUDA126, or CUDA128.
+2. Wait for the matching complete package to download and pass SHA-256 verification, then select both the application directory and user-data directory.
 3. Select a 64-bit CPython 3.12.x installation, or let the installer detect one, then keep **Set up the runtime after installation** enabled.
 4. Start XB-SVCB from the desktop or Start menu.
 
-The package contains the built frontend, FFmpeg, engine source code, essential base models, and offline Python dependencies for the selected hardware stack. Use CUDA126 for NVIDIA RTX 40-series and older GPUs, CUDA128 for RTX 50-series GPUs, ROCm 10 as the preferred Windows AMD backend, DirectML as an alternative AMD backend, and CPU when no compatible GPU is available. DirectML does not accelerate PyMSS, and DDSP automatic mode uses the CPU.
+For a fully offline installation, download the dedicated hardware package's EXE and every BIN file sharing its prefix, and keep them in one directory. The package contains the built frontend, FFmpeg, engine source code, essential base models, and offline Python dependencies for the selected hardware stack. Use CUDA126 for NVIDIA RTX 40-series and older GPUs, CUDA128 for RTX 50-series GPUs, ROCm 10 as the preferred Windows AMD backend, DirectML as an alternative AMD backend, and CPU when no compatible GPU is available. In the DirectML package, PyMSS and DDSP automatic mode run on the CPU; PyMSS does not use DirectML acceleration.
 
 ### Install from source
 
@@ -214,11 +214,11 @@ See the [documentation index](docs/en/README.md) for architecture, startup, test
 
 ## Roadmap
 
-Current version: **v0.0.32**
+Current version: **v0.1.0**
 
 The core multi-framework inference workflow, timeline-based multi-singer covers, Audio Editor Lite, ModelScope model hub, FastAPI integration, CUDA / ROCm 10 / DirectML / CPU paths, and plugin runtime are available. Current priorities include automatic lyric recognition, improved automatic timelines, standardized model metadata, project import/export and autosave, more conversion frameworks, video and lyric-video export, and improved Intel GPU / CPU / multi-GPU scheduling.
 
-See the [release-notes directory](docs/release-notes/) for the full version history.
+See the [release-notes directory](docs/release-notes/) for the full version history. The current release is available as [v0.1.0 release notes](docs/release-notes/release_notes_v0_1_0.en.md).
 
 ## Contributors
 

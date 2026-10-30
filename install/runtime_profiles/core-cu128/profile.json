@@ -34,6 +34,12 @@
       "sha256": "c10b891d00af306537cb8b58a039b2ba41571f0da06f433a41c4ca8d6abe1373"
     },
     {
+      "group": "candidate",
+      "path": "assets/runtime/core-cu128/candidate/onnx_weekly-1.23.0.dev20260831-cp312-abi3-win_amd64.whl",
+      "bytes": 7850755,
+      "sha256": "b8620fd5747916781134453cd629e892d8dbdd349cc2c3208cdc1aeef1812c2d"
+    },
+    {
       "group": "compat",
       "path": "assets/runtime/core-cu128/compat/antlr4_python3_runtime-4.9.3-py3-none-any.whl",
       "bytes": 144613,

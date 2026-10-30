@@ -38,7 +38,20 @@ Torch、torchvision、torchaudio 使用各自的官方版本号，不能假设�
 
 离线安装包在暂存阶段还会读取 Torch wheel 内的 `torch/version.py`，校验 ROCm 10 与 HIP 标记，拒绝混入 DirectML 的依赖目录。已下载验证官方 Windows cp312 wheel：`torch.version.rocm == '10.0.0'`，而 `torch.version.hip == '7.15.26333'`；两者版本号不同，不能用 HIP 主版本代替 ROCm 主版本。源与版本不匹配时会停止打包，需要重新准备对应的 wheelhouse。
 
-PyMSS 在独立 `.venv-pymss` 环境安装同一 ROCm 栈，支持 AMD 加速。`auto` 会识别 HIP 并回报 `rocm`，显式 `rocm` 不可用时直接报错。PyMSS 不支持 DirectML。ROCm 10 的 SVC/RVC/Vocal 共用 `runtimes/svc-rocm10`；独立 DirectML 安装包和 RVC DirectML 环境仍可选，但不能与 ROCm Torch 混装。
+## 离线发布缓存与网络恢复
+
+发布侧的 `-RebuildWheelhouse` 是增量补齐；只有显式添加 `-CleanWheelhouse` 才会删除所有 CPU、ROCm、DirectML 和 CUDA 缓存。CPU 的 SVC/RVC 组件在进入 ROCm 批次前生成，避免 AMD 源失败后留下不可打包的半成品 CPU 栈。ROCm 的 PyMSS 和 DDSP 组件通过硬链接复用公共 ROCm Torch/SDK wheels，暂存时再按文件名去重，不重复下载或打包同一份大型运行时。
+
+ROCm DDSP 批次中断后可从原批次继续：
+
+```powershell
+& C:\python3.12.9\python.exe .\install\prepare_wheelhouse.py `
+  --root . --stack rocm10 --from-batch "ddsp legacy rocm10 torch"
+```
+
+如果日志先报告 `ProxyError('Cannot connect to proxy')` 或 TLS handshake timeout，之后才显示 `ResolutionImpossible`，后者通常只是 pip 在无法读取索引时的派生错误，不表示固定版本互相冲突。检查当前 PowerShell 的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和 `XB_TORCH_ROCM_INDEX`；修正网络后直接重跑增量命令，不要清空已经下载的 ROCm wheels。
+
+PyMSS 在独立 `.venv-pymss` 环境安装同一 ROCm 栈，支持 AMD 加速。`auto` 会识别 HIP 并回报 `rocm`，显式 `rocm` 不可用时直接报错。PyMSS 不使用 DirectML 后端；DirectML 安装包会为它携带独立的 CPU Torch 2.7.1 wheel 并回退到 CPU 推理，避免与固定 Torch 2.4.1 的 `torch-directml` 混装。ROCm 10 的 SVC/RVC/Vocal 共用 `runtimes/svc-rocm10`；独立 DirectML 安装包和 RVC DirectML 环境仍可选，但不能与 ROCm Torch 混装。
 
 ## DDSP 与 SeedVC 模型
 

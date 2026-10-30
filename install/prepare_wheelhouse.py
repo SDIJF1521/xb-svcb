@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -29,6 +30,7 @@ PLATFORM = "win_amd64"
 IMPLEMENTATION = "cp"
 PYPI_OFFICIAL_INDEX = "https://pypi.org/simple"
 BUILD_VENVS = ROOT / ".tmp" / "wheelhouse-build-envs"
+STACKS = ("cpu", "rocm10", "directml", "cu126", "cu128")
 
 
 @dataclass(frozen=True)
@@ -329,7 +331,6 @@ def _pymss_batches(root: Path, installer, stack: str) -> list[DownloadBatch]:
             dest,
             py,
             (f"pymss=={installer.PYMSS_VERSION}",),
-            index=torch_index if stack == installer.ROCM_STACK else None,
             constraints=constraints,
         ),
     ]
@@ -699,6 +700,12 @@ def build_plan(root: Path, stacks: set[str] | None = None) -> list[DownloadBatch
     for stack in ("cpu", "rocm10", "directml", "cu126", "cu128"):
         if stack in requested:
             batches += _py312_batches(root, installer, reqs, stack)
+            # PyMSS 2.0.x requires Torch 2.7.1, while torch-directml pins
+            # Torch 2.4.1. DirectML packages therefore carry the isolated CPU
+            # PyMSS runtime instead of omitting PyMSS or mixing incompatible
+            # Torch providers in one environment.
+            if stack == "directml" and "cpu" not in requested:
+                batches += _pymss_batches(root, installer, "cpu")
             if stack == "directml" and "cpu" in requested:
                 continue
             legacy_stack = "cpu" if stack == "directml" else stack
@@ -712,9 +719,11 @@ def build_plan(root: Path, stacks: set[str] | None = None) -> list[DownloadBatch
                               ("setuptools<81", "wheel", "fairseq-fixed==0.12.3.1", "einops", "local-attention"),
                               requirements=reqs["ddsp-legacy"], build_source=True, constraints=constraints),
             ]
-    for stack in ("cpu",):
-        if stack in requested:
-            batches += _cpu_compat_batches(root, installer, reqs, stack)
+            # Keep CPU compatibility components with the CPU stack. A later
+            # GPU-stack failure must not leave an apparently complete CPU
+            # wheelhouse without its required SVC/RVC groups.
+            if stack == "cpu":
+                batches += _cpu_compat_batches(root, installer, reqs, stack)
     return batches
 
 
@@ -756,6 +765,59 @@ def _run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True, env=_subprocess_env())
 
 
+def _package_name(spec: str) -> str:
+    name = spec.split(";", 1)[0].strip()
+    for marker in ("[", "=", "<", ">", "!", "~", "@"):
+        name = name.split(marker, 1)[0]
+    return name.strip().lower().replace("_", "-")
+
+
+def _exact_wheel_present(directory: Path, spec: str) -> bool:
+    requirement = spec.split(";", 1)[0].strip()
+    if "==" not in requirement:
+        return False
+    version = requirement.split("==", 1)[1].strip().lower().replace("-", "_")
+    prefix = _package_name(requirement).replace("-", "_") + "-" + version + "-"
+    return any(wheel.name.lower().startswith(prefix) for wheel in directory.glob("*.whl"))
+
+
+def _is_rocm_torch_batch(batch: DownloadBatch) -> bool:
+    names = {_package_name(spec) for spec in batch.packages}
+    return bool(names) and names <= {"torch", "torchaudio", "torchvision"}
+
+
+def _reuse_shared_rocm_wheels(root: Path, batch: DownloadBatch) -> int:
+    """Hardlink the completed shared ROCm runtime into component caches."""
+    if "rocm10" not in batch.dest.parts:
+        return 0
+    shared = _wheelhouse_dir(root, batch.python_version, "rocm10")
+    if batch.dest.resolve() == shared.resolve() or not shared.is_dir():
+        return 0
+
+    sources = sorted(shared.glob("*.whl"))
+    if not sources:
+        return 0
+    batch.dest.mkdir(parents=True, exist_ok=True)
+    linked = 0
+    for source in sources:
+        destination = batch.dest / source.name
+        try:
+            if destination.exists() and os.path.samefile(source, destination):
+                continue
+        except OSError:
+            pass
+
+        temporary = batch.dest / f".{source.name}.shared.tmp"
+        temporary.unlink(missing_ok=True)
+        try:
+            os.link(source, temporary)
+        except OSError:
+            shutil.copy2(source, temporary)
+        os.replace(temporary, destination)
+        linked += 1
+    return linked
+
+
 def _has_module(py: Path, module: str) -> bool:
     try:
         return (
@@ -786,6 +848,30 @@ def _python_works(py: Path) -> bool:
             ).returncode
             == 0
         )
+    except OSError:
+        return False
+
+
+def _build_toolchain_ready(py: Path) -> bool:
+    check = """
+from importlib.metadata import version
+from packaging.version import Version
+raise SystemExit(0 if (
+    Version(version('pip')) == Version('24.0')
+    and Version(version('setuptools')) < Version('81')
+    and Version(version('Cython')) < Version('3')
+    and Version(version('numpy')) == Version('1.26.4')
+    and bool(version('wheel'))
+) else 1)
+"""
+    try:
+        return subprocess.run(
+            [str(py), "-c", check],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            env=_subprocess_env(),
+        ).returncode == 0
     except OSError:
         return False
 
@@ -955,22 +1041,23 @@ def _ensure_build_python(root: Path, installer, python_version: str) -> Path:
     if not _python_works(py):
         raise RuntimeError(f"Python {python_version} wheel build environment could not be created: {py}")
     _ensure_pip(py)
-    _run(
-        [
-            str(py),
-            "-m",
-            "pip",
-            "install",
-            "--upgrade",
-            "pip==24.0",
-            "setuptools<81",
-            "wheel",
-            "Cython<3",
-            "numpy==1.26.4",
-            "--disable-pip-version-check",
-            *_pip_index_args(installer, None),
-        ]
-    )
+    if not _build_toolchain_ready(py):
+        _run(
+            [
+                str(py),
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                "pip==24.0",
+                "setuptools<81",
+                "wheel",
+                "Cython<3",
+                "numpy==1.26.4",
+                "--disable-pip-version-check",
+                *_pip_index_args(installer, None),
+            ]
+        )
     _BUILD_PYTHONS[python_version] = py
     return py
 
@@ -1010,9 +1097,23 @@ def _build_wheels(root: Path, installer, batch: DownloadBatch) -> None:
 def _download_batch(root: Path, installer, batch: DownloadBatch) -> None:
     if not batch.packages and batch.requirements is None:
         return
-    if "rocm10" in batch.dest.parts and batch.index is None:
+    reused = _reuse_shared_rocm_wheels(root, batch)
+    if reused:
+        print(f"[wheelhouse] Reused {reused} shared ROCm wheels in {batch.dest}")
+    # Only the Torch runtime itself needs AMD's index. Other ROCm batches use
+    # the normal PyPI mirrors and resolve the pinned runtime from --find-links.
+    if "rocm10" in batch.dest.parts and batch.index is None and _is_rocm_torch_batch(batch):
         from dataclasses import replace
         batch = replace(batch, index=installer.TORCH_ROCM_INDEX)
+    shared_rocm = _wheelhouse_dir(root, batch.python_version, "rocm10")
+    if (
+        _is_rocm_torch_batch(batch)
+        and batch.dest.resolve() != shared_rocm.resolve()
+        and all(_exact_wheel_present(batch.dest, spec) for spec in batch.packages)
+    ):
+        print(f"\n==== {batch.label} ====")
+        print("[wheelhouse] Reusing the completed shared ROCm Torch runtime.")
+        return
     # AMD publishes ``rocm==10.0.0`` as an sdist-only metadata package.  The
     # ROCm Torch wheels depend on it, but the cross-platform download below is
     # intentionally binary-only and therefore cannot resolve that sdist. Build
@@ -1044,7 +1145,21 @@ def _download_batch(root: Path, installer, batch: DownloadBatch) -> None:
             raise RuntimeError("无法加载 RVC 兼容构建模块")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        module.prepare(batch.dest, [batch.dest])
+        indexes = [
+            value
+            for value in (
+                installer.PYPI_MIRROR,
+                installer.PYPI_FALLBACK_INDEX,
+                PYPI_OFFICIAL_INDEX,
+            )
+            if value
+        ]
+        module.prepare(
+            batch.dest,
+            [batch.dest],
+            python=_ensure_tool_python(root, installer),
+            index_urls=indexes,
+        )
     # Requirement sets default to the wheel builder because upstream engine
     # lists can contain source-only packages. A reviewed frozen lock may opt
     # into the platform-specific binary downloader explicitly.
@@ -1088,6 +1203,58 @@ def _download_batch(root: Path, installer, batch: DownloadBatch) -> None:
     _run(cmd)
 
 
+def _batch_signature(root: Path, batch: DownloadBatch) -> dict[str, object]:
+    requirement: dict[str, str] | None = None
+    if batch.requirements is not None:
+        requirement = {
+            "path": batch.requirements.relative_to(root).as_posix(),
+            "sha256": hashlib.sha256(batch.requirements.read_bytes()).hexdigest(),
+        }
+    return {
+        "label": batch.label,
+        "dest": batch.dest.relative_to(root).as_posix(),
+        "python": batch.python_version,
+        "packages": list(batch.packages),
+        "requirements": requirement,
+        "index": batch.index,
+        "build_source": batch.build_source,
+        "no_deps": batch.no_deps,
+        "binary_only": batch.binary_only,
+        "constraints": list(batch.constraints),
+        "no_build_isolation": batch.no_build_isolation,
+    }
+
+
+def _plan_signature(root: Path, batches: list[DownloadBatch]) -> str:
+    payload = [_batch_signature(root, batch) for batch in batches]
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _profile_snapshot(root: Path, stack: str, batches: list[DownloadBatch]) -> dict[str, object]:
+    wheel_root = root / "assets" / "wheels"
+    groups = sorted({batch.dest.relative_to(wheel_root).as_posix() for batch in batches})
+    empty = [group for group in groups if not any((wheel_root / group).glob("*.whl"))]
+    if empty:
+        raise RuntimeError(f"Wheelhouse groups are empty for {stack}: {', '.join(empty)}")
+
+    wheels: dict[str, int] = {}
+    for group in groups:
+        for wheel in (wheel_root / group).glob("*.whl"):
+            wheels[wheel.relative_to(wheel_root).as_posix()] = wheel.stat().st_size
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "plan_signature": _plan_signature(root, batches),
+        "groups": groups,
+        "wheel_count": len(wheels),
+        "wheel_bytes": sum(wheels.values()),
+        "wheels": [
+            {"path": path, "size": size}
+            for path, size in sorted(wheels.items())
+        ],
+    }
+
+
 def _summarize(root: Path, batches: list[DownloadBatch]) -> dict:
     groups: dict[str, dict] = {}
     wheel_root = root / "assets" / "wheels"
@@ -1107,7 +1274,7 @@ def _summarize(root: Path, batches: list[DownloadBatch]) -> dict:
         path = wheel_root / group["path"]
         group["wheel_count"] = len(list(path.glob("*.whl"))) if path.exists() else 0
     return {
-        "schema": 1,
+        "schema": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "platform": PLATFORM,
         "layout": (
@@ -1115,21 +1282,97 @@ def _summarize(root: Path, batches: list[DownloadBatch]) -> dict:
             "assets/wheels/<component>/<py tag>/<stack>/*.whl, and bootstrap/*.whl"
         ),
         "groups": sorted(groups.values(), key=lambda item: item["path"]),
+        "profiles": {},
     }
 
 
-def _write_manifest(root: Path, batches: list[DownloadBatch]) -> None:
+def _read_profiles(manifest_path: Path) -> dict[str, object]:
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    profiles = manifest.get("profiles") if manifest.get("schema") == 2 else None
+    return dict(profiles) if isinstance(profiles, dict) else {}
+
+
+def _write_manifest(
+    root: Path,
+    batches: list[DownloadBatch],
+    profile_plans: dict[str, list[DownloadBatch]],
+) -> None:
     manifest = _summarize(root, batches)
     manifest_path = root / "assets" / "wheels" / "wheelhouse.json"
+    profiles = _read_profiles(manifest_path)
+    for stack, plan in profile_plans.items():
+        profiles[stack] = _profile_snapshot(root, stack, plan)
+    manifest["profiles"] = profiles
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
+    temporary = manifest_path.with_suffix(".json.tmp")
+    temporary.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    os.replace(temporary, manifest_path)
     empty = [group["path"] for group in manifest["groups"] if group["wheel_count"] <= 0]
     if empty:
         raise RuntimeError(f"Wheelhouse groups are empty: {', '.join(empty)}")
     print(f"\nWheelhouse manifest written: {manifest_path}")
+
+
+def validate_wheelhouse_profiles(
+    root: Path,
+    profile_plans: dict[str, list[DownloadBatch]],
+) -> list[str]:
+    manifest_path = root / "assets" / "wheels" / "wheelhouse.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return [f"wheelhouse manifest not found: {manifest_path}"]
+    except (json.JSONDecodeError, OSError) as exc:
+        return [f"wheelhouse manifest is unreadable: {manifest_path}: {exc}"]
+    if manifest.get("schema") != 2 or not isinstance(manifest.get("profiles"), dict):
+        return ["wheelhouse manifest has no per-stack completion profiles; rebuild the selected stack"]
+
+    wheel_root = root / "assets" / "wheels"
+    errors: list[str] = []
+    profiles = manifest["profiles"]
+    for stack, plan in profile_plans.items():
+        profile = profiles.get(stack)
+        if not isinstance(profile, dict):
+            errors.append(f"{stack}: completion profile is missing")
+            continue
+        if profile.get("plan_signature") != _plan_signature(root, plan):
+            errors.append(f"{stack}: dependency plan changed after the wheelhouse was prepared")
+            continue
+        planned_groups = sorted({batch.dest.relative_to(wheel_root).as_posix() for batch in plan})
+        if profile.get("groups") != planned_groups:
+            errors.append(f"{stack}: recorded wheel groups do not match the current dependency plan")
+            continue
+        wheels = profile.get("wheels")
+        if not isinstance(wheels, list) or not wheels:
+            errors.append(f"{stack}: completion profile contains no wheels")
+            continue
+        for item in wheels:
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str) or not isinstance(item.get("size"), int):
+                errors.append(f"{stack}: completion profile contains an invalid wheel record")
+                break
+            relative = Path(item["path"])
+            if relative.is_absolute() or ".." in relative.parts or relative.suffix.lower() != ".whl":
+                errors.append(f"{stack}: completion profile contains an unsafe wheel path: {relative}")
+                break
+            wheel = wheel_root / relative
+            try:
+                size = wheel.stat().st_size
+            except OSError:
+                errors.append(f"{stack}: recorded wheel is missing: {relative.as_posix()}")
+                break
+            if size != item["size"]:
+                errors.append(
+                    f"{stack}: recorded wheel size changed: {relative.as_posix()} "
+                    f"({size} bytes, expected {item['size']})"
+                )
+                break
+    return errors
 
 
 def main() -> int:
@@ -1142,6 +1385,7 @@ def main() -> int:
         help="prepare only selected stack(s); default prepares all",
     )
     parser.add_argument("--dry-run", action="store_true", help="print the plan without downloading")
+    parser.add_argument("--check", action="store_true", help="validate selected stack completion profiles")
     parser.add_argument("--clean", action="store_true", help="remove assets/wheels before downloading")
     parser.add_argument(
         "--from-batch",
@@ -1161,8 +1405,25 @@ def main() -> int:
         if stale_requirements.exists():
             shutil.rmtree(stale_requirements)
 
+    requested_stacks = set(args.stack or STACKS)
     installer = _load_installer(root)
-    batches = build_plan(root, set(args.stack or []))
+    batches = build_plan(root, requested_stacks)
+    if len(requested_stacks) == 1:
+        profile_plans = {next(iter(requested_stacks)): batches}
+    else:
+        profile_plans = {
+            stack: build_plan(root, {stack})
+            for stack in STACKS
+            if stack in requested_stacks
+        }
+    if args.check:
+        errors = validate_wheelhouse_profiles(root, profile_plans)
+        if errors:
+            for error in errors:
+                print(f"[wheelhouse] {error}", file=sys.stderr)
+            return 1
+        print("Wheelhouse completion profiles are valid: " + ", ".join(sorted(requested_stacks)))
+        return 0
     manifest_batches = batches
     if args.from_batch:
         labels = [batch.label for batch in batches]
@@ -1198,7 +1459,7 @@ def main() -> int:
     wheelhouse.mkdir(parents=True, exist_ok=True)
     for batch in batches:
         _download_batch(root, installer, batch)
-    _write_manifest(root, manifest_batches)
+    _write_manifest(root, manifest_batches, profile_plans)
     return 0
 
 

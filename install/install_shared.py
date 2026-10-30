@@ -224,6 +224,10 @@ def _run_shared(args: argparse.Namespace, impl) -> int:
                     "--root",
                     str(impl.ROOT),
                     "--require-cuda",
+                    "--timeout",
+                    "90",
+                    "--ddsp-timeout",
+                    "180",
                 ])
                 impl.run([
                     str(core_py),
