@@ -88,6 +88,27 @@ describe('application localization', () => {
       .toContain('ユーザーのRVCモデル')
   })
 
+  it('keeps the Japanese cover workspace workflow fully localized', () => {
+    setLocale('ja-JP')
+    expect([
+      '自动输出人声 + 伴奏的完整成品',
+      '先自动出成品，再进入编辑器微调',
+      '不启动自动推理，直接创建编辑工程',
+      '提取干声与伴奏（UVR / PyMSS）',
+      'DeepFilterNet3 清理分离伪影并保护高频细节',
+      '分析音高曲线',
+      '加载模型进行歌声转换',
+    ].map((item) => translateUiText(item))).toEqual([
+      'ボーカルと伴奏を自動でミックスして完成音源を出力',
+      '自動生成後、エディターで細かく調整',
+      '自動推論を行わず、編集プロジェクトを直接作成',
+      'ボーカルと伴奏を抽出（UVR / PyMSS）',
+      'DeepFilterNet3で分離ノイズを除去し、高域のディテールを保護',
+      'ピッチカーブを解析',
+      'モデルを読み込んで歌声を変換',
+    ])
+  })
+
   it('translates API documentation, model hub, and re-inference log copy', () => {
     setLocale('en-US')
     expect(translateUiText('典型流程：上传音频、读取模型、创建任务、轮询状态、下载成品。'))

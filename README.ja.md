@@ -33,6 +33,14 @@ AIカバー制作の全工程を一つのワークフローで実行できます
 
 ---
 
+## アプリケーション画面
+
+<div align="center">
+  <img src="docs/images/xb-svcb-app-ja.png" width="100%" alt="XB-SVCB AIカバー制作画面の日本語表示" />
+  <br/>
+  <sub>XB-SVCB 0.1.0 · 日本語で表示した実際のAIカバー制作画面</sub>
+</div>
+
 ## 概要
 
 XB-SVCBは、Windowsでローカル動作するAIカバー・音声制作アプリケーションです。UIにはVue 3、アプリケーションコアにはPythonを使用し、各AIフレームワークは独立した環境とWorkerプロセスで動作します。

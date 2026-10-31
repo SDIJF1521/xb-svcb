@@ -38,6 +38,14 @@
 
 ---
 
+## 软件界面
+
+<div align="center">
+  <img src="docs/images/xb-svcb-app.png" width="100%" alt="XB-SVCB AI 翻唱工作台真实运行界面" />
+  <br/>
+  <sub>XB-SVCB 0.1.0 · AI 翻唱工作台实际运行界面</sub>
+</div>
+
 ## 项目简介
 
 XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它以 Vue 3 作为界面，以 Python 作为业务核心，并将不同 AI 框架放在独立环境和 Worker 进程中运行。

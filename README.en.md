@@ -33,6 +33,14 @@ Create a complete AI song cover in one workflow. Supports **So-VITS-SVC and RVC 
 
 ---
 
+## Application Interface
+
+<div align="center">
+  <img src="docs/images/xb-svcb-app-en.png" width="100%" alt="XB-SVCB AI cover workspace running in English" />
+  <br/>
+  <sub>XB-SVCB 0.1.0 · Actual AI cover workspace in English</sub>
+</div>
+
 ## Overview
 
 XB-SVCB is a local-first Windows application for AI song covers and audio production. Its interface is built with Vue 3, its application core is written in Python, and each AI framework runs in an isolated environment and worker process.
