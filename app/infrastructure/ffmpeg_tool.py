@@ -22,8 +22,9 @@ import config
 class FfmpegTool:
     DEFAULT_VOCAL_GAIN_DB = 1.8
     DEFAULT_INSTRUMENTAL_GAIN_DB = -0.7
-    ADAPTIVE_VOCAL_UNDER_MUSIC_DB = 2.5
-    ADAPTIVE_FALLBACK_VOCAL_GAIN_DB = -1.0
+    ADAPTIVE_VOCAL_OVER_MUSIC_DB = 1.5
+    ADAPTIVE_MIN_VOCAL_GAIN_DB = -1.0
+    ADAPTIVE_MAX_VOCAL_GAIN_DB = 4.0
 
     def __init__(self) -> None:
         self.ffmpeg = shutil.which("ffmpeg")
@@ -729,8 +730,8 @@ class FfmpegTool:
                 "adaptive": False,
                 "vocal_lufs": vocal_lufs,
                 "instrumental_lufs": music_lufs,
-                "vocal_gain_db": self.ADAPTIVE_FALLBACK_VOCAL_GAIN_DB,
-                "instrumental_gain_db": 0.0,
+                "vocal_gain_db": self.DEFAULT_VOCAL_GAIN_DB,
+                "instrumental_gain_db": self.DEFAULT_INSTRUMENTAL_GAIN_DB,
             }
 
         # Keep unusually loud backing tracks from driving the final limiter while
@@ -739,10 +740,13 @@ class FfmpegTool:
         vocal_gain_db = (
             music_lufs
             + music_gain_db
-            - self.ADAPTIVE_VOCAL_UNDER_MUSIC_DB
+            + self.ADAPTIVE_VOCAL_OVER_MUSIC_DB
             - vocal_lufs
         )
-        vocal_gain_db = max(-3.0, min(0.5, vocal_gain_db))
+        vocal_gain_db = max(
+            self.ADAPTIVE_MIN_VOCAL_GAIN_DB,
+            min(self.ADAPTIVE_MAX_VOCAL_GAIN_DB, vocal_gain_db),
+        )
         return {
             "adaptive": True,
             "vocal_lufs": vocal_lufs,
@@ -805,9 +809,9 @@ class FfmpegTool:
            保持时长不变），破坏「同音高完全重合」，形成自然的合唱团厚度；
         3. **微延迟去相关（Haas）** —— 每路加几毫秒不等延迟，破坏相位对齐、进一步
            拉宽声场（仍被感知为同一句、不串拍）；
-        4. **等响度增益补偿** —— 去相关后按略高于 ``1/sqrt(N)`` 压低再 ``amix`` 求和
-           （``normalize=0``），最后软限幅 ``alimiter`` 防破音，使合唱句与独唱句
-           整体响度大体一致。
+        4. **等响度增益补偿** —— 去相关后按略高于 ``sqrt(2/N)`` 压低再 ``amix``
+           求和（``normalize=0``）。这里的 2 用于补偿普通独唱从单声道复制为双声道
+           的能量基准，最后软限幅 ``alimiter`` 防破音，使合唱句不比独唱句更轻。
         """
         if not self.ffmpeg:
             return False
@@ -818,8 +822,9 @@ class FfmpegTool:
             return self.convert(srcs[0], dst, sample_rate)
         try:
             n = len(srcs)
-            # 去相关后更接近能量相加，给 1/sqrt(N) 一点回补避免合唱句偏轻
-            gain = 1.0 / (n ** 0.5) * 1.12
+            # 每路随后会从 mono 做恒功率 stereo 声像；以普通独唱的双声道复制
+            # 为响度基准，需要 sqrt(2/N) 而不是单声道基准的 1/sqrt(N)。
+            gain = (2.0 / n) ** 0.5 * 1.12
             spread = 0.85  # 声像展开范围（1.0=完全左右，过宽会听感分离失衡）
             # 每路微失谐（音分）/ 微延迟（ms）模板：首路居中不动，其余左右展开
             cents_tbl = [0.0, 9.0, -9.0, 6.0, -6.0, 12.0, -12.0, 4.0]
