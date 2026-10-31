@@ -119,12 +119,15 @@ ja.OnlinePlanCache=キャッシュ検証済み: %1 ファイル。今回のダ�
 zhcn.OnlinePlanLocation=下载位置：%1
 en.OnlinePlanLocation=Download location: %1
 ja.OnlinePlanLocation=ダウンロード先: %1
-zhcn.OnlinePlanReady=准备就绪。点击“安装”后开始准备文件。
-en.OnlinePlanReady=Ready. Select Install to prepare the files.
-ja.OnlinePlanReady=準備完了です。「インストール」を選択してファイルを準備します。
+zhcn.OnlinePlanReady=准备就绪。点击“下一步”开始下载文件。
+en.OnlinePlanReady=Ready. Select Next to start downloading the files.
+ja.OnlinePlanReady=準備完了です。「次へ」を選択してファイルのダウンロードを開始します。
 zhcn.OnlineInstalling=正在启动正式安装向导…
 en.OnlineInstalling=Launching the full installation wizard...
 ja.OnlineInstalling=本体のインストールウィザードを起動しています...
+zhcn.OnlineLaunched=正式安装向导已启动。你可以关闭此在线安装器。
+en.OnlineLaunched=The full installation wizard has started. You can close this online bootstrapper.
+ja.OnlineLaunched=本体のインストールウィザードを起動しました。このオンラインセットアップは閉じることができます。
 zhcn.OnlineDirectDownloadTitle=正在准备安装文件
 en.OnlineDirectDownloadTitle=Preparing installation files
 ja.OnlineDirectDownloadTitle=インストールファイルを準備しています
@@ -137,9 +140,9 @@ ja.OnlineDownloadingFile=%1 をダウンロードしています (%2)
 zhcn.OnlineVerifyingFile=正在校验 %1
 en.OnlineVerifyingFile=Verifying %1
 ja.OnlineVerifyingFile=%1 を検証しています
-zhcn.OnlineCurlMissing=当前 Windows 缺少 curl.exe，无法直接下载到目标磁盘。请更新 Windows，或将 curl.exe 加入 PATH 后重试。
-en.OnlineCurlMissing=Windows curl.exe is unavailable, so Setup cannot download directly to the target drive. Update Windows or add curl.exe to PATH and try again.
-ja.OnlineCurlMissing=Windows の curl.exe が見つからないため、対象ドライブへ直接ダウンロードできません。Windows を更新するか、curl.exe を PATH に追加して再試行してください。
+zhcn.OnlineCurlMissing=当前 Windows 没有可用的下载组件（curl 或 PowerShell），无法下载到目标磁盘。
+en.OnlineCurlMissing=No usable downloader (curl or PowerShell) was found, so Setup cannot download the files.
+ja.OnlineCurlMissing=使用可能なダウンローダー（curl または PowerShell）が見つからないため、ファイルをダウンロードできません。
 zhcn.OnlineHashMismatch=%1 下载完成但 SHA-256 校验失败，已删除损坏的临时文件，请重试。
 en.OnlineHashMismatch=%1 finished downloading but failed SHA-256 verification. The damaged partial file was removed; try again.
 ja.OnlineHashMismatch=%1 のダウンロードは完了しましたが、SHA-256 検証に失敗しました。破損した一時ファイルは削除されました。再試行してください。
@@ -148,18 +151,6 @@ ja.OnlineHashMismatch=%1 のダウンロードは完了しましたが、SHA-256
 const
   ManifestName = 'online-manifest.ini';
   MaxArtifactCount = 64;
-  ProcessQueryLimitedInformation = $1000;
-  ProcessStillActive = 259;
-
-function OpenProcess(DesiredAccess: Longword; InheritHandle: Boolean;
-  ProcessId: Longword): Longword;
-  external 'OpenProcess@kernel32.dll stdcall';
-
-function GetExitCodeProcess(ProcessHandle: Longword; var ExitCode: Longword): Longword;
-  external 'GetExitCodeProcess@kernel32.dll stdcall';
-
-function CloseHandle(Handle: Longword): Longword;
-  external 'CloseHandle@kernel32.dll stdcall';
 
 var
   HardwarePage: TInputOptionWizardPage;
@@ -376,6 +367,26 @@ begin
     Result := '';
 end;
 
+function PowerShellPath(): String;
+var
+  Candidate: String;
+begin
+  Candidate := ExpandConstant('{sys}\\WindowsPowerShell\\v1.0\\powershell.exe');
+  if FileExists(Candidate) then
+    Result := Candidate
+  else
+    Result := '';
+end;
+
+function PowerShellQuote(const Value: String): String;
+var
+  Escaped: String;
+begin
+  Escaped := Value;
+  StringChangeEx(Escaped, '''', '''''', True);
+  Result := '''' + Escaped + '''';
+end;
+
 function FileSize64(const Path: String): Int64;
 var
   Handle: TFileStream;
@@ -399,19 +410,19 @@ procedure UpdateDirectDownloadProgress(const ArtifactIndex: Integer;
   const PartialPath: String);
 var
   CompletedBytes, ExpectedBytes: Int64;
-  Percent: Integer;
+  ProgressUnits: Integer;
 begin
   ExpectedBytes := DownloadedArtifactSizes[ArtifactIndex];
   CompletedBytes := FileSize64(PartialPath);
   if (ExpectedBytes > 0) and (CompletedBytes > ExpectedBytes) then
     CompletedBytes := ExpectedBytes;
   if PendingArtifactBytes > 0 then
-    Percent := Integer(((CompletedArtifactBytes + CompletedBytes) * 100) div PendingArtifactBytes)
+    ProgressUnits := Integer(((CompletedArtifactBytes + CompletedBytes) * 1000) div PendingArtifactBytes)
   else
-    Percent := 100;
-  if Percent < 0 then Percent := 0;
-  if Percent > 99 then Percent := 99;
-  ArtifactProgressPage.SetProgress(Percent, 100);
+    ProgressUnits := 1000;
+  if ProgressUnits < 0 then ProgressUnits := 0;
+  if ProgressUnits > 999 then ProgressUnits := 999;
+  ArtifactProgressPage.SetProgress(ProgressUnits, 1000);
   ArtifactProgressPage.SetText(
     M2('OnlineDownloadingFile', DownloadedArtifactNames[ArtifactIndex],
       FormatPackageSize(CompletedBytes) + ' / ' + FormatPackageSize(ExpectedBytes)),
@@ -421,56 +432,101 @@ end;
 
 function RunDirectDownload(const ArtifactIndex: Integer): Boolean;
 var
-  Curl, DestinationPath, PartialPath, Args: String;
+  Curl, PowerShell, DestinationPath, PartialPath, MarkerPath, ScriptPath,
+    PowerShellScriptPath, Args, CmdLine: String;
+  ScriptText: String;
   ProcessId, ResultCode: Integer;
-  ProcessHandle, ExitCode: Longword;
+  MarkerText: String;
+  MarkerData: AnsiString;
 begin
   Result := False;
   Curl := CurlPath();
-  if Curl = '' then
-  begin
-    SuppressibleMsgBox(M('OnlineCurlMissing'), mbCriticalError, MB_OK, IDOK);
-    Exit;
-  end;
 
   DestinationPath := AddBackslash(DownloadDirectory) + DownloadedArtifactNames[ArtifactIndex];
   PartialPath := DestinationPath + '.part';
+  MarkerPath := ExpandConstant('{tmp}\\xb_svcb_curl_' + IntToStr(ArtifactIndex) + '.exitcode');
+  ScriptPath := ExpandConstant('{tmp}\\xb_svcb_curl_' + IntToStr(ArtifactIndex) + '.cmd');
+  PowerShellScriptPath := ExpandConstant('{tmp}\\xb_svcb_download_' + IntToStr(ArtifactIndex) + '.ps1');
   if FileExists(DestinationPath) then
     DeleteFile(DestinationPath);
+  DeleteFile(MarkerPath);
+  DeleteFile(ScriptPath);
+  DeleteFile(PowerShellScriptPath);
   Args := '--fail --location --retry 5 --retry-delay 2 --connect-timeout 30 ' +
     '--continue-at - --output ' + QuoteCommandArg(PartialPath) + ' ' +
     QuoteCommandArg(ArtifactUrl(DownloadedArtifactNames[ArtifactIndex]));
-  if not Exec(Curl, Args, DownloadDirectory, SW_HIDE, ewNoWait, ProcessId) then
+  { Use a completion marker instead of treating ewNoWait's output value as a
+    process handle/PID. On some Windows versions that value can be 259 while
+    the short-lived cmd wrapper is still starting, which made downloads look
+    like they never started. A temporary .cmd file also avoids /c quoting
+    rules swallowing the final quote in the marker's exit code. }
+  if Curl <> '' then
+    ScriptText := '@echo off' + #13#10 +
+      '"' + Curl + '" ' + Args + ' >nul 2>&1' + #13#10 +
+      '>"' + MarkerPath + '" echo %errorlevel%' + #13#10
+  else
   begin
-    SuppressibleMsgBox(
-      M2('OnlineDownloadFailed', DownloadedArtifactNames[ArtifactIndex],
-        SysErrorMessage(ProcessId)), mbCriticalError, MB_OK, IDOK);
-    Exit;
+    PowerShell := PowerShellPath();
+    if PowerShell = '' then
+    begin
+      SuppressibleMsgBox(M('OnlineCurlMissing'), mbCriticalError, MB_OK, IDOK);
+      Exit;
+    end;
+    if not SaveStringToFile(
+      PowerShellScriptPath,
+      '$ErrorActionPreference = ''Stop''' + #13#10 +
+      '$ProgressPreference = ''SilentlyContinue''' + #13#10 +
+      'try {' + #13#10 +
+      '  Invoke-WebRequest -UseBasicParsing -Uri ' +
+        PowerShellQuote(ArtifactUrl(DownloadedArtifactNames[ArtifactIndex])) +
+        ' -OutFile ' + PowerShellQuote(PartialPath) + #13#10 +
+      '  exit 0' + #13#10 +
+      '} catch {' + #13#10 +
+      '  exit 1' + #13#10 +
+      '}' + #13#10,
+      False) then
+    begin
+      SuppressibleMsgBox(
+        M2('OnlineDownloadFailed', DownloadedArtifactNames[ArtifactIndex],
+          SysErrorMessage(DLLGetLastError)), mbCriticalError, MB_OK, IDOK);
+      Exit;
+    end;
+    ScriptText := '@echo off' + #13#10 +
+      '"' + PowerShell + '" -NoProfile -ExecutionPolicy Bypass -File ' +
+        QuoteCommandArg(PowerShellScriptPath) + ' >nul 2>&1' + #13#10 +
+      '>"' + MarkerPath + '" echo %errorlevel%' + #13#10;
   end;
-
-  ProcessHandle := OpenProcess(ProcessQueryLimitedInformation, False, ProcessId);
-  if ProcessHandle = 0 then
+  if not SaveStringToFile(ScriptPath, ScriptText, False) then
   begin
     SuppressibleMsgBox(
       M2('OnlineDownloadFailed', DownloadedArtifactNames[ArtifactIndex],
         SysErrorMessage(DLLGetLastError)), mbCriticalError, MB_OK, IDOK);
     Exit;
   end;
-  try
-    repeat
-      UpdateDirectDownloadProgress(ArtifactIndex, PartialPath);
-      Sleep(250);
-      ExitCode := ProcessStillActive;
-      if GetExitCodeProcess(ProcessHandle, ExitCode) = 0 then
-      begin
-        ResultCode := -1;
-        Break;
-      end;
-      ResultCode := Integer(ExitCode);
-    until ExitCode <> ProcessStillActive;
-  finally
-    CloseHandle(ProcessHandle);
+  CmdLine := '/d /c call ' + QuoteCommandArg(ScriptPath);
+  ProcessId := 0;
+  if not Exec(ExpandConstant('{cmd}'), CmdLine, DownloadDirectory,
+    SW_HIDE, ewNoWait, ProcessId) then
+  begin
+    SuppressibleMsgBox(
+      M2('OnlineDownloadFailed', DownloadedArtifactNames[ArtifactIndex],
+        SysErrorMessage(ProcessId)), mbCriticalError, MB_OK, IDOK);
+    Exit;
   end;
+  repeat
+    UpdateDirectDownloadProgress(ArtifactIndex, PartialPath);
+    Sleep(250);
+  until FileExists(MarkerPath);
+  if LoadStringFromFile(MarkerPath, MarkerData) then
+  begin
+    MarkerText := Trim(String(MarkerData));
+    ResultCode := StrToIntDef(MarkerText, -1);
+  end
+  else
+    ResultCode := -1;
+  DeleteFile(MarkerPath);
+  DeleteFile(ScriptPath);
+  DeleteFile(PowerShellScriptPath);
   if ResultCode <> 0 then
   begin
     SuppressibleMsgBox(
@@ -514,10 +570,10 @@ begin
     M2('OnlinePlanCache', IntToStr(CachedArtifactCount),
       IntToStr(PendingArtifactCount)) + #13#10 +
     M1('OnlinePlanLocation', DownloadDirectory);
-  if PendingArtifactCount = 0 then
-    PlanDetailLabel.Caption := M('OnlinePlanReady')
-  else
-    PlanDetailLabel.Caption := M('OnlinePreparing');
+  { The plan page is shown only after the manifest and artifact metadata have
+    been prepared. Pending files describe the next download step; they do not
+    mean that this page is still loading. }
+  PlanDetailLabel.Caption := M('OnlinePlanReady');
 end;
 
 procedure InvalidManifest(const Detail: String);
@@ -622,11 +678,11 @@ begin
     end;
     DownloadedArtifactNames[Index] := FileName;
     DownloadedArtifactHashes[Index] := HashValue;
-    SizeValue := GetIniString(SectionName, 'size' + IntToStr(Index), '0', ManifestPath);
+    SizeValue := GetIniString(SectionName, 'size_' + IntToStr(Index), '0', ManifestPath);
     DownloadedArtifactSizes[Index] := StrToInt64Def(SizeValue, 0);
     if DownloadedArtifactSizes[Index] <= 0 then
     begin
-      InvalidManifest(SectionName + '.size' + IntToStr(Index));
+      InvalidManifest(SectionName + '.size_' + IntToStr(Index));
       Exit;
     end;
     TotalArtifactBytes := TotalArtifactBytes + DownloadedArtifactSizes[Index];
@@ -716,21 +772,19 @@ begin
   WizardForm.StatusLabel.Caption := M('OnlineInstalling');
   WizardForm.FilenameLabel.Caption := DownloadedSetup;
   WizardForm.Update;
+  { The downloaded installer owns the complete installation workflow. Do not
+    synchronously wait for it here: that blocks this bootstrapper's UI and can
+    leave its buttons disabled after the child wizard appears to have closed. }
   if not Exec(DownloadedSetup, '/SP- /LANG=' + ActiveLanguage(),
-    ExpandConstant('{tmp}'), SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+    DownloadDirectory, SW_SHOW, ewNoWait, ResultCode) then
   begin
     SuppressibleMsgBox(
-      M1('OnlineLaunchFailed', SysErrorMessage(DLLGetLastError)),
+      M1('OnlineLaunchFailed', SysErrorMessage(ResultCode)),
       mbCriticalError, MB_OK, IDOK);
     Exit;
   end;
-  if ResultCode <> 0 then
-  begin
-    SuppressibleMsgBox(
-      M1('OnlineInstallerFailed', IntToStr(ResultCode)),
-      mbError, MB_OK, IDOK);
-    Exit;
-  end;
+  WizardForm.StatusLabel.Caption := M('OnlineLaunched');
+  WizardForm.Update;
   Result := True;
 end;
 
@@ -800,6 +854,14 @@ begin
         Exit;
       end;
     end;
+  end
+  else if CurPageID = PlanPage.ID then
+  begin
+    { Start downloading as soon as the user confirms the plan. The standard
+      Ready page remains only for launching the completed offline installer. }
+    Result := DownloadArtifacts();
+    if Result then
+      ArtifactsReady := True;
   end
   else if CurPageID = wpReady then
   begin

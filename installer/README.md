@@ -215,7 +215,7 @@ $env:XB_OSS_BASE_URL = "https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1
 
 该模式只能用于 OSS 文件与本地 `dist\online-manifest.ini` 完全对应的情况。若重新构建或替换了任何离线 EXE/BIN，必须恢复全部五套本地文件并重新生成、最后上传清单，不能复用旧清单。
 
-在线安装器只把几 KB 的 `online-manifest.ini` 临时放入系统临时目录。大体积的 EXE/BIN 分卷由 Windows 自带 `curl.exe` 直接下载到在线安装器所在目录下，不经过 C 盘临时目录：
+在线安装器只把几 KB 的 `online-manifest.ini` 临时放入系统临时目录。大体积的 EXE/BIN 分卷优先由 Windows 自带 `curl.exe` 直接下载到在线安装器所在目录下；如果系统没有 curl，则自动回退到 Windows PowerShell 的 `Invoke-WebRequest`。两种方式都不会把大文件写入 C 盘临时目录：
 
 ```text
 <在线安装器所在目录>\XB-SVCB-Downloads\0.1.0\<stack>\

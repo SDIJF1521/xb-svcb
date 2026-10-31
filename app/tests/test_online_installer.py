@@ -136,13 +136,26 @@ def test_online_inno_script_localizes_and_verifies_downloads() -> None:
     assert "'{#XB_ONLINE_MANIFEST_SHA256}'" in script
     assert "--continue-at - --output" in script
     assert "PartialPath := DestinationPath + '.part'" in script
+    assert "MarkerPath := ExpandConstant('{tmp}\\\\xb_svcb_curl_' + IntToStr(ArtifactIndex) + '.exitcode')" in script
+    assert "ScriptPath := ExpandConstant('{tmp}\\\\xb_svcb_curl_' + IntToStr(ArtifactIndex) + '.cmd')" in script
+    assert "PowerShellScriptPath := ExpandConstant('{tmp}\\\\xb_svcb_download_' + IntToStr(ArtifactIndex) + '.ps1')" in script
+    assert "CmdLine := '/d /c call ' + QuoteCommandArg(ScriptPath)" in script
+    assert "until FileExists(MarkerPath);" in script
+    assert "OpenProcess" not in script
+    assert "GetExitCodeProcess" not in script
     assert "RenameFile(PartialPath, DestinationPath)" in script
     assert "GetSHA256OfFile(PartialPath)" in script
+    assert "ProgressUnits := Integer(((CompletedArtifactBytes + CompletedBytes) * 1000) div PendingArtifactBytes)" in script
+    assert "ArtifactProgressPage.SetProgress(ProgressUnits, 1000)" in script
+    assert "function PowerShellPath" in script
+    assert "Invoke-WebRequest -UseBasicParsing -Uri" in script
     assert "ArtifactProgressPage := CreateOutputProgressPage" in script
     assert "AddBackslash(ExpandConstant('{tmp}')) +\n          DownloadedArtifactNames[Index]" not in script
     assert "function IsSafeBaseName" in script
     assert "function IsHexHash" in script
     assert "GetIniString(SectionName, 'file0'" in script
+    assert "GetIniString(SectionName, 'size_' + IntToStr(Index), '0', ManifestPath)" in script
+    assert "GetIniString(SectionName, 'size' + IntToStr(Index), '0', ManifestPath)" not in script
     assert "ActiveLanguage()" in script
     assert "ewWaitUntilTerminated" in script
     assert "Get-CimInstance Win32_VideoController" in script
@@ -152,11 +165,18 @@ def test_online_inno_script_localizes_and_verifies_downloads() -> None:
     assert "ForceDirectories(DownloadDirectory)" in script
     assert "DownloadedSetup := AddBackslash(DownloadDirectory) + SetupName" in script
     assert "PlanPage := CreateCustomPage" in script
+    assert "PlanDetailLabel.Caption := M('OnlinePlanReady');" in script
+    assert "else\n    PlanDetailLabel.Caption := M('OnlinePreparing');" not in script
+    assert "else if CurPageID = PlanPage.ID then" in script
+    assert "Result := DownloadArtifacts();" in script
     assert "OnlinePlanCache" in script
     assert "GetSHA256OfFile(DestinationPath)" in script
     assert "ManifestPrepared" in script
     assert "if PendingArtifactCount = 0 then" in script
     assert "OnlineInstalling" in script
+    assert "DownloadDirectory, SW_SHOW, ewNoWait, ResultCode" in script
+    assert "DownloadDirectory, SW_SHOW, ewWaitUntilTerminated, ResultCode" not in script
+    assert "WizardForm.StatusLabel.Caption := M('OnlineLaunched')" in script
 
     custom = script.split("[CustomMessages]", 1)[1].split("[Code]", 1)[0]
     catalogs: dict[str, set[str]] = {
