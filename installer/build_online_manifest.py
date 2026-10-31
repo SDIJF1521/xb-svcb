@@ -16,6 +16,8 @@ STACK_BASE_NAMES = {
     "cu128": "XB-SVCB-Setup-CUDA128",
 }
 MAX_ARTIFACT_BYTES = 2 * 1024**3
+SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
+SAFE_NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
 
 
 @dataclass(frozen=True)
@@ -94,12 +96,71 @@ def build_manifest(dist: Path, output: Path, version: str) -> configparser.Confi
     return manifest
 
 
+def validate_existing_manifest(path: Path, version: str) -> configparser.ConfigParser:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    manifest = configparser.ConfigParser(interpolation=None)
+    manifest.optionxform = str
+    with path.open("r", encoding="utf-8") as handle:
+        manifest.read_file(handle)
+
+    if manifest.get("release", "version", fallback="") != version:
+        raise ValueError(f"Manifest version does not match {version}: {path}")
+    expected_stacks = list(STACK_BASE_NAMES)
+    stacks = [item.strip() for item in manifest.get("release", "stacks", fallback="").split(",") if item.strip()]
+    if stacks != expected_stacks:
+        raise ValueError(f"Manifest stacks are invalid: {stacks}")
+
+    for stack, base_name in STACK_BASE_NAMES.items():
+        section_name = f"stack.{stack}"
+        if not manifest.has_section(section_name):
+            raise ValueError(f"Manifest section is missing: {section_name}")
+        section = manifest[section_name]
+        try:
+            count = int(section.get("count", "0"))
+        except ValueError as exc:
+            raise ValueError(f"Invalid artifact count for {stack}") from exc
+        if count < 2 or count > 64:
+            raise ValueError(f"Invalid artifact count for {stack}: {count}")
+        expected_setup = f"{base_name}.exe"
+        if section.get("setup") != expected_setup or section.get("file0") != expected_setup:
+            raise ValueError(f"Invalid setup artifact for {stack}")
+
+        names: set[str] = set()
+        for index in range(count):
+            name = section.get(f"file{index}", "")
+            digest = section.get(f"sha256_{index}", "")
+            try:
+                size = int(section.get(f"size_{index}", "0"))
+            except ValueError as exc:
+                raise ValueError(f"Invalid artifact size for {stack} file {index}") from exc
+            if not SAFE_NAME_RE.fullmatch(name) or ".." in name:
+                raise ValueError(f"Unsafe artifact name for {stack}: {name}")
+            if name.casefold() in names:
+                raise ValueError(f"Duplicate artifact name for {stack}: {name}")
+            names.add(name.casefold())
+            if not SHA256_RE.fullmatch(digest):
+                raise ValueError(f"Invalid SHA-256 for {stack}: {name}")
+            if size <= 0 or size >= MAX_ARTIFACT_BYTES:
+                raise ValueError(f"Invalid artifact size for {stack}: {name} ({size})")
+    return manifest
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the hash-pinned XB-SVCB online installer manifest.")
-    parser.add_argument("--dist", type=Path, required=True, help="Directory containing all five offline installers")
-    parser.add_argument("--output", type=Path, required=True, help="Output INI manifest path")
+    parser.add_argument("--dist", type=Path, help="Directory containing all five offline installers")
+    parser.add_argument("--output", type=Path, help="Output INI manifest path")
+    parser.add_argument("--validate-existing", type=Path, help="Validate an existing manifest without local artifacts")
     parser.add_argument("--version", required=True, help="XB-SVCB release version")
     args = parser.parse_args()
+
+    if args.validate_existing:
+        manifest = validate_existing_manifest(args.validate_existing.resolve(), args.version)
+        file_count = sum(int(manifest[f"stack.{stack}"]["count"]) for stack in STACK_BASE_NAMES)
+        print(f"ONLINE_MANIFEST_VALID {args.validate_existing.resolve()} stacks={len(STACK_BASE_NAMES)} files={file_count}")
+        return 0
+    if not args.dist or not args.output:
+        parser.error("--dist and --output are required unless --validate-existing is used")
 
     manifest = build_manifest(args.dist.resolve(), args.output.resolve(), args.version)
     file_count = sum(int(manifest[f"stack.{stack}"]["count"]) for stack in STACK_BASE_NAMES)

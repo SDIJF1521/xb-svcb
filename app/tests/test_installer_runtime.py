@@ -1050,6 +1050,13 @@ def test_setup_env_uses_install_py_as_the_single_progress_source() -> None:
     assert "if Target < EnvProgressCurrent then" in script
 
 
+def test_installer_does_not_expand_app_constant_during_wizard_initialization() -> None:
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    initialize = script[script.index("procedure InitializeWizard()"):script.index("function RequestedGpuStackName()")]
+
+    assert "ExpandConstant('{app}" not in initialize
+
+
 def test_setup_batch_keeps_inno_responsive_while_waiting_for_process() -> None:
     script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
     start = script.index("function RunSetupBatch(")
@@ -1057,10 +1064,11 @@ def test_setup_batch_keeps_inno_responsive_while_waiting_for_process() -> None:
     runner = script[start:end]
 
     assert "ewNoWait" in runner
-    assert "OpenProcess(ProcessQueryLimitedInformation" in runner
+    assert "MarkerPath := LogDir + '\\' + StepName + '.exitcode'" in runner
+    assert "echo !errorlevel!" in runner
+    assert "until FileExists(MarkerPath);" in runner
     assert "ReadInstallLogDelta(LogPath, SeenText, PendingLine)" in runner
-    assert "GetExitCodeProcess(ProcessHandle, ExitCode)" in runner
-    assert "until ExitCode <> ProcessStillActive;" in runner
+    assert "StrToIntDef(MarkerText, -1)" in runner
     assert "ExecAndLogOutput" not in runner
 
 

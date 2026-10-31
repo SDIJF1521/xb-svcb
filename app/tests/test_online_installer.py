@@ -81,6 +81,37 @@ def test_online_manifest_requires_all_five_packages(tmp_path: Path) -> None:
         builder.build_manifest(dist, dist / "online-manifest.ini", "0.1.0")
 
 
+def test_existing_online_manifest_can_be_validated_without_release_files(
+    tmp_path: Path,
+) -> None:
+    builder = _load_manifest_builder()
+    dist = tmp_path / "dist"
+    output = dist / "online-manifest.ini"
+    _write_release_files(dist, builder)
+    builder.build_manifest(dist, output, "0.1.0")
+    for artifact in dist.iterdir():
+        if artifact != output:
+            artifact.unlink()
+
+    manifest = builder.validate_existing_manifest(output, "0.1.0")
+
+    assert manifest["release"]["version"] == "0.1.0"
+    assert manifest["stack.cu128"]["setup"] == "XB-SVCB-Setup-CUDA128.exe"
+
+
+def test_existing_online_manifest_rejects_invalid_hash(tmp_path: Path) -> None:
+    builder = _load_manifest_builder()
+    dist = tmp_path / "dist"
+    output = dist / "online-manifest.ini"
+    _write_release_files(dist, builder)
+    builder.build_manifest(dist, output, "0.1.0")
+    text = output.read_text(encoding="utf-8")
+    output.write_text(re.sub(r"sha256_0=[0-9a-f]{64}", "sha256_0=bad", text, count=1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid SHA-256"):
+        builder.validate_existing_manifest(output, "0.1.0")
+
+
 def test_online_manifest_rejects_noncontiguous_split_volumes(tmp_path: Path) -> None:
     builder = _load_manifest_builder()
     dist = tmp_path / "dist"
@@ -103,7 +134,12 @@ def test_online_inno_script_localizes_and_verifies_downloads() -> None:
     assert 'Name: "ja"; MessagesFile: "languages\\Japanese.isl"' in script
     assert "DownloadPage.Add(ArtifactUrl(ManifestName), ManifestName," in script
     assert "'{#XB_ONLINE_MANIFEST_SHA256}'" in script
-    assert "DownloadPage.Add(ArtifactUrl(FileName), FileName, HashValue)" in script
+    assert "--continue-at - --output" in script
+    assert "PartialPath := DestinationPath + '.part'" in script
+    assert "RenameFile(PartialPath, DestinationPath)" in script
+    assert "GetSHA256OfFile(PartialPath)" in script
+    assert "ArtifactProgressPage := CreateOutputProgressPage" in script
+    assert "AddBackslash(ExpandConstant('{tmp}')) +\n          DownloadedArtifactNames[Index]" not in script
     assert "function IsSafeBaseName" in script
     assert "function IsHexHash" in script
     assert "GetIniString(SectionName, 'file0'" in script
@@ -114,7 +150,6 @@ def test_online_inno_script_localizes_and_verifies_downloads() -> None:
     assert "ExpandConstant('{src}')" in script
     assert "XB-SVCB-Downloads\\{#MyAppVersion}\\" in script
     assert "ForceDirectories(DownloadDirectory)" in script
-    assert "CopyFile(TempPath, DestinationPath, False)" in script
     assert "DownloadedSetup := AddBackslash(DownloadDirectory) + SetupName" in script
     assert "PlanPage := CreateCustomPage" in script
     assert "OnlinePlanCache" in script
@@ -149,6 +184,8 @@ def test_online_build_uses_public_url_without_oss_credentials() -> None:
     assert "Get-FileHash -LiteralPath $ManifestPath -Algorithm SHA256" in build
     assert "/DXB_ONLINE_BASE_URL=$publicBaseUrl" in build
     assert "/DXB_ONLINE_MANIFEST_SHA256=$manifestHash" in build
+    assert "[switch]$ReuseManifest" in build
+    assert "--validate-existing $ManifestPath" in build
     assert "AccessKey" not in build
     assert "Secret" not in build
 

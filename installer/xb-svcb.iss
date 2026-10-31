@@ -543,18 +543,6 @@ const
   CudaToolkitBlackwellVersion = '12.8';
   CudaToolkitPreBlackwellUrl = 'https://developer.nvidia.com/cuda-12-6-0-download-archive';
   CudaToolkitBlackwellUrl = 'https://developer.nvidia.com/cuda-12-8-0-download-archive';
-  ProcessQueryLimitedInformation = $1000;
-  ProcessStillActive = 259;
-
-function OpenProcess(DesiredAccess: Longword; InheritHandle: Boolean;
-  ProcessId: Longword): Longword;
-  external 'OpenProcess@kernel32.dll stdcall';
-
-function GetExitCodeProcess(ProcessHandle: Longword; var ExitCode: Longword): Longword;
-  external 'GetExitCodeProcess@kernel32.dll stdcall';
-
-function CloseHandle(Handle: Longword): Longword;
-  external 'CloseHandle@kernel32.dll stdcall';
 
 var
   DataDirPage: TInputDirWizardPage;
@@ -1613,7 +1601,9 @@ begin
   );
   PythonPathPage.Add(M('PythonExecutableLabel'),
     'Python executable|python.exe|Executable files|*.exe|All files|*.*', '.exe');
-  PythonPathPage.Values[0] := ExpandConstant('{app}\tools\python312\python.exe');
+  // The app directory is not initialized during InitializeWizard. This page
+  // is skipped for bundled-Python builds and gets its final path later.
+  PythonPathPage.Values[0] := '';
 
   PrereqPathPage := CreateInputDirPage(
     PythonPathPage.ID,
@@ -1881,11 +1871,9 @@ end;
 function RunSetupBatch(const BatchName, Args, Status: String; ProgressStart, ProgressEnd: Integer): Boolean;
 var
   ResultCode, ProcessId: Integer;
-  ProcessHandle: Longword;
-  ExitCode: Longword;
   PollTicks: Integer;
-  CmdLine, LogDir, LogPath, StepName: String;
-  SeenText, PendingLine: String;
+  CmdLine, LogDir, LogPath, MarkerPath, StepName: String;
+  SeenText, PendingLine, MarkerText: String;
   FinalLogText: AnsiString;
 begin
   BeginEnvProgress(Status, ProgressStart, ProgressEnd);
@@ -1894,6 +1882,8 @@ begin
   LogDir := ExpandConstant('{app}\install_logs');
   ForceDirectories(LogDir);
   LogPath := LogDir + '\' + StepName + '.log';
+  MarkerPath := LogDir + '\' + StepName + '.exitcode';
+  DeleteFile(MarkerPath);
   LastInstallLog := LogPath;
   CurrentLogPath := LogPath;
   SaveStringToFile(LogPath,
@@ -1910,11 +1900,13 @@ begin
   AppendInstallDetail(M1('LogFile', LogPath));
   AppendInstallDetail('------------------------------------------------------------');
   WizardForm.FilenameLabel.Caption := M1('DetailsLog', LogPath);
-  CmdLine := '/c call "' + ExpandConstant('{app}\') + BatchName + '"';
+  { Delayed expansion evaluates !errorlevel! after the batch returns. The
+    marker avoids relying on ewNoWait's ResultCode, which can be 259 when the
+    short-lived cmd wrapper has already exited before it is opened. }
+  CmdLine := '/d /v:on /c call "' + ExpandConstant('{app}\') + BatchName + '"';
   if Args <> '' then
     CmdLine := CmdLine + ' ' + Args;
-  CmdLine := CmdLine + ' >> "' + LogPath + '" 2>&1';
-  ProcessHandle := 0;
+  CmdLine := CmdLine + ' >> "' + LogPath + '" 2>&1 & >"' + MarkerPath + '" echo !errorlevel!';
   ProcessId := 0;
   PollTicks := 0;
   SeenText := '';
@@ -1922,21 +1914,11 @@ begin
   if LoadStringFromFile(LogPath, FinalLogText) then
     SeenText := FinalLogText;
   try
-    { Start the batch asynchronously. The polling loop below keeps the Inno
-      window repainting while uv/pip performs long wheel installs. }
+    { Start the batch asynchronously. The polling loop keeps the Inno window
+      repainting while uv/pip performs long wheel installs. }
     Result := Exec(ExpandConstant('{cmd}'), CmdLine, ExpandConstant('{app}'),
       SW_HIDE, ewNoWait, ProcessId);
-    if Result then
-    begin
-      ProcessHandle := OpenProcess(ProcessQueryLimitedInformation, False, ProcessId);
-      if ProcessHandle = 0 then
-      begin
-        Result := False;
-        ResultCode := -1;
-        AppendInstallDetail('[installer] Could not monitor setup process ' + IntToStr(ProcessId));
-      end;
-    end
-    else
+    if not Result then
     begin
       ResultCode := ProcessId;
       AppendInstallDetail('[installer] ' + SysErrorMessage(ResultCode));
@@ -1955,27 +1937,21 @@ begin
         end;
         WizardForm.Update;
         Sleep(250);
-        ExitCode := ProcessStillActive;
-        if GetExitCodeProcess(ProcessHandle, ExitCode) = 0 then
-        begin
-          Result := False;
-          ResultCode := -1;
-          AppendInstallDetail('[installer] Could not read setup process status');
-          Break;
-        end;
-      until ExitCode <> ProcessStillActive;
-      if Result then
-        ResultCode := ExitCode;
+      until FileExists(MarkerPath);
+      if LoadStringFromFile(MarkerPath, FinalLogText) then
+      begin
+        MarkerText := Trim(String(FinalLogText));
+        ResultCode := StrToIntDef(MarkerText, -1);
+      end
+      else
+        ResultCode := -1;
       ReadInstallLogDelta(LogPath, SeenText, PendingLine);
       FlushInstallLogLine(PendingLine);
-      CloseHandle(ProcessHandle);
     end;
   except
     AppendInstallDetail('[installer] ' + GetExceptionMessage);
     ResultCode := -1;
     Result := False;
-    if ProcessHandle <> 0 then
-      CloseHandle(ProcessHandle);
   end;
   CurrentLogPath := '';
   if LoadStringFromFile(LogPath, FinalLogText) then

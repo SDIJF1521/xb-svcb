@@ -125,11 +125,41 @@ ja.OnlinePlanReady=準備完了です。「インストール」を選択して�
 zhcn.OnlineInstalling=正在启动正式安装向导…
 en.OnlineInstalling=Launching the full installation wizard...
 ja.OnlineInstalling=本体のインストールウィザードを起動しています...
+zhcn.OnlineDirectDownloadTitle=正在准备安装文件
+en.OnlineDirectDownloadTitle=Preparing installation files
+ja.OnlineDirectDownloadTitle=インストールファイルを準備しています
+zhcn.OnlineDirectDownloadSubtitle=文件直接保存到在线安装器旁边，不占用系统盘临时空间
+en.OnlineDirectDownloadSubtitle=Files are saved next to the online installer without using system-drive temporary storage
+ja.OnlineDirectDownloadSubtitle=システムドライブの一時領域を使わず、オンラインインストーラーの隣に直接保存します
+zhcn.OnlineDownloadingFile=正在下载 %1（%2）
+en.OnlineDownloadingFile=Downloading %1 (%2)
+ja.OnlineDownloadingFile=%1 をダウンロードしています (%2)
+zhcn.OnlineVerifyingFile=正在校验 %1
+en.OnlineVerifyingFile=Verifying %1
+ja.OnlineVerifyingFile=%1 を検証しています
+zhcn.OnlineCurlMissing=当前 Windows 缺少 curl.exe，无法直接下载到目标磁盘。请更新 Windows，或将 curl.exe 加入 PATH 后重试。
+en.OnlineCurlMissing=Windows curl.exe is unavailable, so Setup cannot download directly to the target drive. Update Windows or add curl.exe to PATH and try again.
+ja.OnlineCurlMissing=Windows の curl.exe が見つからないため、対象ドライブへ直接ダウンロードできません。Windows を更新するか、curl.exe を PATH に追加して再試行してください。
+zhcn.OnlineHashMismatch=%1 下载完成但 SHA-256 校验失败，已删除损坏的临时文件，请重试。
+en.OnlineHashMismatch=%1 finished downloading but failed SHA-256 verification. The damaged partial file was removed; try again.
+ja.OnlineHashMismatch=%1 のダウンロードは完了しましたが、SHA-256 検証に失敗しました。破損した一時ファイルは削除されました。再試行してください。
 
 [Code]
 const
   ManifestName = 'online-manifest.ini';
   MaxArtifactCount = 64;
+  ProcessQueryLimitedInformation = $1000;
+  ProcessStillActive = 259;
+
+function OpenProcess(DesiredAccess: Longword; InheritHandle: Boolean;
+  ProcessId: Longword): Longword;
+  external 'OpenProcess@kernel32.dll stdcall';
+
+function GetExitCodeProcess(ProcessHandle: Longword; var ExitCode: Longword): Longword;
+  external 'GetExitCodeProcess@kernel32.dll stdcall';
+
+function CloseHandle(Handle: Longword): Longword;
+  external 'CloseHandle@kernel32.dll stdcall';
 
 var
   HardwarePage: TInputOptionWizardPage;
@@ -137,6 +167,7 @@ var
   PlanInfoLabel: TNewStaticText;
   PlanDetailLabel: TNewStaticText;
   DownloadPage: TDownloadWizardPage;
+  ArtifactProgressPage: TOutputProgressWizardPage;
   SelectedStack: String;
   DownloadDirectory: String;
   DownloadedSetup: String;
@@ -144,7 +175,11 @@ var
   PendingArtifactCount: Integer;
   CachedArtifactCount: Integer;
   TotalArtifactBytes: Int64;
+  PendingArtifactBytes: Int64;
+  CompletedArtifactBytes: Int64;
   DownloadedArtifactNames: array[0..MaxArtifactCount - 1] of String;
+  DownloadedArtifactHashes: array[0..MaxArtifactCount - 1] of String;
+  DownloadedArtifactSizes: array[0..MaxArtifactCount - 1] of Int64;
   DownloadedArtifactCached: array[0..MaxArtifactCount - 1] of Boolean;
   ManifestPrepared: Boolean;
   ArtifactsReady: Boolean;
@@ -310,11 +345,162 @@ begin
   PendingArtifactCount := 0;
   CachedArtifactCount := 0;
   TotalArtifactBytes := 0;
+  PendingArtifactBytes := 0;
+  CompletedArtifactBytes := 0;
   for Index := 0 to MaxArtifactCount - 1 do
   begin
     DownloadedArtifactNames[Index] := '';
+    DownloadedArtifactHashes[Index] := '';
+    DownloadedArtifactSizes[Index] := 0;
     DownloadedArtifactCached[Index] := False;
   end;
+end;
+
+function QuoteCommandArg(const Value: String): String;
+var
+  Escaped: String;
+begin
+  Escaped := Value;
+  StringChangeEx(Escaped, '"', '\"', True);
+  Result := '"' + Escaped + '"';
+end;
+
+function CurlPath(): String;
+var
+  SystemCurl: String;
+begin
+  SystemCurl := ExpandConstant('{sys}\curl.exe');
+  if FileExists(SystemCurl) then
+    Result := SystemCurl
+  else
+    Result := '';
+end;
+
+function FileSize64(const Path: String): Int64;
+var
+  Handle: TFileStream;
+begin
+  Result := 0;
+  if not FileExists(Path) then
+    Exit;
+  try
+    Handle := TFileStream.Create(Path, fmOpenRead or fmShareDenyNone);
+    try
+      Result := Handle.Size;
+    finally
+      Handle.Free;
+    end;
+  except
+    Result := 0;
+  end;
+end;
+
+procedure UpdateDirectDownloadProgress(const ArtifactIndex: Integer;
+  const PartialPath: String);
+var
+  CompletedBytes, ExpectedBytes: Int64;
+  Percent: Integer;
+begin
+  ExpectedBytes := DownloadedArtifactSizes[ArtifactIndex];
+  CompletedBytes := FileSize64(PartialPath);
+  if (ExpectedBytes > 0) and (CompletedBytes > ExpectedBytes) then
+    CompletedBytes := ExpectedBytes;
+  if PendingArtifactBytes > 0 then
+    Percent := Integer(((CompletedArtifactBytes + CompletedBytes) * 100) div PendingArtifactBytes)
+  else
+    Percent := 100;
+  if Percent < 0 then Percent := 0;
+  if Percent > 99 then Percent := 99;
+  ArtifactProgressPage.SetProgress(Percent, 100);
+  ArtifactProgressPage.SetText(
+    M2('OnlineDownloadingFile', DownloadedArtifactNames[ArtifactIndex],
+      FormatPackageSize(CompletedBytes) + ' / ' + FormatPackageSize(ExpectedBytes)),
+    M1('OnlinePlanLocation', DownloadDirectory));
+  WizardForm.Update;
+end;
+
+function RunDirectDownload(const ArtifactIndex: Integer): Boolean;
+var
+  Curl, DestinationPath, PartialPath, Args: String;
+  ProcessId, ResultCode: Integer;
+  ProcessHandle, ExitCode: Longword;
+begin
+  Result := False;
+  Curl := CurlPath();
+  if Curl = '' then
+  begin
+    SuppressibleMsgBox(M('OnlineCurlMissing'), mbCriticalError, MB_OK, IDOK);
+    Exit;
+  end;
+
+  DestinationPath := AddBackslash(DownloadDirectory) + DownloadedArtifactNames[ArtifactIndex];
+  PartialPath := DestinationPath + '.part';
+  if FileExists(DestinationPath) then
+    DeleteFile(DestinationPath);
+  Args := '--fail --location --retry 5 --retry-delay 2 --connect-timeout 30 ' +
+    '--continue-at - --output ' + QuoteCommandArg(PartialPath) + ' ' +
+    QuoteCommandArg(ArtifactUrl(DownloadedArtifactNames[ArtifactIndex]));
+  if not Exec(Curl, Args, DownloadDirectory, SW_HIDE, ewNoWait, ProcessId) then
+  begin
+    SuppressibleMsgBox(
+      M2('OnlineDownloadFailed', DownloadedArtifactNames[ArtifactIndex],
+        SysErrorMessage(ProcessId)), mbCriticalError, MB_OK, IDOK);
+    Exit;
+  end;
+
+  ProcessHandle := OpenProcess(ProcessQueryLimitedInformation, False, ProcessId);
+  if ProcessHandle = 0 then
+  begin
+    SuppressibleMsgBox(
+      M2('OnlineDownloadFailed', DownloadedArtifactNames[ArtifactIndex],
+        SysErrorMessage(DLLGetLastError)), mbCriticalError, MB_OK, IDOK);
+    Exit;
+  end;
+  try
+    repeat
+      UpdateDirectDownloadProgress(ArtifactIndex, PartialPath);
+      Sleep(250);
+      ExitCode := ProcessStillActive;
+      if GetExitCodeProcess(ProcessHandle, ExitCode) = 0 then
+      begin
+        ResultCode := -1;
+        Break;
+      end;
+      ResultCode := Integer(ExitCode);
+    until ExitCode <> ProcessStillActive;
+  finally
+    CloseHandle(ProcessHandle);
+  end;
+  if ResultCode <> 0 then
+  begin
+    SuppressibleMsgBox(
+      M2('OnlineDownloadFailed', DownloadedArtifactNames[ArtifactIndex],
+        'curl exit code ' + IntToStr(ResultCode)), mbCriticalError, MB_OK, IDOK);
+    Exit;
+  end;
+
+  ArtifactProgressPage.SetText(
+    M1('OnlineVerifyingFile', DownloadedArtifactNames[ArtifactIndex]),
+    M1('OnlinePlanLocation', DownloadDirectory));
+  WizardForm.Update;
+  if (not FileExists(PartialPath)) or
+     (CompareText(GetSHA256OfFile(PartialPath), DownloadedArtifactHashes[ArtifactIndex]) <> 0) then
+  begin
+    DeleteFile(PartialPath);
+    SuppressibleMsgBox(
+      M1('OnlineHashMismatch', DownloadedArtifactNames[ArtifactIndex]),
+      mbCriticalError, MB_OK, IDOK);
+    Exit;
+  end;
+  if not RenameFile(PartialPath, DestinationPath) then
+  begin
+    SuppressibleMsgBox(
+      M2('OnlineSaveFailed', DestinationPath, SysErrorMessage(DLLGetLastError)),
+      mbCriticalError, MB_OK, IDOK);
+    Exit;
+  end;
+  CompletedArtifactBytes := CompletedArtifactBytes + DownloadedArtifactSizes[ArtifactIndex];
+  Result := True;
 end;
 
 procedure UpdatePlanPage();
@@ -435,8 +621,15 @@ begin
       end;
     end;
     DownloadedArtifactNames[Index] := FileName;
+    DownloadedArtifactHashes[Index] := HashValue;
     SizeValue := GetIniString(SectionName, 'size' + IntToStr(Index), '0', ManifestPath);
-    TotalArtifactBytes := TotalArtifactBytes + StrToInt64Def(SizeValue, 0);
+    DownloadedArtifactSizes[Index] := StrToInt64Def(SizeValue, 0);
+    if DownloadedArtifactSizes[Index] <= 0 then
+    begin
+      InvalidManifest(SectionName + '.size' + IntToStr(Index));
+      Exit;
+    end;
+    TotalArtifactBytes := TotalArtifactBytes + DownloadedArtifactSizes[Index];
     DestinationPath := AddBackslash(DownloadDirectory) + FileName;
     if FileExists(DestinationPath) and
        (CompareText(GetSHA256OfFile(DestinationPath), HashValue) = 0) then
@@ -447,7 +640,7 @@ begin
     else
     begin
       Inc(PendingArtifactCount);
-      DownloadPage.Add(ArtifactUrl(FileName), FileName, HashValue);
+      PendingArtifactBytes := PendingArtifactBytes + DownloadedArtifactSizes[Index];
     end;
   end;
 
@@ -466,7 +659,6 @@ end;
 
 function DownloadArtifacts(): Boolean;
 var
-  Error, TempPath, DestinationPath: String;
   Index: Integer;
 begin
   Result := False;
@@ -476,46 +668,25 @@ begin
     Result := True;
     Exit;
   end;
-  DownloadPage.Show;
+  ArtifactProgressPage.Show;
   try
-    try
-      DownloadPage.Download;
-      for Index := 0 to DownloadedArtifactCount - 1 do
-      begin
-        if DownloadedArtifactCached[Index] then
-          Continue;
-        TempPath := AddBackslash(ExpandConstant('{tmp}')) +
-          DownloadedArtifactNames[Index];
-        DestinationPath := AddBackslash(DownloadDirectory) +
-          DownloadedArtifactNames[Index];
-        DeleteFile(DestinationPath);
-        if (not FileExists(TempPath)) or
-           (not CopyFile(TempPath, DestinationPath, False)) then
-        begin
-          SuppressibleMsgBox(
-            M2('OnlineSaveFailed', DestinationPath, SysErrorMessage(DLLGetLastError)),
-            mbCriticalError, MB_OK, IDOK);
-          Exit;
-        end;
-        DeleteFile(TempPath);
-      end;
-      if not FileExists(DownloadedSetup) then
-      begin
-        InvalidManifest(DownloadedSetup);
+    for Index := 0 to DownloadedArtifactCount - 1 do
+    begin
+      if DownloadedArtifactCached[Index] then
+        Continue;
+      if not RunDirectDownload(Index) then
         Exit;
-      end;
-      Result := True;
-    except
-      if not DownloadPage.AbortedByUser then
-      begin
-        Error := GetExceptionMessage;
-        SuppressibleMsgBox(
-          M2('OnlineDownloadFailed', DownloadPage.LastBaseNameOrUrl, Error),
-          mbCriticalError, MB_OK, IDOK);
-      end;
+      DownloadedArtifactCached[Index] := True;
     end;
+    ArtifactProgressPage.SetProgress(100, 100);
+    if not FileExists(DownloadedSetup) then
+    begin
+      InvalidManifest(DownloadedSetup);
+      Exit;
+    end;
+    Result := True;
   finally
-    DownloadPage.Hide;
+    ArtifactProgressPage.Hide;
   end;
 end;
 
@@ -599,6 +770,8 @@ begin
   DownloadPage := CreateDownloadPage(
     M('OnlineDownloadTitle'), M('OnlineDownloadSubtitle'), nil);
   DownloadPage.ShowBaseNameInsteadOfUrl := True;
+  ArtifactProgressPage := CreateOutputProgressPage(
+    M('OnlineDirectDownloadTitle'), M('OnlineDirectDownloadSubtitle'));
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;

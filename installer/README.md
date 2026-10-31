@@ -204,13 +204,24 @@ $env:XB_OSS_BASE_URL = "https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1
 
 构建完成后，把 `dist\online-manifest.ini` 和五套离线安装器的 EXE/BIN 文件原名上传到 `xb-svcb/0.1.0/` 前缀。先上传全部 EXE/BIN，最后上传 `online-manifest.ini`。本地分发的 `dist\XB-SVCB-Online-Setup.exe` 是引导程序，不要求放在 OSS；如果也上传，必须放在单独位置，避免用户误把它当作某个硬件栈的离线安装器。
 
-在线安装器使用 Inno Setup 临时目录完成下载和 SHA-256 校验，然后把校验通过的文件保存到在线安装器所在目录下：
+如果 OSS 上的五套离线包和 `online-manifest.ini` 没有变化，只修改了在线安装器代码，本地可以删除大分卷后复用现有清单。此时使用 `-ReuseManifest`，脚本会严格校验现有清单但不会要求本地保留五套 EXE/BIN：
+
+```powershell
+.\installer\build-online.ps1 `
+  -ReuseManifest `
+  -BaseUrl "https://xb-svcb.oss-accelerate.aliyuncs.com/xb-svcb/0.1.0" `
+  -Python C:\python3.12.9\python.exe
+```
+
+该模式只能用于 OSS 文件与本地 `dist\online-manifest.ini` 完全对应的情况。若重新构建或替换了任何离线 EXE/BIN，必须恢复全部五套本地文件并重新生成、最后上传清单，不能复用旧清单。
+
+在线安装器只把几 KB 的 `online-manifest.ini` 临时放入系统临时目录。大体积的 EXE/BIN 分卷由 Windows 自带 `curl.exe` 直接下载到在线安装器所在目录下，不经过 C 盘临时目录：
 
 ```text
 <在线安装器所在目录>\XB-SVCB-Downloads\0.1.0\<stack>\
 ```
 
-例如在线安装器在 `D:\Downloads` 中并选择 CUDA126，最终文件位于 `D:\Downloads\XB-SVCB-Downloads\0.1.0\cu126\`。该目录保存用户选择的硬件栈 EXE 和全部 `.bin` 分卷，在线安装器从这里启动离线安装器。它不会在在线安装器退出时自动删除，因此也可作为完整离线包保留。在线安装器所在目录必须可写；若从只读目录、受保护目录或压缩包内运行，需要先把在线安装器移动到普通可写文件夹。
+例如在线安装器在 `D:\Downloads` 中并选择 CUDA126，下载中的文件和最终文件都位于 `D:\Downloads\XB-SVCB-Downloads\0.1.0\cu126\`。未完成文件使用 `.part` 后缀并支持续传，SHA-256 校验通过后在同一目录原地改名。该目录保存用户选择的硬件栈 EXE 和全部 `.bin` 分卷，在线安装器从这里启动离线安装器。它不会在在线安装器退出时自动删除，因此也可作为完整离线包保留。在线安装器所在目录必须可写；若从只读目录、受保护目录或压缩包内运行，需要先把在线安装器移动到普通可写文件夹。
 
 上传后先验证匿名读取（在 OSS 权限配置完成后执行）：
 

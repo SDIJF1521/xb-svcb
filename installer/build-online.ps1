@@ -12,6 +12,7 @@ param(
   [string]$BaseUrl,
   [string]$Python,
   [switch]$ManifestOnly,
+  [switch]$ReuseManifest,
   [switch]$ValidateOnly
 )
 
@@ -24,12 +25,15 @@ Options:
                       Defaults to the XB_OSS_BASE_URL environment variable.
   -Python <path>      Python used to generate online-manifest.ini.
   -ManifestOnly       Generate the manifest without compiling the bootstrapper.
+  -ReuseManifest      Reuse and validate dist\online-manifest.ini without
+                      requiring all five local EXE/BIN package sets.
   -ValidateOnly       Compile-check the Inno script without release artifacts.
   -Help, -h, --help   Show this help and exit.
 
 Examples:
   .\installer\build-online.ps1 -ValidateOnly
   .\installer\build-online.ps1 -ManifestOnly
+  .\installer\build-online.ps1 -ReuseManifest -BaseUrl https://downloads.example.com/xb-svcb/0.1.0
   .\installer\build-online.ps1 -BaseUrl https://downloads.example.com/xb-svcb/0.1.0
 '@ | Write-Output
   return
@@ -163,9 +167,18 @@ if ($ValidateOnly) {
 Require-File $ManifestBuilder 'Online manifest builder'
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 $pythonExe = Resolve-Python $Python
-& $pythonExe $ManifestBuilder --dist $Dist --output $ManifestPath --version $appVersion
+if ($ReuseManifest -and $ManifestOnly) {
+  throw '-ReuseManifest cannot be combined with -ManifestOnly.'
+}
+if ($ReuseManifest) {
+  Require-File $ManifestPath 'Existing online manifest'
+  & $pythonExe $ManifestBuilder --validate-existing $ManifestPath --version $appVersion
+} else {
+  & $pythonExe $ManifestBuilder --dist $Dist --output $ManifestPath --version $appVersion
+}
 if ($LASTEXITCODE -ne 0) {
-  throw "Online manifest generation failed (exit code $LASTEXITCODE)"
+  $operation = if ($ReuseManifest) { 'validation' } else { 'generation' }
+  throw "Online manifest $operation failed (exit code $LASTEXITCODE)"
 }
 Require-File $ManifestPath 'Online manifest'
 $manifestHash = (Get-FileHash -LiteralPath $ManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -194,6 +207,13 @@ $bootstrapper = Join-Path $Dist 'XB-SVCB-Online-Setup.exe'
 Require-File $bootstrapper 'Online installer bootstrapper'
 Write-Host "`nOnline installer ready:" -ForegroundColor Green
 Write-Host ("  {0}" -f $bootstrapper) -ForegroundColor Green
+if ($ReuseManifest) {
+  Write-Host "`nExisting manifest reused. Keep the matching OSS manifest and EXE/BIN files unchanged." -ForegroundColor Yellow
+  Write-Host "Only redistribute the rebuilt online bootstrapper:" -ForegroundColor Cyan
+  Write-Host ("  {0}" -f $bootstrapper)
+  return
+}
+
 Write-Host "`nUpload these files to $publicBaseUrl/:" -ForegroundColor Cyan
 Write-Host ("  {0}" -f $ManifestPath)
 $packageNames = @(
