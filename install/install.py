@@ -158,6 +158,22 @@ def _derive_paths(root: Path) -> None:
     RUNTIME_MANIFEST = root / "runtime.json"
     UVR_MODELS_DIR = root / "models" / "uvr"
     VOCAL_MODELS_DIR = root / "models" / "vocal-enhancement"
+    # Keep extraction and generic temporary traffic on the user-selected
+    # installation drive. Global caches can be read-only, locked by security
+    # software, or unexpectedly consume the system drive during large installs.
+    runtime_temp = Path(
+        os.environ.get("XB_RUNTIME_TEMP") or root / ".tmp" / "runtime-temp"
+    ).resolve()
+    runtime_temp.mkdir(parents=True, exist_ok=True)
+    os.environ["TEMP"] = str(runtime_temp)
+    os.environ["TMP"] = str(runtime_temp)
+    uv_cache = Path(
+        os.environ.get("XB_UV_CACHE_DIR") or root / ".tmp" / "uv-cache"
+    ).resolve()
+    os.environ["UV_CACHE_DIR"] = str(uv_cache)
+    # tempfile caches its first selected directory. Reset it for repairs and
+    # test processes that call _derive_paths more than once.
+    tempfile.tempdir = str(runtime_temp)
 
 SOVITS_REPO_URL = "https://github.com/svc-develop-team/so-vits-svc.git"
 SOVITS_BRANCH = "4.1-Stable"
@@ -1398,6 +1414,42 @@ def _find_local_uv() -> Path | None:
     return None
 
 
+def _bundled_uv() -> Path | None:
+    """Extract the pinned wheelhouse uv executable into this install root."""
+    destination = ROOT / ".tmp" / "uv-tools" / _uv_exe_name()
+    try:
+        if destination.is_file() and destination.stat().st_size > 0:
+            return destination
+    except OSError:
+        pass
+    root = _wheelhouse_root()
+    if root is None:
+        return None
+    wheels = sorted((root / "bootstrap").glob("uv-*.whl"), reverse=True)
+    if not wheels:
+        return None
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(wheels[0]) as archive:
+            members = [
+                name for name in archive.namelist()
+                if name.lower().endswith(".data/scripts/" + _uv_exe_name())
+            ]
+            if len(members) != 1:
+                raise RuntimeError(
+                    f"uv wheel does not contain exactly one {_uv_exe_name()}: {wheels[0]}"
+                )
+            temporary = destination.with_suffix(destination.suffix + ".tmp")
+            temporary.write_bytes(archive.read(members[0]))
+            temporary.replace(destination)
+    except (OSError, RuntimeError, zipfile.BadZipFile, KeyError) as exc:
+        if _wheelhouse_strict():
+            raise RuntimeError(f"无法从安装包准备受控 uv：{exc}") from exc
+        print(c("y", f"    无法从 wheelhouse 准备 uv，将检查本机 uv：{exc}"))
+        return None
+    return destination
+
+
 def _pip_install_uv(use_mirror: bool = True) -> None:
     cmd = [
         sys.executable,
@@ -1427,13 +1479,18 @@ def _pip_install_uv(use_mirror: bool = True) -> None:
 
 def ensure_uv() -> str:
     """确保 uv 可用；Python 已安装时自动把 uv 装到用户 Scripts 目录。"""
-    found = shutil.which("uv")
-    if found:
-        return found
+    # Release packages carry a pinned uv wheel. Prefer it over PATH so a
+    # user's unrelated Python/uv installation cannot control setup behavior.
+    bundled = _bundled_uv()
+    if bundled:
+        return str(bundled)
     local = _find_local_uv()
     if local:
         os.environ["PATH"] = str(local.parent) + os.pathsep + os.environ.get("PATH", "")
         return str(local)
+    found = shutil.which("uv")
+    if found:
+        return found
 
     print(c("y", "    未检测到 uv，正在通过当前 Python 自动安装到用户目录 …"))
     try:
@@ -2561,6 +2618,7 @@ def _filter_requirements(
         if name not in seen_ov:
             print(c("y", f"    追加依赖：{spec}"))
             kept.append(spec)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(kept) + "\n", encoding="utf-8")
     return out
 

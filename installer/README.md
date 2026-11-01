@@ -351,6 +351,8 @@ XB-SVCB-Setup-CUDA128-2.bin
 
 安装器执行 `setup_env.bat` 时会异步启动批处理，并轮询真实进程状态；安装窗口会持续刷新，不会因为 `uv`/`pip` 安装大型 wheel 长时间没有输出而显示为无响应。进度条优先使用脚本输出的 `[XB-PROGRESS]` 标记，等待依赖安装期间只做受限心跳推进，绝不会在进程退出前报告完成。每一步的完整输出保存在安装目录的 `install_logs\install_prereqs.log` 或 `install_logs\setup_env.log`；只有批处理返回 0 后才会继续进行各模型运行时校验。
 
+运行环境安装始终优先使用 `assets\wheels\bootstrap` 中固定版本的 `uv`，执行文件提取到安装目录的 `.tmp\uv-tools`，缓存写入 `.tmp\uv-cache`。安装会话的 `TEMP` / `TMP` 也会指向安装目录的 `.tmp\runtime-temp`，Python 临时目录、wheel 解包和依赖检测不会占用系统盘的大量空间；这些变量只对安装脚本进程生效，不修改用户永久环境变量。在线安装器的完整离线包仍保存在在线安装器旁边的 `XB-SVCB-Downloads`。Windows 和 Inno Setup 启动自身仍可能使用少量系统临时空间，因此 C 盘不能完全为 0 字节可用。过滤后的临时 requirements 会自动创建父目录，因此全新安装中不存在 `.tmp` 时也能安装 DDSP legacy 环境。
+
 ## 文件职责
 
 - `build.ps1`：构建一套硬件专用包；默认 CUDA128。

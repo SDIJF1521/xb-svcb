@@ -1864,6 +1864,9 @@ begin
     'set "XB_WHEELHOUSE=' + BatchEscape(ExpandConstant('{app}\assets\wheels')) + '"' + #13#10 +
     'set "XB_WHEELHOUSE_STRICT=1"' + #13#10 +
     'set "UV_LINK_MODE=copy"' + #13#10 +
+    'set "XB_UV_CACHE_DIR=' + BatchEscape(ExpandConstant('{app}\.tmp\uv-cache')) + '"' + #13#10 +
+    'set "UV_CACHE_DIR=%XB_UV_CACHE_DIR%"' + #13#10 +
+    'set "XB_RUNTIME_TEMP=' + BatchEscape(ExpandConstant('{app}\.tmp\runtime-temp')) + '"' + #13#10 +
     'set "PIP_DISABLE_PIP_VERSION_CHECK=1"' + #13#10;
   SaveStringToFile(ExpandConstant('{app}\installer_env.cmd'), Payload, False);
 end;

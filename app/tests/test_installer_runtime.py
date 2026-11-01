@@ -237,6 +237,19 @@ def test_installer_entrypoints_suppress_uv_cross_drive_hardlink_warning() -> Non
     assert 'set "UV_LINK_MODE=copy"' in setup_env
     assert 'set "UV_LINK_MODE=copy"' in prereqs
     assert 'set "UV_LINK_MODE=copy"' in script
+    assert 'set "XB_UV_CACHE_DIR=%~dp0.tmp\\uv-cache"' in setup_env
+    assert 'set "UV_CACHE_DIR=%XB_UV_CACHE_DIR%"' in setup_env
+    assert 'set "XB_UV_CACHE_DIR=%~dp0.tmp\\uv-cache"' in prereqs
+    assert 'set "UV_CACHE_DIR=%XB_UV_CACHE_DIR%"' in prereqs
+    assert 'set "XB_UV_CACHE_DIR=' in script
+    assert 'set "UV_CACHE_DIR=%XB_UV_CACHE_DIR%"' in script
+    assert 'set "XB_RUNTIME_TEMP=%~dp0.tmp\\runtime-temp"' in setup_env
+    assert 'set "XB_RUNTIME_TEMP=%~dp0.tmp\\runtime-temp"' in prereqs
+    assert 'set "TEMP=%XB_RUNTIME_TEMP%"' in setup_env
+    assert 'set "TMP=%XB_RUNTIME_TEMP%"' in setup_env
+    assert 'set "TEMP=%XB_RUNTIME_TEMP%"' in prereqs
+    assert 'set "TMP=%XB_RUNTIME_TEMP%"' in prereqs
+    assert 'set "XB_RUNTIME_TEMP=' in script
 
 
 def test_pyinstaller_packages_python_plugin_worker_and_sdk() -> None:
@@ -514,6 +527,52 @@ def test_rocm_svc_requirements_replace_legacy_starlette(tmp_path: Path) -> None:
 
     assert "starlette>=0.46,<2" in requirements
     assert "starlette==0.19.1" not in requirements
+
+
+def test_filtered_requirements_create_missing_scratch_parent(tmp_path: Path) -> None:
+    installer = _load_install_module()
+    source = tmp_path / "requirements.txt"
+    source.write_text("numpy\n", encoding="utf-8")
+    output = tmp_path / ".tmp" / "nested" / "requirements.txt"
+
+    result = installer._filter_requirements(source, output=output)
+
+    assert result == output
+    assert output.read_text(encoding="utf-8") == "numpy\n"
+
+
+def test_ensure_uv_prefers_bundled_wheel_and_install_cache(tmp_path: Path, monkeypatch) -> None:
+    installer = _load_install_module()
+    installer._derive_paths(tmp_path)
+    bootstrap = tmp_path / "assets" / "wheels" / "bootstrap"
+    bootstrap.mkdir(parents=True)
+    wheel = bootstrap / "uv-1.0.0-py3-none-win_amd64.whl"
+    executable_name = installer._uv_exe_name()
+    with installer.zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(f"uv-1.0.0.data/scripts/{executable_name}", b"managed uv")
+    monkeypatch.setenv("XB_WHEELHOUSE", str(tmp_path / "assets" / "wheels"))
+    monkeypatch.setattr(
+        installer.shutil,
+        "which",
+        lambda _name: str(tmp_path / "external-python310" / executable_name),
+    )
+    monkeypatch.setenv("UV_CACHE_DIR", r"C:\Users\tester\AppData\Local\uv\cache")
+    monkeypatch.delenv("XB_UV_CACHE_DIR", raising=False)
+    monkeypatch.delenv("XB_RUNTIME_TEMP", raising=False)
+    installer._derive_paths(tmp_path)
+
+    selected = Path(installer.ensure_uv())
+
+    assert selected == tmp_path / ".tmp" / "uv-tools" / executable_name
+    assert selected.read_bytes() == b"managed uv"
+    assert installer.os.environ["UV_CACHE_DIR"] == str(tmp_path / ".tmp" / "uv-cache")
+    expected_temp = str((tmp_path / ".tmp" / "runtime-temp").resolve())
+    assert installer.os.environ["TEMP"] == expected_temp
+    assert installer.os.environ["TMP"] == expected_temp
+    assert installer.tempfile.gettempdir() == expected_temp
+
+    monkeypatch.delenv("XB_WHEELHOUSE")
+    assert Path(installer.ensure_uv()) == selected
 
 
 def test_rocm_shared_repair_requires_the_full_group(tmp_path: Path, monkeypatch) -> None:
