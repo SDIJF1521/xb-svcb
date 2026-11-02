@@ -8,9 +8,10 @@
   "lock": "requirements.lock",
   "lock_sha256": "99648e092cfb5c55012afa24973a74f46a4d9434b24ddc8a2bd0a71f205c4b97",
   "optional_packages": [
+    "exceptiongroup",
     "hf-xet"
   ],
-  "optional_reason": "Transport-only helper: installed Hugging Face metadata excludes uppercase AMD64, while target-platform resolution includes lowercase amd64. Missing hf-xet is allowed for the existing HTTP-based runtime; fresh installs use its pinned version.",
+  "optional_reason": "Python 3.12 provides ExceptionGroup in the standard library, so resolvers may omit the exceptiongroup backport. hf-xet is a transport-only helper whose installed Hugging Face metadata excludes uppercase AMD64 while target-platform resolution includes lowercase amd64. Missing either package is valid; all runtime packages remain strictly pinned.",
   "compatibility_wheel": "assets/runtime/core-cu128/compat/descript_audiotools-0.7.2+xb1-py3-none-any.whl",
   "full_model_inference_validated": false,
   "rollback_is_known_healthy": false,

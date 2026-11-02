@@ -1,5 +1,9 @@
 # core-cu128 固定实验配方
 
+最终环境校验允许缺少 `exceptiongroup` 与 `hf-xet`。前者是 Python 3.11
+以前的 `ExceptionGroup` 回移植包，Python 3.12 解析依赖时可以正常省略；后者只用于
+Hugging Face Xet 传输。除这两个非运行时必需包外，其余锁定包仍必须完整且版本一致。
+
 适用范围：Windows x86_64、CPython 3.12、Torch 2.7.1+cu128，UVR / SeedVC / DDSP 共享环境。
 已验证 uv 0.12.5。必须支持 `uv pip compile/install --torch-backend cu128`。
 这是迁移到 Python 3.12 的实验配方，完整依赖安装及真实模型音频需要重新验收；历史 Python 3.10 的安装结果不代表 3.12 已通过。
