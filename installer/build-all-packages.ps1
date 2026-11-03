@@ -1,15 +1,15 @@
 <#
   Sequentially build the five dedicated XB-SVCB installer families.
 
-  Default behavior reuses the existing assets/wheels cache, but rebuilds the
-  frontend/application/JUCE outputs once so every installer contains current
-  source. Use -ReuseBuildOutputs only for an unchanged, already validated tree.
+  Default behavior reuses the existing assets/wheels cache and incrementally
+  prepares missing stacks, while rebuilding frontend/application/JUCE outputs
+  once. Use -ReuseBuildOutputs only for an unchanged, validated tree.
 
   Examples:
     ./installer/build-all-packages.ps1 -Help
     ./installer/build-all-packages.ps1
     ./installer/build-all-packages.ps1 -RebuildWheelhouse
-    ./installer/build-all-packages.ps1 -Python C:\Python312\python.exe
+    ./installer/build-all-packages.ps1 -Python C:\path\to\python.exe
     ./installer/build-all-packages.ps1 -RuntimeAssets D:\XB-SVCB\assets\runtime\core-cu128
     ./installer/build-all-packages.ps1 -ReuseBuildOutputs
 #>
@@ -18,6 +18,7 @@ param(
   [Alias('h')]
   [switch]$Help,
   [switch]$RebuildWheelhouse,
+  [switch]$CleanWheelhouse,
   [switch]$RebuildWeb,
   [switch]$RebuildApp,
   [switch]$RebuildJuceHost,
@@ -36,7 +37,8 @@ Build order: cpu, rocm10, directml, cu126, cu128.
 Options:
   -Python <path>          Use a 64-bit CPython 3.12 executable.
   -RuntimeAssets <dir>    Supply the shared CUDA core runtime assets.
-  -RebuildWheelhouse      Rebuild the complete five-stack wheelhouse.
+  -RebuildWheelhouse      Incrementally complete all five wheel stacks.
+  -CleanWheelhouse        Delete cached wheels before rebuilding (slow).
   -RebuildWeb             Rebuild the frontend.
   -RebuildApp             Rebuild the PyInstaller application.
   -RebuildJuceHost        Rebuild the JUCE VST3 host.
@@ -44,7 +46,8 @@ Options:
   -KeepExistingInstallers Keep existing installer artifacts in dist.
   -Help, -h, --help       Show this help and exit.
 
-By default, existing wheels are reused and frontend/app/JUCE outputs are rebuilt.
+By default, existing wheels are reused, missing stacks are prepared, and
+frontend/app/JUCE outputs are rebuilt.
 '@ | Write-Output
   return
 }
@@ -62,6 +65,17 @@ function Require-File([string]$Path, [string]$Label) {
   }
 }
 
+function Get-IncompleteWheelhouseStacks {
+  $incomplete = @()
+  foreach ($stack in $Stacks) {
+    & $BuildPython $WheelhouseScript --root $Root --check --stack $stack 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      $incomplete += $stack
+    }
+  }
+  return $incomplete
+}
+
 function Test-Python312([string]$Path) {
   if ([string]::IsNullOrWhiteSpace($Path) -or
       -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -75,7 +89,7 @@ function Resolve-Python312([string]$ExplicitPath) {
   if ($ExplicitPath) {
     $candidate = [IO.Path]::GetFullPath($ExplicitPath)
     if (-not (Test-Python312 $candidate)) {
-      throw "-Python must point to a runnable CPython 3.12.x python.exe: $candidate"
+      throw "-Python must point to a runnable 64-bit CPython 3.12.x python.exe: $candidate. Omit -Python to use automatic detection."
     }
     return $candidate
   }
@@ -124,19 +138,36 @@ $refreshWeb = (-not $ReuseBuildOutputs) -or $RebuildWeb
 $refreshApp = (-not $ReuseBuildOutputs) -or $RebuildApp
 $refreshJuceHost = (-not $ReuseBuildOutputs) -or $RebuildJuceHost
 
-if ($RebuildWheelhouse) {
-  Write-Host "`n==== Rebuilding the complete five-stack wheelhouse ====" -ForegroundColor Cyan
-  & $BuildPython $WheelhouseScript `
-    --root $Root `
-    --clean `
-    --stack cpu `
-    --stack rocm10 `
-    --stack directml `
-    --stack cu126 `
-    --stack cu128
-  if ($LASTEXITCODE -ne 0) {
-    throw "Wheelhouse rebuild failed (exit code $LASTEXITCODE)"
+if ($CleanWheelhouse -and -not $RebuildWheelhouse) {
+  throw '-CleanWheelhouse requires -RebuildWheelhouse.'
+}
+
+$wheelhouseStacks = if ($RebuildWheelhouse) {
+  @($Stacks)
+} else {
+  @(Get-IncompleteWheelhouseStacks)
+}
+if ($wheelhouseStacks.Count -gt 0) {
+  $wheelhouseArgs = @(
+    '--root', $Root
+  )
+  foreach ($stack in $wheelhouseStacks) {
+    $wheelhouseArgs += @('--stack', $stack)
   }
+  if ($CleanWheelhouse) {
+    $wheelhouseArgs += '--clean'
+    Write-Host "`n==== Clean rebuilding the complete five-stack wheelhouse ====" -ForegroundColor Cyan
+  } elseif ($RebuildWheelhouse) {
+    Write-Host "`n==== Incrementally completing the five-stack wheelhouse ====" -ForegroundColor Cyan
+  } else {
+    Write-Host ("`n==== Preparing missing wheelhouse stacks: {0} ====" -f ($wheelhouseStacks -join ', ')) -ForegroundColor Cyan
+  }
+  & $BuildPython $WheelhouseScript @wheelhouseArgs
+  if ($LASTEXITCODE -ne 0) {
+    throw "Wheelhouse preparation failed (exit code $LASTEXITCODE)"
+  }
+} else {
+  Write-Host "`n==== Reusing complete five-stack wheelhouse ====" -ForegroundColor Green
 }
 
 if (-not $KeepExistingInstallers) {

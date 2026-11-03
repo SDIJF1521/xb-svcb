@@ -10,8 +10,9 @@ import shutil
 import struct
 import threading
 import wave
+import zipfile
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import config
@@ -24,7 +25,10 @@ from infrastructure.juce_vst3_host import JuceVst3Host
 from infrastructure.pymss_tool import PymssTool
 from infrastructure.storage import ListRepository
 from infrastructure.uvr_tool import UvrTool
-from infrastructure.vocal_enhancement import VocalEnhancementProcessor
+from infrastructure.vocal_enhancement import (
+    VocalEnhancementControls,
+    VocalEnhancementProcessor,
+)
 
 from .model_service import ModelService
 
@@ -34,9 +38,14 @@ class AudioEditorService:
 
     _HISTORY_LIMIT = 60
     _MIN_RERUN_DURATION = 1.0
-    _RENDER_VERSION = "channel-route-v8-effects-envelope-juce-stretch"
+    _RENDER_VERSION = "channel-route-v9-scoped-effects-buses"
     _HIGH_PITCH_THRESHOLD = 800.0
     _HIGH_PITCH_GUARD_SEMITONES = 7
+    _PROJECT_BUNDLE_SCHEMA = "xb-audio-editor-project"
+    _PROJECT_BUNDLE_VERSION = 1
+    _PROJECT_BUNDLE_MAX_FILES = 4096
+    _PROJECT_BUNDLE_MAX_BYTES = 64 * 1024 * 1024 * 1024
+    _PROJECT_BUNDLE_MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 
     def __init__(
         self,
@@ -60,6 +69,8 @@ class AudioEditorService:
         self._plugin_sessions: dict[str, dict[str, str]] = {}
         self._engines = engines
         self._vocal_enhancement = vocal_enhancement or VocalEnhancementProcessor()
+        self._rerun_jobs: dict[str, dict[str, Any]] = {}
+        self._rerun_jobs_lock = threading.RLock()
 
     def list(self) -> list[dict[str, Any]]:
         self._cleanup_orphan_project_dirs()
@@ -234,6 +245,192 @@ class AudioEditorService:
         self._repo.add({**project, "history": [], "future": []})
         return self._public(project)
 
+    def export_bundle(self, project_id: str, destination: Path) -> Path:
+        """Write a portable editor project containing its timeline and referenced media."""
+        stored = self._repo.get(project_id)
+        if not stored:
+            raise ValueError("工程不存在")
+
+        project = self._clean(self._public(stored) or {})
+        project["waveform_cache"] = {}
+        sources: dict[str, tuple[Path, str]] = {}
+        for track in project.get("tracks", []) or []:
+            for clip in track.get("clips", []) or []:
+                source = Path(str(clip.get("file") or ""))
+                if not source.is_file():
+                    name = str(clip.get("name") or source.name or "未知片段")
+                    raise ValueError(f"工程素材不存在：{name}")
+                try:
+                    source_key = str(source.resolve()).casefold()
+                except OSError:
+                    source_key = str(source.absolute()).casefold()
+                bundled = sources.get(source_key)
+                if bundled is None:
+                    safe_name = re.sub(r'[^\w.()\-\u4e00-\u9fff]+', "_", source.name).strip("._")
+                    safe_name = safe_name[:120] or f"audio{source.suffix.lower() or '.wav'}"
+                    member = f"media/{len(sources) + 1:04d}_{safe_name}"
+                    bundled = (source, member)
+                    sources[source_key] = bundled
+                clip["file"] = bundled[1]
+
+        manifest = {
+            "schema": self._PROJECT_BUNDLE_SCHEMA,
+            "version": self._PROJECT_BUNDLE_VERSION,
+            "exported_at": self._now(),
+            "project": project,
+        }
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(destination.name + ".tmp")
+        try:
+            with zipfile.ZipFile(
+                temporary,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=1,
+                allowZip64=True,
+            ) as archive:
+                archive.writestr(
+                    "project.json",
+                    json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
+                )
+                for source, member in sources.values():
+                    archive.write(source, member)
+            temporary.replace(destination)
+        except Exception:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        return destination
+
+    def import_bundle(self, source: Path) -> dict[str, Any]:
+        """Import a portable project into a new isolated editor directory."""
+        if not source.is_file():
+            raise ValueError("工程文件不存在")
+
+        try:
+            with zipfile.ZipFile(source) as archive:
+                files = [item for item in archive.infolist() if not item.is_dir()]
+                if not files or len(files) > self._PROJECT_BUNDLE_MAX_FILES:
+                    raise ValueError("工程包文件数量异常")
+                names = [item.filename.replace("\\", "/") for item in files]
+                if len(names) != len(set(names)):
+                    raise ValueError("工程包包含重复文件")
+                total_size = sum(max(0, int(item.file_size)) for item in files)
+                if total_size > self._PROJECT_BUNDLE_MAX_BYTES:
+                    raise ValueError("工程包内容过大")
+                info_by_name = dict(zip(names, files, strict=True))
+                manifest_info = info_by_name.get("project.json")
+                if not manifest_info or manifest_info.file_size > self._PROJECT_BUNDLE_MAX_MANIFEST_BYTES:
+                    raise ValueError("工程包缺少有效的工程描述")
+                try:
+                    manifest = json.loads(archive.read(manifest_info).decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError("工程描述已损坏") from exc
+                if not isinstance(manifest, dict) or manifest.get("schema") != self._PROJECT_BUNDLE_SCHEMA:
+                    raise ValueError("不是受支持的音频编辑工程")
+                if int(manifest.get("version") or 0) != self._PROJECT_BUNDLE_VERSION:
+                    raise ValueError("工程文件版本暂不支持")
+                raw_project = manifest.get("project")
+                if not isinstance(raw_project, dict) or not isinstance(raw_project.get("tracks"), list):
+                    raise ValueError("工程结构无效")
+                for raw_track in raw_project.get("tracks", []):
+                    if not isinstance(raw_track, dict) or not isinstance(raw_track.get("clips", []), list):
+                        raise ValueError("工程音轨结构无效")
+                    if any(not isinstance(raw_clip, dict) for raw_clip in raw_track.get("clips", [])):
+                        raise ValueError("工程片段结构无效")
+
+                project = self._clean(raw_project)
+                project_id = paths.new_id("edt_")
+                project_dir = self._project_dir(project_id)
+                staging_dir = project_dir.with_name(f".{project_id}.importing")
+                media_dir = staging_dir / "media"
+                media_dir.mkdir(parents=True, exist_ok=False)
+                extracted: dict[str, Path] = {}
+                media_index = 0
+                try:
+                    for track in project.get("tracks", []) or []:
+                        track["id"] = paths.new_id("trk_")
+                        for clip in track.get("clips", []) or []:
+                            member_name = str(clip.get("file") or "").replace("\\", "/")
+                            member_path = PurePosixPath(member_name)
+                            if (
+                                member_path.is_absolute()
+                                or ".." in member_path.parts
+                                or len(member_path.parts) < 2
+                                or member_path.parts[0] != "media"
+                                or member_name not in info_by_name
+                            ):
+                                raise ValueError("工程包包含无效的素材路径")
+                            final_path = extracted.get(member_name)
+                            if final_path is None:
+                                media_index += 1
+                                safe_name = re.sub(
+                                    r'[^\w.()\-\u4e00-\u9fff]+',
+                                    "_",
+                                    member_path.name,
+                                ).strip("._")
+                                safe_name = safe_name[:120] or f"audio_{media_index:04d}.wav"
+                                relative_name = f"{media_index:04d}_{safe_name}"
+                                staged_path = media_dir / relative_name
+                                final_path = project_dir / "media" / relative_name
+                                with archive.open(info_by_name[member_name]) as input_stream:
+                                    with staged_path.open("wb") as output_stream:
+                                        shutil.copyfileobj(input_stream, output_stream, length=1024 * 1024)
+                                extracted[member_name] = final_path
+                            clip["id"] = paths.new_id("clp_")
+                            clip["file"] = str(final_path)
+                            for effect in clip.get("effects", []) or []:
+                                if isinstance(effect, dict):
+                                    effect["id"] = paths.new_id("fx_")
+                        for effect in track.get("effects", []) or []:
+                            if isinstance(effect, dict):
+                                effect["id"] = paths.new_id("fx_")
+
+                    for role in project.get("roles", []) or []:
+                        if not isinstance(role, dict):
+                            continue
+                        for effect in role.get("effects", []) or []:
+                            if isinstance(effect, dict):
+                                effect["id"] = paths.new_id("fx_")
+
+                    now = self._now()
+                    metadata = dict(project.get("metadata") or {})
+                    metadata.pop("work_id", None)
+                    metadata.pop("source_path", None)
+                    metadata.update(
+                        {
+                            "mode": "imported_bundle",
+                            "imported_at": now,
+                            "bundle_version": self._PROJECT_BUNDLE_VERSION,
+                        }
+                    )
+                    project.update(
+                        {
+                            "id": project_id,
+                            "metadata": metadata,
+                            "waveform_cache": {},
+                            "created_at": now,
+                            "updated_at": now,
+                            "duration": self._project_duration(project),
+                            "history": [],
+                            "future": [],
+                        }
+                    )
+                    staging_dir.replace(project_dir)
+                    try:
+                        self._repo.add(project)
+                    except Exception:
+                        shutil.rmtree(project_dir, ignore_errors=True)
+                        raise
+                except Exception:
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                    raise
+        except zipfile.BadZipFile as exc:
+            raise ValueError("工程文件已损坏或格式不正确") from exc
+        return self._public(project) or {}
+
     def add_track(
         self,
         project_id: str,
@@ -253,6 +450,7 @@ class AudioEditorService:
             name=((name or "").strip() or f"音轨 {len(tracks) + 1}")[:80],
             type=track_kind,
             clips=[],
+            effects=[],
             locked=False,
             mute=False,
             volume=1.0,
@@ -736,12 +934,43 @@ class AudioEditorService:
         work = self._works_repo.get(work_id)
         if not work:
             return None
+        existing = [
+            item
+            for item in self._repo.all()
+            if str((item.get("metadata") or {}).get("work_id") or "") == work_id
+            and str((item.get("metadata") or {}).get("mode") or "") == "from_work"
+            and item.get("tracks")
+        ]
+        if existing:
+            latest = max(existing, key=lambda item: str(item.get("updated_at") or ""))
+            return self._public(latest)
         pid = paths.new_id("edt_")
         now = self._now()
         tracks: list[dict[str, Any]] = []
         known: set[str] = set()
         workflow = str(work.get("workflow") or "auto_mix")
         vocal_export = workflow == "manual_vocal_merge"
+
+        def stored_duration(value: Any) -> float:
+            if isinstance(value, (int, float)):
+                return max(0.0, float(value))
+            text = str(value or "").strip()
+            if not text or text == "—":
+                return 0.0
+            try:
+                parts = [float(part) for part in text.split(":")]
+            except (TypeError, ValueError):
+                return 0.0
+            if len(parts) == 2:
+                return max(0.0, parts[0] * 60.0 + parts[1])
+            if len(parts) == 3:
+                return max(0.0, parts[0] * 3600.0 + parts[1] * 60.0 + parts[2])
+            return max(0.0, parts[0]) if len(parts) == 1 else 0.0
+
+        duration_hint = stored_duration(work.get("duration"))
+        source_path = Path(str(work.get("source_path") or ""))
+        if duration_hint <= 0.0 and source_path.is_file():
+            duration_hint = float(self._ffmpeg.probe_duration(source_path) or 0.0)
 
         def add_track(
             name: str,
@@ -762,7 +991,7 @@ class AudioEditorService:
                 return
             if resolved in known:
                 return
-            dur = float(self._ffmpeg.probe_duration(src) or 0.0)
+            dur = duration_hint or float(self._ffmpeg.probe_duration(src) or 0.0)
             known.add(resolved)
             tracks.append(
                 EditorTrack(
@@ -976,7 +1205,11 @@ class AudioEditorService:
                     continue
                 if resolved in known:
                     continue
-                dur = float(self._ffmpeg.probe_duration(p) or 0.0)
+                dur = (
+                    float(self._ffmpeg.probe_duration(p) or 0.0)
+                    if p.name.startswith("piece_")
+                    else duration_hint or float(self._ffmpeg.probe_duration(p) or 0.0)
+                )
                 mid_clips.append(
                     EditorClip(
                         id=paths.new_id("clp_"),
@@ -1263,21 +1496,51 @@ class AudioEditorService:
         clip_id: str,
         effect_id: str,
         parent_window: str = "",
+        effect_scope: str = "clip",
+        role_id: str = "",
     ) -> dict[str, Any]:
         project = self._repo.get(project_id)
         if not project:
             return {"ok": False, "error": "工程不存在", **self._plugin_host.status()}
-        track, _, clip = self._find_clip_ref(project, track_id, clip_id)
-        if not track or not clip:
-            return {"ok": False, "error": "片段不存在", **self._plugin_host.status()}
-        effect = self._find_effect(clip, effect_id)
+        scope = str(effect_scope or "clip").strip().lower()
+        if scope not in {"clip", "track", "role"}:
+            scope = "clip"
+        track = next(
+            (item for item in project.get("tracks", []) or [] if item.get("id") == track_id),
+            None,
+        )
+        clip = None
+        target = None
+        if scope == "role":
+            target = next(
+                (item for item in project.get("roles", []) or [] if item.get("id") == role_id),
+                None,
+            )
+        elif scope == "track":
+            target = track
+        else:
+            track, _, clip = self._find_clip_ref(project, track_id, clip_id)
+            target = clip
+        if not target or (scope != "role" and not track):
+            label = "角色" if scope == "role" else "音轨" if scope == "track" else "片段"
+            return {"ok": False, "error": f"{label}不存在", **self._plugin_host.status()}
+        effect = self._find_effect(target, effect_id)
         if not effect:
             return {"ok": False, "error": "效果器不存在", **self._plugin_host.status()}
-        monitor = self._prepare_plugin_monitor(project, track, clip, effect_id)
+        if scope == "clip":
+            if not isinstance(track, dict) or not isinstance(clip, dict):
+                return {
+                    "ok": False,
+                    "error": "片段不存在",
+                    **self._plugin_host.status(),
+                }
+            monitor = self._prepare_plugin_monitor(project, track, clip, effect_id)
+        else:
+            monitor = {}
         result = self._plugin_host.show_editor(
             effect,
             project_id=project_id,
-            clip_id=clip_id,
+            clip_id=clip_id if scope == "clip" else f"{scope}:{role_id or track_id}",
             effect_id=effect_id,
             parent_window=parent_window,
             monitor=monitor,
@@ -1289,6 +1552,8 @@ class AudioEditorService:
                 "track_id": track_id,
                 "clip_id": clip_id,
                 "effect_id": effect_id,
+                "effect_scope": scope,
+                "role_id": role_id,
             }
         return result
 
@@ -1311,11 +1576,9 @@ class AudioEditorService:
         if ref:
             current = self._repo.get(ref.get("project_id", ""))
             track, _, clip = self._find_clip_ref(
-                current or {},
-                ref.get("track_id", ""),
-                ref.get("clip_id", ""),
-            )
-            if track and clip:
+                current or {}, ref.get("track_id", ""), ref.get("clip_id", "")
+            ) if ref.get("effect_scope", "clip") == "clip" else (None, -1, None)
+            if clip:
                 monitor_transport["timeline_start"] = float(clip.get("start") or 0.0)
                 monitor_transport["timeline_end"] = float(clip.get("end") or 0.0)
                 monitor_transport["audible"] = (
@@ -1478,14 +1741,27 @@ class AudioEditorService:
         project = self._repo.get(ref.get("project_id", ""))
         if not project:
             return None
-        _, _, clip = self._find_clip_ref(
-            project,
-            ref.get("track_id", ""),
-            ref.get("clip_id", ""),
-        )
-        if not clip:
+        scope = ref.get("effect_scope", "clip")
+        target = None
+        if scope == "role":
+            target = next(
+                (item for item in project.get("roles", []) or [] if item.get("id") == ref.get("role_id", "")),
+                None,
+            )
+        elif scope == "track":
+            target = next(
+                (item for item in project.get("tracks", []) or [] if item.get("id") == ref.get("track_id", "")),
+                None,
+            )
+        else:
+            _, _, target = self._find_clip_ref(
+                project,
+                ref.get("track_id", ""),
+                ref.get("clip_id", ""),
+            )
+        if not target:
             return None
-        effect = self._find_effect(clip, ref.get("effect_id", ""))
+        effect = self._find_effect(target, ref.get("effect_id", ""))
         if not effect:
             return None
 
@@ -1563,6 +1839,7 @@ class AudioEditorService:
             "id": project_id,
             "duration": length,
             "sample_rate": project.get("sample_rate") or 44100,
+            "roles": copy.deepcopy(project.get("roles") or []),
             "tracks": [
                 {
                     "id": track.get("id"),
@@ -1570,6 +1847,8 @@ class AudioEditorService:
                     "type": track.get("type", "audio"),
                     "volume": track.get("volume", 1.0),
                     "mute": False,
+                    "effects": copy.deepcopy(track.get("effects") or []),
+                    "metadata": copy.deepcopy(track.get("metadata") or {}),
                     "clips": [preview_clip],
                 }
             ],
@@ -1614,6 +1893,7 @@ class AudioEditorService:
             "id": project_id,
             "duration": max(float(project.get("duration") or 0.05), self._project_duration({"tracks": [track]})),
             "sample_rate": project.get("sample_rate") or 44100,
+            "roles": copy.deepcopy(project.get("roles") or []),
             "tracks": [{**copy.deepcopy(track), "mute": False}],
         }
         key = FFmpegEngine.cache_key(
@@ -2295,7 +2575,7 @@ class AudioEditorService:
         framework = config.modelhub_normalize_framework(model.get("framework"))
         return {"rvc": 760.0, "seed-vc": 980.0, "ddsp-svc": 1040.0, "so-vits-svc": 1120.0}.get(framework, 1000.0)
 
-    def rerun_clip(
+    def _execute_rerun_clip(
         self,
         project_id: str,
         track_id: str,
@@ -2303,7 +2583,16 @@ class AudioEditorService:
         model_id: str,
         params: dict[str, Any] | None = None,
         enhance: dict[str, Any] | None = None,
+        progress: Any = None,
+        log: Any = None,
     ) -> dict[str, Any]:
+        def report(value: int, message: str) -> None:
+            if progress:
+                progress(value, message)
+            if log:
+                log(message)
+
+        report(5, "开始校验片段与模型")
         project = self._repo.get(project_id)
         model = self._models.get(model_id) if model_id else None
         if not project or not model:
@@ -2324,7 +2613,10 @@ class AudioEditorService:
             }
         out_dir = self._project_dir(project_id) / "reruns"
         out_dir.mkdir(parents=True, exist_ok=True)
-        infer_params = InferenceParams.from_dict(params or {})
+        report(12, "正在准备局部音频")
+        infer_params = InferenceParams.from_dict(
+            ModelService.apply_detected_rvc_version(model, params or {})
+        )
         used_params = infer_params.to_dict()
         rerun_key = self._rerun_key(src, clip, model_id, used_params)
         dry = out_dir / f"{clip_id}_{rerun_key}_input.wav"
@@ -2342,6 +2634,7 @@ class AudioEditorService:
             sample_rate=int(project.get("sample_rate") or 44100),
         ):
             return {"ok": False, "error": "片段裁剪失败"}
+        report(25, "片段裁剪完成，开始模型推理")
         model_payload = self._model_payload(model)
         engine = self._engines.for_model(model_payload)
         try:
@@ -2356,6 +2649,7 @@ class AudioEditorService:
             )
         except Exception as exc:  # noqa: BLE001 - 需要把推理错误回传给前端
             return {"ok": False, "error": str(exc)}
+        report(70, "模型推理完成")
 
         # 可选增强：以裁剪出的原始干声保护高级层的辅音、呼吸和宽带平衡。
         enhance_used = False
@@ -2363,6 +2657,7 @@ class AudioEditorService:
         enhance_error = ""
         enhance_cfg = enhance or {}
         if enhance_cfg.get("enabled") and self._vocal_enhancement.available:
+            report(74, "正在执行 AI 歌声增强")
             enhance_level = "advanced" if str(enhance_cfg.get("level") or "basic").lower() == "advanced" else "basic"
             pitch_correction = self._vocal_enhancement.normalize_strength(
                 enhance_cfg.get("pitch_correction", 0.45), 0.45
@@ -2415,12 +2710,14 @@ class AudioEditorService:
                     ai_exciter=ai_exciter,
                     stereo_width=stereo_width,
                     loudness_envelope=loudness_envelope,
+                    progress_callback=lambda value: report(value, "正在执行 AI 歌声增强"),
                 )
                 if enhanced_out.is_file():
                     out = enhanced_out
                     enhance_used = True
             except Exception as exc:  # noqa: BLE001 - 美声失败不应阻塞重推理
                 enhance_error = str(exc)
+            report(88, "AI 歌声增强处理完成")
 
         next_project = copy.deepcopy(project)
         next_track, next_idx, next_clip = self._find_clip_ref(next_project, track_id, clip_id)
@@ -2467,7 +2764,80 @@ class AudioEditorService:
         next_track["clips"][next_idx] = next_clip
         next_project["waveform_cache"] = {}
         saved = self.save(next_project, push_history=True)
+        report(100, "片段替换完成，工程已保存")
         return {"ok": True, "project": saved, "clip": next_clip}
+
+    def rerun_clip(
+        self,
+        project_id: str,
+        track_id: str,
+        clip_id: str,
+        model_id: str,
+        params: dict[str, Any] | None = None,
+        enhance: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Queue a local rerun so the editor can show progress and logs."""
+        job_id = f"rerun_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+        log_path = self._project_dir(project_id) / "reruns" / f"{job_id}.log"
+        state: dict[str, Any] = {
+            "id": job_id,
+            "project_id": project_id,
+            "status": "queued",
+            "progress": 0,
+            "message": "等待开始",
+            "log_path": str(log_path),
+            "project": None,
+            "clip": None,
+            "error": None,
+        }
+        with self._rerun_jobs_lock:
+            self._rerun_jobs[job_id] = state
+
+        def write_log(message: str) -> None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"[{datetime.now().strftime('%H:%M:%S')}] {message}\n")
+
+        def update(value: int, message: str) -> None:
+            with self._rerun_jobs_lock:
+                state["progress"] = max(0, min(100, int(value)))
+                state["message"] = message
+
+        def worker() -> None:
+            update(1, "开始重推理")
+            write_log("=== 编辑器局部重推理开始 ===")
+            try:
+                result = self._execute_rerun_clip(
+                    project_id, track_id, clip_id, model_id, params, enhance,
+                    progress=update, log=write_log,
+                )
+                with self._rerun_jobs_lock:
+                    state.update(result)
+                    state["status"] = "done" if result.get("ok") else "failed"
+                    state["error"] = result.get("error")
+                write_log("=== 重推理成功 ===" if result.get("ok") else f"=== 重推理失败：{result.get('error')} ===")
+            except Exception as exc:  # noqa: BLE001
+                with self._rerun_jobs_lock:
+                    state.update(status="failed", error=str(exc), message="重推理失败")
+                write_log(f"=== 重推理异常：{exc} ===")
+
+        threading.Thread(target=worker, name=f"editor-rerun-{job_id}", daemon=True).start()
+        return {"ok": True, "job_id": job_id, "status": "queued", "progress": 0, "message": "等待开始", "log_path": str(log_path)}
+
+    def rerun_status(self, job_id: str) -> dict[str, Any] | None:
+        with self._rerun_jobs_lock:
+            state = self._rerun_jobs.get(job_id)
+            return copy.deepcopy(state) if state else None
+
+    def rerun_log(self, job_id: str) -> str | None:
+        state = self.rerun_status(job_id)
+        if not state:
+            return None
+        path = Path(str(state.get("log_path") or ""))
+        try:
+            return path.read_text(encoding="utf-8") if path.is_file() else ""
+        except OSError:
+            return ""
 
     def enhance_clip(
         self,
@@ -2523,7 +2893,7 @@ class AudioEditorService:
 
         cfg = options or {}
         level = "advanced" if str(cfg.get("level") or "advanced").lower() == "advanced" else "basic"
-        strengths = {
+        strengths: VocalEnhancementControls = {
             "pitch_correction": self._vocal_enhancement.normalize_strength(
                 cfg.get("pitch_correction", 0.45), 0.45
             ),
@@ -2787,8 +3157,16 @@ class AudioEditorService:
         cleaned.pop("future", None)
         cleaned.setdefault("waveform_cache", {})
         cleaned.setdefault("metadata", {})
+        roles = cleaned.get("roles")
+        if not isinstance(roles, list):
+            roles = []
+            cleaned["roles"] = roles
+        for role in roles:
+            if isinstance(role, dict):
+                role["effects"] = AudioEditorService._clean_effects(role.get("effects"))
         for track in cleaned.get("tracks", []) or []:
             track.setdefault("metadata", {})
+            track["effects"] = AudioEditorService._clean_effects(track.get("effects"))
             for clip in track.get("clips", []) or []:
                 channel = str(clip.get("channel") or "stereo").strip().lower()
                 clip["channel"] = channel if channel in {"stereo", "left", "right"} else "stereo"
@@ -3134,7 +3512,7 @@ class AudioEditorService:
             return []
 
     @staticmethod
-    def _model_payload(model: dict[str, Any]) -> dict[str, str]:
+    def _model_payload(model: dict[str, Any]) -> dict[str, Any]:
         framework = config.modelhub_normalize_framework(
             model.get("framework") or config.modelhub_guess_framework(model.get("type"))
         )
@@ -3145,4 +3523,5 @@ class AudioEditorService:
             "diffusion_model_path": (model.get("diffusion_model") or {}).get("path", ""),
             "diffusion_config_path": (model.get("diffusion_config") or {}).get("path", ""),
             "index_path": (model.get("index_file") or {}).get("path", ""),
+            "metadata": model.get("metadata") or {},
         }

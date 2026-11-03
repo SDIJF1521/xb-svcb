@@ -73,7 +73,12 @@ def test_pymss_wheelhouse_is_isolated_with_a_compatible_torch_pair(wheelhouse_pl
         assert torch.index == expected_index
 
     directml = wheelhouse.build_plan(root, {"directml"})
-    assert not any(batch.label.startswith("pymss ") for batch in directml)
+    directml_pymss = [batch for batch in directml if batch.label.startswith("pymss cpu ")]
+    assert directml_pymss
+    assert all(
+        batch.dest == root / "assets" / "wheels" / "pymss" / "py312" / "cpu"
+        for batch in directml_pymss
+    )
 
 
 def test_cuda_constraints_use_matching_local_torch_wheel(wheelhouse_plan) -> None:
@@ -118,6 +123,11 @@ def test_wheelhouse_plan_builds_source_only_packages_and_splits_conflicting_torc
         and "fairseq-fixed==0.12.3.1" in batch.packages
         for batch in cpu
     )
+
+    complete = wheelhouse.build_plan(root, {"cpu", "rocm10"})
+    labels = [batch.label for batch in complete]
+    assert labels.index("svc cpu py312 setuptools") < labels.index("rocm10 py312 setuptools")
+    assert labels.index("rvc cpu py312 setuptools") < labels.index("rocm10 py312 setuptools")
     expected_matplotlib_support = (
         "contourpy==1.2.1",
         "cycler>=0.10",
@@ -258,6 +268,25 @@ def test_plan_does_not_rewrite_upstream_requirements(wheelhouse_plan):
     assert not list((root / "engines").rglob("requirements_xb*"))
     assert all(batch.requirements.is_relative_to(root / ".tmp")
                for batch in plan if batch.requirements)
+
+
+def test_completion_profile_detects_missing_wheel_from_completed_plan(
+    wheelhouse_plan,
+) -> None:
+    wheelhouse, root = wheelhouse_plan
+    plan = wheelhouse.build_plan(root, {"cpu"})
+    for index, destination in enumerate(sorted({batch.dest for batch in plan})):
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / f"profile-{index}.whl").write_bytes(f"wheel-{index}".encode())
+
+    wheelhouse._write_manifest(root, plan, {"cpu": plan})
+    assert wheelhouse.validate_wheelhouse_profiles(root, {"cpu": plan}) == []
+
+    profile = wheelhouse._read_profiles(root / "assets/wheels/wheelhouse.json")["cpu"]
+    missing = root / "assets/wheels" / profile["wheels"][0]["path"]
+    missing.unlink()
+    errors = wheelhouse.validate_wheelhouse_profiles(root, {"cpu": plan})
+    assert errors and "recorded wheel is missing" in errors[0]
 
 
 def test_legacy_source_wheel_build_reuses_pinned_toolchain(tmp_path, monkeypatch):

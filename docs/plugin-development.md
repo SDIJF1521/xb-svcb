@@ -1,3 +1,5 @@
+[简体中文](plugin-development.md) | [English](en/plugin-development.md) | [日本語](ja/plugin-development.md)
+
 # XB-SVCB 插件开发指南
 
 XB-SVCB 插件可以扩展翻唱流程、提供声明式工具页面，或运行自定义 Python 逻辑。本指南只使用公开 SDK；开发插件不需要阅读 XB-SVCB 主项目源码。

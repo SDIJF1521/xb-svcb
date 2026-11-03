@@ -163,11 +163,12 @@ def _source_on_output_timeline(source: Any, output_frames: int) -> Any:
     data = np.asarray(source, dtype=np.float32)
     if data.ndim == 1:
         data = data[:, np.newaxis]
-    mono = (
+    mono = np.asarray(
         np.mean(data, axis=1, dtype=np.float32)
         if len(data)
-        else np.zeros(0, dtype=np.float32)
-    )
+        else np.zeros(0, dtype=np.float32),
+        dtype=np.float32,
+    ).reshape(-1)
     if output_frames <= 0:
         return np.zeros(0, dtype=np.float64)
     if not len(mono):
@@ -226,8 +227,12 @@ def _source_guided_high_band_repair(
             "transient_reduction_db": 0.0,
         }
 
-    source_mono = _source_on_output_timeline(source, len(data))
-    output_mono = np.mean(data, axis=1, dtype=np.float64)
+    source_mono = np.asarray(
+        _source_on_output_timeline(source, len(data)), dtype=np.float64
+    ).reshape(-1)
+    output_mono = np.asarray(
+        np.mean(data, axis=1, dtype=np.float64), dtype=np.float64
+    ).reshape(-1)
     nyquist = sample_rate * 0.5
     high_cutoff = min(5600.0, nyquist * 0.72)
     body_high = min(4800.0, nyquist * 0.58)
@@ -396,6 +401,7 @@ def _source_guided_high_band_repair(
     fft_size = 1 << int(np.ceil(np.log2(min(frame_size, 2048))))
 
     def _hf_shape(signal: "np.ndarray") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        signal = np.asarray(signal, dtype=np.float64).reshape(-1)
         frame_count = int(np.ceil(len(signal) / frame_size))
         padded = np.pad(signal, (0, frame_count * frame_size - len(signal)))
         frames_fft = padded.reshape(frame_count, frame_size)

@@ -25,6 +25,16 @@ if defined XB_WHEELHOUSE if not exist "%XB_WHEELHOUSE%\wheelhouse.json" (
 if not defined XB_WHEELHOUSE if exist "%~dp0assets\wheels\wheelhouse.json" set "XB_WHEELHOUSE=%~dp0assets\wheels"
 if defined XB_WHEELHOUSE if not defined XB_WHEELHOUSE_STRICT set "XB_WHEELHOUSE_STRICT=1"
 if not defined UV_LINK_MODE set "UV_LINK_MODE=copy"
+if not defined XB_UV_CACHE_DIR set "XB_UV_CACHE_DIR=%~dp0.tmp\uv-cache"
+set "UV_CACHE_DIR=%XB_UV_CACHE_DIR%"
+if not defined XB_RUNTIME_TEMP set "XB_RUNTIME_TEMP=%~dp0.tmp\runtime-temp"
+if not exist "%XB_RUNTIME_TEMP%" mkdir "%XB_RUNTIME_TEMP%" >nul 2>&1
+if not exist "%XB_RUNTIME_TEMP%" (
+  echo [XB-SVCB] Cannot create runtime temporary directory: %XB_RUNTIME_TEMP%
+  exit /b 1
+)
+set "TEMP=%XB_RUNTIME_TEMP%"
+set "TMP=%XB_RUNTIME_TEMP%"
 if not defined PIP_DISABLE_PIP_VERSION_CHECK set "PIP_DISABLE_PIP_VERSION_CHECK=1"
 echo [XB-SVCB] HuggingFace mirror: %HF_ENDPOINT%
 echo [XB-SVCB] PyPI mirror       : %PIP_INDEX_URL%
@@ -34,6 +44,8 @@ rem The selected installer emits the authoritative 0-100 progress stream.
 rem These wrapper messages deliberately stay at the local start position so
 rem they cannot jump ahead and then move backwards when install.py starts.
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 0 正在查找 Python 运行时
+set "XB_PYTHON_EXE=%~dp0tools\python312\python.exe"
+set "XB_PYTHON_DIR=%~dp0tools\python312"
 set "PYTHON_DETECTOR=%~dp0install\detect_python.bat"
 if not exist "%PYTHON_DETECTOR%" (
   echo [XB-SVCB] Python detector not found: %PYTHON_DETECTOR%

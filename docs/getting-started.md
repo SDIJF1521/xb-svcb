@@ -1,20 +1,28 @@
+[简体中文](getting-started.md) | [English](en/getting-started.md) | [日本語](ja/getting-started.md)
+
 # 安装、源码启动与修复
 
-普通用户应下载与硬件匹配的专用安装包。源码方式面向开发者和需要修改引擎的人。
+普通用户可以使用在线安装器自动选择硬件包，也可以下载与硬件匹配的完整离线安装包。源码方式面向开发者和需要修改引擎的人。
+
+## 在线安装
+
+从 GitHub Releases 下载并运行魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`，选择“自动检测（推荐）”或手动指定硬件版本。在线安装器从 ModelScope 的 `v0.1.0` 版本只下载所选硬件的完整 EXE/BIN 文件，逐个校验 SHA-256 后启动三语离线安装向导。下载期间需要保持网络连接，并确保防火墙允许访问 `www.modelscope.cn`。
+
+GitHub 不公开提供备用版 `XB-SVCB-Online-Setup.exe`；确有需要时请联系开发者单独获取。在线安装器不会在电脑上保存仓库或 OSS 密钥。校验通过的 EXE/BIN 会保存在在线安装器旁边的 `XB-SVCB-Downloads\0.1.0\<硬件栈>\` 目录中，并从该目录启动；该目录不会随在线安装器退出而删除。在线安装器所在文件夹必须具有写入权限。若下载中断或校验失败，请重新运行安装器。需要完全离线安装时，也可以保留该目录中的 EXE 和全部同名前缀 BIN。
 
 ## 选择安装包
 
-| 设备                       | 安装包  | 运行时布局                                  |
-| -------------------------- | ------- | ------------------------------------------- |
-| 无兼容 GPU                 | CPU     | 隔离兼容环境                                |
-| Windows AMD Radeon（首选） | ROCm 10 | SVC/RVC/Vocal 共享，其余隔离                 |
+| 设备                       | 安装包   | 运行时布局                                  |
+| -------------------------- | -------- | ------------------------------------------- |
+| 无兼容 GPU                 | CPU      | 隔离兼容环境                                |
+| Windows AMD Radeon（首选） | ROCm 10  | SVC/RVC/Vocal 共享，其余隔离                |
 | Windows AMD（可选）        | DirectML | 隔离兼容环境；DDSP 自动使用 CPU             |
-| NVIDIA RTX 40 系及以下     | CUDA126 | `core-cu126` + `svc-cu126` 两层共享环境 |
-| NVIDIA RTX 50 系 Blackwell | CUDA128 | `core-cu128` + `svc-cu128` 两层共享环境 |
+| NVIDIA RTX 40 系及以下     | CUDA126  | `core-cu126` + `svc-cu126` 两层共享环境 |
+| NVIDIA RTX 50 系 Blackwell | CUDA128  | `core-cu128` + `svc-cu128` 两层共享环境 |
 
 项目最低 CUDA wheel 栈为 cu126，不再使用 cu121。每套专用包只携带自己的硬件 wheels，但应用、模型和引擎源码相同。
 
-安装器不内置完整 Python。请选择 64 位 CPython 3.12.x；如果自动检测结果不正确，可在安装向导中手动指定 `python.exe`。`uv` 无需预装，安装器会从自带启动 wheel 安装。
+安装器内置完整的 64 位 CPython 3.12.x，并固定使用安装目录中的 `tools\python312\python.exe`；无需另外安装或手动选择 Python。`uv` 无需预装，安装器会从自带启动 wheel 安装。
 
 ## 安装后的运行环境
 
@@ -96,10 +104,62 @@ setup_env.bat --only models
 
 安装失败时先保留 `assets\wheels` 和 `install_logs`。只有全部环境通过最终校验后，安装器才自动删除离线 wheels。
 
+### v0.0.32 CUDA128 离线安装修复
+
+若 RTX 50 系安装在 `torch-2.7.1+cu128` 处报错 `The wheel is invalid: Missing .dist-info directory`，这不是 CUDA Toolkit 或显卡驱动错误。先关闭 XB-SVCB，在安装目录打开 PowerShell，并核对安装包释放出的 Torch wheel：
+
+```powershell
+$root = "E:\XB-SVCB" # 改为实际安装目录
+$torchWheel = "$root\assets\wheels\py312\cu128\torch-2.7.1+cu128-cp312-cp312-win_amd64.whl"
+
+(Get-Item $torchWheel).Length
+(Get-FileHash $torchWheel -Algorithm SHA256).Hash
+```
+
+v0.0.32 CUDA128 包的正确结果是：
+
+```text
+大小：3273024349
+SHA256：2BB8C05D48BA815B316879A18195D53A6472A03E297D971E916753F8E1053D30
+```
+
+若大小或哈希不一致，应重新下载完整的 CUDA128 安装包，并确保安装器 EXE 与所有同名前缀 BIN 分卷位于同一目录。不要继续使用损坏的 wheel 修复环境。
+
+若大小和哈希一致，从安装日志或 `installer_env.cmd` 取得锁定的 `XB_PYTHON_EXE` 路径，然后强制重装随包 `uv`、清理 Torch 缓存并重试共享核心组：
+
+```powershell
+$py = "C:\Path\To\Python312\python.exe" # 替换为 XB_PYTHON_EXE
+$uv = "$env:APPDATA\Python\Python312\Scripts\uv.exe"
+
+& $py -m ensurepip --upgrade
+& $py -m pip install --user --force-reinstall --no-index `
+  --find-links "$root\assets\wheels\bootstrap" "uv==0.12.22"
+& $uv --version
+& $uv cache clean torch
+
+Set-Location $root
+.\setup_env.bat --cu128 --only uvr seedvc ddsp
+```
+
+如果 UVR、SeedVC 和 DDSP 均显示成功，但最终校验报告 `missing: ["exceptiongroup"]`，Torch 和 CUDA 已经安装成功，只需补装本地 wheel 后再次执行同一修复入口：
+
+```powershell
+& $uv pip install `
+  --python "$root\runtimes\core-cu128\Scripts\python.exe" `
+  --no-index --no-build `
+  --find-links "$root\assets\wheels\py312\cu128" `
+  "exceptiongroup==1.3.1"
+
+Set-Location $root
+.\setup_env.bat --cu128 --only uvr seedvc ddsp
+```
+
+最终输出应显示共享运行环境完成并写入 `runtime.json`。报告中的 `hf-xet` 属于允许缺失的可选包；DDSP 输出的 `Please install tensorboardX` 也不是本次安装失败原因。
+
 ## 源码环境要求
 
 - Windows。
-- 64 位 CPython 3.12.x，用于安装器和当前离线 wheels。
+- 源码运行和发布构建需要 64 位 CPython 3.12.x；普通安装用户使用安装器内置版本。
 - Node.js 20.19+ 或 22.12+，仅构建前端需要。
 - 可访问 PyPI、模型源和上游仓库，或已准备离线 wheelhouse 与模型资产。
 - 构建 VST3 Host 时需要 CMake、Visual C++ Build Tools 和 JUCE。
@@ -163,7 +223,7 @@ npm run dev
 
 ### 找不到 Python
 
-安装器只接受可运行的 64 位 CPython 3.12.x，因为离线 wheels 是 `cp312-win_amd64`。优先选择普通 Python 或 Conda 解释器，不要选择某个 AI 项目的 `.venv`。
+离线 wheels 面向 `cp312-win_amd64`，安装器会固定使用自带的 64 位 CPython 3.12.x。只有源码运行或制作发布包时才需要开发者自行准备 Python 3.12。
 
 ### 缺少前端
 

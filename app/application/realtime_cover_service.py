@@ -451,8 +451,8 @@ class RealtimeCoverService:
     def _run_system(self, session_id: str) -> None:
         session = self._sessions[session_id]
         directory = Path(session["directory"])
-        worker = None
-        separator = None
+        worker: Any | None = None
+        separator: Any | None = None
         try:
             import numpy as np
 
@@ -687,7 +687,7 @@ class RealtimeCoverService:
         """Retry a realtime block when the model mutes a voiced high-note span."""
         threshold = self._model_high_pitch_threshold(params, model)
         params.high_pitch_threshold = threshold
-        guard_rounds = ConversionService._high_pitch_guard_rounds(params)
+        guard_rounds = ConversionService._high_pitch_guard_rounds(params, realtime=True)
         attempts = 1 + guard_rounds if params.auto_high_pitch_guard else 1
         history: list[dict[str, Any]] = []
         rendered = output
@@ -1279,6 +1279,9 @@ class RealtimeCoverService:
             if framework not in self._FRAMEWORKS:
                 continue
             seen.add(model_id)
+            model_params = ModelService.apply_detected_rvc_version(
+                record, dict(entry.get("params") or {})
+            )
             result.append(
                 {
                     "model_id": model_id,
@@ -1288,7 +1291,7 @@ class RealtimeCoverService:
                     "main_config_path": (record.get("main_config") or {}).get("path", ""),
                     "index_path": (record.get("index_file") or {}).get("path", ""),
                     "metadata": record.get("metadata") or {},
-                    "params": dict(entry.get("params") or {}),
+                    "params": model_params,
                 }
             )
         return result

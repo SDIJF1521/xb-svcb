@@ -47,6 +47,7 @@ export interface ThemeMediaPickResult {
   kind?: 'image' | 'video'
   mime?: string
   name?: string
+  converted?: boolean
 }
 
 export interface SystemStatus {
@@ -168,6 +169,8 @@ export interface ModelDTO {
   framework?: string
   /** RVC 检索特征文件（.index），可选。 */
   index_file?: ModelFileDTO | null
+  /** 模型配置中可选的说话人名称或 ID。 */
+  speakers?: string[]
   favorite?: boolean
   tags?: string[]
   metadata?: Record<string, unknown>
@@ -325,6 +328,8 @@ export interface WorkDTO {
   queue_position?: number
   history?: InferenceHistoryItem[]
 }
+
+export type WorkAudioExportFormat = 'wav' | 'mp3' | 'flac' | 'm4a'
 
 export interface InferenceHistoryItem {
   work_id?: string
@@ -936,6 +941,7 @@ export interface EditorRole {
   id: string
   name: string
   color: string
+  effects?: EditorClipEffect[]
   model_id?: string
   pitch?: number
   notes?: string
@@ -987,6 +993,7 @@ export interface EditorTrack {
   name: string
   type: EditorTrackType | string
   clips: EditorClip[]
+  effects?: EditorClipEffect[]
   locked?: boolean
   mute?: boolean
   volume?: number
@@ -1012,6 +1019,14 @@ export interface EditorProjectSummary {
   duration: number
   tracks: number
   updated_at: string
+}
+
+export interface EditorProjectTransferResult {
+  ok: boolean
+  cancelled?: boolean
+  error?: string
+  path?: string
+  project?: EditorProject
 }
 
 export interface EditorWaveform {
@@ -1107,6 +1122,11 @@ export interface EditorRerunResult {
   error?: string
   project?: EditorProject
   clip?: EditorClip
+  job_id?: string
+  status?: 'queued' | 'running' | 'done' | 'failed'
+  progress?: number
+  message?: string
+  log_path?: string
 }
 
 export interface EditorSeparationOptions {

@@ -1,5 +1,7 @@
+import json
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +10,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from application.audio_editor_service import AudioEditorService
+from api.bridge import Api
 from domain import EditorProject
 from infrastructure.storage import ListRepository
 
@@ -24,6 +27,16 @@ class _FakeFfmpeg:
             {"start": 2.8, "end": 3.2, "duration": 0.4},
             {"start": 5.8, "end": 6.2, "duration": 0.4},
         ]
+
+
+class _FakeExportFfmpeg:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def convert(self, source: Path, destination: Path) -> bool:
+        self.calls.append((source, destination))
+        destination.write_bytes(source.read_bytes() + b"-converted")
+        return True
 
 
 class _FakePluginHost:
@@ -183,6 +196,110 @@ class AudioEditorWorkflowTests(unittest.TestCase):
             "history": [],
             "future": [],
         }
+
+    def test_create_from_work_reuses_existing_editor_project(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "source.wav"
+            source.write_bytes(b"audio")
+            project_repo = ListRepository(root / "projects.json")
+            works_repo = ListRepository(root / "works.json")
+            works_repo.add(
+                {
+                    "id": "work-1",
+                    "title": "Existing cover",
+                    "status": "done",
+                    "mode": "single",
+                    "workflow": "auto_mix",
+                    "duration": "0:12",
+                    "source_path": str(source),
+                }
+            )
+            service = object.__new__(AudioEditorService)
+            service._repo = project_repo
+            service._works_repo = works_repo
+            service._ffmpeg = _FakeFfmpeg()
+            service._ffmpeg.probe_duration = lambda _path: self.fail(
+                "stored work duration should avoid probing full-length stems"
+            )
+
+            with patch("application.audio_editor_service.config.WORKS_DIR", root / "work-files"):
+                first = service.create_from_work("work-1")
+                second = service.create_from_work("work-1")
+
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(second)
+            self.assertEqual(first["id"], second["id"])
+            self.assertEqual(len(project_repo.all()), 1)
+
+    def test_project_bundle_round_trip_includes_media_and_creates_new_project(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            editor_dir = root / "editor"
+            source = root / "voice.wav"
+            source.write_bytes(b"portable-audio")
+            service, repo, _ffmpeg = self.make_service(root)
+            repo.add(self.project(source))
+            bundle = root / "workflow.xbproject"
+
+            with patch("application.audio_editor_service.config.EDITOR_DIR", editor_dir):
+                exported = service.export_bundle("project-1", bundle)
+                imported = service.import_bundle(exported)
+
+            self.assertTrue(bundle.is_file())
+            self.assertNotEqual(imported["id"], "project-1")
+            self.assertEqual(len(repo.all()), 2)
+            imported_file = Path(imported["tracks"][0]["clips"][0]["file"])
+            self.assertEqual(imported_file.read_bytes(), b"portable-audio")
+            self.assertEqual(imported_file.parents[1], editor_dir / imported["id"])
+            self.assertEqual(imported["metadata"]["mode"], "imported_bundle")
+            with zipfile.ZipFile(bundle) as archive:
+                manifest = json.loads(archive.read("project.json"))
+                bundled_file = manifest["project"]["tracks"][0]["clips"][0]["file"]
+                self.assertTrue(bundled_file.startswith("media/"))
+
+    def test_project_bundle_import_rejects_parent_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            editor_dir = root / "editor"
+            service, repo, _ffmpeg = self.make_service(root)
+            project = self.project(root / "unused.wav")
+            project["tracks"][0]["clips"][0]["file"] = "../outside.wav"
+            bundle = root / "unsafe.xbproject"
+            manifest = {
+                "schema": service._PROJECT_BUNDLE_SCHEMA,
+                "version": service._PROJECT_BUNDLE_VERSION,
+                "project": project,
+            }
+            with zipfile.ZipFile(bundle, "w") as archive:
+                archive.writestr("project.json", json.dumps(manifest))
+                archive.writestr("../outside.wav", b"unsafe")
+
+            with patch("application.audio_editor_service.config.EDITOR_DIR", editor_dir):
+                with self.assertRaisesRegex(ValueError, "无效的素材路径"):
+                    service.import_bundle(bundle)
+
+            self.assertEqual(repo.all(), [])
+            self.assertFalse((root / "outside.wav").exists())
+
+    def test_work_export_converts_to_selected_format_and_normalizes_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "finished.wav"
+            source.write_bytes(b"finished-audio")
+            api = object.__new__(Api)
+            api._stem_path = lambda _work_id, _kind: source
+            api._works = type("Works", (), {"get": lambda _self, _work_id: {"title": "My Cover"}})()
+            api._save_dialog = lambda _title, _filename: str(root / "picked-name.tmp")
+            converter = _FakeExportFfmpeg()
+
+            with patch("api.bridge.FfmpegTool", return_value=converter):
+                result = api.export_work("work-1", "m4a")
+
+            target = root / "picked-name.m4a"
+            self.assertEqual(result, str(target))
+            self.assertEqual(target.read_bytes(), b"finished-audio-converted")
+            self.assertEqual(converter.calls, [(source, target)])
 
     def test_plain_txt_auto_split_snaps_to_silence_and_preserves_roles(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -479,6 +596,24 @@ class AudioEditorWorkflowTests(unittest.TestCase):
         ).to_dict()
         self.assertEqual(project["roles"][0]["id"], "lead")
 
+    def test_clean_preserves_distinct_track_and_role_effect_racks(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "voice.wav"
+            source.write_bytes(b"audio")
+            project = self.project(source)
+            project["tracks"][0]["effects"] = [
+                {"id": "track-fx", "type": "compressor", "params": {"ratio": 3}}
+            ]
+            project["roles"][0]["effects"] = [
+                {"id": "role-fx", "type": "reverb", "params": {"wet_level": 0.2}}
+            ]
+
+            cleaned = AudioEditorService._clean(project)
+
+            self.assertEqual(cleaned["tracks"][0]["effects"][0]["id"], "track-fx")
+            self.assertEqual(cleaned["roles"][0]["effects"][0]["id"], "role-fx")
+            self.assertEqual(cleaned["tracks"][0]["clips"][0]["effects"], [])
+
     def test_plugin_state_sync_keeps_session_open_and_deduplicates_updates(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -525,6 +660,41 @@ class AudioEditorWorkflowTests(unittest.TestCase):
             closed = service.sync_effect_plugin_editor("session-1")
             self.assertTrue(closed["closed"])
             self.assertNotIn("session-1", service._plugin_sessions)
+
+    def test_plugin_state_sync_updates_role_effect_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "voice.wav"
+            source.write_bytes(b"audio")
+            service, repo, _ = self.make_service(root)
+            project = self.project(source)
+            project["roles"][0]["effects"] = [
+                {
+                    "id": "role-plugin",
+                    "type": "plugin",
+                    "enabled": True,
+                    "params": {"path": "role.vst3"},
+                }
+            ]
+            repo.add(project)
+            host = _FakePluginHost()
+            service._plugin_host = host
+            service._plugin_sessions = {
+                "role-session": {
+                    "project_id": "project-1",
+                    "track_id": "track-1",
+                    "clip_id": "clip-1",
+                    "effect_id": "role-plugin",
+                    "effect_scope": "role",
+                    "role_id": "role-a",
+                }
+            }
+
+            result = service.sync_effect_plugin_editor("role-session", {"playing": False})
+
+            params = result["project"]["roles"][0]["effects"][0]["params"]
+            self.assertEqual(params["parameters"], {"mix": 0.75})
+            self.assertNotIn("timeline_start", host.transport)
 
     def test_plugin_monitor_renders_only_effects_before_target(self) -> None:
         with tempfile.TemporaryDirectory() as td:

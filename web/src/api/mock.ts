@@ -15,6 +15,7 @@ import type {
   HttpApiKeyResult,
   InferenceDeviceRuntime,
   WorkDTO,
+  WorkAudioExportFormat,
   PipelineStep,
   MusicSearchResult,
   MusicSongResult,
@@ -54,6 +55,7 @@ import type {
   EditorPluginTransport,
   EditorProject,
   EditorProjectSummary,
+  EditorProjectTransferResult,
   EditorTrack,
   RealtimeCoverPayload,
   RealtimeCoverStatus,
@@ -253,11 +255,13 @@ const mockModels: ModelDTO[] = [
   {
     id: 'm1', name: '我的音色 v2', type: 'So-VITS', sample_rate: '44.1kHz', size: '418 MB', imported_at: '06-10',
     main_model: { name: 'G_30000.pth', path: '' }, main_config: { name: 'config.json', path: '' },
+    speakers: ['主唱', '和声'],
     diffusion_model: { name: 'diffusion.pt', path: '' }, diffusion_config: { name: 'diffusion.yaml', path: '' },
   },
   {
     id: 'm2', name: '星野', type: 'So-VITS', sample_rate: '44.1kHz', size: '396 MB', imported_at: '06-08',
     main_model: { name: 'Hoshino_G.pth', path: '' }, main_config: { name: 'config.json', path: '' },
+    speakers: ['星野'],
     diffusion_model: { name: 'model_diff.pt', path: '' }, diffusion_config: { name: 'diff.yaml', path: '' },
   },
   {
@@ -465,6 +469,7 @@ const mockWorks: WorkDTO[] = [
 
 const cloneProject = (p: EditorProject): EditorProject => JSON.parse(JSON.stringify(p)) as EditorProject
 const mockEditorProjects: EditorProject[] = []
+const mockRerunJobs: Record<string, EditorRerunResult & { log?: string }> = {}
 const mockEditorHistory: Record<string, EditorProject[]> = {}
 const mockEditorFuture: Record<string, EditorProject[]> = {}
 const mockMinRerunClipSeconds = 1
@@ -1190,9 +1195,9 @@ export const mock = {
     console.info('[mock] getStemAudio', id, kind)
     return ''
   },
-  exportWork(id: string): string {
-    console.info('[mock] exportWork', id)
-    return ''
+  exportWork(id: string, fmt: WorkAudioExportFormat = 'wav'): string {
+    console.info('[mock] exportWork', id, fmt)
+    return `C:/exports/${id}.${fmt}`
   },
 
   // ---- 音乐资源获取（浏览器开发环境模拟）----
@@ -1658,6 +1663,19 @@ export const mock = {
     mockEditorFuture[project.id] = []
     return cloneProject(project)
   },
+  exportEditorProjectBundle(projectId: string): EditorProjectTransferResult {
+    const project = mockEditorProjects.find((item) => item.id === projectId)
+    return project
+      ? { ok: true, path: `C:/exports/${projectId}.xbproject` }
+      : { ok: false, error: '工程不存在' }
+  },
+  importEditorProjectBundle(): EditorProjectTransferResult {
+    const project = makeEditorProject('导入的音频工程')
+    mockEditorProjects.unshift(project)
+    mockEditorHistory[project.id] = []
+    mockEditorFuture[project.id] = []
+    return { ok: true, path: 'C:/imports/demo.xbproject', project: cloneProject(project) }
+  },
   createEditorProjectFromWork(workId: string): EditorProject | null {
     const work = mockWorks.find((w) => w.id === workId)
     if (!work) return null
@@ -1919,8 +1937,10 @@ export const mock = {
     clipId: string,
     effectId: string,
     parentWindow = '',
+    effectScope: 'clip' | 'track' | 'role' = 'clip',
+    roleId = '',
   ): EditorPluginWindowResult {
-    console.info('[mock] openEditorEffectPlugin', projectId, trackId, clipId, effectId, parentWindow)
+    console.info('[mock] openEditorEffectPlugin', projectId, trackId, clipId, effectId, parentWindow, effectScope, roleId)
     return {
       ...this.getEditorPluginHostStatus(),
       session_id: rid('juce_'),
@@ -2358,7 +2378,23 @@ export const mock = {
       rerun_loudness_envelope: enhance?.enabled ? (enhance.loudness_envelope ?? 0.58) : 0,
     }
     project.updated_at = now()
-    return { ok: true, project: cloneProject(project), clip: { ...clip } }
+    const jobId = `mock_rerun_${Date.now()}`
+    mockRerunJobs[jobId] = {
+      ok: true,
+      status: 'done',
+      progress: 100,
+      message: '片段替换完成，工程已保存',
+      project: cloneProject(project),
+      clip: { ...clip },
+      log: '[00:00:00] 开始校验片段与模型\n[00:00:01] 模型推理完成\n[00:00:01] 片段替换完成，工程已保存\n',
+    }
+    return { ok: true, job_id: jobId, status: 'done', progress: 100, message: '片段替换完成，工程已保存' }
+  },
+  getEditorRerunStatus(jobId: string): EditorRerunResult {
+    return mockRerunJobs[jobId] || { ok: false, error: '重推理任务不存在' }
+  },
+  getEditorRerunLog(jobId: string): string {
+    return mockRerunJobs[jobId]?.log || ''
   },
   enhanceEditorClip(
     projectId: string,

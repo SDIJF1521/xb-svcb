@@ -132,8 +132,19 @@ def test_pymss_rocm_installer_selects_vendor_source_and_verifies(tmp_path, monke
         i for i, (args, _) in enumerate(installs) if "pymss==2.0.18" in args
     )
     assert any("--reinstall-package" in args for args, kw in torch_installs)
-    with pytest.raises(RuntimeError, match="ROCm"):
-        installer.step_pymss("uv", "directml")
+    installs.clear()
+    versions.clear()
+    checks.clear()
+    installer.step_pymss("uv", "directml")
+    assert versions == ["3.12"]
+    assert checks == []
+    assert any(
+        args == ("uv", str(tmp_path / ".venv-pymss" / "Scripts" / "python.exe"),
+                 "torch==2.7.1", "torchaudio==2.7.1")
+        and kw["index"] == installer.TORCH_CPU_INDEX
+        and kw["gpu_stack"] == "cpu"
+        for args, kw in installs
+    )
 
 
 @pytest.mark.parametrize("hip,rocm,available", [(None, "10.0", True), ("7.2.1", "7.2.1", True), ("7.15.26333", "10.0", False)])
@@ -188,6 +199,66 @@ def test_rocm_wheelhouse_routes_all_engines_to_hip(tmp_path, monkeypatch):
     assert len(torch_batches) >= 7
     assert all(b.index == installer.TORCH_ROCM_INDEX for b in torch_batches)
     assert all(b.python_version == "3.12" for b in batches)
+
+
+def test_rocm_component_torch_reuses_shared_wheels_without_pip(tmp_path, monkeypatch):
+    planner = load("install/prepare_wheelhouse.py")
+    shared = tmp_path / "assets" / "wheels" / "py312" / "rocm10"
+    component = tmp_path / "assets" / "wheels" / "ddsp-legacy" / "py312" / "rocm10"
+    shared.mkdir(parents=True)
+    component.mkdir(parents=True)
+    names = (
+        "torch-2.13.0+rocm10.0.0-cp312-cp312-win_amd64.whl",
+        "torchaudio-2.11.0.2+rocm10.0.0-cp312-cp312-win_amd64.whl",
+        "torchvision-0.28.0+rocm10.0.0-cp312-cp312-win_amd64.whl",
+    )
+    for name in names:
+        (shared / name).write_bytes(name.encode())
+    (component / names[0]).write_bytes(b"old duplicate")
+
+    class Installer:
+        TORCH_ROCM_INDEX = "https://vendor.invalid/rocm/"
+
+    monkeypatch.setattr(planner, "_run", lambda _cmd: pytest.fail("pip should not run"))
+    monkeypatch.setattr(planner, "_build_wheels", lambda *_args: pytest.fail("wheel build should not run"))
+    batch = planner.DownloadBatch(
+        "ddsp legacy rocm10 torch",
+        component,
+        "3.12",
+        (
+            "torch[device-all]==2.13.0+rocm10.0.0",
+            "torchaudio==2.11.0.2+rocm10.0.0",
+            "torchvision[device-all]==0.28.0+rocm10.0.0",
+        ),
+    )
+
+    planner._download_batch(tmp_path, Installer, batch)
+
+    assert all((component / name).is_file() for name in names)
+    assert all((component / name).samefile(shared / name) for name in names)
+
+
+def test_rocm_non_torch_batch_uses_normal_package_indexes(tmp_path, monkeypatch):
+    planner = load("install/prepare_wheelhouse.py")
+    captured = []
+
+    class Installer:
+        TORCH_ROCM_INDEX = "https://vendor.invalid/rocm/"
+
+    monkeypatch.setattr(planner, "_reuse_shared_rocm_wheels", lambda *_args: 0)
+    monkeypatch.setattr(planner, "_build_wheels", lambda _root, _installer, batch: captured.append(batch))
+    batch = planner.DownloadBatch(
+        "ddsp legacy rocm10 requirements",
+        tmp_path / "assets" / "wheels" / "ddsp-legacy" / "py312" / "rocm10",
+        "3.12",
+        ("fairseq-fixed==0.12.3.1",),
+        build_source=True,
+    )
+
+    planner._download_batch(tmp_path, Installer, batch)
+
+    assert len(captured) == 1
+    assert captured[0].index is None
     assert any(b.dest == tmp_path / "assets/wheels/pymss/py312/rocm10" for b in batches)
     assert not any("torch-directml" in p for b in batches for p in b.packages)
     assert all(not Requirement(c).extras for b in batches for c in b.constraints)
@@ -272,3 +343,36 @@ def test_rvc_wheel_keeps_code_and_validates_record(tmp_path):
             wheel.writestr(name, data)
     with pytest.raises(ValueError, match="RECORD mismatch"):
         builder.build(source, tmp_path / "bad")
+
+
+def test_rvc_source_download_uses_resilient_pip_indexes(tmp_path, monkeypatch):
+    builder = load("install/build_rvc_compat.py")
+    calls = []
+
+    def fake_run(command, check):
+        calls.append((command, check))
+        destination = Path(command[command.index("--dest") + 1])
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "rvc_python-0.1.5-py3-none-any.whl").write_bytes(b"wheel")
+
+    monkeypatch.setattr(builder.subprocess, "run", fake_run)
+    result = builder._download_source_wheel(
+        tmp_path,
+        python="tool-python.exe",
+        index_urls=[
+            "https://mirror.example/simple/",
+            "https://fallback.example/simple",
+        ],
+    )
+
+    assert result == tmp_path / "rvc_python-0.1.5-py3-none-any.whl"
+    assert calls and calls[0][1] is True
+    command = calls[0][0]
+    assert command[:4] == ["tool-python.exe", "-m", "pip", "download"]
+    assert command[command.index("--index-url") + 1] == "https://mirror.example/simple"
+    assert command[command.index("--extra-index-url") + 1] == "https://fallback.example/simple"
+    assert command[command.index("--retries") + 1] == "5"
+    assert command[command.index("--timeout") + 1] == "60"
+    assert "--no-deps" in command
+    assert "--only-binary=:all:" in command
+    assert command[-1] == "rvc-python==0.1.5"

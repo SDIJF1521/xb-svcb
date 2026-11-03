@@ -82,7 +82,7 @@ def test_mix_brings_vocal_forward_and_limits_true_peak_headroom(
     assert "level=false" in filter_graph
 
 
-def test_adaptive_mix_profile_places_enhanced_vocal_under_music(
+def test_adaptive_mix_profile_places_enhanced_vocal_over_music(
     tmp_path: Path, monkeypatch
 ) -> None:
     tool = FfmpegTool()
@@ -104,11 +104,11 @@ def test_adaptive_mix_profile_places_enhanced_vocal_under_music(
     assert profile["adaptive"] is True
     assert profile["vocal_lufs"] == -13.91
     assert profile["instrumental_lufs"] == -12.89
-    assert profile["vocal_gain_db"] == pytest.approx(-1.5532)
+    assert profile["vocal_gain_db"] == pytest.approx(2.4468)
     assert profile["instrumental_gain_db"] == pytest.approx(-0.0732)
 
 
-def test_adaptive_mix_profile_uses_quiet_fallback_when_measurement_fails(
+def test_adaptive_mix_profile_uses_vocal_forward_fallback_when_measurement_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
     tool = FfmpegTool()
@@ -125,8 +125,41 @@ def test_adaptive_mix_profile_uses_quiet_fallback_when_measurement_fails(
     profile = tool.adaptive_mix_profile(vocals, instrumental)
 
     assert profile["adaptive"] is False
-    assert profile["vocal_gain_db"] == -1.0
-    assert profile["instrumental_gain_db"] == 0.0
+    assert profile["vocal_gain_db"] == 1.8
+    assert profile["instrumental_gain_db"] == -0.7
+
+
+@pytest.mark.parametrize(
+    ("vocal_lufs", "music_lufs", "expected_gain"),
+    [
+        (-22.0, -12.0, 4.0),
+        (-9.0, -14.0, -1.0),
+    ],
+)
+def test_adaptive_mix_profile_bounds_extreme_vocal_gain(
+    tmp_path: Path,
+    monkeypatch,
+    vocal_lufs: float,
+    music_lufs: float,
+    expected_gain: float,
+) -> None:
+    tool = FfmpegTool()
+    tool.ffmpeg = "ffmpeg"
+    vocals = tmp_path / "vocals.wav"
+    instrumental = tmp_path / "instrumental.wav"
+    vocals.write_bytes(b"vocal")
+    instrumental.write_bytes(b"music")
+
+    def fake_run(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        measured = vocal_lufs if str(vocals) in command else music_lufs
+        payload = f'{{"input_i": "{measured}", "input_tp": "-1.0"}}'
+        return subprocess.CompletedProcess(command, 0, "", payload)
+
+    monkeypatch.setattr("infrastructure.ffmpeg_tool.subprocess.run", fake_run)
+
+    profile = tool.adaptive_mix_profile(vocals, instrumental)
+
+    assert profile["vocal_gain_db"] == expected_gain
 
 
 def test_mix_can_apply_light_parallel_glue(tmp_path: Path, monkeypatch) -> None:
@@ -160,6 +193,33 @@ def test_mix_can_apply_light_parallel_glue(tmp_path: Path, monkeypatch) -> None:
     assert "acompressor=threshold=0.251189:ratio=1.180" in filter_graph
     assert "detection=rms:mix=0.55[glue]" in filter_graph
     assert "[glue]alimiter=limit=0.841395" in filter_graph
+
+
+def test_mix_vocals_compensates_stereo_chorus_energy(
+    tmp_path: Path, monkeypatch
+) -> None:
+    tool = FfmpegTool()
+    tool.ffmpeg = "ffmpeg"
+    first = tmp_path / "first.wav"
+    second = tmp_path / "second.wav"
+    output = tmp_path / "chorus.wav"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    captured: list[str] = []
+
+    def fake_run(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        captured.extend(command)
+        output.write_bytes(b"chorus")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("infrastructure.ffmpeg_tool.subprocess.run", fake_run)
+
+    assert tool.mix_vocals([first, second], output)
+    filter_graph = captured[captured.index("-filter_complex") + 1]
+    assert "volume=1.1200[d0]" in filter_graph
+    assert "volume=1.1200[d1]" in filter_graph
+    assert "amix=inputs=2:duration=longest:normalize=0" in filter_graph
+    assert "alimiter=limit=0.97" in filter_graph
 
 
 def test_pitch_shift_rejects_collapsed_worker_output(

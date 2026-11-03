@@ -1,3 +1,5 @@
+[简体中文](client-api.md) | [English](../en/plugins/client-api.md) | [日本語](../ja/plugins/client-api.md)
+
 # 页面 Client API
 
 自定义 HTML/Vue 页面不能直接调用桌面 Bridge。所有宿主能力通过 `postMessage` 协议暴露，npm Client 负责 token、请求 ID、响应匹配和超时。

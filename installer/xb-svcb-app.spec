@@ -19,7 +19,7 @@ ROOT = Path(SPECPATH).parent          # 仓库根（spec 位于 installer/）
 APP = ROOT / "app"
 
 # 应用图标（嵌入 exe；快捷方式会继承）
-ICON = ROOT / "assets" / "icon" / "xb-svcb.ico"
+ICON = ROOT / "web" / "public" / "favicon.ico"
 ICON_PATH = str(ICON) if ICON.exists() else None
 VERSION_INFO = str(ROOT / "installer" / "xb-svcb-version.txt")
 

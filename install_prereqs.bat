@@ -23,6 +23,16 @@ if not defined UV_DEFAULT_INDEX set "UV_DEFAULT_INDEX=%XB_PYPI_MIRROR%"
 if not defined XB_WHEELHOUSE if exist "%~dp0assets\wheels\wheelhouse.json" set "XB_WHEELHOUSE=%~dp0assets\wheels"
 if defined XB_WHEELHOUSE if not defined XB_WHEELHOUSE_STRICT set "XB_WHEELHOUSE_STRICT=1"
 if not defined UV_LINK_MODE set "UV_LINK_MODE=copy"
+if not defined XB_UV_CACHE_DIR set "XB_UV_CACHE_DIR=%~dp0.tmp\uv-cache"
+set "UV_CACHE_DIR=%XB_UV_CACHE_DIR%"
+if not defined XB_RUNTIME_TEMP set "XB_RUNTIME_TEMP=%~dp0.tmp\runtime-temp"
+if not exist "%XB_RUNTIME_TEMP%" mkdir "%XB_RUNTIME_TEMP%" >nul 2>&1
+if not exist "%XB_RUNTIME_TEMP%" (
+  echo [fail] Cannot create runtime temporary directory: %XB_RUNTIME_TEMP%
+  exit /b 1
+)
+set "TEMP=%XB_RUNTIME_TEMP%"
+set "TMP=%XB_RUNTIME_TEMP%"
 if not defined PIP_DISABLE_PIP_VERSION_CHECK set "PIP_DISABLE_PIP_VERSION_CHECK=1"
 if not defined XB_FFMPEG_DIR if exist "%~dp0tools\ffmpeg\bin\ffmpeg.exe" set "XB_FFMPEG_DIR=%~dp0tools\ffmpeg"
 
@@ -245,6 +255,8 @@ if not errorlevel 1 (
 exit /b 0
 
 :CHECK_PYTHON
+set "XB_PYTHON_EXE=%~dp0tools\python312\python.exe"
+set "XB_PYTHON_DIR=%~dp0tools\python312"
 set "PYTHON_DETECTOR=%~dp0install\detect_python.bat"
 if not exist "!PYTHON_DETECTOR!" (
   echo [fail] Python detector not found: !PYTHON_DETECTOR!
@@ -275,6 +287,13 @@ call :RESOLVE_PATHS
 exit /b 0
 
 :CHECK_FFMPEG
+if defined XB_FFMPEG_BIN if exist "!XB_FFMPEG_BIN!\ffmpeg.exe" if exist "!XB_FFMPEG_BIN!\ffprobe.exe" (
+  "!XB_FFMPEG_BIN!\ffmpeg.exe" -version >nul 2>&1 && "!XB_FFMPEG_BIN!\ffprobe.exe" -version >nul 2>&1
+  if not errorlevel 1 (
+    echo [ok] bundled ffmpeg/ffprobe found: !XB_FFMPEG_BIN!
+    exit /b 0
+  )
+)
 ffmpeg -version >nul 2>&1 && ffprobe -version >nul 2>&1 && (
   set "XB_FFMPEG_BIN="
   for /f "delims=" %%P in ('where ffmpeg 2^>nul') do if not defined XB_FFMPEG_BIN set "XB_FFMPEG_BIN=%%~dpP"
@@ -292,10 +311,6 @@ ffmpeg -version >nul 2>&1 && ffprobe -version >nul 2>&1 && (
   ) else (
     echo [ok] system ffmpeg found; bundled deployment skipped: !XB_FFMPEG_BIN!\ffmpeg.exe
   )
-  exit /b 0
-)
-if defined XB_FFMPEG_BIN if exist "%XB_FFMPEG_BIN%\ffmpeg.exe" if exist "%XB_FFMPEG_BIN%\ffprobe.exe" (
-  echo [ok] bundled ffmpeg/ffprobe found: %XB_FFMPEG_BIN%
   exit /b 0
 )
 echo [fail] A working ffmpeg/ffprobe pair was not found in PATH and the bundled payload is missing.

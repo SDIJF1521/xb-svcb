@@ -26,9 +26,16 @@ def test_checked_in_profile_is_portable_and_pins_all_versions():
     assert pins["protobuf"] == "7.36.0"
     assert pins["onnx-weekly"] == "1.23.0.dev20260831"
     assert pins["gin-config"] == "0.5.0"
-    assert profile["optional_packages"] == ["hf-xet"]
+    assert profile["optional_packages"] == ["exceptiongroup", "hf-xet"]
     assert not profile["rollback_is_known_healthy"]
     assert not profile["full_model_inference_validated"]
+    assert any(
+        artifact["path"].endswith(
+            "onnx_weekly-1.23.0.dev20260831-cp312-abi3-win_amd64.whl"
+        )
+        and artifact["group"] == "candidate"
+        for artifact in profile["artifacts"]
+    )
     for artifact in profile["artifacts"]:
         assert not Path(artifact["path"]).is_absolute()
         assert ".tmp" not in artifact["path"]
@@ -77,10 +84,10 @@ def test_environment_check_reports_optional_transport_and_real_drift(monkeypatch
     recipe = load("core_recipe")
     actual = {"python": "3.12.21", "system": "win32", "machine": "AMD64", "packages": {"numpy": "2.2.6"}}
     monkeypatch.setattr(recipe.subprocess, "run", lambda *a, **kw: SimpleNamespace(stdout=json.dumps(actual)))
-    profile = {"python": "3.12", "optional_packages": ["hf-xet"]}
-    pins = {"numpy": "2.2.6", "hf-xet": "1.6.0"}
+    profile = {"python": "3.12", "optional_packages": ["exceptiongroup", "hf-xet"]}
+    pins = {"numpy": "2.2.6", "exceptiongroup": "1.3.1", "hf-xet": "1.6.0"}
     report = recipe.check_environment(Path("python"), profile, pins)
-    assert report["ok"] and report["missing_optional"] == ["hf-xet"]
+    assert report["ok"] and report["missing_optional"] == ["exceptiongroup", "hf-xet"]
     actual["packages"]["numpy"] = "1.26.4"
     assert not recipe.check_environment(Path("python"), profile, pins)["ok"]
     actual["packages"] = {"hf-xet": "1.6.0"}

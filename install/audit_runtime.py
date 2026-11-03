@@ -61,11 +61,24 @@ def probe(name: str, code: str, cwd: Path, timeout: int) -> dict:
         return {"name": name, "ok": result.returncode == 0,
                 "exit_code": result.returncode, "stdout": result.stdout[-4000:],
                 "stderr": result.stderr[-6000:]}
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "name": name,
+            "ok": False,
+            "timed_out": True,
+            "timeout_seconds": timeout,
+            "error": f"Import audit exceeded {timeout} seconds",
+        }
     except (OSError, subprocess.SubprocessError) as exc:
         return {"name": name, "ok": False, "error": str(exc)}
 
 
-def audit(root: Path, timeout: int = 45, require_cuda: bool = False) -> dict:
+def audit(
+    root: Path,
+    timeout: int = 90,
+    require_cuda: bool = False,
+    ddsp_timeout: int = 180,
+) -> dict:
     versions = {}
     for name in ("torch", "torchaudio", "torchvision", "numpy", "protobuf",
                  "audio-separator", "onnx-weekly", "descript-audiotools", "transformers"):
@@ -95,7 +108,10 @@ def audit(root: Path, timeout: int = 45, require_cuda: bool = False) -> dict:
         ("seedvc", "import inference; from modules.length_regulator import InterpolateRegulator", root / "engines/seed-vc"),
         ("ddsp", "import ddsp.vocoder; import reflow.vocoder", root / "engines/ddsp-svc"),
     ]
-    imports = [probe(name, code, cwd, timeout) for name, code, cwd in checks]
+    imports = [
+        probe(name, code, cwd, ddsp_timeout if name == "ddsp" else timeout)
+        for name, code, cwd in checks
+    ]
     return {"python": sys.executable, "root": str(root), "versions": versions,
             "dependency_issues": issues, "imports": imports,
             "ok": not issues and all(item["ok"] for item in imports),
@@ -106,12 +122,25 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--output", type=Path, help="Optional JSON report; no environment changes")
-    parser.add_argument("--timeout", type=int, default=45, help="Timeout per import subprocess")
+    parser.add_argument("--timeout", type=int, default=90, help="Timeout for ordinary import subprocesses")
+    parser.add_argument(
+        "--ddsp-timeout",
+        type=int,
+        default=180,
+        help="Timeout for the slower first DDSP import subprocess",
+    )
     parser.add_argument("--require-cuda", action="store_true")
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
-    report = audit(args.root.resolve(), args.timeout, args.require_cuda)
+    if args.ddsp_timeout <= 0:
+        parser.error("--ddsp-timeout must be positive")
+    report = audit(
+        args.root.resolve(),
+        args.timeout,
+        args.require_cuda,
+        args.ddsp_timeout,
+    )
     encoded = json.dumps(report, indent=2, ensure_ascii=False)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -296,7 +296,9 @@ class WorkService:
             size="—",
             created_at=datetime.now().isoformat(timespec="seconds"),
             source_path=source_path,
-            params=payload.get("params", {}) or {},
+            params=ModelService.apply_detected_rvc_version(
+                model, payload.get("params", {}) or {}
+            ),
             steps=default_steps(
                 vocal_enhancement["enabled"],
                 preprocess["enabled"],
@@ -407,6 +409,7 @@ class WorkService:
                 continue
             model_params = entry.get("params")
             model_params = dict(model_params) if isinstance(model_params, dict) else {}
+            model_params = ModelService.apply_detected_rvc_version(model, model_params)
             # Multi-model requests own parameters per model.  Keep the legacy
             # top-level switch as a fallback, then make the default explicit so
             # every model follows the same high-pitch protection contract.
@@ -604,6 +607,23 @@ class WorkService:
         # 实时翻唱的归档记录没有普通转换任务所需的推理参数，不能按常规任务重跑。
         if work.get("workflow") == "realtime_cover":
             return False
+        if work.get("mode") == "multi":
+            for model_id, entry in (work.get("seg_models") or {}).items():
+                model = self._models.get(str(model_id))
+                if not model or not isinstance(entry, dict):
+                    continue
+                entry.update(self._resolve_model_paths(model))
+                entry["params"] = ModelService.apply_detected_rvc_version(
+                    model, entry.get("params") or {}
+                )
+        else:
+            model_id = str(work.get("model_id") or "")
+            model = self._models.get(model_id) if model_id else None
+            if model:
+                work.update(self._resolve_model_paths(model))
+                work["params"] = ModelService.apply_detected_rvc_version(
+                    model, work.get("params") or {}
+                )
         work["status"] = JobStatus.QUEUE.value
         work["progress"] = 0
         work["error"] = None

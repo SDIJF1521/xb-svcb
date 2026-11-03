@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -75,6 +76,112 @@ def test_rocm_uses_pytorch_cuda_compatibility_device() -> None:
     assert resolved.backend == "rocm"
     assert resolved.device == "cuda:0"
     assert resolved.name == "AMD Radeon ROCm"
+
+
+def test_explicit_cuda_rejects_rocm_runtime() -> None:
+    with pytest.raises(RuntimeError, match="NVIDIA CUDA"):
+        inference_device.resolve_torch_device(
+            "cuda",
+            _FakeTorch(cuda=True, hip="10.0"),
+        )
+
+
+def test_cuda_inference_profile_pins_device_and_uses_strict_fp32_matmul() -> None:
+    calls: list[tuple[str, object]] = []
+    torch = SimpleNamespace(
+        set_grad_enabled=lambda enabled: calls.append(("grad", enabled)),
+        set_float32_matmul_precision=lambda value: calls.append(("matmul", value)),
+        cuda=SimpleNamespace(
+            set_device=lambda device: calls.append(("device", device)),
+        ),
+        backends=SimpleNamespace(
+            cudnn=SimpleNamespace(allow_tf32=True),
+            cuda=SimpleNamespace(matmul=SimpleNamespace(allow_tf32=True)),
+        ),
+    )
+    resolved = inference_device.ResolvedDevice(
+        device="cuda:2",
+        backend="cuda",
+        name="NVIDIA Test GPU",
+        index=2,
+    )
+
+    profile = inference_device.configure_torch_inference(torch, resolved)
+
+    assert calls == [("grad", False), ("device", "cuda:2"), ("matmul", "highest")]
+    assert torch.backends.cudnn.allow_tf32 is False
+    assert torch.backends.cuda.matmul.allow_tf32 is False
+    assert profile.float32_matmul_precision == "highest"
+    assert profile.tf32 == "off"
+
+
+def test_rocm_inference_profile_keeps_tf32_settings_untouched() -> None:
+    torch = SimpleNamespace(
+        set_grad_enabled=lambda _enabled: None,
+        set_float32_matmul_precision=lambda _value: None,
+        cuda=SimpleNamespace(set_device=lambda _device: None),
+        backends=SimpleNamespace(
+            cudnn=SimpleNamespace(allow_tf32=True),
+            cuda=SimpleNamespace(matmul=SimpleNamespace(allow_tf32=True)),
+        ),
+    )
+    resolved = inference_device.ResolvedDevice("cuda:0", "rocm", "AMD Radeon")
+
+    profile = inference_device.configure_torch_inference(torch, resolved)
+
+    assert torch.backends.cudnn.allow_tf32 is True
+    assert torch.backends.cuda.matmul.allow_tf32 is True
+    assert profile.float32_matmul_precision == "highest"
+    assert profile.tf32 == "default"
+
+
+def test_cpu_inference_profile_uses_bounded_threads_and_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+    torch = SimpleNamespace(
+        set_grad_enabled=lambda enabled: calls.append(("grad", enabled)),
+        set_num_threads=lambda value: calls.append(("threads", value)),
+        set_num_interop_threads=lambda value: calls.append(("interop", value)),
+    )
+    resolved = inference_device.ResolvedDevice("cpu", "cpu", "CPU")
+    monkeypatch.setenv("XB_INFERENCE_CPU_THREADS", "3")
+
+    profile = inference_device.configure_torch_inference(torch, resolved)
+
+    assert calls == [("grad", False), ("threads", 3), ("interop", 1)]
+    assert profile.cpu_threads == 3
+    assert "cpu_threads=3" in profile.summary
+
+
+def test_vocal_enhancement_uses_cpu_stable_path_for_directml(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from infrastructure import vocal_enhancement_worker
+
+    fake_torch = SimpleNamespace(device=lambda value: value)
+    configured: list[inference_device.ResolvedDevice] = []
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        vocal_enhancement_worker,
+        "resolve_torch_device",
+        lambda *_args: pytest.fail("DirectML Vocal 路径不应要求 torch-directml"),
+    )
+    monkeypatch.setattr(
+        vocal_enhancement_worker,
+        "configure_torch_inference",
+        lambda _torch, resolved: configured.append(resolved)
+        or SimpleNamespace(summary="cpu"),
+    )
+    monkeypatch.delenv("DF_DEVICE", raising=False)
+
+    resolved, _profile = vocal_enhancement_worker._configure_vocal_inference_runtime(
+        "directml"
+    )
+
+    assert resolved.backend == "cpu"
+    assert configured == [resolved]
+    assert os.environ["DF_DEVICE"] == "cpu"
 
 
 def test_explicit_directml_never_silently_falls_back_to_cpu() -> None:

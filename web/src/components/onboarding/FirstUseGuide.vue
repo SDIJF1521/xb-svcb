@@ -77,7 +77,7 @@ interface GuideStep {
   prepare?: 'multi' | 'multi-timeline' | 'enhancement' | 'open-player'
 }
 
-const STORAGE_KEY = 'xb-first-use-guide-v3'
+const STORAGE_KEY = 'xb-first-use-guide-v4'
 const router = useRouter()
 const route = useRoute()
 const visible = ref(false)
@@ -86,8 +86,12 @@ const currentStep = ref(0)
 const hasTarget = ref(false)
 const targetRect = ref<DOMRect | null>(null)
 let focusRaf = 0
+let trackingRaf = 0
+let targetElement: HTMLElement | null = null
+let targetResizeObserver: ResizeObserver | null = null
+let targetMutationObserver: MutationObserver | null = null
 
-const steps: GuideStep[] = [
+const allSteps: GuideStep[] = [
   { section: '首页 · 01', targetLabel: 'AI 翻唱快捷入口', title: '从这里开始一次完整翻唱', description: 'AI 翻唱工作台负责导入歌曲、选择音色、设置推理并生成作品。点击快捷入口进入空白工作台；从首页拖入音频则会把该文件一并带入。', details: [{ label: '点击卡片', value: '进入空白工作台' }, { label: '拖拽音频', value: '自动跳转并预填这首歌' }], route: '/', selector: '[data-guide="home-ai-cover"]', placement: 'right', icon: Microphone },
   { section: '首页 · 02', targetLabel: '首页音频拖拽区', title: '拖入音频会自动带入翻唱', description: '把歌曲拖到首页这个区域，软件会校验格式，然后跳转到 AI 翻唱并显示刚才的文件。直接点击区域仍然只是打开空白工作台。', details: [{ label: '格式', value: 'MP3、WAV、FLAC、M4A、OGG、AAC' }, { label: '大小', value: '不设固定大小上限' }], route: '/', selector: '[data-guide="home-dropzone"]', placement: 'bottom', icon: UploadFilled },
   { section: '翻唱工作台 · 03', targetLabel: '单模型 / 多模型模式', title: '先决定整首歌还是逐句分配', description: '单模型适合整首歌保持一个音色，步骤少、最容易成功。多模型会显示歌词时间轴，可以按句选择不同音色，也可以多选形成合唱。', details: [{ label: '单模型', value: '整首统一音色，适合快速生成' }, { label: '多模型', value: '逐句分配模型，适合角色切换与和声' }, { label: '切换', value: '已填写的歌曲与常用参数会保留' }], route: '/create', selector: '[data-guide="cover-mode"]', placement: 'right', icon: Operation },
@@ -101,7 +105,7 @@ const steps: GuideStep[] = [
   { section: '单模型推理 · 11', targetLabel: '全参数手动调整开关', title: '打开后才让高级值参与推理', description: '全参数默认关闭。关闭时目标说话人 / 音色 ID、F0 过滤阈值和手动高音起点不会发送给推理引擎；普通参数仍然有效。应用预设也不会偷偷打开开关。', details: [{ label: '默认关闭', value: '保证新手直接生成时维持原有模型效果' }, { label: '开启后', value: '显示并发送模型支持的全部高级参数' }, { label: '预设隔离', value: '预设只载入数值，开关状态由你决定' }], route: '/create', selector: '[data-guide="manual-switch"]', placement: 'bottom', icon: Setting },
   { section: '单模型推理 · 12', targetLabel: '高音保护与 F0 阈值', title: '按模型音域保护高音', description: '高音保护先读取当前模型的音域 profile，不再用统一固定阈值。只有打开高音保护后，且全参数开关已开启，才显示可手动编辑的保护起点。', details: [{ label: '自动', value: '0 表示使用当前模型的音域配置' }, { label: '手动起点', value: '仅全参数开启 + 高音保护开启时出现' }, { label: 'F0 过滤', value: '仅全参数开启时出现，数值越高越严格' }], route: '/create', selector: '[data-guide="high-pitch-toggle"]', placement: 'bottom', icon: Microphone },
   { section: '多模型推理 · 13', targetLabel: '多模型模式', title: '切换到逐句混合推理', description: '多模型模式会为每个已勾选模型保存独立参数。为便于完整展示，导览会临时选中示例模型并打开全参数；退出这一段后会恢复你原来的模式和开关。', details: [{ label: '适合', value: '主唱 / 和声 / 对话角色切换' }, { label: '独立保存', value: '每个模型的变调、比例和保护互不覆盖' }, { label: '合唱', value: '同一句勾选多个模型即可叠唱' }], route: '/create', selector: '[data-guide="multi-mode"]', placement: 'bottom', icon: Operation, prepare: 'multi' },
-  { section: '多模型推理 · 14', targetLabel: '逐模型参数', title: '为每个模型单独调音', description: '勾选模型后会展开它自己的参数区。普通参数一直可调；高级字段只在全参数开启时出现，并且只作用于当前模型。', details: [{ label: '音色比例', value: '每个模型可以使用不同的主模型 / 扩散比例' }, { label: '框架专属', value: 'DDSP 的 formant、SeedVC 的参考音频按框架显示' }, { label: '目标音色', value: 'So-VITS / DDSP 可填目标说话人或音色 ID' }], route: '/create', selector: '[data-guide="multi-model-params"], [data-guide="model-select"]', placement: 'right', icon: Setting, prepare: 'multi' },
+  { section: '多模型推理 · 14', targetLabel: '逐模型参数', title: '为每个模型单独调音', description: '勾选模型后会展开它自己的参数区。普通参数一直可调；高级字段只在全参数开启时出现，并且只作用于当前模型。', details: [{ label: '音色比例', value: '每个模型可以使用不同的主模型 / 扩散比例' }, { label: '框架专属', value: 'DDSP 的 formant、SeedVC 的参考音频按框架显示' }, { label: '目标音色', value: 'So-VITS / DDSP 可从模型配置选择说话人' }], route: '/create', selector: '[data-guide="multi-model-params"], [data-guide="model-select"]', placement: 'right', icon: Setting, prepare: 'multi' },
   { section: '多模型推理 · 15', targetLabel: '歌词与分句', title: '获取歌词并校准时间轴', description: '可以按歌名从曲库获取歌词，也可以导入带时间轴的 LRC / TXT。整体偏移用于把歌词和音频对齐，之后每段都能继续精修。', details: [{ label: '获取', value: '输入歌名、序号和曲库后在线获取' }, { label: '导入', value: '选择本地 .lrc 或纯文本歌词' }, { label: '偏移', value: '用滑杆整体前后移动，单位为秒' }], route: '/create', selector: '[data-guide="multi-lyrics"]', placement: 'right', icon: UploadFilled, prepare: 'multi' },
   { section: '多模型推理 · 16', targetLabel: '多模型时间轴', title: '先弹出时间轴，再学习逐句编排', description: '时间轴只有在多模型模式完成歌词分句后才会出现。导览会临时准备一组演示分句并自动打开“放大编辑”弹窗，让你看到真实的时间轴组件；不会提交或保存演示内容。', details: [{ label: '批量指派', value: '一键把所有句子交给某个模型' }, { label: '局部编辑', value: '拖动边界、拆分、合并、撤销 / 重做' }, { label: '间奏', value: '清空模型后该段不会生成演唱' }], route: '/create', selector: '[data-guide="multi-timeline-dialog"]', placement: 'top', icon: MagicStick, prepare: 'multi-timeline' },
   { section: '翻唱工作台 · 17', targetLabel: 'AI Vocal Enhancement 开关', title: '生成前开启 AI 歌声增强', description: '介绍这一段时，导览会临时打开 AI Vocal Enhancement，让你直接看到增强层级和控制项。离开本段或结束引导后，开关和原来的选择会自动恢复。', details: [{ label: 'Clean Voice', value: '轻量降噪、自然修音、并行轻母带' }, { label: 'Natural Voice', value: '真实细节保护、宽带校正和自然度母带' }, { label: '恢复', value: '演示结束自动恢复你进入引导前的状态' }], route: '/create', selector: '[data-guide="enhancement-toggle"]', placement: 'right', icon: MagicStick, prepare: 'enhancement' },
@@ -125,6 +129,9 @@ const steps: GuideStep[] = [
   { section: 'API 接入 · 41', targetLabel: '服务配置', title: '需要外部调用时再启动 API', description: 'API 服务默认停止，只在本次运行期间手动启动。可以选择仅本机或局域网、修改端口、复制 API Key 并做连通性测试。', details: [{ label: '安全', value: '优先使用仅本机监听，局域网只在可信网络开启' }, { label: '密钥', value: '调用受保护接口时放在 X-API-Key 请求头' }, { label: '生命周期', value: '停止服务后外部任务无法继续访问' }], route: '/api', selector: '[data-guide="api-service"]', placement: 'right', icon: Setting },
   { section: 'API 接入 · 42', targetLabel: '调用文档', title: '按文档接入上传、任务和下载', description: '调用文档提供 Python 和 PowerShell 示例，以及完整的 v1 接口列表。典型流程是上传音频、读取模型、创建任务、轮询状态，最后下载成品。', details: [{ label: '示例', value: '切换语言后复制完整请求代码' }, { label: '异步任务', value: '创建返回 202，轮询到 done 再下载' }, { label: '接口', value: '健康检查、模型、上传、任务、结果和重试' }], route: '/api', selector: '[data-guide="api-docs"]', placement: 'top', icon: FolderOpened },
 ]
+
+// Keep the first-use tour focused on the shortest path to a generated cover.
+const steps = allSteps.slice(0, 10)
 
 const activeStep = computed(() => steps[currentStep.value] ?? steps[0]!)
 const focusStyle = computed(() => {
@@ -162,16 +169,29 @@ function wait(ms: number) { return new Promise<void>((resolve) => window.setTime
 function findTarget() {
   const selectors = activeStep.value.selector.split(',').map((item) => item.trim()).filter(Boolean)
   for (const selector of selectors) {
-    const target = document.querySelector<HTMLElement>(selector)
-    if (target) return target
+    const targets = document.querySelectorAll<HTMLElement>(selector)
+    for (const target of targets) {
+      const rect = target.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0 && getComputedStyle(target).visibility !== 'hidden') return target
+    }
   }
   return null
+}
+
+function observeTarget(target: HTMLElement | null) {
+  if (target === targetElement) return
+  targetResizeObserver?.disconnect()
+  targetElement = target
+  if (!target || typeof ResizeObserver === 'undefined') return
+  targetResizeObserver = new ResizeObserver(() => updateFocus())
+  targetResizeObserver.observe(target)
 }
 
 async function locateTarget() {
   locating.value = true
   hasTarget.value = false
   targetRect.value = null
+  observeTarget(null)
   let target: HTMLElement | null = null
   for (let attempt = 0; attempt < 75; attempt += 1) {
     target = findTarget()
@@ -179,10 +199,15 @@ async function locateTarget() {
     await wait(40)
   }
   if (target) {
+    observeTarget(target)
     target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
     await wait(220)
-    targetRect.value = target.getBoundingClientRect()
-    hasTarget.value = targetRect.value.width > 0 && targetRect.value.height > 0
+    // Conditional Vue blocks can replace the node while the page scrolls.
+    target = findTarget()
+    observeTarget(target)
+    const rect = target?.getBoundingClientRect() ?? null
+    targetRect.value = rect
+    hasTarget.value = !!rect && rect.width > 0 && rect.height > 0
   }
   locating.value = false
 }
@@ -261,6 +286,11 @@ function finish() {
   visible.value = false
   hasTarget.value = false
   targetRect.value = null
+  targetResizeObserver?.disconnect()
+  targetMutationObserver?.disconnect()
+  targetElement = null
+  if (trackingRaf) cancelAnimationFrame(trackingRaf)
+  trackingRaf = 0
   try {
     localStorage.setItem(STORAGE_KEY, '1')
   } catch {
@@ -271,13 +301,41 @@ function finish() {
 function skip() { finish() }
 
 function updateFocus() {
-  if (!visible.value || !hasTarget.value) return
+  if (!visible.value) return
   if (focusRaf) cancelAnimationFrame(focusRaf)
   focusRaf = requestAnimationFrame(() => {
     focusRaf = 0
     const target = findTarget()
-    if (target) targetRect.value = target.getBoundingClientRect()
+    observeTarget(target)
+    if (target) {
+      targetRect.value = target.getBoundingClientRect()
+      hasTarget.value = targetRect.value.width > 0 && targetRect.value.height > 0
+    } else {
+      targetRect.value = null
+      hasTarget.value = false
+    }
   })
+}
+
+function trackTargetPosition() {
+  trackingRaf = 0
+  if (!visible.value) return
+  let target = targetElement && targetElement.isConnected ? targetElement : null
+  if (target) {
+    const currentRect = target.getBoundingClientRect()
+    if (currentRect.width <= 0 || currentRect.height <= 0) target = null
+  }
+  target ||= findTarget()
+  if (target) {
+    observeTarget(target)
+    const rect = target.getBoundingClientRect()
+    const previous = targetRect.value
+    if (!previous || previous.top !== rect.top || previous.left !== rect.left || previous.width !== rect.width || previous.height !== rect.height) {
+      targetRect.value = rect
+      hasTarget.value = rect.width > 0 && rect.height > 0
+    }
+  }
+  trackingRaf = requestAnimationFrame(trackTargetPosition)
 }
 
 watch(() => route.path, () => {
@@ -286,7 +344,11 @@ watch(() => route.path, () => {
 
 onMounted(() => {
   window.addEventListener('resize', updateFocus, { passive: true })
-  window.addEventListener('scroll', updateFocus, { passive: true })
+  window.addEventListener('scroll', updateFocus, { passive: true, capture: true })
+  if (typeof MutationObserver !== 'undefined') {
+    targetMutationObserver = new MutationObserver(() => updateFocus())
+    targetMutationObserver.observe(document.body, { childList: true, subtree: true })
+  }
   let shouldShow = false
   try {
     shouldShow = localStorage.getItem(STORAGE_KEY) !== '1'
@@ -296,6 +358,7 @@ onMounted(() => {
   if (shouldShow) {
     window.setTimeout(() => {
       visible.value = true
+      trackingRaf = requestAnimationFrame(trackTargetPosition)
       void goToStep(0)
     }, 240)
   }
@@ -303,8 +366,12 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', updateFocus)
-  window.removeEventListener('scroll', updateFocus)
+  window.removeEventListener('scroll', updateFocus, true)
+  targetResizeObserver?.disconnect()
+  targetMutationObserver?.disconnect()
+  targetElement = null
   if (focusRaf) cancelAnimationFrame(focusRaf)
+  if (trackingRaf) cancelAnimationFrame(trackingRaf)
 })
 </script>
 

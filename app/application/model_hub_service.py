@@ -600,7 +600,8 @@ class ModelHubService:
         detail: bool = False,
     ) -> dict[str, Any]:
         fw = config.modelhub_normalize_framework(manifest.get("framework"))
-        files = manifest.get("files") if isinstance(manifest.get("files"), dict) else {}
+        raw_files = manifest.get("files")
+        files = raw_files if isinstance(raw_files, dict) else {}
         assets = self._assets_from_manifest(manifest)
         metric_summary = self._metric_summary(manifest, entry)
         deps = self._dependency_status(fw, files)

@@ -3,13 +3,13 @@
     <button
       class="theme-toggle"
       :class="theme"
-      :title="`当前：${themeLabel}（点击切换主题）`"
+      :title="translateUiText(`当前：${translateUiText(themeLabel)}（点击切换主题）`)"
       @click="onThemeToggle"
     >
       <span class="theme-knob">
-        <el-icon><component :is="theme === 'anime' ? Sunny : theme === 'custom' ? Brush : Moon" /></el-icon>
+        <el-icon><component :is="theme === 'anime' ? Sunny : theme === 'brand' ? Headset : theme === 'custom' ? Brush : Moon" /></el-icon>
       </span>
-      <span class="theme-name">{{ themeLabel }}</span>
+      <span class="theme-name">{{ translateUiText(themeLabel) }}</span>
     </button>
     <button
       class="theme-edit"
@@ -46,12 +46,13 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Brush, Moon, Sunny } from '@element-plus/icons-vue'
+import { Brush, Headset, Moon, Sunny } from '@element-plus/icons-vue'
 import { api } from '@/api'
 import CustomThemeEditor from '@/components/theme/CustomThemeEditor.vue'
 import ThemePresetList from '@/components/theme/ThemePresetList.vue'
 import { cloneCustomTheme, DEFAULT_CUSTOM_THEME, useThemeStore } from '@/stores/theme'
 import type { CustomTheme, ThemeName } from '@/stores/theme'
+import { translateUiText } from '@/i18n'
 
 defineOptions({ name: 'ThemeSwitcher' })
 
@@ -68,15 +69,17 @@ function deleteStoredMedia(path: string) {
 }
 
 function updateCustomDraft(value: CustomTheme) {
-  const previousMedia = customDraft.value.bgImage
+  const mediaChanged = (
+    customDraft.value.bgImage !== value.bgImage
+    || customDraft.value.bgMediaType !== value.bgMediaType
+  )
   customDraft.value = value
-  if (
-    previousMedia
-    && previousMedia !== value.bgImage
-    && previousMedia !== persistedMedia.value
-  ) {
-    deleteStoredMedia(previousMedia)
-  }
+  if (!mediaChanged) return
+
+  const previousMedia = persistedMedia.value
+  themeStore.saveCustomTheme(value)
+  persistedMedia.value = value.bgImage
+  if (previousMedia !== value.bgImage) deleteStoredMedia(previousMedia)
 }
 
 function togglePanel() {
@@ -170,6 +173,7 @@ onUnmounted(() => {
   transition: transform 0.4s ease;
 }
 .theme-toggle.anime .theme-knob { transform: rotate(360deg); }
+.theme-toggle.brand .theme-knob { transform: rotate(12deg); }
 .theme-toggle.custom .theme-knob { transform: rotate(180deg); }
 .theme-name { display: none; }
 .theme-edit {

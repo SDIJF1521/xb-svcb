@@ -1,3 +1,5 @@
+[简体中文](hybrid.md) | [English](../en/plugins/hybrid.md) | [日本語](../ja/plugins/hybrid.md)
+
 # Vue + Python 混合插件
 
 混合插件适合“页面负责交互，Python 负责计算、配置或系统操作”的场景。Vue 页面通过 `runAction()` 请求宿主，宿主启动独立 Python Worker，执行清单指定的 handler，再把 JSON 结果返回页面。

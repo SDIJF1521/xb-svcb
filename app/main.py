@@ -83,6 +83,8 @@ def main() -> None:
             background_color=config.APP_BG,
             text_select=False,
         )
+        if window is None:
+            raise RuntimeError("无法创建应用窗口")
         # 注入窗口引用，供原生文件对话框使用
         api.set_window(window)
 
@@ -125,9 +127,10 @@ def main() -> None:
             if api is not None:
                 api.shutdown()
         finally:
-            # Stop background services first, then remove every generated
-            # artifact below data/temp before releasing the single-instance
-            # handle. Keep the directory itself for the next launch.
+            '''
+            先停止后台服务，然后在发布单实例处理程序之前，
+            删除以下 data/temp 目录下的所有生成的文件。
+            下次启动时保留该目录本身。'''
             paths.clear_temp_directory()
             single.close()
 

@@ -158,6 +158,22 @@ def _derive_paths(root: Path) -> None:
     RUNTIME_MANIFEST = root / "runtime.json"
     UVR_MODELS_DIR = root / "models" / "uvr"
     VOCAL_MODELS_DIR = root / "models" / "vocal-enhancement"
+    # Keep extraction and generic temporary traffic on the user-selected
+    # installation drive. Global caches can be read-only, locked by security
+    # software, or unexpectedly consume the system drive during large installs.
+    runtime_temp = Path(
+        os.environ.get("XB_RUNTIME_TEMP") or root / ".tmp" / "runtime-temp"
+    ).resolve()
+    runtime_temp.mkdir(parents=True, exist_ok=True)
+    os.environ["TEMP"] = str(runtime_temp)
+    os.environ["TMP"] = str(runtime_temp)
+    uv_cache = Path(
+        os.environ.get("XB_UV_CACHE_DIR") or root / ".tmp" / "uv-cache"
+    ).resolve()
+    os.environ["UV_CACHE_DIR"] = str(uv_cache)
+    # tempfile caches its first selected directory. Reset it for repairs and
+    # test processes that call _derive_paths more than once.
+    tempfile.tempdir = str(runtime_temp)
 
 SOVITS_REPO_URL = "https://github.com/svc-develop-team/so-vits-svc.git"
 SOVITS_BRANCH = "4.1-Stable"
@@ -217,8 +233,9 @@ TORCHVISION_PREBLACKWELL_VER = "0.22.1"
 # PyMSS wheelhouse aligned to the actual runtime stack.
 TORCH_PYMSS_CUDA_INDEX = "https://download.pytorch.org/whl/cu126"
 
-# PyMSS supports AMD through HIP-enabled PyTorch. Its isolated environment
-# follows the selected CUDA/ROCm stack; DirectML is not a PyMSS backend.
+# PyMSS supports AMD acceleration through HIP-enabled PyTorch. Its isolated
+# environment follows CUDA/ROCm; a DirectML installation uses CPU Torch because
+# the current PyMSS Torch requirement is incompatible with torch-directml.
 PYMSS_VERSION = "2.0.18"
 PYMSS_TORCH_VER = "2.7.1"
 PYMSS_TORCHAUDIO_VER = "2.7.1"
@@ -334,6 +351,8 @@ def _recipe_module():
     # Load the sibling file even when embedded/imported outside the repo root.
     # Do not rely on another test or caller having modified sys.path.
     spec = importlib.util.spec_from_file_location("xb_installer_core_recipe", Path(__file__).with_name("core_recipe.py"))
+    if spec is None or spec.loader is None:
+        raise RuntimeError("无法加载安装配方 core_recipe.py")
     recipe = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(recipe)
     return recipe
@@ -1395,6 +1414,42 @@ def _find_local_uv() -> Path | None:
     return None
 
 
+def _bundled_uv() -> Path | None:
+    """Extract the pinned wheelhouse uv executable into this install root."""
+    destination = ROOT / ".tmp" / "uv-tools" / _uv_exe_name()
+    try:
+        if destination.is_file() and destination.stat().st_size > 0:
+            return destination
+    except OSError:
+        pass
+    root = _wheelhouse_root()
+    if root is None:
+        return None
+    wheels = sorted((root / "bootstrap").glob("uv-*.whl"), reverse=True)
+    if not wheels:
+        return None
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(wheels[0]) as archive:
+            members = [
+                name for name in archive.namelist()
+                if name.lower().endswith(".data/scripts/" + _uv_exe_name())
+            ]
+            if len(members) != 1:
+                raise RuntimeError(
+                    f"uv wheel does not contain exactly one {_uv_exe_name()}: {wheels[0]}"
+                )
+            temporary = destination.with_suffix(destination.suffix + ".tmp")
+            temporary.write_bytes(archive.read(members[0]))
+            temporary.replace(destination)
+    except (OSError, RuntimeError, zipfile.BadZipFile, KeyError) as exc:
+        if _wheelhouse_strict():
+            raise RuntimeError(f"无法从安装包准备受控 uv：{exc}") from exc
+        print(c("y", f"    无法从 wheelhouse 准备 uv，将检查本机 uv：{exc}"))
+        return None
+    return destination
+
+
 def _pip_install_uv(use_mirror: bool = True) -> None:
     cmd = [
         sys.executable,
@@ -1424,13 +1479,18 @@ def _pip_install_uv(use_mirror: bool = True) -> None:
 
 def ensure_uv() -> str:
     """确保 uv 可用；Python 已安装时自动把 uv 装到用户 Scripts 目录。"""
-    found = shutil.which("uv")
-    if found:
-        return found
+    # Release packages carry a pinned uv wheel. Prefer it over PATH so a
+    # user's unrelated Python/uv installation cannot control setup behavior.
+    bundled = _bundled_uv()
+    if bundled:
+        return str(bundled)
     local = _find_local_uv()
     if local:
         os.environ["PATH"] = str(local.parent) + os.pathsep + os.environ.get("PATH", "")
         return str(local)
+    found = shutil.which("uv")
+    if found:
+        return found
 
     print(c("y", "    未检测到 uv，正在通过当前 Python 自动安装到用户目录 …"))
     try:
@@ -2021,6 +2081,7 @@ def step_uvr(uv: str, gpu_stack: str) -> None:
 
     # audio-separator 的不同 extra 分别部署 CUDA / DirectML / CPU provider。
     if use_cuda:
+        assert torch_index is not None
         # 安装 audio-separator 时也带上 PyTorch wheel 源，避免依赖解析把 CUDA torch 换成 PyPI CPU 版。
         # onnx2torch-py313 declares a broad torchvision range; without constraints
         # uv may select a newer torchvision whose metadata forces a newer,
@@ -2083,8 +2144,6 @@ def step_pymss(uv: str, gpu_stack: str) -> None:
     user can choose a catalog model instead of consuming disk space up front.
     """
     hr("5/12 可选 PyMSS 分离环境 .venv-pymss")
-    if gpu_stack == "directml":
-        raise RuntimeError("PyMSS 的 AMD 加速需要 ROCm，请使用 --rocm10，或显式选择 --cpu")
     ensure_venv(uv, PYMSS_VENV, PYTHON_FOR_ENGINES)
     py = str(venv_python(PYMSS_VENV))
     # PyMSS 2.0.x requires Torch 2.7.1. Pre-Blackwell NVIDIA uses cu126 and
@@ -2094,6 +2153,8 @@ def step_pymss(uv: str, gpu_stack: str) -> None:
         pymss_stack = "cu128"
     elif gpu_stack == "cu126":
         pymss_stack = "cu126"
+    elif gpu_stack == "directml":
+        pymss_stack = "cpu"
     else:
         pymss_stack = gpu_stack
     pip = make_pip(
@@ -2557,6 +2618,7 @@ def _filter_requirements(
         if name not in seen_ov:
             print(c("y", f"    追加依赖：{spec}"))
             kept.append(spec)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(kept) + "\n", encoding="utf-8")
     return out
 
@@ -3080,6 +3142,8 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
 
 def _prepare_rvc_compat(gpu_stack: str) -> Path:
     spec = importlib.util.spec_from_file_location("xb_rvc_compat", Path(__file__).with_name("build_rvc_compat.py"))
+    if spec is None or spec.loader is None:
+        raise RuntimeError("无法加载 RVC 兼容构建模块")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.prepare(
@@ -3715,12 +3779,6 @@ def main() -> int:
         print(c("y", "未检测到兼容 NVIDIA/AMD 显卡，已改用 CPU 版 torch。"))
     if args.no_cu128 and detected_stack == "cu128":
         print(c("y", "检测到 NVIDIA 显卡，忽略旧 CUDA 栈请求，统一改用 cu128。"))
-    if detected_stack == "directml" and "pymss" in selected:
-        if args.only:
-            print(c("r", "PyMSS 不支持 DirectML；请从 --only 中移除 pymss"))
-            return 2
-        selected = [step for step in selected if step != "pymss"]
-        print(c("y", "DirectML 不支持 PyMSS，已跳过该步骤。"))
     installer_progress(8, "Checking GPU runtime")
     if detected_stack == "cu128":
         mode = c("g", "CUDA · Blackwell/50系 (cu128 + torch" + TORCH_BLACKWELL_VER + ")")
@@ -3842,7 +3900,8 @@ def main() -> int:
                 if not recipe_check["ok"]:
                     raise RuntimeError("共享环境偏离固定配方：" + json.dumps(recipe_check, ensure_ascii=False))
             run([str(venv_python(CORE_VENV)), str(Path(__file__).with_name("audit_runtime.py")),
-                 "--root", str(ROOT), *(["--require-cuda"] if detected_stack != "cpu" else [])])
+                 "--root", str(ROOT), "--timeout", "90", "--ddsp-timeout", "180",
+                 *(["--require-cuda"] if detected_stack != "cpu" else [])])
             if CORE_COMPAT_WHEEL is not None:
                 run([str(venv_python(CORE_VENV)), str(Path(__file__).with_name("probe_core_compat.py")),
                      "--root", str(ROOT), "--output", str(ROOT / ".tmp" / "core-compat-installed-probes.json")])

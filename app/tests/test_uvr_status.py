@@ -1,4 +1,5 @@
 import json
+import json
 import os
 import tempfile
 import time
@@ -15,6 +16,7 @@ import config
 from infrastructure.uvr_tool import UvrTool
 from infrastructure.pymss_tool import PymssTool
 from infrastructure.uvr_worker import _configure_rocm_miopen
+from infrastructure.pymss_worker import _name_score
 
 
 class UvrStatusTests(unittest.TestCase):
@@ -49,6 +51,62 @@ class UvrStatusTests(unittest.TestCase):
             config.PYMSS_PURPOSE_HARMONY,
         )
         self.assertEqual(PymssTool._purpose_for_categories("karaoke", ""), "")
+
+    def test_pymss_catalog_tolerates_runtime_warnings_and_category_path(self) -> None:
+        tool = PymssTool()
+        payload = (
+            '[{"name":"DemoModel.CKPT","category":"vocal/vocal_extraction",'
+            '"supported":true}]'
+        )
+        with patch.object(type(tool), "available", new=property(lambda self: True)), patch.object(
+            config, "pymss_model_ready", return_value=True
+        ), patch(
+            "infrastructure.pymss_tool.subprocess.run",
+            return_value=SimpleNamespace(returncode=0, stdout="warning from torch\n" + payload, stderr=""),
+        ):
+            models = tool.list_models(purpose=config.PYMSS_PURPOSE_VOCAL)
+        self.assertEqual([item["name"] for item in models], ["DemoModel.CKPT"])
+        self.assertEqual(models[0]["purpose"], config.PYMSS_PURPOSE_VOCAL)
+
+    def test_pymss_auto_retries_cpu_after_gpu_process_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "input.wav"
+            out_dir = root / "out"
+            vocals = out_dir / "pymss_vocals.wav"
+            src.write_bytes(b"input")
+            tool = PymssTool()
+            devices: list[str] = []
+
+            def run(command, **kwargs):  # noqa: ANN001 - subprocess mock
+                devices.append(command[command.index("--device") + 1])
+                if len(devices) == 2:
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    vocals.write_bytes(b"audio")
+                    (out_dir / "pymss_result.json").write_text(
+                        json.dumps({"vocals": str(vocals), "device": "cpu"}),
+                        encoding="utf-8",
+                    )
+                    return SimpleNamespace(returncode=0, stdout="", stderr="")
+                return SimpleNamespace(returncode=1, stdout="", stderr="GPU kernel failed")
+
+            with patch.object(type(tool), "available", new=property(lambda self: True)), patch.object(
+                tool, "list_models", return_value=[{"name": "model.ckpt"}]
+            ), patch("infrastructure.pymss_tool.subprocess.run", side_effect=run):
+                result = tool.separate(src, out_dir, "model.ckpt", "auto")
+
+        self.assertEqual(devices, ["auto", "cpu"])
+        self.assertEqual(result.device, "cpu")
+
+    def test_pymss_output_scoring_prefers_clean_dereverb_stem(self) -> None:
+        self.assertGreater(
+            _name_score(Path("song_No Reverb.wav"), "dereverb", "No Reverb"),
+            _name_score(Path("song_Reverb.wav"), "dereverb", "Reverb"),
+        )
+        self.assertGreater(
+            _name_score(Path("song_No Noise.wav"), "dereverb", "Noise"),
+            _name_score(Path("song_Noise.wav"), "dereverb", "Noise"),
+        )
 
     def test_pymss_fallback_catalog_exposes_only_allowed_purposes(self) -> None:
         with tempfile.TemporaryDirectory() as td:

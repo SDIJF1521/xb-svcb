@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 import config
 from domain import ModelFile, ModelInfo, ModelType
@@ -16,13 +20,46 @@ from infrastructure.storage import ListRepository, SettingsStore
 
 
 class ModelService:
+    _RVC_INSPECT_MARKER = "RVC_INSPECT\t"
+
     def __init__(self, repo: ListRepository, settings: SettingsStore) -> None:
         self._repo = repo
         self._settings = settings
 
     # ---- 查询 ----
     def list(self) -> list[dict[str, Any]]:
-        return [self._normalize_item(item, refresh_size=False) for item in self._repo.all()]
+        items = [
+            self._ensure_rvc_version(
+                self._normalize_item(item, refresh_size=False),
+                persist=True,
+            )
+            for item in self._repo.all()
+        ]
+        for item in items:
+            item["speakers"] = self._speaker_options(item)
+        return items
+
+    @staticmethod
+    def _speaker_options(item: dict[str, Any]) -> list[str]:
+        framework = item.get("framework")
+        if framework not in {"so-vits-svc", "ddsp-svc"}:
+            return []
+        config_file = item.get("main_config") or {}
+        config_path = config_file.get("path") if isinstance(config_file, dict) else ""
+        if not config_path:
+            return []
+        try:
+            raw = Path(config_path).read_text(encoding="utf-8")
+            if framework == "so-vits-svc":
+                data = json.loads(raw)
+                speakers = data.get("spk") if isinstance(data, dict) else None
+                return [name for name in speakers if name.strip()] if isinstance(speakers, dict) else []
+            data = yaml.safe_load(raw)
+            model = data.get("model") if isinstance(data, dict) else None
+            count = int(model.get("n_spk", 1)) if isinstance(model, dict) else 1
+            return [str(index) for index in range(1, count + 1)] if 1 <= count <= 4096 else []
+        except (OSError, ValueError, TypeError, yaml.YAMLError):
+            return []
 
     def overview(self) -> dict[str, Any]:
         """返回本地模型库的多框架统一概览。"""
@@ -89,7 +126,12 @@ class ModelService:
 
     def get(self, model_id: str) -> dict[str, Any] | None:
         item = self._repo.get(model_id)
-        return self._normalize_item(item, refresh_size=False) if item else None
+        if not item:
+            return None
+        return self._ensure_rvc_version(
+            self._normalize_item(item, refresh_size=False),
+            persist=True,
+        )
 
     # ---- 命令 ----
     def import_model(self, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -153,13 +195,14 @@ class ModelService:
                 return None
             if is_seedvc or is_ddsp:
                 companion = payload.get("diffusion_model")
-                diffusion_model = copy(companion, f"companion_{Path(companion).name}" if companion else None)
+                companion_name = f"companion_{Path(str(companion)).name}" if companion else None
+                diffusion_model = copy(companion, companion_name)
                 diffusion_config = copy(payload.get("diffusion_config"), "companion_config.yaml") if is_ddsp else None
                 if (companion and diffusion_model is None) or (is_ddsp and companion and diffusion_config is None):
                     shutil.rmtree(dst_dir, ignore_errors=True)
                     return None
                 try:
-                    self._preserve_model_assets(Path(main_config_src), Path(main_config.path))
+                    self._preserve_model_assets(Path(str(main_config_src)), Path(main_config.path))
                     if diffusion_config:
                         self._preserve_model_assets(Path(payload["diffusion_config"]), Path(diffusion_config.path))
                 except (OSError, ValueError):
@@ -207,6 +250,11 @@ class ModelService:
             index_file=index_file,
         )
         record = self._normalize_item(info.to_dict(), refresh_size=True)
+        if is_rvc:
+            record["metadata"] = {
+                **(record.get("metadata") or {}),
+                **self._inspect_rvc_checkpoint(Path(main_model.path)),
+            }
         inferred_profile = self._infer_pitch_profile(main_config.path if main_config else "", framework)
         if inferred_profile:
             record["metadata"] = {
@@ -274,7 +322,10 @@ class ModelService:
 
         visit(data)
         if copied:
-            destination.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            serialized = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+            if not isinstance(serialized, str):
+                raise TypeError("YAML serializer did not return text")
+            destination.write_text(serialized, encoding="utf-8")
 
     @staticmethod
     def _infer_pitch_profile(config_path: str, framework: str) -> dict[str, float] | None:
@@ -369,6 +420,30 @@ class ModelService:
                             "path": str(candidates[0]),
                         }
                         fixed.append("index_file")
+            main = Path(str((normalized.get("main_model") or {}).get("path") or ""))
+            if main.is_file():
+                detected = self._inspect_rvc_checkpoint(main)
+                detected_version = str(detected.get("rvc_version") or "")
+                previous_version = str((normalized.get("metadata") or {}).get("rvc_version") or "")
+                if detected_version:
+                    normalized["metadata"] = {
+                        **(normalized.get("metadata") or {}),
+                        **detected,
+                    }
+                    if repair and detected_version != previous_version:
+                        fixed.append("rvc_version")
+                elif previous_version not in {"v1", "v2"}:
+                    normalized["metadata"] = {
+                        **(normalized.get("metadata") or {}),
+                        **detected,
+                    }
+                    issues.append(
+                        {
+                            "key": "rvc_version",
+                            "level": "warn",
+                            "message": "无法自动识别 RVC v1/v2，将保留兼容版本设置",
+                        }
+                    )
 
         if framework == "so-vits-svc":
             cfg = Path(str((normalized.get("main_config") or {}).get("path") or ""))
@@ -403,6 +478,107 @@ class ModelService:
             "model": normalized,
             "issues": issues,
             "fixed": fixed,
+        }
+
+    @staticmethod
+    def apply_detected_rvc_version(
+        model: dict[str, Any] | None,
+        params: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        resolved = dict(params or {})
+        if not model:
+            return resolved
+        framework = config.modelhub_normalize_framework(
+            model.get("framework") or config.modelhub_guess_framework(model.get("type"))
+        )
+        metadata = model.get("metadata") or model.get("model_metadata") or {}
+        version = str(metadata.get("rvc_version") or "").strip().lower() if isinstance(metadata, dict) else ""
+        if framework == "rvc" and version in {"v1", "v2"}:
+            resolved["rvc_version"] = version
+        return resolved
+
+    def _ensure_rvc_version(
+        self,
+        model: dict[str, Any],
+        *,
+        persist: bool,
+    ) -> dict[str, Any]:
+        framework = config.modelhub_normalize_framework(
+            model.get("framework") or config.modelhub_guess_framework(model.get("type"))
+        )
+        metadata = dict(model.get("metadata") or {})
+        if framework != "rvc" or str(metadata.get("rvc_version") or "").lower() in {"v1", "v2"}:
+            return model
+        # Unknown/broken custom layouts are retried only through the explicit
+        # model inspection action. An unavailable runtime is cheap to recheck
+        # and may become available after the installer finishes.
+        if metadata.get("rvc_version_detection") in {"unknown", "failed"}:
+            return model
+        main = Path(str((model.get("main_model") or {}).get("path") or ""))
+        if not main.is_file():
+            return model
+        detected = self._inspect_rvc_checkpoint(main)
+        model["metadata"] = {**metadata, **detected}
+        if persist and detected.get("rvc_version") and model.get("id"):
+            self._repo.update(str(model["id"]), model)
+        return model
+
+    @classmethod
+    def _inspect_rvc_checkpoint(cls, model_path: Path) -> dict[str, Any]:
+        python = getattr(config, "RVC_PYTHON", None) or getattr(config, "RVC_DIRECTML_PYTHON", None)
+        worker = getattr(config, "RVC_WORKER", None)
+        if not python or not Path(python).is_file() or not worker or not Path(worker).is_file():
+            return {
+                "rvc_version_detection": "unavailable",
+                "rvc_version_detail": "RVC 运行环境未就绪",
+            }
+        kwargs: dict[str, Any] = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        try:
+            completed = subprocess.run(
+                [
+                    str(python),
+                    str(worker),
+                    "--model",
+                    str(model_path),
+                    "--inspect-model",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=45,
+                check=False,
+                **kwargs,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {
+                "rvc_version_detection": "failed",
+                "rvc_version_detail": str(exc)[:240],
+            }
+        for line in reversed((completed.stdout or "").splitlines()):
+            if not line.startswith(cls._RVC_INSPECT_MARKER):
+                continue
+            try:
+                result = json.loads(line[len(cls._RVC_INSPECT_MARKER):])
+            except (TypeError, ValueError):
+                break
+            version = str(result.get("version") or "").strip().lower()
+            if version in {"v1", "v2"}:
+                return {
+                    "rvc_version": version,
+                    "rvc_version_detection": "detected",
+                    "rvc_version_source": str(result.get("source") or "checkpoint"),
+                }
+            return {
+                "rvc_version_detection": "unknown",
+                "rvc_version_detail": str(result.get("source") or "unknown_layout"),
+            }
+        detail = (completed.stderr or completed.stdout or "RVC 检查进程未返回结果").strip()
+        return {
+            "rvc_version_detection": "failed",
+            "rvc_version_detail": detail[-240:],
         }
 
     def set_default(self, model_id: str) -> bool:

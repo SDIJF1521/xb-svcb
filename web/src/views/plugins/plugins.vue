@@ -3,56 +3,56 @@
     <div class="page-head">
       <div class="heading-wrap">
         <div class="heading-icon"><el-icon><Grid /></el-icon></div>
-        <div><p class="eyebrow">// EXTENSIONS / WORKSPACE</p><h1>插件中心</h1><p class="page-sub">扩展翻唱流程，安装用户页面，把工作台变成你的工作台</p></div>
+        <div><p class="eyebrow">// EXTENSIONS / WORKSPACE</p><h1>{{ translateUiText('插件中心') }}</h1><p class="page-sub">{{ translateUiText('扩展翻唱流程，安装用户页面，把工作台变成你的工作台') }}</p></div>
       </div>
-      <div class="master-control" :class="{ active: enabled }"><el-tag :type="enabled ? 'success' : 'warning'" effect="light">{{ enabled ? '插件运行中' : '插件已暂停' }}</el-tag><el-switch v-model="enabled" :loading="saving" inline-prompt active-text="开" inactive-text="关" @change="saveEnabled" /></div>
+      <div class="master-control" :class="{ active: enabled }"><el-tag :type="enabled ? 'success' : 'warning'" effect="light">{{ translateUiText(enabled ? '插件运行中' : '插件已暂停') }}</el-tag><el-switch v-model="enabled" :loading="saving" inline-prompt :active-text="translateUiText('开')" :inactive-text="translateUiText('关')" @change="saveEnabled" /></div>
     </div>
 
-    <div class="status-banner" :class="{ active: enabled }"><div class="status-mark"><el-icon><CircleCheck /></el-icon></div><div class="status-copy"><strong>{{ enabled ? '扩展能力已接入当前工作流' : '扩展能力当前处于暂停状态' }}</strong><span>{{ enabled ? '已授权的插件页面和翻唱钩子可以正常使用。' : '开启后仍需单独启用每个插件，现有翻唱流程不会受到影响。' }}</span></div><span class="status-count">{{ plugins.length }} 个已安装</span></div>
+    <div class="status-banner" :class="{ active: enabled }"><div class="status-mark"><el-icon><CircleCheck /></el-icon></div><div class="status-copy"><strong>{{ translateUiText(enabled ? '扩展能力已接入当前工作流' : '扩展能力当前处于暂停状态') }}</strong><span>{{ translateUiText(enabled ? '已授权的插件页面和翻唱钩子可以正常使用。' : '开启后仍需单独启用每个插件，现有翻唱流程不会受到影响。') }}</span></div><span class="status-count">{{ plugins.length }} {{ translateUiText('个已安装') }}</span></div>
 
     <section class="settings glass" data-guide="plugin-settings">
       <div class="section-head">
-        <div class="section-title"><span class="section-kicker">01</span><div><h2>插件功能</h2><p>控制扩展运行环境与市场来源</p></div></div>
+        <div class="section-title"><span class="section-kicker">01</span><div><h2>{{ translateUiText('插件功能') }}</h2><p>{{ translateUiText('控制扩展运行环境与市场来源') }}</p></div></div>
       </div>
-      <p class="security">{{ status.security }}</p>
+      <p class="security">{{ translateUiText(status.security) }}</p>
       <div class="market-row">
-        <label for="market-url">插件市场索引</label>
+        <label for="market-url">{{ translateUiText('插件市场索引') }}</label>
         <el-input id="market-url" v-model="marketUrl" placeholder="https://raw.githubusercontent.com/<owner>/<repo>/<branch>/assets/plugins.json5" @change="saveMarket" />
-        <el-button :loading="marketLoading" @click="loadMarket">刷新市场</el-button>
+        <el-button :loading="marketLoading" @click="loadMarket">{{ translateUiText('刷新市场') }}</el-button>
       </div>
       <div class="local-row">
-        <el-button class="install-btn" :loading="localInstalling" @click="installLocal"><el-icon><Upload /></el-icon>安装本地插件包</el-button><input ref="pluginFileInput" class="plugin-file-input" type="file" accept=".xbplugin,.zip,application/zip" @change="installSelectedLocal">
-        <span class="dev-path"><span>开发目录</span><code>{{ status.development_dir || '加载中…' }}</code></span>
+        <el-button class="install-btn" :loading="localInstalling" @click="installLocal"><el-icon><Upload /></el-icon>{{ translateUiText('安装本地插件包') }}</el-button><input ref="pluginFileInput" class="plugin-file-input" type="file" accept=".xbplugin,.zip,application/zip" @change="installSelectedLocal">
+        <span class="dev-path"><span>{{ translateUiText('开发目录') }}</span><code>{{ status.development_dir || translateUiText('加载中…') }}</code></span>
       </div>
     </section>
 
     <section v-if="market.length" class="section" data-guide="plugin-market">
-      <div class="section-head"><div class="section-title"><span class="section-kicker">02</span><div><h2>插件市场</h2><p>兼容 NoneBot2 风格 plugins.json5 索引</p></div></div><span class="section-note">NONEBOT2 / GITHUB JSON5</span></div>
+      <div class="section-head"><div class="section-title"><span class="section-kicker">02</span><div><h2>{{ translateUiText('插件市场') }}</h2><p>{{ translateUiText('兼容 NoneBot2 风格 plugins.json5 索引') }}</p></div></div><span class="section-note">NONEBOT2 / GITHUB JSON5</span></div>
       <div class="plugin-grid">
         <article v-for="item in market" :key="item.id" class="plugin-card glass">
-          <div class="plugin-title"><div class="plugin-identity"><div class="plugin-avatar market"><el-icon><Grid /></el-icon></div><div><h3>{{ item.name }}</h3><span>{{ marketSubtitle(item) }}</span></div></div><span class="tag">{{ item.is_official ? '官方' : '市场' }}</span></div>
-          <p>{{ item.description || '暂无说明' }}</p>
+          <div class="plugin-title"><div class="plugin-identity"><div class="plugin-avatar market"><el-icon><Grid /></el-icon></div><div><h3>{{ item.name }}</h3><span>{{ marketSubtitle(item) }}</span></div></div><span class="tag">{{ translateUiText(item.is_official ? '官方' : '市场') }}</span></div>
+          <p>{{ item.description || translateUiText('暂无说明') }}</p>
           <div v-if="item.tags?.length" class="market-tags"><el-tag v-for="tag in item.tags" :key="tag.label" size="small" effect="plain">{{ tag.label }}</el-tag></div>
-          <footer><span class="author">{{ item.author || item.project_link || '未知作者' }}</span><el-button size="small" :disabled="!item.bundle_url" :loading="installingMarketUrl === item.bundle_url" @click="installMarket(item.bundle_url || '')">{{ item.bundle_url ? '安装' : '仅索引' }} <el-icon><ArrowRight /></el-icon></el-button></footer>
+          <footer><span class="author">{{ item.author || item.project_link || translateUiText('未知作者') }}</span><el-button size="small" :disabled="!item.bundle_url" :loading="installingMarketUrl === item.bundle_url" @click="installMarket(item.bundle_url || '')">{{ translateUiText(item.bundle_url ? '安装' : '仅索引') }} <el-icon><ArrowRight /></el-icon></el-button></footer>
         </article>
       </div>
     </section>
 
     <section class="section" data-guide="plugin-installed">
-      <div class="section-head"><div class="section-title"><span class="section-kicker">03</span><div><h2>已安装插件</h2><p>每个插件都需要单独授权后才能运行</p></div></div><span class="section-note">LOCAL RUNTIME</span></div>
+      <div class="section-head"><div class="section-title"><span class="section-kicker">03</span><div><h2>{{ translateUiText('已安装插件') }}</h2><p>{{ translateUiText('每个插件都需要单独授权后才能运行') }}</p></div></div><span class="section-note">LOCAL RUNTIME</span></div>
       <div v-if="plugins.length" class="plugin-grid">
         <article v-for="plugin in plugins" :key="plugin.id" class="plugin-card glass">
-          <div class="plugin-title"><div class="plugin-identity"><div class="plugin-avatar" :class="plugin.runtime"><el-icon><component :is="plugin.runtime === 'frontend' ? Grid : Cpu" /></el-icon></div><div><h3>{{ plugin.name }}</h3><span>{{ plugin.id }} · v{{ plugin.version }}</span></div></div><el-switch :model-value="plugin.enabled" :disabled="plugin.runtime_status?.ready === false" inline-prompt active-text="开" inactive-text="关" @change="togglePlugin(plugin, $event)" /></div>
-          <div class="runtime-row"><span class="runtime-tag" :class="plugin.runtime">{{ runtimeLabel(plugin.runtime) }}</span><span v-if="plugin.permissions.length" class="permission-text">{{ permissionSummary(plugin.permissions) }}</span></div>
+          <div class="plugin-title"><div class="plugin-identity"><div class="plugin-avatar" :class="plugin.runtime"><el-icon><component :is="plugin.runtime === 'frontend' ? Grid : Cpu" /></el-icon></div><div><h3>{{ plugin.name }}</h3><span>{{ plugin.id }} · v{{ plugin.version }}</span></div></div><el-switch :model-value="plugin.enabled" :disabled="plugin.runtime_status?.ready === false" inline-prompt :active-text="translateUiText('开')" :inactive-text="translateUiText('关')" @change="togglePlugin(plugin, $event)" /></div>
+          <div class="runtime-row"><span class="runtime-tag" :class="plugin.runtime">{{ translateUiText(runtimeLabel(plugin.runtime)) }}</span><span v-if="plugin.permissions.length" class="permission-text">{{ translateUiText(permissionSummary(plugin.permissions)) }}</span></div>
           <div v-if="pluginError(plugin)" class="plugin-error" :title="pluginError(plugin)"><el-icon><WarningFilled /></el-icon><span>{{ pluginError(plugin) }}</span></div>
-          <p>{{ plugin.description || '暂无说明' }}</p>
+          <p>{{ plugin.description || translateUiText('暂无说明') }}</p>
           <footer>
-            <span class="author">{{ plugin.author || '未知作者' }}</span>
-            <span class="card-actions"><el-button v-if="plugin.pages.length || plugin.frontend?.entry" size="small" :disabled="!enabled || !plugin.enabled" @click="openPlugin(plugin)">打开</el-button><el-button size="small" type="danger" plain @click="removePlugin(plugin.id)">卸载</el-button></span>
+            <span class="author">{{ plugin.author || translateUiText('未知作者') }}</span>
+            <span class="card-actions"><el-button v-if="plugin.pages.length || plugin.frontend?.entry" size="small" :disabled="!enabled || !plugin.enabled" @click="openPlugin(plugin)">{{ translateUiText('打开') }}</el-button><el-button size="small" type="danger" plain @click="removePlugin(plugin.id)">{{ translateUiText('卸载') }}</el-button></span>
           </footer>
         </article>
       </div>
-      <div v-else class="empty glass">尚未安装插件。可从 GitHub 市场安装，或选择本地 <code>.xbplugin</code> 包。</div>
+      <div v-else class="empty glass">{{ translateUiText('尚未安装插件。可从 GitHub 市场安装，或选择本地') }} <code>.xbplugin</code> {{ translateUiText('包。') }}</div>
     </section>
   </div>
 </template>
@@ -65,6 +65,7 @@ import { ElMessageBox, ElNotification } from 'element-plus'
 import { ArrowRight, CircleCheck, Cpu, Grid, Upload, WarningFilled } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { api, type PluginInfo, type PluginInstallResult, type PluginMarketItem, type PluginStatus } from '@/api'
+import { translateUiText } from '@/i18n'
 
 defineOptions({ name: 'PluginsPage' })
 const router = useRouter()
@@ -87,8 +88,8 @@ function notify(type: 'success' | 'warning' | 'info' | 'error', message: string)
   const titles = { success: '操作完成', warning: '需要注意', info: '提示', error: '操作失败' }
   ElNotification({
     type,
-    title: titles[type],
-    message,
+    title: translateUiText(titles[type]),
+    message: translateUiText(message),
     position: 'top-right',
     customClass: 'xb-notification-center',
     duration: type === 'error' ? 4200 : 2600,
@@ -100,7 +101,7 @@ const notifyInfo = (message: string) => notify('info', message)
 const notifyError = (message: string) => notify('error', message)
 
 function installSuccessMessage(result: PluginInstallResult) {
-  return result.plugin?.path ? '插件已安装到：' + result.plugin.path : (result.message || '插件已安装')
+  return result.plugin?.path ? `插件已安装到：${result.plugin.path}` : (result.message || '插件已安装')
 }
 
 function readFileAsBase64(file: File): Promise<string> {
@@ -243,9 +244,9 @@ async function togglePlugin(plugin: PluginInfo, value: string | number | boolean
   if (next && plugin.runtime !== 'frontend') {
     try {
       await ElMessageBox.confirm(
-        '此插件包含 Python 代码，将以当前用户权限运行，可能访问文件、网络或启动进程。请仅启用你信任且已检查来源的插件。',
-        '启用 Python 插件',
-        { type: 'warning', confirmButtonText: '我信任并启用', cancelButtonText: '取消' },
+        translateUiText('此插件包含 Python 代码，将以当前用户权限运行，可能访问文件、网络或启动进程。请仅启用你信任且已检查来源的插件。'),
+        translateUiText('启用 Python 插件'),
+        { type: 'warning', confirmButtonText: translateUiText('我信任并启用'), cancelButtonText: translateUiText('取消') },
       )
     } catch { return }
   }
@@ -278,7 +279,7 @@ function openPlugin(plugin: PluginInfo) {
 }
 async function removePlugin(id: string) {
   try {
-    await ElMessageBox.confirm('卸载会删除此插件的本地文件，是否继续？', '卸载插件', { type: 'warning' })
+    await ElMessageBox.confirm(translateUiText('卸载会删除此插件的本地文件，是否继续？'), translateUiText('卸载插件'), { type: 'warning' })
   } catch { return }
   try {
     if (await api.uninstallPlugin(id)) {

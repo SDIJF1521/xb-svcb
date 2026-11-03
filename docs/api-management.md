@@ -1,3 +1,5 @@
+[简体中文](api-management.md) | [English](en/api-management.md) | [日本語](ja/api-management.md)
+
 # XB-SVCB API 管理与构建资源变更说明
 
 > 0.0.32 中 `5616756` 提交的实现记录；当前使用说明见 [FastAPI 接入文档](api.md)。

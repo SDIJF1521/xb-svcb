@@ -63,11 +63,27 @@ class AudioEffectsProcessor:
         if not dry.exists() and not self._extract_clip(src, dry, offset, length, clip, sample_rate):
             return None
 
-        current = dry
+        return self.render_file(dry, effects, dst, cache_dir, sample_rate)
+
+    def render_file(
+        self,
+        src: Path,
+        effects: list[dict[str, Any]],
+        dst: Path,
+        cache_dir: Path,
+        sample_rate: int,
+    ) -> Path | None:
+        """Apply an effect chain to an already aligned track or role bus."""
+        enabled = self._enabled_effect_list(effects)
+        if not self.ffmpeg or not src.exists() or not enabled:
+            return None
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        current = src
         changed = False
-        for idx, effect in enumerate(effects):
+        stem = dst.stem
+        for idx, effect in enumerate(enabled):
             effect_type = self._effect_type(effect)
-            next_path = cache_dir / f"{stem}_fx{idx:02d}.wav"
+            next_path = cache_dir / f"{stem}_busfx{idx:02d}.wav"
             ok = False
             if effect_type == "plugin":
                 ok = self._juce_host.render_plugin(current, next_path, effect, sample_rate)
@@ -290,6 +306,10 @@ class AudioEffectsProcessor:
     @staticmethod
     def _enabled_effects(clip: dict[str, Any]) -> list[dict[str, Any]]:
         effects = clip.get("effects") or []
+        return AudioEffectsProcessor._enabled_effect_list(effects)
+
+    @staticmethod
+    def _enabled_effect_list(effects: Any) -> list[dict[str, Any]]:
         if not isinstance(effects, list):
             return []
         return [

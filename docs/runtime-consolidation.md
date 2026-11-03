@@ -1,3 +1,5 @@
+[简体中文](runtime-consolidation.md) | [English](en/runtime-consolidation.md) | [日本語](ja/runtime-consolidation.md)
+
 # 共享运行时与兼容布局
 
 本文是当前运行环境布局的唯一说明。早期空间盘点、缓存恢复和实验安装记录已合并到这里；历史版本行为保留在 `docs/release-notes/`。
@@ -10,7 +12,7 @@ NVIDIA CUDA126 和 CUDA128 默认使用两层共享环境。ROCm 10 的 SVC/RVC/
 | ------- | -------- | ---------------------------------------------------------------------------------------------- |
 | CPU     | 隔离兼容 | `.venv-uvr`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-vocal` |
 | ROCm 10 | SVC 组共享 | `runtimes/svc-rocm10` 用于 SVC/RVC/Vocal；其他组件用 `.venv-*`，包含独立 PyMSS |
-| DirectML | 隔离兼容 | `.venv-*`；DDSP 自动用 CPU，PyMSS 不支持 DirectML |
+| DirectML | 隔离兼容 | `.venv-*`；DDSP 自动用 CPU，PyMSS 在独立环境中回退到 CPU |
 | CUDA126 | 两层共享 | `runtimes/core-cu126`、`runtimes/svc-cu126`                                                |
 | CUDA128 | 两层共享 | `runtimes/core-cu128`、`runtimes/svc-cu128`                                                |
 
@@ -53,6 +55,8 @@ python install/install.py --directml --only rvc
 ```
 
 ROCm RVC 默认保留 rvc-python 的 fp16 GPU 路径。若目标驱动或模型在 fp16 下不稳定，可临时设置 `XB_RVC_ROCM_FP32=1` 重试；worker 日志中的 `RVC_COMPONENT_DEVICES` 和 `RVC_TIMING` 会分别显示组件设备及模型/后处理耗时。
+
+SVC、RVC、SeedVC、DDSP-SVC、UVR、PyMSS、F0 与 Vocal Worker 共享质量优先的 PyTorch 运行策略：关闭梯度记录，固定 CUDA/ROCm 当前设备，使用最高精度的 FP32 矩阵运算，并在 NVIDIA CUDA 上关闭 TF32。CPU 推理默认使用不超过 8 个 Torch 线程，可用 `XB_INFERENCE_CPU_THREADS` 覆盖；各模型的 FP16/FP32 选择和 DirectML 稳定回退仍由对应 Worker 决定。每个 Worker 会输出 `*_RUNTIME` 行，记录实际后端、设备和精度策略。
 
 `--consolidated` 仍由旧公共实现识别，但在发布流程中它表示 CUDA 共享布局，不再作为面向用户的实验开关。旧安装若没有 `XB_RUNTIME_LAYOUT`，无参数运行 `setup_env.bat` 仍保持兼容行为；显式传入 `--cu126`、`--cu128` 或 `--consolidated` 会选择共享入口。
 
@@ -101,7 +105,7 @@ CUDA 安装包构建还必须携带 `assets/runtime/core-cu128/candidate` 和 `c
 检查已安装共享环境：
 
 ```powershell
-& .\runtimes\core-cu128\Scripts\python.exe -B .\install\audit_runtime.py --root . --require-cuda
+& .\runtimes\core-cu128\Scripts\python.exe -B .\install\audit_runtime.py --root . --require-cuda --timeout 90 --ddsp-timeout 180
 & uv pip check --python .\runtimes\core-cu128\Scripts\python.exe
 & uv pip check --python .\runtimes\svc-cu128\Scripts\python.exe
 ```

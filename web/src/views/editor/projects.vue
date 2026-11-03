@@ -10,6 +10,9 @@
         <el-button round class="ghost-btn" :loading="loading" @click="loadProjects">
           <el-icon class="el-icon--left"><Refresh /></el-icon>刷新
         </el-button>
+        <el-button round class="ghost-btn" @click="importProject">
+          <el-icon class="el-icon--left"><FolderOpened /></el-icon>导入工程
+        </el-button>
         <el-button round class="cta-btn" data-guide="editor-import" @click="importAudio">
           <el-icon class="el-icon--left"><FolderAdd /></el-icon>导入音频
         </el-button>
@@ -34,6 +37,18 @@
             </span>
           </span>
           <el-icon class="project-go"><Right /></el-icon>
+        </button>
+        <button
+          type="button"
+          class="project-export"
+          :disabled="isExporting(item.id)"
+          :aria-label="`导出工程 ${item.title}`"
+          title="导出工程文件"
+          @pointerdown.stop
+          @click.stop.prevent="exportProject(item)"
+        >
+          <el-icon v-if="isExporting(item.id)" class="spin"><Refresh /></el-icon>
+          <el-icon v-else><Download /></el-icon>
         </button>
         <button
           type="button"
@@ -66,12 +81,15 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Delete,
+  Download,
   FolderAdd,
+  FolderOpened,
   Headset,
   Refresh,
   Right,
   Scissor,
 } from '@element-plus/icons-vue'
+import 'element-plus/es/components/message-box/style/css'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, type EditorProjectSummary } from '@/api'
 
@@ -81,6 +99,7 @@ const router = useRouter()
 const loading = ref(false)
 const projects = ref<EditorProjectSummary[]>([])
 const deletingIds = ref<Set<string>>(new Set())
+const exportingIds = ref<Set<string>>(new Set())
 
 function isDeleting(id: string) {
   return deletingIds.value.has(id)
@@ -94,6 +113,17 @@ function setDeleting(id: string, value: boolean) {
     next.delete(id)
   }
   deletingIds.value = next
+}
+
+function isExporting(id: string) {
+  return exportingIds.value.has(id)
+}
+
+function setExporting(id: string, value: boolean) {
+  const next = new Set(exportingIds.value)
+  if (value) next.add(id)
+  else next.delete(id)
+  exportingIds.value = next
 }
 
 async function loadProjects() {
@@ -116,6 +146,39 @@ async function importAudio() {
   await router.push({ path: '/editor', query: { project: project.id } })
 }
 
+async function importProject() {
+  try {
+    const result = await api.importEditorProjectBundle()
+    if (result.cancelled) return
+    if (!result.ok || !result.project) {
+      ElMessage.error(result.error || '工程导入失败')
+      return
+    }
+    ElMessage.success('工程已导入')
+    await router.push({ path: '/editor', query: { project: result.project.id } })
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '工程导入失败')
+  }
+}
+
+async function exportProject(item: EditorProjectSummary) {
+  if (isExporting(item.id)) return
+  setExporting(item.id, true)
+  try {
+    const result = await api.exportEditorProjectBundle(item.id)
+    if (result.cancelled) return
+    if (!result.ok) {
+      ElMessage.error(result.error || '工程导出失败')
+      return
+    }
+    ElMessage.success('工程已导出到：' + result.path)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '工程导出失败')
+  } finally {
+    setExporting(item.id, false)
+  }
+}
+
 async function openProject(id: string) {
   await router.push({ path: '/editor', query: { project: id } })
 }
@@ -130,6 +193,7 @@ async function deleteProject(item: EditorProjectSummary) {
         confirmButtonText: '删除工程',
         cancelButtonText: '取消',
         type: 'warning',
+        customClass: 'editor-delete-confirm',
       },
     )
   } catch {
@@ -239,7 +303,7 @@ onMounted(loadProjects)
   grid-template-columns: 46px minmax(0, 1fr) 28px;
   align-items: center;
   gap: 14px;
-  padding: 18px 54px 18px 18px;
+  padding: 18px 90px 18px 18px;
   border: none;
   background: transparent;
   color: var(--xb-text);
@@ -288,6 +352,7 @@ onMounted(loadProjects)
 .project-go {
   color: var(--xb-muted);
 }
+.project-export,
 .project-delete {
   position: absolute;
   z-index: 2;
@@ -303,9 +368,19 @@ onMounted(loadProjects)
   color: var(--xb-accent);
   cursor: pointer;
 }
+.project-export {
+  right: 48px;
+  border-color: var(--xb-border);
+  background: rgba(var(--xb-primary-rgb), 0.08);
+  color: var(--xb-primary);
+}
+.project-export:hover {
+  background: rgba(var(--xb-primary-rgb), 0.16);
+}
 .project-delete:hover {
   background: rgba(var(--xb-accent-rgb), 0.16);
 }
+.project-export:disabled,
 .project-delete:disabled {
   opacity: 0.7;
   cursor: progress;
@@ -337,6 +412,77 @@ onMounted(loadProjects)
 }
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+:global(.editor-delete-confirm.el-message-box) {
+  width: min(430px, calc(100vw - 32px));
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(var(--xb-accent-rgb), .38);
+  border-radius: 12px;
+  background: var(--xb-bg-2);
+  box-shadow: 0 22px 64px rgba(var(--xb-bg-rgb), .58), 0 0 0 1px rgba(var(--xb-fill-rgb), .06) inset;
+}
+:global(.editor-delete-confirm .el-message-box__header) {
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid rgba(var(--xb-fill-rgb), .1);
+  background: linear-gradient(110deg, rgba(var(--xb-accent-rgb), .13), transparent 70%);
+}
+:global(.editor-delete-confirm .el-message-box__title) {
+  color: var(--xb-text);
+  font-size: 16px;
+  font-weight: 800;
+}
+:global(.editor-delete-confirm .el-message-box__headerbtn) {
+  top: 14px;
+  right: 14px;
+}
+:global(.editor-delete-confirm .el-message-box__headerbtn .el-message-box__close) {
+  color: var(--xb-muted);
+}
+:global(.editor-delete-confirm .el-message-box__headerbtn:hover .el-message-box__close) {
+  color: var(--xb-text);
+}
+:global(.editor-delete-confirm .el-message-box__content) {
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 20px 8px;
+}
+:global(.editor-delete-confirm .el-message-box__status) {
+  margin-top: 2px;
+  color: var(--xb-accent);
+}
+:global(.editor-delete-confirm .el-message-box__message) {
+  color: var(--xb-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+:global(.editor-delete-confirm .el-message-box__btns) {
+  gap: 9px;
+  padding: 14px 20px 18px;
+}
+:global(.editor-delete-confirm .el-button) {
+  min-width: 82px;
+  height: 34px;
+  border-radius: 7px;
+  font-weight: 700;
+}
+:global(.editor-delete-confirm .el-button--default) {
+  border-color: var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), .05);
+  color: var(--xb-text);
+}
+:global(.editor-delete-confirm .el-button--default:hover) {
+  border-color: var(--xb-primary);
+  color: var(--xb-primary);
+}
+:global(.editor-delete-confirm .el-button--primary) {
+  border-color: transparent;
+  background: var(--xb-accent);
+  color: var(--xb-on-accent, #fff);
+  box-shadow: 0 7px 18px rgba(var(--xb-accent-rgb), .22);
+}
+:global(.editor-delete-confirm .el-button--primary:hover) {
+  filter: brightness(1.08);
 }
 @media (max-width: 760px) {
   .projects-head {

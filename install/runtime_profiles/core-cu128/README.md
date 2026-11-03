@@ -1,5 +1,9 @@
 # core-cu128 固定实验配方
 
+最终环境校验允许缺少 `exceptiongroup` 与 `hf-xet`。前者是 Python 3.11
+以前的 `ExceptionGroup` 回移植包，Python 3.12 解析依赖时可以正常省略；后者只用于
+Hugging Face Xet 传输。除这两个非运行时必需包外，其余锁定包仍必须完整且版本一致。
+
 适用范围：Windows x86_64、CPython 3.12、Torch 2.7.1+cu128，UVR / SeedVC / DDSP 共享环境。
 已验证 uv 0.12.5。必须支持 `uv pip compile/install --torch-backend cu128`。
 这是迁移到 Python 3.12 的实验配方，完整依赖安装及真实模型音频需要重新验收；历史 Python 3.10 的安装结果不代表 3.12 已通过。
@@ -11,14 +15,14 @@ protobuf 保留 `cp310-abi3` 文件名，其稳定 ABI 支持 Python 3.12，不�
 ## 保存了什么
 
 - `requirements.lock`：全部精确版本，不包含机器绝对路径。现有 147 个包均与此一致。
-- `profile.json`：锁文件 SHA-256、14 个本地 wheel 的路径/大小/SHA-256，以及验收和回滚限制。
+- `profile.json`：锁文件 SHA-256、15 个本地 wheel 的路径/大小/SHA-256，以及验收和回滚限制。
 - `assets/runtime/core-cu128/compat/`：本地 AudioTools 兼容 wheel 和六个已构建的辅助 wheel。
-- `assets/runtime/core-cu128/candidate/`：这次迁移使用的 NumPy、protobuf、TensorBoardX 三个新版 wheel。
+- `assets/runtime/core-cu128/candidate/`：这次迁移使用的 NumPy、protobuf、TensorBoardX 和固定版本 ONNX Weekly wheel。
 - `assets/runtime/core-cu128/rollback/`：四个迁移前 wheel。只用于恢复原版本，不是完整虚拟环境备份。
 
 二进制 wheel 不提交 Git；本机已从现有 wheelhouse 和 PyPI 恢复，并按 profile 校验。
 其中六个辅助 wheel 的 ZIP 字节与历史记录不同，profile 已更新为本次材料的大小和 SHA-256；
-14 个 wheel 均通过 ZIP 和 RECORD 校验。请将 `assets/runtime/core-cu128/` 随自己的备份保存。
+15 个 wheel 均通过 ZIP 和 RECORD 校验。请将 `assets/runtime/core-cu128/` 随自己的备份保存。
 Inno 配置会携带该目录中的材料；仅克隆源码不会获得这些二进制文件。
 缺失时 `--core-profile` 会明确拒绝执行；不得通过删除哈希检查绕过。
 
@@ -28,9 +32,9 @@ Inno 配置会携带该目录中的材料；仅克隆源码不会获得这些二
 因此固定其版本供新安装使用，但现有 HTTP 下载路径可缺少它；校验结果会单列 `missing_optional`。
 这不是第二套模型运行配方，也不会为通过校验自动安装它。
 
-此目录仅保存上述 14 个固定材料；安装器使用的完整离线 wheelhouse 位于 `assets/wheels/`，
+此目录仅保存上述 15 个固定材料；安装器使用的完整离线 wheelhouse 位于 `assets/wheels/`，
 包含五套硬件栈各自的 Torch 和其他依赖。两处二进制材料均未提交 Git；
-只有此 profile 中的 14 个 wheel 做了逐文件哈希固定。
+只有此 profile 中的 15 个 wheel 做了逐文件哈希固定。
 
 早期验证曾通过 `install/validate_core_install.py --recover-cache ... --wheel-dir ...` 复用既有下载和旧缓存。缓存包只有在 RECORD 校验通过后才允许在独立临时目录重封装；这不等于取得上游原始 ZIP 的哈希认证，也不会自动成为长期发布材料。当前激活、验证与修复边界见 [共享运行时与兼容布局](../../../docs/runtime-consolidation.md)。
 

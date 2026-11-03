@@ -1,3 +1,5 @@
+[简体中文](README.md) | [English](../en/plugins/README.md) | [日本語](../ja/plugins/README.md)
+
 # XB-SVCB 插件开发文档
 
 这套文档面向插件作者。完成这里的教程不需要阅读 XB-SVCB 主项目源码；清单 SDK、页面 Client、Vue composable、Python SDK、打包格式、安装行为和当前运行限制都在文档中说明。

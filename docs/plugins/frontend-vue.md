@@ -1,3 +1,5 @@
+[简体中文](frontend-vue.md) | [English](../en/plugins/frontend-vue.md) | [日本語](../ja/plugins/frontend-vue.md)
+
 # Vue 3 自定义页面
 
 Vue 页面是 TypeScript 前端插件的默认方案。页面布局和组件完全由插件作者控制；宿主只负责在沙箱 iframe 中载入构建后的 `dist/frontend/index.html`，并通过 Client SDK 提供有限能力。

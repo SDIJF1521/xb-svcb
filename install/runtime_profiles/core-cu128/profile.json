@@ -8,9 +8,10 @@
   "lock": "requirements.lock",
   "lock_sha256": "99648e092cfb5c55012afa24973a74f46a4d9434b24ddc8a2bd0a71f205c4b97",
   "optional_packages": [
+    "exceptiongroup",
     "hf-xet"
   ],
-  "optional_reason": "Transport-only helper: installed Hugging Face metadata excludes uppercase AMD64, while target-platform resolution includes lowercase amd64. Missing hf-xet is allowed for the existing HTTP-based runtime; fresh installs use its pinned version.",
+  "optional_reason": "Python 3.12 provides ExceptionGroup in the standard library, so resolvers may omit the exceptiongroup backport. hf-xet is a transport-only helper whose installed Hugging Face metadata excludes uppercase AMD64 while target-platform resolution includes lowercase amd64. Missing either package is valid; all runtime packages remain strictly pinned.",
   "compatibility_wheel": "assets/runtime/core-cu128/compat/descript_audiotools-0.7.2+xb1-py3-none-any.whl",
   "full_model_inference_validated": false,
   "rollback_is_known_healthy": false,
@@ -32,6 +33,12 @@
       "path": "assets/runtime/core-cu128/candidate/tensorboardx-2.6.5-py3-none-any.whl",
       "bytes": 87510,
       "sha256": "c10b891d00af306537cb8b58a039b2ba41571f0da06f433a41c4ca8d6abe1373"
+    },
+    {
+      "group": "candidate",
+      "path": "assets/runtime/core-cu128/candidate/onnx_weekly-1.23.0.dev20260831-cp312-abi3-win_amd64.whl",
+      "bytes": 7850755,
+      "sha256": "b8620fd5747916781134453cd629e892d8dbdd349cc2c3208cdc1aeef1812c2d"
     },
     {
       "group": "compat",

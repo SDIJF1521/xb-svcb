@@ -19,7 +19,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import config
 from application import (
@@ -50,6 +50,43 @@ def _safe_filename(name: str) -> str:
     """清洗为合法文件名（去除非法字符并限长），用于导出默认名。"""
     cleaned = re.sub(r'[\\/:*?"<>|\r\n\t]', "_", name or "").strip().strip(".")
     return cleaned[:120] or "翻唱作品"
+
+
+_THEME_IMAGE_FORMATS = {
+    "jpeg": (".jpg", "image/jpeg"),
+    "png": (".png", "image/png"),
+    "webp": (".webp", "image/webp"),
+    "gif": (".gif", "image/gif"),
+    "avif": (".avif", "image/avif"),
+}
+
+# Data URIs cross the pywebview JS bridge as strings. Keep managed background
+# images compact so high-resolution source files do not exceed that channel.
+_THEME_IMAGE_OPTIMIZE_THRESHOLD = 2 * 1024 * 1024
+
+
+def _sniff_theme_image_format(path: Path) -> str:
+    """Return the actual image container instead of trusting its suffix."""
+    try:
+        with path.open("rb") as stream:
+            head = stream.read(64)
+    except OSError:
+        return ""
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    if len(head) >= 12 and head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return "webp"
+    if len(head) >= 16 and head[4:8] == b"ftyp":
+        brands = {head[index:index + 4].lower() for index in range(8, min(len(head) - 3, 36), 4)}
+        if brands & {b"avif", b"avis"}:
+            return "avif"
+        if brands & {b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"mif1", b"msf1"}:
+            return "heif"
+    return ""
 
 
 class Api:
@@ -229,8 +266,8 @@ class Api:
             "选择主题背景图片或 MP4 动态壁纸",
             multiple=False,
             file_types=(
-                "背景媒体 (*.jpg;*.jpeg;*.png;*.webp;*.gif;*.mp4)",
-                "图片 (*.jpg;*.jpeg;*.png;*.webp;*.gif)",
+                "背景媒体 (*.jpg;*.jpeg;*.png;*.webp;*.gif;*.avif;*.heic;*.heif;*.mp4)",
+                "图片 (*.jpg;*.jpeg;*.png;*.webp;*.gif;*.avif;*.heic;*.heif)",
                 "MP4 视频 (*.mp4)",
                 "所有文件 (*.*)",
             ),
@@ -241,38 +278,99 @@ class Api:
         if not src.exists() or not src.is_file():
             return {"ok": False, "error": "媒体文件不存在"}
         ext = src.suffix.lower()
-        image_mimes = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".webp": "image/webp",
-            ".gif": "image/gif",
-        }
+        image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".heic", ".heif"}
         if ext == ".mp4":
             kind = "video"
             mime = "video/mp4"
             max_bytes = 200 * 1024 * 1024
-        elif ext in image_mimes:
+        elif ext in image_extensions:
             kind = "image"
-            mime = image_mimes[ext]
-            max_bytes = 50 * 1024 * 1024
+            mime = ""
+            max_bytes = None
         else:
             return {"ok": False, "error": "仅支持图片或 MP4 视频"}
         try:
-            if src.stat().st_size > max_bytes:
-                limit = "200MB" if kind == "video" else "50MB"
-                return {"ok": False, "error": f"媒体文件过大，请选择不超过 {limit} 的文件"}
+            source_size = src.stat().st_size
+            if max_bytes is not None and source_size > max_bytes:
+                return {"ok": False, "error": "媒体文件过大，请选择不超过 200MB 的文件"}
         except OSError:
             return {"ok": False, "error": "无法读取媒体文件"}
 
         paths.ensure_dirs()
         safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", src.stem).strip("._") or "theme_media"
-        dst = config.THEME_MEDIA_DIR / f"{time.time_ns()}_{safe_stem}{ext}"
+        detected_format = _sniff_theme_image_format(src) if kind == "image" else ""
+        converted = kind == "image" and (
+            detected_format not in _THEME_IMAGE_FORMATS
+            or source_size > _THEME_IMAGE_OPTIMIZE_THRESHOLD
+        )
+        if converted:
+            target_ext, mime = ".webp", "image/webp"
+        elif kind == "image" and detected_format in _THEME_IMAGE_FORMATS:
+            target_ext, mime = _THEME_IMAGE_FORMATS[detected_format]
+        else:
+            target_ext = ext
+        dst = config.THEME_MEDIA_DIR / f"{time.time_ns()}_{safe_stem}{target_ext}"
         try:
-            shutil.copy2(src, dst)
+            if converted:
+                if not self._transcode_theme_image(src, dst):
+                    return {
+                        "ok": False,
+                        "error": "图片自动优化失败；请确认 FFmpeg 可用或尝试转换为 JPG/WebP",
+                    }
+            else:
+                shutil.copy2(src, dst)
         except OSError as exc:
             return {"ok": False, "error": f"复制背景媒体失败：{exc}"}
-        return {"ok": True, "path": dst.name, "kind": kind, "mime": mime, "name": src.name}
+        return {
+            "ok": True,
+            "path": dst.name,
+            "kind": kind,
+            "mime": mime,
+            "name": src.name,
+            "converted": converted,
+        }
+
+    @staticmethod
+    def _transcode_theme_image(src: Path, dst: Path) -> bool:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            return False
+        try:
+            result = subprocess.run(
+                [
+                    ffmpeg,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(src),
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease",
+                    "-map_metadata",
+                    "-1",
+                    "-c:v",
+                    "libwebp",
+                    "-quality",
+                    "82",
+                    "-compression_level",
+                    "5",
+                    str(dst),
+                ],
+                capture_output=True,
+                timeout=120,
+                check=False,
+                **config.subprocess_no_window(),
+            )
+        except (OSError, subprocess.SubprocessError):
+            dst.unlink(missing_ok=True)
+            return False
+        if result.returncode == 0 and dst.is_file() and dst.stat().st_size > 0:
+            return True
+        dst.unlink(missing_ok=True)
+        return False
 
     def get_theme_media_data(self, media_path: str) -> str:
         """返回已保存主题媒体的 data URI，供背景图/视频播放。"""
@@ -299,6 +397,7 @@ class Api:
                 ".png": "image/png",
                 ".webp": "image/webp",
                 ".gif": "image/gif",
+                ".avif": "image/avif",
                 ".mp4": "video/mp4",
             }
             mime = mime_by_ext.get(ext)
@@ -1099,24 +1198,34 @@ class Api:
         b64 = base64.b64encode(data).decode("ascii")
         return f"data:{mime};base64,{b64}"
 
-    def export_work(self, work_id: str) -> str:
-        """弹出保存对话框，把成品音频另存到用户选择的位置，返回保存路径。
-
-        默认文件名取作品标题（与重命名后的名称保持一致），后缀沿用成品格式。
-        """
+    def export_work(self, work_id: str, fmt: str = "wav") -> str:
+        """按指定格式导出翻唱成品，返回用户选择的保存路径。"""
         src = self._stem_path(work_id, "output")
         if src is None:
             return ""
         work = self._works.get(work_id) or {}
         title = (work.get("title") or src.stem).strip()
-        ext = src.suffix or ".wav"
+        output_format = str(fmt or "wav").strip().lower().lstrip(".")
+        if output_format not in {"wav", "mp3", "flac", "m4a"}:
+            output_format = "wav"
+        ext = f".{output_format}"
         filename = f"{_safe_filename(title)}{ext}"
-        dest = self._save_dialog("导出翻唱作品", filename)
+        dest = self._save_dialog(f"导出翻唱作品 · {output_format.upper()}", filename)
         if not dest:
             return ""
+        dest_path = Path(dest)
+        if dest_path.suffix.lower() != ext:
+            dest_path = dest_path.with_suffix(ext)
         try:
-            shutil.copyfile(src, dest)
-            return dest
+            if src.resolve() == dest_path.resolve():
+                return str(dest_path) if src.suffix.lower() == ext else ""
+            if src.suffix.lower() == ext:
+                shutil.copyfile(src, dest_path)
+                return str(dest_path)
+            if FfmpegTool().convert(src, dest_path):
+                return str(dest_path)
+            dest_path.unlink(missing_ok=True)
+            return ""
         except OSError:
             return ""
 
@@ -1253,6 +1362,43 @@ class Api:
     def create_editor_project_from_work(self, work_id: str) -> dict[str, Any] | None:
         return self._editor.create_from_work(work_id)
 
+    def export_editor_project_bundle(self, project_id: str) -> dict[str, Any]:
+        project = self._editor.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        title = str(project.get("title") or "音频编辑工程").strip()
+        destination = self._save_dialog(
+            "导出音频编辑工程",
+            f"{_safe_filename(title)}.xbproject",
+        )
+        if not destination:
+            return {"ok": False, "cancelled": True}
+        target = Path(destination)
+        if target.suffix.lower() != ".xbproject":
+            target = target.with_suffix(".xbproject")
+        try:
+            exported = self._editor.export_bundle(project_id, target)
+            return {"ok": True, "path": str(exported)}
+        except Exception as exc:  # noqa: BLE001 - 将打包错误返回给桌面端界面
+            return {"ok": False, "error": str(exc) or "工程导出失败"}
+
+    def import_editor_project_bundle(self) -> dict[str, Any]:
+        selected = self._open_dialog(
+            "导入音频编辑工程",
+            multiple=False,
+            file_types=(
+                "音频编辑工程 (*.xbproject)",
+                "所有文件 (*.*)",
+            ),
+        )
+        if not selected:
+            return {"ok": False, "cancelled": True}
+        try:
+            project = self._editor.import_bundle(Path(selected[0]))
+            return {"ok": True, "path": selected[0], "project": project}
+        except Exception as exc:  # noqa: BLE001 - 将损坏包等读取错误返回给桌面端界面
+            return {"ok": False, "error": str(exc) or "工程导入失败"}
+
     def add_editor_track(
         self, project_id: str, name: str | None = None, kind: str = "audio"
     ) -> dict[str, Any]:
@@ -1307,6 +1453,8 @@ class Api:
         clip_id: str,
         effect_id: str,
         parent_window: str = "",
+        effect_scope: str = "clip",
+        role_id: str = "",
     ) -> dict[str, Any]:
         return self._editor.open_effect_plugin_editor(
             project_id,
@@ -1314,6 +1462,8 @@ class Api:
             clip_id,
             effect_id,
             parent_window,
+            effect_scope,
+            role_id,
         )
 
     def close_editor_effect_plugin(self, session_id: str) -> dict[str, Any]:
@@ -1433,6 +1583,12 @@ class Api:
         enhance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._editor.rerun_clip(project_id, track_id, clip_id, model_id, params or {}, enhance or {})
+
+    def get_editor_rerun_status(self, job_id: str) -> dict[str, Any] | None:
+        return self._editor.rerun_status(job_id)
+
+    def get_editor_rerun_log(self, job_id: str) -> str | None:
+        return self._editor.rerun_log(job_id)
 
     def enhance_editor_clip(
         self,
@@ -1783,7 +1939,7 @@ class Api:
             if window is None:
                 return []
             result = window.create_file_dialog(
-                webview.OPEN_DIALOG,
+                cast(int, webview.OPEN_DIALOG),
                 allow_multiple=multiple,
                 file_types=file_types,
             )
@@ -1803,7 +1959,7 @@ class Api:
             if window is None:
                 return ""
             result = window.create_file_dialog(
-                webview.SAVE_DIALOG,
+                cast(int, webview.SAVE_DIALOG),
                 save_filename=filename,
             )
             if not result:
@@ -1821,7 +1977,7 @@ class Api:
                 window = webview.windows[0]
             if window is None:
                 return ""
-            result = window.create_file_dialog(webview.FOLDER_DIALOG)
+            result = window.create_file_dialog(cast(int, webview.FOLDER_DIALOG))
             if not result:
                 return ""
             return result if isinstance(result, str) else str(result[0])

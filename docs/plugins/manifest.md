@@ -1,3 +1,5 @@
+[简体中文](manifest.md) | [English](../en/plugins/manifest.md) | [日本語](../ja/plugins/manifest.md)
+
 # 清单、页面与动作
 
 `xb-svcb-plugin.json` 是宿主识别插件的唯一入口。推荐始终维护 `src/plugin.ts`，用构建器生成 JSON，而不是长期手工修改构建产物。

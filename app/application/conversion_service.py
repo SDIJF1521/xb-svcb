@@ -12,7 +12,7 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import config
 from domain import InferenceParams, JobStatus, StepStatus
@@ -22,7 +22,14 @@ from infrastructure.ffmpeg_tool import FfmpegTool
 from infrastructure.storage import ListRepository
 from infrastructure.uvr_tool import UvrTool
 from infrastructure.pymss_tool import PymssTool
-from infrastructure.vocal_enhancement import VocalEnhancementProcessor
+from infrastructure.vocal_enhancement import (
+    VocalEnhancementControls,
+    VocalEnhancementProcessor,
+)
+
+if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
 
 _VOCAL_OUTPUT_WORKFLOWS = {"auto_vocal_merge", "manual_vocal_merge"}
 
@@ -122,12 +129,15 @@ class ConversionService:
     _DROPOUT_RESIDUAL_MAX_SECONDS = 4.0
 
     @classmethod
-    def _high_pitch_guard_rounds(cls, params: InferenceParams) -> int:
+    def _high_pitch_guard_rounds(
+        cls, params: InferenceParams, *, realtime: bool = False
+    ) -> int:
         """Return the user-selected guarded retry count.
 
-        The ordinary workflow deliberately ignores the stored advanced value
-        and keeps the established three retry rounds. This prevents a preset
-        saved with full parameters from changing default-mode rendering.
+        The ordinary workflow treats an explicit zero in full-parameter mode
+        as automatic, matching the default-mode protection behavior. Realtime
+        keeps the historical meaning of zero (no guarded retries), because
+        its latency budget is different.
         """
         if not bool(getattr(params, "auto_high_pitch_guard", True)):
             return 0
@@ -138,6 +148,8 @@ class ConversionService:
             configured = int(getattr(params, "high_pitch_guard_rounds", default_rounds))
         except (TypeError, ValueError):
             configured = default_rounds
+        if configured == 0 and not realtime:
+            return default_rounds
         return max(0, min(cls._MAX_HIGH_PITCH_GUARD_ROUNDS, configured))
 
     @classmethod
@@ -282,14 +294,14 @@ class ConversionService:
 
     @staticmethod
     def _stable_high_pitch_mask(
-        f0: object,
-        strength: object,
-        rms: object,
+        f0: NDArray[np.float32],
+        strength: NDArray[np.float32],
+        rms: NDArray[np.float32],
         high_floor: float,
         *,
         minimum_strength: float = 0.35,
         minimum_run_frames: int = 3,
-    ) -> object:
+    ) -> NDArray[np.bool_]:
         """Keep only high-pitch frames supported by a coherent local note.
 
         The lightweight autocorrelation probe can report a single upper
@@ -419,7 +431,7 @@ class ConversionService:
     @staticmethod
     def _enhancement_settings(
         work: dict[str, Any],
-    ) -> tuple[bool, str, dict[str, float]]:
+    ) -> tuple[bool, str, VocalEnhancementControls]:
         raw = work.get("vocal_enhancement") or {}
         if not isinstance(raw, dict):
             return False, "basic", {
@@ -445,7 +457,7 @@ class ConversionService:
                 value = default
             return max(0.0, min(1.0, value))
 
-        controls = {
+        controls: VocalEnhancementControls = {
             "pitch_correction": strength("pitch_correction", 0.45),
             "timing_alignment": strength("timing_alignment", 0.45),
             "timbre_focus": strength("timbre_focus", 0.60),
@@ -951,7 +963,10 @@ class ConversionService:
             return guarded
 
     @staticmethod
-    def _read_mono_audio(source: Path, target_rate: int = 16000):
+    def _read_mono_audio(
+        source: Path,
+        target_rate: int = 16000,
+    ) -> tuple[NDArray[np.float32], int]:
         """读取 PCM WAV 为单声道浮点数组，供模型输出质量探针使用。"""
         import numpy as np
 
@@ -1019,11 +1034,12 @@ class ConversionService:
             output_frames = output_frames - output_frames.mean(axis=1, keepdims=True)
             source_rms = np.sqrt(np.mean(source_frames * source_frames, axis=1))
             output_rms = np.sqrt(np.mean(output_frames * output_frames, axis=1))
+
             def estimate_pitch(
-                frames: object,
-                rms: object,
-                indices: object,
-            ) -> tuple[object, object]:
+                frames: NDArray[np.float32],
+                rms: NDArray[np.float32],
+                indices: NDArray[np.int64],
+            ) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
                 pitch_values = np.zeros(len(rms), dtype=np.float32)
                 pitch_strength = np.zeros(len(rms), dtype=np.float32)
                 selected = np.asarray(indices, dtype=np.int64)
@@ -1157,10 +1173,12 @@ class ConversionService:
                 cls._DROPOUT_RECOVERY_MIN_THRESHOLD,
                 active_threshold - max(70.0, active_threshold * 0.08),
             )
-            # If an old/cached work directory has no F0 sidecar, the fallback
-            # autocorrelation is intentionally conservative: it is useful for
-            # ordinary custom WAVs, but must not treat a repaired high-frequency
-            # transient in infer_input.wav as a genuine singer note.
+            '''
+            如果旧的/缓存的工作目录中没有F0侧边车，
+            那么自动相关性回退机制将故意保持保守：
+                它适用于普通的自定义WAV文件，
+                但必须不能将infer_input.wav中修复后的高频瞬态信号视为真正的演唱音符。
+            '''
             source_min_strength = (
                 0.35
                 if not source_uses_standard_f0_input or source_f0_sidecar_loaded
@@ -1192,10 +1210,11 @@ class ConversionService:
             if ratios.size >= 8:
                 reference_gain = float(np.median(ratios))
             dropout_ratio = max(0.04, min(1.0, reference_gain * 0.18))
-            # A breathy high note can retain a trackable F0 while losing much
-            # of its vocal support. Detect that local loss relative to the
-            # song's normal gain, but keep the lower boundary well above
-            # ordinary speech so normal quiet phrases are untouched.
+            """
+            高音部分的呼吸感可以保留可追踪的F0，
+            同时损失大量声带支持。检测到相对于歌曲正常增益的局部损失，
+            但保持下限远高于普通语音，以确保安静的语句不受影响。
+            """
             near_high_floor = max(
                 cls._DROPOUT_RECOVERY_MIN_THRESHOLD,
                 active_threshold - max(180.0, active_threshold * 0.18),
@@ -1222,12 +1241,12 @@ class ConversionService:
                 output_rms,
                 high_indices,
             )
-            # A collapsed high note is often still loud enough to pass the
-            # ordinary energy test.  In that case the output contains a weak
-            # low partial plus broadband air, so a pitch-only test is too easy
-            # to miss.  Measure the air band only on source-confirmed high
-            # frames; this keeps unrelated accompaniment/transient energy out
-            # of the decision and never copies that band into the render.
+            """
+            当高音部分坍塌时，其声音通常仍足够响亮，
+            能够通过普通能量测试。在这种情况下，输出中包含一个微弱的低频分量以及宽带空气声，
+            因此仅进行音高测试会过于简单而容易遗漏。应仅在源确认的高音帧上测量空气频带；
+            这可以避免无关的伴奏或瞬态能量进入判断过程，并且永远不会将该频带复制到渲染结果中。
+            """
             output_high_ratio = np.zeros_like(output_rms, dtype=np.float32)
             output_high_flatness = np.zeros_like(output_rms, dtype=np.float32)
             if high_indices.size:
@@ -2039,6 +2058,8 @@ class ConversionService:
         render.  The candidate is accepted only when it removes the residual
         detector result entirely; otherwise the previous best file is kept.
         """
+        if not issue:
+            return baseline, issue, False
         residual_regions = self._dropout_core_regions(issue)
         if not residual_regions:
             return baseline, issue, False
@@ -2823,15 +2844,21 @@ class ConversionService:
             return self._ffmpeg.mix(vocals, instrumental, output)
 
         profile = self._ffmpeg.adaptive_mix_profile(vocals, instrumental)
-        vocal_gain = float(profile["vocal_gain_db"])
-        music_gain = float(profile["instrumental_gain_db"])
+        raw_vocal_gain = profile.get("vocal_gain_db")
+        raw_music_gain = profile.get("instrumental_gain_db")
+        vocal_gain = float(raw_vocal_gain) if isinstance(raw_vocal_gain, (int, float)) else 0.0
+        music_gain = float(raw_music_gain) if isinstance(raw_music_gain, (int, float)) else 0.0
         vocal_lufs = profile.get("vocal_lufs")
         music_lufs = profile.get("instrumental_lufs")
-        measured = (
-            f"输入人声 {float(vocal_lufs):.2f} LUFS / 伴奏 {float(music_lufs):.2f} LUFS"
-            if vocal_lufs is not None and music_lufs is not None
-            else "响度测量不可用，使用保守回退"
-        )
+        if isinstance(vocal_lufs, (int, float)) and isinstance(
+            music_lufs, (int, float)
+        ):
+            measured = (
+                f"输入人声 {float(vocal_lufs):.2f} LUFS / "
+                f"伴奏 {float(music_lufs):.2f} LUFS"
+            )
+        else:
+            measured = "响度测量不可用，使用保守回退"
         self._log(
             log_file,
             "  AI 动态混音平衡："
@@ -3140,7 +3167,7 @@ class ConversionService:
                 if preprocess_engine == "pymss" and not config.pymss_model_ready(sep_model):
                     raise RuntimeError(f"PyMSS 模型未下载: {sep_model}，请先在模型管理页下载")
                 if preprocess_engine == "pymss":
-                    sep = tool.separate(
+                    sep = self._pymss.separate(
                         sep_source,
                         work_dir,
                         sep_model,
@@ -3148,7 +3175,9 @@ class ConversionService:
                         purpose=config.PYMSS_PURPOSE_VOCAL,
                     )
                 else:
-                    sep = tool.separate(sep_source, work_dir, sep_model, params.device)
+                    sep = self._uvr.separate(
+                        sep_source, work_dir, sep_model, params.device
+                    )
                 vocals = sep.vocals
                 instrumental = sep.instrumental
                 if sep.simulated:
@@ -3696,7 +3725,7 @@ class ConversionService:
                 if preprocess_engine == "pymss" and not config.pymss_model_ready(sep_model):
                     raise RuntimeError(f"PyMSS 模型未下载: {sep_model}，请先在模型管理页下载")
                 if preprocess_engine == "pymss":
-                    sep = tool.separate(
+                    sep = self._pymss.separate(
                         sep_source,
                         work_dir,
                         sep_model,
@@ -3704,7 +3733,9 @@ class ConversionService:
                         purpose=config.PYMSS_PURPOSE_VOCAL,
                     )
                 else:
-                    sep = tool.separate(sep_source, work_dir, sep_model, base_params.device)
+                    sep = self._uvr.separate(
+                        sep_source, work_dir, sep_model, base_params.device
+                    )
                 vocals = sep.vocals
                 instrumental = sep.instrumental
                 if sep.simulated:

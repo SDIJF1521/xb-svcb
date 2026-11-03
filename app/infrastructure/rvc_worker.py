@@ -56,6 +56,7 @@ try:
     )
     from inference_device import (
         ResolvedDevice,
+        configure_torch_inference,
         patch_directml_checkpoint_load,
         patch_directml_float32,
         patch_directml_rmvpe_cpu,
@@ -68,6 +69,7 @@ except ImportError:  # package import used by tests/application tooling
     )
     from infrastructure.inference_device import (
         ResolvedDevice,
+        configure_torch_inference,
         patch_directml_checkpoint_load,
         patch_directml_float32,
         patch_directml_rmvpe_cpu,
@@ -122,6 +124,74 @@ _RVC_DIRECTML_DEFAULT_WINDOWS = {
     "x_center": 12,
     "x_max": 14,
 }
+
+
+def _normalize_rvc_checkpoint_version(value) -> str:  # noqa: ANN001
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8", errors="ignore")
+        except Exception:  # noqa: BLE001
+            return ""
+    normalized = str(value or "").strip().lower().replace("rvc", "").strip(" -_v")
+    if normalized in {"1", "1.0"}:
+        return "v1"
+    if normalized in {"2", "2.0"}:
+        return "v2"
+    return ""
+
+
+def _rvc_checkpoint_version(checkpoint) -> tuple[str, str]:  # noqa: ANN001
+    """Identify RVC v1/v2 from declared metadata, then phone-encoder width."""
+    if not isinstance(checkpoint, dict):
+        return "", "unsupported_checkpoint"
+
+    for key in ("version", "rvc_version", "model_version"):
+        version = _normalize_rvc_checkpoint_version(checkpoint.get(key))
+        if version:
+            return version, f"checkpoint.{key}"
+
+    containers = [checkpoint]
+    for key in ("weight", "model", "state_dict"):
+        value = checkpoint.get(key)
+        if isinstance(value, dict):
+            containers.append(value)
+    for weights in containers:
+        for key, tensor in weights.items():
+            if not str(key).endswith("enc_p.emb_phone.weight"):
+                continue
+            shape = getattr(tensor, "shape", None)
+            if not shape or len(shape) < 2:
+                continue
+            try:
+                phone_width = int(shape[-1])
+            except (TypeError, ValueError):
+                continue
+            if phone_width == 256:
+                return "v1", f"weight.{key}[{phone_width}]"
+            if phone_width == 768:
+                return "v2", f"weight.{key}[{phone_width}]"
+    return "", "unknown_layout"
+
+
+def _inspect_rvc_model(torch_module, model_path: str) -> dict[str, str]:  # noqa: ANN001
+    try:
+        checkpoint = torch_module.load(
+            model_path,
+            map_location="cpu",
+            weights_only=True,
+        )
+    except TypeError:
+        checkpoint = torch_module.load(model_path, map_location="cpu")
+    except Exception:
+        # Some older RVC exports contain objects not accepted by the restricted
+        # loader. This remains isolated in the RVC subprocess, never the app.
+        checkpoint = torch_module.load(
+            model_path,
+            map_location="cpu",
+            weights_only=False,
+        )
+    version, source = _rvc_checkpoint_version(checkpoint)
+    return {"version": version, "source": source}
 
 
 def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
@@ -567,6 +637,11 @@ def main() -> int:
     parser.add_argument("--protect", type=float, default=0.33)
     parser.add_argument("--filter-radius", dest="filter_radius", type=int, default=3)
     parser.add_argument("--version", default="v2")
+    parser.add_argument(
+        "--inspect-model",
+        action="store_true",
+        help="只读取 checkpoint 并输出自动识别的 RVC v1/v2",
+    )
     args = parser.parse_args()
 
     try:
@@ -575,6 +650,10 @@ def main() -> int:
         # 导入 rvc-python 之前还原旧默认（RVC 的 .pth/.index/底模均为本地可信文件）。
         # 老栈（torch 2.1.1，默认即 False）加这层无副作用。
         import torch  # noqa: WPS433
+        if args.inspect_model:
+            result = _inspect_rvc_model(torch, args.model)
+            print("RVC_INSPECT\t" + json.dumps(result, ensure_ascii=False), flush=True)
+            return 0 if result.get("version") else 2
         resolved_device = _resolve_device(args.device)
         print(
             "RVC_RUNTIME "
@@ -588,6 +667,8 @@ def main() -> int:
         if resolved_device.backend == "directml":
             _apply_rvc_directml_thread_limits(torch)
             patch_directml_float32(torch)
+        runtime_profile = configure_torch_inference(torch, resolved_device)
+        print(f"RVC_INFERENCE {runtime_profile.summary}", flush=True)
         _configure_rvc_torch_load(
             torch,
             directml=resolved_device.backend == "directml",
