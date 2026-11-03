@@ -22,9 +22,11 @@ AIカバー制作の全工程を一つのワークフローで実行できます
 [![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
 [![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
 
-### [オンラインインストーラー: CPU / AMD / NVIDIA を自動選択](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+### [ModelScope版オンラインインストーラー: CPU / AMD / NVIDIA を自動選択](https://github.com/SDIJF1521/xb-svcb/releases/latest)
 
 <sub>Windows向けワンクリックインストール。フロントエンドと基本モデルを同梱し、Python / Node.jsの手動設定は不要です。</sub>
+
+<sub>GitHub Releasesでは`XB-SVCB-Online-Setup-ModelScope.exe`を配布します。予備版`XB-SVCB-Online-Setup.exe`はGitHubで公開しないため、必要な場合は開発者へお問い合わせください。</sub>
 
 <sub>交流・サポート（QQグループ）: **1038366109**</sub>
 
@@ -66,7 +68,7 @@ So-VITS-SVC、RVC、SeedVC、DDSP-SVCをサポートしています。また、U
 
 ### インストーラーを使う
 
-通常の利用では、GitHub Releasesの最新版から`XB-SVCB-Online-Setup.exe`をダウンロードしてください。
+通常の利用では、GitHub Releasesの最新版からModelScope版`XB-SVCB-Online-Setup-ModelScope.exe`をダウンロードしてください。このインストーラーはModelScopeの`v0.1.0`リビジョンから検証済みオフラインパッケージを取得します。予備版`XB-SVCB-Online-Setup.exe`はGitHubで公開しないため、必要な場合は開発者から個別に入手してください。
 
 1. オンラインインストーラーを実行し、自動検出を使用するか、CPU、ROCm 10、DirectML、CUDA126、CUDA128を手動で選択します。
 2. 対応する完全パッケージのダウンロードとSHA-256検証が完了したら、アプリケーションのインストール先とユーザーデータの保存先を選択します。

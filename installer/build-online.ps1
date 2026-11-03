@@ -9,7 +9,13 @@
 param(
   [Alias('h')]
   [switch]$Help,
+  [ValidateSet('oss', 'modelscope')]
+  [string]$Source = 'oss',
   [string]$BaseUrl,
+  [string]$ModelScopeRepo,
+  [string]$ModelScopeRevision,
+  [string]$ModelScopePath,
+  [switch]$ModelScopeRoot,
   [string]$Python,
   [switch]$ManifestOnly,
   [switch]$ReuseManifest,
@@ -21,8 +27,17 @@ if ($Help -or $args -contains '--help') {
 Usage: .\installer\build-online.ps1 [options]
 
 Options:
+  -Source <source>    Download source: oss (default) or modelscope.
   -BaseUrl <url>      Public OSS directory containing the release files.
                       Defaults to the XB_OSS_BASE_URL environment variable.
+  -ModelScopeRepo <id> Public ModelScope model repository (owner/name).
+                       Defaults to XB_MODELSCOPE_REPO.
+  -ModelScopeRevision <revision>
+                      Repository revision. Defaults to v<app-version>.
+  -ModelScopePath <path>
+                      Directory containing release files in the repository.
+                      Defaults to the repository root.
+  -ModelScopeRoot      Read release files from the repository root.
   -Python <path>      Python used to generate online-manifest.ini.
   -ManifestOnly       Generate the manifest without compiling the bootstrapper.
   -ReuseManifest      Reuse and validate dist\online-manifest.ini without
@@ -35,6 +50,7 @@ Examples:
   .\installer\build-online.ps1 -ManifestOnly
   .\installer\build-online.ps1 -ReuseManifest -BaseUrl https://downloads.example.com/xb-svcb/0.1.0
   .\installer\build-online.ps1 -BaseUrl https://downloads.example.com/xb-svcb/0.1.0
+  .\installer\build-online.ps1 -Source modelscope -ModelScopeRepo lkpp233/xb-svcb
 '@ | Write-Output
   return
 }
@@ -125,6 +141,35 @@ function Normalize-BaseUrl([string]$Value) {
   return $Value.Trim().TrimEnd('/')
 }
 
+function Normalize-ModelScopeRepo([string]$Value) {
+  $normalized = ([string]$Value).Trim().Trim('/')
+  if ($normalized -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$') {
+    throw 'ModelScope repository must use the owner/name form.'
+  }
+  return $normalized
+}
+
+function Normalize-ModelScopeRevision([string]$Value) {
+  $normalized = ([string]$Value).Trim()
+  if ($normalized -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+    throw 'ModelScope revision contains unsupported characters.'
+  }
+  return $normalized
+}
+
+function Normalize-ModelScopePath([string]$Value) {
+  $normalized = ([string]$Value).Trim().Trim('/').Replace('\', '/')
+  if (-not $normalized) {
+    return ''
+  }
+  if (($normalized -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$') -or
+      $normalized.Contains('//') -or
+      (($normalized.Split('/')) -contains '..')) {
+    throw 'ModelScope release path contains unsupported characters or traversal.'
+  }
+  return $normalized
+}
+
 Require-File $OnlineScript 'Online Inno Setup script'
 $appVersion = Read-RegexValue `
   (Join-Path $Root 'app\config.py') `
@@ -155,6 +200,18 @@ if ($ValidateOnly) {
     if ($LASTEXITCODE -ne 0) {
       throw "Online installer validation failed (exit code $LASTEXITCODE)"
     }
+    & $iscc `
+      '/DXB_ONLINE_MODELSCOPE=1' `
+      '/DXB_ONLINE_MODELSCOPE_REPO=owner/repository' `
+      '/DXB_ONLINE_MODELSCOPE_REVISION=v0.1.0' `
+      '/DXB_ONLINE_MODELSCOPE_PATH=' `
+      '/DXB_ONLINE_OUTPUT_FILENAME=XB-SVCB-Online-ModelScope-Validation' `
+      '/DXB_ONLINE_MANIFEST_SHA256=0000000000000000000000000000000000000000000000000000000000000000' `
+      "/O$validateDir" `
+      $OnlineScript
+    if ($LASTEXITCODE -ne 0) {
+      throw "ModelScope online installer validation failed (exit code $LASTEXITCODE)"
+    }
   } finally {
     if (Test-Path -LiteralPath $validateDir) {
       Remove-Item -LiteralPath $validateDir -Recurse -Force
@@ -162,6 +219,37 @@ if ($ValidateOnly) {
   }
   Write-Host "Online installer validation passed for v$appVersion." -ForegroundColor Green
   return
+}
+
+$publicBaseUrl = ''
+$repo = ''
+$revision = ''
+$releasePath = ''
+$bootstrapperName = 'XB-SVCB-Online-Setup.exe'
+$publishTarget = ''
+if (-not $ManifestOnly) {
+  if ($Source -eq 'modelscope') {
+    if ($BaseUrl) {
+      throw '-BaseUrl cannot be combined with -Source modelscope.'
+    }
+    if ($ModelScopeRoot -and $ModelScopePath) {
+      throw '-ModelScopeRoot cannot be combined with -ModelScopePath.'
+    }
+    $repo = Normalize-ModelScopeRepo $(if ($ModelScopeRepo) { $ModelScopeRepo } else { $env:XB_MODELSCOPE_REPO })
+    $revision = Normalize-ModelScopeRevision $(if ($ModelScopeRevision) { $ModelScopeRevision } else { "v$appVersion" })
+    $releasePath = if ($ModelScopeRoot -or -not $ModelScopePath) { '' } else {
+      Normalize-ModelScopePath $ModelScopePath
+    }
+    $bootstrapperName = 'XB-SVCB-Online-Setup-ModelScope.exe'
+    $publishTarget = "ModelScope repository $repo, revision $revision, directory $releasePath"
+  } else {
+    if ($ModelScopeRepo -or $ModelScopePath -or $ModelScopeRoot -or $ModelScopeRevision) {
+      throw 'ModelScope options require -Source modelscope.'
+    }
+    $publicBaseUrl = if ($BaseUrl) { $BaseUrl } else { $env:XB_OSS_BASE_URL }
+    $publicBaseUrl = Normalize-BaseUrl $publicBaseUrl
+    $publishTarget = "$publicBaseUrl/"
+  }
 }
 
 Require-File $ManifestBuilder 'Online manifest builder'
@@ -189,32 +277,40 @@ if ($ManifestOnly) {
   return
 }
 
-$publicBaseUrl = if ($BaseUrl) { $BaseUrl } else { $env:XB_OSS_BASE_URL }
-$publicBaseUrl = Normalize-BaseUrl $publicBaseUrl
 if (-not $iscc) {
   throw 'ISCC.exe not found. Install Inno Setup 6: https://jrsoftware.org/isdl.php'
 }
 
-& $iscc `
-  "/DXB_ONLINE_BASE_URL=$publicBaseUrl" `
-  "/DXB_ONLINE_MANIFEST_SHA256=$manifestHash" `
-  $OnlineScript
+$compileArgs = @("/DXB_ONLINE_MANIFEST_SHA256=$manifestHash")
+if ($Source -eq 'modelscope') {
+  $compileArgs += @(
+    '/DXB_ONLINE_MODELSCOPE=1',
+    "/DXB_ONLINE_MODELSCOPE_REPO=$repo",
+    "/DXB_ONLINE_MODELSCOPE_REVISION=$revision",
+    "/DXB_ONLINE_MODELSCOPE_PATH=$releasePath",
+    '/DXB_ONLINE_OUTPUT_FILENAME=XB-SVCB-Online-Setup-ModelScope'
+  )
+} else {
+  $compileArgs += "/DXB_ONLINE_BASE_URL=$publicBaseUrl"
+}
+
+& $iscc @compileArgs $OnlineScript
 if ($LASTEXITCODE -ne 0) {
   throw "Online installer compile failed (exit code $LASTEXITCODE)"
 }
 
-$bootstrapper = Join-Path $Dist 'XB-SVCB-Online-Setup.exe'
+$bootstrapper = Join-Path $Dist $bootstrapperName
 Require-File $bootstrapper 'Online installer bootstrapper'
 Write-Host "`nOnline installer ready:" -ForegroundColor Green
 Write-Host ("  {0}" -f $bootstrapper) -ForegroundColor Green
 if ($ReuseManifest) {
-  Write-Host "`nExisting manifest reused. Keep the matching OSS manifest and EXE/BIN files unchanged." -ForegroundColor Yellow
+  Write-Host "`nExisting manifest reused. Keep the matching remote manifest and EXE/BIN files unchanged." -ForegroundColor Yellow
   Write-Host "Only redistribute the rebuilt online bootstrapper:" -ForegroundColor Cyan
   Write-Host ("  {0}" -f $bootstrapper)
   return
 }
 
-Write-Host "`nUpload these files to $publicBaseUrl/:" -ForegroundColor Cyan
+Write-Host "`nUpload these files to ${publishTarget}:" -ForegroundColor Cyan
 Write-Host ("  {0}" -f $ManifestPath)
 $packageNames = @(
   'XB-SVCB-Setup-CPU',
@@ -229,4 +325,4 @@ foreach ($packageName in $packageNames) {
     Sort-Object { [int]([regex]::Match($_.BaseName, '-(\d+)$').Groups[1].Value) } |
     ForEach-Object { Write-Host ("  {0}" -f $_.FullName) }
 }
-Write-Host "`nDistribute XB-SVCB-Online-Setup.exe; do not upload OSS credentials." -ForegroundColor Green
+Write-Host "`nDistribute $bootstrapperName; do not embed repository credentials." -ForegroundColor Green

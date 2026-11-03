@@ -22,9 +22,11 @@ Create a complete AI song cover in one workflow. Supports **So-VITS-SVC and RVC 
 [![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
 [![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
 
-### [Download the online installer: automatic CPU / AMD / NVIDIA selection](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+### [Download the ModelScope online installer: automatic CPU / AMD / NVIDIA selection](https://github.com/SDIJF1521/xb-svcb/releases/latest)
 
 <sub>One-click Windows installation with the frontend and base models included. No manual Python or Node.js setup required.</sub>
+
+<sub>GitHub Releases provides `XB-SVCB-Online-Setup-ModelScope.exe`. The fallback `XB-SVCB-Online-Setup.exe` is not published on GitHub; contact the developer if you need it.</sub>
 
 <sub>Community and support (QQ group): **1038366109**</sub>
 
@@ -66,7 +68,7 @@ The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UV
 
 ### Installer
 
-For normal use, download `XB-SVCB-Online-Setup.exe` from the latest GitHub release:
+For normal use, download the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`, from the latest GitHub release. It downloads verified offline packages from the ModelScope `v0.1.0` revision. The fallback `XB-SVCB-Online-Setup.exe` is not published on GitHub; contact the developer to obtain it separately.
 
 1. Run the online installer and use automatic detection, or manually select CPU, ROCm 10, DirectML, CUDA126, or CUDA128.
 2. Wait for the matching complete package to download and pass SHA-256 verification, then select both the application directory and user-data directory.

@@ -52,10 +52,10 @@ Starting with `0.1.0`, every new release must publish matching Simplified Chines
 - All five offline installers now include a clean 64-bit CPython 3.12.x runtime and complete FFmpeg/ffprobe payload. Installation and later repairs use these bundled runtimes instead of depending on global Python or FFmpeg installations.
 - Fixed false CUDA shared-runtime failures on slower GPUs or first cold starts where DDSP import exceeded 45 seconds. Shared setup now allows 90 seconds for ordinary imports and 180 seconds for DDSP cold start; timeouts remain explicit failures and never activate an incomplete `runtime.json`.
 - Simplified Chinese and Japanese Inno Setup language files are stored in the repository, so builds do not depend on optional language packs installed on the build machine.
-- Added a lightweight online installer that detects CPU, NVIDIA CUDA 12.6/12.8, and AMD ROCm 10, with an explicit DirectML compatibility option. It downloads only the selected offline installer family.
+- Added a lightweight online installer that detects CPU, NVIDIA CUDA 12.6/12.8, and AMD ROCm 10, with an explicit DirectML compatibility option. It downloads only the selected offline installer family. GitHub Releases publicly provides the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`.
 - Restored `pymss/py312/cpu` in the DirectML package. PyMSS uses CPU Torch 2.7.1 in its isolated `.venv-pymss` instead of mixing with the Torch 2.4.1 runtime pinned by `torch-directml`.
 - The online manifest pins the size and SHA-256 of every EXE/BIN file, while the online bootstrapper pins the manifest SHA-256. The offline installer starts only after all checks pass.
-- The public OSS HTTPS URL is injected at build time. No AccessKey, secret, or long-lived signed URL is embedded in the installer.
+- The GitHub ModelScope edition is pinned to the `v0.1.0` files in `lkpp233/xb-svcb` and verifies both the release manifest and every installer part. The fallback `XB-SVCB-Online-Setup.exe` is not uploaded to GitHub; contact the developer to obtain it separately. Neither edition embeds repository or OSS credentials.
 - Five-stack wheelhouse preparation is now incremental. Only `-CleanWheelhouse` deletes cached wheels, and interrupted downloads can resume at a named batch.
 - CPU SVC/RVC components are prepared before ROCm batches so an AMD source failure cannot leave the CPU package apparently present but incomplete.
 - ROCm component groups reuse shared Torch/SDK wheels through hardlinks, reducing repeated downloads and disk use for PyMSS, DDSP, and related components.
@@ -77,7 +77,7 @@ Starting with `0.1.0`, every new release must publish matching Simplified Chines
 
 - Python 3.12 and hardware-specific runtime layouts remain in use. Installer profiles are available for CPU, ROCm 10, DirectML, CUDA 12.6, and CUDA 12.8.
 - DirectML is primarily a compatibility path. DDSP automatic device selection still prefers CPU; explicitly selected experimental DirectML output should be auditioned before use.
-- The online installer requires access to the configured OSS/HTTPS endpoint. For fully offline deployment, download the EXE and every matching BIN part for the selected hardware stack.
+- The online installer provided on GitHub requires access to ModelScope. Contact the developer for the fallback download-source edition. For fully offline deployment, download the EXE and every matching BIN part for the selected hardware stack.
 - Back up the user data directory before upgrading from an older version. The installer does not migrate or remove existing models, works, or editor projects, but external model storage remains the publisher's or user's responsibility.
 
-See [Installation and startup](../en/getting-started.md) for setup and repair, and the [installer documentation](../../installer/README.md) for builds, online publishing, and OSS configuration.
+See [Installation and startup](../en/getting-started.md) for setup and repair, and the [installer documentation](../../installer/README.md) for builds, ModelScope publishing, and fallback OSS configuration.

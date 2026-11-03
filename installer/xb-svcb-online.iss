@@ -9,6 +9,9 @@
 #ifndef XB_ONLINE_MANIFEST_SHA256
   #define XB_ONLINE_MANIFEST_SHA256 "0000000000000000000000000000000000000000000000000000000000000000"
 #endif
+#ifndef XB_ONLINE_OUTPUT_FILENAME
+  #define XB_ONLINE_OUTPUT_FILENAME "XB-SVCB-Online-Setup"
+#endif
 
 [Setup]
 AppId={{8A5BDAA4-CC5F-45B0-A87F-AACB289713A2}
@@ -22,7 +25,7 @@ CreateAppDir=no
 Uninstallable=no
 PrivilegesRequired=lowest
 OutputDir=..\dist
-OutputBaseFilename=XB-SVCB-Online-Setup
+OutputBaseFilename={#XB_ONLINE_OUTPUT_FILENAME}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -38,9 +41,15 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 Name: "ja"; MessagesFile: "languages\Japanese.isl"
 
 [CustomMessages]
+#ifdef XB_ONLINE_MODELSCOPE
+zhcn.OnlineAppName=XB-SVCB 在线安装器（魔搭社区版）
+en.OnlineAppName=XB-SVCB Online Setup (ModelScope)
+ja.OnlineAppName=XB-SVCB オンラインセットアップ (ModelScope)
+#else
 zhcn.OnlineAppName=XB-SVCB 在线安装器
 en.OnlineAppName=XB-SVCB Online Setup
 ja.OnlineAppName=XB-SVCB オンラインセットアップ
+#endif
 zhcn.OnlineHardwareTitle=选择硬件版本
 en.OnlineHardwareTitle=Choose a hardware build
 ja.OnlineHardwareTitle=ハードウェア版の選択
@@ -297,7 +306,16 @@ end;
 
 function ArtifactUrl(const BaseName: String): String;
 begin
+#ifdef XB_ONLINE_MODELSCOPE
+  Result := 'https://www.modelscope.cn/api/v1/models/' +
+    '{#XB_ONLINE_MODELSCOPE_REPO}/repo?Revision={#XB_ONLINE_MODELSCOPE_REVISION}' +
+    '&FilePath=';
+  if '{#XB_ONLINE_MODELSCOPE_PATH}' <> '' then
+    Result := Result + '{#XB_ONLINE_MODELSCOPE_PATH}/';
+  Result := Result + BaseName;
+#else
   Result := BaseUrl() + '/' + BaseName;
+#endif
 end;
 
 function PersistentDownloadDirectory(): String;

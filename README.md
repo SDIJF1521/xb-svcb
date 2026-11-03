@@ -26,9 +26,11 @@
 
 <br/>
 
-### ⬇️ [**下载在线安装器 · 自动选择 CPU / AMD / NVIDIA 版本**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
+### ⬇️ [**下载魔搭社区在线安装器 · 自动选择 CPU / AMD / NVIDIA 版本**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
 
 <sub>Windows 一键安装 · 内置前端与底模 · 无需手动配置 Python / Node</sub>
+
+<sub>GitHub Releases 提供 `XB-SVCB-Online-Setup-ModelScope.exe`；备用版 `XB-SVCB-Online-Setup.exe` 不在 GitHub 公开发布，如有需要请联系开发者获取。</sub>
 
 <sub>用户交流 / 反馈 QQ 群：**1038366109**</sub>
 
@@ -71,7 +73,7 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 
 ### 使用安装包
 
-普通用户建议直接使用 GitHub Releases 中的 `XB-SVCB-Online-Setup.exe`：
+普通用户建议直接使用 GitHub Releases 中的魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`。该安装器从 ModelScope 的 `v0.1.0` 版本下载经过校验的离线安装包。备用版 `XB-SVCB-Online-Setup.exe` 不在 GitHub 公开发布，如有需要请联系开发者单独获取。
 
 1. 运行在线安装器，使用自动检测或手动选择 CPU、ROCm 10、DirectML、CUDA126、CUDA128。
 2. 等待对应的完整安装包下载并通过 SHA-256 校验，然后选择应用安装目录和用户数据目录。

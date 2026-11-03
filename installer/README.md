@@ -172,9 +172,29 @@ CPU、ROCm 已完成而其余三栈尚未准备时，直接补齐剩余栈，避
 - `-KeepExistingInstallers`：不清理 `dist` 中旧的安装器分卷。
 - `-CleanWheelhouse`：与 `-RebuildWheelhouse` 一起使用，删除现有缓存后从零下载；通常不需要。
 
-## 在线安装器与 OSS 发布
+## 在线安装器与发布源
 
-v0.1.0 同时提供引导式在线安装器 `XB-SVCB-Online-Setup.exe`。它会自动检测或让用户手动选择硬件栈，先读取并校验发布清单，再显示完整安装包大小、缓存复用情况和下载位置。只有缺失或 SHA-256 不匹配的 EXE/BIN 分卷会下载；全部文件校验通过后，在线安装器会以当前语言启动完整离线安装向导。在线安装器支持简体中文、English 和日本語。
+v0.1.0 提供两种引导式在线安装器。GitHub Releases 只公开发布魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`；备用下载源版本 `XB-SVCB-Online-Setup.exe` 不上传 GitHub，如有需要请联系开发者单独获取。两种版本都会自动检测或让用户手动选择硬件栈，先读取并校验发布清单，再显示完整安装包大小、缓存复用情况和下载位置。只有缺失或 SHA-256 不匹配的 EXE/BIN 分卷会下载；全部文件校验通过后，在线安装器会以当前语言启动完整离线安装向导。在线安装器支持简体中文、English 和日本語。
+
+### 魔搭社区 ModelScope 版本
+
+`XB-SVCB-Online-Setup-ModelScope.exe` 与备用 OSS 版共用同一份带 SHA-256 的发布清单和五套离线包，但从公开的 ModelScope 模型仓库下载。两个引导程序可同时构建，互不覆盖。当前默认发布源是 [`lkpp233/xb-svcb` 的 `v0.1.0` 版本文件页](https://www.modelscope.cn/models/lkpp233/xb-svcb/files?version=v0.1.0)，安装器读取该版本的仓库根目录。把 `online-manifest.ini` 和全部 `XB-SVCB-Setup-*` EXE/BIN 原名上传到该版本根目录，然后运行：
+
+```powershell
+& .\installer\build-online-modelscope.ps1 `
+  -Python C:\python3.12.9\python.exe
+```
+
+也可以显式指定其他仓库、版本和仓库子目录：
+
+```powershell
+& .\installer\build-online-modelscope.ps1 `
+  -Repo "你的用户名/xb-svcb-releases" `
+  -Revision v0.1.0 `
+  -RepositoryPath "xb-svcb/0.1.0"
+```
+
+仓库必须允许匿名下载。构建脚本使用 ModelScope 官方文件接口 `/api/v1/models/<仓库>/repo?Revision=...&FilePath=...`，不会把访问令牌写进安装器。上传后应先验证清单、一个 EXE 和最大的 BIN 都能在未登录状态下下载，并确认 BIN 请求支持断点续传；仓库配额、单文件大小或下行流量不满足时，不能只上传部分分卷。替换任何发布文件后，仍需重新生成清单并重新构建、分发引导程序。
 
 ### 当前 OSS 桶配置
 
@@ -202,7 +222,7 @@ $env:XB_OSS_BASE_URL = "https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1
   -Python C:\python3.12.9\python.exe
 ```
 
-构建完成后，把 `dist\online-manifest.ini` 和五套离线安装器的 EXE/BIN 文件原名上传到 `xb-svcb/0.1.0/` 前缀。先上传全部 EXE/BIN，最后上传 `online-manifest.ini`。本地分发的 `dist\XB-SVCB-Online-Setup.exe` 是引导程序，不要求放在 OSS；如果也上传，必须放在单独位置，避免用户误把它当作某个硬件栈的离线安装器。
+构建完成后，把 `dist\online-manifest.ini` 和五套离线安装器的 EXE/BIN 文件原名上传到 `xb-svcb/0.1.0/` 前缀。先上传全部 EXE/BIN，最后上传 `online-manifest.ini`。本地生成的 `dist\XB-SVCB-Online-Setup.exe` 是备用引导程序，不上传 GitHub Releases，也不要求放在 OSS；需要时由开发者单独提供。如果上传到内部下载位置，必须与离线安装分卷分开，避免用户误把它当作某个硬件栈的离线安装器。
 
 如果 OSS 上的五套离线包和 `online-manifest.ini` 没有变化，只修改了在线安装器代码，本地可以删除大分卷后复用现有清单。此时使用 `-ReuseManifest`，脚本会严格校验现有清单但不会要求本地保留五套 EXE/BIN：
 
@@ -221,7 +241,7 @@ $env:XB_OSS_BASE_URL = "https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1
 <在线安装器所在目录>\XB-SVCB-Downloads\0.1.0\<stack>\
 ```
 
-例如在线安装器在 `D:\Downloads` 中并选择 CUDA126，下载中的文件和最终文件都位于 `D:\Downloads\XB-SVCB-Downloads\0.1.0\cu126\`。未完成文件使用 `.part` 后缀并支持续传，SHA-256 校验通过后在同一目录原地改名。该目录保存用户选择的硬件栈 EXE 和全部 `.bin` 分卷，在线安装器从这里启动离线安装器。它不会在在线安装器退出时自动删除，因此也可作为完整离线包保留。在线安装器所在目录必须可写；若从只读目录、受保护目录或压缩包内运行，需要先把在线安装器移动到普通可写文件夹。
+例如在线安装器在 `D:\Downloads` 中并选择 CUDA126，下载中的文件和最终文件都位于 `D:\Downloads\XB-SVCB-Downloads\0.1.0\cu126\`。未完成文件使用 `.part` 后缀；curl 路径支持续传，PowerShell 回退路径会从头重新下载。SHA-256 校验通过后文件在同一目录原地改名。该目录保存用户选择的硬件栈 EXE 和全部 `.bin` 分卷，在线安装器从这里启动离线安装器。它不会在在线安装器退出时自动删除，因此也可作为完整离线包保留。在线安装器所在目录必须可写；若从只读目录、受保护目录或压缩包内运行，需要先把在线安装器移动到普通可写文件夹。
 
 上传后先验证匿名读取（在 OSS 权限配置完成后执行）：
 
@@ -265,7 +285,7 @@ XB-SVCB-Setup-CUDA128.exe
 XB-SVCB-Setup-CUDA128-*.bin
 ```
 
-对外分发本地生成的 `dist\XB-SVCB-Online-Setup.exe`，它本身不必放在同一个 OSS 目录。OSS 发布要求：
+备用 OSS 版只在需要时由开发者单独分发本地生成的 `dist\XB-SVCB-Online-Setup.exe`，不上传 GitHub Releases；它本身不必放在同一个 OSS 目录。OSS 发布要求：
 
 - 推荐 Bucket 保持私有，只通过 Bucket Policy 给 `xb-svcb/0.1.0/*` 前缀开放匿名只读；不要开放匿名写入、删除或列目录权限。
 - 绑定公开 HTTPS 域名或使用 OSS 公网 HTTPS Endpoint，不要使用内网 Endpoint，也不要把 AccessKey、Secret 或临时签名 URL 编译进安装器。

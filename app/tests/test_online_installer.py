@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_BUILDER = ROOT / "installer" / "build_online_manifest.py"
 ONLINE_SCRIPT = ROOT / "installer" / "xb-svcb-online.iss"
 ONLINE_BUILD = ROOT / "installer" / "build-online.ps1"
+MODELSCOPE_BUILD = ROOT / "installer" / "build-online-modelscope.ps1"
 
 
 def _load_manifest_builder():
@@ -208,6 +209,35 @@ def test_online_build_uses_public_url_without_oss_credentials() -> None:
     assert "--validate-existing $ManifestPath" in build
     assert "AccessKey" not in build
     assert "Secret" not in build
+
+
+def test_online_installer_supports_a_separate_modelscope_edition() -> None:
+    build = ONLINE_BUILD.read_text(encoding="utf-8")
+    wrapper = MODELSCOPE_BUILD.read_text(encoding="utf-8")
+    script = ONLINE_SCRIPT.read_text(encoding="utf-8")
+
+    assert "[ValidateSet('oss', 'modelscope')]" in build
+    assert "Normalize-ModelScopeRepo" in build
+    assert "Normalize-ModelScopeRevision" in build
+    assert "Normalize-ModelScopePath" in build
+    assert "XB_MODELSCOPE_REPO" in build
+    assert "ModelScopeRoot" in build
+    assert "/DXB_ONLINE_MODELSCOPE=1" in build
+    assert "/DXB_ONLINE_OUTPUT_FILENAME=XB-SVCB-Online-Setup-ModelScope" in build
+    assert "Source = 'modelscope'" in wrapper
+    assert "build-online.ps1" in wrapper
+    assert "#ifdef XB_ONLINE_MODELSCOPE" in script
+    assert "https://www.modelscope.cn/api/v1/models/" in script
+    assert "?Revision={#XB_ONLINE_MODELSCOPE_REVISION}" in script
+    assert "if '{#XB_ONLINE_MODELSCOPE_PATH}' <> '' then" in script
+    assert "Result := Result + '{#XB_ONLINE_MODELSCOPE_PATH}/';" in script
+    assert "OutputBaseFilename={#XB_ONLINE_OUTPUT_FILENAME}" in script
+    assert "XB-SVCB 在线安装器（魔搭社区版）" in script
+    assert "[string]$Repo = 'lkpp233/xb-svcb'" in wrapper
+    assert "[string]$Revision = 'v0.1.0'" in wrapper
+    assert "https://www.modelscope.cn/models/lkpp233/xb-svcb/files?version=v0.1.0" in wrapper
+    assert "ModelScopeRoot = $true" in wrapper
+    assert 'else { "v$appVersion" }' in build
 
 
 def test_release_installers_use_the_web_favicon_as_the_canonical_icon() -> None:

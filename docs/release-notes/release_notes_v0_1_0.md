@@ -52,10 +52,10 @@ fc8d214e068457a273929e80c108b33f55b4e9e8^..HEAD
 - 五套离线安装器现在都内置干净的 64 位 CPython 3.12.x 和完整 FFmpeg/ffprobe，不再依赖用户机器上的全局 Python 或 FFmpeg；安装及后续修复固定使用安装目录中的运行时。
 - 修复 CUDA 共享运行时在低端或首次冷启动较慢的显卡上因 DDSP 导入超过 45 秒而误报失败的问题；共享安装器现在对普通导入允许 90 秒，对 DDSP 冷启动允许 180 秒，超时仍会明确记录并阻止激活不完整的 `runtime.json`。
 - 简体中文和日语 Inno Setup 语言文件随源码提供，构建不依赖开发机是否安装额外语言包。
-- 新增轻量在线安装器，可检测 CPU、NVIDIA CUDA 12.6/12.8、AMD ROCm 10，并提供 DirectML 兼容模式选择；它只下载用户选择的一套离线安装包。
+- 新增轻量在线安装器，可检测 CPU、NVIDIA CUDA 12.6/12.8、AMD ROCm 10，并提供 DirectML 兼容模式选择；它只下载用户选择的一套离线安装包。GitHub Releases 公开提供魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`。
 - DirectML 安装包恢复携带 `pymss/py312/cpu`：PyMSS 在独立 `.venv-pymss` 中使用 CPU Torch 2.7.1，不与固定 Torch 2.4.1 的 `torch-directml` 混装。
 - 在线清单固定五套离线安装器 EXE/BIN 的文件大小和 SHA-256，在线安装器再固定清单 SHA-256；全部校验通过后才启动离线安装流程。
-- OSS 地址在构建时通过公开 HTTPS URL 注入，安装器不包含 AccessKey、Secret 或长期签名 URL。
+- GitHub 发布的魔搭社区版固定访问 `lkpp233/xb-svcb` 的 `v0.1.0` 版本文件，并逐项校验发布清单与安装分卷。备用版 `XB-SVCB-Online-Setup.exe` 不上传 GitHub，如有需要请联系开发者单独获取；两种版本都不包含仓库或 OSS 密钥。
 - 五栈 wheelhouse 改为增量补齐。只有显式使用 `-CleanWheelhouse` 才会删除缓存，网络中断后可以从指定批次继续。
 - CPU 的 SVC/RVC 组件在 ROCm 批次前准备，避免 AMD 下载源失败导致 CPU 安装包后续才发现目录为空。
 - ROCm 组件通过硬链接复用公共 Torch/SDK wheels，减少 PyMSS、DDSP 等组件重复下载和占用磁盘空间。
@@ -77,7 +77,7 @@ fc8d214e068457a273929e80c108b33f55b4e9e8^..HEAD
 
 - 继续使用 Python 3.12 和硬件专用运行时布局，提供 CPU、ROCm 10、DirectML、CUDA 12.6 与 CUDA 12.8 五种安装配置。
 - DirectML 主要用于兼容推理。DDSP 自动设备仍优先使用 CPU；显式选择 DirectML 的实验路径需要试听确认输出。
-- 在线安装器需要访问发布者配置的 OSS/HTTPS 地址；需要完全离线部署时应下载对应硬件栈的 EXE 和全部同名前缀 BIN 分卷。
+- GitHub 提供的在线安装器需要访问 ModelScope；备用下载源版本需联系开发者获取。需要完全离线部署时，应下载对应硬件栈的 EXE 和全部同名前缀 BIN 分卷。
 - 从旧版本升级前建议保留用户数据目录备份。安装器不会迁移或删除已有模型、作品和编辑工程，但外部模型目录必须由发布者或用户自行维护。
 
-安装与修复步骤见[源码安装与启动](../getting-started.md)，安装器构建、在线发布和 OSS 配置见[安装器文档](../../installer/README.md)。
+安装与修复步骤见[源码安装与启动](../getting-started.md)，安装器构建、ModelScope 在线发布和备用 OSS 配置见[安装器文档](../../installer/README.md)。
