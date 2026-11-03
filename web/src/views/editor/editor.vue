@@ -5863,7 +5863,7 @@ onUnmounted(() => {
   min-height: 640px;
 }
 .timeline-top {
-  height: 52px;
+  min-height: 52px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -5875,6 +5875,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 14px;
+  flex: 1 1 50%;
   min-width: 0;
 }
 .transport {
@@ -5904,6 +5905,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 .edit-tools .split-btn {
   width: auto;
@@ -5930,8 +5932,9 @@ onUnmounted(() => {
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
 .render-path {
+  flex: 0 1 50%;
   min-width: 0;
-  max-width: 50%;
+  max-width: min(50%, 360px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6335,5 +6338,20 @@ onUnmounted(() => {
   }
   .rerun-param-head { flex-wrap: wrap; }
   .editor-manual-switch { width: 100%; margin-left: 0; justify-content: space-between; white-space: normal; }
+}
+@media (max-width: 760px) {
+  .timeline-top {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding-block: 8px;
+  }
+  .timeline-main-tools {
+    flex-basis: 100%;
+  }
+  .render-path {
+    flex-basis: 100%;
+    max-width: 100%;
+  }
 }
 </style>
