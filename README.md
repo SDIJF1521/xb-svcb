@@ -1,43 +1,5 @@
 <div align="center">
 
-**简体中文** | [English](README.en.md) | [日本語](README.ja.md)
-
-<img src="assets/icon/xb-svcb.png" width="180" alt="XB-SVCB Logo" />
-
-# 🎤 XB-SVCB · AI 翻唱工具
-
-#### 开箱即用的桌面级 AI 翻唱工作站
-
-**🎵 导入歌曲 ｜ 🎚️ 人声分离 ｜ 🌫️ 去混响 ｜ 🗣️ AI 歌声转换 ｜ 🎧 AI 歌声增强 ｜ 🎼 合并伴奏 ｜ 🎤 成品翻唱**
-
-一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **实时系统音频变声** · **AI 歌声增强工程** · **在线曲库** · **模型站** · **音频编辑器**
-
-<br/>
-
-[![License](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release&color=ff6b9d)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/SDIJF1521/xb-svcb/total?color=brightgreen&label=downloads)](https://github.com/SDIJF1521/xb-svcb/releases)
-[![Stars](https://img.shields.io/github/stars/SDIJF1521/xb-svcb?style=flat&color=yellow)](https://github.com/SDIJF1521/xb-svcb/stargazers)
-
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#)
-[![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](#)
-[![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
-[![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
-
-<br/>
-
-### ⬇️ [**下载魔搭社区在线安装器 · 自动选择 CPU / AMD / NVIDIA 版本**](https://github.com/SDIJF1521/xb-svcb/releases/latest)
-
-<sub>Windows 一键安装 · 内置前端与底模 · 无需手动配置 Python / Node</sub>
-
-<sub>GitHub Releases 提供 `XB-SVCB-Online-Setup-ModelScope.exe`；备用版 `XB-SVCB-Online-Setup.exe` 不在 GitHub 公开发布，如有需要请联系开发者获取。</sub>
-
-<sub>用户交流 / 反馈 QQ 群：**1038366109**</sub>
-
-<sub>项目官网：**[https://xb-svcb.cn](https://xb-svcb.cn)**</sub>
-<sub>项目文档：**[https://sdijf1521.github.io/xb-svcb/](https://sdijf1521.github.io/xb-svcb/)**</sub>
-</div>
-
 ---
 
 ## 软件界面
@@ -88,23 +50,23 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 
 Python 3.12 依赖迁移、ROCm 10 官方源和模型兼容范围见 [迁移说明](docs/python312-rocm10.md)。AMD 默认使用官方 `whl-next` 源及 `device-all` 套件，已验证 Windows cp312 wheel 与 PyMSS 的依赖解析；安装成功仍须通过 HIP/GPU 运算校验。
 
-~~~bat
+```bat
 setup_env.bat --cu128
 setup_env.bat --cu126
 setup_env.bat --rocm10
 setup_env.bat --directml
 setup_env.bat --cpu
-~~~
+```
 
-CUDA126/CUDA128 调用 <code>install/install_shared.py</code>，分别创建 <code>runtimes/core-*</code> 与 <code>runtimes/svc-*</code> 两层共享环境；CPU、ROCm 10 和 DirectML 走 <code>install/install.py</code>。ROCm 10 的 SVC/RVC/Vocal 共用 <code>runtimes/svc-rocm10</code>，其余组件仍隔离；CPU/DirectML 使用隔离布局。
+CUDA126/CUDA128 调用 <code>install/install_shared.py</code>，分别创建 <code>runtimes/core-</code> 与 <code>runtimes/svc-</code> 两层共享环境；CPU、ROCm 10 和 DirectML 走 <code>install/install.py</code>。ROCm 10 的 SVC/RVC/Vocal 共用 <code>runtimes/svc-rocm10</code>，其余组件仍隔离；CPU/DirectML 使用隔离布局。
 
 常用的单组件安装命令：
 
-~~~bat
+```bat
 setup_env.bat --only uvr seedvc ddsp
 setup_env.bat --only svc rvc vocal
 setup_env.bat --only models
-~~~
+```
 
 CUDA core 的 UVR、SeedVC、DDSP 是原子组，修复时应一起选择。共享布局、固定配方、旧安装回退和清理边界见 [共享运行时与兼容布局](docs/runtime-consolidation.md)。
 
@@ -114,29 +76,29 @@ CUDA core 的 UVR、SeedVC、DDSP 是原子组，修复时应一起选择。共�
 
 生产模式会加载已构建的 <code>web/dist</code>：
 
-~~~bat
+```bat
 run.bat
-~~~
+```
 
 也可以直接运行：
 
-~~~bat
+```bat
 app\.venv\Scripts\python.exe app\main.py
-~~~
+```
 
 开发模式需要两个终端。第一个终端启动前端：
 
-~~~bat
+```bat
 cd web
 npm install
 npm run dev
-~~~
+```
 
 第二个终端启动 Python 后端：
 
-~~~bat
+```bat
 app\.venv\Scripts\python.exe app\main.py --dev
-~~~
+```
 
 开发模式默认连接 <code>http://localhost:5173</code>，也可以通过 <code>XB_DEV_URL</code> 指定前端地址。完整环境说明见[源码安装与启动](docs/getting-started.md)。
 
@@ -155,7 +117,7 @@ app\.venv\Scripts\python.exe app\main.py --dev
 
 XB-SVCB 的核心原则是：桌面 UI 和 FastAPI 共用同一套 Python 业务核心，重型模型与音频工具通过隔离 Worker 执行。
 
-~~~mermaid
+```mermaid
 flowchart LR
     USER[桌面用户] --> UI[Vue 3 + pywebview]
     CLIENT[外部客户端] --> HTTP[FastAPI]
@@ -178,25 +140,25 @@ flowchart LR
     SEED -.-> ASSETS
     DDSP -.-> ASSETS
     UVR -.-> ASSETS
-~~~
+```
 
 上图中各连接的含义：
 
-| 连接 | 作用 |
-| --- | --- |
-| 桌面用户 → Vue + pywebview | 用户选择歌曲、模型、参数，并查看任务状态。 |
-| 外部客户端 → FastAPI | 通过 HTTP 上传文件、创建任务、查询进度和下载结果。 |
-| Vue → Bridge API | 前端通过 pywebview 调用 Python 方法。 |
-| FastAPI → Api Facade | HTTP 层复用桌面入口使用的同一个业务契约。 |
-| Api Facade → Application Services | 将请求分发到模型、作品、转换、编辑器和插件等业务服务。 |
-| Application Services → 推理队列 | 统一管理普通任务，控制任务状态和 GPU 资源占用。 |
-| 推理队列 → EngineRegistry | 根据模型的 framework 选择对应的引擎适配器。 |
-| EngineRegistry → 模型 Worker | 启动独立 Python 环境中的实际推理进程。 |
-| Application Services → UVR / Vocal / FFmpeg | 执行分离、增强、转码、混音和导出等音频处理。 |
-| Worker → 随包模型资产 | 优先读取本地 checkpoint、声码器和 F0 模型，缺失时才联网获取。 |
-| Application Services ↔ .xb_svcb | 保存模型记录、任务、作品、编辑工程、设置、日志和缓存。 |
+| 连接                                         | 作用                                                          |
+| -------------------------------------------- | ------------------------------------------------------------- |
+| 桌面用户 → Vue + pywebview                  | 用户选择歌曲、模型、参数，并查看任务状态。                    |
+| 外部客户端 → FastAPI                        | 通过 HTTP 上传文件、创建任务、查询进度和下载结果。            |
+| Vue → Bridge API                            | 前端通过 pywebview 调用 Python 方法。                         |
+| FastAPI → Api Facade                        | HTTP 层复用桌面入口使用的同一个业务契约。                     |
+| Api Facade → Application Services           | 将请求分发到模型、作品、转换、编辑器和插件等业务服务。        |
+| Application Services → 推理队列             | 统一管理普通任务，控制任务状态和 GPU 资源占用。               |
+| 推理队列 → EngineRegistry                   | 根据模型的 framework 选择对应的引擎适配器。                   |
+| EngineRegistry → 模型 Worker                | 启动独立 Python 环境中的实际推理进程。                        |
+| Application Services → UVR / Vocal / FFmpeg | 执行分离、增强、转码、混音和导出等音频处理。                  |
+| Worker → 随包模型资产                       | 优先读取本地 checkpoint、声码器和 F0 模型，缺失时才联网获取。 |
+| Application Services ↔ .xb_svcb             | 保存模型记录、任务、作品、编辑工程、设置、日志和缓存。        |
 
-主程序环境只负责桌面壳、API 和业务编排，不会把所有模型权重加载到同一个 Python 进程。模型 Worker 通过 <code>runtime.json</code> 路由到实际解释器：CUDA126/CUDA128 使用 <code>runtimes/core-*</code> 与 <code>runtimes/svc-*</code>；ROCm 10 的 SVC/RVC/Vocal 使用 <code>runtimes/svc-rocm10</code>，其余组件和 CPU/DirectML 采用隔离环境。详细的 Python 后端、启动链路和模型加载时机见：
+主程序环境只负责桌面壳、API 和业务编排，不会把所有模型权重加载到同一个 Python 进程。模型 Worker 通过 <code>runtime.json</code> 路由到实际解释器：CUDA126/CUDA128 使用 <code>runtimes/core-</code> 与 <code>runtimes/svc-</code>；ROCm 10 的 SVC/RVC/Vocal 使用 <code>runtimes/svc-rocm10</code>，其余组件和 CPU/DirectML 采用隔离环境。详细的 Python 后端、启动链路和模型加载时机见：
 
 - [系统架构说明](docs/architecture.md)
 - [启动与模型推理链路](docs/startup-chain.md)
@@ -237,7 +199,7 @@ API 文档、鉴权方式和 Python / PowerShell 示例见 [FastAPI 接入文档
 
 ## 目录结构
 
-~~~text
+```text
 xb-svcb/
 ├─ app/                         Python 后端、业务服务、引擎适配和测试
 │  ├─ api/                      pywebview Bridge 与 FastAPI
@@ -254,7 +216,7 @@ xb-svcb/
 ├─ docs/                        使用、架构、API、插件和发布文档
 ├─ run.bat / run.ps1            源码启动入口
 └─ setup_env.bat                运行环境搭建入口
-~~~
+```
 
 ## 数据目录与配置
 
@@ -270,33 +232,33 @@ xb-svcb/
 
 常用环境变量：
 
-| 变量 | 用途 |
-| --- | --- |
-| <code>XB_DATA_DIR</code> | 自定义用户数据目录。 |
-| <code>XB_DEV</code> | 设置为 <code>1</code> 时启用开发模式。 |
-| <code>XB_DEV_URL</code> | 指定开发模式使用的前端地址。 |
-| <code>XB_HF_MIRROR</code> / <code>HF_ENDPOINT</code> | 指定 Hugging Face 镜像。 |
-| <code>XB_PYPI_MIRROR</code> | 指定 Python 包镜像。 |
-| <code>XB_GH_MIRROR</code> | 指定 GitHub 资源镜像。 |
+| 变量                                                 | 用途                                   |
+| ---------------------------------------------------- | -------------------------------------- |
+| <code>XB_DATA_DIR</code>                             | 自定义用户数据目录。                   |
+| <code>XB_DEV</code>                                  | 设置为 <code>1</code> 时启用开发模式。 |
+| <code>XB_DEV_URL</code>                              | 指定开发模式使用的前端地址。           |
+| <code>XB_HF_MIRROR</code> / <code>HF_ENDPOINT</code> | 指定 Hugging Face 镜像。               |
+| <code>XB_PYPI_MIRROR</code>                          | 指定 Python 包镜像。                   |
+| <code>XB_GH_MIRROR</code>                            | 指定 GitHub 资源镜像。                 |
 
 ## 测试与开发
 
 后端测试（项目根目录）：
 
-~~~bat
+```bat
 uv run --project app --with pytest --with scipy==1.13.1 pytest app/tests -q -rs
-~~~
+```
 
 运行时、安装器、离线打包和真实推理的分组与前置条件见 [测试说明](docs/testing.md)。
 
 前端检查和测试：
 
-~~~bat
+```bat
 cd web
 npm run type-check
 npm run test:unit -- --run
 npm run build
-~~~
+```
 
 修改 Python 后端时，建议从 <code>app/api/bridge.py</code>、<code>app/application/</code> 开始，再阅读 <code>app/infrastructure/</code> 中的引擎和 Worker。发布校验与安装包构建命令见[开发与发布](docs/development.md)和[安装器说明](installer/README.md)。
 
@@ -310,11 +272,11 @@ npm run build
 
 确认 Python 已加入 PATH，并按组件重新执行 <code>install/install.py --only COMPONENT</code>。网络不稳定时可设置镜像：
 
-~~~bat
+```bat
 set XB_HF_MIRROR=https://hf-mirror.com
 set XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple
 set XB_GH_MIRROR=https://ghfast.top
-~~~
+```
 
 v0.0.32 CUDA128 安装若在 <code>torch-2.7.1+cu128</code> 处提示 <code>Missing .dist-info directory</code>，或组件安装成功后最终校验提示缺少 <code>exceptiongroup</code>，请按[源码安装与启动中的 CUDA128 离线安装修复](docs/getting-started.md#v0032-cuda128-离线安装修复)核对 wheel 哈希、刷新 <code>uv</code> 缓存并补齐依赖。不要切换到旧隔离环境，也不需要重新安装 CUDA Toolkit。
 
@@ -322,9 +284,9 @@ v0.0.32 CUDA128 安装若在 <code>torch-2.7.1+cu128</code> 处提示 <code>Miss
 
 SVC 环境可能缺少兼容版本的 setuptools。RTX 50 系 cu128 安装可执行：
 
-~~~bat
+```bat
 uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "setuptools<81" wheel
-~~~
+```
 
 ### 分离或推理速度很慢
 
@@ -338,32 +300,11 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 
 当前版本：**v0.1.0**
 
-已完成的核心方向：
-
-- So-VITS-SVC、RVC、SeedVC、DDSP-SVC 多框架推理；
-- 多模型时间轴混唱和基础合唱；
-- Audio Editor Lite 音频编辑工程；
-- ModelScope 模型站；
-- FastAPI 外部接入；
-- NVIDIA CUDA、AMD ROCm 10、DirectML 和 CPU 路径；
-- 插件中心与 Python / 前端插件运行时。
-
-后续重点：
-
-- 自动歌词识别和更完善的自动时间轴；
-- 模型元数据标准化、兼容性检查和自动识别；
-- 工程导入导出与自动保存；
-- 更多歌声转换框架；
-- 作品分类、视频导出和歌词视频能力；
-- Intel GPU、CPU 性能和多 GPU 调度优化。
-
 完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.1.0 更新说明](docs/release-notes/release_notes_v0_1_0.md)。
 
 ## 🤝 贡献者
 
 感谢每一位参与 XB-SVCB 开发和维护的贡献者。
-
-> <a href="https://github.com/SDIJF1521" title="SDIJF1521 · YGXB"><img src="https://images.weserv.nl/?url=github.com/SDIJF1521.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="SDIJF1521" /></a>&nbsp;&nbsp;<a href="https://github.com/emptyelse" title="emptyelse"><img src="https://images.weserv.nl/?url=github.com/emptyelse.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="emptyelse" /></a>&nbsp;&nbsp;<a href="https://github.com/GFMAA" title="GFMAA"><img src="https://images.weserv.nl/?url=github.com/GFMAA.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="GFMAA" /></a>&nbsp;&nbsp;<a href="https://github.com/SugarCatCat" title="SugarCatCat · 糖猫猫"><img src="https://images.weserv.nl/?url=github.com/SugarCatCat.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="SugarCatCat" /></a>
 
 贡献者：**SDIJF1521（YGXB） · emptyelse · GFMAA · SugarCatCat（糖猫猫）**。点击头像可查看个人主页；完整记录见[贡献者页面](https://github.com/SDIJF1521/xb-svcb/graphs/contributors)。欢迎阅读 [贡献指南](CONTRIBUTING.md) 并参与项目。
 
