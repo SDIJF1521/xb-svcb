@@ -40,7 +40,6 @@ declare module 'vue' {
     ElSlider: typeof import('element-plus/es')['ElSlider']
     ElSwitch: typeof import('element-plus/es')['ElSwitch']
     ElTag: typeof import('element-plus/es')['ElTag']
-    ElTooltip: typeof import('element-plus/es')['ElTooltip']
     FirstUseGuide: typeof import('./../components/onboarding/FirstUseGuide.vue')['default']
     LocaleSwitcher: typeof import('./../components/layout/LocaleSwitcher.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']

@@ -1011,16 +1011,33 @@
                 <button title="删除音轨" class="danger" :disabled="track.locked" @click="deleteTrack(track)">
                   <el-icon><Delete /></el-icon>
                 </button>
-                <el-tooltip :content="translateUiText(track.name)" placement="right" :show-after="250">
-                  <span class="track-name" :title="translateUiText(track.name)">
-                    <i
-                      v-if="trackRole(track)"
-                      class="track-role-dot"
-                      :style="{ '--role-color': trackRole(track)?.color }"
-                    ></i>
-                    <span class="track-name-text">{{ translateUiText(track.name) }}</span>
-                  </span>
-                </el-tooltip>
+                <input
+                  v-if="renamingTrackId === track.id"
+                  :data-track-name-input="track.id"
+                  v-model="renamingTrackName"
+                  class="track-name-input"
+                  type="text"
+                  maxlength="80"
+                  :aria-label="`重命名音轨 ${track.name}`"
+                  @click.stop
+                  @pointerdown.stop
+                  @keydown.enter.prevent="finishRenameTrack(track)"
+                  @keydown.esc.prevent="finishRenameTrack(track, true)"
+                  @blur="finishRenameTrack(track)"
+                />
+                <span
+                  v-else
+                  class="track-name"
+                  :title="`双击重命名：${translateUiText(track.name)}`"
+                  @dblclick.stop="startRenameTrack(track)"
+                >
+                  <i
+                    v-if="trackRole(track)"
+                    class="track-role-dot"
+                    :style="{ '--role-color': trackRole(track)?.color }"
+                  ></i>
+                  <span class="track-name-text">{{ translateUiText(track.name) }}</span>
+                </span>
                 <button
                   class="track-fx-btn"
                   :class="{ active: selectedTrack?.id === track.id && effectScope === 'track' }"
@@ -1354,6 +1371,8 @@ const contextMenu = ref<ContextMenuState>({
 const activeInspectorPanel = ref<InspectorPanel>('clip')
 const effectScope = ref<EffectScope>('clip')
 const rerunModelId = ref('')
+const renamingTrackId = ref('')
+const renamingTrackName = ref('')
 const renderedPath = ref('')
 const audioPrimaryEl = ref<HTMLAudioElement | null>(null)
 const audioSecondaryEl = ref<HTMLAudioElement | null>(null)
@@ -1815,7 +1834,8 @@ const contextMenuItems = computed<ContextMenuItem[]>(() => {
       { id: 'import-track', label: '导入音频到此轨', icon: FolderAdd, disabled: !track || !!track.locked, run: () => importAudioToTrack(state.trackId) },
       { id: 'paste-track', label: '粘贴到播放头', icon: CopyDocument, shortcut: 'Ctrl+V', disabled: !track || !!track.locked || pastingAudio.value, run: () => pasteAudioToTrack(state.trackId) },
       { id: 'copy-track', label: '复制整轨音频', icon: CopyDocument, disabled: !track?.clips.length || copyingAudio.value, run: copySelectedTrackAudio },
-      { id: 'track-effects', label: '管理整轨效果', icon: Operation, separatorBefore: true, disabled: !track, run: () => { if (track) selectTrack(track.id) } },
+      { id: 'rename-track', label: '重命名音轨', icon: Operation, separatorBefore: true, disabled: !track || !!track.locked, run: () => { if (track) startRenameTrack(track) } },
+      { id: 'track-effects', label: '管理整轨效果', icon: Operation, disabled: !track, run: () => { if (track) selectTrack(track.id) } },
       { id: 'mute-track', label: track?.mute ? '取消音轨静音' : '静音音轨', icon: Mute, disabled: !track, run: () => { if (track) toggleTrackMute(track) } },
       { id: 'lock-track', label: track?.locked ? '解除音轨锁定' : '锁定音轨', icon: Lock, disabled: !track, run: () => { if (track) toggleTrackLock(track) } },
       { id: 'delete-track', label: '删除音轨', icon: Delete, danger: true, separatorBefore: true, disabled: !track || !!track.locked, run: () => track ? deleteTrack(track) : undefined },
@@ -2920,6 +2940,25 @@ function toggleTrackMute(track: EditorTrack) {
 function toggleTrackLock(track: EditorTrack) {
   track.locked = !track.locked
   saveProject()
+}
+function startRenameTrack(track: EditorTrack) {
+  if (track.locked) return
+  renamingTrackId.value = track.id
+  renamingTrackName.value = track.name
+  void nextTick(() => {
+    document.querySelector<HTMLInputElement>(`[data-track-name-input="${track.id}"]`)?.select()
+  })
+}
+async function finishRenameTrack(track: EditorTrack, cancelled = false) {
+  if (renamingTrackId.value !== track.id) return
+  const nextName = renamingTrackName.value.trim()
+  renamingTrackId.value = ''
+  renamingTrackName.value = ''
+  if (cancelled || !nextName || nextName === track.name) return
+  pushHistory()
+  track.name = nextName
+  renderedPath.value = ''
+  await saveProject()
 }
 async function deleteTrack(track: EditorTrack) {
   if (!project.value || track.locked) return
@@ -5864,24 +5903,30 @@ onUnmounted(() => {
 }
 .timeline-top {
   min-height: 52px;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 16px;
+  gap: 7px;
+  padding: 9px 16px 8px;
   border-bottom: 1px solid var(--xb-border);
 }
 .timeline-main-tools {
   display: flex;
   align-items: center;
   gap: 14px;
-  flex: 1 1 50%;
   min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.timeline-main-tools::-webkit-scrollbar {
+  display: none;
 }
 .transport {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
 }
 .transport > button:nth-child(2) {
   width: 32px;
@@ -5905,15 +5950,19 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 0;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
 }
 .edit-tools .split-btn {
   width: auto;
   min-width: 72px;
+  height: 32px;
   padding: 0 10px;
+  flex: 0 0 auto;
   grid-auto-flow: column;
   gap: 6px;
   font-weight: 700;
+  white-space: nowrap;
 }
 .edit-tools .split-btn:not(:disabled):hover {
   color: var(--xb-primary);
@@ -5932,9 +5981,9 @@ onUnmounted(() => {
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
 .render-path {
-  flex: 0 1 50%;
+  width: 100%;
   min-width: 0;
-  max-width: min(50%, 360px);
+  max-width: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6052,7 +6101,7 @@ onUnmounted(() => {
   left: 0;
   z-index: 4;
   display: grid;
-  grid-template-columns: repeat(5, 24px) minmax(0, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   grid-template-rows: 20px 24px;
   align-items: center;
   gap: 4px;
@@ -6084,17 +6133,17 @@ onUnmounted(() => {
   grid-column: 5;
 }
 .track-label .track-fx-btn {
-  width: auto;
-  min-width: 38px;
+  width: 100%;
+  min-width: 0;
   height: 20px;
   grid-column: 5;
   grid-row: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 1px;
   justify-self: end;
-  padding: 0 4px;
+  padding: 0 2px;
   color: var(--xb-primary);
   font-size: 9px;
   font-weight: 900;
@@ -6123,6 +6172,22 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.track-name-input {
+  grid-column: 1 / 5;
+  grid-row: 1;
+  width: 100%;
+  min-width: 0;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid var(--xb-primary);
+  border-radius: 4px;
+  outline: none;
+  background: rgba(var(--xb-fill-rgb), 0.1);
+  color: var(--xb-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
 }
 .track-role-dot {
   width: 8px;
@@ -6341,17 +6406,11 @@ onUnmounted(() => {
 }
 @media (max-width: 760px) {
   .timeline-top {
-    align-items: flex-start;
-    flex-wrap: wrap;
-    gap: 8px 12px;
+    gap: 7px;
     padding-block: 8px;
   }
   .timeline-main-tools {
-    flex-basis: 100%;
-  }
-  .render-path {
-    flex-basis: 100%;
-    max-width: 100%;
+    gap: 10px;
   }
 }
 </style>
