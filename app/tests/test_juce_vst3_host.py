@@ -51,3 +51,27 @@ def test_only_one_plugin_session_can_keep_native_output_enabled() -> None:
             assert payload["revision"] == 5
         finally:
             JuceVst3Host._sessions = original
+
+
+def test_playback_position_alone_does_not_rewrite_transport_control() -> None:
+    previous = {
+        "playing": True,
+        "audible": True,
+        "output_enabled": True,
+        "seek_revision": 3,
+        "timeline_start": 0.0,
+        "timeline_end": 20.0,
+        "position_seconds": 4.0,
+    }
+    current = {**previous, "position_seconds": 4.2}
+    assert JuceVst3Host._transport_requires_write(previous, current) is False
+
+
+def test_seek_or_playback_change_rewrites_transport_control() -> None:
+    previous = {"playing": True, "seek_revision": 3}
+    assert JuceVst3Host._transport_requires_write(
+        previous, {**previous, "seek_revision": 4}
+    ) is True
+    assert JuceVst3Host._transport_requires_write(
+        previous, {**previous, "playing": False}
+    ) is True

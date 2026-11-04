@@ -1072,6 +1072,89 @@ class Api:
         )
         return result[0] if result else None
 
+    def pick_effect_plugin_directory(self) -> str | None:
+        """Choose a directory to recursively scan for VST3 bundles."""
+        return self._folder_dialog("选择 VST3 插件目录") or None
+
+    def scan_effect_plugin_directory(self, directory: str) -> list[dict[str, str]]:
+        """Recursively discover VST3 bundles from an explicitly selected directory."""
+        root = Path(str(directory or "")).expanduser()
+        if not root.is_dir():
+            return []
+        found = self._scan_effect_plugin_root(root)
+        settings = getattr(self, "_settings", None)
+        if settings is not None:
+            saved = [str(value) for value in settings.get("vst3_directories", []) if str(value).strip()]
+            root_text = str(root.resolve())
+            if root_text.casefold() not in {value.casefold() for value in saved}:
+                settings.set("vst3_directories", [*saved, root_text])
+        return found
+
+    @staticmethod
+    def _scan_effect_plugin_root(root: Path) -> list[dict[str, str]]:
+        found: dict[str, dict[str, str]] = {}
+
+        def add_plugin(path: Path) -> None:
+            try:
+                relative = path.relative_to(root)
+            except ValueError:
+                relative = Path(path.name)
+            if len(relative.parts) > 1:
+                collection = relative.parts[0]
+            elif root.name.casefold() != "vst3":
+                collection = root.name
+            else:
+                collection = "未分组"
+            found[str(path).casefold()] = {
+                "name": path.stem,
+                "path": str(path),
+                "collection": collection,
+            }
+
+        try:
+            for current, directories, files in os.walk(root):
+                base = Path(current)
+                bundles = [name for name in directories if name.lower().endswith(".vst3")]
+                for name in [*bundles, *(item for item in files if item.lower().endswith(".vst3"))]:
+                    add_plugin(base / name)
+                # A VST3 bundle is self-contained; do not crawl its internal binaries/resources.
+                directories[:] = [name for name in directories if name not in bundles]
+        except OSError:
+            return []
+        return sorted(
+            found.values(),
+            key=lambda item: (item["collection"].casefold(), item["name"].casefold(), item["path"].casefold()),
+        )
+
+    def auto_scan_effect_plugins(self) -> list[dict[str, str]]:
+        """Scan conventional VST3 locations without requiring manual setup."""
+        roots: list[Path] = []
+        if os.name == "nt":
+            common_program_files = os.environ.get("COMMONPROGRAMFILES")
+            program_files = os.environ.get("PROGRAMFILES")
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if common_program_files:
+                roots.append(Path(common_program_files) / "VST3")
+            if program_files:
+                roots.append(Path(program_files) / "Common Files" / "VST3")
+            if local_app_data:
+                roots.append(Path(local_app_data) / "Programs" / "Common" / "VST3")
+        else:
+            roots.extend([Path.home() / ".vst3", Path("/usr/lib/vst3"), Path("/usr/local/lib/vst3")])
+        settings = getattr(self, "_settings", None)
+        if settings is not None:
+            roots.extend(Path(str(value)).expanduser() for value in settings.get("vst3_directories", []))
+        merged: dict[str, dict[str, str]] = {}
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for item in self._scan_effect_plugin_root(root):
+                merged[item["path"].casefold()] = item
+        return sorted(
+            merged.values(),
+            key=lambda item: (item.get("collection", "").casefold(), item["name"].casefold()),
+        )
+
     def list_works(self) -> list[dict[str, Any]]:
         return self._works.list()
 

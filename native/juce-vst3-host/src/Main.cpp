@@ -651,19 +651,13 @@ public:
         setVisible (true);
         toFront (true);
 
+        readerThread.startThread (Thread::Priority::high);
+
         if (request.monitorInput.existsAsFile())
-        {
-            AudioFormatManager formats;
-            formats.registerBasicFormats();
-            monitorReader.reset (formats.createReaderFor (request.monitorInput));
-        }
+            monitorReader = createBufferedReader (request.monitorInput);
 
         if (request.bedInput.existsAsFile())
-        {
-            AudioFormatManager formats;
-            formats.registerBasicFormats();
-            bedReader.reset (formats.createReaderFor (request.bedInput));
-        }
+            bedReader = createBufferedReader (request.bedInput);
 
         const auto inputChannels = jmax (1, plugin->getTotalNumInputChannels());
         const auto outputChannels = jmax (2, plugin->getTotalNumOutputChannels());
@@ -686,6 +680,9 @@ public:
         deviceManager.removeAudioCallback (this);
         deviceManager.closeAudioDevice();
         flushState (! finalStateCaptured);
+        monitorReader.reset();
+        bedReader.reset();
+        readerThread.stopThread (2000);
         clearContentComponent();
         if (plugin != nullptr)
         {
@@ -711,6 +708,7 @@ private:
     PluginDescription description;
     File stateOutput;
     File transportControl;
+    TimeSliceThread readerThread { "VST3 monitor read-ahead" };
     std::unique_ptr<AudioFormatReader> monitorReader;
     std::unique_ptr<AudioFormatReader> bedReader;
     AudioBuffer<float> monitorBuffer;
@@ -754,6 +752,23 @@ private:
     bool finalStateCaptured = false;
     bool audioOutputInitialised = false;
 
+    std::unique_ptr<AudioFormatReader> createBufferedReader (const File& file)
+    {
+        AudioFormatManager formats;
+        formats.registerBasicFormats();
+        auto* source = formats.createReaderFor (file);
+        if (source == nullptr)
+            return {};
+
+        auto buffered = std::make_unique<BufferingAudioReader> (
+            source,
+            readerThread,
+            262144
+        );
+        buffered->setReadTimeout (2);
+        return buffered;
+    }
+
     void timerCallback() override
     {
         const auto now = Time::getMillisecondCounter();
@@ -789,7 +804,7 @@ private:
             refreshCachedParameterValues();
             lastParameterRefreshMs = now;
         }
-        if (now - lastStateFlushMs >= 100)
+        if (now - lastStateFlushMs >= 250)
         {
             flushState (false);
             lastStateFlushMs = now;
@@ -1328,7 +1343,7 @@ static int showEditor (const Request& request)
             if (auto* device = probe.getCurrentAudioDevice())
             {
                 realtimeRequest.sampleRate = device->getCurrentSampleRate();
-                realtimeRequest.blockSize = device->getCurrentBufferSizeSamples();
+                realtimeRequest.blockSize = jmax (256, device->getCurrentBufferSizeSamples());
             }
         probe.closeAudioDevice();
     }

@@ -1103,6 +1103,12 @@ export interface EditorPluginInspectResult extends EditorPluginHostStatus {
   plugin?: Record<string, unknown>
 }
 
+export interface EditorPluginPathOption {
+  name: string
+  path: string
+  collection: string
+}
+
 export interface EditorPluginWindowResult extends EditorPluginHostStatus {
   session_id?: string
   state_path?: string

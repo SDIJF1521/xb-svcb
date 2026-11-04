@@ -986,6 +986,18 @@ export const mock = {
   pickEffectPluginFile(): Promise<string | null> {
     return browserPickFile('.vst3,.dll,.component')
   },
+
+  pickEffectPluginDirectory(): Promise<string | null> {
+    return Promise.resolve(null)
+  },
+
+  scanEffectPluginDirectory(_directory: string) {
+    return [] as Array<{ name: string; path: string; collection: string }>
+  },
+
+  autoScanEffectPlugins() {
+    return [] as Array<{ name: string; path: string; collection: string }>
+  },
   listWorks(): WorkDTO[] {
     return mockWorks.map((w) => ({ ...w, steps: w.steps.map((s) => ({ ...s })) }))
   },

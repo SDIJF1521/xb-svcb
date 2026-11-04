@@ -66,7 +66,7 @@ class AudioEditorService:
         self._pymss = pymss or PymssTool()
         self._audio = FFmpegEngine(ffmpeg)
         self._plugin_host = JuceVst3Host()
-        self._plugin_sessions: dict[str, dict[str, str]] = {}
+        self._plugin_sessions: dict[str, dict[str, Any]] = {}
         self._engines = engines
         self._vocal_enhancement = vocal_enhancement or VocalEnhancementProcessor()
         self._rerun_jobs: dict[str, dict[str, Any]] = {}
@@ -214,6 +214,7 @@ class AudioEditorService:
             return None
 
         duration = float(self._ffmpeg.probe_duration(dst) or 0.0)
+        sample_rate = self._detect_sample_rate(dst)
         now = self._now()
         clip = EditorClip(
             id=paths.new_id("clp_"),
@@ -238,12 +239,25 @@ class AudioEditorService:
             title=(title or src.stem or "音频工程")[:120],
             tracks=[track],
             duration=max(duration, 0.05),
+            sample_rate=sample_rate,
             metadata={"source_path": str(src), "mode": "manual"},
             created_at=now,
             updated_at=now,
         ).to_dict()
         self._repo.add({**project, "history": [], "future": []})
         return self._public(project)
+
+    @staticmethod
+    def _detect_sample_rate(path: Path) -> int:
+        """Keep the source rate for WAV imports; compressed sources use the project default."""
+        try:
+            with wave.open(str(path), "rb") as stream:
+                rate = int(stream.getframerate() or 0)
+                if rate >= 8000:
+                    return rate
+        except (OSError, EOFError, wave.Error):
+            pass
+        return 44100
 
     def export_bundle(self, project_id: str, destination: Path) -> Path:
         """Write a portable editor project containing its timeline and referenced media."""
@@ -1554,6 +1568,8 @@ class AudioEditorService:
                 "effect_id": effect_id,
                 "effect_scope": scope,
                 "role_id": role_id,
+                "timeline_start": monitor.get("timeline_start", 0.0),
+                "timeline_end": monitor.get("timeline_end", 0.0),
             }
         return result
 
@@ -1574,19 +1590,28 @@ class AudioEditorService:
         ref = self._plugin_sessions.get(session_id or "")
         monitor_transport = dict(transport) if isinstance(transport, dict) else {}
         if ref:
-            current = self._repo.get(ref.get("project_id", ""))
-            track, _, clip = self._find_clip_ref(
-                current or {}, ref.get("track_id", ""), ref.get("clip_id", "")
-            ) if ref.get("effect_scope", "clip") == "clip" else (None, -1, None)
-            if clip:
-                monitor_transport["timeline_start"] = float(clip.get("start") or 0.0)
-                monitor_transport["timeline_end"] = float(clip.get("end") or 0.0)
+            if ref.get("effect_scope", "clip") == "clip":
+                if "timeline_start" not in ref or "timeline_end" not in ref:
+                    current = self._repo.get(ref.get("project_id", ""))
+                    _, _, clip = self._find_clip_ref(
+                        current or {}, ref.get("track_id", ""), ref.get("clip_id", "")
+                    )
+                    if clip:
+                        ref["timeline_start"] = float(clip.get("start") or 0.0)
+                        ref["timeline_end"] = float(clip.get("end") or 0.0)
+                monitor_transport["timeline_start"] = float(ref.get("timeline_start") or 0.0)
+                monitor_transport["timeline_end"] = float(ref.get("timeline_end") or 0.0)
                 monitor_transport["audible"] = (
                     monitor_transport.get("audible", True) is not False
                 )
         result = self._plugin_host.sync_editor(session_id, monitor_transport)
-        if result.get("ok") and ref:
-            project = self._apply_plugin_state(ref, result.get("plugin"))
+        plugin_state = result.get("plugin")
+        persistable_state = isinstance(plugin_state, dict) and (
+            bool(plugin_state.get("state"))
+            or isinstance(plugin_state.get("parameter_values"), dict)
+        )
+        if result.get("ok") and ref and persistable_state:
+            project = self._apply_plugin_state(ref, plugin_state)
             if project:
                 result["project"] = project
         if result.get("closed"):
@@ -3449,7 +3474,9 @@ class AudioEditorService:
         if self._ffmpeg.available:
             cached = config.EDITOR_CACHE_DIR / f"wf_{FFmpegEngine.cache_key(source_key)}.wav"
             cached.parent.mkdir(parents=True, exist_ok=True)
-            if cached.exists() or self._ffmpeg.convert(src, cached, sample_rate=8000):
+            # 8 kHz made transients and consonants visibly disappear in the editor.
+            # Keep a full-band analysis source while reducing only the displayed bins.
+            if cached.exists() or self._ffmpeg.convert(src, cached, sample_rate=44100):
                 wav_path = cached
         elif src.suffix.lower() != ".wav":
             return []
@@ -3471,7 +3498,7 @@ class AudioEditorService:
                 span = max(1, min(available, requested))
                 if available <= 0:
                     return []
-                target_bins = max(16, min(900, int(bins or 160), span))
+                target_bins = max(16, min(4096, int(bins or 320), span))
                 wf.setpos(start_frame)
                 raw = wf.readframes(span)
                 if not raw:

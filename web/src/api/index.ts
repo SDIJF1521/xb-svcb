@@ -48,6 +48,7 @@ import type {
   EditorAudioCopyResult,
   EditorPluginHostStatus,
   EditorPluginInspectResult,
+  EditorPluginPathOption,
   EditorPluginWindowResult,
   EditorPluginCloseResult,
   EditorPluginSyncResult,
@@ -304,6 +305,17 @@ export const api = {
 
   pickEffectPluginFile: () =>
     invoke<string | null>('pick_effect_plugin_file', [], () => mock.pickEffectPluginFile()),
+
+  pickEffectPluginDirectory: () =>
+    invoke<string | null>('pick_effect_plugin_directory', [], () => mock.pickEffectPluginDirectory()),
+
+  scanEffectPluginDirectory: (directory: string) =>
+    invoke<EditorPluginPathOption[]>('scan_effect_plugin_directory', [directory], () =>
+      mock.scanEffectPluginDirectory(directory),
+    ),
+
+  autoScanEffectPlugins: () =>
+    invoke<EditorPluginPathOption[]>('auto_scan_effect_plugins', [], () => mock.autoScanEffectPlugins()),
 
   listWorks: () => invoke<WorkDTO[]>('list_works', [], () => mock.listWorks()),
 

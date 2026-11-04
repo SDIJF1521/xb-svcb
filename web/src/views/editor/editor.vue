@@ -38,6 +38,8 @@
       :loading="pluginHostLoading"
       :session-id="pluginWindowSessionId"
       :editable="effectScopeEditable"
+      :plugins="vst3Plugins"
+      :scanning="pluginDirectoryScanning"
       @closed="onPluginDialogClose"
       @refresh="refreshPluginHostStatus"
       @inspect="inspectActivePlugin"
@@ -46,6 +48,8 @@
       @pick-plugin="activePluginEffect && pickPluginFile(activePluginEffect)"
       @set-path="activePluginEffect && setPluginPath(activePluginEffect, $event)"
       @set-params="activePluginEffect && setPluginParamJson(activePluginEffect, $event)"
+      @scan-directory="scanVst3Directory"
+      @select-plugin="activePluginEffect && selectVst3Plugin(activePluginEffect, $event)"
     />
 
     <div class="editor-head" data-guide="editor-toolbar">
@@ -117,7 +121,7 @@
           </div>
           <div class="tool-row">
             <span>缩放</span>
-            <el-slider v-model="zoom" :min="24" :max="180" :step="4" />
+            <el-slider v-model="zoom" :min="ZOOM_MIN" :max="ZOOM_MAX" :step="ZOOM_STEP" />
           </div>
           <div class="tool-row">
             <span>切口淡化</span>
@@ -414,7 +418,13 @@
             </div>
 
             <div v-if="activeEffects.length" class="effect-rack">
-              <div v-for="effect in activeEffects" :key="effect.id" class="effect-item">
+              <div
+                v-for="effect in activeEffects"
+                :key="effect.id"
+                class="effect-item"
+                :class="{ 'plugin-opening': openingPluginEffectId === effect.id }"
+                :aria-busy="openingPluginEffectId === effect.id"
+              >
                 <div class="effect-item-head">
                   <button
                     :class="{ active: effect.enabled }"
@@ -435,6 +445,30 @@
                   </button>
                 </div>
                 <div v-if="effect.type === 'plugin'" class="plugin-fields">
+                  <div class="plugin-library-row">
+                    <el-select
+                      class="vst3-select"
+                      :model-value="String(effect.params.path || '')"
+                      :disabled="!effectScopeEditable"
+                      filterable
+                      placeholder="选择 VST3 插件"
+                      no-data-text="未发现 VST3 插件"
+                      popper-class="editor-vst3-select-popper"
+                      @change="onInlinePluginSelect(effect, $event)"
+                    >
+                      <el-option
+                        v-if="effect.params.path && !vst3Plugins.some((item) => item.path === effect.params.path)"
+                        :label="String(effect.params.path)"
+                        :value="String(effect.params.path)"
+                      />
+                      <el-option-group v-for="group in vst3PluginGroups" :key="group.name" :label="group.name">
+                        <el-option v-for="item in group.items" :key="item.path" :label="item.name" :value="item.path" />
+                      </el-option-group>
+                    </el-select>
+                    <button :disabled="!effectScopeEditable || pluginDirectoryScanning" title="扫描 VST3 插件目录" @click="scanVst3Directory">
+                      <el-icon><Search /></el-icon>
+                    </button>
+                  </div>
                   <div class="plugin-path-row">
                     <input
                       :value="String(effect.params.path || '')"
@@ -458,12 +492,14 @@
                   />
                   <button
                     class="effect-add-wide"
-                    :disabled="!effect.params.path"
-                    title="打开插件窗口"
-                    @click="openPluginDialog(effect)"
+                    :disabled="!effect.params.path || openingPluginEffectId === effect.id"
+                    :title="openingPluginEffectId === effect.id ? '正在启动 VST3 插件' : '打开 VST3 原生界面'"
+                    @click="openPluginDirect(effect)"
                   >
-                    <el-icon><SwitchButton /></el-icon>
-                    <span>插件窗口</span>
+                    <el-icon :class="{ spin: openingPluginEffectId === effect.id }">
+                      <component :is="openingPluginEffectId === effect.id ? Loading : SwitchButton" />
+                    </el-icon>
+                    <span>{{ openingPluginEffectId === effect.id ? '正在打开' : '打开插件' }}</span>
                   </button>
                 </div>
                 <div v-for="control in effectControls(effect)" :key="control.key" class="effect-control">
@@ -965,7 +1001,13 @@
           <div class="render-path" :title="renderedPath">{{ renderedPath || '未导出' }}</div>
         </div>
 
-        <div ref="scrollEl" class="timeline-scroll" @pointerdown="onTimelinePointer" @scroll="onTimelineScroll">
+        <div
+          ref="scrollEl"
+          class="timeline-scroll"
+          @pointerdown="onTimelinePointer"
+          @scroll="onTimelineScroll"
+          @wheel="onTimelineWheel"
+        >
           <div
             ref="rulerEl"
             class="ruler"
@@ -1173,6 +1215,7 @@ import {
   RefreshLeft,
   RefreshRight,
   Right,
+  Search,
   Scissor,
   SwitchButton,
   VideoPause,
@@ -1354,6 +1397,9 @@ const pluginHostStatus = ref<EditorPluginHostStatus | null>(null)
 const pluginInspectResult = ref<EditorPluginInspectResult | null>(null)
 const pluginHostLoading = ref(false)
 const pluginWindowSessionId = ref('')
+const openingPluginEffectId = ref('')
+const vst3Plugins = ref<Array<{ name: string; path: string; collection: string }>>([])
+const pluginDirectoryScanning = ref(false)
 const pluginMonitorClipId = ref('')
 const pluginMonitorTimelineStart = ref(0)
 const nativeSeekRevision = ref(0)
@@ -1418,6 +1464,7 @@ let visibleWaveformTimer: ReturnType<typeof setTimeout> | null = null
 let projectLoadRequestId = 0
 let activeProjectLoadKey = ''
 let editorDependenciesStarted = false
+let vst3AutoScanPromise: Promise<void> | null = null
 const waveformLoading = new Set<string>()
 const waveformQueue: Array<{ clip: EditorClip; key: string; projectId: string; resolve: () => void }> = []
 let waveformWorkers = 0
@@ -1429,8 +1476,11 @@ const PLAY_TOGGLE_DEBOUNCE_MS = 350
 const LIVE_MIX_REFRESH_DEBOUNCE_MS = 90
 const LIVE_CONTROL_SAVE_DEBOUNCE_MS = 120
 const MIX_CROSSFADE_MS = 90
-const PLUGIN_STATE_SYNC_INTERVAL_MS = 120
+const PLUGIN_STATE_SYNC_INTERVAL_MS = 200
 const TRACK_LABEL_WIDTH = 160
+const ZOOM_MIN = 24
+const ZOOM_MAX = 180
+const ZOOM_STEP = 4
 const RERUN_PREFS_KEY = 'xb-editor-rerun-params'
 const SEPARATION_PREFS_KEY = 'xb-editor-separation-params'
 const rerunFramework = () => models.value.find((m) => m.id === rerunModelId.value)?.framework || 'so-vits-svc'
@@ -1710,6 +1760,14 @@ const activePluginEffect = computed(() => {
   return activeEffects.value.find((effect) => effect.id === activePluginEffectId.value) || null
 })
 const activePluginPath = computed(() => String(activePluginEffect.value?.params.path || ''))
+const vst3PluginGroups = computed(() => {
+  const groups = new Map<string, typeof vst3Plugins.value>()
+  for (const plugin of vst3Plugins.value) {
+    const name = plugin.collection || '未分组'
+    groups.set(name, [...(groups.get(name) || []), plugin])
+  }
+  return [...groups.entries()].map(([name, items]) => ({ name, items }))
+})
 const activeTemplateId = computed(() => {
   const value = project.value?.metadata?.timeline_template_id
   return typeof value === 'string' ? value : ''
@@ -2289,6 +2347,7 @@ function loadEditorDependencies() {
     modelsStore.load().catch(() => undefined),
     loadSeparationModels(),
     systemStore.loaded ? Promise.resolve() : systemStore.load().catch(() => undefined),
+    autoScanVst3Plugins(),
   ])
 }
 
@@ -2826,6 +2885,35 @@ function onTimelineScroll() {
   }
 }
 
+async function onTimelineWheel(event: WheelEvent) {
+  if (!event.ctrlKey || !scrollEl.value || !project.value || event.deltaY === 0) return
+  event.preventDefault()
+
+  const el = scrollEl.value
+  const oldZoom = zoom.value
+  const direction = event.deltaY < 0 ? 1 : -1
+  const nextZoom = clamp(oldZoom + direction * ZOOM_STEP, ZOOM_MIN, ZOOM_MAX)
+  if (nextZoom === oldZoom) return
+
+  const rect = el.getBoundingClientRect()
+  const laneWidth = Math.max(0, el.clientWidth - TRACK_LABEL_WIDTH)
+  const pointerInLane = clamp(event.clientX - rect.left - TRACK_LABEL_WIDTH, 0, laneWidth)
+  const anchorSeconds = (el.scrollLeft + pointerInLane) / oldZoom
+
+  zoom.value = nextZoom
+  await nextTick()
+
+  const target = anchorSeconds * nextZoom - pointerInLane
+  programmaticTimelineScroll = true
+  el.scrollLeft = clamp(target, 0, Math.max(0, el.scrollWidth - el.clientWidth))
+  lastTimelineScrollLeft = el.scrollLeft
+  if (programmaticScrollFrame) cancelAnimationFrame(programmaticScrollFrame)
+  programmaticScrollFrame = requestAnimationFrame(() => {
+    programmaticTimelineScroll = false
+    programmaticScrollFrame = 0
+  })
+}
+
 function followPlayheadIntoView(force = false) {
   const el = scrollEl.value
   if (!el || !followPlayhead.value || timelineSeeking.value) return
@@ -2873,7 +2961,7 @@ function clipPreviewPlayheadStyle(clip: EditorClip) {
 
 function waveformBins(clip: EditorClip) {
   const drawable = Math.max(12, clipPixelWidth(clip))
-  return Math.max(16, Math.min(900, Math.round(drawable / 3)))
+  return Math.max(32, Math.min(4096, Math.round(drawable / 2)))
 }
 
 function waveformKey(clip: EditorClip) {
@@ -3097,6 +3185,7 @@ async function addScopedEffect(type: EditorEffectType) {
   ])
   renderedPath.value = ''
   await saveProject()
+  if (type === 'plugin' && !vst3Plugins.value.length) await autoScanVst3Plugins(true)
 }
 
 async function toggleScopedEffect(effect: EditorClipEffect) {
@@ -3145,6 +3234,53 @@ async function pickPluginFile(effect: EditorClipEffect) {
   }
 }
 
+async function selectVst3Plugin(effect: EditorClipEffect, path: string) {
+  if (!effectScopeEditable.value || !path) return
+  pushHistory()
+  effect.params = { ...(effect.params || {}), path }
+  renderedPath.value = ''
+  await saveProject()
+  if (activePluginEffectId.value === effect.id) await inspectActivePlugin()
+}
+
+function onInlinePluginSelect(effect: EditorClipEffect, value: unknown) {
+  const path = String(value || '')
+  void selectVst3Plugin(effect, path)
+}
+
+async function scanVst3Directory() {
+  if (!effectScopeEditable.value || pluginDirectoryScanning.value) return
+  const directory = await api.pickEffectPluginDirectory()
+  if (!directory) return
+  pluginDirectoryScanning.value = true
+  try {
+    const found = await api.scanEffectPluginDirectory(directory)
+    vst3Plugins.value = found
+    if (found.length) ElMessage.success(`已发现 ${found.length} 个 VST3 插件`)
+    else ElMessage.info('所选目录中未发现 VST3 插件')
+  } finally {
+    pluginDirectoryScanning.value = false
+  }
+}
+
+function autoScanVst3Plugins(force = false) {
+  if (vst3Plugins.value.length && !force) return Promise.resolve()
+  if (vst3AutoScanPromise) return vst3AutoScanPromise
+  pluginDirectoryScanning.value = true
+  vst3AutoScanPromise = api.autoScanEffectPlugins()
+    .then((found) => {
+      vst3Plugins.value = found
+    })
+    .catch(() => {
+      vst3Plugins.value = []
+    })
+    .finally(() => {
+      pluginDirectoryScanning.value = false
+      vst3AutoScanPromise = null
+    })
+  return vst3AutoScanPromise
+}
+
 function pluginParamJson(effect: EditorClipEffect) {
   const params = effect.params?.parameters
   try {
@@ -3175,7 +3311,29 @@ async function openPluginDialog(effect: EditorClipEffect) {
   activePluginEffectId.value = effect.id
   pluginInspectResult.value = null
   pluginDialogOpen.value = true
+  if (!vst3Plugins.value.length) {
+    await autoScanVst3Plugins(true)
+  }
   await refreshPluginHostStatus()
+}
+
+async function openPluginDirect(effect: EditorClipEffect) {
+  if (!effect.params.path || pluginHostLoading.value || openingPluginEffectId.value) return
+  openingPluginEffectId.value = effect.id
+  activePluginEffectId.value = effect.id
+  pluginInspectResult.value = null
+  try {
+    await refreshPluginHostStatus()
+    if (!pluginHostStatus.value?.ready) {
+      ElMessage.error(pluginHostStatus.value?.error || pluginHostStatus.value?.message || 'JUCE Host 未就绪')
+      return
+    }
+    await openPluginNativeEditor()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : 'VST3 插件启动失败')
+  } finally {
+    if (openingPluginEffectId.value === effect.id) openingPluginEffectId.value = ''
+  }
 }
 
 async function refreshPluginHostStatus() {
@@ -4938,9 +5096,11 @@ onUnmounted(() => {
 
 <style scoped>
 .editor-page {
-  max-width: 1460px;
-  margin: 0 auto;
-  padding: 24px 24px 56px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 18px 20px 40px;
+  min-height: calc(100vh - 72px);
 }
 .editor-head {
   display: flex;
@@ -5001,13 +5161,14 @@ onUnmounted(() => {
 }
 .editor-shell {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: clamp(340px, 27vw, 400px) minmax(0, 1fr);
+  gap: 14px;
   align-items: start;
 }
 .inspector {
   border-radius: 6px;
   padding: 18px;
+  container-type: inline-size;
   position: sticky;
   top: 18px;
   max-height: calc(100vh - 36px);
@@ -5192,17 +5353,28 @@ onUnmounted(() => {
 }
 .field-grid {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: auto 38px;
+  column-gap: 8px;
+  row-gap: 5px;
   color: var(--xb-muted);
   font-size: 12px;
 }
+.field-grid label:nth-of-type(1),
+.field-grid input:nth-of-type(1) { grid-column: 1; }
+.field-grid label:nth-of-type(2),
+.field-grid input:nth-of-type(2) { grid-column: 2; }
+.field-grid label:nth-of-type(3),
+.field-grid input:nth-of-type(3) { grid-column: 3; }
+.field-grid label { grid-row: 1; }
+.field-grid input { grid-row: 2; min-width: 0; }
 .clip-actions {
-  display: flex;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(32px, 1fr));
+  gap: 6px;
   margin-top: 12px;
 }
+.clip-actions button { width: 100%; }
 .clip-panel {
   display: grid;
   gap: 10px;
@@ -5210,7 +5382,7 @@ onUnmounted(() => {
 }
 .inspector-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--xb-border);
@@ -5218,6 +5390,7 @@ onUnmounted(() => {
   background: rgba(var(--xb-fill-rgb), 0.04);
 }
 .inspector-tabs button {
+  min-width: 0;
   height: 30px;
   border: none;
   border-radius: 6px;
@@ -5227,6 +5400,14 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@container (max-width: 350px) {
+  .inspector-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 .inspector-tabs button.active,
 .inspector-tabs button:hover {
@@ -5526,12 +5707,40 @@ onUnmounted(() => {
   text-align: center;
 }
 .effect-item {
+  position: relative;
+  overflow: hidden;
   display: grid;
   gap: 8px;
   padding: 10px;
   border: 1px solid var(--xb-border);
   border-radius: 8px;
   background: rgba(var(--xb-fill-rgb), 0.035);
+}
+.effect-item.plugin-opening {
+  border-color: rgba(var(--xb-primary-rgb), 0.55);
+  background: rgba(var(--xb-primary-rgb), 0.055);
+}
+.effect-item.plugin-opening::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 38%;
+  height: 2px;
+  border-radius: 0 999px 999px 0;
+  background: var(--xb-brand-gradient);
+  box-shadow: 0 0 10px rgba(var(--xb-primary-rgb), 0.55);
+  animation: plugin-opening-progress 1.05s ease-in-out infinite;
+  pointer-events: none;
+}
+.effect-add-wide .spin {
+  animation: editor-spin 0.8s linear infinite;
+}
+@keyframes plugin-opening-progress {
+  0% { transform: translateX(-110%); }
+  55% { transform: translateX(115%); }
+  100% { transform: translateX(285%); }
 }
 .effect-item-head {
   display: grid;
@@ -5576,6 +5785,82 @@ onUnmounted(() => {
 .plugin-fields {
   display: grid;
   gap: 8px;
+}
+.plugin-library-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 6px;
+  align-items: center;
+}
+.vst3-select {
+  width: 100%;
+  min-width: 0;
+}
+.vst3-select :deep(.el-select__wrapper) {
+  min-height: 30px;
+  border-radius: 8px;
+  padding-inline: 9px;
+}
+.plugin-library-row button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--xb-border);
+  border-radius: 8px;
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-muted);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+.plugin-library-row button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+:global(.editor-vst3-select-popper.el-popper) {
+  overflow: hidden;
+  border: 1px solid var(--xb-border) !important;
+  border-radius: 8px !important;
+  background: color-mix(in srgb, var(--xb-bg-2) 96%, transparent) !important;
+  box-shadow: 0 16px 40px rgba(var(--xb-bg-rgb), 0.38), 0 0 0 1px rgba(var(--xb-primary-rgb), 0.08) !important;
+  backdrop-filter: blur(18px);
+}
+:global(.editor-vst3-select-popper .el-select-dropdown__wrap) {
+  max-height: 360px;
+  padding-block: 5px;
+}
+:global(.editor-vst3-select-popper .el-select-group__title) {
+  height: 30px;
+  padding: 6px 12px 4px;
+  color: var(--xb-muted) !important;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 20px;
+  letter-spacing: 0;
+}
+:global(.editor-vst3-select-popper .el-select-group__wrap:not(:last-of-type)::after) {
+  left: 10px;
+  right: 10px;
+  background: var(--xb-border);
+}
+:global(.editor-vst3-select-popper .el-select-dropdown__item) {
+  width: calc(100% - 12px);
+  height: 34px;
+  margin: 2px 6px;
+  padding: 0 10px;
+  border-radius: 6px;
+  line-height: 34px;
+  font-size: 13px;
+}
+:global(.editor-vst3-select-popper .el-select-dropdown__item.hover),
+:global(.editor-vst3-select-popper .el-select-dropdown__item:hover) {
+  color: var(--xb-primary) !important;
+  background: rgba(var(--xb-primary-rgb), 0.11) !important;
+}
+:global(.editor-vst3-select-popper .el-select-dropdown__item.is-selected) {
+  color: var(--xb-primary) !important;
+  background: rgba(var(--xb-primary-rgb), 0.17) !important;
+  font-weight: 800;
 }
 .plugin-path-row {
   display: grid;
@@ -6405,6 +6690,21 @@ onUnmounted(() => {
   .editor-manual-switch { width: 100%; margin-left: 0; justify-content: space-between; white-space: normal; }
 }
 @media (max-width: 760px) {
+  .editor-page {
+    padding-inline: 10px;
+  }
+  .inspector {
+    padding: 14px;
+  }
+  .inspector-tabs button {
+    font-size: 11px;
+  }
+  .tool-row,
+  .slider-row,
+  .channel-row,
+  .role-row {
+    grid-template-columns: 82px minmax(0, 1fr);
+  }
   .timeline-top {
     gap: 7px;
     padding-block: 8px;

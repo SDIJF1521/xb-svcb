@@ -305,17 +305,20 @@ class JuceVst3Host:
         if closed:
             self._sessions.pop(session_id or "", None)
         elif isinstance(control_path, Path) and isinstance(transport, dict):
-            revision = int(session.get("control_revision") or 0) + 1
-            session["control_revision"] = revision
+            previous_transport = dict(session.get("last_transport") or {})
             next_transport = {
                 "timeline_start": session.get("timeline_start", 0.0),
                 "timeline_end": session.get("timeline_end", 0.0),
                 **transport,
             }
-            if bool(next_transport.get("output_enabled")):
+            should_write = self._transport_requires_write(previous_transport, next_transport)
+            if should_write and bool(next_transport.get("output_enabled")):
                 self._disable_other_outputs(session_id)
             session["last_transport"] = dict(next_transport)
-            self._write_transport(control_path, next_transport, revision=revision)
+            if should_write:
+                revision = int(session.get("control_revision") or 0) + 1
+                session["control_revision"] = revision
+                self._write_transport(control_path, next_transport, revision=revision)
         return {
             "ok": True,
             "closed": closed,
@@ -341,6 +344,20 @@ class JuceVst3Host:
             transport["output_enabled"] = False
             other["last_transport"] = transport
             cls._write_transport(control_path, transport, revision=revision)
+
+    @staticmethod
+    def _transport_requires_write(previous: dict[str, Any], current: dict[str, Any]) -> bool:
+        """Position advances locally in JUCE; only control changes need disk IPC."""
+        keys = (
+            "playing",
+            "audible",
+            "output_enabled",
+            "close_requested",
+            "seek_revision",
+            "timeline_start",
+            "timeline_end",
+        )
+        return any(previous.get(key) != current.get(key) for key in keys)
 
     @classmethod
     def _write_transport(

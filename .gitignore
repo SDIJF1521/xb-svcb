@@ -135,3 +135,4 @@ runtime.json
 
 # 安装器本体不入库：超过 GitHub LFS / Release 之外的 2GiB 单文件上限处理，
 # 改为构建后上传到 GitHub Releases 分发（见 README）。dist/* 已忽略，无需额外规则。
+问题.md

@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+import wave
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
@@ -785,6 +786,27 @@ class AudioEditorWorkflowTests(unittest.TestCase):
                 [(item["start"], item["end"]) for item in audio.rendered_project["tracks"][0]["clips"]],
                 [(0.0, 3.0), (3.25, 6.0)],
             )
+
+    def test_import_rate_detection_preserves_wav_sample_rate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "source.wav"
+            with wave.open(str(path), "wb") as stream:
+                stream.setnchannels(1)
+                stream.setsampwidth(2)
+                stream.setframerate(48000)
+                stream.writeframes(b"\x00\x00" * 16)
+            self.assertEqual(AudioEditorService._detect_sample_rate(path), 48000)
+
+    def test_vst3_directory_scan_is_recursive_and_sorted(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "VST3"
+            (root / "Nested" / "B.vst3" / "Contents").mkdir(parents=True)
+            (root / "FabFilter").mkdir(parents=True)
+            (root / "FabFilter" / "A.vst3").write_bytes(b"plugin")
+            api = Api.__new__(Api)
+            result = api.scan_effect_plugin_directory(str(root))
+            self.assertEqual([item["name"] for item in result], ["A", "B"])
+            self.assertEqual([item["collection"] for item in result], ["FabFilter", "Nested"])
 
 
 if __name__ == "__main__":
