@@ -1,5 +1,6 @@
 import { computed, readonly, ref, watch } from 'vue'
 import { enExtraPhrases, jaExtraPhrases, translateDynamicPhrase } from './extraPhrases'
+import { workflowEnPhrases, workflowJaPhrases, translateWorkflowDynamic } from './workflowPhrases'
 
 export type AppLocale = 'zh-CN' | 'en-US' | 'ja-JP'
 
@@ -101,6 +102,7 @@ type MessageKey = keyof (typeof messages)['zh-CN']
 
 const enPhrases: Record<string, string> = {
   ...enExtraPhrases,
+  ...workflowEnPhrases,
   '欢迎回来': 'Welcome back', '// 欢迎回来，Lkpap': '// Welcome back, Lkpap', '首页': 'Home', '资料库': 'Library', '资源获取': 'Resources',
   '我的模型': 'My Models', '我的作品': 'My Works', '插件中心': 'Plugins', 'API 接入': 'API Access',
   'AI 翻唱': 'AI Cover', 'AI 增强': 'AI Enhance', '音频编辑': 'Audio Editor',
@@ -256,6 +258,7 @@ const enPhrases: Record<string, string> = {
 const jaPhrases: Record<string, string> = {
   ...enPhrases,
   ...jaExtraPhrases,
+  ...workflowJaPhrases,
   '欢迎回来': 'おかえりなさい', '// 欢迎回来，Lkpap': '// おかえりなさい、Lkpap', '首页': 'ホーム', '资料库': 'ライブラリ', '资源获取': '素材取得',
   '我的模型': 'マイモデル', '我的作品': 'マイ作品', '插件中心': 'プラグイン', 'API 接入': 'API連携',
   'AI 翻唱': 'AIカバー', 'AI 增强': 'AI強化', '音频编辑': '音声編集',
@@ -437,6 +440,8 @@ function translateExact(source: string, targetLocale = currentLocale.value): str
   if (direct) return direct
   const dynamic = translateDynamicPhrase(source, targetLocale)
   if (dynamic) return dynamic
+  const workflowDynamic = translateWorkflowDynamic(source, targetLocale)
+  if (workflowDynamic) return workflowDynamic
   if (source.startsWith('// ')) {
     const translated = table[source.slice(3)]
     if (translated) return `// ${translated}`

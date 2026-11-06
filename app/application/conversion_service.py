@@ -26,6 +26,7 @@ from infrastructure.vocal_enhancement import (
     VocalEnhancementControls,
     VocalEnhancementProcessor,
 )
+from .workflow_graph import NODE_LABELS, port_label, topological_order
 
 if TYPE_CHECKING:
     import numpy as np
@@ -2902,6 +2903,8 @@ class ConversionService:
         work = self._repo.get(work_id)
         if work and work.get("workflow") == "ai_enhancement":
             self._run_ai_enhancement(work_id)
+        elif work and work.get("mode") == "workflow":
+            self._run_workflow(work_id)
         elif work and work.get("mode") == "multi":
             self._run_multi(work_id)
         else:
@@ -4231,6 +4234,515 @@ class ConversionService:
                     step["status"] = StepStatus.FAILED.value
             self._record_history(work)
             self._save(work)
+
+    # ---- 自定义工作流（节点图） ----
+    def _run_workflow(self, work_id: str) -> None:
+        """按前端画布产出的节点图顺序执行翻唱工作流。"""
+        work = self._repo.get(work_id)
+        if not work:
+            return
+
+        work_dir = config.WORKS_DIR / work_id
+        work_dir.mkdir(parents=True, exist_ok=True)
+        log_file = work_dir / "run.log"
+        try:
+            graph = work.get("workflow_graph") or {}
+            log_file.write_text(
+                f"=== {work.get('title', work_id)} (自定义工作流) ===\n"
+                f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n"
+                f"工作流: {graph.get('name', '未命名')}\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+
+        work["status"] = JobStatus.RUNNING.value
+        work["progress"] = 0
+        work["log_path"] = str(log_file)
+        self._save(work)
+
+        try:
+            graph = work.get("workflow_graph") or {}
+            nodes = list(graph.get("nodes") or [])
+            edges = list(graph.get("edges") or [])
+            order = topological_order(nodes, edges)
+            if order is None:
+                raise RuntimeError("工作流存在循环连线，请断开成环的连线")
+
+            node_by_id: dict[str, dict[str, Any]] = {}
+            for node in nodes:
+                node_by_id[str(node.get("id") or "")] = node
+
+            # 每条连线的目标端口 → 上游（node, port）列表，保持前端连线顺序。
+            incoming: dict[tuple[str, str], list[dict[str, str]]] = {}
+            for edge in edges:
+                to = edge.get("to") or {}
+                key = (str(to.get("node") or ""), str(to.get("port") or ""))
+                incoming.setdefault(key, []).append(edge.get("from") or {})
+
+            source = Path(str(work.get("source_path") or "")) if work.get("source_path") else None
+            duration = (
+                self._ffmpeg.probe_duration(source)
+                if source and source.exists()
+                else None
+            ) or 180.0
+
+            results: dict[str, dict[str, Path]] = {}
+
+            def inputs_of(node_id: str, port: str) -> list[Path]:
+                files: list[Path] = []
+                for frm in incoming.get((node_id, port), []):
+                    upstream = results.get(str(frm.get("node") or "")) or {}
+                    path = upstream.get(str(frm.get("port") or ""))
+                    if path and Path(path).exists():
+                        files.append(Path(path))
+                return files
+
+            def first_input(node_id: str, port: str) -> Path | None:
+                files = inputs_of(node_id, port)
+                return files[0] if files else None
+
+            def missing_hint(node_id: str, port: str) -> str:
+                """上游端口没有产出音频时给出原因，避免只报「缺少输入」。"""
+                for frm in incoming.get((node_id, port), []):
+                    upstream_id = str(frm.get("node") or "")
+                    upstream_port = str(frm.get("port") or "")
+                    if (results.get(upstream_id) or {}).get(upstream_port):
+                        continue
+                    upstream_type = str((node_by_id.get(upstream_id) or {}).get("type") or "")
+                    return (
+                        f"（上游{NODE_LABELS.get(upstream_type, upstream_type)}节点未产出"
+                        f"「{port_label(upstream_port)}」音轨，请检查所选模型的实际输出）"
+                    )
+                return ""
+
+            total = len(order)
+            for idx, node_id in enumerate(order):
+                node = node_by_id[node_id]
+                ntype = str(node.get("type") or "")
+                params = dict(node.get("params") or {})
+                label = NODE_LABELS.get(ntype, ntype)
+                self._set_step(work, node_id, StepStatus.ACTIVE.value)
+                work["progress"] = int(8 + 86 * idx / max(total, 1))
+                self._save(work)
+                self._log(log_file, f"[{idx + 1}/{total}] {label} 开始")
+
+                outs: dict[str, Path] = {}
+                if ntype == "input":
+                    if not source or not source.exists():
+                        raise RuntimeError("源音频文件不存在，请重新选择歌曲")
+                    normalized = self._normalize_source(source, work_dir, log_file)
+                    self._log(log_file, f"  源音频: {source} → {normalized}")
+                    outs["audio"] = normalized
+
+                elif ntype == "separate":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"人声分离节点缺少输入音频{missing_hint(node_id, 'audio')}")
+                    engine = str(params.get("engine") or "uvr").strip().lower()
+                    device = str(params.get("device") or "auto")
+                    model = str(params.get("model") or "")
+                    out_dir = work_dir / f"wf_sep_{node_id}"
+                    declared_stems: list[str] = []
+                    if engine == "pymss":
+                        if not self._pymss.available:
+                            raise RuntimeError("人声分离节点使用 PyMSS，但 PyMSS 环境未就绪")
+                        pymss_model = model or config.PYMSS_DEFAULT_MODEL
+                        if not config.pymss_model_ready(pymss_model):
+                            raise RuntimeError(f"PyMSS 模型未下载: {pymss_model}")
+                        # 模型声明的输出音轨（yaml 的 training.instruments），
+                        # 用于按真实音轨生成端口、并确定主输出。
+                        declared_stems = self._declared_pymss_stems(pymss_model)
+                        primary_stem = str(params.get("primary_stem") or "").strip()
+                        if not primary_stem:
+                            primary_stem = declared_stems[0] if declared_stems else ""
+                        if declared_stems:
+                            self._log(
+                                log_file,
+                                "  模型输出音轨: "
+                                + "、".join(declared_stems)
+                                + (f"（主音轨: {primary_stem}）" if primary_stem else ""),
+                            )
+                        # generic 允许使用 PyMSS 全部模型（任意目录/目标音轨），
+                        # 目标音轨由 primary_stem 决定。
+                        sep = self._pymss.separate(
+                            in_audio,
+                            out_dir,
+                            pymss_model,
+                            device,
+                            purpose="generic",
+                            primary_stem=primary_stem,
+                        )
+                    else:
+                        sep = self._uvr.separate(
+                            in_audio, out_dir, model or config.UVR_SEP_MODEL, device
+                        )
+                    if sep.simulated:
+                        self._log(log_file, "  分离降级：直接使用输入音频作为人声")
+                    # 不同模型输出音轨不一致：UVR / PyMSS 人声模型输出人声+伴奏，
+                    # 去混响类模型输出干声+湿声，多轨模型还会输出鼓/贝斯等音轨。
+                    # 这里按实际产出的音轨生成端口，供下游节点按需连接。
+                    outs["vocals"] = Path(sep.vocals)
+                    outs["audio"] = Path(sep.vocals)
+                    if sep.instrumental and Path(sep.instrumental).exists():
+                        outs["instrumental"] = Path(sep.instrumental)
+                    produced = [
+                        item
+                        for item in (getattr(sep, "stems", None) or [])
+                        if isinstance(item, dict)
+                    ]
+                    extra_stems: list[tuple[str, Path]] = []
+                    used_paths = {str(Path(p)) for p in outs.values() if p}
+                    for index, item in enumerate(produced):
+                        try:
+                            stem_path = Path(str(item.get("path") or ""))
+                        except (TypeError, ValueError):
+                            continue
+                        if not stem_path.is_file() or str(stem_path) in used_paths:
+                            continue
+                        used_paths.add(str(stem_path))
+                        raw_label = str(item.get("name") or "").strip()
+                        if declared_stems:
+                            matched = next(
+                                (stem for stem in declared_stems if stem.casefold() == raw_label.casefold()),
+                                "",
+                            )
+                            if matched:
+                                raw_label = matched
+                            elif len(declared_stems) == len(produced):
+                                # 输出文件名没带音轨名时按声明顺序对齐
+                                raw_label = declared_stems[index]
+                        raw_label = raw_label or stem_path.stem
+                        slug = re.sub(r"[^0-9a-zA-Z_\u4e00-\u9fff]+", "_", raw_label).strip("_").lower()
+                        port = f"stem:{slug or f'stem{len(extra_stems) + 1}'}"
+                        while port in outs:
+                            port = f"{port}_2"
+                        outs[port] = stem_path
+                        extra_stems.append((raw_label, stem_path))
+                    if extra_stems:
+                        # 「其他音轨」端口方便用户只连一根线，取第一路未映射的 stem。
+                        outs["other"] = extra_stems[0][1]
+                    self._log(
+                        log_file,
+                        f"  分离引擎/模型: {engine} / {model or config.UVR_SEP_MODEL}",
+                    )
+                    self._log(
+                        log_file,
+                        "  可用输出端口: "
+                        + "、".join(f"{port_label(k)}({k})" for k in outs),
+                    )
+
+                elif ntype == "dereverb":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"去混响净化节点缺少输入音频{missing_hint(node_id, 'audio')}")
+                    model = str(params.get("model") or config.UVR_DEREVERB_MODEL)
+                    device = str(params.get("device") or "auto")
+                    engine = str(params.get("engine") or "uvr").strip().lower()
+                    if engine == "pymss":
+                        if not self._pymss.available:
+                            outs["audio"] = in_audio
+                            self._log(log_file, "  去混响跳过：PyMSS 环境未就绪")
+                        elif not config.pymss_model_ready(model):
+                            raise RuntimeError(f"PyMSS 去混响模型未下载: {model}")
+                        else:
+                            try:
+                                dr = self._pymss.separate(
+                                    in_audio,
+                                    work_dir / f"wf_dereverb_{node_id}",
+                                    model,
+                                    device,
+                                    purpose="generic",
+                                )
+                                if dr.vocals.exists():
+                                    outs["audio"] = Path(dr.vocals)
+                                    self._log(log_file, f"  PyMSS 去混响模型: {model}")
+                                else:
+                                    outs["audio"] = in_audio
+                                    self._log(log_file, "  去混响降级：沿用输入人声")
+                            except (OSError, RuntimeError, ValueError) as exc:
+                                outs["audio"] = in_audio
+                                self._log(log_file, f"  去混响失败，沿用输入: {exc}")
+                    elif self._uvr.available and config.uvr_dereverb_ready():
+                        dr = self._uvr.separate(
+                            in_audio,
+                            work_dir / f"wf_dereverb_{node_id}",
+                            model,
+                            device,
+                        )
+                        if not dr.simulated and dr.vocals.exists():
+                            outs["audio"] = Path(dr.vocals)
+                            self._log(log_file, f"  去混响模型: {model}")
+                        else:
+                            outs["audio"] = in_audio
+                            self._log(log_file, "  去混响降级：沿用输入人声")
+                    else:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  去混响跳过：未找到去混响模型")
+
+                elif ntype == "repair":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"人声修复节点缺少输入音频{missing_hint(node_id, 'audio')}")
+                    device = str(params.get("device") or "auto")
+                    if not self._vocal_enhancement.available:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  人声修复跳过：DeepFilterNet3 环境未就绪")
+                    else:
+                        try:
+                            profile = self._vocal_enhancement.analyze(
+                                in_audio, log_file=log_file
+                            )
+                            repaired = self._vocal_enhancement.repair(
+                                in_audio,
+                                work_dir / f"wf_repair_{node_id}.wav",
+                                stage="separated",
+                                device=device,
+                                log_file=log_file,
+                                profile=profile,
+                                reference=in_audio,
+                            )
+                            outs["audio"] = repaired
+                        except (OSError, RuntimeError, ValueError) as exc:
+                            outs["audio"] = in_audio
+                            self._log(log_file, f"  人声修复失败，沿用输入: {exc}")
+
+                elif ntype == "convert":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"歌声转换节点缺少输入音频{missing_hint(node_id, 'audio')}")
+                    model_info = dict((work.get("workflow_models") or {}).get(node_id) or {})
+                    if not model_info:
+                        raise RuntimeError("歌声转换节点未关联可用模型")
+                    framework = config.modelhub_normalize_framework(model_info.get("framework"))
+                    seg_params = InferenceParams.from_dict(model_info.get("params") or {})
+                    seg_params.high_pitch_threshold = self._model_high_pitch_threshold(
+                        seg_params, model_info, framework
+                    )
+                    self._adapt_high_range(seg_params, {}, log_file, framework)
+                    engine = self._engines.for_framework(framework)
+                    if framework == "so-vits-svc" and self._svc is not None:
+                        try:
+                            self._svc.extract_f0(
+                                in_audio,
+                                work_dir / f"wf_f0_{node_id}.npy",
+                                str(model_info.get("main_config_path") or ""),
+                                seg_params,
+                                log_file,
+                            )
+                        except (OSError, RuntimeError, ValueError):
+                            pass
+                    fw_label = config.MODELHUB_FRAMEWORKS.get(framework, framework)
+                    self._log(
+                        log_file,
+                        f"  模型 {model_info.get('name', '')} [{fw_label}] 推理"
+                        f"（引擎 {'可用' if getattr(engine, 'available', False) else '降级模式'}）",
+                    )
+                    converted, _, _ = self._infer_with_dropout_recovery(
+                        engine=engine,
+                        model={
+                            "framework": framework,
+                            "main_model_path": model_info.get("main_model_path", ""),
+                            "main_config_path": model_info.get("main_config_path", ""),
+                            "diffusion_model_path": model_info.get("diffusion_model_path", ""),
+                            "diffusion_config_path": model_info.get("diffusion_config_path", ""),
+                            "index_path": model_info.get("index_path", ""),
+                        },
+                        source=in_audio,
+                        output=work_dir / f"wf_convert_{node_id}.wav",
+                        params=seg_params,
+                        duration=duration,
+                        log_file=log_file,
+                        allow_recovery=True,
+                    )
+                    outs["audio"] = converted
+
+                elif ntype == "blend":
+                    in_files = inputs_of(node_id, "audio")
+                    if not in_files:
+                        raise RuntimeError(f"人声合唱叠加节点缺少输入{missing_hint(node_id, 'audio')}")
+                    if len(in_files) == 1:
+                        outs["audio"] = in_files[0]
+                    else:
+                        blended = work_dir / f"wf_blend_{node_id}.wav"
+                        if self._ffmpeg.available and self._ffmpeg.mix_vocals(
+                            in_files, blended
+                        ):
+                            outs["audio"] = blended
+                            self._log(log_file, f"  合唱叠加 {len(in_files)} 路转换人声")
+                        else:
+                            outs["audio"] = in_files[0]
+                            self._log(log_file, "  合唱叠加失败，沿用第一路输入")
+
+                elif ntype == "enhance":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"AI 歌声增强节点缺少输入音频{missing_hint(node_id, 'audio')}")
+                    level = str(params.get("level") or "basic").strip().lower()
+                    if level not in {"basic", "advanced"}:
+                        level = "basic"
+
+                    def strength(key: str, default: float) -> float:
+                        try:
+                            value = float(params.get(key, default))
+                        except (TypeError, ValueError):
+                            value = default
+                        if value != value:
+                            value = default
+                        return max(0.0, min(1.0, value))
+
+                    controls = {
+                        "pitch_correction": strength("pitch_correction", 0.45),
+                        "timing_alignment": strength("timing_alignment", 0.45),
+                        "timbre_focus": strength("timbre_focus", 0.60),
+                        "ai_eq": strength("ai_eq", 0.55),
+                        "ai_compressor": strength("ai_compressor", 0.45),
+                        "ai_exciter": strength("ai_exciter", 0.25),
+                        "stereo_width": strength("stereo_width", 0.30),
+                        "loudness_envelope": strength("loudness_envelope", 0.58),
+                    }
+                    if not self._vocal_enhancement.available:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  AI 歌声增强跳过：环境未就绪")
+                    else:
+                        enhanced = self._vocal_enhancement.enhance(
+                            in_audio,
+                            work_dir / f"wf_enhance_{node_id}.wav",
+                            level=level,
+                            device=str(params.get("device") or "auto"),
+                            log_file=log_file,
+                            skip_repair=True,
+                            **controls,
+                        )
+                        outs["audio"] = enhanced
+
+                elif ntype == "mix":
+                    vocals = first_input(node_id, "vocals")
+                    instrumental = first_input(node_id, "instrumental")
+                    if vocals is None:
+                        raise RuntimeError(f"混音合成节点缺少人声输入{missing_hint(node_id, 'vocals')}")
+                    enhanced = bool(params.get("enhanced"))
+                    out = work_dir / f"wf_mix_{node_id}.wav"
+                    mixed = False
+                    if instrumental and instrumental.exists():
+                        mixed = self._mix_vocal_with_music(
+                            vocals,
+                            instrumental,
+                            out,
+                            enhanced=enhanced,
+                            log_file=log_file,
+                        )
+                    if mixed and out.exists():
+                        outs["audio"] = out
+                    elif self._ffmpeg.available and self._ffmpeg.convert(vocals, out):
+                        outs["audio"] = out
+                        self._log(log_file, "  无可用伴奏，输出仅人声")
+                    else:
+                        outs["audio"] = vocals
+                        self._log(log_file, "  混音失败，输出原始人声")
+
+                elif ntype == "output":
+                    tracks = inputs_of(node_id, "audio")
+                    if not tracks:
+                        raise RuntimeError(f"保存节点缺少输入音频{missing_hint(node_id, 'audio')}")
+                    outs["audio"] = tracks[0]
+                    self._log(log_file, f"  保存节点接入 {len(tracks)} 路音轨")
+
+                else:
+                    raise RuntimeError(f"未知节点类型: {ntype}")
+
+                results[node_id] = outs
+                self._set_step(work, node_id, StepStatus.DONE.value)
+                self._save(work)
+
+            # 汇总所有「保存」节点接入的音轨：每个保存节点可收集多路，
+            # 任一音轨都可以继续处理、被直接保存，或被丢弃（不连线）。
+            # 第一路作为「翻唱成品」（output.wav，进入作品库）；其余只落在本次任务
+            # 目录的 outputs/ 下，作为音频编辑器的素材。
+            saved_tracks: list[tuple[Path, str, str]] = []
+            for onode in nodes:
+                if str(onode.get("type") or "") != "output":
+                    continue
+                oid = str(onode.get("id") or "")
+                for frm in incoming.get((oid, "audio"), []):
+                    upstream = results.get(str(frm.get("node") or "")) or {}
+                    port = str(frm.get("port") or "")
+                    track = upstream.get(port)
+                    if not track or not Path(track).exists():
+                        continue
+                    source_node = node_by_id.get(str(frm.get("node") or "")) or {}
+                    label = NODE_LABELS.get(str(source_node.get("type") or ""), "音频")
+                    # 不同模型可能同时保存人声/伴奏/附加音轨，标题要带上端口名才分得清。
+                    if port and port != "audio":
+                        label = f"{label} · {port_label(port)}"
+                    saved_tracks.append((Path(track), label, port))
+            if not saved_tracks:
+                raise RuntimeError("工作流缺少可用的保存音轨")
+
+            primary_label, primary_port = saved_tracks[0][1], saved_tracks[0][2]
+            primary = saved_tracks[0][0]
+            output = work_dir / "output.wav"
+            if self._ffmpeg.available and self._ffmpeg.convert(primary, output):
+                primary = output
+            saved_outputs: list[dict[str, Any]] = [
+                {
+                    "index": 0,
+                    "primary": True,
+                    "path": str(primary),
+                    "label": primary_label,
+                    "port": primary_port,
+                }
+            ]
+            outputs_dir = work_dir / "outputs"
+            for index, (track, label, port) in enumerate(saved_tracks[1:], start=1):
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                dest = outputs_dir / f"track_{index:02d}.wav"
+                saved = track
+                if self._ffmpeg.available and self._ffmpeg.convert(track, dest):
+                    saved = dest
+                saved_outputs.append(
+                    {
+                        "index": index,
+                        "primary": False,
+                        "path": str(saved),
+                        "label": label,
+                        "port": port,
+                    }
+                )
+
+            work["progress"] = 100
+            work["status"] = JobStatus.DONE.value
+            work["output_path"] = str(primary)
+            work["converted_path"] = str(primary)
+            work["workflow_outputs"] = saved_outputs
+            work["format"] = primary.suffix.lstrip(".").upper() or "WAV"
+            work["size"] = paths.file_size_label(primary)
+            work["duration"] = self._format_duration(duration)
+            self._record_history(work)
+            self._save(work)
+            self._cleanup_finished_work_cache(work_dir, work, log_file)
+            self._log(log_file, f"工作流任务完成 ✅（共保存 {len(saved_outputs)} 路音轨）")
+        except Exception as exc:  # noqa: BLE001 - 任务失败需记录而非崩溃
+            work["status"] = JobStatus.FAILED.value
+            work["error"] = str(exc)
+            self._log(log_file, f"工作流任务失败 ❌: {exc}")
+            self._log(log_file, traceback.format_exc())
+            for step in work.get("steps") or []:
+                if step.get("status") == StepStatus.ACTIVE.value:
+                    step["status"] = StepStatus.FAILED.value
+            self._record_history(work)
+            self._save(work)
+
+    def _declared_pymss_stems(self, model: str) -> list[str]:
+        """读取 PyMSS 模型声明的输出音轨；无配置或旧适配器时返回空列表。"""
+        getter = getattr(self._pymss, "declared_stems", None)
+        if not callable(getter):
+            return []
+        try:
+            stems = getter(model)
+        except (OSError, RuntimeError, ValueError):
+            return []
+        return [str(stem) for stem in (stems or []) if str(stem).strip()]
 
     @staticmethod
     def _format_duration(seconds: float) -> str:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -46,9 +47,21 @@ def _audio_stats(path: Path) -> tuple[float, float, int]:
     )
 
 
+def _normalized_name(path: Path) -> str:
+    return path.stem.casefold().replace("_", " ").replace("-", " ")
+
+
+def _has_token(name: str, token: str) -> bool:
+    """整词匹配，避免 primary_stem="male" 也命中 "female"。"""
+    token = str(token or "").strip()
+    if not token:
+        return False
+    return re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", name) is not None
+
+
 def _name_score(path: Path, purpose: str, preferred_stem: str = "") -> int:
     """Prefer explicit PyMSS stem names over arbitrary filesystem order."""
-    name = path.stem.casefold().replace("_", " ").replace("-", " ")
+    name = _normalized_name(path)
     preferred = str(preferred_stem or "").casefold().replace("_", " ").replace("-", " ").strip()
     if purpose == "dereverb":
         positive = ("no reverb", "noreverb", "no echo", "no noise", "dry", "clean", "dereverb", "deecho")
@@ -68,10 +81,30 @@ def _name_score(path: Path, purpose: str, preferred_stem: str = "") -> int:
     score = (1000 if preferred and preferred in name else 0) + (500 if preferred_clean and preferred and preferred in name else 0) + sum(
         100 for token in positive if token in name
     )
+    if purpose == "generic" and _has_token(name, preferred):
+        # 工作流里明确指定的「主音轨」：整词命中优先，避免 male 命中 female。
+        score += 3000
     # ``no noise``/``no echo`` contain the removed-stem word, so protect the
     # clean label before applying the generic penalty.
     clean_label = any(token in name for token in ("no noise", "no echo", "no reverb"))
     score -= sum(120 for token in negative if token in name and not (clean_label and token in {"noise", "echo", "reverb"}))
+    if purpose == "generic":
+        # 自定义工作流用 generic 跑任意 PyMSS 模型：同一模型若同时输出干声与湿声
+        # （如去混响模型的「(No Reverb)」「(Reverb)」），主输出应取干声。
+        score += sum(
+            80
+            for token in ("no reverb", "noreverb", "no echo", "no noise", "dry", "clean", "dereverb", "deecho")
+            if token in name
+        )
+        score -= sum(
+            60
+            for token in ("reverb", "wet", "echo", "noise")
+            if token in name
+            and not any(
+                clean in name
+                for clean in ("no reverb", "noreverb", "no echo", "no noise", "dry", "clean", "dereverb", "deecho")
+            )
+        )
     return score
 
 
@@ -178,6 +211,7 @@ def main() -> int:
         help="处理用途：人声分离、去混响或通用 PyMSS 分离",
     )
     parser.add_argument("--target-stem", default="")
+    parser.add_argument("--primary-stem", default="", help="用户指定的主音轨（覆盖模型默认目标音轨）")
     parser.add_argument("--download", action="store_true")
     args = parser.parse_args()
 
@@ -241,7 +275,7 @@ def main() -> int:
         configured_stems = (configured_stems,)
     elif not isinstance(configured_stems, (list, tuple)):
         configured_stems = ()
-    primary_stem = str(args.target_stem or (configured_stems[0] if configured_stems else ""))
+    primary_stem = str(args.primary_stem or args.target_stem or (configured_stems[0] if configured_stems else ""))
     try:
         separator.process_folder(str(source))
     finally:

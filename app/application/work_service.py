@@ -21,6 +21,7 @@ from .conversion_service import (
     default_steps_multi,
 )
 from .model_service import ModelService
+from .workflow_graph import NODE_LABELS, topological_order, validate_graph
 
 
 class WorkService:
@@ -31,6 +32,7 @@ class WorkService:
         "auto_then_editor",
         "full_manual_editor",
         "ai_enhancement",
+        "workflow",
     }
     _VOCAL_MERGE_WORKFLOWS = {"auto_vocal_merge", "manual_vocal_merge"}
 
@@ -209,6 +211,8 @@ class WorkService:
         """根据前端配置创建翻唱任务并启动后台处理。"""
         if str((payload or {}).get("workflow") or "") == "ai_enhancement":
             return self._create_ai_enhancement(payload or {})
+        if (payload or {}).get("mode") == "workflow":
+            return self._create_workflow(payload or {})
         if (payload or {}).get("mode") == "multi":
             return self._create_multi(payload or {})
         return self._create_single(payload or {})
@@ -268,6 +272,35 @@ class WorkService:
         next_presets = [p for p in presets if p.get("id") != preset_id]
         self._settings.set("inference_presets", next_presets)
         return len(next_presets) != len(presets)
+
+    # ---- 自定义翻唱工作流 ----
+    def list_workflows(self) -> list[dict[str, Any]]:
+        return list(self._settings.get("cover_workflows", []) or [])
+
+    def save_workflow(self, name: str, graph: dict[str, Any]) -> dict[str, Any]:
+        """保存（新建或按 id 覆盖）一个自定义翻唱工作流。"""
+        error = validate_graph(graph or {})
+        if error:
+            raise ValueError(error)
+        workflows = self.list_workflows()
+        existing_id = str((graph or {}).get("id") or "").strip()
+        workflow = {
+            "id": existing_id or paths.new_id("wf_"),
+            "name": (name or "未命名工作流").strip() or "未命名工作流",
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "nodes": (graph or {}).get("nodes") or [],
+            "edges": (graph or {}).get("edges") or [],
+        }
+        workflows = [w for w in workflows if w.get("id") != workflow["id"]]
+        workflows.insert(0, workflow)
+        self._settings.set("cover_workflows", workflows[:50])
+        return workflow
+
+    def delete_workflow(self, workflow_id: str) -> bool:
+        workflows = self.list_workflows()
+        next_workflows = [w for w in workflows if w.get("id") != workflow_id]
+        self._settings.set("cover_workflows", next_workflows)
+        return len(next_workflows) != len(workflows)
 
     def _create_single(self, payload: dict[str, Any]) -> dict[str, Any]:
         model_id = payload.get("model_id") or self._models.default_id()
@@ -504,6 +537,81 @@ class WorkService:
         self._conversion.start(work.id)
         return self._view(record)
 
+    def _create_workflow(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """创建自定义工作流翻唱任务：解析节点图并把每个歌声转换节点解析为可推理模型。"""
+        graph = payload.get("workflow_graph") or {}
+        error = validate_graph(graph)
+        if error:
+            raise ValueError(error)
+
+        source_path = payload.get("source_path")
+        title = payload.get("title") or (
+            Path(source_path).stem if source_path else "未命名翻唱"
+        )
+        workflow_name = str(graph.get("name") or "自定义工作流").strip() or "自定义工作流"
+
+        # 为每个「歌声转换」节点解析出可推理的模型路径与框架。
+        workflow_models: dict[str, Any] = {}
+        for node in graph.get("nodes") or []:
+            if str(node.get("type") or "") != "convert":
+                continue
+            raw_params = dict(node.get("params") or {})
+            model_id = str(raw_params.get("model_id") or "").strip()
+            if not model_id:
+                continue
+            model = self._models.get(model_id)
+            if not model:
+                continue
+            model_params = {k: v for k, v in raw_params.items() if k != "model_id"}
+            model_params = ModelService.apply_detected_rvc_version(model, model_params)
+            workflow_models[str(node.get("id") or "")] = {
+                "name": model.get("name", model_id),
+                "model_id": model_id,
+                "params": model_params,
+                **self._resolve_model_paths(model),
+            }
+
+        nodes = graph.get("nodes") or []
+        node_by_id = {str(node.get("id") or ""): node for node in nodes}
+        order = topological_order(nodes, graph.get("edges") or []) or [
+            str(node.get("id") or "") for node in nodes
+        ]
+        steps = [
+            {
+                "key": node_id,
+                "label": NODE_LABELS.get(
+                    str((node_by_id.get(node_id) or {}).get("type") or ""),
+                    "节点",
+                ),
+                "status": "wait",
+            }
+            for node_id in order
+        ]
+
+        work = Work(
+            id=paths.new_id("wrk_"),
+            title=title,
+            model=f"自定义工作流 · {workflow_name}",
+            model_id="",
+            status=JobStatus.QUEUE.value,
+            progress=0,
+            duration="—",
+            format="—",
+            size="—",
+            created_at=datetime.now().isoformat(timespec="seconds"),
+            source_path=source_path,
+            params=payload.get("params", {}) or {},
+            steps=steps,
+            workflow="workflow",
+            mode="workflow",
+        )
+        record = work.to_dict()
+        record["workflow_graph"] = graph
+        record["workflow_models"] = workflow_models
+        self._repo.add(record)
+        self._conversion.start(work.id)
+        return self._view(record)
+
     @classmethod
     def _workflow(cls, payload: dict[str, Any], mode: str = "single") -> str:
         value = str((payload or {}).get("workflow") or "auto_mix")
@@ -607,7 +715,17 @@ class WorkService:
         # 实时翻唱的归档记录没有普通转换任务所需的推理参数，不能按常规任务重跑。
         if work.get("workflow") == "realtime_cover":
             return False
-        if work.get("mode") == "multi":
+        if work.get("mode") == "workflow":
+            for node_id, entry in (work.get("workflow_models") or {}).items():
+                model_id = str(entry.get("model_id") or "")
+                model = self._models.get(model_id) if model_id else None
+                if not model or not isinstance(entry, dict):
+                    continue
+                entry.update(self._resolve_model_paths(model))
+                entry["params"] = ModelService.apply_detected_rvc_version(
+                    model, entry.get("params") or {}
+                )
+        elif work.get("mode") == "multi":
             for model_id, entry in (work.get("seg_models") or {}).items():
                 model = self._models.get(str(model_id))
                 if not model or not isinstance(entry, dict):
@@ -637,6 +755,24 @@ class WorkService:
         )
         if work.get("workflow") == "ai_enhancement":
             work["steps"] = default_steps_ai_enhancement()
+        elif work.get("mode") == "workflow":
+            wf_graph = work.get("workflow_graph") or {}
+            wf_nodes = wf_graph.get("nodes") or []
+            wf_by_id = {str(node.get("id") or ""): node for node in wf_nodes}
+            wf_order = topological_order(wf_nodes, wf_graph.get("edges") or []) or [
+                str(node.get("id") or "") for node in wf_nodes
+            ]
+            work["steps"] = [
+                {
+                    "key": node_id,
+                    "label": NODE_LABELS.get(
+                        str((wf_by_id.get(node_id) or {}).get("type") or ""),
+                        "节点",
+                    ),
+                    "status": "wait",
+                }
+                for node_id in wf_order
+            ]
         else:
             work["steps"] = (
                 default_steps_multi(enhancement_enabled, preprocess_enabled, harmony_enabled)

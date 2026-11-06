@@ -84,6 +84,8 @@ import type {
   PluginMarketResult,
   PluginInstallResult,
   PluginActionResult,
+  CoverWorkflow,
+  WorkflowGraph,
 } from './types'
 
 const now = () => new Date().toISOString()
@@ -276,6 +278,7 @@ const mockModels: ModelDTO[] = [
 ]
 let defaultModelId = 'm1'
 let mockInferencePresets: InferencePreset[] = []
+let mockCoverWorkflows: CoverWorkflow[] = []
 const mockAudioImports = new Map<string, string>()
 
 // 音乐资源获取的模拟状态（仅浏览器开发环境）
@@ -1007,6 +1010,7 @@ export const mock = {
   },
   createWork(payload: CreateWorkPayload): WorkDTO {
     const isMulti = payload.mode === 'multi'
+    const isWorkflow = payload.mode === 'workflow'
     const workflow = normalizeMockWorkflow(payload.workflow, isMulti)
     const isEnhancement = workflow === 'ai_enhancement'
     const enhancement = Boolean(
@@ -1024,8 +1028,8 @@ export const mock = {
     const parent = isEnhancement ? mockWorks.find((item) => item.id === payload.target_work_id) : undefined
     const work: WorkDTO = {
       id: rid('wrk_'),
-      title: `${rawTitle} (${isEnhancement ? 'AI 增强' : isMulti ? '混合翻唱' : 'AI 翻唱'})`,
-      model: isEnhancement ? `${parent?.model || '翻唱作品'} · AI 增强` : isMulti ? `多模型混合（${payload.models?.length || 0} 个）` : (model?.name || '默认模型'),
+      title: `${rawTitle} (${isEnhancement ? 'AI 增强' : isWorkflow ? '自定义工作流' : isMulti ? '混合翻唱' : 'AI 翻唱'})`,
+      model: isEnhancement ? `${parent?.model || '翻唱作品'} · AI 增强` : isWorkflow ? `自定义工作流 · ${payload.workflow_graph?.name || '未命名'}` : isMulti ? `多模型混合（${payload.models?.length || 0} 个）` : (model?.name || '默认模型'),
       model_id: isEnhancement ? (parent?.model_id || '') : payload.models?.[0]?.model_id || model?.id || '',
       status: 'queue',
       progress: 0,
@@ -1050,9 +1054,15 @@ export const mock = {
         loudness_envelope: Math.max(0, Math.min(1, payload.vocal_enhancement?.loudness_envelope ?? 0.58)),
       },
       preprocess,
-      mode: isMulti ? 'multi' : 'single',
+      mode: isWorkflow ? 'workflow' : isMulti ? 'multi' : 'single',
       segments: payload.segments,
-      steps: isEnhancement ? enhancementSteps() : isMulti ? multiSteps(enhancement, preprocess.enabled) : baseSteps(enhancement, preprocess.enabled),
+      steps: isEnhancement
+        ? enhancementSteps()
+        : isWorkflow
+          ? (payload.workflow_graph?.nodes || []).map((n) => ({ key: n.id, label: n.type, status: 'wait' as const }))
+          : isMulti
+            ? multiSteps(enhancement, preprocess.enabled)
+            : baseSteps(enhancement, preprocess.enabled),
     }
     mockWorks.unshift(work)
     advance(work)
@@ -1167,6 +1177,28 @@ export const mock = {
     mockInferencePresets = mockInferencePresets.filter((p) => p.id !== id)
     return mockInferencePresets.length !== before
   },
+  listCoverWorkflows(): CoverWorkflow[] {
+    return [...mockCoverWorkflows]
+  },
+  saveCoverWorkflow(name: string, graph: WorkflowGraph): CoverWorkflow {
+    const workflow: CoverWorkflow = {
+      id: graph.id || rid('wf_'),
+      name: name || graph.name || '未命名工作流',
+      updated_at: now(),
+      nodes: graph.nodes,
+      edges: graph.edges,
+    }
+    mockCoverWorkflows = [
+      workflow,
+      ...mockCoverWorkflows.filter((w) => w.id !== workflow.id),
+    ].slice(0, 50)
+    return workflow
+  },
+  deleteCoverWorkflow(id: string): boolean {
+    const before = mockCoverWorkflows.length
+    mockCoverWorkflows = mockCoverWorkflows.filter((w) => w.id !== id)
+    return mockCoverWorkflows.length !== before
+  },
   retryWork(id: string): boolean {
     const w = mockWorks.find((x) => x.id === id)
     if (!w) return false
@@ -1194,6 +1226,11 @@ export const mock = {
   openWorkLog(id: string): boolean {
     console.info('[mock] openWorkLog', id)
     return false
+  },
+  getWorkLog(id: string, tail = 300): string {
+    void id
+    void tail
+    return ''
   },
   openPath(path: string): boolean {
     console.info('[mock] openPath', path)

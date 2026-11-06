@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import config
+from infrastructure.pymss_catalog_meta import attach_model_stems, model_stems
 from infrastructure.uvr_tool import SeparationResult
 
 
@@ -33,6 +34,8 @@ class PymssTool:
             "purpose": config.PYMSS_PURPOSE_VOCAL,
             "purpose_label": config.PYMSS_PURPOSE_LABELS[config.PYMSS_PURPOSE_VOCAL],
             "target_stem": "vocals",
+            "primary_stem": "vocals",
+            "stems": ["vocals", "instrumental"],
             "size_bytes": 0,
             "downloaded": False,
         },
@@ -44,6 +47,8 @@ class PymssTool:
             "purpose": config.PYMSS_PURPOSE_DEREVERB,
             "purpose_label": config.PYMSS_PURPOSE_LABELS[config.PYMSS_PURPOSE_DEREVERB],
             "target_stem": "vocals",
+            "primary_stem": "No Reverb",
+            "stems": ["No Reverb", "Reverb"],
             "size_bytes": 0,
             "downloaded": False,
         },
@@ -59,6 +64,11 @@ class PymssTool:
 
     def status(self, model: str = "") -> str:
         return config.pymss_status(model)
+
+    @staticmethod
+    def declared_stems(model: str = "") -> list[str]:
+        """模型 yaml 里声明的输出音轨（只读配置，不加载权重）。"""
+        return model_stems(model, config.PYMSS_MODEL_DIR)
 
     def version(self) -> str | None:
         if not self.available:
@@ -101,6 +111,22 @@ class PymssTool:
         ]
 
     def list_models(
+        self,
+        supported_only: bool = True,
+        purpose: str = "",
+        include_all: bool = False,
+    ) -> list[dict[str, Any]]:
+        """读取 PyMSS catalog，并补充模型声明的输出音轨（stems）。"""
+        return attach_model_stems(
+            self._list_models(
+                supported_only=supported_only,
+                purpose=purpose,
+                include_all=include_all,
+            ),
+            config.PYMSS_MODEL_DIR,
+        )
+
+    def _list_models(
         self,
         supported_only: bool = True,
         purpose: str = "",
@@ -444,7 +470,13 @@ class PymssTool:
             return True
 
     def separate(
-        self, src: Path, out_dir: Path, model: str = "", device: str = "auto", purpose: str = ""
+        self,
+        src: Path,
+        out_dir: Path,
+        model: str = "",
+        device: str = "auto",
+        purpose: str = "",
+        primary_stem: str = "",
     ) -> SeparationResult:
         out_dir.mkdir(parents=True, exist_ok=True)
         if not self.available or not src or not Path(src).exists():
@@ -496,6 +528,10 @@ class PymssTool:
         target_stem = str(model_entry.get("target_stem") or "").strip()
         if target_stem:
             cmd.extend(["--target-stem", target_stem])
+        chosen_stem = str(primary_stem or "").strip()
+        if chosen_stem:
+            # 用户在工作流节点里指定的「主音轨」，优先于 catalog 的默认目标音轨。
+            cmd.extend(["--primary-stem", chosen_stem])
         env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         # ``auto`` is allowed one CPU retry.  This handles transient CUDA/ROCm
         # kernel and VRAM failures without silently changing an explicit device.

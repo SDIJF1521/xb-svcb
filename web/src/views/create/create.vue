@@ -9,26 +9,34 @@
       </div>
     </div>
 
-    <div class="layout">
+    <!-- 翻唱模式（全宽） -->
+    <section class="card glass mode-card" data-guide="cover-mode">
+      <button class="mode-item" data-guide="single-mode" :class="{ active: mode === 'single' }" @click="mode = 'single'">
+        <el-icon><Microphone /></el-icon>
+        <div class="mode-text">
+          <div class="mode-name">单模型翻唱</div>
+          <div class="mode-desc">整首歌用一个模型</div>
+        </div>
+      </button>
+      <button class="mode-item" data-guide="multi-mode" :class="{ active: mode === 'multi' }" @click="mode = 'multi'">
+        <el-icon><Operation /></el-icon>
+        <div class="mode-text">
+          <div class="mode-name">多模型混合</div>
+          <div class="mode-desc">逐句指派不同模型</div>
+        </div>
+      </button>
+      <button class="mode-item" data-guide="workflow-mode" :class="{ active: mode === 'workflow' }" @click="mode = 'workflow'">
+        <el-icon><Connection /></el-icon>
+        <div class="mode-text">
+          <div class="mode-name">自定义工作流</div>
+          <div class="mode-desc">拖拽连线自由编排</div>
+        </div>
+      </button>
+    </section>
+
+    <div v-if="mode !== 'workflow'" class="layout">
       <!-- 左侧：配置 -->
       <div class="config">
-        <!-- 翻唱模式 -->
-        <section class="card glass mode-card" data-guide="cover-mode">
-          <button class="mode-item" data-guide="single-mode" :class="{ active: mode === 'single' }" @click="mode = 'single'">
-            <el-icon><Microphone /></el-icon>
-            <div class="mode-text">
-              <div class="mode-name">单模型翻唱</div>
-              <div class="mode-desc">整首歌用一个模型</div>
-            </div>
-          </button>
-          <button class="mode-item" data-guide="multi-mode" :class="{ active: mode === 'multi' }" @click="mode = 'multi'">
-            <el-icon><Operation /></el-icon>
-            <div class="mode-text">
-              <div class="mode-name">多模型混合</div>
-              <div class="mode-desc">逐句指派不同模型</div>
-            </div>
-          </button>
-        </section>
 
         <section class="card glass workflow-card" data-guide="cover-workflow">
           <div class="card-head">
@@ -341,7 +349,7 @@
               <router-link to="/models?tab=pymss" class="head-link preprocess-link">打开模型站 <el-icon><Right /></el-icon></router-link>
             </div>
             <div class="pymss-picker">
-              <el-select v-model="pymssModel" class="pymss-select" placeholder="选择已下载的人声分离模型">
+              <el-select v-model="pymssModel" class="pymss-select" placeholder="选择已下载的人声分离模型" filterable>
                 <el-option
                   v-for="item in downloadedPymssVocalModels"
                   :key="item.name"
@@ -372,7 +380,7 @@
                 <span class="preprocess-label">去混响 / 人声净化模型</span>
                 <router-link to="/models?tab=pymss" class="head-link preprocess-link">下载模型 <el-icon><Right /></el-icon></router-link>
               </div>
-              <el-select v-model="harmonyModel" class="pymss-select" placeholder="选择已下载的去混响模型">
+              <el-select v-model="harmonyModel" class="pymss-select" placeholder="选择已下载的去混响模型" filterable>
                 <el-option
                   v-for="item in downloadedPymssHarmonyModels"
                   :key="item.name"
@@ -1118,6 +1126,174 @@
         </section>
       </div>
     </div>
+
+    <!-- 自定义工作流模式（全宽画布） -->
+    <div v-if="mode === 'workflow'" class="workflow-layout">
+      <section class="card glass workflow-bar">
+        <div class="workflow-bar-left">
+          <div class="card-head workflow-title" style="margin-bottom: 0">
+            <span class="step-no">WF</span>
+            <h2>自定义翻唱工作流</h2>
+          </div>
+          <el-dropdown
+            v-if="!song"
+            class="song-source-dropdown"
+            trigger="click"
+            placement="bottom-start"
+            @command="onSongSourceCommand"
+          >
+            <div
+              class="song-pick"
+              role="button"
+              tabindex="0"
+              :class="{ 'is-dragover': songDragActive }"
+              @dragenter.prevent="songDragActive = true"
+              @dragover.prevent="songDragActive = true"
+              @dragleave.prevent="songDragActive = false"
+              @drop.prevent="onSongDrop"
+            >
+              <el-icon class="song-pick-icon"><UploadFilled /></el-icon>
+              <span>选择歌曲或拖入</span>
+              <input ref="songInput" type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aac" hidden @click.stop @change="onSongFileChange" />
+            </div>
+            <template #dropdown>
+              <el-dropdown-menu class="song-source-menu">
+                <el-dropdown-item command="local">
+                  <el-icon><Document /></el-icon>选择本地文件
+                </el-dropdown-item>
+                <el-dropdown-item
+                  v-for="d in downloaded"
+                  :key="d.path"
+                  :command="'dl:' + d.path"
+                >
+                  <el-icon><Headset /></el-icon>
+                  <span class="song-source-name">{{ d.name }}</span>
+                </el-dropdown-item>
+                <el-dropdown-item v-if="!downloaded.length" disabled>暂无已下载素材</el-dropdown-item>
+                <el-dropdown-item divided command="more">
+                  <el-icon><Right /></el-icon>去资源获取下载
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <div v-else class="song-file">
+            <div class="song-cover"><el-icon><Headset /></el-icon></div>
+            <div class="song-info">
+              <div class="song-name">{{ song.name }}</div>
+              <div class="song-meta">{{ song.hint }}</div>
+            </div>
+            <button class="icon-x" @click="song = null"><el-icon><Close /></el-icon></button>
+          </div>
+          <span class="workflow-summary">{{ workflowSummary }}</span>
+        </div>
+        <div class="workflow-bar-right">
+          <audio
+            ref="workflowAudioEl"
+            style="display: none"
+            @playing="onWorkflowAudioPlaying"
+            @pause="onWorkflowAudioPause"
+            @timeupdate="onWorkflowAudioTimeUpdate"
+            @loadedmetadata="onWorkflowAudioMetadata"
+            @ended="onWorkflowAudioEnded"
+            @error="onWorkflowAudioPause"
+          />
+          <span v-if="isGenerating" class="wf-status running">生成中 {{ currentWork?.progress || 0 }}%</span>
+          <span v-else-if="failed" class="wf-status failed">{{ currentWork?.error || '生成失败' }}</span>
+          <template v-else-if="done">
+            <span class="wf-status done">已完成</span>
+            <router-link
+              :to="{ path: '/player', query: { work: currentWork?.id } }"
+              class="head-link"
+            >播放页</router-link>
+          </template>
+          <el-button
+            data-guide="cover-generate"
+            size="large"
+            round
+            class="cta-btn generate-btn"
+            :disabled="!canGenerate || isGenerating"
+            @click="generate"
+          >
+            <el-icon class="el-icon--left"><MagicStick /></el-icon>
+            {{ isGenerating ? '生成中...' : '运行工作流' }}
+          </el-button>
+        </div>
+
+        <div v-if="done" class="wf-audition-row">
+          <button
+            class="wf-audition-btn"
+            :disabled="workflowAudioLoading"
+            :title="workflowPlaying ? '暂停试听' : '试听成品'"
+            @click="toggleWorkflowAudio"
+          >
+            <el-icon v-if="workflowAudioLoading" class="spin"><Loading /></el-icon>
+            <el-icon v-else-if="workflowPlaying"><VideoPause /></el-icon>
+            <el-icon v-else><VideoPlay /></el-icon>
+          </button>
+          <span class="wf-audition-time">{{ formatPreviewTime(workflowAudioCurrentTime) }}</span>
+          <input
+            class="wf-audition-range"
+            type="range"
+            min="0"
+            :max="workflowAudioDuration || 0"
+            step="0.01"
+            :value="workflowAudioCurrentTime"
+            :disabled="!workflowAudioDuration"
+            @input="seekWorkflowAudio"
+          />
+          <span class="wf-audition-time">{{ formatPreviewTime(workflowAudioDuration) }}</span>
+        </div>
+      </section>
+
+      <WorkflowCanvas
+        v-model="workflowGraph"
+        :models="models"
+        :uvr-models="uvrModels"
+        :pymss-vocal-models="downloadedPymssVocalModels.map((m) => m.name)"
+        :pymss-harmony-models="downloadedPymssHarmonyModels.map((m) => m.name)"
+        :pymss-all-models="allPymssModels"
+        :song-name="song?.name || ''"
+        :run-status="currentWork?.mode === 'workflow' ? currentWork.status : ''"
+        :run-steps="currentWork?.mode === 'workflow' ? currentWork.steps : []"
+        :run-progress="currentWork?.mode === 'workflow' ? currentWork.progress : 0"
+        @pick-song="onPickSong"
+        @run="generate"
+        @download-pymss="onWorkflowDownloadPymss"
+      />
+
+      <section class="card glass wf-runlog">
+        <div class="card-head">
+          <span class="step-no">LOG</span>
+          <h2>执行流程与日志</h2>
+          <span v-if="currentWork?.mode === 'workflow'" class="wf-runlog-status" :class="currentWork.status">
+            {{ currentWork.status === 'running' ? `运行中 ${currentWork.progress}%` : currentWork.status === 'queue' ? '排队中' : currentWork.status === 'done' ? '已完成' : currentWork.status === 'failed' ? '失败' : '' }}
+          </span>
+          <button class="head-link" @click="logPanelOpen = !logPanelOpen">{{ logPanelOpen ? '收起' : '展开' }}</button>
+        </div>
+        <div v-if="logPanelOpen" class="wf-runlog-body">
+          <div class="wf-runlog-steps">
+            <div class="wf-runlog-title">执行流程</div>
+            <div v-for="(step, i) in workflowSteps" :key="step.key" class="wf-runlog-step" :class="step.status">
+              <span class="wf-runlog-idx">
+                <el-icon v-if="step.status === 'done'"><Select /></el-icon>
+                <el-icon v-else-if="step.status === 'active'" class="spin"><Loading /></el-icon>
+                <template v-else>{{ i + 1 }}</template>
+              </span>
+              <span class="wf-runlog-label">{{ translateUiText(step.label) }}</span>
+              <span class="wf-runlog-state">{{ stepStateText(step.status) }}</span>
+            </div>
+            <p v-if="!workflowSteps.length" class="wf-runlog-empty">运行工作流后，这里会显示逐节点执行流程。</p>
+          </div>
+          <div class="wf-runlog-log">
+            <div class="wf-runlog-log-head">
+              <span>运行日志</span>
+              <button v-if="currentWork?.log_path" class="wf-runlog-open" @click="openLog">打开完整日志</button>
+            </div>
+            <pre class="wf-runlog-pre">{{ workflowLog || '暂无日志' }}</pre>
+          </div>
+        </div>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -1176,13 +1352,16 @@ import {
   type VocalEnhancementLevel,
   type PymssModel,
   type PymssStatus,
+  type WorkflowGraph,
 } from '@/api'
+import WorkflowCanvas from './WorkflowCanvas.vue'
 import { useModelsStore } from '@/stores/models'
 import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
 import { f0MethodsForFramework, normalizeF0Method } from '@/utils/f0'
 import { takePendingAudio } from '@/utils/pendingAudio'
 import { importDroppedAudio } from '@/utils/audioImport'
+import { workflowOutputTitle } from '@/utils/workflowTitle'
 
 defineOptions({ name: 'CreatePage' })
 
@@ -1224,6 +1403,8 @@ const preprocessEnabled = ref(prefs.preprocessEnabled !== false)
 const preprocessEngine = ref<'uvr' | 'pymss'>(prefs.preprocessEngine === 'pymss' ? 'pymss' : 'uvr')
 const pymssModel = ref(str(prefs.pymssModel, 'bs_roformer_voc_hyperacev2'))
 const pymssModels = ref<PymssModel[]>([])
+// 全量 PyMSS 模型目录（含未下载），供自定义工作流节点选择全部模型。
+const allPymssModels = ref<PymssModel[]>([])
 const downloadedPymssVocalModels = computed(() => pymssModels.value.filter((item) => item.purpose === 'vocal_separation' && item.downloaded))
 const downloadedPymssHarmonyModels = computed(() => pymssModels.value.filter((item) => (item.purpose === 'dereverb' || item.purpose === 'harmony_removal') && item.downloaded))
 const harmonyRemovalEnabled = ref(Boolean(prefs.harmonyRemovalEnabled))
@@ -1259,6 +1440,33 @@ async function downloadPymssModel() {
 
 watch(pymssModel, () => { void refreshPymssStatus() })
 watch(harmonyModel, () => { void refreshPymssStatus() })
+
+/** 全量 PyMSS 模型目录（含未下载），供工作流节点选择全部模型。 */
+async function refreshAllPymssModels() {
+  try {
+    allPymssModels.value = await api.pymssModels(undefined, true)
+  } catch {
+    /* PyMSS 可选，目录获取失败时保持原列表。 */
+  }
+}
+
+/** 工作流节点内直接下载任意 PyMSS 模型。 */
+async function onWorkflowDownloadPymss(name: string) {
+  const model = String(name || '').trim()
+  if (!model) return
+  try {
+    const result = await api.pymssDownloadModel(model)
+    if (!result.ok) {
+      ElMessage.error(result.error || 'PyMSS 模型下载失败')
+      return
+    }
+    ElMessage.success(result.already ? '该模型正在下载中' : `已开始下载：${model}`)
+    // 下载是后台任务；稍后刷新目录，下载完成后节点里的“下载该模型”按钮会自动消失。
+    setTimeout(() => void refreshAllPymssModels(), 6000)
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : 'PyMSS 模型下载失败')
+  }
+}
 
 const f0Method = ref(normalizeF0Method('so-vits-svc', str(prefs.f0Method, 'rmvpe')))
 
@@ -1446,7 +1654,12 @@ function paramsForFramework(framework: string, values: ParamValues): InferencePa
   }
   return params
 }
-const mode = ref<'single' | 'multi'>(prefs.mode === 'multi' ? 'multi' : 'single')
+const mode = ref<'single' | 'multi' | 'workflow'>(
+  prefs.mode === 'multi' ? 'multi' : prefs.mode === 'workflow' ? 'workflow' : 'single',
+)
+
+// 自定义工作流：画布节点图。初始为空，由 WorkflowCanvas 挂载时生成默认模板。
+const workflowGraph = ref<WorkflowGraph>({ id: '', name: '新工作流', updated_at: '', nodes: [], edges: [] })
 const workflowKeys: CreateWorkflow[] = [
   'auto_mix',
   'auto_vocal_merge',
@@ -1488,7 +1701,7 @@ const workflowOptions: {
 const availableWorkflowOptions = computed(() =>
   workflowOptions.filter((item) => mode.value === 'multi' || !isVocalMergeWorkflow(item.key)),
 )
-function workflowOpensEditor(value: CreateWorkflow, targetMode: 'single' | 'multi') {
+function workflowOpensEditor(value: CreateWorkflow, targetMode: 'single' | 'multi' | 'workflow') {
   return value === 'auto_then_editor' || (targetMode === 'multi' && value === 'manual_vocal_merge')
 }
 
@@ -1937,7 +2150,7 @@ function onTlClosed() {
 /* 首次使用引导的演示状态：只在引导期间临时准备多模型时间轴 / AI 增强，离开后完整恢复。 */
 type GuideDemoKind = 'multi' | 'multi-timeline' | 'enhancement'
 interface GuideDemoSnapshot {
-  mode: 'single' | 'multi'
+  mode: 'single' | 'multi' | 'workflow'
   workflow: CreateWorkflow
   manualParamsEnabled: boolean
   selectedMulti: string[]
@@ -2326,6 +2539,40 @@ watch(
 const isPlaying = ref(false)
 const currentWork = ref<WorkDTO | null>(null)
 
+// 工作流运行的可视化：执行流程步骤 + 实时日志。
+const workflowLog = ref('')
+const logPanelOpen = ref(true)
+const workflowSteps = computed(() => {
+  const work = currentWork.value
+  if (!work || work.mode !== 'workflow') return []
+  return work.steps || []
+})
+const workflowSummary = computed(() => {
+  const nodes = workflowGraph.value.nodes.length
+  const edges = workflowGraph.value.edges.length
+  return `${nodes} ${translateUiText('节点')} · ${edges} ${translateUiText('连线')}`
+})
+function stepStateText(status: string): string {
+  switch (status) {
+    case 'active': return translateUiText('运行中')
+    case 'done': return translateUiText('完成')
+    case 'failed': return translateUiText('失败')
+    default: return translateUiText('等待')
+  }
+}
+async function refreshWorkflowLog() {
+  const work = currentWork.value
+  if (!work || work.mode !== 'workflow') {
+    workflowLog.value = ''
+    return
+  }
+  try {
+    workflowLog.value = await api.getWorkLog(work.id, 400)
+  } catch {
+    /* 日志读取失败不影响主流程 */
+  }
+}
+
 const stepMeta: Record<string, string> = {
   separate: '提取干声与伴奏（UVR / PyMSS）',
   harmony: '使用 PyMSS BVE 模型移除伴唱，仅保留主唱',
@@ -2380,14 +2627,30 @@ const activeWorkflow = computed<CreateWorkflow>(() => {
   const saved = currentWork.value?.workflow
   return isWorkflow(saved) ? saved : workflow.value
 })
-const activeMode = computed<'single' | 'multi'>(() =>
-  currentWork.value?.mode === 'multi' ? 'multi' : mode.value,
+const activeMode = computed<'single' | 'multi' | 'workflow'>(() =>
+  currentWork.value?.mode === 'multi' ? 'multi' : currentWork.value?.mode === 'workflow' ? 'workflow' : mode.value,
 )
 const editorAvailable = computed(() =>
   done.value && workflowOpensEditor(activeWorkflow.value, activeMode.value),
 )
+const workflowReady = computed(() => {
+  const nodes = workflowGraph.value.nodes
+  const edges = workflowGraph.value.edges
+  const inputCount = nodes.filter((n) => n.type === 'input').length
+  const outputCount = nodes.filter((n) => n.type === 'output').length
+  const convertOk = nodes
+    .filter((n) => n.type === 'convert')
+    .every((n) => Boolean((n.params as { model_id?: string }).model_id))
+  const hasConvert = nodes.some((n) => n.type === 'convert')
+  // 一个工作流只有一个保存节点；至少有一路音轨接入它。
+  const hasOutputConnection = nodes.some(
+    (n) => n.type === 'output' && edges.some((e) => e.to.node === n.id),
+  )
+  return inputCount === 1 && outputCount === 1 && hasConvert && convertOk && hasOutputConnection
+})
 const canGenerate = computed(() => {
   if (!song.value) return false
+  if (mode.value === 'workflow') return workflowReady.value
   if (workflow.value === 'full_manual_editor') return true
   if (mode.value === 'single') {
     if (!selectedModel.value) return false
@@ -2407,6 +2670,82 @@ const audioLoadedFor = ref<string | null>(null)
 const previewAudioLoading = ref(false)
 const previewCurrentTime = ref(0)
 const previewDuration = ref(0)
+
+// 自定义工作流模式的成品试听（独立的 audio 元素，不影响右侧预览播放器）。
+const workflowAudioEl = ref<HTMLAudioElement | null>(null)
+const workflowAudioWorkId = ref('')
+const workflowAudioLoading = ref(false)
+const workflowPlaying = ref(false)
+const workflowAudioCurrentTime = ref(0)
+const workflowAudioDuration = ref(0)
+function onWorkflowAudioPlaying() {
+  workflowPlaying.value = true
+  workflowAudioLoading.value = false
+}
+function onWorkflowAudioPause() {
+  workflowPlaying.value = false
+}
+function onWorkflowAudioMetadata() {
+  const duration = Number(workflowAudioEl.value?.duration || 0)
+  workflowAudioDuration.value = Number.isFinite(duration) ? duration : 0
+}
+function onWorkflowAudioTimeUpdate() {
+  workflowAudioCurrentTime.value = Number(workflowAudioEl.value?.currentTime || 0)
+}
+function onWorkflowAudioEnded() {
+  workflowPlaying.value = false
+  workflowAudioCurrentTime.value = workflowAudioDuration.value
+}
+function seekWorkflowAudio(event: Event) {
+  const el = workflowAudioEl.value
+  if (!el) return
+  const value = Number((event.target as HTMLInputElement).value)
+  if (!Number.isFinite(value)) return
+  el.currentTime = Math.max(0, Math.min(value, workflowAudioDuration.value || value))
+  workflowAudioCurrentTime.value = el.currentTime
+}
+async function preloadWorkflowAudio() {
+  const work = currentWork.value
+  const el = workflowAudioEl.value
+  if (!work || work.mode !== 'workflow' || work.status !== 'done' || !el) return
+  if (workflowAudioWorkId.value === work.id) return
+  try {
+    const data = await api.getWorkAudio(work.id)
+    if (!data) return
+    el.src = data
+    el.load()
+    workflowAudioWorkId.value = work.id
+  } catch {
+    /* 预加载失败不影响点按播放时的再次加载 */
+  }
+}
+
+async function toggleWorkflowAudio() {
+  const work = currentWork.value
+  const el = workflowAudioEl.value
+  if (!work || work.status !== 'done' || !el || workflowAudioLoading.value) return
+  if (!el.paused) {
+    el.pause()
+    return
+  }
+  workflowAudioLoading.value = true
+  try {
+    if (workflowAudioWorkId.value !== work.id) {
+      const data = await api.getWorkAudio(work.id)
+      if (!data) throw new Error('无法加载生成的音频')
+      el.src = data
+      el.load()
+      workflowAudioWorkId.value = work.id
+      workflowAudioCurrentTime.value = 0
+      workflowAudioDuration.value = 0
+    }
+    await el.play()
+  } catch (error) {
+    workflowAudioLoading.value = false
+    workflowPlaying.value = false
+    ElMessage.error(error instanceof Error && error.message ? error.message : '音频播放失败')
+  }
+}
 function formatPreviewTime(value: number) {
   const total = Math.max(0, Math.floor(Number(value) || 0))
   return `${Math.floor(total / 60).toString().padStart(2, '0')}:${(total % 60).toString().padStart(2, '0')}`
@@ -2760,6 +3099,23 @@ function pickDownloaded(d: DownloadedMusic) {
   song.value = { name: d.name, path: d.path, hint: '已下载素材' }
 }
 
+/** 工作流模式选歌：本地文件 / 已下载素材 / 去资源获取。 */
+function onSongSourceCommand(command: string | number | object) {
+  const value = String(command)
+  if (value === 'local') {
+    void onPickSong()
+    return
+  }
+  if (value === 'more') {
+    void router.push('/music')
+    return
+  }
+  if (value.startsWith('dl:')) {
+    const item = downloaded.value.find((d) => d.path === value.slice(3))
+    if (item) pickDownloaded(item)
+  }
+}
+
 async function loadDownloaded() {
   try {
     downloaded.value = await api.listMusic()
@@ -2780,6 +3136,7 @@ function startPolling(id: string) {
   timer = setInterval(async () => {
     const w = await api.getWork(id)
     if (w) currentWork.value = w
+    if (w?.mode === 'workflow') void refreshWorkflowLog()
     if (!w || w.status === 'done' || w.status === 'failed') {
       stopPolling()
       if (w?.status === 'done') void maybeOpenEditor(w)
@@ -2789,12 +3146,42 @@ function startPolling(id: string) {
 
 watch(currentWork, (work) => {
   if (work?.status === 'done') void maybeOpenEditor(work)
+  if (work?.mode === 'workflow') void refreshWorkflowLog()
+  if (workflowAudioWorkId.value && work?.id !== workflowAudioWorkId.value) {
+    workflowAudioEl.value?.pause()
+    workflowAudioWorkId.value = ''
+    workflowPlaying.value = false
+    workflowAudioCurrentTime.value = 0
+    workflowAudioDuration.value = 0
+  }
+  if (work?.mode === 'workflow' && work.status === 'done') void preloadWorkflowAudio()
 })
 
 const generate = async () => {
   if (!canGenerate.value || isGenerating.value || !song.value) return
   isPlaying.value = false
   const title = song.value.name.replace(/\.[^.]+$/, '')
+
+  if (mode.value === 'workflow') {
+    workflowAudioEl.value?.pause()
+    workflowAudioWorkId.value = ''
+    workflowPlaying.value = false
+    workflowAudioCurrentTime.value = 0
+    workflowAudioDuration.value = 0
+    workflowGraph.value.name = workflowGraph.value.name?.trim() || '未命名工作流'
+    const workflowTitle = workflowOutputTitle(workflowGraph.value, song.value.name, models.value)
+    const work = await worksStore.create({
+      title: workflowTitle,
+      mode: 'workflow',
+      source_path: song.value.path,
+      workflow_graph: { ...workflowGraph.value },
+    })
+    currentWork.value = work
+    editorOpenedFor.value = null
+    startPolling(work.id)
+    return
+  }
+
   const currentWorkflow = normalizeWorkflowForMode(workflow.value, mode.value)
   if (currentWorkflow !== workflow.value) workflow.value = currentWorkflow
 
@@ -2951,6 +3338,7 @@ onMounted(async () => {
   await modelsStore.load()
   try {
     pymssModels.value = await api.pymssModels()
+    void refreshAllPymssModels()
     const vocalModels = pymssModels.value.filter((item) => item.purpose === 'vocal_separation')
     const harmonyModels = pymssModels.value.filter((item) => item.purpose === 'dereverb' || item.purpose === 'harmony_removal')
     const downloadedVocal = vocalModels.filter((item) => item.downloaded)
@@ -3324,6 +3712,163 @@ onUnmounted(() => {
 .mode-item.active .el-icon { color: var(--xb-primary); }
 .mode-name { font-weight: 700; font-size: 14px; }
 .mode-desc { font-size: 12px; color: var(--xb-muted); margin-top: 2px; }
+
+/* 自定义工作流模式（全宽画布） */
+.workflow-layout { display: flex; flex-direction: column; gap: 18px; margin-top: 18px; }
+.workflow-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  padding: 12px 18px;
+}
+.workflow-bar-left { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-width: 0; flex: 1; }
+.workflow-bar-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; flex-wrap: nowrap; }
+.workflow-bar-right .wf-status,
+.workflow-bar-right .head-link { white-space: nowrap; flex-shrink: 0; }
+.workflow-title h2 { font-size: 16px; }
+.workflow-bar .song-file { flex: 1; }
+.song-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 220px;
+  padding: 9px 14px;
+  border: 1px dashed rgba(var(--xb-primary-rgb), 0.5);
+  border-radius: 9px;
+  background: rgba(var(--xb-primary-rgb), 0.05);
+  color: var(--xb-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.song-pick:hover, .song-pick.is-dragover {
+  border-color: var(--xb-primary);
+  background: rgba(var(--xb-primary-rgb), 0.12);
+}
+.song-pick-icon { font-size: 18px; color: var(--xb-primary); }
+.song-source-dropdown { flex: 1; min-width: 220px; display: flex; }
+.song-source-dropdown .song-pick { width: 100%; box-sizing: border-box; }
+.song-source-menu { max-height: 320px; overflow-y: auto; }
+.song-source-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-summary {
+  font-size: 12px;
+  color: var(--xb-muted);
+  white-space: nowrap;
+}
+.wf-audition-row {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--xb-border);
+}
+.wf-audition-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-primary-rgb), 0.12);
+  color: var(--xb-text);
+  cursor: pointer;
+}
+.wf-audition-btn:hover:not(:disabled) { background: rgba(var(--xb-primary-rgb), 0.24); }
+.wf-audition-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.wf-audition-range {
+  flex: 1;
+  min-width: 120px;
+  accent-color: var(--xb-primary);
+  cursor: pointer;
+}
+.wf-audition-range:disabled { opacity: 0.4; cursor: not-allowed; }
+.wf-audition-time {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--xb-muted);
+  font-variant-numeric: tabular-nums;
+}
+.wf-status { font-size: 13px; font-weight: 600; }
+.wf-status.running { color: var(--xb-primary); }
+.wf-status.done { color: #35d07f; }
+.wf-status.failed { color: #f43f5e; max-width: 340px; }
+
+/* 执行流程与日志 */
+.wf-runlog { display: flex; flex-direction: column; }
+.wf-runlog-status { margin-left: 10px; font-size: 12px; font-weight: 700; }
+.wf-runlog-status.running { color: var(--xb-primary); }
+.wf-runlog-status.done { color: #35d07f; }
+.wf-runlog-status.failed { color: #f43f5e; }
+.wf-runlog-status.queue { color: var(--xb-muted); }
+.wf-runlog-body { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.wf-runlog-title { font-size: 12px; font-weight: 700; color: var(--xb-muted); margin-bottom: 8px; }
+.wf-runlog-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--xb-border);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.wf-runlog-step.wait { opacity: 0.6; }
+.wf-runlog-step.active { border-color: var(--xb-primary); background: color-mix(in srgb, var(--xb-primary) 10%, transparent); }
+.wf-runlog-step.done { border-color: #35d07f; }
+.wf-runlog-step.failed { border-color: #f43f5e; }
+.wf-runlog-idx {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--xb-border) 60%, transparent);
+  font-size: 11px;
+}
+.wf-runlog-step.done .wf-runlog-idx { background: #35d07f; color: #fff; }
+.wf-runlog-step.active .wf-runlog-idx { background: var(--xb-primary); color: #fff; }
+.wf-runlog-step.failed .wf-runlog-idx { background: #f43f5e; color: #fff; }
+.wf-runlog-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-runlog-state { font-size: 11px; color: var(--xb-muted); }
+.wf-runlog-step.done .wf-runlog-state { color: #35d07f; }
+.wf-runlog-step.active .wf-runlog-state { color: var(--xb-primary); }
+.wf-runlog-step.failed .wf-runlog-state { color: #f43f5e; }
+.wf-runlog-empty { font-size: 12px; color: var(--xb-muted); }
+.wf-runlog-log { min-width: 0; display: flex; flex-direction: column; }
+.wf-runlog-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--xb-muted);
+  margin-bottom: 8px;
+}
+.wf-runlog-open { border: none; background: transparent; color: var(--xb-primary); font-size: 12px; cursor: pointer; }
+.wf-runlog-pre {
+  flex: 1;
+  margin: 0;
+  padding: 10px;
+  min-height: 180px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--xb-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--xb-panel) 80%, #000);
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--xb-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 .workflow-card { padding-top: 18px; }
 .preprocess-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }

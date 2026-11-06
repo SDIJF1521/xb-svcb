@@ -1238,6 +1238,16 @@ class Api:
     def delete_inference_preset(self, preset_id: str) -> bool:
         return self._works.delete_preset(preset_id)
 
+    # ---- 自定义翻唱工作流 ----
+    def list_cover_workflows(self) -> list[dict[str, Any]]:
+        return self._works.list_workflows()
+
+    def save_cover_workflow(self, name: str, graph: dict[str, Any]) -> dict[str, Any]:
+        return self._works.save_workflow(name, graph or {})
+
+    def delete_cover_workflow(self, workflow_id: str) -> bool:
+        return self._works.delete_workflow(workflow_id)
+
     def retry_work(self, work_id: str) -> bool:
         return self._works.retry(work_id)
 
@@ -1420,6 +1430,20 @@ class Api:
         target = Path(log_path) if log_path else (config.WORKS_DIR / work_id)
         folder = target.parent if target.suffix else target
         return self._reveal(folder)
+
+    def get_work_log(self, work_id: str, tail: int = 300) -> str:
+        """读取任务运行日志的末尾若干行，供前端实时显示执行流程。"""
+        work = self._works.get(work_id)
+        log_path = (work or {}).get("log_path")
+        target = Path(log_path) if log_path else (config.WORKS_DIR / work_id / "run.log")
+        try:
+            if not target.is_file():
+                return ""
+            lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return ""
+        limit = max(1, min(2000, int(tail or 300)))
+        return "\n".join(lines[-limit:])
 
     def open_path(self, path: str) -> bool:
         """用系统默认方式打开指定文件或文件夹。"""

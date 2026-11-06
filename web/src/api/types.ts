@@ -320,7 +320,7 @@ export interface WorkDTO {
   log_path?: string | null
   params?: InferenceParams
   steps: PipelineStep[]
-  mode?: 'single' | 'multi'
+  mode?: 'single' | 'multi' | 'workflow'
   workflow?: CreateWorkflow
   vocal_enhancement?: VocalEnhancementOptions
   preprocess?: PreprocessOptions
@@ -372,6 +372,53 @@ export interface BlendModel {
   params: InferenceParams
 }
 
+/** 自定义工作流：画布节点类型。 */
+export type WorkflowNodeType =
+  | 'input'
+  | 'separate'
+  | 'dereverb'
+  | 'repair'
+  | 'convert'
+  | 'blend'
+  | 'enhance'
+  | 'mix'
+  | 'output'
+
+/** 自定义工作流：画布节点。 */
+export interface WorkflowNode {
+  id: string
+  type: WorkflowNodeType
+  x: number
+  y: number
+  /** 节点参数（按类型不同，见后端 workflow_graph.NODE_TYPES）。 */
+  params: Record<string, any>
+}
+
+/** 自定义工作流：画布连线。 */
+export interface WorkflowEdge {
+  id: string
+  from: { node: string; port: string }
+  to: { node: string; port: string }
+}
+
+/** 自定义工作流：完整节点图。 */
+export interface WorkflowGraph {
+  id: string
+  name: string
+  updated_at: string
+  nodes: WorkflowNode[]
+  edges: WorkflowEdge[]
+}
+
+/** 已保存的自定义工作流（后端持久化记录）。 */
+export interface CoverWorkflow {
+  id: string
+  name: string
+  updated_at: string
+  nodes: WorkflowNode[]
+  edges: WorkflowEdge[]
+}
+
 export interface CreateWorkPayload {
   title?: string
   model_id?: string
@@ -382,12 +429,14 @@ export interface CreateWorkPayload {
   workflow?: CreateWorkflow
   /** 模型推理后的可选 AI 美声/歌声增强流程。 */
   vocal_enhancement?: VocalEnhancementOptions
-  /** 翻唱模式：single=单模型（默认）；multi=多模型混合。 */
-  mode?: 'single' | 'multi'
+  /** 翻唱模式：single=单模型（默认）；multi=多模型混合；workflow=自定义工作流。 */
+  mode?: 'single' | 'multi' | 'workflow'
   /** 多模型混合时参与的模型与参数。 */
   models?: BlendModel[]
   /** 多模型混合时每句歌词的模型指派。 */
   segments?: BlendSegment[]
+  /** 自定义工作流：画布节点图。 */
+  workflow_graph?: WorkflowGraph
   /** 独立 AI 增强：待处理的已完成翻唱作品 ID。 */
   target_work_id?: string
   /** 独立 AI 增强：与翻唱作品对应的原始歌曲路径。 */
@@ -419,6 +468,10 @@ export interface PymssModel {
   purpose?: PymssPurpose | ''
   purpose_label?: string
   target_stem?: string
+  /** 模型 yaml 声明的输出音轨（如 vocals / instrumental / male / female）。 */
+  stems?: string[]
+  /** 主输出音轨（catalog target_stem 或声明顺序第一路）。 */
+  primary_stem?: string
   size_bytes?: number
   downloaded?: boolean
 }

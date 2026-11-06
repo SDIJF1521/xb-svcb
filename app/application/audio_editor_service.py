@@ -974,6 +974,34 @@ class AudioEditorService:
             "timing": timing,
         }
 
+    @staticmethod
+    def _project_has_workflow_tracks(project: dict[str, Any], work: dict[str, Any]) -> bool:
+        """判断已有工程是否已包含全部工作流保存音轨。"""
+        files: set[str] = set()
+        for item in work.get("workflow_outputs") or []:
+            if not isinstance(item, dict):
+                continue
+            raw = str(item.get("path") or "").strip()
+            if not raw:
+                continue
+            try:
+                files.add(str(Path(raw).resolve()))
+            except OSError:
+                continue
+        if not files:
+            return True
+        present: set[str] = set()
+        for track in project.get("tracks") or []:
+            for clip in track.get("clips") or []:
+                raw = str((clip or {}).get("file") or "").strip()
+                if not raw:
+                    continue
+                try:
+                    present.add(str(Path(raw).resolve()))
+                except OSError:
+                    continue
+        return files.issubset(present)
+
     def create_from_work(self, work_id: str) -> dict[str, Any] | None:
         work = self._works_repo.get(work_id)
         if not work:
@@ -987,7 +1015,11 @@ class AudioEditorService:
         ]
         if existing:
             latest = max(existing, key=lambda item: str(item.get("updated_at") or ""))
-            return self._public(latest)
+            if work.get("mode") != "workflow" or self._project_has_workflow_tracks(
+                latest, work
+            ):
+                return self._public(latest)
+            # 旧工程缺少工作流保存音轨时，重新创建一个包含全部音轨的工程。
         pid = paths.new_id("edt_")
         now = self._now()
         tracks: list[dict[str, Any]] = []
@@ -1199,7 +1231,6 @@ class AudioEditorService:
         add_track("原始音频", "source", work.get("source_path"), locked=True, mute=True)
         add_track("原始人声", "vocal", work.get("vocals_path"), mute=True)
         add_track("BGM 轨", "bgm", work.get("instrumental_path"), mute=vocal_export)
-        remember(work.get("output_path"))
 
         work_dir = config.WORKS_DIR / work_id
         ai_merged = work.get("ai_merged_vocal_path") or work.get("converted_path")
@@ -1226,8 +1257,43 @@ class AudioEditorService:
                         raw,
                         metadata={"stem": "ai_model", "model_id": model_id},
                     )
+        elif work.get("mode") == "workflow":
+            # 自定义工作流：成品进入「翻唱成品」轨，其余保存音轨自动按角色导入到对应音轨。
+            port_kind = {"vocals": "vocal", "instrumental": "bgm", "audio": "ai", "other": "ai"}
+            port_name = {"vocals": "人声", "instrumental": "伴奏", "audio": "音频", "other": "其他音轨"}
+            workflow_outputs = [
+                item for item in (work.get("workflow_outputs") or []) if isinstance(item, dict)
+            ]
+            primary_item = next(
+                (item for item in workflow_outputs if item.get("primary")), None
+            )
+            cover_path = (primary_item or {}).get("path") or ai_merged or work.get("output_path")
+            add_track("翻唱成品", "ai", cover_path)
+            for item in workflow_outputs:
+                if item.get("primary"):
+                    continue
+                port = str(item.get("port") or "")
+                label = str(item.get("label") or "").strip()
+                fallback_name = port_name.get(port)
+                if not fallback_name and port.startswith("stem:"):
+                    fallback_name = f"音轨 {port.split(':', 1)[1]}"
+                track_name = f"素材 · {label}" if label else f"素材 · {fallback_name or '音频'}"
+                add_track(
+                    track_name,
+                    port_kind.get(port, "ai"),
+                    item.get("path"),
+                    metadata={
+                        "work_id": work_id,
+                        "stem": "workflow_output",
+                        "port": port,
+                        "primary": False,
+                    },
+                )
         else:
             add_track("AI 翻唱干声", "ai", ai_merged or (ai_paths[0] if ai_paths else None))
+
+        # 成品音轨已加入后，再标记整轨成品路径，避免「中间片段」重复导入。
+        remember(work.get("output_path"))
 
         mid_clips: list[dict[str, Any]] = []
         if work_dir.exists():

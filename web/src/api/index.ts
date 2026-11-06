@@ -82,6 +82,8 @@ import type {
   PymssModel,
   PymssStatus,
   PymssDownloadJob,
+  CoverWorkflow,
+  WorkflowGraph,
 } from './types'
 
 export * from './types'
@@ -371,6 +373,17 @@ export const api = {
   deleteInferencePreset: (id: string) =>
     invoke<boolean>('delete_inference_preset', [id], () => mock.deleteInferencePreset(id)),
 
+  listCoverWorkflows: () =>
+    invoke<CoverWorkflow[]>('list_cover_workflows', [], () => mock.listCoverWorkflows()),
+
+  saveCoverWorkflow: (name: string, graph: WorkflowGraph) =>
+    invoke<CoverWorkflow>('save_cover_workflow', [name, graph], () =>
+      mock.saveCoverWorkflow(name, graph),
+    ),
+
+  deleteCoverWorkflow: (id: string) =>
+    invoke<boolean>('delete_cover_workflow', [id], () => mock.deleteCoverWorkflow(id)),
+
   retryWork: (id: string) =>
     invoke<boolean>('retry_work', [id], () => mock.retryWork(id)),
 
@@ -382,6 +395,9 @@ export const api = {
 
   openWorkLog: (id: string) =>
     invoke<boolean>('open_work_log', [id], () => mock.openWorkLog(id)),
+
+  getWorkLog: (id: string, tail = 300) =>
+    invoke<string>('get_work_log', [id, tail], () => mock.getWorkLog(id, tail)),
 
   openPath: (path: string) =>
     invoke<boolean>('open_path', [path], () => mock.openPath(path)),
