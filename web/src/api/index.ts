@@ -472,8 +472,8 @@ export const api = {
   pymssStatus: (model?: string) =>
     invoke<PymssStatus>('pymss_status', [model], () => mock.pymssStatus(model)),
 
-  pymssModels: (purpose?: 'vocal_separation' | 'dereverb' | 'harmony_removal') =>
-    invoke<PymssModel[]>('pymss_models', [purpose], () => mock.pymssModels(purpose)),
+  pymssModels: (purpose?: 'vocal_separation' | 'dereverb' | 'harmony_removal', includeAll = false) =>
+    invoke<PymssModel[]>('pymss_models', [purpose, includeAll], () => mock.pymssModels(purpose, includeAll)),
 
   pymssDownloadModel: (model: string) =>
     invoke<{ ok: boolean; error?: string; model?: string; key?: string; already?: boolean }>('pymss_download_model', [model], () =>

@@ -802,9 +802,9 @@ class Api:
             "version": tool.version(),
         }
 
-    def pymss_models(self, purpose: str = "") -> list[dict[str, Any]]:
+    def pymss_models(self, purpose: str = "", include_all: bool = False) -> list[dict[str, Any]]:
         tool = getattr(self, "_pymss", None) or PymssTool()
-        return tool.list_models(purpose=purpose)
+        return tool.list_models(purpose=purpose, include_all=bool(include_all))
 
     def pymss_download_model(self, model: str = "") -> dict[str, Any]:
         tool = getattr(self, "_pymss", None) or PymssTool()

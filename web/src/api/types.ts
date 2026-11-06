@@ -411,7 +411,12 @@ export interface PymssModel {
   architecture?: string
   supported?: boolean
   category?: string
-  purpose?: PymssPurpose
+  primary_category?: string
+  primary_category_label?: string
+  secondary_category?: string
+  secondary_category_label?: string
+  category_label?: string
+  purpose?: PymssPurpose | ''
   purpose_label?: string
   target_stem?: string
   size_bytes?: number
@@ -1139,6 +1144,7 @@ export interface EditorSeparationOptions {
   engine?: 'uvr' | 'pymss'
   model?: string
   pymss_model?: string
+  pymss_purpose?: PymssPurpose | 'generic'
   harmony_removal_enabled?: boolean
   harmony_model?: string
   mute_source?: boolean

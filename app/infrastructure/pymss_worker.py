@@ -53,13 +53,19 @@ def _name_score(path: Path, purpose: str, preferred_stem: str = "") -> int:
     if purpose == "dereverb":
         positive = ("no reverb", "noreverb", "no echo", "no noise", "dry", "clean", "dereverb", "deecho")
         negative = ("reverb", "wet", "echo", "noise", "instrument", "accompan")
+    elif purpose == "generic":
+        # Generic PyMSS models may target drums, bass, restoration, or any
+        # other catalog stem. The catalog target is applied through the
+        # preferred name instead of assuming every output is vocal.
+        positive = ()
+        negative = ()
     else:
         positive = ("vocal", "vocals", "voice", "singing", "lead")
         negative = ("instrument", "accompan", "karaoke", "music", "other", "reverb")
-    preferred_clean = purpose != "dereverb" or any(
+    preferred_clean = purpose not in {"dereverb", "generic"} or any(
         token in preferred for token in ("no ", "dry", "clean", "vocals", "vocal")
     )
-    score = (500 if preferred_clean and preferred and preferred in name else 0) + sum(
+    score = (1000 if preferred and preferred in name else 0) + (500 if preferred_clean and preferred and preferred in name else 0) + sum(
         100 for token in positive if token in name
     )
     # ``no noise``/``no echo`` contain the removed-stem word, so protect the
@@ -167,10 +173,11 @@ def main() -> int:
     parser.add_argument("--device", default="auto")
     parser.add_argument(
         "--purpose",
-        choices=("vocal_separation", "dereverb", "harmony_removal"),
+        choices=("vocal_separation", "dereverb", "harmony_removal", "generic"),
         default="vocal_separation",
-        help="处理用途：人声分离或去混响/人声净化",
+        help="处理用途：人声分离、去混响或通用 PyMSS 分离",
     )
+    parser.add_argument("--target-stem", default="")
     parser.add_argument("--download", action="store_true")
     args = parser.parse_args()
 
@@ -230,7 +237,11 @@ def main() -> int:
     configured_stems = getattr(getattr(separator, "config", None), "training", {})
     if hasattr(configured_stems, "get"):
         configured_stems = configured_stems.get("instruments", ())
-    primary_stem = str(configured_stems[0] if configured_stems else "")
+    if isinstance(configured_stems, str):
+        configured_stems = (configured_stems,)
+    elif not isinstance(configured_stems, (list, tuple)):
+        configured_stems = ()
+    primary_stem = str(args.target_stem or (configured_stems[0] if configured_stems else ""))
     try:
         separator.process_folder(str(source))
     finally:
@@ -246,6 +257,8 @@ def main() -> int:
     )
     instrumental = _find_stem(raw_dir, "instrumental") or _find_stem(raw_dir, "accompaniment") or _find_stem(raw_dir, "other")
     if vocal is None:
+        if args.purpose == "generic":
+            raise RuntimeError("PyMSS 未生成有效分离音轨（输出为空或近似静音）")
         raise RuntimeError("PyMSS 未生成有效人声音轨（输出为空或近似静音）")
     vocals_dest = out_dir / "pymss_vocals.wav"
     removed_harmony = None
@@ -259,6 +272,23 @@ def main() -> int:
     if instrumental and instrumental != vocal:
         instrumental_dest = out_dir / "pymss_instrumental.wav"
         shutil.copyfile(instrumental, instrumental_dest)
+    stem_outputs = []
+    raw_outputs = _audio_files(raw_dir)
+    configured_names = [str(value) for value in configured_stems or () if str(value).strip()]
+    for index, output in enumerate(raw_outputs):
+        output_key = output.stem.casefold().replace("_", " ").replace("-", " ")
+        label = next(
+            (name for name in configured_names if name.casefold().replace("_", " ").replace("-", " ") in output_key),
+            output.stem,
+        )
+        if output == vocal:
+            destination = vocals_dest
+        elif instrumental and output == instrumental and instrumental_dest:
+            destination = instrumental_dest
+        else:
+            destination = out_dir / f"pymss_stem_{index + 1:02d}{output.suffix.lower()}"
+            shutil.copyfile(output, destination)
+        stem_outputs.append({"name": label, "path": str(destination)})
     (out_dir / "pymss_result.json").write_text(
         json.dumps(
             {
@@ -266,12 +296,14 @@ def main() -> int:
                 "instrumental": str(instrumental_dest) if instrumental_dest else None,
                 "removed_harmony": str(removed_harmony) if removed_harmony else None,
                 "device": device_backend,
+                "target_stem": primary_stem,
+                "stems": stem_outputs,
             },
             ensure_ascii=False,
         ),
         encoding="utf-8",
     )
-    print(json.dumps({"ok": True, "vocals": str(vocals_dest), "instrumental": str(instrumental_dest) if instrumental_dest else None, "removed_harmony": str(removed_harmony) if removed_harmony else None}, ensure_ascii=False))
+    print(json.dumps({"ok": True, "vocals": str(vocals_dest), "instrumental": str(instrumental_dest) if instrumental_dest else None, "removed_harmony": str(removed_harmony) if removed_harmony else None, "stems": stem_outputs}, ensure_ascii=False))
     return 0
 
 

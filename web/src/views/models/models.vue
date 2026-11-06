@@ -439,21 +439,49 @@
         <el-icon class="notice-ic"><Connection /></el-icon>
         <div class="notice-main">
           <div class="notice-title">{{ translateUiText('PyMSS 音乐源分离模型站') }}</div>
-          <div class="notice-sub">{{ translateUiText('仅提供人声分离与去混响 / 人声净化模型。下载后可在翻唱页「前期人声处理」中选择。') }}</div>
+          <div class="notice-sub">{{ translateUiText('完整 PyMSS Studio 模型目录，可按一级分类、二级分类和架构筛选；人声前处理兼容模型可在翻唱页直接选择。') }}</div>
         </div>
         <el-button round class="ghost-btn" :loading="pymssLoading" @click="loadPymssModels">{{ translateUiText('刷新') }}</el-button>
       </div>
-      <div class="pymss-purpose-tabs">
-        <button class="tab" :class="{ on: pymssPurpose === 'vocal_separation' }" @click="pymssPurpose = 'vocal_separation'">{{ translateUiText('人声分离') }}</button>
-        <button class="tab" :class="{ on: pymssPurpose === 'dereverb' }" @click="pymssPurpose = 'dereverb'">{{ translateUiText('去混响 / 人声净化') }}</button>
-        <el-input v-model="pymssQuery" class="pymss-search" clearable :placeholder="translateUiText('搜索模型名称，例如 dereverb_mel_band_roformer_anvuew')" />
+      <div class="pymss-filter-bar">
+        <label class="pymss-filter-control">
+          <span>{{ translateUiText('一级分类') }}</span>
+          <el-select v-model="pymssPrimaryCategory" clearable :placeholder="translateUiText('全部一级分类')" @change="onPymssPrimaryCategoryChange">
+            <el-option v-for="category in pymssPrimaryCategories" :key="category.value" :label="`${category.label} (${category.count})`" :value="category.value" />
+          </el-select>
+        </label>
+        <label class="pymss-filter-control">
+          <span>{{ translateUiText('二级分类') }}</span>
+          <el-select v-model="pymssSecondaryCategory" clearable :disabled="!pymssPrimaryCategory" :placeholder="translateUiText(pymssPrimaryCategory ? '全部二级分类' : '请先选择一级分类')" @change="pymssArchitecture = ''">
+            <el-option v-for="category in pymssSecondaryCategories" :key="category.value" :label="`${category.label} (${category.count})`" :value="category.value" />
+          </el-select>
+        </label>
+        <label class="pymss-filter-control compact">
+          <span>{{ translateUiText('模型架构') }}</span>
+          <el-select v-model="pymssArchitecture" clearable :placeholder="translateUiText('全部架构')">
+            <el-option v-for="architecture in pymssArchitectures" :key="architecture.value" :label="`${architecture.label} (${architecture.count})`" :value="architecture.value" />
+          </el-select>
+        </label>
+        <label class="pymss-filter-control compact">
+          <span>{{ translateUiText('下载状态') }}</span>
+          <el-select v-model="pymssDownloadState" :placeholder="translateUiText('全部模型')">
+            <el-option :label="translateUiText('全部模型')" value="all" />
+            <el-option :label="translateUiText('已下载')" value="downloaded" />
+            <el-option :label="translateUiText('未下载')" value="available" />
+          </el-select>
+        </label>
+        <label class="pymss-filter-control search">
+          <span>{{ translateUiText('搜索') }}</span>
+          <el-input v-model="pymssQuery" clearable :placeholder="translateUiText('搜索模型名称、分类或目标音轨')" />
+        </label>
+        <span class="pymss-filter-count">{{ filteredPymssItems.length }} / {{ pymssItems.length }}</span>
       </div>
       <div class="list glass">
         <div v-for="item in filteredPymssItems" :key="item.name" class="row">
           <div class="row-cover hub"><el-icon><Operation /></el-icon></div>
           <div class="row-main">
             <div class="row-title">{{ item.name }} <span class="fw-tag">{{ item.architecture || 'PyMSS' }}</span></div>
-            <div class="row-sub"><span class="purpose-label">{{ translateUiText(item.purpose_label || (item.purpose === 'dereverb' || item.purpose === 'harmony_removal' ? '去混响 / 人声净化' : '人声分离')) }}</span> · {{ translateUiText('目标音轨') }} {{ item.target_stem || 'vocals' }}</div>
+            <div class="row-sub"><span class="purpose-label">{{ pymssCategoryLabel(item) }}</span> · {{ translateUiText('目标音轨') }} {{ translatePymssTargetStem(item.target_stem) }}</div>
             <div v-if="pymssJob(item.name)?.status === 'running'" class="row-prog">
               <el-progress :percentage="Math.round(pymssJob(item.name)?.pct || 0)" :stroke-width="5" :show-text="false" striped striped-flow />
               <span class="prog-msg">{{ translateUiText(pymssJob(item.name)?.message || '下载中…') }}</span>
@@ -479,7 +507,7 @@
             </el-button>
           </div>
         </div>
-        <div v-if="!filteredPymssItems.length && !pymssLoading" class="empty small"><span>{{ translateUiText('未读取到该用途的 PyMSS 模型，请先安装 PyMSS 环境。') }}</span></div>
+        <div v-if="!filteredPymssItems.length && !pymssLoading" class="empty small"><span>{{ translateUiText('当前筛选条件下没有 PyMSS 模型。') }}</span></div>
       </div>
     </template>
 
@@ -680,7 +708,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, type HubModelItem, type HubModelUpdateItem, type ModelFramework, type PymssDownloadJob, type PymssModel, type PymssStatus } from '@/api'
 import { useModelsStore, type ModelVM } from '@/stores/models'
 import { useTransfersStore } from '@/stores/transfers'
-import { translateUiText } from '@/i18n'
+import { translatePymssCategory, translatePymssTargetStem, translateUiText } from '@/i18n'
 
 defineOptions({ name: 'ModelsPage' })
 
@@ -973,21 +1001,105 @@ const pymssDownloading = ref('')
 const pymssDeleting = ref('')
 const pymssJobs = ref<Record<string, PymssDownloadJob>>({})
 const pymssRuntime = ref<PymssStatus | null>(null)
-const pymssPurpose = ref<'vocal_separation' | 'dereverb' | 'harmony_removal'>('vocal_separation')
+const pymssPrimaryCategory = ref('')
+const pymssSecondaryCategory = ref('')
+const pymssArchitecture = ref('')
+const pymssDownloadState = ref<'all' | 'downloaded' | 'available'>('all')
 const pymssQuery = ref('')
+
+function pymssCategoryLabel(item: PymssModel) {
+  const byId = translatePymssCategory(item.primary_category, item.secondary_category)
+  if (byId !== 'PyMSS') return byId
+  const primary = translateUiText(item.primary_category_label || '')
+  const secondary = translateUiText(item.secondary_category_label || '')
+  if (primary && secondary) return `${primary} / ${secondary}`
+  return translateUiText(item.category_label || item.purpose_label || item.category || 'PyMSS')
+}
+
+function pymssSecondaryKey(item: PymssModel) {
+  return String(item.secondary_category || '__general__')
+}
+
+const pymssPrimaryCategories = computed(() => {
+  const values = new Map<string, { label: string; count: number }>()
+  for (const item of pymssItems.value) {
+    const value = String(item.primary_category || '').trim()
+    if (!value) continue
+    const current = values.get(value)
+    values.set(value, {
+      label: translatePymssCategory(value, '') === 'PyMSS'
+        ? translateUiText(item.primary_category_label || value.replace(/_/g, ' '))
+        : translatePymssCategory(value, ''),
+      count: (current?.count || 0) + 1,
+    })
+  }
+  return [...values.entries()]
+    .map(([value, meta]) => ({ value, ...meta }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+})
+
+const pymssSecondaryCategories = computed(() => {
+  if (!pymssPrimaryCategory.value) return []
+  const values = new Map<string, { label: string; count: number }>()
+  for (const item of pymssItems.value) {
+    if (item.primary_category !== pymssPrimaryCategory.value) continue
+    const value = pymssSecondaryKey(item)
+    const current = values.get(value)
+    values.set(value, {
+      label: translatePymssCategory(pymssPrimaryCategory.value, value) !== 'PyMSS'
+        ? translatePymssCategory(pymssPrimaryCategory.value, value).replace(`${translatePymssCategory(pymssPrimaryCategory.value, '')} / `, '')
+        : translateUiText(item.secondary_category_label || '通用 / 未细分'),
+      count: (current?.count || 0) + 1,
+    })
+  }
+  return [...values.entries()]
+    .map(([value, meta]) => ({ value, ...meta }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+})
+
+const pymssArchitectures = computed(() => {
+  const values = new Map<string, number>()
+  for (const item of pymssItems.value) {
+    if (pymssPrimaryCategory.value && item.primary_category !== pymssPrimaryCategory.value) continue
+    if (pymssSecondaryCategory.value && pymssSecondaryKey(item) !== pymssSecondaryCategory.value) continue
+    const value = String(item.architecture || 'unknown').trim().toLowerCase()
+    values.set(value, (values.get(value) || 0) + 1)
+  }
+  return [...values.entries()]
+    .map(([value, count]) => ({ value, label: value === 'unknown' ? translateUiText('未知架构') : value, count }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+})
+
+function onPymssPrimaryCategoryChange() {
+  pymssSecondaryCategory.value = ''
+  pymssArchitecture.value = ''
+}
+
 const filteredPymssItems = computed(() => {
   const query = pymssQuery.value.trim().toLowerCase()
   return pymssItems.value.filter((item) => {
-    if (item.purpose !== pymssPurpose.value) return false
+    if (pymssPrimaryCategory.value && item.primary_category !== pymssPrimaryCategory.value) return false
+    if (pymssSecondaryCategory.value && pymssSecondaryKey(item) !== pymssSecondaryCategory.value) return false
+    if (pymssArchitecture.value && String(item.architecture || 'unknown').toLowerCase() !== pymssArchitecture.value) return false
+    if (pymssDownloadState.value === 'downloaded' && !item.downloaded) return false
+    if (pymssDownloadState.value === 'available' && item.downloaded) return false
     if (!query) return true
-    return [item.name, item.architecture, item.category].some((value) => String(value || '').toLowerCase().includes(query))
+    return [
+      item.name,
+      item.architecture,
+      item.category,
+      item.category_label,
+      item.primary_category_label,
+      item.secondary_category_label,
+      item.target_stem,
+    ].some((value) => String(value || '').toLowerCase().includes(query))
   })
 })
 
 async function loadPymssModels() {
   pymssLoading.value = true
   try {
-    pymssItems.value = await api.pymssModels()
+    pymssItems.value = await api.pymssModels(undefined, true)
     pymssRuntime.value = await api.pymssStatus(pymssItems.value[0]?.name)
   } finally {
     pymssLoading.value = false
@@ -1355,11 +1467,30 @@ onUnmounted(() => {
 .eyebrow { color: var(--xb-primary); font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 14px; margin: 0 0 8px; }
 .page-head h1 { font-size: 30px; font-weight: 800; margin: 0 0 8px; }
 .page-sub { color: var(--xb-muted); font-size: 15px; margin: 0; }
-.pymss-purpose-tabs { display: flex; gap: 8px; margin: 18px 0 10px; }
-.pymss-purpose-tabs .tab { min-height: 36px; padding: 0 16px; }
-.pymss-search { max-width: 420px; margin-left: auto; }
+.pymss-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.05fr) minmax(180px, 1.05fr) minmax(150px, .8fr) minmax(140px, .72fr) minmax(230px, 1.35fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin: 18px 0 10px;
+}
+.pymss-filter-control { display: grid; min-width: 0; gap: 6px; }
+.pymss-filter-control > span { color: var(--xb-muted); font-size: 11px; font-weight: 700; }
+.pymss-filter-control :deep(.el-select), .pymss-filter-control :deep(.el-input) { width: 100%; }
+.pymss-filter-control :deep(.el-select__wrapper), .pymss-filter-control :deep(.el-input__wrapper) {
+  min-height: 38px;
+  border-radius: 8px;
+  background: var(--xb-panel);
+  box-shadow: 0 0 0 1px var(--xb-border) inset;
+}
+.pymss-filter-control :deep(.el-select__wrapper.is-focused), .pymss-filter-control :deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 1px var(--xb-primary) inset, 0 0 0 3px rgba(var(--xb-primary-rgb), .1);
+}
+.pymss-filter-count { align-self: center; color: var(--xb-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; padding-top: 18px; }
 .purpose-label { color: var(--xb-primary); font-weight: 700; }
-@media (max-width: 760px) { .pymss-purpose-tabs { flex-wrap: wrap; } .pymss-search { max-width: none; width: 100%; margin-left: 0; } }
+@media (max-width: 1100px) { .pymss-filter-bar { grid-template-columns: repeat(3, minmax(0, 1fr)); } .pymss-filter-control.search { grid-column: span 2; } }
+@media (max-width: 760px) { .pymss-filter-bar { grid-template-columns: 1fr 1fr; } .pymss-filter-control.search { grid-column: 1 / -1; } .pymss-filter-count { padding-top: 0; } }
+@media (max-width: 520px) { .pymss-filter-bar { grid-template-columns: 1fr; } .pymss-filter-control.search { grid-column: auto; } }
 
 .glass { position: relative; background: var(--xb-panel); border: 1px solid var(--xb-border); backdrop-filter: blur(16px); }
 .cta-btn { background: linear-gradient(135deg, var(--xb-primary), var(--xb-primary-2)) !important; border: none !important; color: var(--xb-on-primary) !important; font-weight: 700; box-shadow: 0 0 18px rgba(var(--xb-primary-rgb), 0.35); }

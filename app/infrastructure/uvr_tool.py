@@ -14,7 +14,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import config
 from infrastructure.persistent_worker import PersistentInferenceSession
@@ -28,6 +28,7 @@ class SeparationResult:
     instrumental: Optional[Path] = None
     simulated: bool = False
     device: str = ""
+    stems: list[dict[str, Any]] | None = None
 
 
 class UvrTool:

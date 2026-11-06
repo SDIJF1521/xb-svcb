@@ -100,7 +100,12 @@ class PymssTool:
             if not purpose or item.get("purpose") == purpose
         ]
 
-    def list_models(self, supported_only: bool = True, purpose: str = "") -> list[dict[str, Any]]:
+    def list_models(
+        self,
+        supported_only: bool = True,
+        purpose: str = "",
+        include_all: bool = False,
+    ) -> list[dict[str, Any]]:
         """Read the installed PyMSS catalog without importing it in the app."""
         purpose = str(purpose or "").strip().lower()
         if purpose == config.PYMSS_PURPOSE_HARMONY_LEGACY:
@@ -114,7 +119,8 @@ class PymssTool:
             f"rows=pymss.list_models(supported={bool(supported_only)!r}); "
             "print(json.dumps([{'name':x.name,'architecture':getattr(x,'architecture',''),"
             "'supported':bool(getattr(x,'supported',True)),'category':getattr(x,'category_path',''),"
-            "'primary_category':getattr(x,'primary_category',''),'secondary_category':getattr(x,'secondary_category',''),"
+            "'primary_category':getattr(x,'primary_category',''),'primary_category_label':getattr(x,'primary_category_cn',''),"
+            "'secondary_category':getattr(x,'secondary_category',''),'secondary_category_label':getattr(x,'secondary_category_cn',''),"
             "'purpose':getattr(x,'secondary_category',''),'target_stem':getattr(x,'target_stem',''),"
             "'size_bytes':int(getattr(x,'size_bytes',0) or 0)} for x in rows], ensure_ascii=False))"
         )
@@ -148,10 +154,16 @@ class PymssTool:
                     primary,
                     secondary,
                 )
-                if not item_purpose or secondary.casefold() == "vr_backing_vocal":
+                if not include_all and (not item_purpose or secondary.casefold() == "vr_backing_vocal"):
                     continue
                 item["purpose"] = item_purpose
-                item["purpose_label"] = config.PYMSS_PURPOSE_LABELS[item_purpose]
+                item["purpose_label"] = config.PYMSS_PURPOSE_LABELS.get(item_purpose, "")
+                item["category_label"] = " / ".join(
+                    part for part in (
+                        str(item.get("primary_category_label") or "").strip(),
+                        str(item.get("secondary_category_label") or "").strip(),
+                    ) if part
+                ) or category
                 item["downloaded"] = bool(config.pymss_model_ready(str(item.get("name") or "")))
                 if not purpose or item_purpose == purpose:
                     filtered.append(item)
@@ -184,7 +196,10 @@ class PymssTool:
             purpose = config.PYMSS_PURPOSE_DEREVERB
         if purpose and purpose not in config.PYMSS_ALLOWED_MODEL_CATEGORIES:
             return {"ok": False, "error": "不支持的 PyMSS 模型用途"}
-        catalog = self.list_models(purpose=purpose)
+        # Downloads are available for every supported PyMSS catalog category.
+        # ``purpose`` remains available for legacy callers that want to narrow
+        # the lookup, while the model hub can download any listed capability.
+        catalog = self.list_models(purpose=purpose, include_all=not bool(purpose))
         requested = name.casefold()
         exact = []
         for item in catalog:
@@ -445,16 +460,21 @@ class PymssTool:
         model_purpose = str(purpose or config.PYMSS_PURPOSE_VOCAL).strip().lower()
         if model_purpose == config.PYMSS_PURPOSE_HARMONY_LEGACY:
             model_purpose = config.PYMSS_PURPOSE_DEREVERB
-        if model_purpose not in config.PYMSS_ALLOWED_MODEL_CATEGORIES:
+        if model_purpose not in {*config.PYMSS_ALLOWED_MODEL_CATEGORIES, "generic"}:
             raise RuntimeError("不支持的 PyMSS 模型用途")
-        catalog = self.list_models(purpose=model_purpose)
+        catalog = self.list_models(
+            purpose="" if model_purpose == "generic" else model_purpose,
+            include_all=model_purpose == "generic",
+        )
         model_aliases: dict[str, str] = {}
+        catalog_by_name: dict[str, dict[str, Any]] = {}
         for item in catalog:
             full = str(item.get("name") or "").strip()
             if not full:
                 continue
             model_aliases[full.casefold()] = full
             model_aliases[Path(full).stem.casefold()] = full
+            catalog_by_name[full.casefold()] = item
         requested_model = model_name.casefold()
         resolved = model_aliases.get(requested_model)
         if resolved is None:
@@ -464,6 +484,7 @@ class PymssTool:
         if not resolved:
             raise RuntimeError("该模型不属于受支持的 PyMSS 人声处理类别")
         model_name = resolved
+        model_entry = catalog_by_name.get(model_name.casefold(), {})
         cmd = [
             str(config.PYMSS_PYTHON), str(config.PYMSS_WORKER),
             "--model", model_name,
@@ -472,6 +493,9 @@ class PymssTool:
             "--device", requested,
         ]
         cmd.extend(["--purpose", model_purpose])
+        target_stem = str(model_entry.get("target_stem") or "").strip()
+        if target_stem:
+            cmd.extend(["--target-stem", target_stem])
         env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         # ``auto`` is allowed one CPU retry.  This handles transient CUDA/ROCm
         # kernel and VRAM failures without silently changing an explicit device.
@@ -535,7 +559,14 @@ class PymssTool:
             return None
         vocals = Path(str(data.get("vocals") or ""))
         instrumental = Path(str(data.get("instrumental") or "")) if data.get("instrumental") else None
-        return SeparationResult(vocals, instrumental, simulated=False, device=str(data.get("device") or ""))
+        stems = data.get("stems") if isinstance(data.get("stems"), list) else None
+        return SeparationResult(
+            vocals,
+            instrumental,
+            simulated=False,
+            device=str(data.get("device") or ""),
+            stems=stems,
+        )
 
     @staticmethod
     def _error_tail(stdout: str | None, stderr: str | None) -> str:

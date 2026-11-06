@@ -47,13 +47,15 @@ Content-Type: application/json
 {"name": "新的模型显示名称"}
 ```
 
-## PyMSS 人声处理
+## PyMSS 音源分离与人声处理
 
-PyMSS 模型接口只开放两个用途：`vocal_separation`（人声分离）和
-`dereverb`（去混响/人声净化）。先调用模型列表接口查看 catalog，再下载需要的模型：
+模型站可列出 PyMSS catalog 中的全部受支持模型，并返回一级、二级分类和中文分类名。
+`purpose` 仍用于筛选翻唱前处理兼容的 `vocal_separation`（人声分离）与
+`dereverb`（去混响/人声净化）模型：
 
 ```http
 GET /api/v1/preprocess/pymss/models?purpose=vocal_separation
+GET /api/v1/preprocess/pymss/models?all_models=true
 POST /api/v1/preprocess/pymss/models/UVR-DeEcho-DeReverb.pth/download
 DELETE /api/v1/preprocess/pymss/models/UVR-DeEcho-DeReverb.pth
 GET /api/v1/preprocess/pymss/downloads
@@ -73,7 +75,7 @@ GET /api/v1/preprocess/pymss/downloads
 }
 ```
 
-`harmony_removal_enabled` 默认为 `false`。模型下载会立即进入统一传输任务中心，可通过 `GET /api/v1/preprocess/pymss/downloads` 查询进度。模型未下载、PyMSS 环境不可用或模型不属于上述两类用途时，任务会明确失败并提示先到模型站处理。
+`harmony_removal_enabled` 默认为 `false`。模型下载会立即进入统一传输任务中心，可通过 `GET /api/v1/preprocess/pymss/downloads` 查询进度。模型未下载或 PyMSS 环境不可用时，任务会明确失败并提示先到模型站处理。
 
 编辑器选中片段后也可调用同一套前处理能力：
 
@@ -83,6 +85,19 @@ GET /api/v1/preprocess/pymss/downloads
   "pymss_model": "bs_roformer_voc_hyperacev2.ckpt",
   "harmony_removal_enabled": true,
   "harmony_model": "UVR-DeEcho-DeReverb.pth",
+  "mute_source": true,
+  "device": "auto"
+}
+```
+
+编辑器使用其它分类或多音轨模型时设置 `pymss_purpose` 为 `generic`。模型生成的每个
+stem 都会作为独立音轨加入时间线：
+
+```json
+{
+  "engine": "pymss",
+  "pymss_model": "HTDemucs4_6stems.th",
+  "pymss_purpose": "generic",
   "mute_source": true,
   "device": "auto"
 }

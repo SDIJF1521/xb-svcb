@@ -1344,12 +1344,15 @@ export const mock = {
     const downloaded = mockPymssDownloaded.has(model) || mockPymssDownloaded.has(`${model}.ckpt`)
     return { ok: downloaded, environment: true, model, status: downloaded ? '已就绪' : '模型未下载', version: '2.0' }
   },
-  pymssModels(purpose?: 'vocal_separation' | 'dereverb' | 'harmony_removal'): PymssModel[] {
+  pymssModels(purpose?: 'vocal_separation' | 'dereverb' | 'harmony_removal', includeAll = false): PymssModel[] {
     const items: PymssModel[] = [
-      { name: 'bs_roformer_voc_hyperacev2.ckpt', architecture: 'bs_roformer', supported: true, category: 'vocal/vocal_extraction', purpose: 'vocal_separation', purpose_label: '人声分离', target_stem: 'vocals', downloaded: mockPymssDownloaded.has('bs_roformer_voc_hyperacev2.ckpt') },
-      { name: 'UVR-DeEcho-DeReverb.pth', architecture: 'vr_deecho_dereverb', supported: true, category: 'legacy_vr/vr_deecho_dereverb', purpose: 'dereverb', purpose_label: '去混响 / 人声净化', target_stem: 'vocals', downloaded: mockPymssDownloaded.has('UVR-DeEcho-DeReverb.pth') },
+      { name: 'bs_roformer_voc_hyperacev2.ckpt', architecture: 'bs_roformer', supported: true, category: 'vocal/vocal_extraction', category_label: '人声 / 人声提取', primary_category: 'vocal', primary_category_label: '人声', secondary_category: 'vocal_extraction', secondary_category_label: '人声提取', purpose: 'vocal_separation', purpose_label: '人声分离', target_stem: 'vocals', downloaded: mockPymssDownloaded.has('bs_roformer_voc_hyperacev2.ckpt') },
+      { name: 'UVR-DeEcho-DeReverb.pth', architecture: 'vr_deecho_dereverb', supported: true, category: 'legacy_vr/vr_deecho_dereverb', category_label: '传统 VR / 去回声与混响', primary_category: 'legacy_vr', primary_category_label: '传统 VR', secondary_category: 'vr_deecho_dereverb', secondary_category_label: '去回声与混响', purpose: 'dereverb', purpose_label: '去混响 / 人声净化', target_stem: 'vocals', downloaded: mockPymssDownloaded.has('UVR-DeEcho-DeReverb.pth') },
+      { name: 'HTDemucs4_6stems.th', architecture: 'demucs', supported: true, category: 'music_stems/six_stem', category_label: '音乐分轨 / 六轨分离', primary_category: 'music_stems', primary_category_label: '音乐分轨', secondary_category: 'six_stem', secondary_category_label: '六轨分离', target_stem: '', downloaded: mockPymssDownloaded.has('HTDemucs4_6stems.th') },
+      { name: 'Apollo_LQ_MP3_restoration.ckpt', architecture: 'apollo', supported: true, category: 'cleanup/audio_restoration', category_label: '音频清理/修复 / 音频/人声修复', primary_category: 'cleanup', primary_category_label: '音频清理/修复', secondary_category: 'audio_restoration', secondary_category_label: '音频/人声修复', target_stem: 'restored', downloaded: mockPymssDownloaded.has('Apollo_LQ_MP3_restoration.ckpt') },
     ]
-    return purpose ? items.filter((item) => item.purpose === purpose) : items
+    if (purpose) return items.filter((item) => item.purpose === purpose)
+    return includeAll ? items : items.filter((item) => item.purpose)
   },
   pymssDownloadModel(model: string): { ok: boolean; model?: string; key?: string; error?: string } {
     if (!model) return { ok: false, error: '未指定 PyMSS 模型' }

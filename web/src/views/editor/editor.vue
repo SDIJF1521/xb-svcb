@@ -554,23 +554,27 @@
               <template v-if="separationEngine === 'pymss'">
                 <div class="editor-separation-field">
                   <div class="editor-field-head">
-                    <span>{{ translateUiText('人声分离模型') }}</span>
+                    <span>{{ translateUiText('PyMSS 模型') }}</span>
                     <router-link to="/models?tab=pymss">{{ translateUiText('模型站') }} <el-icon><Right /></el-icon></router-link>
                   </div>
-                  <select v-model="separationPymssModel" :disabled="!downloadedSeparationPymssModels.length">
-                    <option value="">{{ translateUiText('选择已下载的模型') }}</option>
-                    <option v-for="item in downloadedSeparationPymssModels" :key="item.name" :value="item.name">
-                      {{ item.name }}
-                    </option>
-                  </select>
+                  <el-select v-model="separationPymssModel" filterable :disabled="!downloadedSeparationPymssModels.length" :placeholder="translateUiText('选择已下载的模型')">
+                    <el-option-group v-for="group in separationPymssModelGroups" :key="group.label" :label="group.label">
+                      <el-option v-for="item in group.items" :key="item.name" :label="item.name" :value="item.name" />
+                    </el-option-group>
+                  </el-select>
+                  <div v-if="selectedSeparationPymssModel" class="editor-pymss-model-meta">
+                    <span>{{ selectedPymssCategoryLabel }}</span>
+                    <span>{{ translateUiText('目标音轨') }}: {{ selectedSeparationPymssModel.target_stem ? translatePymssTargetStem(selectedSeparationPymssModel.target_stem) : translateUiText('按模型输出') }}</span>
+                    <span>{{ translateUiText(selectedPymssIsGeneric ? '多音轨输出' : '人声处理') }}</span>
+                  </div>
                   <span class="editor-separation-status" :class="{ ready: separationPymssStatus?.ok }">
                     <i></i>{{ translateUiText(separationStatusText) }}
                   </span>
                 </div>
-                <label class="editor-harmony-toggle">
+                <label v-if="separationHarmonyEligible" class="editor-harmony-toggle">
                   <input v-model="separationHarmonyEnabled" type="checkbox" :disabled="!separationPymssModel" />
                   <span>{{ translateUiText('分离后去混响 / 净化人声') }}</span>
-                  <small>PyMSS Dereverb</small>
+                  <small>PyMSS · {{ translateUiText('去混响 / 人声净化') }}</small>
                 </label>
                 <div v-if="separationHarmonyEnabled" class="editor-separation-field harmony-field">
                   <div class="editor-field-head">
@@ -1227,7 +1231,7 @@ import EditorPluginDialog from '@/components/editor/EditorPluginDialog.vue'
 import EditorRoleManager from '@/components/editor/EditorRoleManager.vue'
 import TimelineTemplatePanel from '@/components/editor/TimelineTemplatePanel.vue'
 import { api } from '@/api'
-import { translateUiText } from '@/i18n'
+import { translatePymssCategory, translatePymssTargetStem, translateUiText } from '@/i18n'
 import { useModelsStore } from '@/stores/models'
 import { useSystemStore } from '@/stores/system'
 import { f0MethodsForFramework, normalizeF0Method } from '@/utils/f0'
@@ -1780,8 +1784,32 @@ const selectedClipDuration = computed(() => {
   return clip ? Math.max(0, clip.end - clip.start) : 0
 })
 const downloadedSeparationPymssModels = computed(() =>
-  separationPymssModels.value.filter((item) => item.purpose === 'vocal_separation' && item.downloaded),
+  separationPymssModels.value.filter((item) => item.downloaded),
 )
+const selectedSeparationPymssModel = computed(() =>
+  separationPymssModels.value.find((item) => item.name === separationPymssModel.value),
+)
+const selectedPymssIsGeneric = computed(() => selectedSeparationPymssModel.value?.purpose !== 'vocal_separation' && selectedSeparationPymssModel.value?.purpose !== 'dereverb' && selectedSeparationPymssModel.value?.purpose !== 'harmony_removal')
+const selectedPymssCategoryLabel = computed(() => {
+  const item = selectedSeparationPymssModel.value
+  if (!item) return ''
+  return translatePymssCategory(item.primary_category, item.secondary_category, item.category_label || item.category || 'PyMSS')
+})
+const separationHarmonyEligible = computed(() =>
+  selectedSeparationPymssModel.value?.purpose === 'vocal_separation',
+)
+const separationPymssModelGroups = computed(() => {
+  const groups = new Map<string, PymssModel[]>()
+  for (const item of downloadedSeparationPymssModels.value) {
+    const label = translatePymssCategory(item.primary_category, item.secondary_category, item.primary_category_label || item.category_label || item.category || 'PyMSS')
+    const values = groups.get(label) || []
+    values.push(item)
+    groups.set(label, values)
+  }
+  return [...groups.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([label, items]) => ({ label, items: items.sort((a, b) => a.name.localeCompare(b.name)) }))
+})
 const downloadedSeparationHarmonyModels = computed(() =>
   separationPymssModels.value.filter((item) => (item.purpose === 'dereverb' || item.purpose === 'harmony_removal') && item.downloaded),
 )
@@ -1796,7 +1824,7 @@ const separationReady = computed(() =>
 )
 const separationStatusText = computed(() => {
   if (separationEngine.value === 'uvr') return '使用现有 UVR 分离配置'
-  if (!separationPymssModel.value) return '请先在模型站下载人声分离模型'
+  if (!separationPymssModel.value) return '请先在模型站下载 PyMSS 模型'
   if (!separationPymssStatus.value) return '正在检查 PyMSS 环境'
   return separationPymssStatus.value.status
 })
@@ -2404,7 +2432,7 @@ async function loadInitial() {
 
 async function loadSeparationModels() {
   try {
-    separationPymssModels.value = await api.pymssModels()
+    separationPymssModels.value = await api.pymssModels(undefined, true)
     if (!downloadedSeparationPymssModels.value.some((item) => item.name === separationPymssModel.value)) {
       separationPymssModel.value = downloadedSeparationPymssModels.value[0]?.name || separationPymssModel.value
     }
@@ -2450,7 +2478,10 @@ watch(
     )
   },
 )
-watch(separationPymssModel, () => { void refreshSeparationStatus() })
+watch(separationPymssModel, () => {
+  if (!separationHarmonyEligible.value) separationHarmonyEnabled.value = false
+  void refreshSeparationStatus()
+})
 
 async function importAudio() {
   const path = await api.pickAudioFile()
@@ -3907,6 +3938,10 @@ async function separateSelectedClip() {
     }
     if (separationEngine.value === 'pymss') {
       options.pymss_model = separationPymssModel.value || undefined
+      const purpose = selectedSeparationPymssModel.value?.purpose
+      options.pymss_purpose = purpose === 'vocal_separation' || purpose === 'dereverb' || purpose === 'harmony_removal'
+        ? purpose
+        : 'generic'
       options.harmony_removal_enabled = separationHarmonyEnabled.value
       options.harmony_model = separationHarmonyModel.value || undefined
     }
@@ -3931,7 +3966,7 @@ async function separateSelectedClip() {
     } else if (res.harmony_removed) {
       ElMessage.success('人声、伴奏已加入时间线，并已完成去混响净化')
     } else {
-      ElMessage.success(res.engine === 'pymss' ? 'PyMSS 人声与伴奏已加入时间线' : '人声与伴奏已加入时间线')
+      ElMessage.success(translateUiText(res.engine === 'pymss' ? 'PyMSS 分离音轨已加入时间线' : '人声与伴奏已加入时间线'))
     }
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '人声分离失败')
@@ -5521,6 +5556,22 @@ onUnmounted(() => {
 }
 .editor-field-head a:hover { color: var(--xb-text); }
 .editor-separation-field select { height: 32px; font-size: 12px; }
+.editor-separation-field :deep(.el-select) { width: 100%; }
+.editor-separation-field :deep(.el-select__wrapper) { min-height: 32px; font-size: 12px; }
+.editor-pymss-model-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  color: var(--xb-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+.editor-pymss-model-meta span {
+  padding: 3px 7px;
+  border: 1px solid rgba(var(--xb-primary-rgb), .18);
+  border-radius: 999px;
+  background: rgba(var(--xb-primary-rgb), .045);
+}
 .editor-separation-status {
   display: inline-flex;
   align-items: center;

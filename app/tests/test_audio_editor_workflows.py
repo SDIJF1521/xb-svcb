@@ -104,10 +104,11 @@ class _FakeEnhancement:
 
 
 class _FakeSeparation:
-    def __init__(self, vocals: Path, instrumental: Path | None = None, simulated: bool = False) -> None:
+    def __init__(self, vocals: Path, instrumental: Path | None = None, simulated: bool = False, stems=None) -> None:
         self.vocals = vocals
         self.instrumental = instrumental
         self.simulated = simulated
+        self.stems = stems
 
 
 class _FakeUvr:
@@ -136,6 +137,15 @@ class _FakePymss:
         out_dir.mkdir(parents=True, exist_ok=True)
         vocals = out_dir / f"{purpose or 'vocal'}_vocals.wav"
         vocals.write_bytes(b"pymss-vocals")
+        if purpose == "generic":
+            drums = out_dir / "drums.wav"
+            bass = out_dir / "bass.wav"
+            drums.write_bytes(b"drums")
+            bass.write_bytes(b"bass")
+            return _FakeSeparation(vocals, stems=[
+                {"name": "drums", "path": str(drums)},
+                {"name": "bass", "path": str(bass)},
+            ])
         return _FakeSeparation(vocals)
 
 
@@ -379,6 +389,32 @@ class AudioEditorWorkflowTests(unittest.TestCase):
             self.assertIn("PyMSS", vocal_track["name"])
             self.assertIn("去和声", vocal_track["name"])
             self.assertEqual(vocal_track["clips"][0]["metadata"]["harmony_model"], "bve.pth")
+
+    def test_separate_clip_exposes_generic_pymss_multistem_output(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "song.wav"
+            source.write_bytes(b"audio")
+            service, repo, _ = self.make_service(root)
+            repo.add(self.project(source))
+            service._audio = _FakeAudio()
+            service._uvr = _FakeUvr(root)
+            service._pymss = _FakePymss()
+
+            with (
+                patch("application.audio_editor_service.config.EDITOR_DIR", root / "editor"),
+                patch("application.audio_editor_service.config.pymss_model_ready", return_value=True),
+            ):
+                result = service.separate_clip_vocals(
+                    "project-1",
+                    "track-1",
+                    "clip-1",
+                    {"engine": "pymss", "pymss_model": "four-stem.ckpt", "pymss_purpose": "generic"},
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(service._pymss.calls[0][2], "generic")
+            self.assertEqual([track["name"].split(" - ", 1)[0] for track in result["tracks"]], ["drums · PyMSS", "bass · PyMSS"])
 
     def test_remove_project_deletes_project_files_and_owned_cache(self) -> None:
         with tempfile.TemporaryDirectory() as td:

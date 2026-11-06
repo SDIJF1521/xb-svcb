@@ -658,7 +658,17 @@ class AudioEditorService:
         pymss_model = str(
             opts.get("pymss_model") or opts.get("model") or config.PYMSS_DEFAULT_MODEL
         ).strip()
+        pymss_purpose = str(opts.get("pymss_purpose") or config.PYMSS_PURPOSE_VOCAL).strip().lower()
+        if pymss_purpose not in {
+            config.PYMSS_PURPOSE_VOCAL,
+            config.PYMSS_PURPOSE_DEREVERB,
+            config.PYMSS_PURPOSE_HARMONY_LEGACY,
+            "generic",
+        }:
+            pymss_purpose = "generic"
         harmony_enabled = bool(engine == "pymss" and opts.get("harmony_removal_enabled"))
+        if pymss_purpose != config.PYMSS_PURPOSE_VOCAL:
+            harmony_enabled = False
         harmony_model = str(
             opts.get("harmony_model") or config.PYMSS_DEFAULT_HARMONY_MODEL
         ).strip()
@@ -691,7 +701,7 @@ class AudioEditorService:
                     out_dir,
                     pymss_model,
                     device,
-                    purpose=config.PYMSS_PURPOSE_VOCAL,
+                    purpose=pymss_purpose,
                 )
             else:
                 sep = self._uvr.separate(dry, out_dir, model, device)
@@ -752,6 +762,7 @@ class AudioEditorService:
                     "separation_engine": engine,
                     "uvr_model": model if engine == "uvr" else "",
                     "pymss_model": pymss_model if engine == "pymss" else "",
+                    "pymss_purpose": pymss_purpose if engine == "pymss" else "",
                     "harmony_removal_enabled": harmony_enabled,
                     "harmony_model": harmony_model if harmony_enabled else "",
                     "simulated": bool(sep.simulated),
@@ -772,9 +783,28 @@ class AudioEditorService:
             vocal_label += " · PyMSS"
         if harmony_enabled:
             vocal_label += " · 去和声"
-        created_tracks = [make_track("vocals", vocal_label, vocals)]
-        if instrumental and instrumental.exists():
-            created_tracks.append(make_track("instrumental", "伴奏", instrumental))
+        if engine == "pymss" and pymss_purpose == "generic" and sep.stems:
+            created_tracks = []
+            seen_paths: set[str] = set()
+            for stem in sep.stems:
+                if not isinstance(stem, dict):
+                    continue
+                stem_path = Path(str(stem.get("path") or ""))
+                if not stem_path.exists():
+                    continue
+                path_key = str(stem_path.resolve(strict=False)).casefold()
+                if path_key in seen_paths:
+                    continue
+                seen_paths.add(path_key)
+                stem_name = str(stem.get("name") or "分离音轨").strip()[:48]
+                kind = stem_name.casefold().replace(" ", "_") or "stem"
+                created_tracks.append(make_track(kind, f"{stem_name} · PyMSS", stem_path))
+            if not created_tracks:
+                created_tracks = [make_track("stem", "分离音轨 · PyMSS", vocals)]
+        else:
+            created_tracks = [make_track("vocals", vocal_label, vocals)]
+            if instrumental and instrumental.exists():
+                created_tracks.append(make_track("instrumental", "伴奏", instrumental))
         tracks[insert_at:insert_at] = created_tracks
         next_project["waveform_cache"] = {}
         saved = self.save(next_project, push_history=True)

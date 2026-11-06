@@ -498,7 +498,8 @@ export const enExtraPhrases: Record<string, string> = {
   '架构': 'Architecture', '全部架构': 'All architectures', '排序': 'Sort', '综合排序': 'Relevance', '下载排行': 'Most downloads', '最近更新': 'Recently updated',
   '搜索模型站中的翻唱模型（留空浏览全部）…': 'Search cover models on the hub (leave empty to browse all)…', '仅展示由本软件上传、且通过清单校验的模型，避免无关模型干扰。下载后会自动导入「本地模型」。': 'Only models uploaded by this app and passing manifest validation are shown. Downloads are imported into Local Models.',
   '依赖缺失': 'Missing dependency', '依赖 OK': 'Dependencies OK', '作者': 'Author', '图': 'images', '下载中断，可继续下载': 'Download interrupted. You can resume.', '在 ModelScope 查看': 'View on ModelScope', '查看本地': 'View local', '继续下载': 'Resume download', '下载导入': 'Download and import', '加载更多': 'Load more', '换个关键词，或把你的模型「分享到模型站」让社区也能用': 'Try another keyword, or share your model to the hub for the community.', '点击「搜索」浏览模型站中的社区翻唱模型。': 'Click Search to browse community cover models on the hub.',
-  'PyMSS 音乐源分离模型站': 'PyMSS Source Separation Model Hub', '仅提供人声分离与去混响 / 人声净化模型。下载后可在翻唱页「前期人声处理」中选择。': 'Provides vocal separation and dereverb / vocal cleanup models. Select them under Vocal Preprocessing after download.', '去混响 / 人声净化': 'Dereverb / Vocal Cleanup', '目标音轨': 'Target stem', '搜索模型名称，例如 dereverb_mel_band_roformer_anvuew': 'Search model name, e.g. dereverb_mel_band_roformer_anvuew', '重新下载': 'Download again', '未读取到该用途的 PyMSS 模型，请先安装 PyMSS 环境。': 'No PyMSS models were found for this purpose. Install the PyMSS environment first.',
+  'PyMSS 音乐源分离模型站': 'PyMSS Source Separation Model Hub', '完整 PyMSS Studio 模型目录，可按一级分类、二级分类和架构筛选；人声前处理兼容模型可在翻唱页直接选择。': 'Complete PyMSS Studio model catalog. Filter by primary category, secondary category, and architecture; compatible vocal preprocessing models can be selected in the Cover page.', '一级分类': 'Primary category', '二级分类': 'Secondary category', '模型架构': 'Model architecture', '下载状态': 'Download status', '全部一级分类': 'All primary categories', '全部二级分类': 'All secondary categories', '请先选择一级分类': 'Select a primary category first', '全部模型': 'All models', '全部能力': 'All capabilities', '搜索': 'Search', '搜索模型名称、分类或目标音轨': 'Search model name, category, or target stem', '当前筛选条件下没有 PyMSS 模型。': 'No PyMSS models match the current filters.', '去混响 / 人声净化': 'Dereverb / Vocal Cleanup', '目标音轨': 'Target stem', '搜索模型名称，例如 dereverb_mel_band_roformer_anvuew': 'Search model name, e.g. dereverb_mel_band_roformer_anvuew', '重新下载': 'Download again', '未读取到该用途的 PyMSS 模型，请先安装 PyMSS 环境。': 'No PyMSS models were found for this purpose. Install the PyMSS environment first.',
+  '人声': 'Vocals', '传统 VR 模型': 'Legacy VR models', '传统非 VR 模型': 'Legacy non-VR models', '伴奏/无人声提取': 'Instrumental extraction', '单乐器/单音轨': 'Single instrument / stem', '卡拉OK/和声': 'Karaoke / backing vocals', '声像/空间分离': 'Spatial separation', '实验/通用分离': 'Experimental / general separation', '混响/回声处理': 'Reverb / echo control', '特殊目标/差异提取': 'Special target / difference extraction', '音乐多轨/分轨': 'Multi-stem music separation', '音频清理/修复': 'Audio cleanup / restoration', '人声-伴奏双向分离': 'Vocal / instrumental dual separation', '人声提取': 'Vocal extraction', '双人/二重唱分离': 'Duet separation', '合唱/人群歌声分离': 'Choir / crowd vocal separation', '气声/呼吸声分离': 'Breath / aspiration separation', '男女声/合唱分离': 'Gender / choir vocal separation', '语音/说话人声分离': 'Speech vocal separation', 'VR HP2 系列': 'VR HP2 series', 'VR MGM 系列': 'VR MGM series', 'VR SP 系列': 'VR SP series', 'VR 人声提取': 'VR vocal extraction', 'VR 伴唱/和声': 'VR backing vocal / harmony', 'VR 伴奏/无人声提取': 'VR instrumental extraction', 'VR 去回声': 'VR dereverb / echo removal', 'VR 去回声+去混响': 'VR echo and reverb removal', 'VR 去混响': 'VR dereverb', 'VR 和声/伴唱': 'VR harmony / backing vocal', 'VR 谐波/噪声分离': 'VR harmonic / noise separation', 'VR 降噪': 'VR denoise', 'VR 风声/管乐伴奏': 'VR wind / instrumental separation', 'Demucs/HTDemucs 系列': 'Demucs / HTDemucs series', '吉他': 'Guitar', '弦乐': 'Strings', '贝斯': 'Bass', '鼓/打击乐': 'Drums / percussion', '中央/宽声像提取': 'Center / wide stereo extraction', '单声道/立体声分离': 'Mono / stereo separation', '通用源分离': 'General source separation', '去混响': 'Dereverb', '去混响+去回声': 'Dereverb + echo removal', '相似/差异分离': 'Similarity / difference separation', 'DNR 对话/音乐/音效分轨': 'DNR dialogue / music / effects separation', 'MVSep 53 轨分离': 'MVSep 53-stem separation', '六轨分离': 'Six-stem separation', '四轨分离': 'Four-stem separation', '鼓组细分': 'Drum stem separation', '人群/观众声移除': 'Crowd / audience removal', '降噪/串音抑制': 'Denoise / bleed suppression', '音频/人声修复': 'Audio / vocal restoration',
   '请登录后在「个人中心 → 访问令牌」获取令牌填入下方。令牌仅保存在本地，用于上传到你自己的命名空间。': 'Sign in, get a token from Profile → Access Token, and enter it below. It is stored locally and used only for uploads to your namespace.',
   '。 请登录后在「个人中心 → 访问令牌」获取令牌填入下方。令牌仅保存在本地，用于上传到你自己的命名空间。': '. Sign in, get a token from Profile → Access Token, and enter it below. It is stored locally and used only for uploads to your namespace.',
   'SeedVC 示例音色': 'SeedVC Sample Voice',
@@ -516,7 +517,7 @@ export const enExtraPhrases: Record<string, string> = {
   '人声轨': 'Vocal Track', 'BGM 轨': 'BGM Track', 'AI 转换轨': 'AI Conversion Track',
   '主旋律': 'Lead Melody', '副歌叠加': 'Chorus Layer',
   '进入音频编辑': 'Open Audio Editor',
-  '人声': 'Vocal', '重推理': 'Re-inference',
+  '人声标签': 'Vocal', '重推理': 'Re-inference',
   '保护轮次': 'Protection Rounds', '确认高音失配时按轮次重试': 'Retry by rounds when high-note mismatch is confirmed',
   '扩散步数': 'Diffusion Steps', '采样步数': 'Sampling Steps', '扩散占比': 'Diffusion Ratio',
   '选择音色参考': 'Choose Voice Reference', '片段效果': 'Clip Effects', '整轨效果': 'Full Track Effects', '角色效果': 'Role Effects',
@@ -560,6 +561,22 @@ export const enExtraPhrases: Record<string, string> = {
   '未找到 .venv-pymss': '.venv-pymss not found', '应用 worker 缺失': 'Application worker missing',
   '模型目录未就绪': 'Model directory not ready', '模型未下载': 'Model not downloaded',
 }
+
+Object.assign(enExtraPhrases, {
+  '人声': 'Vocal',
+  '按模型输出': 'Model-defined output',
+  '多音轨输出': 'Multi-stem output',
+  '人声处理': 'Vocal processing',
+  'PyMSS 分离音轨已加入时间线': 'PyMSS separated stems were added to the timeline',
+  '人声与伴奏已加入时间线': 'Vocals and instrumental were added to the timeline',
+  '未知架构': 'Unknown architecture',
+  '通用 / 未细分': 'General / uncategorized',
+  '全部一级分类': 'All primary categories',
+  '全部二级分类': 'All secondary categories',
+  '请先选择一级分类': 'Select a primary category first',
+  '当前筛选条件下没有 PyMSS 模型。': 'No PyMSS models match the current filters.',
+  '完整 PyMSS Studio 模型目录，可按一级分类、二级分类和架构筛选；人声前处理兼容模型可在翻唱页直接选择。': 'Complete PyMSS Studio model catalog. Filter by primary category, secondary category, and architecture; compatible vocal preprocessing models can be selected in the Cover page.',
+})
 
 export const jaExtraPhrases: Record<string, string> = {
   '名称不能为空': '名前を入力してください', '保存失败': '保存に失敗しました', '删除失败': '削除に失敗しました',
@@ -682,7 +699,8 @@ export const jaExtraPhrases: Record<string, string> = {
   '模型站基于': 'モデルハブの基盤：', '魔搭社区 ModelScope': 'ModelScopeコミュニティ',
   '尚未配置模型上传令牌': 'モデルアップロードトークン未設定', '浏览和下载无需本地令牌；分享到自己的 ModelScope 仓库时再配置访问令牌。': '閲覧とダウンロードにローカルトークンは不要です。ModelScopeリポジトリへ共有するときだけ設定してください。',
   '架构': 'アーキテクチャ', '全部架构': 'すべての方式', '排序': '並び順', '综合排序': '関連度', '下载排行': 'ダウンロード数', '最近更新': '最近更新', '搜索模型站中的翻唱模型（留空浏览全部）…': 'モデルハブのカバーモデルを検索（空欄で全件表示）…', '依赖缺失': '依存関係不足', '依赖 OK': '依存関係OK', '作者': '作者', '图': '画像', '下载中断，可继续下载': 'ダウンロードが中断されました。再開できます', '在 ModelScope 查看': 'ModelScopeで表示', '查看本地': 'ローカルを表示', '继续下载': 'ダウンロードを再開', '下载导入': 'ダウンロードしてインポート', '加载更多': 'さらに読み込む', '换个关键词，或把你的模型「分享到模型站」让社区也能用': '別のキーワードを試すか、モデルをハブへ共有してコミュニティで利用できます。', '点击「搜索」浏览模型站中的社区翻唱模型。': '「検索」をクリックしてコミュニティのカバーモデルを表示します。',
-  'PyMSS 音乐源分离模型站': 'PyMSS音源分離モデルハブ', '仅提供人声分离与去混响 / 人声净化模型。下载后可在翻唱页「前期人声处理」中选择。': 'ボーカル分離と残響除去 / ボーカル浄化モデルを提供します。ダウンロード後、ボーカル前処理で選択できます。', '去混响 / 人声净化': '残響除去 / ボーカル浄化', '目标音轨': '対象ステム', '搜索模型名称，例如 dereverb_mel_band_roformer_anvuew': 'モデル名を検索（例：dereverb_mel_band_roformer_anvuew）', '重新下载': '再ダウンロード', '未读取到该用途的 PyMSS 模型，请先安装 PyMSS 环境。': 'この用途のPyMSSモデルが見つかりません。先にPyMSS環境をインストールしてください。',
+  'PyMSS 音乐源分离模型站': 'PyMSS音源分離モデルハブ', '完整 PyMSS Studio 模型目录，可按一级分类、二级分类和架构筛选；人声前处理兼容模型可在翻唱页直接选择。': 'PyMSS Studioの全モデルカタログです。大分類・小分類・アーキテクチャで絞り込み、対応するボーカル前処理モデルをカバー画面から選択できます。', '一级分类': '大分類', '二级分类': '小分類', '模型架构': 'モデルアーキテクチャ', '下载状态': 'ダウンロード状態', '全部一级分类': 'すべての大分類', '全部二级分类': 'すべての小分類', '请先选择一级分类': '先に大分類を選択', '全部模型': 'すべてのモデル', '全部能力': 'すべての機能', '搜索': '検索', '搜索模型名称、分类或目标音轨': 'モデル名・分類・対象ステムを検索', '当前筛选条件下没有 PyMSS 模型。': '現在の条件に一致するPyMSSモデルはありません。', '去混响 / 人声净化': '残響除去 / ボーカル浄化', '目标音轨': '対象ステム', '搜索模型名称，例如 dereverb_mel_band_roformer_anvuew': 'モデル名を検索（例：dereverb_mel_band_roformer_anvuew）', '重新下载': '再ダウンロード', '未读取到该用途的 PyMSS 模型，请先安装 PyMSS 环境。': 'この用途のPyMSSモデルが見つかりません。先にPyMSS環境をインストールしてください。',
+  '人声': 'ボーカル', '传统 VR 模型': '従来型VRモデル', '传统非 VR 模型': '従来型非VRモデル', '伴奏/无人声提取': '伴奏 / ボーカルなし抽出', '单乐器/单音轨': '単一楽器 / 単一ステム', '卡拉OK/和声': 'カラオケ / バッキングボーカル', '声像/空间分离': '定位 / 空間分離', '实验/通用分离': '実験 / 汎用分離', '混响/回声处理': '残響 / エコー処理', '特殊目标/差异提取': '特殊ターゲット / 差分抽出', '音乐多轨/分轨': '音楽マルチステム分離', '音频清理/修复': '音声クリーンアップ / 修復', '人声-伴奏双向分离': 'ボーカル / 伴奏の双方向分離', '人声提取': 'ボーカル抽出', '双人/二重唱分离': 'デュエット分離', '合唱/人群歌声分离': '合唱 / 群衆ボーカル分離', '气声/呼吸声分离': '息づかい / ブレス分離', '男女声/合唱分离': '男女声 / 合唱分離', '语音/说话人声分离': '音声 / 話し声分離', 'VR HP2 系列': 'VR HP2シリーズ', 'VR MGM 系列': 'VR MGMシリーズ', 'VR SP 系列': 'VR SPシリーズ', 'VR 人声提取': 'VRボーカル抽出', 'VR 伴唱/和声': 'VRバッキング / ハーモニー', 'VR 伴奏/无人声提取': 'VR伴奏抽出', 'VR 去回声': 'VRエコー除去', 'VR 去回声+去混响': 'VRエコー + 残響除去', 'VR 去混响': 'VR残響除去', 'VR 和声/伴唱': 'VRハーモニー / バッキング', 'VR 谐波/噪声分离': 'VR倍音 / ノイズ分離', 'VR 降噪': 'VRノイズ除去', 'VR 风声/管乐伴奏': 'VR風音 / 楽器伴奏分離', 'Demucs/HTDemucs 系列': 'Demucs / HTDemucsシリーズ', '吉他': 'ギター', '弦乐': '弦楽器', '贝斯': 'ベース', '鼓/打击乐': 'ドラム / パーカッション', '中央/宽声像提取': 'センター / ワイドステレオ抽出', '单声道/立体声分离': 'モノラル / ステレオ分離', '通用源分离': '汎用音源分離', '去混响': '残響除去', '去混响+去回声': '残響除去 + エコー除去', '相似/差异分离': '類似 / 差分分離', 'DNR 对话/音乐/音效分轨': 'DNR 会話 / 音楽 / 効果音分離', 'MVSep 53 轨分离': 'MVSep 53ステム分離', '六轨分离': '6ステム分離', '四轨分离': '4ステム分離', '鼓组细分': 'ドラムステム分離', '人群/观众声移除': '群衆 / 観客音声除去', '降噪/串音抑制': 'ノイズ除去 / 漏れ抑制', '音频/人声修复': '音声 / ボーカル修復',
   '请登录后在「个人中心 → 访问令牌」获取令牌填入下方。令牌仅保存在本地，用于上传到你自己的命名空间。': 'ログイン後、プロフィール → アクセストークンから取得して入力してください。トークンはローカルにのみ保存されます。',
   '。 请登录后在「个人中心 → 访问令牌」获取令牌填入下方。令牌仅保存在本地，用于上传到你自己的命名空间。': '。ログイン後、プロフィール → アクセストークンから取得して入力してください。トークンはローカルにのみ保存されます。',
   '模型：': 'モデル：',
@@ -700,7 +718,7 @@ export const jaExtraPhrases: Record<string, string> = {
   '人声轨': 'ボーカルトラック', 'BGM 轨': 'BGMトラック', 'AI 转换轨': 'AI変換トラック',
   '主旋律': 'メインメロディ', '副歌叠加': 'サビレイヤー',
   '进入音频编辑': '音声エディターを開く',
-  '人声': 'ボーカル', '重推理': '再推論',
+  '人声标签': 'ボーカル', '重推理': '再推論',
   '保护轮次': '保護回数', '确认高音失配时按轮次重试': '高音の不一致を確認した場合に回数指定で再試行',
   '扩散步数': '拡散ステップ数', '采样步数': 'サンプリングステップ数', '扩散占比': '拡散比率',
   '选择音色参考': '音色参照を選択', '片段效果': 'クリップエフェクト', '整轨效果': 'トラック全体エフェクト', '角色效果': 'ロールエフェクト',
@@ -759,6 +777,22 @@ export const jaExtraPhrases: Record<string, string> = {
   '加载 DDSP-SVC Rectified Flow 模型进行歌声转换': 'DDSP-SVC Rectified Flowモデルを読み込み、歌声変換を実行します',
   '可选 PyMSS 音乐源分离引擎，模型可从模型站下载': '任意のPyMSS音源分離エンジンです。モデルハブからモデルをダウンロードできます',
 }
+
+Object.assign(jaExtraPhrases, {
+  '人声': 'ボーカル',
+  '按模型输出': 'モデル定義の出力',
+  '多音轨输出': 'マルチステム出力',
+  '人声处理': 'ボーカル処理',
+  'PyMSS 分离音轨已加入时间线': 'PyMSSの分離ステムをタイムラインに追加しました',
+  '人声与伴奏已加入时间线': 'ボーカルと伴奏をタイムラインに追加しました',
+  '未知架构': '未知のアーキテクチャ',
+  '通用 / 未细分': '汎用 / 未分類',
+  '全部一级分类': 'すべての大分類',
+  '全部二级分类': 'すべての小分類',
+  '请先选择一级分类': '先に大分類を選択',
+  '当前筛选条件下没有 PyMSS 模型。': '現在の条件に一致するPyMSSモデルはありません。',
+  '完整 PyMSS Studio 模型目录，可按一级分类、二级分类和架构筛选；人声前处理兼容模型可在翻唱页直接选择。': 'PyMSS Studioの全モデルカタログです。大分類・小分類・アーキテクチャで絞り込み、対応するボーカル前処理モデルをカバー画面から選択できます。',
+})
 
 type DynamicRule = readonly [RegExp, string]
 

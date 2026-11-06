@@ -450,6 +450,62 @@ export function translateUiText(source: string, targetLocale = currentLocale.val
   return `${match[1] ?? ''}${translateExact(match[2] ?? '', targetLocale)}${match[3] ?? ''}`
 }
 
+// PyMSS returns stable category ids alongside labels. Translate from those ids
+// so catalog versions that return Chinese, English, or shortened labels render
+// consistently in every supported UI language.
+const pymssPrimaryLabels: Record<string, string> = {
+  cleanup: '音频清理/修复', experimental_general: '实验/通用分离', instrumental: '伴奏/无人声提取',
+  karaoke: '卡拉OK/和声', legacy_models: '传统非 VR 模型', legacy_vr: '传统 VR 模型',
+  music_stems: '音乐多轨/分轨', reverb_echo_control: '混响/回声处理', single_instrument: '单乐器/单音轨',
+  spatial: '声像/空间分离', special: '特殊目标/差异提取', vocal: '人声',
+}
+
+const pymssSecondaryLabels: Record<string, string> = {
+  audio_restoration: '音频/人声修复', crowd_removal: '人群/观众声移除', noise_bleed_control: '降噪/串音抑制',
+  aspiration_breath: '气声/呼吸声分离', choir_vocal: '合唱/人群歌声分离', duet_vocal: '双人/二重唱分离',
+  speech_vocal: '语音/说话人声分离', vocal_extraction: '人声提取', vocal_gender_chorus: '男女声/合唱分离',
+  vocal_instrumental_dual: '人声-伴奏双向分离', vr_backing_vocal: 'VR 伴唱/和声', vr_deecho: 'VR 去回声',
+  vr_deecho_dereverb: 'VR 去回声+去混响', vr_denoise: 'VR 降噪', vr_dereverb: 'VR 去混响',
+  vr_harmonic_noise: 'VR 谐波/噪声分离', vr_hp2: 'VR HP2 系列', vr_instrumental_extraction: 'VR 伴奏/无人声提取',
+  vr_karaoke: 'VR 和声/伴唱', vr_mgm: 'VR MGM 系列', vr_sp: 'VR SP 系列', vr_vocal_extraction: 'VR 人声提取',
+  vr_wind_instrumental: 'VR 风声/管乐伴奏', dnr_stems: 'DNR 对话/音乐/音效分轨', drum_stems: '鼓组细分',
+  four_stem: '四轨分离', mega_53_stems: 'MVSep 53 轨分离', six_stem: '六轨分离',
+  dereverb: '去混响', dereverb_deecho: '去混响+去回声', bass: '贝斯', drums_percussion: '鼓/打击乐',
+  guitar: '吉他', strings: '弦乐', mono_stereo_duality: '单声道/立体声分离', phantom_center_wide: '中央/宽声像提取',
+}
+
+const pymssGeneralSecondaryLabels: Record<string, string> = {
+  experimental_general: '通用源分离', instrumental: '伴奏/无人声提取', karaoke: '卡拉OK/和声',
+  legacy_models: 'Demucs/HTDemucs 系列', special: '相似/差异分离',
+}
+
+export function translatePymssCategory(
+  primaryId?: string,
+  secondaryId?: string,
+  fallback = 'PyMSS',
+): string {
+  const primary = translateUiText(pymssPrimaryLabels[String(primaryId || '').trim()] || '')
+  const secondaryKey = String(secondaryId || '').trim()
+  const secondary = translateUiText(
+    pymssSecondaryLabels[secondaryKey] || (secondaryKey === '__general__' ? pymssGeneralSecondaryLabels[String(primaryId || '').trim()] || '' : ''),
+  )
+  if (primary && secondary) return `${primary} / ${secondary}`
+  if (primary) return primary
+  return translateUiText(fallback)
+}
+
+const pymssTargetStemLabels: Record<string, string> = {
+  vocal: '人声', vocals: '人声', singing: '人声', voice: '人声',
+  instrumental: '伴奏', accompaniment: '伴奏', drums: '鼓', bass: '贝斯', guitar: '吉他',
+  strings: '弦乐', piano: '钢琴', speech: '语音', noise: '噪声', restored: '修复音频',
+  restored_vocal: '修复人声', crowd: '人群声', effects: '音效', other: '其他',
+}
+
+export function translatePymssTargetStem(value?: string): string {
+  const key = String(value || '').trim().toLowerCase().replace(/[- ]+/g, '_')
+  return translateUiText(pymssTargetStemLabels[key] || value || '—')
+}
+
 export function setLocale(next: AppLocale) {
   if (!localeOptions.some((item) => item.value === next)) return
   currentLocale.value = next

@@ -1213,6 +1213,10 @@ class EditorSeparationRequest(BaseModel):
         default=None,
         description="PyMSS 人声分离模型名；engine=pymss 时使用",
     )
+    pymss_purpose: Literal["vocal_separation", "dereverb", "harmony_removal", "generic"] = Field(
+        default="vocal_separation",
+        description="PyMSS 处理用途；generic 开放完整 catalog 与多音轨结果",
+    )
     harmony_removal_enabled: bool = Field(
         default=False,
         description="engine=pymss 时，分离后是否使用 PyMSS 去混响/人声净化模型",
@@ -1890,10 +1894,13 @@ def create_http_app(
         "/preprocess/pymss/models",
         tags=["模型"],
         summary="列出 PyMSS 前期分离模型",
-        description="method: `GET`\n\n参数:\n\n| 参数名 | 类型 | 必填 | 默认值 | 说明 |\n|---|---|---|---|---|\n| purpose | string | 否 | 空 | vocal_separation 人声分离，或 dereverb 去混响/人声净化；为空返回两类 |\n\n返回: PyMSS 模型列表与运行状态。\n\n响应数据:\n\n| 字段名 | 类型 | 说明 |\n|---|---|---|\n| items | array | PyMSS 模型列表 |\n| status | object | 当前运行状态 |\n\n读取当前 PyMSS 环境中的受支持模型目录，供前期处理选择。",
+        description="method: `GET`\n\n参数:\n\n| 参数名 | 类型 | 必填 | 默认值 | 说明 |\n|---|---|---|---|---|\n| purpose | string | 否 | 空 | vocal_separation 人声分离，或 dereverb 去混响/人声净化 |\n| all_models | boolean | 否 | false | true 返回 PyMSS 全部受支持能力，并带一级/二级分类 |\n\n返回: PyMSS 模型列表与运行状态。\n\n响应数据:\n\n| 字段名 | 类型 | 说明 |\n|---|---|---|\n| items | array | PyMSS 模型列表，包含 category_label 分类显示名 |\n| status | object | 当前运行状态 |",
     )
-    def list_pymss_models(purpose: str = Query(default="", description="vocal_separation 或 dereverb")) -> dict[str, Any]:
-        return {"items": facade.pymss_models(purpose), "status": facade.pymss_status()}
+    def list_pymss_models(
+        purpose: str = Query(default="", description="vocal_separation 或 dereverb"),
+        all_models: bool = Query(default=False, description="是否返回全部 PyMSS 分类"),
+    ) -> dict[str, Any]:
+        return {"items": facade.pymss_models(purpose, all_models), "status": facade.pymss_status()}
 
     @router.post(
         "/preprocess/pymss/models/{model_name:path}/download",
