@@ -10,7 +10,7 @@
       -> app/.venv/Scripts/python.exe app/main.py
       -> app/main.py
       -> resolve_url()
-      -> build_api()
+      -> app/composition.py: build_api()
       -> pywebview.create_window(..., js_api=api)
       -> webview.start()
 
@@ -18,7 +18,11 @@
 
 ## 2. 后端装配
 
-build_api() 是组合根，主要负责把路径、存储、模型服务、作品服务、转换服务、编辑器服务、实时服务和插件服务组装到 Api 外观上。Vue 调用的 window.pywebview.api.* 方法最终进入这些应用服务。
+`app/composition.py` 的 `build_api()` 是组合根：先创建基础设施适配器（FFmpeg、UVR、PyMSS、各引擎、JSON 仓储、主题媒体/音频导入/工作文件/编辑器工程存储、数据目录搬运），
+再用它们注入 `app/application/` 的用例服务（作品、转换、模型、编辑器与渲染、实时、插件、媒体、数据维护），最后装成 `api/bridge.py` 的 `Api` 外观。
+用例服务只依赖 `application/ports.py` 声明的端口，不再 import 基础设施；Vue 调用的 `window.pywebview.api.*` 方法最终进入这些用例服务。
+
+分层红线与端口清单见[分层架构约束（DDD）](ddd-architecture.md)，由 `app/tests/test_architecture.py` 自动校验。
 
 FastAPI 是可选入口。用户在应用内手动启动后，Uvicorn 在 GUI 进程后台线程中监听端口；HTTP 路由调用同一个 Api 和同一批应用服务，不会另起一套业务核心。
 
@@ -35,7 +39,7 @@ FastAPI 是可选入口。用户在应用内手动启动后，Uvicorn 在 GUI �
       -> EngineRegistry：按 framework 路由
       -> Model Worker：加载 checkpoint 并推理
       -> Vocal Enhancement：按需增强
-      -> FFmpeg：混音、转码和输出
+      -> FFmpeg：按 LUFS 测量平衡人声与伴奏后混音、转码和输出
       -> 保存作品与任务状态
       -> 前端轮询/推送并展示结果
 

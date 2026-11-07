@@ -1,12 +1,22 @@
 """领域实体。
 
-实体均提供 to_dict / from_dict，便于持久化与跨 pywebview 桥传输（JSON 序列化）。
+实体均提供 ``to_dict``（可选 ``from_dict``），便于持久化与跨 pywebview 桥传输
+（JSON 序列化）。作品记录在仓储里是「实体字段 + 若干扩展字段」的 dict，
+因此只有 ``ModelInfo`` 提供反向解析：它被读取路径用来推导推理引擎需要的
+文件路径（见 ``ModelInfo.engine_paths``）。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
+
+from .enums import StepStatus
+
+# 推理架构 id；默认 so-vits-svc（当前主力引擎）。
+FRAMEWORK_DEFAULT = "so-vits-svc"
+# "other" 表示未归类（引擎路由会回退默认引擎），保留它是为了兼容既有模型记录。
+FRAMEWORKS = ("so-vits-svc", "rvc", "seed-vc", "ddsp-svc", "other")
 
 
 @dataclass
@@ -26,8 +36,8 @@ class ModelFile:
         return cls(name=data.get("name", ""), path=data.get("path", ""))
 
 
-def _guess_framework(model_type: str | None) -> str:
-    """据本地模型 type 推断框架 id（领域层自带，避免依赖 config）。"""
+def guess_framework(model_type: str | None) -> str:
+    """据本地模型 type 推断框架 id。"""
     t = (model_type or "").strip().lower()
     if "seed" in t:
         return "seed-vc"
@@ -35,7 +45,20 @@ def _guess_framework(model_type: str | None) -> str:
         return "rvc"
     if "ddsp" in t:
         return "ddsp-svc"
-    return "so-vits-svc"
+    if "so-vits" in t or "sovits" in t or t == "svc":
+        return "so-vits-svc"
+    return FRAMEWORK_DEFAULT
+
+
+def normalize_framework(framework: str | None, model_type: str | None = None) -> str:
+    """把任意输入规整为合法的推理架构 id。
+
+    显式给出且受支持的框架优先；否则按模型 ``type`` 推断，再退回默认架构。
+    """
+    fw = str(framework or "").strip().lower()
+    if fw in FRAMEWORKS:
+        return fw
+    return guess_framework(model_type)
 
 
 def _coerce_bool(value: Any, default: bool) -> bool:
@@ -84,20 +107,38 @@ class ModelInfo:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ModelInfo":
+        """从仓储记录还原模型聚合；缺失的可选字段按默认值补齐。"""
+        data = data or {}
         return cls(
-            id=data["id"],
-            name=data["name"],
-            type=data.get("type", "SVC"),
-            sample_rate=data.get("sample_rate", "44.1kHz"),
-            size=data.get("size", "—"),
-            imported_at=data.get("imported_at", ""),
+            id=str(data.get("id") or ""),
+            name=str(data.get("name") or ""),
+            type=str(data.get("type") or "SVC"),
+            sample_rate=str(data.get("sample_rate") or "44.1kHz"),
+            size=str(data.get("size") or "—"),
+            imported_at=str(data.get("imported_at") or ""),
             main_model=ModelFile.from_dict(data.get("main_model")) or ModelFile("", ""),
             main_config=ModelFile.from_dict(data.get("main_config")) or ModelFile("", ""),
             diffusion_model=ModelFile.from_dict(data.get("diffusion_model")),
             diffusion_config=ModelFile.from_dict(data.get("diffusion_config")),
-            framework=str(data.get("framework") or _guess_framework(data.get("type"))),
+            framework=normalize_framework(data.get("framework"), data.get("type")),
             index_file=ModelFile.from_dict(data.get("index_file")),
         )
+
+    def engine_paths(self) -> dict[str, str]:
+        """推理引擎需要的扁平文件路径 + 框架 id。
+
+        引擎/Worker 只接受扁平路径（``main_model_path`` / ``index_path`` …），
+        这份映射原先在作品服务、编辑器服务和实时翻唱服务里各写了一份，
+        现在统一由领域实体给出。
+        """
+        return {
+            "framework": normalize_framework(self.framework, self.type),
+            "main_model_path": self.main_model.path,
+            "main_config_path": self.main_config.path,
+            "diffusion_model_path": self.diffusion_model.path if self.diffusion_model else "",
+            "diffusion_config_path": self.diffusion_config.path if self.diffusion_config else "",
+            "index_path": self.index_file.path if self.index_file else "",
+        }
 
 
 @dataclass
@@ -106,10 +147,25 @@ class PipelineStep:
 
     key: str
     label: str
-    status: str = "wait"
+    status: str = StepStatus.WAIT.value
+
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def apply_step_status(steps: list[dict[str, Any]], key: str, status: StepStatus | str) -> bool:
+    """把 ``steps`` 中指定步骤的状态改写为 ``status``；未找到时返回 False。
+
+    步骤在作品记录中以 dict 形式持久化（前端直接消费），这里集中处理
+    「状态值必须来自 ``StepStatus``」这条规则。
+    """
+    value = StepStatus(status).value
+    for step in steps:
+        if step.get("key") == key:
+            step["status"] = value
+            return True
+    return False
 
 
 @dataclass
@@ -291,27 +347,7 @@ class Work:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Work":
-        return cls(
-            id=data["id"],
-            title=data["title"],
-            model=data.get("model", ""),
-            model_id=data.get("model_id", ""),
-            status=data.get("status", "queue"),
-            progress=int(data.get("progress", 0)),
-            duration=data.get("duration", "—"),
-            format=data.get("format", "—"),
-            size=data.get("size", "—"),
-            created_at=data.get("created_at", ""),
-            source_path=data.get("source_path"),
-            output_path=data.get("output_path"),
-            error=data.get("error"),
-            params=data.get("params", {}) or {},
-            steps=data.get("steps", []) or [],
-            workflow=data.get("workflow", "auto_mix"),
-            vocal_enhancement=data.get("vocal_enhancement", {}) or {},
-            preprocess=data.get("preprocess", {}) or {},
-            mode=data.get("mode", "single"),
-            segments=data.get("segments", []) or [],
-        )
+    # 说明：作品记录 = Work 字段 + 大量扩展字段（seg_models、workflow_outputs、
+    # workflow_models、log_path、history……），因此**不提供** ``from_dict``：
+    # 反向解析会静默丢掉扩展字段。读取路径直接使用仓储记录（DTO），
+    # 需要领域行为时按字段取值，或先 to_dict 再补充扩展字段。

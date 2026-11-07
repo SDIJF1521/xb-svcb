@@ -10,6 +10,21 @@ uv run --project app --with pytest --with scipy==1.13.1 pytest app/tests -q -rs
 
 Add `--offline` after the cache is populated. `-rs` displays every skip reason. A successful test exit does not mean that real inference or release acceptance has passed.
 
+## Layering and domain-rule tests
+
+Run this group whenever you change the architecture, move rules into `domain/`, or add a port:
+
+```powershell
+uv run --project app --with pytest pytest app/tests/test_architecture.py app/tests/test_composition.py \
+    app/tests/test_domain_entities.py app/tests/test_domain_editor_rules.py \
+    app/tests/test_work_request.py app/tests/test_data_maintenance.py -q
+```
+
+`test_architecture.py` checks the import direction of every layer, the single composition root,
+the port/adapter contracts and that the presentation layer never touches facade private members;
+`test_composition.py` builds `composition.build_api()` once in an isolated data directory.
+See [Layering Constraints (DDD)](../ddd-architecture.md).
+
 ## Groups
 
 | Marker | Contents | Selection |

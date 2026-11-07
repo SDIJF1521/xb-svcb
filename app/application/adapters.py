@@ -20,6 +20,8 @@ from .ports import (
     AudioEnginePort,
     AudioImportStorePort,
     DataTransferPort,
+    EditorProjectStorePort,
+    WorkFilesPort,
     EngineRegistryPort,
     FfmpegGateway,
     PymssGateway,
@@ -157,6 +159,18 @@ def system_audio_writer(
 
 
 # ---- 应用生命周期 ----
+
+def work_files() -> WorkFilesPort:
+    from infrastructure.work_files import WorkFiles
+
+    return WorkFiles()
+
+
+def editor_project_store() -> EditorProjectStorePort:
+    from infrastructure.editor_project_store import EditorProjectStore
+    from infrastructure.ffmpeg_tool import FfmpegTool
+
+    return EditorProjectStore(FfmpegTool())
 
 def data_transfer() -> DataTransferPort:
     from infrastructure.data_transfer import DataTransfer

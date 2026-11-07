@@ -4,6 +4,7 @@ from .audio_import_service import AudioImportService
 from .audio_editor_service import AudioEditorService
 from .conversion_service import ConversionService
 from .data_maintenance_service import DataMaintenanceService
+from .editor_render_service import EditorRenderService
 from .media_service import MediaService
 from .model_hub_service import ModelHubService
 from .model_service import ModelService
@@ -19,6 +20,7 @@ __all__ = [
     "AudioImportService",
     "ConversionService",
     "DataMaintenanceService",
+    "EditorRenderService",
     "MediaService",
     "ModelHubService",
     "ModelService",

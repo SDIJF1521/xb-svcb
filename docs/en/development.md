@@ -16,7 +16,9 @@
 
 ## Backend Development
 
-Main-application dependencies are declared in `app/pyproject.toml`; the runtime entry point is `app/main.py`. Start with `app/api/bridge.py` and `app/application/` to follow application calls, then inspect concrete engines and workers in `app/infrastructure/`.
+Main-application dependencies are declared in `app/pyproject.toml`; the runtime entry point is `app/main.py`. Suggested reading order: `app/composition.py` (the single wiring point listing every adapter and use-case service), then the use-case services in `app/application/` and the port contracts in `app/application/ports.py`, and finally the concrete engines and workers in `app/infrastructure/`. Framework-free rules live in `app/domain/`; `app/api/` only adapts parameters and protocols.
+
+The dependency direction is a hard constraint enforced by `app/tests/test_architecture.py`; see [Layering Constraints (DDD)](../ddd-architecture.md).
 
 Run tests:
 

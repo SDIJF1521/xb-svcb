@@ -878,25 +878,15 @@ class Api:
 
     def open_work_log(self, work_id: str) -> bool:
         """在系统文件管理器中打开该任务的日志所在文件夹。"""
-        work = self._works.get(work_id)
-        log_path = (work or {}).get("log_path")
-        target = Path(log_path) if log_path else (config.WORKS_DIR / work_id)
+        target = self._works.log_path(work_id)
+        if target is None:
+            return False
         folder = target.parent if target.suffix else target
         return self._reveal(folder)
 
     def get_work_log(self, work_id: str, tail: int = 300) -> str:
         """读取任务运行日志的末尾若干行，供前端实时显示执行流程。"""
-        work = self._works.get(work_id)
-        log_path = (work or {}).get("log_path")
-        target = Path(log_path) if log_path else (config.WORKS_DIR / work_id / "run.log")
-        try:
-            if not target.is_file():
-                return ""
-            lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            return ""
-        limit = max(1, min(2000, int(tail or 300)))
-        return "\n".join(lines[-limit:])
+        return self._works.read_log(work_id, tail)
 
     def open_path(self, path: str) -> bool:
         """用系统默认方式打开指定文件或文件夹。"""

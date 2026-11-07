@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 import threading
 import time
 from datetime import datetime
@@ -10,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import config
-from domain import JobStatus, Work
+from domain import FRAMEWORK_DEFAULT, JobStatus, ModelInfo, Work
 from domain.formatting import file_size_label
 from domain.identity import new_id
 from domain.work_request import (
@@ -24,7 +23,7 @@ from domain.work_request import (
 )
 from domain.workflow_graph import NODE_LABELS, topological_order, validate_graph
 
-from .adapters import ensure_data_dirs
+from .adapters import ensure_data_dirs, work_files
 from .conversion_service import (
     ConversionService,
     default_steps,
@@ -32,7 +31,7 @@ from .conversion_service import (
     default_steps_multi,
 )
 from .model_service import ModelService
-from .ports import ItemRepository, SettingsRepository
+from .ports import ItemRepository, SettingsRepository, WorkFilesPort
 
 # 工作流文件格式标记（导入时据此识别本软件导出的文件）。
 WORKFLOW_FILE_KIND = "xb-cover-workflow"
@@ -57,11 +56,13 @@ class WorkService:
         conversion: ConversionService,
         models: ModelService,
         settings: SettingsRepository,
+        files: WorkFilesPort | None = None,
     ) -> None:
         self._repo = repo
         self._conversion = conversion
         self._models = models
         self._settings = settings
+        self._files = files or work_files()
         self._realtime_lock = threading.Lock()
 
     def list(self) -> list[dict[str, Any]]:
@@ -103,18 +104,20 @@ class WorkService:
                 if existing:
                     return self._view(existing)
             work_id = new_id("wrk_")
-            work_dir = config.WORKS_DIR / work_id
+            work_dir = self._files.work_dir(work_id)
             artifact_dir = work_dir / "realtime"
             try:
                 work_dir.mkdir(parents=True, exist_ok=False)
-                shutil.copytree(session_dir, artifact_dir)
+                copied = self._files.copy_tree(session_dir, artifact_dir)
             except OSError:
-                shutil.rmtree(work_dir, ignore_errors=True)
+                copied = False
+            if not copied:
+                self._files.remove_tree(work_dir)
                 return None
 
             archived_output = artifact_dir / output.name
             if not archived_output.is_file():
-                shutil.rmtree(work_dir, ignore_errors=True)
+                self._files.remove_tree(work_dir)
                 return None
             names = [str(item).strip() for item in (status.get("model_names") or []) if str(item).strip()]
             model_label = "、".join(names) if names else "实时翻唱"
@@ -171,9 +174,9 @@ class WorkService:
             known = {str(item.get("id") or "") for item in self._repo.all()}
             if not base.exists():
                 return
-            for child in base.iterdir():
+            for child in self._files.list_entries(base):
                 if child.is_dir() and child.name.startswith("wrk_") and child.name not in known:
-                    shutil.rmtree(child, ignore_errors=True)
+                    self._files.remove_tree(child)
         except OSError:
             return
 
@@ -191,7 +194,7 @@ class WorkService:
                 if item.get("realtime_session_id")
             }
             cache_suffixes = ("_output.mp3", "_instrumental.mp3", "_vocals.mp3")
-            for candidate in temp_root.iterdir():
+            for candidate in self._files.list_entries(temp_root):
                 if not candidate.is_file():
                     continue
                 suffix = next((item for item in cache_suffixes if candidate.name.endswith(item)), "")
@@ -205,7 +208,7 @@ class WorkService:
             if not realtime_root.is_dir():
                 return
             stale_before = time.time() - 6 * 60 * 60
-            for session_dir in realtime_root.iterdir():
+            for session_dir in self._files.list_entries(realtime_root):
                 if (
                     not session_dir.is_dir()
                     or not session_dir.name.startswith("live_")
@@ -214,7 +217,7 @@ class WorkService:
                     continue
                 # 未归档的实时任务没有作品记录；只清理长期未更新的目录，保护活跃会话。
                 if session_dir.stat().st_mtime < stale_before:
-                    shutil.rmtree(session_dir, ignore_errors=True)
+                    self._files.remove_tree(session_dir)
         except (OSError, RuntimeError):
             return
 
@@ -315,6 +318,24 @@ class WorkService:
                 )
         rows.sort(key=lambda x: str(x.get("finished_at") or ""), reverse=True)
         return rows[: max(1, int(limit or 50))]
+
+    def log_path(self, work_id: str) -> Path | None:
+        """解析作品的日志路径：优先使用记录中的 ``log_path``，否则回落到工作目录。"""
+        if not work_id:
+            return None
+        work = self._repo.get(work_id)
+        recorded = str((work or {}).get("log_path") or "").strip()
+        if recorded:
+            return self._files.log_path(work_id, recorded)
+        return self._files.work_dir(work_id)
+
+    def read_log(self, work_id: str, tail: int = 300) -> str:
+        """读取作品运行日志的末尾若干行，供前端实时显示执行流程。"""
+        work = self._repo.get(work_id)
+        recorded = str((work or {}).get("log_path") or "").strip()
+        target = self._files.log_path(work_id, recorded or None)
+        limit = max(1, min(2000, int(tail or 300)))
+        return self._files.read_text_tail(target, limit)
 
     def list_presets(self) -> list[dict[str, Any]]:
         return list(self._settings.get("inference_presets", []) or [])
@@ -773,12 +794,12 @@ class WorkService:
     def _resolve_model_paths(model: dict[str, Any] | None) -> dict[str, Any]:
         """从模型记录提取推理所需的文件路径与框架标识。
 
-        返回含 ``framework``（路由引擎用）、so-vits / SeedVC 的 main/config 路径、
-        RVC 的 ``index_path``；推理引擎按 ``framework`` 各取所需。
+        映射规则由领域实体 ``ModelInfo.engine_paths`` 统一提供；这里只补充
+        作品记录需要的附加字段 ``model_metadata``。
         """
         if not model:
             return {
-                "framework": config.MODELHUB_DEFAULT_FRAMEWORK,
+                "framework": FRAMEWORK_DEFAULT,
                 "main_model_path": "",
                 "main_config_path": "",
                 "diffusion_model_path": "",
@@ -786,18 +807,8 @@ class WorkService:
                 "index_path": "",
                 "model_metadata": {},
             }
-        framework = config.modelhub_normalize_framework(
-            model.get("framework") or config.modelhub_guess_framework(model.get("type"))
-        )
-        return {
-            "framework": framework,
-            "main_model_path": (model.get("main_model") or {}).get("path", ""),
-            "main_config_path": (model.get("main_config") or {}).get("path", ""),
-            "diffusion_model_path": (model.get("diffusion_model") or {}).get("path", ""),
-            "diffusion_config_path": (model.get("diffusion_config") or {}).get("path", ""),
-            "index_path": (model.get("index_file") or {}).get("path", ""),
-            "model_metadata": model.get("metadata") or {},
-        }
+        info = ModelInfo.from_dict(model)
+        return {**info.engine_paths(), "model_metadata": model.get("metadata") or {}}
 
     def retry(self, work_id: str) -> bool:
         work = self._repo.get(work_id)
@@ -915,23 +926,21 @@ class WorkService:
         self._purge_work_cache(work_id, work)
         return True
 
-    @staticmethod
-    def _purge_work_dir(work_id: str) -> None:
+    def _purge_work_dir(self, work_id: str) -> None:
         """删除作品目录（校验其确实位于 WORKS_DIR 内，避免误删任意路径）。"""
         if not work_id:
             return
         try:
             base = config.WORKS_DIR.resolve()
-            target = (config.WORKS_DIR / work_id).resolve()
+            target = self._files.work_dir(work_id).resolve()
         except OSError:
             return
         # 仅允许删除 WORKS_DIR 下的子目录，防止 work_id 含 .. 等导致越界
         if target.parent != base or not target.exists():
             return
-        shutil.rmtree(target, ignore_errors=True)
+        self._files.remove_tree(target)
 
-    @staticmethod
-    def _purge_work_cache(work_id: str, work: dict[str, Any] | None = None) -> None:
+    def _purge_work_cache(self, work_id: str, work: dict[str, Any] | None = None) -> None:
         """删除作品关联的试听缓存和实时会话目录，不触碰用户导出的文件。"""
         if not work_id:
             return
@@ -953,7 +962,7 @@ class WorkService:
         session_dir = realtime_base / session_id
         try:
             if session_dir.parent == realtime_base and session_dir.is_dir():
-                shutil.rmtree(session_dir, ignore_errors=True)
+                self._files.remove_tree(session_dir)
         except OSError:
             return
 

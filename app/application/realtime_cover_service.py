@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import config
-from domain import InferenceParams
+from domain import InferenceParams, ModelInfo
 from domain.identity import new_id
 
 from .adapters import (
@@ -1288,10 +1288,7 @@ class RealtimeCoverService:
                 {
                     "model_id": model_id,
                     "name": record.get("name") or model_id,
-                    "framework": framework,
-                    "main_model_path": (record.get("main_model") or {}).get("path", ""),
-                    "main_config_path": (record.get("main_config") or {}).get("path", ""),
-                    "index_path": (record.get("index_file") or {}).get("path", ""),
+                    **ModelInfo.from_dict(record).engine_paths(),
                     "metadata": record.get("metadata") or {},
                     "params": model_params,
                 }

@@ -27,6 +27,8 @@ __all__ = [
     "AudioEnginePort",
     "AudioImportStorePort",
     "DataTransferPort",
+    "EditorProjectStorePort",
+    "WorkFilesPort",
     "EngineRegistryPort",
     "FfmpegGateway",
     "ItemRepository",
@@ -299,3 +301,47 @@ class DataTransferPort(Protocol):
         total_bytes: int,
         on_progress: Any,
     ) -> None: ...
+
+# ---- 本地文件访问（工作目录 / 编辑器工程） ----
+
+@runtime_checkable
+class WorkFilesPort(Protocol):
+    """作品工作目录与运行日志的文件系统访问。
+
+    用例层保留「什么时候清理、清理什么」的策略，实际的文件操作走这里。
+    """
+
+    def work_dir(self, work_id: str) -> Path: ...
+
+    def log_path(self, work_id: str, recorded: str | None = None) -> Path: ...
+
+    def read_text_tail(self, path: Path, lines: int) -> str: ...
+
+    def copy_tree(self, source: Path, destination: Path) -> bool: ...
+
+    def remove_tree(self, path: Path) -> None: ...
+
+    def list_entries(self, path: Path) -> list[Path]: ...
+
+
+@runtime_checkable
+class EditorProjectStorePort(Protocol):
+    """编辑器工程目录、渲染/波形缓存与工程包（zip）的文件访问。"""
+
+    def project_dir(self, project_id: str) -> Path: ...
+
+    def cache_path(self, name: str) -> Path: ...
+
+    def audio_data_uri(self, source: Path, *, exact: bool = False) -> str: ...
+
+    def read_bytes(self, path: Path) -> bytes | None: ...
+
+    def write_bytes(self, path: Path, data: bytes) -> bool: ...
+
+    def exists(self, path: Path) -> bool: ...
+
+    def remove(self, path: Path) -> None: ...
+
+    def export_zip(self, entries: Any, destination: Path) -> bool: ...
+
+    def extract_zip(self, source: Path, destination: Path) -> list[str]: ...

@@ -38,9 +38,15 @@
 
 纯业务规则，无 I/O、无框架、可单测：
 
-- `entities.py`：`ModelInfo` / `Work` / `PipelineStep` / `InferenceParams` 等实体与值对象；
+- `entities.py`：`ModelInfo` / `Work` / `PipelineStep` / `InferenceParams` 等实体与值对象。
+  其中 `InferenceParams.from_dict` 是所有推理入口的参数归一化点，`ModelInfo.engine_paths`
+  是「模型记录 → 引擎文件路径」的唯一映射（作品/编辑器/实时翻唱三个服务共用），
+  `PipelineStep` 负责流水线步骤的初始状态，`apply_step_status` 负责状态迁移校验；
+  `Work` 只用于作品创建（记录携带大量扩展字段，故不提供有损的 `from_dict`）；
 - `enums.py`：`JobStatus` / `StepStatus` / `ModelType`；
 - `audio_editor.py`：时间轴工程、轨道、片段实体；
+- `audio_editor_rules.py`：工程/效果/包络归一化、时长与拉伸度量、片段与轨道查找、波形重算判定；
+- `lyrics.py`：LRC 与普通 TXT 歌词解析、按比例自动配时、由静音区间推导演唱范围；
 - `workflow_graph.py`：自定义工作流的节点图模型、图校验与拓扑排序；
 - `work_request.py`：任务创建请求的业务规则（模式、工作流、模型、分句、参考音频）；
 - `vocal_enhancement.py`：歌声增强等级、强度归一化与设置解析规则；
@@ -53,9 +59,11 @@
 
 - 作品与推理：`work_service`、`conversion_service`、`realtime_cover_service`；
 - 模型：`model_service`、`model_hub_service`；
-- 编辑器与媒体：`audio_editor_service`、`media_service`（试听/导出/时长）、
+- 编辑器与媒体：`audio_editor_service`（工程/轨道/片段与插件会话）、
+  `editor_render_service`（渲染、预览、波形）、`media_service`（试听/导出/时长）、
   `audio_import_service`（拖拽与分块上传）、`theme_media_service`（背景媒体）；
-- 其他：`music_service`、`plugin_service`、`system_service`、
+- 其他：`music_service`、`plugin_service`（插件安装/运行时）、
+  `plugin_market.py`（插件市场解析规则）、`system_service`、
   `data_maintenance_service`（数据目录查看/切换/迁移）。
 
 `ports.py` 定义仓储与网关协议，`adapters.py` 是唯一的默认适配器接缝：
@@ -71,7 +79,9 @@
 
 ### `app/infrastructure/` — 适配层
 
-- 存储：`storage.py`（JSON 仓储）；`theme_media.py`、`audio_import.py`（本地媒体落盘）
+- 存储：`storage.py`（JSON 仓储）；`theme_media.py`、`audio_import.py`（本地媒体落盘）、
+  `work_files.py`（作品工作目录与运行日志）、`editor_project_store.py`（编辑器工程目录、
+  渲染/波形缓存、工程包 zip）、`data_transfer.py`（数据目录迁移搬运）
 - 音频：`ffmpeg_tool.py`、`audio_engine.py`、`ffmpeg` 之上的渲染能力
 - 分离与推理：`uvr_tool.py`、`pymss_tool.py`、`*_engine.py`、`*_worker.py`
 - 系统集成：`clipboard.py`、`system_audio.py`、`juce_vst3_host.py`、`window_theme.py`、`single_instance.py`
@@ -97,32 +107,49 @@
 
 ## 迁移台账
 
-已收敛的违例：
+已收敛（全部完成）：
 
 - 组合根从 `api/bridge.py` 移到 `app/composition.py`，表现层不再 import 基础设施；
 - 用例层 42 处 `from infrastructure...` 全部改为 `application.ports` / `application.adapters`；
 - 工作流节点图、歌声增强规则、ID 与体积格式化下沉到 `domain/`；
-- 主题媒体、音频导入、作品试听/导出、VST3 目录扫描从表现层迁出，
-  分别落到 `theme_media_service`、`audio_import_service`、`media_service`、`plugin_service`；
+- 主题媒体、音频导入、作品试听/导出、VST3 目录扫描从表现层迁出；
 - 数据目录查看/切换/迁移整段（约 500 行）迁到 `DataMaintenanceService`，
-  文件系统能力落到 `infrastructure/data_transfer.py`（`DataTransferPort`），
-  `api/bridge.py` 只剩转发，覆盖见 `app/tests/test_data_maintenance.py`；
-- 任务创建请求规则（模式 / 工作流 / 模型 / 分句 / SeedVC 参考音频）集中到
-  `domain/work_request.py`，由 `WorkService.validate_request` 编排；
-  HTTP 适配器只保留上传件解析与错误映射，覆盖见 `app/tests/test_work_request.py`；
-- HTTP 层不再访问门面私有成员，改用 `facade.models` / `facade.editor` /
-  `facade.work_stem_path` / `facade.validate_work_request`。
+  文件系统能力落到 `infrastructure/data_transfer.py`；
+- 任务创建请求规则集中到 `domain/work_request.py`，由 `WorkService.validate_request` 编排，
+  HTTP 适配器只保留上传件解析与错误映射；
+- HTTP 层不再访问门面私有成员（`facade.models` / `facade.editor` / `facade.work_stem_path` /
+  `facade.validate_work_request`）；
+- 领域实体承担真实职责：`ModelInfo.engine_paths` 收敛三处重复映射、
+  `PipelineStep` + `apply_step_status` 统一流水线步骤与状态校验、
+  框架判定由 `config` 委托领域层，删除无人调用的 `Work.from_dict`；
+- 编辑器纯规则下沉到 `domain/audio_editor_rules.py` 与 `domain/lyrics.py`
+  （用例层保留同名薄封装），覆盖见 `app/tests/test_domain_editor_rules.py`；
+- 用例层不再直接做文件 I/O：作品工作目录/日志走 `WorkFilesPort`（`infrastructure/work_files.py`），
+  编辑器工程目录、渲染/波形缓存、音频 data URI、工程包 zip 走 `EditorProjectStorePort`
+  （`infrastructure/editor_project_store.py`），两者由组合根显式注入；
+- `audio_editor_service` 按用例拆分：渲染/预览/波形移到 `application/editor_render_service.py`，
+  `plugin_service` 的市场解析规则移到 `application/plugin_market.py`；
+- 重新审视后确认无需清理的点：`JobStatus` / `StepStatus` / `ModelType` 枚举、
+  `EditorClip/Track/Project` 实体、`InferenceParams` 均在生产路径上被使用（见
+  `app/tests/test_domain_entities.py`、`app/tests/test_domain_editor_rules.py`）。
 
-仍存在的债务（按优先级，属于持续演进项）：
+## 架构约定（不是债务）
 
-1. 用例层仍有直接的文件 I/O：编辑器工程包（zip）导入导出、作品运行日志、
-   渲染缓存与波形缓存。下一步把它们收敛到端口，例如
-   `ProjectBundleStore`（读写工程包）与 `WorkFilesPort`（工作目录、日志、缓存），
-   实现放在 `infrastructure`。
-2. 多数用例服务仍以 `dict[str, Any]` 作为内部传输结构，实体只在作品创建、
-   编辑器工程、模型记录等路径使用。建议按用例逐个归一化入参为领域实体/值对象，
-   边界（Bridge/HTTP）继续使用 DTO——边界 DTO 本身不是违例。
-3. `audio_editor_service`（约 3600 行）与 `plugin_service` 仍偏大，可按用例继续拆分
-   （时间轴渲染、片段重推理、插件市场、插件运行时）。
-4. 编辑器工程与效果的归一化规则（`_clean_*`）仍在用例层，可继续下沉到
-   `domain/audio_editor.py`，作为工程实体的不变量。
+以下几点是**有意的设计选择**，后续改动请保持，而不是当作待清理项：
+
+1. **边界 DTO**：Bridge / FastAPI 的入参出参与仓储里持久化的作品记录都是 `dict`
+   （记录含大量前端消费的扩展字段）。领域实体负责规则与映射，边界保持 JSON 友好的
+   字典；不要为了「纯实体」把这些结构改成对象，那会破坏前端契约。
+2. **服务规模**：拆分依据是「一个用例集合」，不是行数。`audio_editor_service`
+   仍包含工程生命周期、片段编辑、插件会话与重推理编排，这些共享同一批不变量，
+   不宜继续机械拆分；新增用例优先新建服务，不要继续加进已有大类。
+3. **默认适配器接缝**：`application/adapters.py` 允许函数内延迟导入基础设施，
+   仅用于「组合根未注入时」的默认实现与单测；生产路径由 `composition.py` 显式注入，
+   新代码优先走显式注入。
+4. **进程内音频工具调用**：FFmpeg / UVR / 引擎都是端口后面的适配器，
+   用例层可以编排它们的调用顺序，但不能在模块级 import 它们。
+
+## 校验
+
+    app\.venv\Scripts\python.exe -m pytest app\tests -q
+    app\.venv\Scripts\python.exe -m pytest app\tests\test_architecture.py -q

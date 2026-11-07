@@ -9,6 +9,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from domain.entities import guess_framework as _domain_guess_framework
+from domain.entities import normalize_framework as _domain_normalize_framework
+
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
 APP_VERSION = "0.1.0"
@@ -1088,24 +1091,16 @@ MODELHUB_FRAMEWORKS: dict[str, str] = {
 MODELHUB_DEFAULT_FRAMEWORK = "so-vits-svc"
 
 
+# 架构 id 的判定规则属于领域层（见 domain.entities.normalize_framework），
+# 这里只保留面向 UI 的显示名映射。
 def modelhub_normalize_framework(framework: str | None) -> str:
     """把任意输入规整为合法的架构 id（非法回退默认）。"""
-    fw = (framework or "").strip().lower()
-    return fw if fw in MODELHUB_FRAMEWORKS else MODELHUB_DEFAULT_FRAMEWORK
+    return _domain_normalize_framework(framework)
 
 
 def modelhub_guess_framework(model_type: str | None) -> str:
     """根据本地模型的 type（ModelType 值）推断默认架构 id。"""
-    t = (model_type or "").strip().lower()
-    if "seed" in t:
-        return "seed-vc"
-    if "rvc" in t:
-        return "rvc"
-    if "ddsp" in t:
-        return "ddsp-svc"
-    if "so-vits" in t or "sovits" in t or t == "svc":
-        return "so-vits-svc"
-    return MODELHUB_DEFAULT_FRAMEWORK
+    return _domain_guess_framework(model_type)
 
 
 # 上传 / 下载暂存目录

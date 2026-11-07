@@ -343,6 +343,7 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 ## 🤝 贡献者
 
 感谢每一位参与 XB-SVCB 开发和维护的贡献者。
+> <a href="https://github.com/SDIJF1521" title="SDIJF1521 · YGXB"><img src="https://images.weserv.nl/?url=github.com/SDIJF1521.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="SDIJF1521" /></a>&nbsp;&nbsp;<a href="https://github.com/emptyelse" title="emptyelse"><img src="https://images.weserv.nl/?url=github.com/emptyelse.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="emptyelse" /></a>&nbsp;&nbsp;<a href="https://github.com/GFMAA" title="GFMAA"><img src="https://images.weserv.nl/?url=github.com/GFMAA.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="GFMAA" /></a>&nbsp;&nbsp;<a href="https://github.com/SugarCatCat" title="SugarCatCat · 糖猫猫"><img src="https://images.weserv.nl/?url=github.com/SugarCatCat.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="SugarCatCat" /></a>
 
 贡献者：**SDIJF1521（YGXB） · emptyelse · GFMAA · SugarCatCat（糖猫猫）**。点击头像可查看个人主页；完整记录见[贡献者页面](https://github.com/SDIJF1521/xb-svcb/graphs/contributors)。欢迎阅读 [贡献指南](CONTRIBUTING.md) 并参与项目。
 

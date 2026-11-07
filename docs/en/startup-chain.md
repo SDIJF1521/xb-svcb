@@ -10,7 +10,7 @@ This document describes the actual startup relationship between the Python backe
       -> app/.venv/Scripts/python.exe app/main.py
       -> app/main.py
       -> resolve_url()
-      -> build_api()
+      -> app/composition.py: build_api()
       -> pywebview.create_window(..., js_api=api)
       -> webview.start()
 
@@ -18,7 +18,16 @@ Production mode loads `web/dist/index.html` through the built-in static HTTP ser
 
 ## 2. Backend Composition
 
-`build_api()` is the composition root. It connects paths, storage, model services, work services, conversion services, editor services, real-time services, and plugin services to the API facade. Calls to `window.pywebview.api.*` ultimately reach these application services.
+`build_api()` in `app/composition.py` is the composition root: it creates the infrastructure adapters
+(FFmpeg, UVR, PyMSS, engines, JSON repositories, theme media / audio import / work files / editor project
+storage, data-directory transfer), injects them into the use-case services in `app/application/`
+(works, conversion, models, editor and rendering, real-time, plugins, media, data maintenance), and
+assembles the `Api` facade from `api/bridge.py`. Use-case services depend on the ports declared in
+`application/ports.py` and never import infrastructure; calls to `window.pywebview.api.*` end up in those
+use-case services.
+
+The layering rules and port catalogue live in [Layering Constraints (DDD)](../ddd-architecture.md) and are
+enforced by `app/tests/test_architecture.py`.
 
 FastAPI is optional. After a user starts it in the application, Uvicorn listens from a background thread in the GUI process. HTTP routes call the same API and services instead of creating a second application core.
 
@@ -35,7 +44,7 @@ Model worker interpreters are routed through `runtime.json`. CUDA126/CUDA128 rou
       -> EngineRegistry: route by framework
       -> Model worker: load checkpoint and infer
       -> Vocal enhancement when enabled
-      -> FFmpeg: mix, transcode, and output
+      -> FFmpeg: balance vocal vs backing by measured LUFS, then mix, transcode, and output
       -> Save work and task state
       -> Frontend polling/push displays the result
 

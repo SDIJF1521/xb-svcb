@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
 import config
-from domain import InferenceParams, JobStatus, StepStatus
+from domain import InferenceParams, JobStatus, PipelineStep, StepStatus, apply_step_status
 from domain.formatting import file_size_label
 from domain.vocal_enhancement import VocalEnhancementControls, enhancement_settings
 from domain.workflow_graph import (
@@ -59,31 +59,33 @@ def _wants_vocal_output(work: dict[str, Any]) -> bool:
     )
 
 
+def _steps(*blueprints: tuple[str, str]) -> list[dict[str, Any]]:
+    """按 (key, label) 蓝图生成流水线步骤，状态由领域实体统一初始化。"""
+    return [PipelineStep(key=key, label=label).to_dict() for key, label in blueprints]
+
+
 def default_steps(
     enhancement: bool = False,
     preprocess: bool = True,
     harmony_removal: bool = False,
 ) -> list[dict[str, Any]]:
-    steps = []
+    blueprints: list[tuple[str, str]] = []
     if preprocess:
-        steps.extend([
-            {"key": "separate", "label": "前期人声分离", "status": StepStatus.WAIT.value},
-            *([{"key": "harmony", "label": "可选去混响净化", "status": StepStatus.WAIT.value}] if harmony_removal else []),
-            {"key": "repair_input", "label": "分离人声修复", "status": StepStatus.WAIT.value},
-        ])
-    steps.extend([
-        {"key": "f0", "label": "F0 提取", "status": StepStatus.WAIT.value},
-        {"key": "infer", "label": "模型推理", "status": StepStatus.WAIT.value},
-        {"key": "repair_output", "label": "输出人声修复", "status": StepStatus.WAIT.value},
-    ])
-    if enhancement:
-        steps.append(
-            {"key": "enhance", "label": "AI 歌声增强", "status": StepStatus.WAIT.value}
-        )
-    steps.append(
-        {"key": "mix", "label": "混音合成", "status": StepStatus.WAIT.value}
+        blueprints.append(("separate", "前期人声分离"))
+        if harmony_removal:
+            blueprints.append(("harmony", "可选去混响净化"))
+        blueprints.append(("repair_input", "分离人声修复"))
+    blueprints.extend(
+        [
+            ("f0", "F0 提取"),
+            ("infer", "模型推理"),
+            ("repair_output", "输出人声修复"),
+        ]
     )
-    return steps
+    if enhancement:
+        blueprints.append(("enhance", "AI 歌声增强"))
+    blueprints.append(("mix", "混音合成"))
+    return _steps(*blueprints)
 
 
 def default_steps_multi(
@@ -92,37 +94,34 @@ def default_steps_multi(
     harmony_removal: bool = False,
 ) -> list[dict[str, Any]]:
     """多模型混合翻唱的流水线步骤。"""
-    steps = []
+    blueprints: list[tuple[str, str]] = []
     if preprocess:
-        steps.extend([
-            {"key": "separate", "label": "前期人声分离", "status": StepStatus.WAIT.value},
-            *([{"key": "harmony", "label": "可选去混响净化", "status": StepStatus.WAIT.value}] if harmony_removal else []),
-            {"key": "repair_input", "label": "分离人声修复", "status": StepStatus.WAIT.value},
-        ])
-    steps.extend([
-        {"key": "split", "label": "歌词分割", "status": StepStatus.WAIT.value},
-        {"key": "infer", "label": "逐段推理", "status": StepStatus.WAIT.value},
-        {"key": "merge", "label": "人声合并", "status": StepStatus.WAIT.value},
-        {"key": "repair_output", "label": "输出人声修复", "status": StepStatus.WAIT.value},
-    ])
-    if enhancement:
-        steps.append(
-            {"key": "enhance", "label": "AI 歌声增强", "status": StepStatus.WAIT.value}
-        )
-    steps.append(
-        {"key": "mix", "label": "混音合成", "status": StepStatus.WAIT.value}
+        blueprints.append(("separate", "前期人声分离"))
+        if harmony_removal:
+            blueprints.append(("harmony", "可选去混响净化"))
+        blueprints.append(("repair_input", "分离人声修复"))
+    blueprints.extend(
+        [
+            ("split", "歌词分割"),
+            ("infer", "逐段推理"),
+            ("merge", "人声合并"),
+            ("repair_output", "输出人声修复"),
+        ]
     )
-    return steps
+    if enhancement:
+        blueprints.append(("enhance", "AI 歌声增强"))
+    blueprints.append(("mix", "混音合成"))
+    return _steps(*blueprints)
 
 
 def default_steps_ai_enhancement() -> list[dict[str, Any]]:
     """独立 AI 增强任务：原曲分析、翻唱人声准备、增强和重新混音。"""
-    return [
-        {"key": "reference", "label": "原曲人声与伴奏分析", "status": StepStatus.WAIT.value},
-        {"key": "cover_vocal", "label": "翻唱人声准备", "status": StepStatus.WAIT.value},
-        {"key": "enhance", "label": "AI 歌声增强", "status": StepStatus.WAIT.value},
-        {"key": "mix", "label": "增强成品混音", "status": StepStatus.WAIT.value},
-    ]
+    return _steps(
+        ("reference", "原曲人声与伴奏分析"),
+        ("cover_vocal", "翻唱人声准备"),
+        ("enhance", "AI 歌声增强"),
+        ("mix", "增强成品混音"),
+    )
 
 
 class ConversionService:
@@ -147,8 +146,7 @@ class ConversionService:
     _DROPOUT_RESIDUAL_MAX_SECONDS = 4.0
 
     @classmethod
-    def _high_pitch_guard_rounds(
-        cls, params: InferenceParams, *, realtime: bool = False
+    def _high_pitch_guard_rounds(        cls, params: InferenceParams, *, realtime: bool = False
     ) -> int:
         """Return the user-selected guarded retry count.
 
@@ -441,10 +439,8 @@ class ConversionService:
         self._repo.update(work["id"], work)
 
     def _set_step(self, work: dict[str, Any], key: str, status: str) -> None:
-        for step in work["steps"]:
-            if step["key"] == key:
-                step["status"] = status
-                break
+        # 状态值必须是 StepStatus 的合法取值，规则由领域层统一维护。
+        apply_step_status(work["steps"], key, status)
 
     @staticmethod
     def _enhancement_settings(

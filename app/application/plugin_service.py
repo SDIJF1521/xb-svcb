@@ -20,15 +20,20 @@ import zipfile
 from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 
 import config
+from .plugin_market import (
+    is_github_url,
+    is_valid_id,
+    market_records,
+    normalise_market_item,
+    parse_market_payload,
+)
 from .ports import SettingsRepository
 
 
-_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,63}$")
 _MANIFEST_NAME = "xb-svcb-plugin.json"
 _MAX_BUNDLE_BYTES = 20 * 1024 * 1024
 _MAX_MANIFEST_BYTES = 512 * 1024
@@ -73,7 +78,7 @@ class PluginService:
             self._settings.set("plugins_enabled", bool(payload.get("enabled")))
         if "market_url" in payload:
             raw = str(payload.get("market_url") or "").strip()
-            if raw and not self._is_github_url(raw):
+            if raw and not is_github_url(raw):
                 return {"ok": False, "error": "插件市场仅支持 GitHub HTTPS raw 或 API 地址。", **self.status()}
             self._settings.set("plugin_market_url", raw)
         return {"ok": True, **self.status()}
@@ -267,13 +272,13 @@ class PluginService:
 
     def install_from_market(self, url: str) -> dict[str, Any]:
         raw = str(url or "").strip()
-        if not self._is_github_url(raw):
+        if not is_github_url(raw):
             return {"ok": False, "error": "仅允许从 GitHub HTTPS 地址安装插件。"}
         try:
             with httpx.Client(timeout=30, follow_redirects=True) as client:
                 response = client.get(raw)
                 response.raise_for_status()
-                if not self._is_github_url(str(response.url)):
+                if not is_github_url(str(response.url)):
                     return {"ok": False, "error": "GitHub 下载跳转到了不受信任的站点。"}
                 if len(response.content) > _MAX_BUNDLE_BYTES:
                     return {"ok": False, "error": "插件包超过 20 MB 限制。"}
@@ -303,21 +308,21 @@ class PluginService:
         url = str(self._settings.get("plugin_market_url", "") or "").strip()
         if not url:
             return {"ok": False, "error": "请先填写插件市场索引地址。", "items": []}
-        if not self._is_github_url(url):
+        if not is_github_url(url):
             return {"ok": False, "error": "插件市场仅支持 GitHub HTTPS raw 或 API 地址。", "items": []}
         try:
             response = httpx.get(url, timeout=20, follow_redirects=True)
             response.raise_for_status()
-            if not self._is_github_url(str(response.url)):
+            if not is_github_url(str(response.url)):
                 return {"ok": False, "error": "插件市场跳转到了不受信任的站点。", "items": []}
-            payload = self._parse_market_payload(response.text)
+            payload = parse_market_payload(response.text)
         except httpx.HTTPError as exc:
             return {"ok": False, "error": f"读取插件市场失败：{exc}", "items": []}
         except ValueError as exc:
             return {"ok": False, "error": f"插件市场索引格式无效：{exc}", "items": []}
         items = []
-        for item in self._market_records(payload):
-            normalized = self._normalise_market_item(item)
+        for item in market_records(payload):
+            normalized = normalise_market_item(item)
             if normalized:
                 items.append(normalized)
         return {"ok": True, "items": items}
@@ -444,7 +449,7 @@ class PluginService:
             item = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None
-        if not isinstance(item, dict) or not self._valid_id(str(item.get("id") or "")):
+        if not isinstance(item, dict) or not is_valid_id(str(item.get("id") or "")):
             return None
         if not all(isinstance(item.get(key), str) and item[key].strip() for key in ("name", "version")):
             return None
@@ -490,18 +495,20 @@ class PluginService:
             "pages": pages, "actions": actions, "workflow": item.get("workflow") if isinstance(item.get("workflow"), dict) else {},
         }
 
-    def _valid_page(self, page: dict[str, Any]) -> bool:
-        if not self._valid_id(str(page.get("id") or "")) or not str(page.get("title") or "").strip():
+    @staticmethod
+    def _valid_page(page: dict[str, Any]) -> bool:
+        if not is_valid_id(str(page.get("id") or "")) or not str(page.get("title") or "").strip():
             return False
         fields = page.get("fields", [])
         return isinstance(fields, list) and all(
-            isinstance(field, dict) and self._valid_id(str(field.get("id") or ""))
+            isinstance(field, dict) and is_valid_id(str(field.get("id") or ""))
             and field.get("type") in _ALLOWED_COMPONENTS for field in fields
         )
 
-    def _valid_action(self, action: dict[str, Any]) -> bool:
+    @staticmethod
+    def _valid_action(action: dict[str, Any]) -> bool:
         if not (
-            self._valid_id(str(action.get("id") or ""))
+            is_valid_id(str(action.get("id") or ""))
             and action.get("type") in _ALLOWED_ACTIONS
             and bool(str(action.get("label") or "").strip())
         ):
@@ -643,93 +650,6 @@ class PluginService:
         return not PurePosixPath(raw).is_absolute()
 
     @staticmethod
-    def _parse_market_payload(raw: str) -> Any:
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            without_blocks = re.sub(r"/\*.*?\*/", "", raw, flags=re.S)
-            without_line_comments = re.sub(r"(?m)^\s*//.*$", "", without_blocks)
-            without_trailing_commas = re.sub(r",(\s*[}\]])", r"\1", without_line_comments)
-            try:
-                return json.loads(without_trailing_commas)
-            except json.JSONDecodeError as exc:
-                raise ValueError(str(exc)) from exc
-
-    @staticmethod
-    def _market_records(payload: Any) -> list[Any]:
-        if isinstance(payload, list):
-            return payload
-        if isinstance(payload, dict):
-            records = payload.get("plugins")
-            if isinstance(records, list):
-                return records
-            records = payload.get("items")
-            if isinstance(records, list):
-                return records
-        return []
-
-    @staticmethod
-    def _market_id(value: str) -> str:
-        cleaned = re.sub(r"[^a-z0-9._-]+", "-", value.lower()).strip("._-")
-        if len(cleaned) < 3:
-            cleaned = f"plugin-{cleaned}".strip("-")
-        return cleaned[:64]
-
-    def _normalise_market_item(self, item: Any) -> dict[str, Any] | None:
-        if not isinstance(item, dict):
-            return None
-        module_name = str(item.get("module_name") or item.get("id") or "").strip()
-        raw_id = str(item.get("id") or module_name or item.get("project_link") or "").strip()
-        plugin_id = self._market_id(raw_id)
-        if not plugin_id or not self._valid_id(plugin_id):
-            return None
-        project_link = str(item.get("project_link") or "").strip()
-        homepage = str(
-            item.get("homepage")
-            or item.get("homepage_url")
-            or item.get("repository")
-            or item.get("repo")
-            or ""
-        ).strip()
-        if not homepage and project_link:
-            homepage = project_link if project_link.startswith("https://") else f"https://pypi.org/project/{project_link}/"
-        bundle_url = str(
-            item.get("bundle_url")
-            or item.get("download_url")
-            or item.get("release_url")
-            or ""
-        ).strip()
-        if bundle_url and not self._is_github_url(bundle_url):
-            bundle_url = ""
-        tags = []
-        raw_tags = item.get("tags")
-        if isinstance(raw_tags, list):
-            for tag in raw_tags:
-                if isinstance(tag, dict):
-                    label = str(tag.get("label") or tag.get("name") or "").strip()
-                    if label:
-                        tags.append({"label": label, "color": str(tag.get("color") or "")})
-                else:
-                    label = str(tag or "").strip()
-                    if label:
-                        tags.append({"label": label, "color": ""})
-        author = str(item.get("author") or item.get("author_name") or item.get("author_id") or "")
-        description = str(item.get("description") or item.get("desc") or item.get("summary") or "")
-        name = str(item.get("name") or module_name or project_link or plugin_id)
-        return {
-            "id": plugin_id,
-            "module_name": module_name,
-            "project_link": project_link,
-            "name": name,
-            "version": str(item.get("version") or ""),
-            "description": description,
-            "author": author,
-            "bundle_url": bundle_url,
-            "homepage": homepage,
-            "tags": tags,
-            "is_official": bool(item.get("is_official", False)),
-        }
-    @staticmethod
     def _write_plugin_error(plugin_id: str, detail: str) -> None:
         if not detail.strip():
             return
@@ -756,21 +676,6 @@ class PluginService:
             if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]{0,40}", str(key)):
                 result = result.replace("{{" + str(key) + "}}", str(item))
         return result
-
-    @staticmethod
-    def _valid_id(value: str) -> bool:
-        return bool(_ID_RE.fullmatch(value))
-
-    @staticmethod
-    def _is_github_url(value: str) -> bool:
-        parsed = urlparse(value)
-        host = (parsed.hostname or "").lower()
-        return parsed.scheme == "https" and (
-            host in {"github.com", "api.github.com"}
-            or host.endswith(".github.com")
-            or host == "githubusercontent.com"
-            or host.endswith(".githubusercontent.com")
-        )
 
     # ---- 效果器插件（VST3）目录扫描 ----
 

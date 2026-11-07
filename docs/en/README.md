@@ -16,6 +16,7 @@ All current Markdown documentation under `docs/` is available in English. Releas
 
 ## Contributors
 
+- [Layering constraints (DDD)](ddd-architecture.md): dependency rules, ports and adapters, the composition root and placement guidance for new features; enforced by `app/tests/test_architecture.py`.
 - [System architecture](architecture.md): responsibilities and connections between the Python backend, Vue frontend, workers, queues, models, and audio tools.
 - [Startup and inference flow](startup-chain.md): application startup, normal jobs, and real-time processing.
 - [Development and release](development.md): repository layout, tests, frontend builds, JUCE host, and installer builds.

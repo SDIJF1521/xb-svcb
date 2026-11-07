@@ -55,6 +55,10 @@ Presentation layer:
 - `bridge.py` defines the API exposed to Vue. The composition root is `build_api()` in `app/composition.py`, which wires infrastructure and application services.
 - `http_server.py` creates the FastAPI/Uvicorn service that users start and stop manually.
 
+### `app/composition.py`
+
+The composition root: creates the infrastructure adapters and repositories, injects the use-case services and assembles the presentation-layer `Api`; `main.py` only calls its `build_api()`.
+
 ### `app/application/`
 
 Use-case and orchestration layer. It contains services for models, works, music sources, audio editing, real-time conversion, plugins, and conversion tasks. Normal inference tasks enter the serial queue in `conversion_service.py`.

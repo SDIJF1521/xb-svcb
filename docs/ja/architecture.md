@@ -55,6 +55,10 @@ XB-SVCBはローカル優先のデスクトップアプリケーションです�
 - `bridge.py`: Vueへ公開するAPI。構成ルートは`app/composition.py`の`build_api()`で、インフラとアプリケーションサービスを組み立てます。
 - `http_server.py`: 手動で開始・停止するFastAPI/Uvicornサービス。
 
+### `app/composition.py`
+
+構成ルート。インフラのアダプタとリポジトリを作成し、ユースケースサービスへ注入して表示層の`Api`を組み立てます。`main.py`は`build_api()`を呼ぶだけです。
+
 ### `app/application/`
 
 ユースケースと処理調整層です。モデル、作品、音楽ソース、音声編集、リアルタイム変換、プラグイン、変換タスクのサービスを含みます。通常の推論タスクは`conversion_service.py`から直列キューへ入ります。

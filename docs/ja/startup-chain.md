@@ -10,7 +10,7 @@ Pythonバックエンドとモデルランタイムの実際の起動関係を�
       -> app/.venv/Scripts/python.exe app/main.py
       -> app/main.py
       -> resolve_url()
-      -> build_api()
+      -> app/composition.py: build_api()
       -> pywebview.create_window(..., js_api=api)
       -> webview.start()
 
@@ -18,7 +18,12 @@ Pythonバックエンドとモデルランタイムの実際の起動関係を�
 
 ## 2. バックエンドの構成
 
-`build_api()`は構成ルートです。パス、保存、モデル、作品、変換、エディター、リアルタイム、プラグインサービスをAPI facadeへ接続します。`window.pywebview.api.*`の呼び出しは最終的にこれらのApplication servicesへ届きます。
+構成ルートは`app/composition.py`の`build_api()`です。インフラのアダプタ（FFmpeg、UVR、PyMSS、各エンジン、JSONリポジトリ、
+テーマメディア／音声取り込み／作品ファイル／エディター工程ストア、データディレクトリ移行）を作成し、
+`app/application/`のユースケースサービス（作品、変換、モデル、エディターとレンダリング、リアルタイム、プラグイン、メディア、データ保守）へ注入したうえで、
+`api/bridge.py`の`Api`として組み立てます。ユースケース層は`application/ports.py`のポートだけに依存し、インフラをimportしません。
+
+レイヤー制約とポート一覧は[レイヤー制約（DDD）](../ddd-architecture.md)にあり、`app/tests/test_architecture.py`が自動検証します。`window.pywebview.api.*`の呼び出しは最終的にこれらのApplication servicesへ届きます。
 
 FastAPIは任意機能です。アプリ内で開始すると、UvicornがGUIプロセスのバックグラウンドスレッドで待ち受けます。HTTP routeは同じAPIとサービスを呼び、別の業務コアを作りません。
 
@@ -35,7 +40,7 @@ Model workerのPythonは`runtime.json`で選択します。CUDA126/CUDA128では
       -> EngineRegistry: frameworkで選択
       -> Model worker: checkpoint読込と推論
       -> 必要に応じてVocal enhancement
-      -> FFmpeg: ミックス、変換、出力
+      -> FFmpeg: 計測LUFSでボーカルと伴奏のバランスを取ってからミックス、変換、出力
       -> 作品とタスク状態を保存
       -> フロントエンドのpolling/pushで結果表示
 

@@ -45,6 +45,8 @@ from infrastructure.theme_media import ThemeMediaStore
 from infrastructure.uvr_tool import UvrTool
 from infrastructure.vocal_enhancement import VocalEnhancementProcessor
 from infrastructure.audio_import import AudioImportStore
+from infrastructure.editor_project_store import EditorProjectStore
+from infrastructure.work_files import WorkFiles
 from infrastructure.data_transfer import DataTransfer
 from infrastructure.window_theme import apply as apply_window_theme
 
@@ -79,11 +81,22 @@ def build_api() -> Api:
     conversion_service = ConversionService(
         works_repo, ffmpeg, uvr, engines, vocal_enhancement, pymss
     )
-    work_service = WorkService(works_repo, conversion_service, model_service, settings)
+    work_files = WorkFiles()
+    work_service = WorkService(
+        works_repo, conversion_service, model_service, settings, files=work_files
+    )
     music_service = MusicService(settings)
     hub_service = ModelHubService(settings, model_service)
     editor_service = AudioEditorService(
-        editor_repo, works_repo, model_service, ffmpeg, uvr, engines, vocal_enhancement, pymss
+        editor_repo,
+        works_repo,
+        model_service,
+        ffmpeg,
+        uvr,
+        engines,
+        vocal_enhancement,
+        pymss,
+        store=EditorProjectStore(ffmpeg),
     )
     plugin_service = PluginService(settings)
     realtime_cover_service = RealtimeCoverService(model_service, ffmpeg, uvr, engines)

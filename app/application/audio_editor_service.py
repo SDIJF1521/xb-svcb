@@ -2,35 +2,55 @@
 
 from __future__ import annotations
 
-import base64
 import copy
 import json
 import re
 import shutil
-import struct
 import threading
 import wave
 import zipfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 import config
-from domain import EditorClip, EditorProject, EditorTrack, InferenceParams
+from domain import EditorClip, EditorProject, EditorTrack, InferenceParams, ModelInfo
 from domain.identity import new_id
+from domain.audio_editor_rules import (
+    clean_effects,
+    clean_project,
+    clean_volume_envelope,
+    clip_stretch,
+    find_clip,
+    find_clip_ref,
+    find_effect,
+    is_plugin_effect,
+    normalize_format,
+    project_duration,
+    should_render_waveform,
+)
+from domain.lyrics import (
+    auto_time_lyric_lines,
+    parse_lyric_lines,
+    parse_plain_lyric_lines,
+    speech_ranges_from_silence,
+)
 from domain.vocal_enhancement import VocalEnhancementControls
 
 from .adapters import (
     audio_engine as create_audio_engine,
     audio_files_from_clipboard,
     copy_file_to_clipboard,
+    editor_project_store as create_editor_project_store,
     ffmpeg_cache_key,
     plugin_host as create_plugin_host,
     pymss_tool as create_pymss_tool,
     vocal_enhancement as create_vocal_enhancement,
 )
+from .editor_render_service import RENDER_VERSION, EditorRenderService
 from .ports import (
     AudioEnginePort,
+    EditorProjectStorePort,
     EngineRegistryPort,
     FfmpegGateway,
     ItemRepository,
@@ -42,12 +62,17 @@ from .ports import (
 from .model_service import ModelService
 
 
+def _bundle_path(root: Path, arcname: str) -> Path:
+    """工程包成员名（posix 相对路径）→ 本地路径。"""
+    return root.joinpath(*PurePosixPath(arcname).parts)
+
+
 class AudioEditorService:
     """Timeline Project 的应用层服务。"""
 
     _HISTORY_LIMIT = 60
     _MIN_RERUN_DURATION = 1.0
-    _RENDER_VERSION = "channel-route-v9-scoped-effects-buses"
+    _RENDER_VERSION = RENDER_VERSION
     _HIGH_PITCH_THRESHOLD = 800.0
     _HIGH_PITCH_GUARD_SEMITONES = 7
     _PROJECT_BUNDLE_SCHEMA = "xb-audio-editor-project"
@@ -68,6 +93,7 @@ class AudioEditorService:
         pymss: PymssGateway | None = None,
         audio: AudioEnginePort | None = None,
         plugin_host: PluginHostPort | None = None,
+        store: EditorProjectStorePort | None = None,
     ) -> None:
         self._repo = repo
         self._works_repo = works_repo
@@ -75,13 +101,80 @@ class AudioEditorService:
         self._ffmpeg = ffmpeg
         self._uvr = uvr
         self._pymss = pymss or create_pymss_tool()
-        self._audio = audio or create_audio_engine(ffmpeg)
+        self._store = store if store is not None else create_editor_project_store()
         self._plugin_host = plugin_host or create_plugin_host()
         self._plugin_sessions: dict[str, dict[str, Any]] = {}
         self._engines = engines
         self._vocal_enhancement = vocal_enhancement or create_vocal_enhancement()
         self._rerun_jobs: dict[str, dict[str, Any]] = {}
         self._rerun_jobs_lock = threading.RLock()
+        self._render = EditorRenderService(
+            repo=repo,
+            audio=audio or create_audio_engine(ffmpeg),
+            ffmpeg=ffmpeg,
+            store=self._store,
+            save=self.save,
+        )
+
+    # ---- 端口与协作对象 ----
+
+    @property
+    def _store(self) -> EditorProjectStorePort:
+        """编辑器工程的文件访问端口（未注入时回落到默认适配器）。"""
+        store = self.__dict__.get("_editor_store")
+        if store is None:
+            store = create_editor_project_store()
+            self.__dict__["_editor_store"] = store
+        return store
+
+    @_store.setter
+    def _store(self, store: EditorProjectStorePort) -> None:
+        self.__dict__["_editor_store"] = store
+
+    @property
+    def _render(self) -> EditorRenderService:
+        """渲染/波形用例（懒创建，兼容不经 ``__init__`` 直接装配的调用方）。"""
+        service = self.__dict__.get("_render_service")
+        if service is None:
+            service = EditorRenderService(
+                repo=self._repo,
+                audio=None,
+                ffmpeg=self._ffmpeg,
+                store=self._store,
+                save=self.save,
+            )
+            self.__dict__["_render_service"] = service
+        return service
+
+    @_render.setter
+    def _render(self, service: EditorRenderService) -> None:
+        self.__dict__["_render_service"] = service
+
+    @property
+    def _audio(self) -> AudioEnginePort:
+        """时间线渲染引擎：读写都落在渲染子服务上，既有装配点保持不变。"""
+        return self._render._audio
+
+    @_audio.setter
+    def _audio(self, engine: AudioEnginePort) -> None:
+        self._render._audio = engine
+
+    @property
+    def _compute_waveform(self) -> Callable[..., list[float]]:
+        """波形采样实现（渲染子服务）；保留可替换入口以兼容既有调用方。"""
+        return self._render._compute_waveform
+
+    @_compute_waveform.setter
+    def _compute_waveform(self, compute: Callable[..., list[float]]) -> None:
+        self._render._compute_waveform = compute
+
+    def _editor_root(self) -> Path:
+        """编辑器工程根目录（与 ``project_dir`` 同源）。"""
+        return self._store.project_dir("")
+
+    def _cache_root(self) -> Path:
+        """编辑器缓存根目录（与 ``cache_path`` 同源）。"""
+        return self._store.cache_path("")
 
     def list(self) -> list[dict[str, Any]]:
         self._cleanup_orphan_project_dirs()
@@ -111,9 +204,9 @@ class AudioEditorService:
         if not stored_id or stored_id != project_id:
             return False
         try:
-            base = config.EDITOR_DIR.resolve()
-            cache_root = config.EDITOR_CACHE_DIR.resolve()
-            project_path = config.EDITOR_DIR / stored_id
+            base = self._editor_root().resolve()
+            cache_root = self._cache_root().resolve()
+            project_path = self._project_dir(stored_id)
             target = project_path.resolve()
         except (OSError, RuntimeError):
             return False
@@ -164,14 +257,14 @@ class AudioEditorService:
     def _cleanup_orphan_project_dirs(self) -> None:
         """清理数据库中已不存在的编辑工程目录，避免历史删除失败留下文件。"""
         try:
-            base = config.EDITOR_DIR.resolve()
+            base = self._editor_root().resolve()
             known = {str(item.get("id") or "") for item in self._repo.all()}
             if not base.exists():
                 return
             for candidate in base.iterdir():
                 if (
                     not candidate.is_dir()
-                    or candidate.name == config.EDITOR_CACHE_DIR.name
+                    or candidate.name == self._cache_root().name
                     or not candidate.name.startswith("edt_")
                     or candidate.name in known
                 ):
@@ -185,7 +278,7 @@ class AudioEditorService:
     def _cleanup_editor_cache_after_remove(self) -> None:
         """删除无工程所有者的编辑器缓存；最后一个工程删除时清空整个缓存目录。"""
         try:
-            cache_root = config.EDITOR_CACHE_DIR.resolve()
+            cache_root = self._cache_root().resolve()
             if not cache_root.exists():
                 return
             remaining = {str(item.get("id") or "") for item in self._repo.all()}
@@ -304,29 +397,21 @@ class AudioEditorService:
             "exported_at": self._now(),
             "project": project,
         }
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_name(destination.name + ".tmp")
+        # 工程描述先落成临时文件，再和素材一起交给文件访问适配层打包。
+        manifest_path = destination.with_name(destination.name + ".manifest.tmp")
+        if not self._store.write_bytes(
+            manifest_path,
+            json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
+        ):
+            raise ValueError("工程包写入失败")
         try:
-            with zipfile.ZipFile(
-                temporary,
-                "w",
-                compression=zipfile.ZIP_DEFLATED,
-                compresslevel=1,
-                allowZip64=True,
-            ) as archive:
-                archive.writestr(
-                    "project.json",
-                    json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
-                )
-                for source, member in sources.values():
-                    archive.write(source, member)
-            temporary.replace(destination)
-        except Exception:
-            try:
-                temporary.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+            if not self._store.export_zip(
+                [(manifest_path, "project.json"), *sources.values()],
+                destination,
+            ):
+                raise ValueError("工程包写入失败")
+        finally:
+            self._store.remove(manifest_path)
         return destination
 
     def import_bundle(self, source: Path) -> dict[str, Any]:
@@ -370,42 +455,42 @@ class AudioEditorService:
                 project_id = new_id("edt_")
                 project_dir = self._project_dir(project_id)
                 staging_dir = project_dir.with_name(f".{project_id}.importing")
-                media_dir = staging_dir / "media"
-                media_dir.mkdir(parents=True, exist_ok=False)
-                extracted: dict[str, Path] = {}
-                media_index = 0
+                # 先按工程结构校验素材路径（策略），解包本身交给文件访问适配层。
+                members: dict[str, str] = {}
+                for track in project.get("tracks", []) or []:
+                    track["id"] = new_id("trk_")
+                    for clip in track.get("clips", []) or []:
+                        member_name = str(clip.get("file") or "").replace("\\", "/")
+                        member_path = PurePosixPath(member_name)
+                        if (
+                            member_path.is_absolute()
+                            or ".." in member_path.parts
+                            or len(member_path.parts) < 2
+                            or member_path.parts[0] != "media"
+                            or member_name not in info_by_name
+                        ):
+                            raise ValueError("工程包包含无效的素材路径")
+                        members.setdefault(member_name, member_name)
+
+                if self._store.exists(staging_dir):
+                    raise ValueError("工程目录已存在")
                 try:
+                    extracted = self._store.extract_zip(source, staging_dir)
+                    if not extracted:
+                        raise ValueError("工程包解压失败")
+                    extracted_names = set(extracted)
+                    if any(name not in extracted_names for name in members):
+                        raise ValueError("工程包包含无效的素材路径")
+                    # 只保留工程引用的素材；工程描述等打包元数据不进入工程目录。
+                    for name in extracted:
+                        if name not in members:
+                            self._store.remove(_bundle_path(staging_dir, name))
+
                     for track in project.get("tracks", []) or []:
-                        track["id"] = new_id("trk_")
                         for clip in track.get("clips", []) or []:
                             member_name = str(clip.get("file") or "").replace("\\", "/")
-                            member_path = PurePosixPath(member_name)
-                            if (
-                                member_path.is_absolute()
-                                or ".." in member_path.parts
-                                or len(member_path.parts) < 2
-                                or member_path.parts[0] != "media"
-                                or member_name not in info_by_name
-                            ):
-                                raise ValueError("工程包包含无效的素材路径")
-                            final_path = extracted.get(member_name)
-                            if final_path is None:
-                                media_index += 1
-                                safe_name = re.sub(
-                                    r'[^\w.()\-\u4e00-\u9fff]+',
-                                    "_",
-                                    member_path.name,
-                                ).strip("._")
-                                safe_name = safe_name[:120] or f"audio_{media_index:04d}.wav"
-                                relative_name = f"{media_index:04d}_{safe_name}"
-                                staged_path = media_dir / relative_name
-                                final_path = project_dir / "media" / relative_name
-                                with archive.open(info_by_name[member_name]) as input_stream:
-                                    with staged_path.open("wb") as output_stream:
-                                        shutil.copyfileobj(input_stream, output_stream, length=1024 * 1024)
-                                extracted[member_name] = final_path
                             clip["id"] = new_id("clp_")
-                            clip["file"] = str(final_path)
+                            clip["file"] = str(_bundle_path(project_dir, member_name))
                             for effect in clip.get("effects", []) or []:
                                 if isinstance(effect, dict):
                                     effect["id"] = new_id("fx_")
@@ -1768,13 +1853,13 @@ class AudioEditorService:
                 "sample_rate": sample_rate,
             }
         )
-        raw_dst = config.EDITOR_CACHE_DIR / f"plugin_monitor_raw_{key}.wav"
+        raw_dst = self._store.cache_path(f"plugin_monitor_raw_{key}.wav")
         if not raw_dst.exists() and not self._audio.render_plugin_monitor_input(
             src,
             clip,
             prefix,
             raw_dst,
-            config.EDITOR_CACHE_DIR,
+            self._cache_root(),
             sample_rate,
         ):
             return {}
@@ -1819,13 +1904,13 @@ class AudioEditorService:
                 "volume_envelope": clip.get("volume_envelope"),
             }
         )
-        target_dst = config.EDITOR_CACHE_DIR / f"plugin_target_{target_key}.wav"
+        target_dst = self._store.cache_path(f"plugin_target_{target_key}.wav")
         render_timeline = getattr(self._audio, "render_timeline", None)
         if callable(render_timeline) and not target_dst.exists():
             render_timeline(
                 target_project,
                 target_dst,
-                config.EDITOR_CACHE_DIR,
+                self._cache_root(),
                 "wav",
             )
         if not target_dst.exists():
@@ -1845,12 +1930,12 @@ class AudioEditorService:
                 "target_clip": clip.get("id"),
             }
         )
-        bed_dst = config.EDITOR_CACHE_DIR / f"plugin_bed_{bed_key}.wav"
+        bed_dst = self._store.cache_path(f"plugin_bed_{bed_key}.wav")
         if callable(render_timeline) and not bed_dst.exists():
             render_timeline(
                 bed_project,
                 bed_dst,
-                config.EDITOR_CACHE_DIR,
+                self._cache_root(),
                 "wav",
             )
         return {
@@ -1920,29 +2005,19 @@ class AudioEditorService:
         self._repo.update(str(project.get("id") or ""), project)
         return self._public(project)
 
+    # ---- 渲染与波形（实现见 application/editor_render_service.py） ----
+
     def render_preview(self, project_id: str) -> str:
-        # Preview is streamed as a data URI by the desktop bridge; MP3 keeps
-        # first-play latency and bridge memory bounded for long projects.
-        path = self.render(project_id, "mp3")
-        return self._audio_data(path, exact=True) if path else ""
+        return self._render.render_preview(project_id)
 
     def render(self, project_id: str, output_format: str = "wav") -> Path | None:
-        project = self._repo.get(project_id)
-        if not project:
-            return None
-        fmt = self._normalize_format(output_format)
-        key = self._render_key(project, fmt)
-        dst = config.EDITOR_CACHE_DIR / f"{project_id}_{key}.{fmt}"
-        if dst.exists():
-            return dst
-        ok = self._audio.render_timeline(project, dst, config.EDITOR_CACHE_DIR, fmt)
-        return dst if ok and dst.exists() else None
+        return self._render.render(project_id, output_format)
 
     def render_track(
         self, project_id: str, track_id: str, output_format: str = "wav"
     ) -> Path | None:
         """把单条音轨（含该轨效果与片段）渲染成一个音频文件，用于导出单轨。"""
-        return self._render_track_file(project_id, track_id, output_format)
+        return self._render.render_track(project_id, track_id, output_format)
 
     def render_clip(
         self,
@@ -1953,7 +2028,7 @@ class AudioEditorService:
         cache: bool = False,
     ) -> Path | None:
         """把单个片段渲染成音频文件，用于导出与 HTTP 下载。"""
-        return self._render_clip_file(project_id, clip_id, output_format, cache=cache)
+        return self._render.render_clip(project_id, clip_id, output_format, cache=cache)
 
     def _render_clip_file(
         self,
@@ -1962,68 +2037,7 @@ class AudioEditorService:
         fmt: str = "wav",
         cache: bool = False,
     ) -> Path | None:
-        project = self._repo.get(project_id)
-        track: dict[str, Any] | None = None
-        clip: dict[str, Any] | None = None
-        if project:
-            for item in project.get("tracks", []) or []:
-                hit = next(
-                    (c for c in item.get("clips", []) or [] if c.get("id") == clip_id),
-                    None,
-                )
-                if hit:
-                    track = item
-                    clip = hit
-                    break
-        if not project or not track or not clip:
-            return None
-        try:
-            length = max(0.01, float(clip.get("end") or 0.0) - float(clip.get("start") or 0.0))
-        except (TypeError, ValueError):
-            length = 0.01
-        preview_clip = copy.deepcopy(clip)
-        preview_clip["start"] = 0.0
-        preview_clip["end"] = length
-        preview_project = {
-            "id": project_id,
-            "duration": length,
-            "sample_rate": project.get("sample_rate") or 44100,
-            "roles": copy.deepcopy(project.get("roles") or []),
-            "tracks": [
-                {
-                    "id": track.get("id"),
-                    "name": track.get("name", ""),
-                    "type": track.get("type", "audio"),
-                    "volume": track.get("volume", 1.0),
-                    "mute": False,
-                    "effects": copy.deepcopy(track.get("effects") or []),
-                    "metadata": copy.deepcopy(track.get("metadata") or {}),
-                    "clips": [preview_clip],
-                }
-            ],
-        }
-        output_format = self._normalize_format(fmt)
-        key = ffmpeg_cache_key(
-            {
-                "render_version": self._RENDER_VERSION,
-                "project_id": project_id,
-                "clip": preview_clip,
-                "track_volume": track.get("volume", 1.0),
-                "sample_rate": preview_project["sample_rate"],
-                "format": output_format,
-            }
-        )
-        if cache:
-            dst = config.EDITOR_CACHE_DIR / f"{project_id}_{clip_id}_{key}.{output_format}"
-        else:
-            export_dir = self._project_dir(project_id) / "copied"
-            export_dir.mkdir(parents=True, exist_ok=True)
-            name = self._safe_stem(str(clip.get("name") or Path(str(clip.get("file") or "")).stem))
-            dst = export_dir / f"{name}_{key}.{output_format}"
-        if dst.exists():
-            return dst
-        ok = self._audio.render_timeline(preview_project, dst, config.EDITOR_CACHE_DIR, output_format)
-        return dst if ok and dst.exists() else None
+        return self._render._render_clip_file(project_id, clip_id, fmt, cache=cache)
 
     def _render_track_file(
         self,
@@ -2031,89 +2045,24 @@ class AudioEditorService:
         track_id: str,
         fmt: str = "wav",
     ) -> Path | None:
-        project = self._repo.get(project_id)
-        if not project:
-            return None
-        track = next((t for t in project.get("tracks", []) or [] if t.get("id") == track_id), None)
-        if not track:
-            return None
-        output_format = self._normalize_format(fmt)
-        track_project = {
-            "id": project_id,
-            "duration": max(float(project.get("duration") or 0.05), self._project_duration({"tracks": [track]})),
-            "sample_rate": project.get("sample_rate") or 44100,
-            "roles": copy.deepcopy(project.get("roles") or []),
-            "tracks": [{**copy.deepcopy(track), "mute": False}],
-        }
-        key = ffmpeg_cache_key(
-            {
-                "render_version": self._RENDER_VERSION,
-                "project_id": project_id,
-                "track": track_project,
-                "format": output_format,
-            }
-        )
-        export_dir = self._project_dir(project_id) / "copied"
-        export_dir.mkdir(parents=True, exist_ok=True)
-        dst = export_dir / f"{self._safe_stem(str(track.get('name') or 'track'))}_{key}.{output_format}"
-        if dst.exists():
-            return dst
-        ok = self._audio.render_timeline(track_project, dst, config.EDITOR_CACHE_DIR, output_format)
-        return dst if ok and dst.exists() else None
+        return self._render._render_track_file(project_id, track_id, fmt)
+
+    def _render_key(self, project: dict[str, Any], fmt: str) -> str:
+        return self._render._render_key(project, fmt)
 
     def waveform(self, project_id: str, clip_id: str, bins: int = 160) -> dict[str, Any]:
-        project = self._repo.get(project_id)
-        clip = self._find_clip(project, clip_id) if project else None
-        if not project or not clip:
-            return {"ok": False, "peaks": []}
-        rendered = None
-        if self._waveform_should_render(clip):
-            rendered = self._render_clip_file(project_id, clip_id, "wav", cache=True)
-        waveform_src = rendered if rendered and rendered.exists() else Path(str(clip.get("file") or ""))
-        cache_key = self._waveform_key(clip, bins, waveform_src)
-        cache = dict(project.get("waveform_cache") or {})
-        if cache_key in cache:
-            return {"ok": True, **cache[cache_key]}
-        if rendered and rendered.exists():
-            peaks = self._compute_waveform(rendered, bins)
-        else:
-            try:
-                timeline_duration = max(
-                    0.01,
-                    float(clip.get("end") or 0.0) - float(clip.get("start") or 0.0),
-                )
-            except (TypeError, ValueError):
-                timeline_duration = 0.01
-            stretch = self._clip_stretch(clip)
-            duration = timeline_duration / stretch
-            try:
-                offset = max(0.0, float(clip.get("offset") or 0.0))
-            except (TypeError, ValueError):
-                offset = 0.0
-            peaks = self._compute_waveform(
-                Path(str(clip.get("file") or "")),
-                bins,
-                offset=offset,
-                duration=duration,
-            )
-        payload = {"clip_id": clip_id, "bins": bins, "peaks": peaks}
-        cache[cache_key] = payload
-        project["waveform_cache"] = cache
-        self.save(project, push_history=False)
-        return {"ok": True, **payload}
+        return self._render.waveform(project_id, clip_id, bins)
 
     def preload_waveforms(self, project_id: str, bins: int = 160) -> bool:
-        project = self._repo.get(project_id)
-        if not project:
-            return False
+        return self._render.preload_waveforms(project_id, bins)
 
-        def worker() -> None:
-            for track in project.get("tracks", []) or []:
-                for clip in track.get("clips", []) or []:
-                    self.waveform(project_id, str(clip.get("id")), bins)
-
-        threading.Thread(target=worker, daemon=True).start()
-        return True
+    def _waveform_key(
+        self,
+        clip: dict[str, Any],
+        bins: int,
+        source: Path | None = None,
+    ) -> str:
+        return self._render._waveform_key(clip, bins, source)
 
     def split_clip_by_silence(
         self,
@@ -3138,58 +3087,11 @@ class AudioEditorService:
 
     @staticmethod
     def _parse_lyric_lines(lyrics: Any) -> list[dict[str, Any]]:
-        lines: list[dict[str, Any]] = []
-        if isinstance(lyrics, list):
-            for item in lyrics:
-                if not isinstance(item, dict):
-                    continue
-                try:
-                    time_value = float(item.get("time") or item.get("start") or 0.0)
-                except (TypeError, ValueError):
-                    continue
-                if time_value < 0:
-                    continue
-                lines.append({"time": round(time_value, 3), "text": str(item.get("text") or "")})
-            return sorted(lines, key=lambda x: float(x["time"]))
-
-        text = str(lyrics or "")
-        stamp_re = re.compile(r"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
-        for raw in text.splitlines():
-            matches = list(stamp_re.finditer(raw))
-            if not matches:
-                continue
-            body = stamp_re.sub("", raw).strip()
-            for match in matches:
-                minute = int(match.group(1))
-                second = int(match.group(2))
-                fraction_raw = match.group(3) or "0"
-                fraction = int(fraction_raw) / (10 ** len(fraction_raw))
-                lines.append(
-                    {
-                        "time": round(minute * 60 + second + fraction, 3),
-                        "text": body,
-                    }
-                )
-        return sorted(lines, key=lambda x: float(x["time"]))
+        return parse_lyric_lines(lyrics)
 
     @staticmethod
     def _parse_plain_lyric_lines(lyrics: Any) -> list[str]:
-        """Parse ordinary TXT lyrics into sentences without inventing timestamps."""
-        if isinstance(lyrics, list):
-            values = [str(item.get("text") or "") for item in lyrics if isinstance(item, dict)]
-        else:
-            values = str(lyrics or "").splitlines()
-        metadata_re = re.compile(r"^\[(?:ar|ti|al|by|offset|length|re|ve):", re.IGNORECASE)
-        sentences: list[str] = []
-        for value in values:
-            value = value.strip().lstrip("\ufeff")
-            if not value or metadata_re.match(value):
-                continue
-            for sentence in re.split(r"(?<=[。！？!?；;])\s*", value):
-                sentence = sentence.strip()
-                if sentence:
-                    sentences.append(sentence[:500])
-        return sentences[:500]
+        return parse_plain_lyric_lines(lyrics)
 
     @staticmethod
     def _auto_time_lyric_lines(
@@ -3198,42 +3100,7 @@ class AudioEditorService:
         silence_points: list[float],
         min_clip: float,
     ) -> list[dict[str, Any]]:
-        """Assign TXT sentences to the clip, snapping proportional cuts to nearby silences."""
-        if not texts or duration <= 0:
-            return []
-        weights = [
-            max(1, len(re.sub(r"[\s，。！？!?；;、,.]", "", text)))
-            for text in texts
-        ]
-        total_weight = max(1, sum(weights))
-        cumulative = 0
-        targets: list[float] = []
-        for weight in weights[:-1]:
-            cumulative += weight
-            targets.append(duration * cumulative / total_weight)
-
-        points = sorted(
-            {
-                max(0.0, min(duration, float(point)))
-                for point in silence_points
-                if 0.0 < float(point) < duration
-            }
-        )
-        boundaries = [0.0]
-        for index, target in enumerate(targets):
-            remaining = len(targets) - index
-            lower = boundaries[-1] + min_clip
-            upper = duration - remaining * min_clip
-            if upper < lower:
-                lower = upper = max(boundaries[-1], min(duration, target))
-            eligible = [point for point in points if lower <= point <= upper]
-            chosen = min(eligible, key=lambda point: abs(point - target)) if eligible else target
-            boundaries.append(max(lower, min(upper, chosen)))
-
-        return [
-            {"time": round(boundaries[index], 3), "text": text}
-            for index, text in enumerate(texts)
-        ]
+        return auto_time_lyric_lines(texts, duration, silence_points, min_clip)
 
     @staticmethod
     def _speech_ranges_from_silence(
@@ -3243,36 +3110,7 @@ class AudioEditorService:
         padding: float,
         min_silence: float,
     ) -> list[tuple[float, float]]:
-        ranges: list[tuple[float, float]] = []
-        cursor = 0.0
-        for silence in sorted(silences, key=lambda x: float(x.get("start") or 0.0)):
-            try:
-                silence_start = max(0.0, min(duration, float(silence.get("start") or 0.0)))
-                silence_end = max(silence_start, min(duration, float(silence.get("end") or 0.0)))
-            except (TypeError, ValueError):
-                continue
-            if silence_end - silence_start < min_silence:
-                continue
-            if silence_start - cursor >= min_clip:
-                ranges.append(
-                    (
-                        max(0.0, cursor - padding),
-                        min(duration, silence_start + padding),
-                    )
-                )
-            cursor = max(cursor, silence_end)
-        if duration - cursor >= min_clip:
-            ranges.append((max(0.0, cursor - padding), duration))
-
-        merged: list[tuple[float, float]] = []
-        for start, end in ranges:
-            if end - start < min_clip:
-                continue
-            if merged and start <= merged[-1][1] + 0.01:
-                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-            else:
-                merged.append((round(start, 3), round(end, 3)))
-        return merged
+        return speech_ranges_from_silence(duration, silences, min_clip, padding, min_silence)
 
     @staticmethod
     def _now() -> str:
@@ -3301,112 +3139,27 @@ class AudioEditorService:
 
     @staticmethod
     def _clean(project: dict[str, Any]) -> dict[str, Any]:
-        cleaned = copy.deepcopy(project)
-        cleaned.pop("history", None)
-        cleaned.pop("future", None)
-        cleaned.setdefault("waveform_cache", {})
-        cleaned.setdefault("metadata", {})
-        roles = cleaned.get("roles")
-        if not isinstance(roles, list):
-            roles = []
-            cleaned["roles"] = roles
-        for role in roles:
-            if isinstance(role, dict):
-                role["effects"] = AudioEditorService._clean_effects(role.get("effects"))
-        for track in cleaned.get("tracks", []) or []:
-            track.setdefault("metadata", {})
-            track["effects"] = AudioEditorService._clean_effects(track.get("effects"))
-            for clip in track.get("clips", []) or []:
-                channel = str(clip.get("channel") or "stereo").strip().lower()
-                clip["channel"] = channel if channel in {"stereo", "left", "right"} else "stereo"
-                clip["time_stretch"] = AudioEditorService._clip_stretch(clip)
-                clip["effects"] = AudioEditorService._clean_effects(clip.get("effects"))
-                try:
-                    clip_duration = max(
-                        0.01,
-                        float(clip.get("end") or 0.0) - float(clip.get("start") or 0.0),
-                    )
-                except (TypeError, ValueError):
-                    clip_duration = 0.01
-                clip["volume_envelope"] = AudioEditorService._clean_volume_envelope(
-                    clip.get("volume_envelope"),
-                    clip_duration,
-                )
-        return cleaned
+        return clean_project(project)
 
     @staticmethod
     def _clean_effects(raw: Any) -> list[dict[str, Any]]:
-        if not isinstance(raw, list):
-            return []
-        cleaned: list[dict[str, Any]] = []
-        for item in raw:
-            if not isinstance(item, dict):
-                continue
-            effect_type = str(item.get("type") or "").strip().lower().replace("-", "_")
-            if not effect_type:
-                continue
-            params = item.get("params")
-            effect = {
-                "id": str(item.get("id") or new_id("fx_")),
-                "type": effect_type,
-                "name": str(item.get("name") or effect_type),
-                "enabled": item.get("enabled", True) is not False,
-                "params": dict(params) if isinstance(params, dict) else {},
-            }
-            for key, value in item.items():
-                if key not in effect and key not in {"params"}:
-                    effect[key] = value
-            cleaned.append(effect)
-        return cleaned
+        return clean_effects(raw)
 
     @staticmethod
     def _is_plugin_effect(effect: dict[str, Any]) -> bool:
-        effect_type = str(effect.get("type") or "").strip().lower().replace("-", "_")
-        return effect_type in {
-            "plugin",
-            "vst",
-            "vst3",
-            "external",
-            "external_plugin",
-            "juce",
-            "juce_vst3",
-        }
+        return is_plugin_effect(effect)
 
     @staticmethod
     def _clean_volume_envelope(raw: Any, duration: float) -> list[dict[str, float]]:
-        if not isinstance(raw, list):
-            return []
-        points: list[tuple[float, float]] = []
-        dur = max(0.01, float(duration or 0.01))
-        for item in raw:
-            if not isinstance(item, dict):
-                continue
-            try:
-                time_value = float(item.get("time", item.get("t", 0.0)) or 0.0)
-                volume = float(item.get("volume", item.get("value", 1.0)) or 0.0)
-            except (TypeError, ValueError):
-                continue
-            points.append((max(0.0, min(dur, time_value)), max(0.0, min(2.5, volume))))
-        by_time: dict[float, float] = {}
-        for time_value, volume in sorted(points, key=lambda point: point[0]):
-            by_time[round(time_value, 3)] = round(volume, 4)
-        return [{"time": time_value, "volume": by_time[time_value]} for time_value in sorted(by_time)]
+        return clean_volume_envelope(raw, duration)
 
     @staticmethod
     def _project_duration(project: dict[str, Any]) -> float:
-        duration = 0.0
-        for track in project.get("tracks", []) or []:
-            for clip in track.get("clips", []) or []:
-                try:
-                    duration = max(duration, float(clip.get("end") or 0.0))
-                except (TypeError, ValueError):
-                    pass
-        return max(duration, 0.05)
+        return project_duration(project)
 
     @staticmethod
     def _normalize_format(fmt: str) -> str:
-        value = (fmt or "wav").strip().lower().lstrip(".")
-        return value if value in {"wav", "mp3", "flac"} else "wav"
+        return normalize_format(fmt)
 
     @staticmethod
     def _rerun_key(
@@ -3434,245 +3187,35 @@ class AudioEditorService:
         )
 
     def _project_dir(self, project_id: str) -> Path:
-        return config.EDITOR_DIR / project_id
+        return self._store.project_dir(project_id)
 
     @staticmethod
     def _find_clip(project: dict[str, Any] | None, clip_id: str) -> dict[str, Any] | None:
-        if not project:
-            return None
-        for track in project.get("tracks", []) or []:
-            for clip in track.get("clips", []) or []:
-                if clip.get("id") == clip_id:
-                    return clip
-        return None
+        return find_clip(project, clip_id)
 
     @staticmethod
     def _find_clip_ref(
         project: dict[str, Any], track_id: str, clip_id: str
     ) -> tuple[dict[str, Any] | None, int, dict[str, Any] | None]:
-        for track in project.get("tracks", []) or []:
-            if track.get("id") != track_id:
-                continue
-            for idx, clip in enumerate(track.get("clips", []) or []):
-                if clip.get("id") == clip_id:
-                    return track, idx, clip
-        return None, -1, None
+        return find_clip_ref(project, track_id, clip_id)
 
     @staticmethod
     def _find_effect(clip: dict[str, Any], effect_id: str) -> dict[str, Any] | None:
-        for effect in clip.get("effects", []) or []:
-            if isinstance(effect, dict) and str(effect.get("id") or "") == effect_id:
-                return effect
-        return None
+        return find_effect(clip, effect_id)
 
     def _audio_data(self, src: Path, exact: bool = False) -> str:
-        if not src.exists():
-            return ""
-        data: bytes | None = None
-        mime_by_ext = {
-            ".flac": "audio/flac",
-            ".mp3": "audio/mpeg",
-            ".wav": "audio/wav",
-        }
-        mime = mime_by_ext.get(src.suffix.lower(), "audio/wav")
-        if exact or src.suffix.lower() == ".mp3":
-            try:
-                data = src.read_bytes()
-            except OSError:
-                data = None
-        if self._ffmpeg.available:
-            try:
-                tmp = config.EDITOR_CACHE_DIR / f"aud_{ffmpeg_cache_key(str(src))}.mp3"
-                if data is None and not tmp.exists():
-                    self._ffmpeg.convert(src, tmp)
-                if data is None and tmp.exists():
-                    data = tmp.read_bytes()
-                    mime = "audio/mpeg"
-            except OSError:
-                data = None
-        if data is None:
-            try:
-                data = src.read_bytes()
-            except OSError:
-                return ""
-        b64 = base64.b64encode(data).decode("ascii")
-        return f"data:{mime};base64,{b64}"
-
-    def _render_key(self, project: dict[str, Any], fmt: str) -> str:
-        payload = self._snapshot(project)
-        payload.pop("waveform_cache", None)
-        stats = []
-        for track in payload.get("tracks", []) or []:
-            for clip in track.get("clips", []) or []:
-                path = Path(str(clip.get("file") or ""))
-                try:
-                    st = path.stat()
-                    stats.append((str(path), st.st_size, int(st.st_mtime)))
-                except OSError:
-                    stats.append((str(path), 0, 0))
-        return ffmpeg_cache_key(
-            {
-                "render_version": self._RENDER_VERSION,
-                "project": payload,
-                "stats": stats,
-                "format": fmt,
-            }
-        )
-
-    def _waveform_key(
-        self,
-        clip: dict[str, Any],
-        bins: int,
-        source: Path | None = None,
-    ) -> str:
-        path = source if source and source.exists() else Path(str(clip.get("file") or ""))
-        try:
-            st = path.stat()
-            stat = (str(path), st.st_size, int(st.st_mtime_ns))
-        except OSError:
-            stat = (str(path), 0, 0)
-        try:
-            duration = max(
-                0.01,
-                float(clip.get("end") or 0.0) - float(clip.get("start") or 0.0),
-            )
-        except (TypeError, ValueError):
-            duration = 0.01
-        try:
-            offset = max(0.0, float(clip.get("offset") or 0.0))
-        except (TypeError, ValueError):
-            offset = 0.0
-        return ffmpeg_cache_key(
-            {
-                "clip": clip.get("id"),
-                "stat": stat,
-                "offset": round(offset, 3),
-                "duration": round(duration, 3),
-                "time_stretch": round(self._clip_stretch(clip), 4),
-                "bins": bins,
-            }
-        )
+        """音频文件 → data URI；mp3 缓存与 mime 表由文件访问适配层实现。"""
+        return self._store.audio_data_uri(src, exact=exact)
 
     def _waveform_should_render(self, clip: dict[str, Any]) -> bool:
-        try:
-            if abs(self._clip_stretch(clip) - 1.0) > 0.0001:
-                return True
-            if float(clip.get("volume", 1.0) or 1.0) != 1.0:
-                return True
-            if float(clip.get("fade_in", 0.0) or 0.0) > 0.0:
-                return True
-            if float(clip.get("fade_out", 0.0) or 0.0) > 0.0:
-                return True
-        except (TypeError, ValueError):
-            return True
-        if str(clip.get("channel") or "stereo").strip().lower() != "stereo":
-            return True
-        if clip.get("effects"):
-            return True
-        if clip.get("volume_envelope"):
-            return True
-        return False
+        return should_render_waveform(clip)
 
     @staticmethod
     def _clip_stretch(clip: dict[str, Any]) -> float:
-        try:
-            return max(0.25, min(4.0, float(clip.get("time_stretch", 1.0) or 1.0)))
-        except (TypeError, ValueError):
-            return 1.0
-
-    def _compute_waveform(
-        self,
-        src: Path,
-        bins: int,
-        offset: float = 0.0,
-        duration: float | None = None,
-    ) -> list[float]:
-        if not src.exists():
-            return []
-        wav_path = src
-        try:
-            st = src.stat()
-            source_key = (str(src), st.st_size, int(st.st_mtime))
-        except OSError:
-            source_key = (str(src), 0, 0)
-        if self._ffmpeg.available:
-            cached = config.EDITOR_CACHE_DIR / f"wf_{ffmpeg_cache_key(source_key)}.wav"
-            cached.parent.mkdir(parents=True, exist_ok=True)
-            # 8 kHz made transients and consonants visibly disappear in the editor.
-            # Keep a full-band analysis source while reducing only the displayed bins.
-            if cached.exists() or self._ffmpeg.convert(src, cached, sample_rate=44100):
-                wav_path = cached
-        elif src.suffix.lower() != ".wav":
-            return []
-        try:
-            with wave.open(str(wav_path), "rb") as wf:
-                frames = wf.getnframes()
-                channels = max(1, wf.getnchannels())
-                width = wf.getsampwidth()
-                rate = max(1, wf.getframerate())
-                if frames <= 0 or width not in (1, 2, 4):
-                    return []
-                start_frame = min(frames, max(0, int(float(offset or 0.0) * rate)))
-                available = max(0, frames - start_frame)
-                requested = (
-                    available
-                    if duration is None
-                    else max(1, int(float(duration or 0.0) * rate))
-                )
-                span = max(1, min(available, requested))
-                if available <= 0:
-                    return []
-                target_bins = max(16, min(4096, int(bins or 320), span))
-                wf.setpos(start_frame)
-                raw = wf.readframes(span)
-                if not raw:
-                    return []
-                # NumPy is present in the application environment; keep a small
-                # struct fallback for portable/headless test environments.
-                try:
-                    import numpy as np
-
-                    dtype = {1: np.uint8, 2: np.int16, 4: np.int32}[width]
-                    samples = np.frombuffer(raw, dtype=dtype)
-                    usable = (len(samples) // channels) * channels
-                    samples = samples[:usable].reshape(-1, channels)
-                    if width == 1:
-                        frame_peaks = np.max(np.abs(samples.astype(np.int16) - 128), axis=1) / 128.0
-                    else:
-                        frame_peaks = np.max(np.abs(samples.astype(np.float32)), axis=1) / float(2 ** (width * 8 - 1) - 1)
-                    edges = np.linspace(0, len(frame_peaks), target_bins + 1, dtype=np.int64)
-                    peaks = [
-                        round(float(np.max(frame_peaks[edges[index] : max(edges[index] + 1, edges[index + 1])])), 4)
-                        if edges[index] < len(frame_peaks) else 0.0
-                        for index in range(target_bins)
-                    ]
-                    return [max(0.0, min(1.0, value)) for value in peaks]
-                except (ImportError, TypeError, ValueError):
-                    fmt = {1: "B", 2: "h", 4: "i"}[width]
-                    max_val = 128.0 if width == 1 else float((2 ** (width * 8 - 1)) - 1)
-                    samples = struct.unpack("<" + fmt * (len(raw) // width), raw[: (len(raw) // width) * width])
-                    peaks: list[float] = []
-                    for idx in range(target_bins):
-                        first = round(idx * len(samples) / target_bins)
-                        last = max(first + channels, round((idx + 1) * len(samples) / target_bins))
-                        frame = samples[first:last]
-                        values = [abs(int(item) - 128) if width == 1 else abs(item) for item in frame]
-                        peaks.append(round(min(1.0, max(values or [0]) / max_val), 4))
-                    return peaks
-        except (OSError, EOFError, wave.Error, struct.error):
-            return []
+        return clip_stretch(clip)
 
     @staticmethod
     def _model_payload(model: dict[str, Any]) -> dict[str, Any]:
-        framework = config.modelhub_normalize_framework(
-            model.get("framework") or config.modelhub_guess_framework(model.get("type"))
-        )
-        return {
-            "framework": framework,
-            "main_model_path": (model.get("main_model") or {}).get("path", ""),
-            "main_config_path": (model.get("main_config") or {}).get("path", ""),
-            "diffusion_model_path": (model.get("diffusion_model") or {}).get("path", ""),
-            "diffusion_config_path": (model.get("diffusion_config") or {}).get("path", ""),
-            "index_path": (model.get("index_file") or {}).get("path", ""),
-            "metadata": model.get("metadata") or {},
-        }
+        """模型记录 → 重推理载荷；路径映射统一由 ``ModelInfo.engine_paths`` 提供。"""
+        info = ModelInfo.from_dict(model)
+        return {**info.engine_paths(), "metadata": model.get("metadata") or {}}

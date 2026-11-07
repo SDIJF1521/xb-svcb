@@ -16,6 +16,7 @@
 
 ## 開発者向け
 
+- [レイヤー制約（DDD）](ddd-architecture.md): 層の依存ルール、ポートとアダプタ、構成ルート、新機能の配置指針。`app/tests/test_architecture.py`が検証します。
 - [システムアーキテクチャ](architecture.md): Pythonバックエンド、Vueフロントエンド、Worker、キュー、モデル、音声ツールの責務と接続。
 - [起動と推論の流れ](startup-chain.md): アプリ起動、通常タスク、リアルタイム処理。
 - [開発とリリース](development.md): リポジトリ構成、テスト、フロントエンドビルド、JUCE Host、インストーラー作成。

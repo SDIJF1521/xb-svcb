@@ -16,7 +16,9 @@
 
 ## バックエンド開発
 
-メインアプリの依存関係は`app/pyproject.toml`、実行エントリは`app/main.py`です。`app/api/bridge.py`と`app/application/`から処理を追い、具体的なエンジンとWorkerは`app/infrastructure/`を確認してください。
+メインアプリの依存関係は`app/pyproject.toml`、実行エントリは`app/main.py`です。読む順序の推奨は、`app/composition.py`（唯一の組み立て箇所でアダプタとユースケースサービスが一覧できる）、次に`app/application/`のユースケースサービスと`app/application/ports.py`のポート契約、最後に`app/infrastructure/`のエンジンとWorker実装です。フレームワーク非依存のルールは`app/domain/`にあり、`app/api/`はパラメータ変換とプロトコル適応のみを行います。
+
+依存方向は厳格な制約で、`app/tests/test_architecture.py`が検証します。詳細は[レイヤー制約（DDD）](../ddd-architecture.md)を参照してください。
 
 テスト:
 
