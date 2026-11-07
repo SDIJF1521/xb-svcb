@@ -16,6 +16,8 @@ from api.http_server import (
     _public_editor_project,
     create_http_app,
 )
+from application.work_service import WorkService
+from infrastructure.storage import ListRepository, SettingsStore
 from infrastructure.storage import SettingsStore
 
 
@@ -42,10 +44,30 @@ class _Models:
     def get(self, model_id: str):
         return self.items.get(model_id)
 
+    def default_id(self):
+        return "model_svc"
+
+
+class _PassthroughConversion:
+    """只满足 WorkService 依赖的最小替身（HTTP 契约测试不跑推理）。"""
+
+    def queue_status(self):
+        return {"running": False, "pending": [], "size": 0}
+
+    def start(self, work_id: str) -> None:
+        return None
+
 
 class _Facade:
     def __init__(self, audio_path: Path | None = None) -> None:
         self._models = _Models()
+        # 请求规则由用例层的 WorkService 提供，这里用真实实现避免复制规则。
+        self._validator = WorkService(
+            ListRepository(Path(tempfile.mkdtemp()) / "works.json"),
+            _PassthroughConversion(),  # type: ignore[arg-type]
+            self._models,  # type: ignore[arg-type]
+            SettingsStore(Path(tempfile.mkdtemp()) / "settings.json"),
+        )
         self.audio_path = audio_path
         self.created_payload = None
         self.work = {
@@ -90,7 +112,14 @@ class _Facade:
     def retry_work(self, work_id: str):
         return work_id == self.work["id"]
 
-    def _stem_path(self, work_id: str, stem: str):
+    @property
+    def models(self):
+        return self._models
+
+    def validate_work_request(self, payload):
+        return self._validator.validate_request(payload)
+
+    def work_stem_path(self, work_id: str, stem: str):
         if work_id == self.work["id"] and stem == "output":
             return self.audio_path
         return None

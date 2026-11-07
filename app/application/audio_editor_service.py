@@ -17,19 +17,28 @@ from typing import Any
 
 import config
 from domain import EditorClip, EditorProject, EditorTrack, InferenceParams
-from infrastructure import paths
-from infrastructure.audio_engine import FFmpegEngine
-from infrastructure.clipboard import audio_files_from_clipboard, copy_file_to_clipboard
-from infrastructure.ffmpeg_tool import FfmpegTool
-from infrastructure.juce_vst3_host import JuceVst3Host
-from infrastructure.pymss_tool import PymssTool
-from infrastructure.storage import ListRepository
-from infrastructure.uvr_tool import UvrTool
-from infrastructure.vocal_enhancement import (
-    VocalEnhancementControls,
-    VocalEnhancementProcessor,
-)
+from domain.identity import new_id
+from domain.vocal_enhancement import VocalEnhancementControls
 
+from .adapters import (
+    audio_engine as create_audio_engine,
+    audio_files_from_clipboard,
+    copy_file_to_clipboard,
+    ffmpeg_cache_key,
+    plugin_host as create_plugin_host,
+    pymss_tool as create_pymss_tool,
+    vocal_enhancement as create_vocal_enhancement,
+)
+from .ports import (
+    AudioEnginePort,
+    EngineRegistryPort,
+    FfmpegGateway,
+    ItemRepository,
+    PluginHostPort,
+    PymssGateway,
+    SeparationGateway,
+    VocalEnhancementPort,
+)
 from .model_service import ModelService
 
 
@@ -49,26 +58,28 @@ class AudioEditorService:
 
     def __init__(
         self,
-        repo: ListRepository,
-        works_repo: ListRepository,
+        repo: ItemRepository,
+        works_repo: ItemRepository,
         models: ModelService,
-        ffmpeg: FfmpegTool,
-        uvr: UvrTool,
-        engines: Any,
-        vocal_enhancement: VocalEnhancementProcessor | None = None,
-        pymss: PymssTool | None = None,
+        ffmpeg: FfmpegGateway,
+        uvr: SeparationGateway,
+        engines: EngineRegistryPort,
+        vocal_enhancement: VocalEnhancementPort | None = None,
+        pymss: PymssGateway | None = None,
+        audio: AudioEnginePort | None = None,
+        plugin_host: PluginHostPort | None = None,
     ) -> None:
         self._repo = repo
         self._works_repo = works_repo
         self._models = models
         self._ffmpeg = ffmpeg
         self._uvr = uvr
-        self._pymss = pymss or PymssTool()
-        self._audio = FFmpegEngine(ffmpeg)
-        self._plugin_host = JuceVst3Host()
+        self._pymss = pymss or create_pymss_tool()
+        self._audio = audio or create_audio_engine(ffmpeg)
+        self._plugin_host = plugin_host or create_plugin_host()
         self._plugin_sessions: dict[str, dict[str, Any]] = {}
         self._engines = engines
-        self._vocal_enhancement = vocal_enhancement or VocalEnhancementProcessor()
+        self._vocal_enhancement = vocal_enhancement or create_vocal_enhancement()
         self._rerun_jobs: dict[str, dict[str, Any]] = {}
         self._rerun_jobs_lock = threading.RLock()
 
@@ -202,7 +213,7 @@ class AudioEditorService:
         src = Path(path) if path else None
         if src is None or not src.exists():
             return None
-        pid = paths.new_id("edt_")
+        pid = new_id("edt_")
         project_dir = self._project_dir(pid)
         media_dir = project_dir / "media"
         media_dir.mkdir(parents=True, exist_ok=True)
@@ -217,7 +228,7 @@ class AudioEditorService:
         sample_rate = self._detect_sample_rate(dst)
         now = self._now()
         clip = EditorClip(
-            id=paths.new_id("clp_"),
+            id=new_id("clp_"),
             name=dst.stem,
             start=0.0,
             end=max(duration, 0.05),
@@ -228,7 +239,7 @@ class AudioEditorService:
             metadata={"source": "manual"},
         ).to_dict()
         track = EditorTrack(
-            id=paths.new_id("trk_"),
+            id=new_id("trk_"),
             name="原始音频",
             type="source",
             clips=[clip],
@@ -356,7 +367,7 @@ class AudioEditorService:
                         raise ValueError("工程片段结构无效")
 
                 project = self._clean(raw_project)
-                project_id = paths.new_id("edt_")
+                project_id = new_id("edt_")
                 project_dir = self._project_dir(project_id)
                 staging_dir = project_dir.with_name(f".{project_id}.importing")
                 media_dir = staging_dir / "media"
@@ -365,7 +376,7 @@ class AudioEditorService:
                 media_index = 0
                 try:
                     for track in project.get("tracks", []) or []:
-                        track["id"] = paths.new_id("trk_")
+                        track["id"] = new_id("trk_")
                         for clip in track.get("clips", []) or []:
                             member_name = str(clip.get("file") or "").replace("\\", "/")
                             member_path = PurePosixPath(member_name)
@@ -393,21 +404,21 @@ class AudioEditorService:
                                     with staged_path.open("wb") as output_stream:
                                         shutil.copyfileobj(input_stream, output_stream, length=1024 * 1024)
                                 extracted[member_name] = final_path
-                            clip["id"] = paths.new_id("clp_")
+                            clip["id"] = new_id("clp_")
                             clip["file"] = str(final_path)
                             for effect in clip.get("effects", []) or []:
                                 if isinstance(effect, dict):
-                                    effect["id"] = paths.new_id("fx_")
+                                    effect["id"] = new_id("fx_")
                         for effect in track.get("effects", []) or []:
                             if isinstance(effect, dict):
-                                effect["id"] = paths.new_id("fx_")
+                                effect["id"] = new_id("fx_")
 
                     for role in project.get("roles", []) or []:
                         if not isinstance(role, dict):
                             continue
                         for effect in role.get("effects", []) or []:
                             if isinstance(effect, dict):
-                                effect["id"] = paths.new_id("fx_")
+                                effect["id"] = new_id("fx_")
 
                     now = self._now()
                     metadata = dict(project.get("metadata") or {})
@@ -460,7 +471,7 @@ class AudioEditorService:
         next_project = copy.deepcopy(project)
         tracks = next_project.setdefault("tracks", [])
         track = EditorTrack(
-            id=paths.new_id("trk_"),
+            id=new_id("trk_"),
             name=((name or "").strip() or f"音轨 {len(tracks) + 1}")[:80],
             type=track_kind,
             clips=[],
@@ -532,7 +543,7 @@ class AudioEditorService:
             return {"ok": False, "error": "目标音轨已锁定"}
         if track is None:
             track = EditorTrack(
-                id=paths.new_id("trk_"),
+                id=new_id("trk_"),
                 name=f"音轨 {len(tracks) + 1}",
                 type="audio",
                 clips=[],
@@ -540,7 +551,7 @@ class AudioEditorService:
             tracks.append(track)
 
         clip = EditorClip(
-            id=paths.new_id("clp_"),
+            id=new_id("clp_"),
             name=dst.stem[:80],
             start=round(clip_start, 3),
             end=round(clip_start + max(duration, 0.05), 3),
@@ -675,7 +686,7 @@ class AudioEditorService:
         device = str(opts.get("device") or "auto")
         mute_source = opts.get("mute_source", True) is not False
         if engine == "pymss":
-            pymss = getattr(self, "_pymss", None) or PymssTool()
+            pymss = getattr(self, "_pymss", None) or create_pymss_tool()
             if not pymss.available:
                 return {"ok": False, "error": "PyMSS 环境未就绪，请先安装 PyMSS 前置环境"}
             if not config.pymss_model_ready(pymss_model):
@@ -695,7 +706,7 @@ class AudioEditorService:
 
         try:
             if engine == "pymss":
-                pymss = getattr(self, "_pymss", None) or PymssTool()
+                pymss = getattr(self, "_pymss", None) or create_pymss_tool()
                 sep = pymss.separate(
                     dry,
                     out_dir,
@@ -715,7 +726,7 @@ class AudioEditorService:
         harmony_result = None
         if harmony_enabled:
             try:
-                pymss = getattr(self, "_pymss", None) or PymssTool()
+                pymss = getattr(self, "_pymss", None) or create_pymss_tool()
                 harmony_result = pymss.separate(
                     vocals,
                     out_dir / "harmony",
@@ -743,7 +754,7 @@ class AudioEditorService:
 
         def make_track(kind: str, label: str, file_path: Path) -> dict[str, Any]:
             stem_clip = EditorClip(
-                id=paths.new_id("clp_"),
+                id=new_id("clp_"),
                 name=f"{base_name} - {label}",
                 start=round(start, 3),
                 end=round(start + duration, 3),
@@ -769,7 +780,7 @@ class AudioEditorService:
                 },
             ).to_dict()
             return EditorTrack(
-                id=paths.new_id("trk_"),
+                id=new_id("trk_"),
                 name=f"{label} - {base_name}"[:80],
                 type="vocal" if kind == "vocals" else "bgm",
                 clips=[stem_clip],
@@ -939,7 +950,7 @@ class AudioEditorService:
             rel_end = float(item_range["end"])
             text = str(item_range.get("text") or "").strip()
             item = copy.deepcopy(original)
-            item["id"] = str(original.get("id")) if i == 0 else paths.new_id("clp_")
+            item["id"] = str(original.get("id")) if i == 0 else new_id("clp_")
             item["name"] = f"{base_name} {i + 1:02d}/{total:02d}" + (f" {text[:18]}" if text else "")
             item["start"] = round(clip_start + rel_start, 3)
             item["end"] = round(clip_start + rel_end, 3)
@@ -1020,7 +1031,7 @@ class AudioEditorService:
             ):
                 return self._public(latest)
             # 旧工程缺少工作流保存音轨时，重新创建一个包含全部音轨的工程。
-        pid = paths.new_id("edt_")
+        pid = new_id("edt_")
         now = self._now()
         tracks: list[dict[str, Any]] = []
         known: set[str] = set()
@@ -1071,12 +1082,12 @@ class AudioEditorService:
             known.add(resolved)
             tracks.append(
                 EditorTrack(
-                    id=paths.new_id("trk_"),
+                    id=new_id("trk_"),
                     name=name,
                     type=kind,
                     clips=[
                         EditorClip(
-                            id=paths.new_id("clp_"),
+                            id=new_id("clp_"),
                             name=src.stem,
                             start=0.0,
                             end=max(dur, 0.05),
@@ -1139,7 +1150,7 @@ class AudioEditorService:
                     names_by_model[model_id] = model_name
                     clips_by_model.setdefault(model_id, []).append(
                         EditorClip(
-                            id=paths.new_id("clp_"),
+                            id=new_id("clp_"),
                             name=f"{model_name} {self._fmt_time(start)}",
                             start=start,
                             end=end,
@@ -1163,7 +1174,7 @@ class AudioEditorService:
                     model_name = names_by_model.get(model_id) or model_id or str(idx)
                     tracks.append(
                         EditorTrack(
-                            id=paths.new_id("trk_"),
+                            id=new_id("trk_"),
                             name=f"AI · {model_name}",
                             type="ai",
                             clips=sorted(clips, key=lambda c: float(c.get("start") or 0.0)),
@@ -1197,7 +1208,7 @@ class AudioEditorService:
                         continue
                     clips.append(
                         EditorClip(
-                            id=paths.new_id("clp_"),
+                            id=new_id("clp_"),
                             name=f"{model_name} {self._fmt_time(start)}",
                             start=start,
                             end=end,
@@ -1219,7 +1230,7 @@ class AudioEditorService:
                 remember(raw)
                 tracks.append(
                     EditorTrack(
-                        id=paths.new_id("trk_"),
+                        id=new_id("trk_"),
                         name=f"AI · {model_name}",
                         type="ai",
                         clips=clips,
@@ -1322,7 +1333,7 @@ class AudioEditorService:
                 )
                 mid_clips.append(
                     EditorClip(
-                        id=paths.new_id("clp_"),
+                        id=new_id("clp_"),
                         name=p.stem,
                         start=0.0,
                         end=max(dur, 0.05),
@@ -1338,7 +1349,7 @@ class AudioEditorService:
         if mid_clips:
             tracks.append(
                 EditorTrack(
-                    id=paths.new_id("trk_"),
+                    id=new_id("trk_"),
                     name="中间片段",
                     type="effect",
                     clips=mid_clips,
@@ -1549,7 +1560,7 @@ class AudioEditorService:
             }
         )
         merged_clip = EditorClip(
-            id=paths.new_id("clp_"),
+            id=new_id("clp_"),
             name=(base_name or "合并片段")[:80],
             start=round(merge_start, 3),
             end=round(merge_end, 3),
@@ -1745,7 +1756,7 @@ class AudioEditorService:
             source_signature = (str(src.resolve()), stat.st_size, int(stat.st_mtime_ns))
         except OSError:
             source_signature = (str(src), 0, 0)
-        key = FFmpegEngine.cache_key(
+        key = ffmpeg_cache_key(
             {
                 "version": "plugin-monitor-v1",
                 "source": source_signature,
@@ -1795,7 +1806,7 @@ class AudioEditorService:
                 }
             ],
         }
-        target_key = FFmpegEngine.cache_key(
+        target_key = ffmpeg_cache_key(
             {
                 "version": "plugin-realtime-target-v1",
                 "monitor": key,
@@ -1827,7 +1838,7 @@ class AudioEditorService:
                 for item in (bed_track.get("clips") or [])
                 if str(item.get("id") or "") != str(clip.get("id") or "")
             ]
-        bed_key = FFmpegEngine.cache_key(
+        bed_key = ffmpeg_cache_key(
             {
                 "version": "plugin-realtime-bed-v2",
                 "project": bed_project,
@@ -1933,6 +1944,17 @@ class AudioEditorService:
         """把单条音轨（含该轨效果与片段）渲染成一个音频文件，用于导出单轨。"""
         return self._render_track_file(project_id, track_id, output_format)
 
+    def render_clip(
+        self,
+        project_id: str,
+        clip_id: str,
+        output_format: str = "wav",
+        *,
+        cache: bool = False,
+    ) -> Path | None:
+        """把单个片段渲染成音频文件，用于导出与 HTTP 下载。"""
+        return self._render_clip_file(project_id, clip_id, output_format, cache=cache)
+
     def _render_clip_file(
         self,
         project_id: str,
@@ -1981,7 +2003,7 @@ class AudioEditorService:
             ],
         }
         output_format = self._normalize_format(fmt)
-        key = FFmpegEngine.cache_key(
+        key = ffmpeg_cache_key(
             {
                 "render_version": self._RENDER_VERSION,
                 "project_id": project_id,
@@ -2023,7 +2045,7 @@ class AudioEditorService:
             "roles": copy.deepcopy(project.get("roles") or []),
             "tracks": [{**copy.deepcopy(track), "mute": False}],
         }
-        key = FFmpegEngine.cache_key(
+        key = ffmpeg_cache_key(
             {
                 "render_version": self._RENDER_VERSION,
                 "project_id": project_id,
@@ -2190,7 +2212,7 @@ class AudioEditorService:
                     3,
                 )
                 item = copy.deepcopy(original)
-                item["id"] = str(original.get("id")) if i == 0 else paths.new_id("clp_")
+                item["id"] = str(original.get("id")) if i == 0 else new_id("clp_")
                 item["name"] = f"{base_name} {i + 1:02d}/{total:02d}"
                 item["start"] = round(start + rel_start, 3)
                 item["end"] = round(start + rel_end, 3)
@@ -2282,7 +2304,7 @@ class AudioEditorService:
             if rel_end - rel_start < 0.05:
                 continue
             item = copy.deepcopy(original)
-            item["id"] = str(original.get("id")) if i == 0 else paths.new_id("clp_")
+            item["id"] = str(original.get("id")) if i == 0 else new_id("clp_")
             item["name"] = f"{base_name} {i + 1:02d}/{total:02d}"
             item["start"] = round(start + rel_start, 3)
             item["end"] = round(start + rel_end, 3)
@@ -3112,7 +3134,7 @@ class AudioEditorService:
             candidate = path.with_name(f"{stem}_{idx:02d}{suffix}")
             if not candidate.exists():
                 return candidate
-        return path.with_name(f"{stem}_{paths.new_id('')}{suffix}")
+        return path.with_name(f"{stem}_{new_id('')}{suffix}")
 
     @staticmethod
     def _parse_lyric_lines(lyrics: Any) -> list[dict[str, Any]]:
@@ -3325,7 +3347,7 @@ class AudioEditorService:
                 continue
             params = item.get("params")
             effect = {
-                "id": str(item.get("id") or paths.new_id("fx_")),
+                "id": str(item.get("id") or new_id("fx_")),
                 "type": effect_type,
                 "name": str(item.get("name") or effect_type),
                 "enabled": item.get("enabled", True) is not False,
@@ -3398,7 +3420,7 @@ class AudioEditorService:
             source = (str(src.resolve()), stat.st_size, int(stat.st_mtime_ns))
         except OSError:
             source = (str(src), 0, 0)
-        return FFmpegEngine.cache_key(
+        return ffmpeg_cache_key(
             {
                 "version": "editor-rerun-dry-v2",
                 "source": source,
@@ -3460,7 +3482,7 @@ class AudioEditorService:
                 data = None
         if self._ffmpeg.available:
             try:
-                tmp = config.EDITOR_CACHE_DIR / f"aud_{FFmpegEngine.cache_key(str(src))}.mp3"
+                tmp = config.EDITOR_CACHE_DIR / f"aud_{ffmpeg_cache_key(str(src))}.mp3"
                 if data is None and not tmp.exists():
                     self._ffmpeg.convert(src, tmp)
                 if data is None and tmp.exists():
@@ -3488,7 +3510,7 @@ class AudioEditorService:
                     stats.append((str(path), st.st_size, int(st.st_mtime)))
                 except OSError:
                     stats.append((str(path), 0, 0))
-        return FFmpegEngine.cache_key(
+        return ffmpeg_cache_key(
             {
                 "render_version": self._RENDER_VERSION,
                 "project": payload,
@@ -3520,7 +3542,7 @@ class AudioEditorService:
             offset = max(0.0, float(clip.get("offset") or 0.0))
         except (TypeError, ValueError):
             offset = 0.0
-        return FFmpegEngine.cache_key(
+        return ffmpeg_cache_key(
             {
                 "clip": clip.get("id"),
                 "stat": stat,
@@ -3574,7 +3596,7 @@ class AudioEditorService:
         except OSError:
             source_key = (str(src), 0, 0)
         if self._ffmpeg.available:
-            cached = config.EDITOR_CACHE_DIR / f"wf_{FFmpegEngine.cache_key(source_key)}.wav"
+            cached = config.EDITOR_CACHE_DIR / f"wf_{ffmpeg_cache_key(source_key)}.wav"
             cached.parent.mkdir(parents=True, exist_ok=True)
             # 8 kHz made transients and consonants visibly disappear in the editor.
             # Keep a full-band analysis source while reducing only the displayed bins.

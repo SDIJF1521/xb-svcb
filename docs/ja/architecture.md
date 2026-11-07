@@ -34,6 +34,14 @@ XB-SVCBはローカル優先のデスクトップアプリケーションです�
 | Application services -> Vocal enhancement | 設定に応じてボーカル修復、整列、音程補正、マスタリングを行います。 |
 | Model worker -> FFmpeg | 推論後に後処理と最終ミックスへ進むことを表し、実際のFFmpeg呼び出しはApplication servicesが行います。 |
 
+## レイヤー契約
+
+`app/api`（表示層）→ `app/application`（ユースケース層）→ `app/domain`（ドメイン層）。
+`app/infrastructure`（アダプタ層）はユースケース層が宣言するポートを実装し、唯一の
+組み立て場所は`app/composition.py`です。依存方向、ポートの規約、新機能の配置、
+移行台帳は[レイヤー制約（DDD）](../ddd-architecture.md)にまとめてあり、
+`app/tests/test_architecture.py`が自動検証します。
+
 ## 主なモジュール
 
 ### `app/main.py`
@@ -44,7 +52,7 @@ XB-SVCBはローカル優先のデスクトップアプリケーションです�
 
 表示層です。
 
-- `bridge.py`: Vueへ公開するAPIと構成ルート`build_api()`。
+- `bridge.py`: Vueへ公開するAPI。構成ルートは`app/composition.py`の`build_api()`で、インフラとアプリケーションサービスを組み立てます。
 - `http_server.py`: 手動で開始・停止するFastAPI/Uvicornサービス。
 
 ### `app/application/`

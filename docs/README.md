@@ -15,6 +15,7 @@
 ## 开发者
 
 - [系统架构](architecture.md)：Python 后端、Vue 前端、Worker、队列、模型和音频工具的职责与连接。
+- [分层架构约束（DDD）](ddd-architecture.md)：分层依赖红线、端口与适配器、组合根和新增功能的放置规则，由 `app/tests/test_architecture.py` 校验。
 - [启动与推理链路](startup-chain.md)：从 app/main.py 启动到一次普通任务和实时任务完成的过程。
 - [开发与发布](development.md)：代码结构、测试、前端构建、JUCE Host 和安装包构建。
 - [安装器说明](../installer/README.md)：PyInstaller、运行环境、离线 wheelhouse 和 Inno Setup 分卷。

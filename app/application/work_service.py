@@ -11,9 +11,20 @@ from typing import Any
 
 import config
 from domain import JobStatus, Work
-from infrastructure import paths
-from infrastructure.storage import ListRepository, SettingsStore
+from domain.formatting import file_size_label
+from domain.identity import new_id
+from domain.work_request import (
+    WorkRequestError,
+    check_duplicate_model_ids,
+    check_workflow_mode,
+    default_title,
+    normalize_segments,
+    require_multi_selection,
+    require_seedvc_reference,
+)
+from domain.workflow_graph import NODE_LABELS, topological_order, validate_graph
 
+from .adapters import ensure_data_dirs
 from .conversion_service import (
     ConversionService,
     default_steps,
@@ -21,7 +32,7 @@ from .conversion_service import (
     default_steps_multi,
 )
 from .model_service import ModelService
-from .workflow_graph import NODE_LABELS, topological_order, validate_graph
+from .ports import ItemRepository, SettingsRepository
 
 # 工作流文件格式标记（导入时据此识别本软件导出的文件）。
 WORKFLOW_FILE_KIND = "xb-cover-workflow"
@@ -42,10 +53,10 @@ class WorkService:
 
     def __init__(
         self,
-        repo: ListRepository,
+        repo: ItemRepository,
         conversion: ConversionService,
         models: ModelService,
-        settings: SettingsStore,
+        settings: SettingsRepository,
     ) -> None:
         self._repo = repo
         self._conversion = conversion
@@ -91,7 +102,7 @@ class WorkService:
                 existing = self._repo.get(existing_id)
                 if existing:
                     return self._view(existing)
-            work_id = paths.new_id("wrk_")
+            work_id = new_id("wrk_")
             work_dir = config.WORKS_DIR / work_id
             artifact_dir = work_dir / "realtime"
             try:
@@ -117,7 +128,7 @@ class WorkService:
                 "progress": 100,
                 "duration": self._format_duration(seconds),
                 "format": archived_output.suffix.lstrip(".").upper() or "WAV",
-                "size": paths.file_size_label(archived_output),
+                "size": file_size_label(archived_output),
                 "created_at": datetime.now().isoformat(timespec="seconds"),
                 "source_path": status.get("source_path"),
                 "output_path": str(archived_output),
@@ -221,6 +232,56 @@ class WorkService:
             return self._create_multi(payload or {})
         return self._create_single(payload or {})
 
+    def validate_request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """严格校验并归一化任务创建请求（桌面桥与 HTTP 共用同一套规则）。
+
+        ``create`` 保持宽容摄取（跳过失效模型/分句，兼容旧客户端数据），
+        本方法则把非法请求挡在用例边界之外，规则本身位于 ``domain.work_request``。
+        """
+        data = dict(payload or {})
+        mode = str(data.get("mode") or "single")
+        workflow = str(data.get("workflow") or "auto_mix")
+        data["title"] = default_title(data.get("title"), data.get("source_path"))
+
+        if mode == "multi":
+            entries = [dict(entry or {}) for entry in data.get("models") or []]
+            segments = list(data.get("segments") or [])
+            require_multi_selection(entries, segments)
+            check_duplicate_model_ids(
+                [str(entry.get("model_id") or "") for entry in entries]
+            )
+            resolved: dict[str, dict[str, Any]] = {}
+            normalized_entries: list[dict[str, Any]] = []
+            for entry in entries:
+                model_id = str(entry.get("model_id") or "")
+                model = self._models.get(model_id) if model_id else None
+                if not model:
+                    raise WorkRequestError(f"模型不存在：{model_id}", not_found=True)
+                params = dict(entry.get("params") or {})
+                require_seedvc_reference(
+                    model,
+                    params,
+                    f"SeedVC 模型 {model_id} 需要 reference_upload_id",
+                )
+                resolved[model_id] = model
+                normalized_entries.append({"model_id": model_id, "params": params})
+            data["models"] = normalized_entries
+            data["segments"] = normalize_segments(segments, resolved)
+            return data
+
+        check_workflow_mode(workflow, mode)
+        model_id = str(data.get("model_id") or self._models.default_id() or "")
+        model = self._models.get(model_id) if model_id else None
+        if not model:
+            raise WorkRequestError("未找到可用模型，请提供有效 model_id", not_found=True)
+        data["model_id"] = model_id
+        require_seedvc_reference(
+            model,
+            data.get("params") or {},
+            "SeedVC 任务需要 reference_upload_id 或 params.reference_audio",
+        )
+        return data
+
     def create_batch(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         """批量创建单模型翻唱任务，任务会进入串行推理队列。"""
         sources = payload.get("source_paths") or []
@@ -261,7 +322,7 @@ class WorkService:
     def save_preset(self, name: str, params: dict[str, Any]) -> dict[str, Any]:
         presets = self.list_presets()
         preset = {
-            "id": paths.new_id("pre_"),
+            "id": new_id("pre_"),
             "name": (name or "未命名预设").strip() or "未命名预设",
             "params": params or {},
             "updated_at": datetime.now().isoformat(timespec="seconds"),
@@ -289,7 +350,7 @@ class WorkService:
         workflows = self.list_workflows()
         existing_id = str((graph or {}).get("id") or "").strip()
         workflow = {
-            "id": existing_id or paths.new_id("wf_"),
+            "id": existing_id or new_id("wf_"),
             "name": (name or "未命名工作流").strip() or "未命名工作流",
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "nodes": (graph or {}).get("nodes") or [],
@@ -349,15 +410,10 @@ class WorkService:
         vocal_enhancement = self._vocal_enhancement(payload, workflow)
         preprocess = self._preprocess(payload)
 
-        title = payload.get("title")
-        if not title:
-            if source_path:
-                title = Path(source_path).stem
-            else:
-                title = "未命名翻唱"
+        title = default_title(payload.get("title"), source_path)
 
         work = Work(
-            id=paths.new_id("wrk_"),
+            id=new_id("wrk_"),
             title=f"{title} (AI 翻唱)",
             model=model["name"] if model else "默认模型",
             model_id=model_id or "",
@@ -408,7 +464,7 @@ class WorkService:
         settings["enabled"] = True
         title = str(payload.get("title") or (parent or {}).get("title") or target_output.stem).strip()
         work = Work(
-            id=paths.new_id("wrk_"),
+            id=new_id("wrk_"),
             title=f"{title} (AI 增强)",
             model=f"{(parent or {}).get('model') or '导入音频'} · AI 增强",
             model_id=str((parent or {}).get("model_id") or ""),
@@ -446,9 +502,7 @@ class WorkService:
     def _create_multi(self, payload: dict[str, Any]) -> dict[str, Any]:
         """创建多模型混合翻唱任务：每句歌词指派给不同模型。"""
         source_path = payload.get("source_path")
-        title = payload.get("title") or (
-            Path(source_path).stem if source_path else "未命名翻唱"
-        )
+        title = default_title(payload.get("title"), source_path)
 
         # 收集本次用到的模型及其各自参数（解析为可推理的本地路径）
         workflow = self._workflow(payload, mode="multi")
@@ -547,7 +601,7 @@ class WorkService:
         )
 
         work = Work(
-            id=paths.new_id("wrk_"),
+            id=new_id("wrk_"),
             title=f"{title} (混合翻唱)",
             model=model_label,
             model_id=next(iter(seg_models), ""),
@@ -584,9 +638,7 @@ class WorkService:
             raise ValueError(error)
 
         source_path = payload.get("source_path")
-        title = payload.get("title") or (
-            Path(source_path).stem if source_path else "未命名翻唱"
-        )
+        title = default_title(payload.get("title"), source_path)
         workflow_name = str(graph.get("name") or "自定义工作流").strip() or "自定义工作流"
 
         # 为每个「歌声转换」节点解析出可推理的模型路径与框架。
@@ -628,7 +680,7 @@ class WorkService:
         ]
 
         work = Work(
-            id=paths.new_id("wrk_"),
+            id=new_id("wrk_"),
             title=title,
             model=f"自定义工作流 · {workflow_name}",
             model_id="",

@@ -1,16 +1,22 @@
+"""主题背景媒体用例的测试（存储实现位于 infrastructure.theme_media）。"""
+
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import sys
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from api.bridge import Api
+from application.theme_media_service import ThemeMediaService
+from infrastructure.theme_media import ThemeMediaStore
 
 
 class ThemeMediaTests(unittest.TestCase):
+    @staticmethod
+    def service() -> ThemeMediaService:
+        return ThemeMediaService(ThemeMediaStore())
+
     def test_pick_theme_image_has_no_file_size_limit(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -21,19 +27,17 @@ class ThemeMediaTests(unittest.TestCase):
                 stream.write(b"\x89PNG\r\n\x1a\n")
                 stream.seek(50 * 1024 * 1024)
                 stream.write(b"image")
-            api = object.__new__(Api)
 
             def optimize(_src: Path, dst: Path) -> bool:
                 dst.write_bytes(b"optimized")
                 return True
 
             with (
-                patch.object(api, "_open_dialog", return_value=[str(source)]),
-                patch.object(api, "_transcode_theme_image", side_effect=optimize) as transcode,
-                patch("api.bridge.config.THEME_MEDIA_DIR", media_root),
-                patch("api.bridge.paths.ensure_dirs"),
+                patch("infrastructure.theme_media._transcode_image", side_effect=optimize) as transcode,
+                patch("infrastructure.theme_media.config.THEME_MEDIA_DIR", media_root),
+                patch("infrastructure.theme_media.paths.ensure_dirs"),
             ):
-                result = api.pick_theme_media_file()
+                result = self.service().save(str(source))
 
             self.assertTrue(result["ok"])
             self.assertEqual(result["kind"], "image")
@@ -52,19 +56,17 @@ class ThemeMediaTests(unittest.TestCase):
             source.write_bytes(
                 b"\x00\x00\x00\x1cftypheic\x00\x00\x00\x00mif1heicmiaf"
             )
-            api = object.__new__(Api)
 
             def convert(_src: Path, dst: Path) -> bool:
                 dst.write_bytes(b"\xff\xd8\xffconverted")
                 return True
 
             with (
-                patch.object(api, "_open_dialog", return_value=[str(source)]),
-                patch.object(api, "_transcode_theme_image", side_effect=convert) as transcode,
-                patch("api.bridge.config.THEME_MEDIA_DIR", media_root),
-                patch("api.bridge.paths.ensure_dirs"),
+                patch("infrastructure.theme_media._transcode_image", side_effect=convert) as transcode,
+                patch("infrastructure.theme_media.config.THEME_MEDIA_DIR", media_root),
+                patch("infrastructure.theme_media.paths.ensure_dirs"),
             ):
-                result = api.pick_theme_media_file()
+                result = self.service().save(str(source))
 
             self.assertTrue(result["ok"])
             self.assertTrue(result["converted"])
@@ -80,14 +82,12 @@ class ThemeMediaTests(unittest.TestCase):
             media_root.mkdir(parents=True)
             source = root / "photo.png"
             source.write_bytes(b"\xff\xd8\xffjpeg")
-            api = object.__new__(Api)
 
             with (
-                patch.object(api, "_open_dialog", return_value=[str(source)]),
-                patch("api.bridge.config.THEME_MEDIA_DIR", media_root),
-                patch("api.bridge.paths.ensure_dirs"),
+                patch("infrastructure.theme_media.config.THEME_MEDIA_DIR", media_root),
+                patch("infrastructure.theme_media.paths.ensure_dirs"),
             ):
-                result = api.pick_theme_media_file()
+                result = self.service().save(str(source))
 
             self.assertTrue(result["ok"])
             self.assertFalse(result["converted"])
@@ -103,13 +103,13 @@ class ThemeMediaTests(unittest.TestCase):
             outside = root / "outside.png"
             managed.write_bytes(b"managed")
             outside.write_bytes(b"outside")
-            api = object.__new__(Api)
+            service = self.service()
 
-            with patch("api.bridge.config.THEME_MEDIA_DIR", media_root):
-                self.assertFalse(api.delete_theme_media_file(str(outside)))
-                self.assertFalse(api.delete_theme_media_file("../outside.png"))
-                self.assertFalse(api.delete_theme_media_file("data:image/png;base64,AAAA"))
-                self.assertTrue(api.delete_theme_media_file(managed.name))
+            with patch("infrastructure.theme_media.config.THEME_MEDIA_DIR", media_root):
+                self.assertFalse(service.delete(str(outside)))
+                self.assertFalse(service.delete("../outside.png"))
+                self.assertFalse(service.delete("data:image/png;base64,AAAA"))
+                self.assertTrue(service.delete(managed.name))
 
             self.assertFalse(managed.exists())
             self.assertTrue(outside.exists())
@@ -118,10 +118,9 @@ class ThemeMediaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             media_root = Path(td) / "media"
             media_root.mkdir()
-            api = object.__new__(Api)
 
-            with patch("api.bridge.config.THEME_MEDIA_DIR", media_root):
-                self.assertTrue(api.delete_theme_media_file("missing.mp4"))
+            with patch("infrastructure.theme_media.config.THEME_MEDIA_DIR", media_root):
+                self.assertTrue(self.service().delete("missing.mp4"))
 
 
 if __name__ == "__main__":

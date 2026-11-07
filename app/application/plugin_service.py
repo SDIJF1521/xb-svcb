@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 import httpx
 
 import config
-from infrastructure.storage import SettingsStore
+from .ports import SettingsRepository
 
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,63}$")
@@ -55,7 +55,7 @@ _ALLOWED_PARAMS = {
 class PluginService:
     """安装、配置和执行可审计的声明式插件。"""
 
-    def __init__(self, settings: SettingsStore) -> None:
+    def __init__(self, settings: SettingsRepository) -> None:
         self._settings = settings
         config.PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
         config.PLUGIN_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -770,4 +770,87 @@ class PluginService:
             or host.endswith(".github.com")
             or host == "githubusercontent.com"
             or host.endswith(".githubusercontent.com")
+        )
+
+    # ---- 效果器插件（VST3）目录扫描 ----
+
+    def scan_effect_plugin_directory(self, directory: str) -> list[dict[str, str]]:
+        """递归发现指定目录下的 VST3 效果器插件，并记住该目录。"""
+        try:
+            root = Path(str(directory or "")).expanduser()
+        except (OSError, ValueError):
+            return []
+        if not root.is_dir():
+            return []
+        found = self._scan_effect_plugin_root(root)
+        saved = [str(value) for value in self._settings.get("vst3_directories", []) if str(value).strip()]
+        root_text = str(root.resolve())
+        if root_text.casefold() not in {value.casefold() for value in saved}:
+            self._settings.set("vst3_directories", [*saved, root_text])
+        return found
+
+    @staticmethod
+    def _scan_effect_plugin_root(root: Path) -> list[dict[str, str]]:
+        found: dict[str, dict[str, str]] = {}
+
+        def add_plugin(path: Path) -> None:
+            try:
+                relative = path.relative_to(root)
+            except ValueError:
+                relative = Path(path.name)
+            if len(relative.parts) > 1:
+                collection = relative.parts[0]
+            elif root.name.casefold() != "vst3":
+                collection = root.name
+            else:
+                collection = "未分组"
+            found[str(path).casefold()] = {
+                "name": path.stem,
+                "path": str(path),
+                "collection": collection,
+            }
+
+        try:
+            for current, directories, files in os.walk(root):
+                base = Path(current)
+                bundles = [name for name in directories if name.lower().endswith(".vst3")]
+                for name in [*bundles, *(item for item in files if item.lower().endswith(".vst3"))]:
+                    add_plugin(base / name)
+                # A VST3 bundle is self-contained; do not crawl its internal binaries/resources.
+                directories[:] = [name for name in directories if name not in bundles]
+        except OSError:
+            return []
+        return sorted(
+            found.values(),
+            key=lambda item: (item["collection"].casefold(), item["name"].casefold(), item["path"].casefold()),
+        )
+
+    def auto_scan_effect_plugins(self) -> list[dict[str, str]]:
+        """扫描常见 VST3 安装位置，无需用户手动指定目录。"""
+        roots: list[Path] = []
+        if os.name == "nt":
+            common_program_files = os.environ.get("COMMONPROGRAMFILES")
+            program_files = os.environ.get("PROGRAMFILES")
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if common_program_files:
+                roots.append(Path(common_program_files) / "VST3")
+            if program_files:
+                roots.append(Path(program_files) / "Common Files" / "VST3")
+            if local_app_data:
+                roots.append(Path(local_app_data) / "Programs" / "Common" / "VST3")
+        else:
+            roots.extend([Path.home() / ".vst3", Path("/usr/lib/vst3"), Path("/usr/local/lib/vst3")])
+        roots.extend(
+            Path(str(value)).expanduser()
+            for value in self._settings.get("vst3_directories", [])
+        )
+        merged: dict[str, dict[str, str]] = {}
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for item in self._scan_effect_plugin_root(root):
+                merged[item["path"].casefold()] = item
+        return sorted(
+            merged.values(),
+            key=lambda item: (item.get("collection", "").casefold(), item["name"].casefold()),
         )

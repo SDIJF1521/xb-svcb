@@ -19,12 +19,14 @@ from typing import Any
 
 import config
 from domain import InferenceParams
-from infrastructure import paths
-from infrastructure.engine import EngineRegistry
-from infrastructure.ffmpeg_tool import FfmpegTool
-from infrastructure.uvr_tool import UvrTool
-from infrastructure.system_audio import SystemAudioReader, SystemAudioWriter, list_devices
+from domain.identity import new_id
 
+from .adapters import (
+    list_system_audio_devices,
+    system_audio_reader,
+    system_audio_writer,
+)
+from .ports import EngineRegistryPort, FfmpegGateway, SeparationGateway
 from .conversion_service import ConversionService
 from .model_service import ModelService
 
@@ -40,9 +42,9 @@ class RealtimeCoverService:
     def __init__(
         self,
         models: ModelService,
-        ffmpeg: FfmpegTool,
-        uvr: UvrTool,
-        engines: EngineRegistry,
+        ffmpeg: FfmpegGateway,
+        uvr: SeparationGateway,
+        engines: EngineRegistryPort,
     ) -> None:
         self._models = models
         self._ffmpeg = ffmpeg
@@ -78,7 +80,7 @@ class RealtimeCoverService:
                 if not Path(reference).is_file():
                     raise ValueError(f"请为 {model['name']} 选择有效的参考音频")
 
-        session_id = paths.new_id("live_")
+        session_id = new_id("live_")
         session_dir = config.TEMP_DIR / "realtime-covers" / session_id
         duration = float(self._ffmpeg.probe_duration(source) or 0.0)
         if duration <= 0:
@@ -130,7 +132,7 @@ class RealtimeCoverService:
         return self.status(session_id)
 
     def list_system_audio_devices(self) -> list[dict[str, Any]]:
-        return list_devices()
+        return list_system_audio_devices()
 
     def start_system(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Start a streaming changer for a mixed WASAPI loopback input.
@@ -146,7 +148,7 @@ class RealtimeCoverService:
             raise ValueError("人声输入和输出设备不能相同")
         if not input_device or not output_device:
             raise ValueError("请选择系统混合音频回环输入和输出设备")
-        devices = list_devices()
+        devices = list_system_audio_devices()
         if not devices:
             raise RuntimeError("未检测到系统音频设备，请安装 soundcard 并配置虚拟音频线")
         system_input_ids = {
@@ -174,7 +176,7 @@ class RealtimeCoverService:
             raise RuntimeError("系统混合音频变声需要 UVR 人声分离环境与模型")
         model = resolved_models[0]
         self._validate_models(resolved_models)
-        session_id = paths.new_id("system_")
+        session_id = new_id("system_")
         session_dir = config.TEMP_DIR / "realtime-covers" / session_id
         # UVR + RVC each have a fixed per-request cost. Four-second blocks
         # amortize model/file overhead and avoid the repeated short-block
@@ -486,11 +488,11 @@ class RealtimeCoverService:
             started = time.monotonic()
             self._update(session, status="ready", message="混合音频分离与变声已就绪，开始流式输出")
             with (
-                SystemAudioReader(session["input_device"], session["sample_rate"], 2) as reader,
+                system_audio_reader(session["input_device"], session["sample_rate"], 2) as reader,
                 # Playback runs on its own thread and starts after two blocks;
                 # this prevents player.play() from stalling the conversion
                 # pipeline at every block boundary.
-                SystemAudioWriter(
+                system_audio_writer(
                     session["output_device"],
                     session["sample_rate"],
                     2,

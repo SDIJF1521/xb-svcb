@@ -15,7 +15,7 @@ import config
 from application.audio_editor_service import AudioEditorService
 from application.conversion_service import ConversionService
 from application.work_service import WorkService
-from application.workflow_graph import topological_order, validate_graph
+from domain.workflow_graph import topological_order, validate_graph
 from infrastructure import pymss_catalog_meta
 from infrastructure.pymss_worker import _name_score
 from infrastructure.pymss_tool import PymssTool

@@ -5,27 +5,23 @@ from __future__ import annotations
 from typing import Any
 
 import config
-from infrastructure.ffmpeg_tool import FfmpegTool
-from infrastructure.inference_device import (
-    inference_device_capabilities,
-    runtime_device_label,
-)
-from infrastructure.model_assets import engine_asset_status
-from infrastructure.svc_engine import SvcEngine
-from infrastructure.uvr_tool import UvrTool
+from .adapters import device_capabilities as inference_device_capabilities
+from .adapters import engine_asset_status
+from .adapters import runtime_device_label
+from .ports import FfmpegGateway, SeparationGateway, ToolAdapter
 
 
 class SystemService:
     def __init__(
         self,
-        ffmpeg: FfmpegTool,
-        uvr: UvrTool,
-        svc: SvcEngine,
-        rvc: Any | None = None,
-        seedvc: Any | None = None,
-        ddsp: Any | None = None,
-        vocal_enhancement: Any | None = None,
-        pymss: Any | None = None,
+        ffmpeg: FfmpegGateway,
+        uvr: SeparationGateway,
+        svc: ToolAdapter,
+        rvc: ToolAdapter | None = None,
+        seedvc: ToolAdapter | None = None,
+        ddsp: ToolAdapter | None = None,
+        vocal_enhancement: ToolAdapter | None = None,
+        pymss: SeparationGateway | None = None,
     ) -> None:
         self._ffmpeg = ffmpeg
         self._uvr = uvr

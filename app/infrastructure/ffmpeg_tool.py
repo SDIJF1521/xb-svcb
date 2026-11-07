@@ -20,11 +20,20 @@ import config
 
 
 class FfmpegTool:
-    DEFAULT_VOCAL_GAIN_DB = 1.8
-    DEFAULT_INSTRUMENTAL_GAIN_DB = -0.7
-    ADAPTIVE_VOCAL_OVER_MUSIC_DB = 1.5
-    ADAPTIVE_MIN_VOCAL_GAIN_DB = -1.0
-    ADAPTIVE_MAX_VOCAL_GAIN_DB = 4.0
+    # 人声/伴奏的基础平衡。人声是窄带且压缩过的信号，等增益相加时听感会明显盖过
+    # 全频段伴奏，因此默认让人声略低于伴奏；实际值由成品混音按响度测量决定。
+    DEFAULT_VOCAL_GAIN_DB = -1.0
+    DEFAULT_INSTRUMENTAL_GAIN_DB = -0.5
+    # 目标关系：人声响度 = 伴奏响度 + 该偏移（负值表示人声略靠后，融进伴奏）。
+    ADAPTIVE_VOCAL_OVER_MUSIC_DB = -1.0
+    ADAPTIVE_MIN_VOCAL_GAIN_DB = -7.0
+    ADAPTIVE_MAX_VOCAL_GAIN_DB = 3.0
+    # 人声总线处理：切掉次低频隆隆声（不与伴奏低频打架），并轻微收敛 3 kHz 附近的
+    # “贴脸”感，让换气与齿音不再比伴奏更突出。
+    VOCAL_HIGHPASS_HZ = 65.0
+    VOCAL_PRESENCE_TRIM_DB = -1.0
+    VOCAL_PRESENCE_CENTER_HZ = 3000.0
+    VOCAL_PRESENCE_Q = 1.2
 
     def __init__(self) -> None:
         self.ffmpeg = shutil.which("ffmpeg")
@@ -663,13 +672,18 @@ class FfmpegTool:
         instrumental_gain_db: float = DEFAULT_INSTRUMENTAL_GAIN_DB,
         glue: bool = False,
     ) -> bool:
-        """按指定增益混合人声与伴奏，并为求和峰值保留 1.5 dB 余量。"""
+        """按指定增益混合人声与伴奏，并为求和峰值保留 1.5 dB 余量。
+
+        除了增益，人声总线还会做两件让两者“融合”的处理：切掉 65 Hz 以下的
+        隆隆声（避免与伴奏低频互相掩盖）、轻微收敛 3 kHz 的贴脸感。
+        人声/伴奏的相对响度由上层按测量到的 LUFS 决定（见 ``adaptive_mix_profile``）。
+        """
         if not self.ffmpeg:
             return False
         try:
-            gain_db = max(-6.0, min(6.0, float(vocal_gain_db)))
+            gain_db = max(-12.0, min(6.0, float(vocal_gain_db)))
             vocal_gain = 10.0 ** (gain_db / 20.0)
-            music_gain_db = max(-6.0, min(6.0, float(instrumental_gain_db)))
+            music_gain_db = max(-12.0, min(6.0, float(instrumental_gain_db)))
             music_gain = 10.0 ** (music_gain_db / 20.0)
             # 先把人声与伴奏统一为同采样率的立体声，避免单声道/立体声不匹配
             # 导致 amix 失败（失败会让上层回退成"仅干声"，表现为没有伴奏）。
@@ -683,6 +697,9 @@ class FfmpegTool:
             )
             filt = (
                 f"[0:a]aresample={sample_rate},aformat=channel_layouts=stereo,"
+                f"highpass=f={self.VOCAL_HIGHPASS_HZ:g},"
+                f"equalizer=f={self.VOCAL_PRESENCE_CENTER_HZ:g}:t=q:"
+                f"w={self.VOCAL_PRESENCE_Q:g}:g={self.VOCAL_PRESENCE_TRIM_DB:g},"
                 f"volume={vocal_gain:.6f}[v];"
                 f"[1:a]aresample={sample_rate},aformat=channel_layouts=stereo,"
                 f"volume={music_gain:.6f}[m];"

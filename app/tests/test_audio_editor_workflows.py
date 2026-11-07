@@ -11,9 +11,11 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from application.audio_editor_service import AudioEditorService
+from application.media_service import MediaService
+from application.plugin_service import PluginService
 from api.bridge import Api
 from domain import EditorProject
-from infrastructure.storage import ListRepository
+from infrastructure.storage import ListRepository, SettingsStore
 
 
 class _FakeFfmpeg:
@@ -296,21 +298,37 @@ class AudioEditorWorkflowTests(unittest.TestCase):
     def test_work_export_converts_to_selected_format_and_normalizes_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            source = root / "finished.wav"
+            works_dir = root / "works"
+            works_dir.mkdir()
+            source = works_dir / "finished.wav"
             source.write_bytes(b"finished-audio")
-            api = object.__new__(Api)
-            api._stem_path = lambda _work_id, _kind: source
-            api._works = type("Works", (), {"get": lambda _self, _work_id: {"title": "My Cover"}})()
-            api._save_dialog = lambda _title, _filename: str(root / "picked-name.tmp")
+            repo = ListRepository(root / "works.json")
+            repo.add({"id": "work-1", "title": "My Cover", "output_path": str(source)})
             converter = _FakeExportFfmpeg()
+            service = MediaService(repo, converter)
 
-            with patch("api.bridge.FfmpegTool", return_value=converter):
-                result = api.export_work("work-1", "m4a")
+            with patch("application.media_service.config.WORKS_DIR", works_dir):
+                result = service.export("work-1", root / "picked-name.tmp", "m4a")
 
             target = root / "picked-name.m4a"
             self.assertEqual(result, str(target))
             self.assertEqual(target.read_bytes(), b"finished-audio-converted")
             self.assertEqual(converter.calls, [(source, target)])
+
+    def test_work_media_access_rejects_paths_outside_data_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            works_dir = root / "works"
+            works_dir.mkdir()
+            outside = root / "outside.wav"
+            outside.write_bytes(b"outside")
+            repo = ListRepository(root / "works.json")
+            repo.add({"id": "work-1", "title": "T", "output_path": str(outside)})
+            service = MediaService(repo, _FakeExportFfmpeg())
+
+            with patch("application.media_service.config.WORKS_DIR", works_dir):
+                self.assertIsNone(service.stem_path("work-1", "output"))
+                self.assertEqual(service.data_uri("work-1", "output"), "")
 
     def test_plain_txt_auto_split_snaps_to_silence_and_preserves_roles(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -839,8 +857,8 @@ class AudioEditorWorkflowTests(unittest.TestCase):
             (root / "Nested" / "B.vst3" / "Contents").mkdir(parents=True)
             (root / "FabFilter").mkdir(parents=True)
             (root / "FabFilter" / "A.vst3").write_bytes(b"plugin")
-            api = Api.__new__(Api)
-            result = api.scan_effect_plugin_directory(str(root))
+            service = PluginService(SettingsStore(Path(td) / "settings.json"))
+            result = service.scan_effect_plugin_directory(str(root))
             self.assertEqual([item["name"] for item in result], ["A", "B"])
             self.assertEqual([item["collection"] for item in result], ["FabFilter", "Nested"])
 

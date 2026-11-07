@@ -34,7 +34,8 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ConfigDict, Field
 
 import config
-from infrastructure.storage import SettingsStore
+from application.ports import SettingsRepository
+from domain.work_request import WorkRequestError
 
 if TYPE_CHECKING:
     from .bridge import Api
@@ -1984,7 +1985,7 @@ def create_http_app(
             examples=["model_0123456789abcdef"],
         )
     ) -> dict[str, Any]:
-        item = facade._models.get(model_id)
+        item = facade.models.get(model_id)
         if not item:
             raise HTTPException(status_code=404, detail="模型不存在")
         return _public_model(item)
@@ -2001,7 +2002,7 @@ def create_http_app(
         request: ModelRenameRequest,
         model_id: str = ApiPath(..., description="声音模型 ID"),
     ) -> dict[str, Any]:
-        item = facade._models.rename(model_id, request.name)
+        item = facade.models.rename(model_id, request.name)
         if not item:
             raise HTTPException(status_code=404, detail="模型不存在或名称无效")
         return _public_model(item)
@@ -2045,7 +2046,7 @@ def create_http_app(
         model_id: str = ApiPath(..., description="声音模型 ID"),
         repair: bool = Query(default=False, description="是否执行可用的自动修复"),
     ) -> dict[str, Any]:
-        if not facade._models.get(model_id):
+        if not facade.models.get(model_id):
             raise HTTPException(status_code=404, detail="模型不存在")
         result = facade.inspect_model(model_id, repair)
         return {
@@ -2163,6 +2164,12 @@ def create_http_app(
         return {"items": items, "total": len(items)}
 
     def _prepare_job_request(request: JobCreateRequest) -> dict[str, Any]:
+        """把 HTTP 请求转换成用例层载荷。
+
+        传输相关的事（上传件解析、Pydantic → dict）留在表现层；
+        业务规则（模式/工作流/模型/分句/SeedVC 参考音频）由
+        ``facade.validate_work_request`` 在用例层统一校验。
+        """
         if bool(request.source_upload_id) == bool(request.source_path):
             raise HTTPException(
                 status_code=422,
@@ -2178,21 +2185,25 @@ def create_http_app(
             if not source.is_file():
                 raise HTTPException(status_code=404, detail="source_path 指向的文件不存在")
 
+        payload: dict[str, Any] = {
+            "source_path": str(source),
+            "title": request.title or "",
+            "workflow": request.workflow,
+            "vocal_enhancement": request.vocal_enhancement.model_dump(),
+            "preprocess": request.preprocess.model_dump(),
+            # Keep the top-level params for compatibility with older clients;
+            # WorkService uses its high-pitch guard switch as a fallback when a
+            # model entry does not provide one.
+            "params": request.params.model_dump(),
+            "mode": request.mode,
+        }
         if request.mode == "multi":
-            if not request.models or not request.segments:
-                raise HTTPException(status_code=422, detail="multi 模式需要 models 和 segments")
-            models: list[dict[str, Any]] = []
-            selected_ids: set[str] = set()
             shared_guard_explicit = "auto_high_pitch_guard" in request.params.model_fields_set
             shared_guard = request.params.auto_high_pitch_guard
             shared_rounds_explicit = "high_pitch_guard_rounds" in request.params.model_fields_set
             shared_rounds = request.params.high_pitch_guard_rounds
-            for entry in request.models:
-                if entry.model_id in selected_ids:
-                    raise HTTPException(status_code=422, detail=f"models 中模型重复：{entry.model_id}")
-                model = facade._models.get(entry.model_id)
-                if not model:
-                    raise HTTPException(status_code=404, detail=f"模型不存在：{entry.model_id}")
+            models: list[dict[str, Any]] = []
+            for entry in request.models or []:
                 params = entry.params.model_dump()
                 # Pydantic fills omitted model fields with their defaults.  If
                 # the caller supplied the legacy top-level switch, propagate it
@@ -2210,77 +2221,24 @@ def create_http_app(
                     params["high_pitch_guard_rounds"] = shared_rounds
                 if entry.reference_upload_id:
                     params["reference_audio"] = str(_resolve_upload(entry.reference_upload_id))
-                if str(model.get("framework") or "") == "seed-vc" and not params.get(
-                    "reference_audio"
-                ):
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"SeedVC 模型 {entry.model_id} 需要 reference_upload_id",
-                    )
-                selected_ids.add(entry.model_id)
                 models.append({"model_id": entry.model_id, "params": params})
-
-            segments: list[dict[str, Any]] = []
-            for segment in request.segments:
-                if segment.end <= segment.start:
-                    raise HTTPException(status_code=422, detail="segments.end 必须大于 start")
-                raw_ids = segment.model_ids or ([segment.model_id] if segment.model_id else [])
-                model_ids = list(dict.fromkeys(raw_ids))
-                if not model_ids or any(model_id not in selected_ids for model_id in model_ids):
-                    raise HTTPException(
-                        status_code=422,
-                        detail="segments 中的 model_ids 必须来自 models 且不能为空",
-                    )
-                segments.append(
-                    {
-                        "start": segment.start,
-                        "end": segment.end,
-                        "model_id": model_ids[0],
-                        "model_ids": model_ids,
-                    }
+            payload["models"] = models
+            payload["segments"] = [segment.model_dump() for segment in request.segments or []]
+        else:
+            if request.reference_upload_id:
+                payload["params"]["reference_audio"] = str(
+                    _resolve_upload(request.reference_upload_id)
                 )
-            payload = {
-                "source_path": str(source),
-                "title": request.title or source.stem,
-                "workflow": request.workflow,
-                "vocal_enhancement": request.vocal_enhancement.model_dump(),
-                "preprocess": request.preprocess.model_dump(),
-                # Keep the top-level params for compatibility with older
-                # clients; WorkService uses its high-pitch guard switch as a
-                # fallback when a model entry does not provide one.
-                "params": request.params.model_dump(),
-                "mode": "multi",
-                "models": models,
-                "segments": segments,
-            }
-            return payload
+            if request.model_id:
+                payload["model_id"] = request.model_id
 
-        if request.workflow in {"auto_vocal_merge", "manual_vocal_merge"}:
-            raise HTTPException(status_code=422, detail="人声合并工作流只支持 multi 模式")
-        model_id = request.model_id or facade.get_default_model()
-        if not model_id or not facade._models.get(model_id):
-            raise HTTPException(status_code=404, detail="未找到可用模型，请提供有效 model_id")
-
-        params = request.params.model_dump()
-        if request.reference_upload_id:
-            params["reference_audio"] = str(_resolve_upload(request.reference_upload_id))
-        model = facade._models.get(model_id) or {}
-        if str(model.get("framework") or "") == "seed-vc" and not params.get("reference_audio"):
+        try:
+            return facade.validate_work_request(payload)
+        except WorkRequestError as exc:
             raise HTTPException(
-                status_code=422,
-                detail="SeedVC 任务需要 reference_upload_id 或 params.reference_audio",
-            )
-
-        payload = {
-            "source_path": str(source),
-            "model_id": model_id,
-            "title": request.title or source.stem,
-            "workflow": request.workflow,
-            "vocal_enhancement": request.vocal_enhancement.model_dump(),
-            "preprocess": request.preprocess.model_dump(),
-            "params": params,
-        }
-        return payload
+                status_code=404 if exc.not_found else 422,
+                detail=str(exc),
+            ) from exc
 
     def _create_job_from_request(request: JobCreateRequest) -> dict[str, Any]:
         return _public_work(facade.create_work(_prepare_job_request(request)))
@@ -2527,7 +2485,7 @@ def create_http_app(
         work = facade.get_work(job_id)
         if not work:
             raise HTTPException(status_code=404, detail="任务不存在")
-        path = facade._stem_path(job_id, stem)
+        path = facade.work_stem_path(job_id, stem)
         if not path or not path.is_file():
             raise HTTPException(status_code=409, detail="请求的音频尚未生成")
         filename = f"{job_id}_{stem}{path.suffix.lower()}"
@@ -2799,7 +2757,7 @@ def create_http_app(
         project_id: str = ApiPath(..., description="编辑工程 ID"),
         format: Literal["wav", "mp3", "flac"] = Query(default="wav", description="输出格式"),
     ) -> FileResponse:
-        path = facade._editor.render(project_id, format)
+        path = facade.editor.render(project_id, format)
         return _editor_audio_response(path, f"{project_id}.{format}")
 
     @router.get(
@@ -2823,7 +2781,7 @@ def create_http_app(
         track_id: str = ApiPath(..., description="音轨 ID"),
         format: Literal["wav", "mp3", "flac"] = Query(default="wav", description="输出格式"),
     ) -> FileResponse:
-        path = facade._editor._render_track_file(project_id, track_id, format)
+        path = facade.editor.render_track(project_id, track_id, format)
         return _editor_audio_response(path, f"{project_id}_{track_id}.{format}")
 
     @router.get(
@@ -2847,7 +2805,7 @@ def create_http_app(
         clip_id: str = ApiPath(..., description="片段 ID"),
         format: Literal["wav", "mp3", "flac"] = Query(default="flac", description="输出格式"),
     ) -> FileResponse:
-        path = facade._editor._render_clip_file(project_id, clip_id, format, cache=True)
+        path = facade.editor.render_clip(project_id, clip_id, format, cache=True)
         return _editor_audio_response(path, f"{project_id}_{clip_id}.{format}")
 
     @router.get(
@@ -2992,7 +2950,7 @@ def create_http_app(
         track_id: str = ApiPath(..., description="音轨 ID"),
         clip_id: str = ApiPath(..., description="片段 ID"),
     ) -> dict[str, Any]:
-        model = facade._models.get(request.model_id)
+        model = facade.models.get(request.model_id)
         if not model:
             raise HTTPException(status_code=404, detail="声音模型不存在")
         params = request.params.model_dump()
@@ -3096,7 +3054,7 @@ class HttpApiServer:
 
     SETTINGS_KEY = "http_api"
 
-    def __init__(self, facade: "Api", settings: SettingsStore) -> None:
+    def __init__(self, facade: "Api", settings: SettingsRepository) -> None:
         self._facade = facade
         self._settings = settings
         self._lock = threading.RLock()

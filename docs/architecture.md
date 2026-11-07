@@ -34,6 +34,14 @@ XB-SVCB 是一个本地优先的桌面应用。前端负责交互和状态展示
 | Application Services -> Vocal Enhancement | 按任务配置执行可选的人声修复、对齐、修音和母带增强。 |
 | Model Worker -> FFmpeg | 表示推理结果进入后处理和最终混音流程；FFmpeg 的实际调用由业务流程编排。 |
 
+## 分层契约
+
+`app/api`（表现层）→ `app/application`（用例层）→ `app/domain`（领域层），
+`app/infrastructure`（适配层）实现用例层声明的端口，唯一装配点是 `app/composition.py`。
+依赖方向、端口约定、新增功能的放置规则和迁移台账见
+[分层架构约束（DDD）](ddd-architecture.md)；这套规则由
+`app/tests/test_architecture.py` 自动校验。
+
 ## 主要模块
 
 ### app/main.py
@@ -44,7 +52,7 @@ XB-SVCB 是一个本地优先的桌面应用。前端负责交互和状态展示
 
 表现层：
 
-- bridge.py 定义暴露给 Vue 的 Api 和组合根 build_api()。
+- bridge.py 定义暴露给 Vue 的 Api；组合根在 `app/composition.py` 的 build_api()，负责装配基础设施与应用服务。
 - http_server.py 创建可手动启停的 FastAPI/Uvicorn 服务。
 
 ### app/application/

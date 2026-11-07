@@ -10,8 +10,13 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Any
+
+# Windows 上浏览器/杀毒软件或其他线程可能短暂占用目标文件，替换失败时重试几次。
+_REPLACE_RETRIES = 5
+_REPLACE_RETRY_DELAY = 0.02
 
 
 class JsonStore:
@@ -40,7 +45,14 @@ class JsonStore:
     def _write(self, data: Any) -> None:
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(self._path)
+        for attempt in range(_REPLACE_RETRIES):
+            try:
+                tmp.replace(self._path)
+                return
+            except PermissionError:
+                if attempt + 1 >= _REPLACE_RETRIES:
+                    raise
+                time.sleep(_REPLACE_RETRY_DELAY)
 
     def _ensure_file(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

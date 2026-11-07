@@ -16,18 +16,25 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 import config
 from domain import InferenceParams, JobStatus, StepStatus
-from infrastructure import paths
-from infrastructure.engine import EngineRegistry
-from infrastructure.ffmpeg_tool import FfmpegTool
-from infrastructure.storage import ListRepository
-from infrastructure.uvr_tool import UvrTool
-from infrastructure.pymss_tool import PymssTool
-from infrastructure.vocal_enhancement import (
-    VocalEnhancementControls,
-    VocalEnhancementProcessor,
+from domain.formatting import file_size_label
+from domain.vocal_enhancement import VocalEnhancementControls, enhancement_settings
+from domain.workflow_graph import (
+    NODE_LABELS,
+    port_label,
+    stem_port_id,
+    topological_order,
 )
-from .workflow_graph import NODE_LABELS, port_label, stem_port_id, topological_order
 
+from .adapters import pymss_tool as create_pymss_tool
+from .adapters import vocal_enhancement as create_vocal_enhancement
+from .ports import (
+    EngineRegistryPort,
+    FfmpegGateway,
+    ItemRepository,
+    PymssGateway,
+    SeparationGateway,
+    VocalEnhancementPort,
+)
 if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
@@ -386,19 +393,19 @@ class ConversionService:
 
     def __init__(
         self,
-        repo: ListRepository,
-        ffmpeg: FfmpegTool,
-        uvr: UvrTool,
-        engines: EngineRegistry,
-        vocal_enhancement: VocalEnhancementProcessor | None = None,
-        pymss: PymssTool | None = None,
+        repo: ItemRepository,
+        ffmpeg: FfmpegGateway,
+        uvr: SeparationGateway,
+        engines: EngineRegistryPort,
+        vocal_enhancement: VocalEnhancementPort | None = None,
+        pymss: PymssGateway | None = None,
     ) -> None:
         self._repo = repo
         self._ffmpeg = ffmpeg
         self._uvr = uvr
-        self._pymss = pymss or PymssTool()
+        self._pymss = pymss or create_pymss_tool()
         self._engines = engines
-        self._vocal_enhancement = vocal_enhancement or VocalEnhancementProcessor()
+        self._vocal_enhancement = vocal_enhancement or create_vocal_enhancement()
         # so-vits 引擎引用：供 F0 探针（仅 so-vits 有意义）使用
         self._svc = engines.sovits
         # 串行任务队列：单 GPU 上一次只跑一个任务，避免并发推理叠加导致显存 OOM
@@ -443,48 +450,7 @@ class ConversionService:
     def _enhancement_settings(
         work: dict[str, Any],
     ) -> tuple[bool, str, VocalEnhancementControls]:
-        raw = work.get("vocal_enhancement") or {}
-        if not isinstance(raw, dict):
-            return False, "basic", {
-                "pitch_correction": 0.45,
-                "timing_alignment": 0.45,
-                "timbre_focus": 0.60,
-                "ai_eq": 0.55,
-                "ai_compressor": 0.45,
-                "ai_exciter": 0.25,
-                "stereo_width": 0.30,
-                "loudness_envelope": 0.58,
-            }
-        level = str(raw.get("level") or "basic").strip().lower()
-        if level not in VocalEnhancementProcessor.LEVELS:
-            level = VocalEnhancementProcessor.LEVEL_BASIC
-
-        def strength(key: str, default: float) -> float:
-            try:
-                value = float(raw.get(key, default))
-            except (TypeError, ValueError):
-                value = default
-            if value != value:
-                value = default
-            return max(0.0, min(1.0, value))
-
-        controls: VocalEnhancementControls = {
-            "pitch_correction": strength("pitch_correction", 0.45),
-            "timing_alignment": strength("timing_alignment", 0.45),
-            "timbre_focus": strength("timbre_focus", 0.60),
-            "ai_eq": strength("ai_eq", 0.55),
-            "ai_compressor": strength("ai_compressor", 0.45),
-            "ai_exciter": strength("ai_exciter", 0.25),
-            "stereo_width": strength("stereo_width", 0.30),
-            "loudness_envelope": strength("loudness_envelope", 0.58),
-        }
-        if work.get("high_pitch_guard_applied"):
-            # 防护装置已恢复高谐波。音色塑造控制部分被有意调至更轻，以保持受保护的辅音自然清晰。
-            controls["timbre_focus"] *= 0.68
-            controls["ai_eq"] *= 0.78
-            controls["ai_compressor"] *= 0.82
-            controls["ai_exciter"] *= 0.45
-        return bool(raw.get("enabled")), level, controls
+        return enhancement_settings(work)
 
     @staticmethod
     def _preprocess_settings(work: dict[str, Any]) -> tuple[bool, str, str, bool, str]:
@@ -2855,9 +2821,8 @@ class ConversionService:
         enhanced: bool,
         log_file: Path,
     ) -> bool:
-        if not enhanced:
-            return self._ffmpeg.mix(vocals, instrumental, output)
-
+        # 无论是否做了 AI 增强，成品混音都按测量到的响度平衡人声与伴奏：
+        # 等增益相加时，窄带且已压缩的人声会明显盖过全频段伴奏。
         profile = self._ffmpeg.adaptive_mix_profile(vocals, instrumental)
         raw_vocal_gain = profile.get("vocal_gain_db")
         raw_music_gain = profile.get("instrumental_gain_db")
@@ -2876,9 +2841,10 @@ class ConversionService:
             measured = "响度测量不可用，使用保守回退"
         self._log(
             log_file,
-            "  AI 动态混音平衡："
+            "  成品混音平衡（"
+            f"{'增强后人声' if enhanced else '转换人声'}）："
             f"人声 {vocal_gain:+.2f} dB / 伴奏 {music_gain:+.2f} dB；"
-            f"{measured}；轻量并行总线融合",
+            f"{measured}；人声总线收敛（切次低频 + 收敛 3 kHz）",
         )
         return self._ffmpeg.mix(
             vocals,
@@ -3076,7 +3042,7 @@ class ConversionService:
             work["status"] = JobStatus.DONE.value
             work["output_path"] = str(output)
             work["format"] = output.suffix.lstrip(".").upper() or "WAV"
-            work["size"] = paths.file_size_label(output)
+            work["size"] = file_size_label(output)
             work["duration"] = self._format_duration(duration)
             self._record_history(work)
             self._save(work)
@@ -3436,7 +3402,7 @@ class ConversionService:
             work["converted_path"] = str(converted)
             work["ai_vocal_paths"] = [str(converted)]
             work["format"] = output.suffix.lstrip(".").upper() or "WAV"
-            work["size"] = paths.file_size_label(output)
+            work["size"] = file_size_label(output)
             work["duration"] = self._format_duration(duration)
             self._record_history(work)
             self._save(work)
@@ -4236,7 +4202,7 @@ class ConversionService:
             work["status"] = JobStatus.DONE.value
             work["output_path"] = str(output)
             work["format"] = output.suffix.lstrip(".").upper() or "WAV"
-            work["size"] = paths.file_size_label(output)
+            work["size"] = file_size_label(output)
             work["duration"] = self._format_duration(duration)
             self._record_history(work)
             self._save(work)
@@ -4745,7 +4711,7 @@ class ConversionService:
             work["converted_path"] = str(primary)
             work["workflow_outputs"] = saved_outputs
             work["format"] = primary.suffix.lstrip(".").upper() or "WAV"
-            work["size"] = paths.file_size_label(primary)
+            work["size"] = file_size_label(primary)
             work["duration"] = self._format_duration(duration)
             self._record_history(work)
             self._save(work)

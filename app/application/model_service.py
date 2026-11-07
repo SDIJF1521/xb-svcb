@@ -15,14 +15,16 @@ import yaml
 
 import config
 from domain import ModelFile, ModelInfo, ModelType
-from infrastructure import paths
-from infrastructure.storage import ListRepository, SettingsStore
+from domain.formatting import human_size
+from domain.identity import new_id
+from .adapters import ensure_data_dirs
+from .ports import ItemRepository, SettingsRepository
 
 
 class ModelService:
     _RVC_INSPECT_MARKER = "RVC_INSPECT\t"
 
-    def __init__(self, repo: ListRepository, settings: SettingsStore) -> None:
+    def __init__(self, repo: ItemRepository, settings: SettingsRepository) -> None:
         self._repo = repo
         self._settings = settings
 
@@ -106,13 +108,13 @@ class ModelService:
 
         rows = []
         for entry in summaries.values():
-            entry["size"] = paths.human_size(int(entry.get("size_bytes") or 0))
+            entry["size"] = human_size(int(entry.get("size_bytes") or 0))
             rows.append(entry)
         rows.sort(key=lambda x: (0 if x.get("count") else 1, str(x.get("name") or "")))
         return {
             "total": sum(int(x.get("count") or 0) for x in rows),
             "total_size_bytes": total_size,
-            "total_size": paths.human_size(total_size),
+            "total_size": human_size(total_size),
             "default_model_id": default_id,
             "frameworks": rows,
         }
@@ -146,7 +148,7 @@ class ModelService:
             - ddsp-svc：main_model(.pt) + main_config(config.yaml) 必填。
         必填文件缺失则返回 None。
         """
-        paths.ensure_dirs()
+        ensure_data_dirs()
         framework = config.modelhub_normalize_framework(payload.get("framework"))
         is_rvc = framework == "rvc"
         is_seedvc = framework == "seed-vc"
@@ -160,7 +162,7 @@ class ModelService:
         if not is_rvc and not main_config_src:
             return None
 
-        model_id = paths.new_id("mdl_")
+        model_id = new_id("mdl_")
         dst_dir = config.MODELS_DIR / model_id
         dst_dir.mkdir(parents=True, exist_ok=True)
 
@@ -240,7 +242,7 @@ class ModelService:
             name=name,
             type=model_type,
             sample_rate=str(payload.get("sample_rate", "44.1kHz")),
-            size=paths.human_size(total),
+            size=human_size(total),
             imported_at=datetime.now().strftime("%Y-%m-%d"),
             main_model=main_model,
             main_config=main_config or ModelFile("", ""),
@@ -459,7 +461,7 @@ class ModelService:
                     issues.append({"key": "main_config", "level": "warn", "message": "配置文件无法解析"})
 
         size = self._model_size_bytes(normalized)
-        normalized["size"] = paths.human_size(size)
+        normalized["size"] = human_size(size)
         metadata = dict(normalized.get("metadata") or {})
         metadata.update(
             {
@@ -639,7 +641,7 @@ class ModelService:
         if not normalized.get("sample_rate"):
             normalized["sample_rate"] = "44.1kHz"
         if refresh_size or not normalized.get("size"):
-            normalized["size"] = paths.human_size(self._model_size_bytes(normalized))
+            normalized["size"] = human_size(self._model_size_bytes(normalized))
         for key in ("main_model", "main_config"):
             normalized.setdefault(key, {"name": "", "path": ""})
         return normalized
