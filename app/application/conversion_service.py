@@ -26,7 +26,7 @@ from infrastructure.vocal_enhancement import (
     VocalEnhancementControls,
     VocalEnhancementProcessor,
 )
-from .workflow_graph import NODE_LABELS, port_label, topological_order
+from .workflow_graph import NODE_LABELS, port_label, stem_port_id, topological_order
 
 if TYPE_CHECKING:
     import numpy as np
@@ -4379,28 +4379,30 @@ class ConversionService:
                         )
                     if sep.simulated:
                         self._log(log_file, "  分离降级：直接使用输入音频作为人声")
-                    # 不同模型输出音轨不一致：UVR / PyMSS 人声模型输出人声+伴奏，
-                    # 去混响类模型输出干声+湿声，多轨模型还会输出鼓/贝斯等音轨。
-                    # 这里按实际产出的音轨生成端口，供下游节点按需连接。
-                    outs["vocals"] = Path(sep.vocals)
-                    outs["audio"] = Path(sep.vocals)
-                    if sep.instrumental and Path(sep.instrumental).exists():
-                        outs["instrumental"] = Path(sep.instrumental)
+                    # 不同模型输出音轨不一致：人声模型输出人声+伴奏，去混响模型输出
+                    # 干声+湿声，多轨模型（HTDemucs 等）输出鼓/贝斯/人声/其他。
+                    # 端口按模型声明的音轨生成：名字正好是 vocals/instrumental/
+                    # other/audio 时直接占用该通用端口，否则用 stem:<name>。
+                    primary_path = Path(sep.vocals)
+                    instrumental_path = (
+                        Path(sep.instrumental)
+                        if sep.instrumental and Path(sep.instrumental).exists()
+                        else None
+                    )
                     produced = [
                         item
                         for item in (getattr(sep, "stems", None) or [])
                         if isinstance(item, dict)
                     ]
+                    mapped: dict[str, Path] = {}
                     extra_stems: list[tuple[str, Path]] = []
-                    used_paths = {str(Path(p)) for p in outs.values() if p}
                     for index, item in enumerate(produced):
                         try:
                             stem_path = Path(str(item.get("path") or ""))
                         except (TypeError, ValueError):
                             continue
-                        if not stem_path.is_file() or str(stem_path) in used_paths:
+                        if not stem_path.is_file():
                             continue
-                        used_paths.add(str(stem_path))
                         raw_label = str(item.get("name") or "").strip()
                         if declared_stems:
                             matched = next(
@@ -4413,15 +4415,24 @@ class ConversionService:
                                 # 输出文件名没带音轨名时按声明顺序对齐
                                 raw_label = declared_stems[index]
                         raw_label = raw_label or stem_path.stem
-                        slug = re.sub(r"[^0-9a-zA-Z_\u4e00-\u9fff]+", "_", raw_label).strip("_").lower()
-                        port = f"stem:{slug or f'stem{len(extra_stems) + 1}'}"
-                        while port in outs:
+                        port = stem_port_id(raw_label, len(extra_stems))
+                        while port in mapped:
                             port = f"{port}_2"
-                        outs[port] = stem_path
-                        extra_stems.append((raw_label, stem_path))
-                    if extra_stems:
-                        # 「其他音轨」端口方便用户只连一根线，取第一路未映射的 stem。
-                        outs["other"] = extra_stems[0][1]
+                        mapped[port] = stem_path
+                        if str(stem_path) not in {
+                            str(primary_path),
+                            str(instrumental_path or ""),
+                        }:
+                            extra_stems.append((raw_label, stem_path))
+                    # 通用别名只在没有同名真实音轨时补齐，避免把「主音轨」错当人声。
+                    for alias in ("vocals", "audio"):
+                        if alias not in mapped:
+                            mapped[alias] = primary_path
+                    if instrumental_path and "instrumental" not in mapped:
+                        mapped["instrumental"] = instrumental_path
+                    if extra_stems and "other" not in mapped:
+                        mapped["other"] = extra_stems[0][1]
+                    outs = mapped
                     self._log(
                         log_file,
                         f"  分离引擎/模型: {engine} / {model or config.UVR_SEP_MODEL}",

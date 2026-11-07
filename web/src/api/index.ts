@@ -84,6 +84,8 @@ import type {
   PymssDownloadJob,
   CoverWorkflow,
   WorkflowGraph,
+  WorkflowFileExportResult,
+  WorkflowFileImportResult,
 } from './types'
 
 export * from './types'
@@ -383,6 +385,22 @@ export const api = {
 
   deleteCoverWorkflow: (id: string) =>
     invoke<boolean>('delete_cover_workflow', [id], () => mock.deleteCoverWorkflow(id)),
+
+  /** 把工作流导出成可分享的 JSON 文件（对话框文案用当前语言）。 */
+  exportCoverWorkflowFile: (graph: WorkflowGraph, dialogTitle = '') =>
+    invoke<WorkflowFileExportResult>('export_cover_workflow_file', [graph, dialogTitle], () =>
+      mock.exportCoverWorkflowFile(graph),
+    ),
+
+  /** 从 JSON 文件导入工作流（载入画布，不直接写入已保存列表）。 */
+  importCoverWorkflowFile: (
+    labels: { title?: string; file?: string; allFiles?: string } = {},
+  ) =>
+    invoke<WorkflowFileImportResult>(
+      'import_cover_workflow_file',
+      [labels.title || '', labels.file || '', labels.allFiles || ''],
+      () => mock.importCoverWorkflowFile(),
+    ),
 
   retryWork: (id: string) =>
     invoke<boolean>('retry_work', [id], () => mock.retryWork(id)),
@@ -722,6 +740,12 @@ export const api = {
   exportEditorProject: (projectId: string, fmt = 'wav') =>
     invoke<string>('export_editor_project', [projectId, fmt], () =>
       mock.exportEditorProject(projectId, fmt),
+    ),
+
+  /** 导出单条音轨的音频文件（只渲染该轨的片段与效果）。 */
+  exportEditorTrack: (projectId: string, trackId: string, fmt = 'wav') =>
+    invoke<string>('export_editor_track', [projectId, trackId, fmt], () =>
+      mock.exportEditorTrack(projectId, trackId, fmt),
     ),
 
   getEditorWaveform: (projectId: string, clipId: string, bins = 160) =>

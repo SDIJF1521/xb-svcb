@@ -23,6 +23,10 @@ from .conversion_service import (
 from .model_service import ModelService
 from .workflow_graph import NODE_LABELS, topological_order, validate_graph
 
+# 工作流文件格式标记（导入时据此识别本软件导出的文件）。
+WORKFLOW_FILE_KIND = "xb-cover-workflow"
+WORKFLOW_FILE_VERSION = 1
+
 
 class WorkService:
     _WORKFLOWS = {
@@ -301,6 +305,41 @@ class WorkService:
         next_workflows = [w for w in workflows if w.get("id") != workflow_id]
         self._settings.set("cover_workflows", next_workflows)
         return len(next_workflows) != len(workflows)
+
+    @staticmethod
+    def workflow_file_payload(graph: dict[str, Any]) -> dict[str, Any]:
+        """导出工作流文件的内容（带格式标记，方便将来兼容升级）。"""
+        graph = graph or {}
+        return {
+            "kind": WORKFLOW_FILE_KIND,
+            "version": WORKFLOW_FILE_VERSION,
+            "app": "XB-SVCB",
+            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "name": str(graph.get("name") or "未命名工作流").strip() or "未命名工作流",
+            "nodes": list(graph.get("nodes") or []),
+            "edges": list(graph.get("edges") or []),
+        }
+
+    @staticmethod
+    def parse_workflow_file(data: Any) -> dict[str, Any]:
+        """解析工作流文件，返回可直接载入画布的 graph；非法时抛 ValueError。"""
+        if not isinstance(data, dict):
+            raise ValueError("工作流文件格式不正确")
+        nodes = data.get("nodes")
+        edges = data.get("edges")
+        if not isinstance(nodes, list) or not isinstance(edges, list):
+            raise ValueError("工作流文件缺少节点或连线数据")
+        graph = {
+            "id": "",
+            "name": str(data.get("name") or "导入的工作流").strip() or "导入的工作流",
+            "updated_at": "",
+            "nodes": nodes,
+            "edges": edges,
+        }
+        problem = validate_graph(graph)
+        if problem:
+            raise ValueError(f"工作流文件无效：{problem}")
+        return graph
 
     def _create_single(self, payload: dict[str, Any]) -> dict[str, Any]:
         model_id = payload.get("model_id") or self._models.default_id()

@@ -1248,6 +1248,59 @@ class Api:
     def delete_cover_workflow(self, workflow_id: str) -> bool:
         return self._works.delete_workflow(workflow_id)
 
+    def export_cover_workflow_file(
+        self, graph: dict[str, Any], dialog_title: str = ""
+    ) -> dict[str, Any]:
+        """把当前工作流导出成可分享的 JSON 文件。"""
+        graph = graph or {}
+        payload = self._works.workflow_file_payload(graph)
+        default_name = f"{_safe_filename(str(payload.get('name') or 'cover-workflow'))}.xbworkflow.json"
+        destination = self._save_dialog(dialog_title or "导出工作流文件", default_name)
+        if not destination:
+            return {"ok": False, "cancelled": True}
+        target = Path(destination)
+        if target.suffix.lower() != ".json":
+            target = target.with_suffix(".json")
+        try:
+            target.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            return {"ok": False, "error": str(exc) or "工作流导出失败"}
+        return {"ok": True, "path": str(target)}
+
+    def import_cover_workflow_file(
+        self,
+        dialog_title: str = "",
+        file_label: str = "",
+        all_files_label: str = "",
+    ) -> dict[str, Any]:
+        """从 JSON 文件导入工作流（不覆盖已保存列表，载入到画布另存）。
+
+        原生对话框的标题与文件类型由前端传入当前语言的文案。
+        """
+        selected = self._open_dialog(
+            dialog_title or "导入工作流文件",
+            multiple=False,
+            file_types=(
+                f"{file_label or '工作流文件'} (*.json)",
+                f"{all_files_label or '所有文件'} (*.*)",
+            ),
+        )
+        if not selected:
+            return {"ok": False, "cancelled": True}
+        path = Path(selected[0])
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            return {"ok": False, "error": f"读取工作流文件失败：{exc}"}
+        try:
+            graph = self._works.parse_workflow_file(data)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "path": str(path), "graph": graph}
+
     def retry_work(self, work_id: str) -> bool:
         return self._works.retry(work_id)
 
@@ -1629,6 +1682,36 @@ class Api:
             else "导出编辑器混音"
         )
         dest = self._save_dialog(dialog_title, filename)
+        if not dest:
+            return ""
+        dest_path = Path(dest)
+        if dest_path.suffix.lower() != ext:
+            dest_path = dest_path.with_suffix(ext)
+        try:
+            shutil.copyfile(src, dest_path)
+            return str(dest_path)
+        except OSError:
+            return ""
+
+    def export_editor_track(self, project_id: str, track_id: str, fmt: str = "wav") -> str:
+        """导出单条音轨的音频文件（只渲染该轨的片段与效果）。"""
+        project = self._editor.get(project_id) or {}
+        track = next(
+            (
+                item
+                for item in project.get("tracks") or []
+                if str(item.get("id") or "") == str(track_id or "")
+            ),
+            None,
+        )
+        src = self._editor.render_track(project_id, track_id, fmt)
+        if src is None:
+            return ""
+        ext = "." + self._editor._normalize_format(fmt)
+        title = str(project.get("title") or "音频编辑").strip()
+        track_name = str((track or {}).get("name") or "音轨").strip()
+        filename = f"{_safe_filename(title)}_{_safe_filename(track_name)}{ext}"
+        dest = self._save_dialog("导出音轨音频", filename)
         if not dest:
             return ""
         dest_path = Path(dest)

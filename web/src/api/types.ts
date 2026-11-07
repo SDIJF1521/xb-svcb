@@ -419,6 +419,23 @@ export interface CoverWorkflow {
   edges: WorkflowEdge[]
 }
 
+/** 工作流文件导出结果。 */
+export interface WorkflowFileExportResult {
+  ok: boolean
+  path?: string
+  cancelled?: boolean
+  error?: string
+}
+
+/** 工作流文件导入结果（成功时带可载入画布的 graph）。 */
+export interface WorkflowFileImportResult {
+  ok: boolean
+  path?: string
+  cancelled?: boolean
+  error?: string
+  graph?: WorkflowGraph
+}
+
 export interface CreateWorkPayload {
   title?: string
   model_id?: string

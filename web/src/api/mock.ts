@@ -86,6 +86,8 @@ import type {
   PluginActionResult,
   CoverWorkflow,
   WorkflowGraph,
+  WorkflowFileExportResult,
+  WorkflowFileImportResult,
 } from './types'
 
 const now = () => new Date().toISOString()
@@ -1199,6 +1201,25 @@ export const mock = {
     mockCoverWorkflows = mockCoverWorkflows.filter((w) => w.id !== id)
     return mockCoverWorkflows.length !== before
   },
+  exportCoverWorkflowFile(graph: WorkflowGraph): WorkflowFileExportResult {
+    const name = (graph.name || '未命名工作流').replace(/[\\/:*?"<>|]/g, '_')
+    return { ok: true, path: `C:/exports/${name}.xbworkflow.json` }
+  },
+  importCoverWorkflowFile(): WorkflowFileImportResult {
+    const source = mockCoverWorkflows[0]
+    if (!source) return { ok: false, cancelled: true }
+    return {
+      ok: true,
+      path: 'C:/exports/imported.xbworkflow.json',
+      graph: {
+        id: '',
+        name: `${source.name}（导入）`,
+        updated_at: '',
+        nodes: source.nodes,
+        edges: source.edges,
+      },
+    }
+  },
   retryWork(id: string): boolean {
     const w = mockWorks.find((x) => x.id === id)
     if (!w) return false
@@ -2110,6 +2131,9 @@ export const mock = {
   },
   exportEditorProject(projectId: string, fmt = 'wav'): string {
     return `C:/exports/${projectId}.${editorFormat(fmt)}`
+  },
+  exportEditorTrack(projectId: string, trackId: string, fmt = 'wav'): string {
+    return `C:/exports/${projectId}_${trackId}.${editorFormat(fmt)}`
   },
   getEditorWaveform(_projectId: string, clipId: string, bins = 160): EditorWaveform {
     const count = Math.max(16, Math.min(900, bins))

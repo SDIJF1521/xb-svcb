@@ -3,6 +3,7 @@
 用假 ffmpeg / UVR / 引擎替代真实推理，验证编排逻辑是否正确。
 """
 
+import json
 import shutil
 import uuid
 from pathlib import Path
@@ -609,6 +610,83 @@ def test_run_workflow_forwards_primary_stem(wtmp: Path, monkeypatch) -> None:  #
     # 标题带上端口名，方便在音频编辑器里区分素材。
     labels = [item["label"] for item in saved["workflow_outputs"]]
     assert labels == ["人声分离 · 人声", "人声分离 · 音轨 drums"]
+
+
+def test_workflow_file_round_trip(wtmp: Path, monkeypatch) -> None:  # noqa: ANN001
+    """导出的工作流文件可以被重新导入，并保留节点、连线与名称。"""
+    repo = _repo(wtmp, monkeypatch)
+    service = WorkService(repo, _QueuedConversion(), _FakeModels([]), SettingsStore(config.SETTINGS_DB))
+    graph = _graph()
+    graph["name"] = "我的工作流"
+    payload = service.workflow_file_payload(graph)
+
+    assert payload["kind"] == "xb-cover-workflow"
+    assert payload["name"] == "我的工作流"
+    # 走一遍 JSON 序列化，确认文件内容可读回
+    restored = service.parse_workflow_file(json.loads(json.dumps(payload)))
+    assert restored["name"] == "我的工作流"
+    assert restored["id"] == ""
+    assert len(restored["nodes"]) == len(graph["nodes"])
+    assert len(restored["edges"]) == len(graph["edges"])
+    assert validate_graph(restored) is None
+
+
+def test_parse_workflow_file_rejects_invalid_graph() -> None:
+    with pytest.raises(ValueError):
+        WorkService.parse_workflow_file({"nodes": "bad", "edges": []})
+    # 缺少输入节点 / 保存节点的图也要拒绝
+    with pytest.raises(ValueError):
+        WorkService.parse_workflow_file(
+            {"nodes": [{"id": "c", "type": "convert"}], "edges": []}
+        )
+
+
+class _FakeAudioEngine:
+    """替代 FFmpegEngine：直接写出一个文件，用轨道数量标记渲染内容。"""
+
+    available = True
+
+    def render_timeline(self, project: dict, dst: Path, _cache_dir: Path, _fmt: str) -> bool:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(b"tracks:" + str(len(project.get("tracks") or [])).encode())
+        return True
+
+
+def test_editor_render_track_only_renders_selected_track(wtmp: Path, monkeypatch) -> None:  # noqa: ANN001
+    """导出单轨：只把选中的那条音轨交给渲染器，其它音轨不参与。"""
+    repo = _repo(wtmp, monkeypatch)
+    monkeypatch.setattr(config, "EDITOR_DIR", wtmp / "editor")
+    monkeypatch.setattr(config, "EDITOR_CACHE_DIR", wtmp / "editor" / "cache")
+    project = {
+        "id": "proj_1",
+        "title": "测试工程",
+        "duration": 12.0,
+        "sample_rate": 44100,
+        "tracks": [
+            {"id": "tr_vocal", "name": "翻唱成品", "type": "audio", "clips": [{"id": "c1", "start": 0, "end": 12, "file": "a.wav"}]},
+            {"id": "tr_bgm", "name": "伴奏", "type": "audio", "clip": [], "clips": []},
+        ],
+    }
+    editor_repo = ListRepository(wtmp / "editor_projects.json")
+    editor_repo.add(project)
+    service = AudioEditorService(
+        editor_repo,
+        repo,
+        None,  # type: ignore[arg-type]
+        _FakeFfmpeg(),
+        None,  # type: ignore[arg-type]
+        None,
+        vocal_enhancement=_FakeEnhancer(),
+        pymss=_FakePymss(),
+    )
+    service._audio = _FakeAudioEngine()  # noqa: SLF001 - 替换真实 ffmpeg 渲染
+
+    rendered = service.render_track("proj_1", "tr_vocal", "wav")
+
+    assert rendered is not None and rendered.is_file()
+    # 只有 1 条音轨被渲染，说明没有把整轨混音当作单轨导出
+    assert rendered.read_bytes() == b"tracks:1"
+    assert service.render_track("proj_1", "missing", "wav") is None
 
 
 def test_run_workflow_fails_when_save_node_has_no_input(wtmp: Path, monkeypatch) -> None:  # noqa: ANN001

@@ -25,6 +25,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -59,6 +60,21 @@ PORT_LABELS: dict[str, str] = {
     "instrumental": "伴奏",
     "other": "其他音轨",
 }
+
+# 音轨名与这些通用端口同名时直接占用通用端口，旧工作流的连线可无缝继续使用。
+CANONICAL_STEM_PORTS = ("vocals", "instrumental", "other", "audio")
+
+
+def stem_port_id(label: str, index: int = 0) -> str:
+    """模型音轨名 → 端口 id：同名通用端口直用，否则 ``stem:<slug>``。
+
+    例：vocals → ``vocals``；drums → ``stem:drums``；No Reverb →
+    ``stem:no_reverb``。前端用同一套规则，保证连线端口一致。
+    """
+    slug = re.sub(r"[^0-9a-zA-Z_\u4e00-\u9fff]+", "_", str(label or "")).strip("_").lower()
+    if slug in CANONICAL_STEM_PORTS:
+        return slug
+    return f"stem:{slug or f'stem{index + 1}'}"
 
 
 def port_label(port: str) -> str:

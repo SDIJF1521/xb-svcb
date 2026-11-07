@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { ArrowDown, ArrowUp, Close, Delete, FullScreen, Grid, MagicStick, Plus, RefreshLeft, RefreshRight, Setting, Upload } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown, ArrowUp, Close, Delete, Download, FolderOpened, FullScreen, Grid, MagicStick, Plus, RefreshLeft, RefreshRight, Setting, Upload } from '@element-plus/icons-vue'
 import { api, type CoverWorkflow, type PymssModel, type WorkflowEdge, type WorkflowGraph, type WorkflowNode, type WorkflowNodeType } from '@/api'
 import { translateUiText } from '@/i18n'
 import { f0MethodsForFramework } from '@/utils/f0'
@@ -93,6 +93,7 @@ const portKey = (nodeId: string, side: 'in' | 'out', port: string) => `${nodeId}
 const SEPARATE_BASE_OUTPUTS = ['vocals', 'instrumental']
 const SEPARATE_EXTRA_OUTPUTS = ['other', 'audio']
 const DEFAULT_STEM_LIMIT = 8
+const CANONICAL_STEM_PORTS = new Set(SEPARATE_EXTRA_OUTPUTS.concat(SEPARATE_BASE_OUTPUTS))
 
 /** 音轨名 → 端口 id（stem:<slug>），slug 规则与后端映射保持一致。 */
 function stemPort(stem: string): string {
@@ -101,6 +102,9 @@ function stemPort(stem: string): string {
     .replace(/[^0-9a-zA-Z_\u4e00-\u9fff]+/g, '_')
     .replace(/^_+|_+$/g, '')
     .toLowerCase()
+  // Keep the shared ports stable. The workflow runner maps these names to
+  // the normalized PyMSS outputs (vocals/instrumental/audio/other).
+  if (CANONICAL_STEM_PORTS.has(slug)) return slug
   return `stem:${slug || 'stem'}`
 }
 
@@ -1025,6 +1029,66 @@ async function loadWorkflow(id: string) {
   await fitView()
 }
 
+// ---- 工作流文件导入 / 导出 ----
+async function exportWorkflowFile() {
+  graph.value.name = (graph.value.name || '').trim() || translateUiText('未命名工作流')
+  try {
+    const result = await api.exportCoverWorkflowFile(
+      { ...graph.value },
+      translateUiText('导出工作流文件'),
+    )
+    if (result.cancelled) return
+    if (!result.ok) {
+      ElMessage.error(result.error || translateUiText('工作流导出失败'))
+      return
+    }
+    ElMessage.success(`工作流已导出到：${result.path}`)
+  } catch (err) {
+    ElMessage.error(`导出失败：${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+async function importWorkflowFile() {
+  try {
+    const result = await api.importCoverWorkflowFile({
+      title: translateUiText('导入工作流文件'),
+      file: translateUiText('工作流文件'),
+      allFiles: translateUiText('所有文件'),
+    })
+    if (result.cancelled) return
+    if (!result.ok || !result.graph) {
+      ElMessage.error(result.error || translateUiText('工作流导入失败'))
+      return
+    }
+    if (nodes.value.length) {
+      try {
+        await ElMessageBox.confirm(
+          translateUiText('导入会用文件内容替换当前画布，未保存的改动将丢失。是否继续？'),
+          translateUiText('导入工作流文件'),
+          {
+            confirmButtonText: translateUiText('继续导入'),
+            cancelButtonText: translateUiText('取消'),
+            type: 'warning',
+          },
+        )
+      } catch {
+        return
+      }
+    }
+    // 导入的工作流作为新画布，保存时再写入自己的列表。
+    graph.value = { ...result.graph, id: '', updated_at: '' }
+    normalizeNodes()
+    selectedNodeId.value = null
+    selectedEdgeId.value = null
+    pushHistory()
+    await nextTick()
+    await fitView()
+    ElMessage.success('工作流已导入，可点击「保存」存入工作流列表')
+  } catch (err) {
+    ElMessage.error(`导入失败：${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
 async function deleteWorkflow() {
   if (!graph.value.id) return
   try {
@@ -1050,12 +1114,24 @@ function normalizeNodes() {
     if (node.type === 'output' && !node.params.file_template) {
       node.params.file_template = '%filename%_%stem%_%model%'
     }
+    if (node.type === 'separate' || node.type === 'dereverb') syncPymssNodeType(node, false)
   }
   // 旧工作流可能连了当前模型并不输出的音轨，载入时静默清理。
   for (const node of graph.value.nodes) {
     if (node.type === 'separate') pruneStalePortEdges(node, true)
   }
 }
+
+// 模型目录异步加载后，补同步已保存工作流中的 PyMSS 节点类型。
+watch(
+  () => props.pymssAllModels,
+  () => {
+    for (const node of nodes.value) {
+      if (node.type === 'separate' || node.type === 'dereverb') syncPymssNodeType(node, false)
+    }
+  },
+  { deep: true },
+)
 
 function newWorkflow() {
   const input: WorkflowNode = { id: nextId('n_'), type: 'input', x: 60, y: 170, params: {} }
@@ -1165,7 +1241,7 @@ function onSeparateEngineChange(node: WorkflowNode) {
     node.params.model = props.uvrModels[0] || 'MDX-Net'
   }
   delete node.params.outputs
-  pruneStalePortEdges(node)
+  if (!syncPymssNodeType(node)) pruneStalePortEdges(node)
 }
 
 function onDereverbEngineChange(node: WorkflowNode) {
@@ -1176,6 +1252,31 @@ function onDereverbEngineChange(node: WorkflowNode) {
   } else if (!node.params.model || findPymssModel(node.params.model)) {
     node.params.model = 'UVR-DeEcho-DeReverb.pth'
   }
+  syncPymssNodeType(node)
+}
+
+/** PyMSS 模型用途决定节点形态，避免用去混响模型执行人声分离。 */
+function syncPymssNodeType(node: WorkflowNode, notify = true): boolean {
+  if (node.params.engine !== 'pymss') return false
+  const model = findPymssModel(String(node.params.model || ''))
+  const purpose = model ? pymssPurposeKey(model) : ''
+  const nextType: WorkflowNodeType | null = purpose === 'dereverb'
+    ? 'dereverb'
+    : purpose === 'vocal_separation'
+      ? 'separate'
+      : null
+  if (!nextType || node.type === nextType) return false
+
+  const previousType = node.type
+  node.type = nextType
+  delete node.params.outputs
+  delete node.params.primary_stem
+  pruneStalePortEdges(node, !notify)
+  void measurePorts()
+  if (notify) {
+    ElMessage.info(nextType === 'dereverb' ? '已自动切换为去混响节点' : '已自动切换为人声分离节点')
+  }
+  return previousType !== nextType
 }
 
 // ---- 分离节点输出端口适配 ----
@@ -1200,7 +1301,12 @@ function pruneStalePortEdges(node: WorkflowNode, quiet = false): number {
 function onSeparateModelChange(node: WorkflowNode, model: string) {
   node.params.model = model
   delete node.params.outputs
-  pruneStalePortEdges(node)
+  if (!syncPymssNodeType(node)) pruneStalePortEdges(node)
+}
+
+function onDereverbModelChange(node: WorkflowNode, model: string) {
+  node.params.model = model
+  syncPymssNodeType(node)
 }
 
 function isSeparateOutputOn(node: WorkflowNode, port: string): boolean {
@@ -1252,6 +1358,12 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
       </el-button>
       <el-button round size="small" class="ghost-btn" @click="saveWorkflow">
         <el-icon class="el-icon--left"><Upload /></el-icon>保存
+      </el-button>
+      <el-button round size="small" class="ghost-btn" @click="importWorkflowFile">
+        <el-icon class="el-icon--left"><FolderOpened /></el-icon>导入文件
+      </el-button>
+      <el-button round size="small" class="ghost-btn" @click="exportWorkflowFile">
+        <el-icon class="el-icon--left"><Download /></el-icon>导出文件
       </el-button>
       <el-select
         :model-value="graph.id"
@@ -1436,6 +1548,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                       v-model="node.params.model"
                       :models="props.pymssAllModels"
                       default-filter="dereverb"
+                      @update:model-value="onDereverbModelChange(node, $event)"
                       @download="emit('download-pymss', $event)"
                     />
                   </span>
@@ -1759,6 +1872,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                   v-model="selectedNode.params.model"
                   :models="props.pymssAllModels"
                   default-filter="dereverb"
+                  @update:model-value="onDereverbModelChange(selectedNode, $event)"
                   @download="emit('download-pymss', $event)"
                 />
                 <el-select v-else v-model="selectedNode.params.model" size="small" class="wf-full" filterable allow-create>

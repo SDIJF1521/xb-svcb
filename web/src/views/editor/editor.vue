@@ -90,6 +90,11 @@
               <el-dropdown-item command="mp3">MP3</el-dropdown-item>
               <el-dropdown-item command="flac">FLAC</el-dropdown-item>
               <el-dropdown-item command="project" divided>工程文件 (.xbproject)</el-dropdown-item>
+              <el-dropdown-item command="track-wav" divided :disabled="!canExportTrack">
+                导出选中音轨 WAV
+              </el-dropdown-item>
+              <el-dropdown-item command="track-mp3" :disabled="!canExportTrack">导出选中音轨 MP3</el-dropdown-item>
+              <el-dropdown-item command="track-flac" :disabled="!canExportTrack">导出选中音轨 FLAC</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -1054,6 +1059,13 @@
                 <button title="粘贴音频" :disabled="track.locked || pastingAudio" @click="pasteAudioToTrack(track.id)">
                   <el-icon><CopyDocument /></el-icon>
                 </button>
+                <button
+                  title="导出该音轨音频"
+                  :disabled="!track.clips.length"
+                  @click.stop="exportTrackAudio(track, 'wav')"
+                >
+                  <el-icon><Download /></el-icon>
+                </button>
                 <button title="删除音轨" class="danger" :disabled="track.locked" @click="deleteTrack(track)">
                   <el-icon><Delete /></el-icon>
                 </button>
@@ -1779,6 +1791,8 @@ const activeTemplateId = computed(() => {
 const exportLabel = computed(() =>
   project.value?.metadata?.export_mode === 'vocal' ? '导出人声' : '导出',
 )
+/** 选中音轨有片段时才允许导出单轨。 */
+const canExportTrack = computed(() => Boolean(selectedTrack.value?.clips?.length))
 const selectedClipDuration = computed(() => {
   const clip = selectedClip.value
   return clip ? Math.max(0, clip.end - clip.start) : 0
@@ -1920,6 +1934,7 @@ const contextMenuItems = computed<ContextMenuItem[]>(() => {
       { id: 'import-track', label: '导入音频到此轨', icon: FolderAdd, disabled: !track || !!track.locked, run: () => importAudioToTrack(state.trackId) },
       { id: 'paste-track', label: '粘贴到播放头', icon: CopyDocument, shortcut: 'Ctrl+V', disabled: !track || !!track.locked || pastingAudio.value, run: () => pasteAudioToTrack(state.trackId) },
       { id: 'copy-track', label: '复制整轨音频', icon: CopyDocument, disabled: !track?.clips.length || copyingAudio.value, run: copySelectedTrackAudio },
+      { id: 'export-track', label: '导出该音轨音频 (WAV)', icon: Download, disabled: !track?.clips.length, run: () => exportTrackAudio(track, 'wav') },
       { id: 'rename-track', label: '重命名音轨', icon: Operation, separatorBefore: true, disabled: !track || !!track.locked, run: () => { if (track) startRenameTrack(track) } },
       { id: 'track-effects', label: '管理整轨效果', icon: Operation, disabled: !track, run: () => { if (track) selectTrack(track.id) } },
       { id: 'mute-track', label: track?.mute ? '取消音轨静音' : '静音音轨', icon: Mute, disabled: !track, run: () => { if (track) toggleTrackMute(track) } },
@@ -4555,7 +4570,27 @@ async function handleExportCommand(command: string) {
     await exportProjectBundle()
     return
   }
+  if (command.startsWith('track-')) {
+    await exportTrackAudio(selectedTrack.value, command.slice('track-'.length))
+    return
+  }
   await exportMix(command)
+}
+
+/** 导出指定音轨的音频文件（只渲染该轨的片段与整轨效果）。 */
+async function exportTrackAudio(track: EditorTrack | null | undefined, fmt = 'wav') {
+  if (!project.value || !track) return
+  if (!track.clips?.length) {
+    ElMessage.info('该音轨还没有音频片段')
+    return
+  }
+  await saveProject()
+  const dest = await api.exportEditorTrack(project.value.id, track.id, fmt)
+  if (dest) {
+    ElMessage.success(`音轨「${translateUiText(track.name)}」已导出到：${dest}`)
+  } else {
+    ElMessage.info('已取消导出')
+  }
 }
 
 async function exitEditor() {

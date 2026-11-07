@@ -1927,6 +1927,12 @@ class AudioEditorService:
         ok = self._audio.render_timeline(project, dst, config.EDITOR_CACHE_DIR, fmt)
         return dst if ok and dst.exists() else None
 
+    def render_track(
+        self, project_id: str, track_id: str, output_format: str = "wav"
+    ) -> Path | None:
+        """把单条音轨（含该轨效果与片段）渲染成一个音频文件，用于导出单轨。"""
+        return self._render_track_file(project_id, track_id, output_format)
+
     def _render_clip_file(
         self,
         project_id: str,
