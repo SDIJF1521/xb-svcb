@@ -211,7 +211,7 @@ SeedVC 需要额外的目标音色参考音频。先通过上传接口分别上�
 
 多模型工作流可使用 `auto_mix`、`auto_vocal_merge`、`manual_vocal_merge`、`auto_then_editor` 和 `full_manual_editor`。`auto_vocal_merge`、`manual_vocal_merge` 不适用于单模型模式。
 
-`models[].params.auto_high_pitch_guard` 控制该模型的高音保护，默认开启。检测到超过可靠音域的高音时，服务会只对对应高音区域先降调推理，完成后恢复原调；因此合唱片段中的每个模型都可以独立设置保护开关。旧请求也可以在顶层 `params.auto_high_pitch_guard` 提供回退值。
+`models[].params.auto_high_pitch_guard` 控制该模型的高音保护，默认开启。检测到超过可靠音域的高音时，服务会只对对应高音区域先降调推理，完成后恢复原调；因此合唱片段中的每个模型都可以独立设置保护开关。旧请求也可以在顶层 `params.auto_high_pitch_guard` 提供回退值。恢复原调后，服务还会在上述已确认的高音区用 Snake-HiFiGAN（缺失权重时退回随包 NSF-HiFiGAN）声码器重建交叉频点以上的频带，只采纳通过电平、气声与窄带峰验收的区段，因此不需要额外参数。
 
 ### 完整 Python 示例
 

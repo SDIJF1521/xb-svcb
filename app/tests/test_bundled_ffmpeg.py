@@ -258,3 +258,38 @@ def test_pitch_shift_rejects_collapsed_worker_output(
     monkeypatch.setattr("infrastructure.ffmpeg_tool.subprocess.run", fake_run)
 
     assert not tool.pitch_shift(source, output, -7)
+
+
+def test_pitch_shift_forwards_f0_curve_and_regions(tmp_path: Path, monkeypatch) -> None:
+    tool = FfmpegTool()
+    source = tmp_path / "source.wav"
+    output = tmp_path / "output.wav"
+    worker_python = tmp_path / "python.exe"
+    worker_script = tmp_path / "formant_pitch_worker.py"
+    f0_curve = tmp_path / "f0.npy"
+    worker_python.write_bytes(b"")
+    worker_script.write_bytes(b"")
+    f0_curve.write_bytes(b"npy")
+    _write_test_wav(source, 12000)
+    monkeypatch.setattr(config, "VOCAL_ENHANCEMENT_PYTHON", worker_python)
+    monkeypatch.setattr(config, "FORMANT_PITCH_WORKER", worker_script)
+    captured: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        captured.append(command)
+        target = Path(command[command.index("--output") + 1])
+        target.write_bytes(source.read_bytes())
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("infrastructure.ffmpeg_tool.subprocess.run", fake_run)
+
+    assert tool.pitch_shift(
+        source,
+        output,
+        -7,
+        regions=[(0.2, 0.6)],
+        f0_curve=f0_curve,
+    )
+    command = captured[0]
+    assert command[command.index("--f0-npy") + 1] == str(f0_curve)
+    assert command[command.index("--regions-json") + 1].endswith(".scope.json")

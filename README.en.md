@@ -53,7 +53,7 @@ The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UV
 
 - Run vocal separation, dereverb, F0 analysis, voice conversion, enhancement, and mixing as one workflow.
 - Manage So-VITS-SVC, RVC, SeedVC, and DDSP-SVC models through one interface with framework-specific parameters.
-- Protect notes outside a model's range by retrying affected regions at a lower pitch and restoring the original pitch afterward.
+- Protect notes outside a model's range by retrying affected regions at a lower pitch and restoring the original pitch afterward; the confirmed high-note regions then get their upper band rebuilt by a Snake-HiFiGAN / NSF-HiFiGAN high-note vocoder, which replaces the PSOLA air and missing harmonics.
 - Split songs from lyrics or silence detection, assign models on a visual timeline, and create multi-singer or ensemble covers.
 - Edit tracks, cut and fade clips, route channels, apply effects, and export WAV / MP3 / FLAC with Audio Editor Lite.
 - Import TXT / LRC lyrics and use role-based solo, duet, and harmony timeline templates.

@@ -2019,6 +2019,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'AI vocal enhancement worker', PathJoin(InternalDir, 'infrastructure\vocal_enhancement_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\formant_pitch_worker.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'High-note protection worker', PathJoin(InternalDir, 'infrastructure\formant_pitch_worker.py'));
+  if not FileExists(PathJoin(InternalDir, 'infrastructure\high_note_vocoder_worker.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'High-note vocoder band worker', PathJoin(InternalDir, 'infrastructure\high_note_vocoder_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\vocal_tuning_worker.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'AI alignment and tuning worker', PathJoin(InternalDir, 'infrastructure\vocal_tuning_worker.py'));
   if not FileExists(PathJoin(AppDir, 'install\configure_user_env.py')) then
@@ -2272,13 +2274,14 @@ end;
 
 function ValidateVocalRuntime(): Boolean;
 var
-  AppDir, VocalPython, VocalWorker, TuningWorker, FormantWorker, VocalReady, Missing: String;
+  AppDir, VocalPython, VocalWorker, TuningWorker, FormantWorker, VocoderWorker, VocalReady, Missing: String;
 begin
   AppDir := ExpandConstant('{app}');
   VocalPython := RuntimePython(AppDir, 'vocal', '.venv-vocal\Scripts\python.exe');
   VocalWorker := PathJoin(AppDir, '_internal\infrastructure\vocal_enhancement_worker.py');
   TuningWorker := PathJoin(AppDir, '_internal\infrastructure\vocal_tuning_worker.py');
   FormantWorker := PathJoin(AppDir, '_internal\infrastructure\formant_pitch_worker.py');
+  VocoderWorker := PathJoin(AppDir, '_internal\infrastructure\high_note_vocoder_worker.py');
   VocalReady := PathJoin(AppDir, 'models\vocal-enhancement\runtime.ready');
   Missing := '';
 
@@ -2296,6 +2299,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'AI alignment and tuning worker', TuningWorker);
   if not FileExists(FormantWorker) then
     Missing := AddMissingRuntimeFile(Missing, 'High-note protection worker', FormantWorker);
+  if not FileExists(VocoderWorker) then
+    Missing := AddMissingRuntimeFile(Missing, 'High-note vocoder band worker', VocoderWorker);
   if not FileExists(VocalReady) then
     Missing := AddMissingRuntimeFile(Missing, 'runtime.ready marker', VocalReady);
 

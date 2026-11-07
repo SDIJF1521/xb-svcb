@@ -31,6 +31,7 @@ __all__ = [
     "WorkFilesPort",
     "EngineRegistryPort",
     "FfmpegGateway",
+    "HighNoteVocoderPort",
     "ItemRepository",
     "PymssGateway",
     "PluginHostPort",
@@ -120,6 +121,17 @@ class FfmpegGateway(ToolAdapter, Protocol):
     def mix_vocals(self, *args: Any, **kwargs: Any) -> Any: ...
 
     def adaptive_mix_profile(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class HighNoteVocoderPort(ToolAdapter, Protocol):
+    """高音声码器补偿：重建已确认高音区的超高频带。
+
+    实现在隔离环境里跑 F0 条件化声码器（Snake-HiFiGAN 优先，NSF-HiFiGAN 兜底），
+    只替换交叉频点以上的频带；未通过验收时不产生输出文件，用例层沿用升调结果。
+    """
+
+    def refine(self, *args: Any, **kwargs: Any) -> dict[str, Any]: ...
 
 
 @runtime_checkable

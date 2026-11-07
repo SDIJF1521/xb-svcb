@@ -207,6 +207,7 @@ PORT_ADAPTERS = [
     ("infrastructure.storage", "SettingsStore", "SettingsRepository"),
     ("infrastructure.svc_engine", "SvcEngine", "ToolAdapter"),
     ("infrastructure.vocal_enhancement", "VocalEnhancementProcessor", "VocalEnhancementPort"),
+    ("infrastructure.high_note_vocoder", "HighNoteVocoderProcessor", "HighNoteVocoderPort"),
     ("infrastructure.juce_vst3_host", "JuceVst3Host", "PluginHostPort"),
     ("infrastructure.audio_engine", "FFmpegEngine", "AudioEnginePort"),
     ("infrastructure.engine", "EngineRegistry", "EngineRegistryPort"),

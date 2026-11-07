@@ -36,6 +36,7 @@ from infrastructure import paths
 from infrastructure.ddsp_engine import DdspSvcEngine
 from infrastructure.engine import EngineRegistry
 from infrastructure.ffmpeg_tool import FfmpegTool
+from infrastructure.high_note_vocoder import HighNoteVocoderProcessor
 from infrastructure.pymss_tool import PymssTool
 from infrastructure.rvc_engine import RvcEngine
 from infrastructure.seedvc_engine import SeedVcEngine
@@ -64,6 +65,7 @@ def build_api() -> Api:
     seedvc = SeedVcEngine()
     ddsp = DdspSvcEngine()
     vocal_enhancement = VocalEnhancementProcessor()
+    high_note_vocoder = HighNoteVocoderProcessor()
     # 引擎注册表：按模型 framework 路由推理引擎（缺省回退 so-vits-svc）
     engines = EngineRegistry([svc, rvc, seedvc, ddsp])
 
@@ -79,7 +81,13 @@ def build_api() -> Api:
     )
     model_service = ModelService(models_repo, settings)
     conversion_service = ConversionService(
-        works_repo, ffmpeg, uvr, engines, vocal_enhancement, pymss
+        works_repo,
+        ffmpeg,
+        uvr,
+        engines,
+        vocal_enhancement,
+        pymss,
+        high_note_vocoder,
     )
     work_files = WorkFiles()
     work_service = WorkService(
@@ -97,6 +105,7 @@ def build_api() -> Api:
         vocal_enhancement,
         pymss,
         store=EditorProjectStore(ffmpeg),
+        high_note_vocoder=high_note_vocoder,
     )
     plugin_service = PluginService(settings)
     realtime_cover_service = RealtimeCoverService(model_service, ffmpeg, uvr, engines)

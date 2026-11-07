@@ -468,6 +468,7 @@ class FfmpegTool:
         high_threshold: float = 800.0,
         report_path: Path | None = None,
         regions: list[tuple[float, float]] | None = None,
+        f0_curve: Path | None = None,
     ) -> bool:
         """Pitch-shift only high-note regions while preserving formants.
 
@@ -499,6 +500,8 @@ class FfmpegTool:
                 command.extend(["--loudness-source", str(loudness_source)])
             if report_path:
                 command.extend(["--report-json", str(report_path)])
+            if f0_curve:
+                command.extend(["--f0-npy", str(f0_curve)])
             if regions:
                 scope_path = dst.with_suffix(".scope.json")
                 scope_path.write_text(

@@ -43,16 +43,19 @@ from .adapters import (
     copy_file_to_clipboard,
     editor_project_store as create_editor_project_store,
     ffmpeg_cache_key,
+    high_note_vocoder as create_high_note_vocoder,
     plugin_host as create_plugin_host,
     pymss_tool as create_pymss_tool,
     vocal_enhancement as create_vocal_enhancement,
 )
 from .editor_render_service import RENDER_VERSION, EditorRenderService
+from .high_note_band import refine_high_note_band
 from .ports import (
     AudioEnginePort,
     EditorProjectStorePort,
     EngineRegistryPort,
     FfmpegGateway,
+    HighNoteVocoderPort,
     ItemRepository,
     PluginHostPort,
     PymssGateway,
@@ -94,6 +97,7 @@ class AudioEditorService:
         audio: AudioEnginePort | None = None,
         plugin_host: PluginHostPort | None = None,
         store: EditorProjectStorePort | None = None,
+        high_note_vocoder: HighNoteVocoderPort | None = None,
     ) -> None:
         self._repo = repo
         self._works_repo = works_repo
@@ -106,6 +110,9 @@ class AudioEditorService:
         self._plugin_sessions: dict[str, dict[str, Any]] = {}
         self._engines = engines
         self._vocal_enhancement = vocal_enhancement or create_vocal_enhancement()
+        # 高音声码器：编辑器局部重推理同样在升回原调后重建超高频带；
+        # 适配器不可用时自动跳过（见 _restore_high_pitch_guard）。
+        self._high_note_vocoder = high_note_vocoder or create_high_note_vocoder()
         self._rerun_jobs: dict[str, dict[str, Any]] = {}
         self._rerun_jobs_lock = threading.RLock()
         self._render = EditorRenderService(
@@ -2361,6 +2368,9 @@ class AudioEditorService:
                 # turn the upper band into a whistle.
                 "loudness_source": source,
                 "high_threshold": self._model_high_pitch_threshold(params, model),
+                # 记录实际升调区间：既供高音区合并使用，也让高音声码器知道
+                # 应该在哪几个高音区重建超高频带。
+                "report_path": destination.with_suffix(".regions.json"),
             }
             if only_regions:
                 kwargs["regions"] = only_regions
@@ -2370,7 +2380,17 @@ class AudioEditorService:
             if only_regions:
                 return source
             ok = pitch_shift(source, destination, int(semitones or self._HIGH_PITCH_GUARD_SEMITONES))
-        return destination if ok and destination.is_file() else source
+        if not (ok and destination.is_file()):
+            return source
+        # 与整轨翻唱一致：升回原调后，用高音声码器重建已确认高音区的超高频带。
+        return refine_high_note_band(
+            getattr(self, "_high_note_vocoder", None),
+            restored=destination,
+            dry=original,
+            report_path=destination.with_suffix(".regions.json"),
+            only_regions=only_regions,
+            threshold=self._model_high_pitch_threshold(params, model),
+        )
 
     def _infer_with_dropout_recovery(
         self,
@@ -2401,6 +2421,41 @@ class AudioEditorService:
         guard_semitones = self._HIGH_PITCH_GUARD_SEMITONES
         best_render = output
         best_bad_frames = float("inf")
+
+        def refresh_scope_at(new_threshold: float, candidate: Path) -> None:
+            """按降调后的边界刷新保护范围与合并范围。
+
+            首次检测用的是较高边界，只能看到句首；边界降低之后才看得见的整句
+            尾段（例如 640Hz 边界下持续 587Hz 的高音）必须同时进入保护范围和
+            合并范围，否则合并阶段会把它们换回模型塌掉的原始渲染。初始失配核
+            保持不动，只用新边界下的核扩大合并范围。
+            """
+            nonlocal guard_regions, merge_regions
+            if new_threshold >= threshold - 1e-6:
+                return
+            refreshed = ConversionService._detect_model_dropout(
+                source,
+                candidate,
+                new_threshold,
+                int(getattr(params, "pitch", 0) or 0),
+            )
+            if not refreshed:
+                return
+            refreshed_scope = ConversionService._confirmed_guard_regions(refreshed)
+            if refreshed_scope:
+                guard_regions = refreshed_scope
+            refreshed_cores = ConversionService._dropout_core_regions(refreshed)
+            if refreshed_cores:
+                combined = list(merge_regions or [])
+                for start, end in refreshed_cores:
+                    if not any(
+                        start < other_end and end > other_start
+                        for other_start, other_end in combined
+                    ):
+                        combined.append((start, end))
+                combined.sort()
+                merge_regions = combined
+
         for attempt in range(attempts):
             raw_target = output if attempt == 0 else output.with_name(
                 f"{output.stem}_dropout_retry{attempt}.wav"
@@ -2567,6 +2622,7 @@ class AudioEditorService:
                             guard_regions,
                         ),
                     )
+                    refresh_scope_at(next_threshold, rendered)
                     threshold = next_threshold
                     params.high_pitch_threshold = threshold
                     continue
@@ -2625,6 +2681,7 @@ class AudioEditorService:
                     guard_regions,
                 ),
             )
+            refresh_scope_at(next_threshold, rendered)
             threshold = next_threshold
             params.high_pitch_threshold = threshold
         return best_render, history, bool(best_render != output)

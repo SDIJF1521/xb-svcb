@@ -458,6 +458,110 @@ def vocal_enhancement_ready() -> bool:
     )
 
 
+# ---- 高音声码器补偿（Snake-HiFiGAN / NSF-HiFiGAN）----
+# 高音保护「降调 → 模型推理 → 升回原调」里的升调由 Praat PSOLA 完成，极高音上
+# 会把谐波糊成气声或窄带哨音。这里在已确认的高音区里用 F0 条件化声码器只重建
+# 交叉频点以上的频带：优先 Snake-HiFiGAN（Snake 激活的高频谐波更完整），没有
+# 对应权重时退回随包的 NSF-HiFiGAN，因此功能在标准安装下即可用。
+HIGH_NOTE_VOCODER_WORKER = BUNDLE_DIR / "infrastructure" / "high_note_vocoder_worker.py"
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+HIGH_NOTE_VOCODER_BAND_HZ = max(1000.0, _env_float("XB_HIGH_NOTE_VOCODER_BAND_HZ", 6000.0))
+HIGH_NOTE_VOCODER_WET = min(1.0, max(0.0, _env_float("XB_HIGH_NOTE_VOCODER_WET", 0.75)))
+# Snake-HiFiGAN 权重目录名（按优先级），其次才是随包 NSF-HiFiGAN。
+_HIGH_NOTE_VOCODER_SNAKE_DIRS = (
+    "nsf_snake_hifigan",
+    "snake_hifigan",
+    "nsf-snake-hifigan",
+    "hifiganwithsnake",
+)
+_HIGH_NOTE_VOCODER_FALLBACK_DIRS = ("nsf_hifigan",)
+
+
+def high_note_vocoder_repos() -> list[Path]:
+    """可提供声码器架构实现的引擎仓库（so-vits-svc → DDSP-SVC）。"""
+    repos: list[Path] = []
+    for repo in (SOVITS_REPO, DDSP_REPO_DIR):
+        if repo and Path(repo).is_dir():
+            repos.append(Path(repo))
+    return repos
+
+
+def _pretrain_roots() -> list[Path]:
+    roots: list[Path] = []
+    data_dir = globals().get("DATA_DIR")
+    if data_dir:
+        roots.append(Path(data_dir) / "models" / "pretrain")
+    roots.append(ROOT_DIR / "assets" / "models" / "pretrain")
+    for repo in (SOVITS_REPO, DDSP_REPO_DIR):
+        if repo:
+            roots.append(Path(repo) / "pretrain")
+    return roots
+
+
+def high_note_vocoder_weight_dirs() -> list[Path]:
+    """候选权重目录，按「Snake-HiFiGAN → NSF-HiFiGAN」优先级排列。"""
+    candidates: list[Path] = []
+    explicit = os.environ.get("XB_HIGH_NOTE_VOCODER_DIR")
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+    roots = _pretrain_roots()
+    for name in _HIGH_NOTE_VOCODER_SNAKE_DIRS:
+        candidates.extend(root / name for root in roots)
+    for name in _HIGH_NOTE_VOCODER_FALLBACK_DIRS:
+        candidates.extend(root / name for root in roots)
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        try:
+            key = str(path.resolve()).lower()
+        except OSError:
+            key = str(path).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def high_note_vocoder_weight_dir() -> Path | None:
+    """返回首个同时具备 config.json 与权重文件的目录。"""
+    for candidate in high_note_vocoder_weight_dirs():
+        try:
+            if not candidate.is_dir() or not (candidate / "config.json").is_file():
+                continue
+            has_weights = (candidate / "model").is_file()
+            if not has_weights:
+                for pattern in ("*.pth", "*.pt", "*.ckpt"):
+                    if any(candidate.glob(pattern)):
+                        has_weights = True
+                        break
+            if has_weights:
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def high_note_vocoder_ready() -> bool:
+    return bool(
+        VOCAL_ENHANCEMENT_PYTHON
+        and VOCAL_ENHANCEMENT_PYTHON.is_file()
+        and HIGH_NOTE_VOCODER_WORKER.is_file()
+        and high_note_vocoder_weight_dir() is not None
+    )
+
+
 # ---- JUCE VST3 Host（编辑器外部效果器插件）----
 # VST3 插件 GUI 必须由原生 host 承载。Python/前端只负责业务状态与调度：
 #   Python（业务逻辑、AI、界面） -> C++ JUCE VST3 Host -> VST3 Plugin GUI

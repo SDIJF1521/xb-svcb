@@ -26,10 +26,13 @@ from domain.workflow_graph import (
 )
 
 from .adapters import pymss_tool as create_pymss_tool
+from .adapters import high_note_vocoder as create_high_note_vocoder
 from .adapters import vocal_enhancement as create_vocal_enhancement
+from .high_note_band import read_guard_regions, refine_high_note_band
 from .ports import (
     EngineRegistryPort,
     FfmpegGateway,
+    HighNoteVocoderPort,
     ItemRepository,
     PymssGateway,
     SeparationGateway,
@@ -397,6 +400,7 @@ class ConversionService:
         engines: EngineRegistryPort,
         vocal_enhancement: VocalEnhancementPort | None = None,
         pymss: PymssGateway | None = None,
+        high_note_vocoder: HighNoteVocoderPort | None = None,
     ) -> None:
         self._repo = repo
         self._ffmpeg = ffmpeg
@@ -404,6 +408,9 @@ class ConversionService:
         self._pymss = pymss or create_pymss_tool()
         self._engines = engines
         self._vocal_enhancement = vocal_enhancement or create_vocal_enhancement()
+        # 高音声码器：只在已确认的高音区重建超高频带，用于弥补 PSOLA 在高音上的
+        # 气声/谐波缺失。实现不可用时保持关闭，保护路径完全不变。
+        self._high_note_vocoder = high_note_vocoder or create_high_note_vocoder()
         # so-vits 引擎引用：供 F0 探针（仅 so-vits 有意义）使用
         self._svc = engines.sovits
         # 串行任务队列：单 GPU 上一次只跑一个任务，避免并发推理叠加导致显存 OOM
@@ -669,6 +676,26 @@ class ConversionService:
             return max(300.0, min(2000.0, float(fallback_threshold)))
         return defaults.get(config.modelhub_normalize_framework(framework), 1000.0)
 
+    @staticmethod
+    def _guard_f0_curve(source: Path) -> Path | None:
+        """推理前算好的 F0 曲线（.npy）优先用于挑选高音区间。
+
+        Praat 的音高层在长高音/强气声上会掉八度或丢点，正好漏掉最需要保护的整段
+        高音；rmvpe/FCPE 刚算出的曲线在高音区稳定得多。降调与升调两阶段必须用同一
+        份曲线，否则会出现只降不升的片段。
+        """
+        try:
+            sidecar = source.with_name("f0.npy")
+            if (
+                sidecar.is_file()
+                and sidecar.stat().st_size > 64
+                and sidecar.stat().st_mtime >= source.stat().st_mtime - 120.0
+            ):
+                return sidecar
+        except OSError:
+            pass
+        return None
+
     def _prepare_high_pitch_guard(
         self,
         source: Path,
@@ -688,6 +715,7 @@ class ConversionService:
             return source, False
         report_path = destination.with_suffix(".regions.json")
         shift_semitones = int(semitones or self._HIGH_PITCH_GUARD_SEMITONES)
+        f0_curve = self._guard_f0_curve(source)
         try:
             guard_ok = self._ffmpeg.pitch_shift(
                 source,
@@ -698,6 +726,7 @@ class ConversionService:
                 high_threshold=high_threshold,
                 report_path=report_path,
                 regions=only_regions,
+                f0_curve=f0_curve,
             )
         except TypeError:
             if only_regions:
@@ -773,6 +802,8 @@ class ConversionService:
                 high_threshold=float(threshold or getattr(params, "high_pitch_threshold", 0.0) or self._HIGH_PITCH_THRESHOLD),
                 report_path=destination.with_suffix(".regions.json"),
                 regions=only_regions,
+                # 与降调阶段使用同一份 F0 曲线，保证两次选中的区间完全一致。
+                f0_curve=self._guard_f0_curve(original),
             )
         except TypeError:
             if only_regions:
@@ -788,9 +819,51 @@ class ConversionService:
             )
         if restore_ok:
             self._log(log_file, "  高音保护完成：仅对记录的高音区域升回原调并补偿响度")
-            return restored
+            return self._refine_high_note_band(
+                restored,
+                original,
+                log_file,
+                destination.with_suffix(".regions.json"),
+                only_regions,
+                float(
+                    threshold
+                    or getattr(params, "high_pitch_threshold", 0.0)
+                    or self._HIGH_PITCH_THRESHOLD
+                ),
+            )
         self._log(log_file, "  高音保护升调失败，沿用模型输出")
         return source
+
+    @staticmethod
+    def _read_guard_regions(report_path: Path | None) -> list[_TimeRegion] | None:
+        """读取高音保护报告里实际处理过的区间（转发到共享用例）。"""
+        return read_guard_regions(report_path)
+
+    def _refine_high_note_band(
+        self,
+        restored: Path,
+        dry: Path | None,
+        log_file: Path,
+        report_path: Path | None,
+        only_regions: list[_TimeRegion] | None,
+        threshold: float,
+    ) -> Path:
+        """用 F0 条件化声码器重建已确认高音区的超高频带。
+
+        升调后的高音听起来「薄」有两个来源：PSOLA 把谐波糊成了气声，以及模型
+        的声码器在超出训练音域时不产生自然谐波。这里用干声的频谱包络 + 成品的
+        音高重新合成交叉频点以上的频带，按 ``wet`` 比例混回去；只处理报告里记录
+        的区间，未通过验收时原样返回升调结果。
+        """
+        return refine_high_note_band(
+            self._high_note_vocoder,
+            restored=restored,
+            dry=dry,
+            report_path=report_path,
+            only_regions=only_regions,
+            threshold=threshold,
+            log=lambda message: self._log(log_file, message),
+        )
 
     @staticmethod
     def _merge_guarded_regions(
@@ -2181,6 +2254,7 @@ class ConversionService:
         仅在确认高音部分已正确处理后，再支付防护/重试的代价。
         '''
         baseline_first = bool(allow_recovery and params.auto_high_pitch_guard)
+        baseline_issue: dict[str, Any] | None = None
         if baseline_first:
             run_inference(source, output)
             rendered = output
@@ -2211,13 +2285,33 @@ class ConversionService:
             # The first confirmed failing note is already enough to lower the
             # next guard boundary.  Starting the first guarded retry at the
             # old boundary can leave a 700-800 Hz syllable unprotected.
+            previous_threshold = threshold
             threshold = self._next_dropout_threshold(threshold, issue)
             params.high_pitch_threshold = threshold
-            guard_regions = self._confirmed_guard_regions(issue)
-            merge_regions = self._dropout_core_regions(issue)
+            # The guard runs at the *lowered* boundary, so the scope has to be
+            # the detector's failure set at that boundary too. Reusing the
+            # failure set from the previous (higher) boundary left whole
+            # phrase tails out of both the guard scope and the merge cores:
+            # e.g. an 800 Hz -> 640 Hz lowering saw only 177.6-178.3 s, while
+            # the same phrase continues at ~587 Hz until 180.5 s. That tail
+            # kept the model's collapsed render and sounded "没唱上去".
+            baseline_issue = issue
+            if threshold < previous_threshold - 1e-6:
+                refreshed = self._detect_model_dropout(
+                    source,
+                    rendered,
+                    threshold,
+                    int(getattr(params, "pitch", 0) or 0),
+                )
+                if refreshed:
+                    refreshed["detected_at_hz"] = round(float(threshold), 1)
+                    history[0]["issue_at_threshold"] = refreshed
+                    baseline_issue = refreshed
+            guard_regions = self._confirmed_guard_regions(baseline_issue)
+            merge_regions = self._dropout_core_regions(baseline_issue)
             guard_semitones = self._guard_semitones_for_retry(
                 threshold,
-                issue,
+                baseline_issue,
                 source,
                 guard_regions,
             )
@@ -2234,16 +2328,20 @@ class ConversionService:
         # Keep the first detector spans immutable for candidate selection. The
         # retry ladder may discover fewer spans, but it must not gradually
         # widen the replacement scope and then score that broader render as
-        # the new baseline.
+        # the new baseline. ``baseline_issue`` is the failure set measured at
+        # the guarded boundary (see above), which is the scope actually used.
         initial_failure_regions = (
-            self._dropout_core_regions(history[0].get("issue"))
-            if baseline_first and history and history[0].get("issue")
+            self._dropout_core_regions(baseline_issue)
+            if baseline_first and baseline_issue
             else None
         )
         unresolved_failure_regions = list(initial_failure_regions or [])
-        if baseline_first and history and history[0].get("issue"):
-            best_issue = history[0]["issue"]
-            best_bad_frames = float(history[0]["issue"].get("bad_frames") or float("inf"))
+        if baseline_first and baseline_issue:
+            # Compare candidates against the baseline measured at the same
+            # boundary the guard uses; a higher-boundary frame count is not
+            # comparable and would make the ladder mis-score good retries.
+            best_issue = baseline_issue
+            best_bad_frames = float(baseline_issue.get("bad_frames") or float("inf"))
         for guard_attempt in range(guard_attempts):
             attempt = guard_attempt + 1 if baseline_first else guard_attempt
             raw_target = (

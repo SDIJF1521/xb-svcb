@@ -191,7 +191,7 @@ Set `mode` to `multi`, specify independent parameters in `models`, and assign si
 
 Supported workflows are `auto_mix`, `auto_vocal_merge`, `manual_vocal_merge`, `auto_then_editor`, and `full_manual_editor`. The two vocal-merge workflows do not apply to single-model mode.
 
-`models[].params.auto_high_pitch_guard` controls high-note protection per model and defaults to true. Regions above a reliable range are inferred at a lower pitch and restored afterward. A legacy request may provide the fallback at top-level `params.auto_high_pitch_guard`.
+`models[].params.auto_high_pitch_guard` controls high-note protection per model and defaults to true. Regions above a reliable range are inferred at a lower pitch and restored afterward. After the restore, those confirmed high-note regions also get their upper band rebuilt by a Snake-HiFiGAN vocoder (bundled NSF-HiFiGAN when Snake weights are absent); only regions that pass the level, air-noise, and narrow-peak checks are kept, so no extra parameter is required. A legacy request may provide the fallback at top-level `params.auto_high_pitch_guard`.
 
 ### Complete Python Example
 

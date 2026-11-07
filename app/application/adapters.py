@@ -24,6 +24,7 @@ from .ports import (
     WorkFilesPort,
     EngineRegistryPort,
     FfmpegGateway,
+    HighNoteVocoderPort,
     PymssGateway,
     PluginHostPort,
     SeparationGateway,
@@ -70,6 +71,12 @@ def vocal_enhancement() -> VocalEnhancementPort:
     from infrastructure.vocal_enhancement import VocalEnhancementProcessor
 
     return VocalEnhancementProcessor()
+
+
+def high_note_vocoder() -> HighNoteVocoderPort:
+    from infrastructure.high_note_vocoder import HighNoteVocoderProcessor
+
+    return HighNoteVocoderProcessor()
 
 
 def engine_registry(engines: list[Any]) -> EngineRegistryPort:
