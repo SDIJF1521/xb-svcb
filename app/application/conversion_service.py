@@ -12,7 +12,7 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import config
 from domain import InferenceParams, JobStatus, StepStatus
@@ -33,6 +33,16 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 _VOCAL_OUTPUT_WORKFLOWS = {"auto_vocal_merge", "manual_vocal_merge"}
+
+_TimeRegion = tuple[float, float]
+
+
+class _HighNoteQuality(TypedDict, total=False):
+    available: bool
+    passed: bool
+    regions: list[dict[str, Any]]
+    accepted_regions: list[_TimeRegion]
+    failed_regions: list[_TimeRegion]
 
 
 def _wants_vocal_output(work: dict[str, Any]) -> bool:
@@ -1569,7 +1579,8 @@ class ConversionService:
                         air = np.maximum(spectrum[air_bins], 1e-14)
                         air_power = float(np.sum(air))
                         flatness = float(
-                            np.exp(np.mean(np.log(air))) / max(np.mean(air), 1e-14)
+                            np.exp(np.mean(np.log(air)))
+                            / max(float(np.mean(air)), 1e-14)
                         )
                         peak_share = float(np.max(air) / max(air_power, 1e-14))
                         return air_power / total, flatness, peak_share
@@ -1611,7 +1622,7 @@ class ConversionService:
         candidate: Path,
         regions: list[tuple[float, float]] | None,
         note_report_path: Path | None = None,
-    ) -> dict[str, Any]:
+    ) -> _HighNoteQuality:
         """Measure every original dropout independently.
 
         A track-wide median can hide one fully breathy syllable among many
@@ -1625,7 +1636,7 @@ class ConversionService:
             for start, end in (regions or [])
             if float(end) > max(0.0, float(start))
         ]
-        result: dict[str, Any] = {
+        result: _HighNoteQuality = {
             "available": False,
             "passed": False,
             "regions": [],
@@ -1677,7 +1688,7 @@ class ConversionService:
                 air = float(np.sum(air_values))
                 air_flatness = float(
                     np.exp(np.mean(np.log(air_values)))
-                    / max(np.mean(air_values), 1e-14)
+                    / max(float(np.mean(air_values)), 1e-14)
                 )
                 autocorrelation = np.fft.irfft(power, n=fft_size)[:frame]
                 base = max(float(autocorrelation[0]), 1e-12)
@@ -1732,7 +1743,7 @@ class ConversionService:
                             trial_air,
                             trial_periodicity,
                             trial_flatness,
-                            trial_pitch,
+                            trial_pitch_value,
                             trial_rms,
                         ) = metrics(candidate_audio[offset : offset + frame])
                         floor = max(source_body * 1e-7, 1e-12)
@@ -1746,7 +1757,7 @@ class ConversionService:
                         baseline_periodicity.append(base_periodicity)
                         candidate_periodicity.append(trial_periodicity)
                         source_f0.append(source_pitch)
-                        candidate_f0.append(trial_pitch)
+                        candidate_f0.append(trial_pitch_value)
                         source_air_share.append(
                             source_air / max(source_body + source_air, floor)
                         )
@@ -1776,7 +1787,7 @@ class ConversionService:
                     )
                     periodicity = np.asarray(candidate_periodicity, dtype=np.float64)
                     dry_pitch = np.asarray(source_f0, dtype=np.float64)
-                    trial_pitch = np.asarray(candidate_f0, dtype=np.float64)
+                    trial_pitch_values = np.asarray(candidate_f0, dtype=np.float64)
                     base_air = np.asarray(baseline_air_share, dtype=np.float64)
                     trial_air = np.asarray(candidate_air_share, dtype=np.float64)
                     dry_air = np.asarray(source_air_share, dtype=np.float64)
@@ -1804,9 +1815,9 @@ class ConversionService:
                     )
                     pitch_comparable = (
                         (dry_pitch > 0.0)
-                        & (trial_pitch > 0.0)
-                        & (trial_pitch >= dry_pitch * 0.68)
-                        & (trial_pitch <= dry_pitch * 1.45)
+                        & (trial_pitch_values > 0.0)
+                        & (trial_pitch_values >= dry_pitch * 0.68)
+                        & (trial_pitch_values <= dry_pitch * 1.45)
                     )
                     pitch_match_fraction = float(np.mean(pitch_comparable))
                     median_body_support = float(np.median(source_support))
@@ -1877,8 +1888,12 @@ class ConversionService:
                             ),
                             "source_f0_hz": round(float(np.median(dry_pitch)), 1),
                             "candidate_f0_hz": round(
-                                float(np.median(trial_pitch[trial_pitch > 0.0]))
-                                if bool(np.any(trial_pitch > 0.0))
+                                float(
+                                    np.median(
+                                        trial_pitch_values[trial_pitch_values > 0.0]
+                                    )
+                                )
+                                if bool(np.any(trial_pitch_values > 0.0))
                                 else 0.0,
                                 1,
                             ),
@@ -1972,7 +1987,7 @@ class ConversionService:
 
     @staticmethod
     def _quality_failure_issue(
-        quality: dict[str, Any],
+        quality: _HighNoteQuality,
         fallback: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
         """Build retry evidence from immutable quality-gate failures."""
@@ -2349,17 +2364,17 @@ class ConversionService:
                 "input": "high_guarded" if guard_applied else "original",
             }
             history.append(entry)
-            quality = (
-                self._guard_candidate_high_note_quality(
+            quality: _HighNoteQuality
+            if baseline_first and rendered != fallback:
+                quality = self._guard_candidate_high_note_quality(
                     source,
                     fallback,
                     rendered,
                     initial_failure_regions,
                     guard_report,
                 )
-                if baseline_first and rendered != fallback
-                else {"available": False}
-            )
+            else:
+                quality = {"available": False}
             if quality.get("available"):
                 entry["quality"] = quality
                 accepted_keys = {
@@ -2396,11 +2411,10 @@ class ConversionService:
                         f"{len(newly_accepted)} 个初始失配区，已累计保留完整音符；"
                         f"仍需重试 {len(unresolved_failure_regions)} 个区",
                     )
+                unresolved_quality = quality.copy()
+                unresolved_quality["failed_regions"] = unresolved_failure_regions
                 quality_issue = self._quality_failure_issue(
-                    {
-                        **quality,
-                        "failed_regions": unresolved_failure_regions,
-                    },
+                    unresolved_quality,
                     issue or best_issue,
                 )
                 entry["issue"] = quality_issue
@@ -4063,12 +4077,16 @@ class ConversionService:
 
             runs: list[dict[str, Any]] = []
             for seg in timeline:
-                key = _src_key(seg)
-                if runs and runs[-1]["key"] == key:
+                source_key = _src_key(seg)
+                if runs and runs[-1]["key"] == source_key:
                     runs[-1]["end"] = seg["end"]
                 else:
                     runs.append(
-                        {"key": key, "start": seg["start"], "end": seg["end"]}
+                        {
+                            "key": source_key,
+                            "start": seg["start"],
+                            "end": seg["end"],
+                        }
                     )
 
             xf = 0.03
@@ -4602,7 +4620,7 @@ class ConversionService:
                             value = default
                         return max(0.0, min(1.0, value))
 
-                    controls = {
+                    controls: VocalEnhancementControls = {
                         "pitch_correction": strength("pitch_correction", 0.45),
                         "timing_alignment": strength("timing_alignment", 0.45),
                         "timbre_focus": strength("timbre_focus", 0.60),
@@ -4750,8 +4768,10 @@ class ConversionService:
         if not callable(getter):
             return []
         try:
-            stems = getter(model)
+            stems: object = getter(model)
         except (OSError, RuntimeError, ValueError):
+            return []
+        if not isinstance(stems, (list, tuple, set)):
             return []
         return [str(stem) for stem in (stems or []) if str(stem).strip()]
 
