@@ -562,6 +562,31 @@ def high_note_vocoder_ready() -> bool:
     )
 
 
+# ---- 编辑器 MIDI 子编辑器（音符级音高重绘）----
+# MIDI 子编辑器把音符落到音频上：Praat PSOLA 逐音符移调（保共振峰）；
+# 分析阶段复用 so-vits-svc 的 F0 worker 生成基频曲线。
+MIDI_PITCH_WORKER = BUNDLE_DIR / "infrastructure" / "midi_pitch_worker.py"
+
+
+def midi_pitch_ready() -> bool:
+    return bool(
+        VOCAL_ENHANCEMENT_PYTHON
+        and VOCAL_ENHANCEMENT_PYTHON.is_file()
+        and MIDI_PITCH_WORKER.is_file()
+    )
+
+
+def midi_analysis_ready() -> bool:
+    """MIDI 音符分析需要 F0 worker + so-vits-svc 仓库。"""
+    return bool(
+        VOCAL_ENHANCEMENT_PYTHON
+        and VOCAL_ENHANCEMENT_PYTHON.is_file()
+        and F0_WORKER.is_file()
+        and SOVITS_REPO
+        and Path(SOVITS_REPO).is_dir()
+    )
+
+
 # ---- JUCE VST3 Host（编辑器外部效果器插件）----
 # VST3 插件 GUI 必须由原生 host 承载。Python/前端只负责业务状态与调度：
 #   Python（业务逻辑、AI、界面） -> C++ JUCE VST3 Host -> VST3 Plugin GUI

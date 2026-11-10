@@ -33,6 +33,7 @@ __all__ = [
     "FfmpegGateway",
     "HighNoteVocoderPort",
     "ItemRepository",
+    "MidiPitchPort",
     "PymssGateway",
     "PluginHostPort",
     "SeparationGateway",
@@ -132,6 +133,17 @@ class HighNoteVocoderPort(ToolAdapter, Protocol):
     """
 
     def refine(self, *args: Any, **kwargs: Any) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class MidiPitchPort(ToolAdapter, Protocol):
+    """MIDI 子编辑器的音高重绘：把音符级编辑落到音频上。
+
+    实现在隔离环境里用 Praat PSOLA 逐音符移调（保共振峰），只改写被编辑过的
+    音符区间；没有音符需要修改时不产生新音频。
+    """
+
+    def apply(self, *args: Any, **kwargs: Any) -> dict[str, Any]: ...
 
 
 @runtime_checkable

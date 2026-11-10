@@ -323,6 +323,12 @@ Clients may modify and resubmit a fetched project. `audio_url`, `waveform_url`, 
 | `POST` | Clip `/separate` | UVR/PyMSS separation and optional dereverb |
 | `POST` | Clip `/rerun` | Regional voice-model re-inference |
 | `POST` | Track `/clips/merge` | Render and merge clips |
+| `GET` | Clip `/midi` | Read the clip MIDI notes (`refresh=1` re-analyzes pitch) |
+| `PUT` | Clip `/midi` | Save the clip MIDI notes |
+| `POST` | Clip `/midi/apply` | Apply MIDI notes to the clip audio (formant-preserving PSOLA) |
+| `GET` | Track `/midi` | Read track-level MIDI notes (empty tracks return an empty grid) |
+| `PUT` | Track `/midi` | Save track-level MIDI notes (absolute project time) |
+| `POST` | Track `/midi/apply` | Split track notes per clip and apply them to audio |
 
 ## Common Status Codes
 

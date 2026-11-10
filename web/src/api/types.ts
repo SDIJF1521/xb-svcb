@@ -1127,6 +1127,163 @@ export interface EditorClipMergeResult {
   path?: string
 }
 
+/** MIDI 子编辑器的音符（片段内时间，秒；pitch 为 MIDI 编号，detune 为音分）。 */
+export interface EditorMidiNote {
+  id: string
+  start: number
+  end: number
+  pitch: number
+  detune: number
+}
+
+export interface EditorMidiClipSpan {
+  id: string
+  name: string
+  start: number
+  end: number
+}
+
+export interface EditorClipMidi {
+  ok: boolean
+  error?: string | null
+  scope?: 'clip' | 'track'
+  clip_id?: string
+  track_id?: string
+  duration?: number
+  notes?: EditorMidiNote[]
+  analysis?: Record<string, unknown>
+  meta?: Record<string, unknown>
+  cached?: boolean
+  midi_ready?: boolean
+  clip_spans?: EditorMidiClipSpan[]
+}
+
+export interface EditorClipMidiSaveResult {
+  ok: boolean
+  error?: string | null
+  scope?: 'clip' | 'track'
+  clip_id?: string
+  track_id?: string
+  duration?: number
+  notes?: EditorMidiNote[]
+  meta?: Record<string, unknown>
+  project?: EditorProject | null
+}
+
+export interface EditorClipMidiApplyResult {
+  ok: boolean
+  error?: string | null
+  scope?: 'clip' | 'track'
+  clip_id?: string
+  track_id?: string
+  report?: {
+    applied_notes?: number
+    applied_seconds?: number
+    skipped?: unknown[]
+    clips?: unknown[]
+  }
+  audio_path?: string
+  project?: EditorProject | null
+  clip?: EditorClip | null
+  clips?: EditorClip[]
+}
+
+/** MIDI 编曲：一个音符（绝对时间，秒；pitch 为 MIDI 编号；velocity 为力度）。 */
+export interface EditorMidiComposeNote {
+  id: string
+  start: number
+  end: number
+  pitch: number
+  velocity: number
+}
+
+/** MIDI 编曲：一个声部 = 一件乐器。 */
+export interface EditorMidiPart {
+  id: string
+  name: string
+  /** GM program（0~127） */
+  instrument: number
+  drum: boolean
+  channel: number
+  volume: number
+  pan: number
+  mute: boolean
+  solo: boolean
+  color: string
+  notes: EditorMidiComposeNote[]
+}
+
+/** MIDI 编曲会话：速度、拍号与多个声部。 */
+export interface EditorMidiSession {
+  version: number
+  tempo: number
+  time_signature: number[]
+  parts: EditorMidiPart[]
+  name?: string
+  loop?: boolean
+  metronome?: boolean
+}
+
+export interface EditorMidiInstrument {
+  program: number
+  name_en: string
+  name_zh: string
+  family: string
+  family_zh: string
+  family_en: string
+}
+
+export interface EditorMidiInstrumentFamily {
+  id: string
+  name_zh: string
+  name_en: string
+  programs: number[]
+  default_program: number
+}
+
+/** 架子鼓鼓件：GM 打击乐里一个音高 = 一件鼓。 */
+export interface EditorMidiDrumPiece {
+  pitch: number
+  name_zh: string
+  name_en: string
+  group: string
+  group_zh: string
+  tone?: number
+  decay?: number
+  noise?: number
+  metallic?: number
+  choke?: number
+}
+
+export interface EditorMidiSessionResult {
+  ok: boolean
+  error?: string | null
+  cancelled?: boolean
+  track_id?: string
+  track_name?: string
+  duration?: number
+  session?: EditorMidiSession
+  summary?: Record<string, unknown>
+  instruments?: EditorMidiInstrument[]
+  families?: EditorMidiInstrumentFamily[]
+  drums?: EditorMidiDrumPiece[]
+  clip_spans?: EditorMidiClipSpan[]
+  has_audio?: boolean
+  midi_ready?: boolean
+  mode?: 'tracks' | 'mix' | string
+  audio?: string
+  path?: string
+  bytes?: number
+  report?: Record<string, unknown>
+  project?: EditorProject | null
+  clips?: EditorClip[]
+  tracks?: EditorTrack[]
+}
+
+export interface EditorMidiRenderOptions {
+  mode?: 'tracks' | 'mix'
+}
+
 export interface EditorPluginHostStatus {
   ok: boolean
   ready: boolean

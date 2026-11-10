@@ -37,6 +37,7 @@ from infrastructure.ddsp_engine import DdspSvcEngine
 from infrastructure.engine import EngineRegistry
 from infrastructure.ffmpeg_tool import FfmpegTool
 from infrastructure.high_note_vocoder import HighNoteVocoderProcessor
+from infrastructure.midi_pitch import MidiPitchProcessor
 from infrastructure.pymss_tool import PymssTool
 from infrastructure.rvc_engine import RvcEngine
 from infrastructure.seedvc_engine import SeedVcEngine
@@ -66,6 +67,7 @@ def build_api() -> Api:
     ddsp = DdspSvcEngine()
     vocal_enhancement = VocalEnhancementProcessor()
     high_note_vocoder = HighNoteVocoderProcessor()
+    midi_pitch = MidiPitchProcessor()
     # 引擎注册表：按模型 framework 路由推理引擎（缺省回退 so-vits-svc）
     engines = EngineRegistry([svc, rvc, seedvc, ddsp])
 
@@ -106,6 +108,7 @@ def build_api() -> Api:
         pymss,
         store=EditorProjectStore(ffmpeg),
         high_note_vocoder=high_note_vocoder,
+        midi_pitch=midi_pitch,
     )
     plugin_service = PluginService(settings)
     realtime_cover_service = RealtimeCoverService(model_service, ffmpeg, uvr, engines)

@@ -219,6 +219,12 @@ workflowは`auto_mix`、`auto_vocal_merge`、`manual_vocal_merge`、`auto_then_e
 | `POST` | clip `/separate` | UVR/PyMSS分離と任意dereverb |
 | `POST` | clip `/rerun` | 範囲再推論 |
 | `POST` | track `/clips/merge` | clip結合render |
+| `GET` | clip `/midi` | clipのMIDI音符を取得（`refresh=1`で再分析） |
+| `PUT` | clip `/midi` | clipのMIDI音符を保存 |
+| `POST` | clip `/midi/apply` | MIDI音符をclip音声へ適用（フォルマント保持PSOLA） |
+| `GET` | track `/midi` | トラック単位のMIDI音符を取得（空トラックは空のグリッド） |
+| `PUT` | track `/midi` | トラック単位のMIDI音符を保存（絶対時間） |
+| `POST` | track `/midi/apply` | トラック音符をclipごとに分割して音声へ適用 |
 
 ## 主なstatus code
 

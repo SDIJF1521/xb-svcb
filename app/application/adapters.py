@@ -25,6 +25,7 @@ from .ports import (
     EngineRegistryPort,
     FfmpegGateway,
     HighNoteVocoderPort,
+    MidiPitchPort,
     PymssGateway,
     PluginHostPort,
     SeparationGateway,
@@ -77,6 +78,12 @@ def high_note_vocoder() -> HighNoteVocoderPort:
     from infrastructure.high_note_vocoder import HighNoteVocoderProcessor
 
     return HighNoteVocoderProcessor()
+
+
+def midi_pitch() -> MidiPitchPort:
+    from infrastructure.midi_pitch import MidiPitchProcessor
+
+    return MidiPitchProcessor()
 
 
 def engine_registry(engines: list[Any]) -> EngineRegistryPort:

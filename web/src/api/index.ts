@@ -54,6 +54,13 @@ import type {
   EditorPluginSyncResult,
   EditorPluginTransport,
   EditorClipMergeResult,
+  EditorClipMidi,
+  EditorClipMidiApplyResult,
+  EditorClipMidiSaveResult,
+  EditorMidiNote,
+  EditorMidiRenderOptions,
+  EditorMidiSession,
+  EditorMidiSessionResult,
   EditorRerunResult,
   EditorSeparationOptions,
   EditorSilenceSplitOptions,
@@ -834,6 +841,81 @@ export const api = {
   ) =>
     invoke<EditorRerunResult>('enhance_editor_clip', [projectId, trackId, clipId, referencePath, options], () =>
       mock.enhanceEditorClip(projectId, trackId, clipId, referencePath, options),
+    ),
+
+  getEditorClipMidi: (projectId: string, clipId: string, refresh = false) =>
+    invoke<EditorClipMidi>('get_editor_clip_midi', [projectId, clipId, refresh], () =>
+      mock.getEditorClipMidi(projectId, clipId, refresh),
+    ),
+
+  saveEditorClipMidi: (projectId: string, clipId: string, notes: EditorMidiNote[]) =>
+    invoke<EditorClipMidiSaveResult>('save_editor_clip_midi', [projectId, clipId, notes], () =>
+      mock.saveEditorClipMidi(projectId, clipId, notes),
+    ),
+
+  applyEditorClipMidi: (projectId: string, clipId: string, notes?: EditorMidiNote[]) =>
+    invoke<EditorClipMidiApplyResult>('apply_editor_clip_midi', [projectId, clipId, notes], () =>
+      mock.applyEditorClipMidi(projectId, clipId, notes),
+    ),
+
+  getEditorTrackMidi: (projectId: string, trackId: string, refresh = false) =>
+    invoke<EditorClipMidi>('get_editor_track_midi', [projectId, trackId, refresh], () =>
+      mock.getEditorTrackMidi(projectId, trackId, refresh),
+    ),
+
+  saveEditorTrackMidi: (projectId: string, trackId: string, notes: EditorMidiNote[]) =>
+    invoke<EditorClipMidiSaveResult>('save_editor_track_midi', [projectId, trackId, notes], () =>
+      mock.saveEditorTrackMidi(projectId, trackId, notes),
+    ),
+
+  applyEditorTrackMidi: (projectId: string, trackId: string, notes?: EditorMidiNote[]) =>
+    invoke<EditorClipMidiApplyResult>('apply_editor_track_midi', [projectId, trackId, notes], () =>
+      mock.applyEditorTrackMidi(projectId, trackId, notes),
+    ),
+
+  // ---- MIDI 编曲（多乐器音序器） ----
+
+  getEditorMidiSession: (projectId: string, trackId: string) =>
+    invoke<EditorMidiSessionResult>('get_editor_midi_session', [projectId, trackId], () =>
+      mock.getEditorMidiSession(projectId, trackId),
+    ),
+
+  saveEditorMidiSession: (
+    projectId: string,
+    trackId: string,
+    session: EditorMidiSession,
+  ) =>
+    invoke<EditorMidiSessionResult>('save_editor_midi_session', [projectId, trackId, session], () =>
+      mock.saveEditorMidiSession(projectId, trackId, session),
+    ),
+
+  renderEditorMidiSession: (
+    projectId: string,
+    trackId: string,
+    session: EditorMidiSession,
+    options: EditorMidiRenderOptions = {},
+  ) =>
+    invoke<EditorMidiSessionResult>(
+      'render_editor_midi_session',
+      [projectId, trackId, session, options],
+      () => mock.renderEditorMidiSession(projectId, trackId, session, options),
+    ),
+
+  previewEditorMidiSession: (projectId: string, trackId: string, session: EditorMidiSession) =>
+    invoke<EditorMidiSessionResult>(
+      'preview_editor_midi_session',
+      [projectId, trackId, session],
+      () => mock.previewEditorMidiSession(projectId, trackId, session),
+    ),
+
+  exportEditorMidiFile: (projectId: string, trackId: string, session: EditorMidiSession) =>
+    invoke<EditorMidiSessionResult>('export_editor_midi_file', [projectId, trackId, session], () =>
+      mock.exportEditorMidiFile(projectId, trackId, session),
+    ),
+
+  importEditorMidiFile: (projectId: string, trackId: string) =>
+    invoke<EditorMidiSessionResult>('import_editor_midi_file', [projectId, trackId], () =>
+      mock.importEditorMidiFile(projectId, trackId),
     ),
 }
 

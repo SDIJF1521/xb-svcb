@@ -46,6 +46,7 @@ declare module 'vue' {
     ElTag: typeof import('element-plus/es')['ElTag']
     FirstUseGuide: typeof import('./../components/onboarding/FirstUseGuide.vue')['default']
     LocaleSwitcher: typeof import('./../components/layout/LocaleSwitcher.vue')['default']
+    MidiEditorDialog: typeof import('./../components/editor/MidiEditorDialog.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     ThemeBackground: typeof import('./../components/theme/ThemeBackground.vue')['default']

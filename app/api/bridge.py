@@ -1186,6 +1186,135 @@ class Api:
             options or {},
         )
 
+    # ---- MIDI 子编辑器 ----
+
+    def get_editor_clip_midi(
+        self,
+        project_id: str,
+        clip_id: str,
+        refresh: bool = False,
+    ) -> dict[str, Any]:
+        return self._editor.clip_midi(project_id, clip_id, refresh=bool(refresh))
+
+    def save_editor_clip_midi(
+        self,
+        project_id: str,
+        clip_id: str,
+        notes: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        return self._editor.save_clip_midi(project_id, clip_id, notes or [])
+
+    def apply_editor_clip_midi(
+        self,
+        project_id: str,
+        clip_id: str,
+        notes: list[dict[str, Any]] | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._editor.apply_clip_midi(project_id, clip_id, notes, options or {})
+
+    def get_editor_track_midi(
+        self,
+        project_id: str,
+        track_id: str,
+        refresh: bool = False,
+    ) -> dict[str, Any]:
+        return self._editor.track_midi(project_id, track_id, refresh=bool(refresh))
+
+    def save_editor_track_midi(
+        self,
+        project_id: str,
+        track_id: str,
+        notes: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        return self._editor.save_track_midi(project_id, track_id, notes or [])
+
+    def apply_editor_track_midi(
+        self,
+        project_id: str,
+        track_id: str,
+        notes: list[dict[str, Any]] | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._editor.apply_track_midi(project_id, track_id, notes, options or {})
+
+    # ---- MIDI 编曲（多乐器音序器） ----
+
+    def get_editor_midi_session(
+        self,
+        project_id: str,
+        track_id: str = "",
+        clip_id: str = "",
+    ) -> dict[str, Any]:
+        return self._editor.midi_session(project_id, track_id, clip_id)
+
+    def save_editor_midi_session(
+        self,
+        project_id: str,
+        track_id: str,
+        session: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._editor.save_midi_session(project_id, track_id, session or {})
+
+    def render_editor_midi_session(
+        self,
+        project_id: str,
+        track_id: str,
+        session: dict[str, Any] | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._editor.render_midi_session(project_id, track_id, session, options or {})
+
+    def preview_editor_midi_session(
+        self,
+        project_id: str,
+        track_id: str,
+        session: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._editor.preview_midi_session(project_id, track_id, session)
+
+    def export_editor_midi_file(
+        self,
+        project_id: str,
+        track_id: str,
+        session: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """导出 .mid：先在工程里生成，再让用户选保存位置。"""
+        result = self._editor.export_midi_session(project_id, track_id, session)
+        if not result.get("ok"):
+            return result
+        source = Path(str(result.get("path") or ""))
+        if not source.is_file():
+            return {"ok": False, "error": "MIDI 文件生成失败"}
+        project = self._editor.get(project_id) or {}
+        title = str(project.get("title") or "MIDI").strip()
+        destination = self._save_dialog(
+            "导出 MIDI 文件", f"{_safe_filename(title)}_MIDI.mid"
+        )
+        if not destination:
+            return {**result, "cancelled": True}
+        target = Path(destination)
+        if target.suffix.lower() not in (".mid", ".midi"):
+            target = target.with_suffix(".mid")
+        try:
+            shutil.copyfile(source, target)
+        except OSError as exc:
+            return {"ok": False, "error": f"MIDI 保存失败：{exc}"}
+        return {**result, "path": str(target)}
+
+    def import_editor_midi_file(
+        self,
+        project_id: str,
+        track_id: str,
+    ) -> dict[str, Any]:
+        """导入 .mid：选择文件后解析成多声部编曲会话。"""
+        paths = self._open_dialog(
+            "导入 MIDI 文件", False, ("MIDI 文件 (*.mid;*.midi)", "全部文件 (*.*)")
+        )
+        if not paths:
+            return {"ok": False, "cancelled": True, "error": ""}
+        return self._editor.import_midi_session(project_id, track_id, paths[0])
+
     @staticmethod
     def _reveal(path: Path) -> bool:
         """跨平台打开文件/文件夹。"""

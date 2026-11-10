@@ -6,6 +6,7 @@ import copy
 import json
 import re
 import shutil
+import subprocess
 import threading
 import wave
 import zipfile
@@ -15,6 +16,8 @@ from typing import Any, Callable
 
 import config
 from domain import EditorClip, EditorProject, EditorTrack, InferenceParams, ModelInfo
+from domain import editor_midi, midi_drums, midi_file, midi_instruments
+from domain import midi_session as midi_session_model
 from domain.identity import new_id
 from domain.audio_editor_rules import (
     clean_effects,
@@ -44,12 +47,15 @@ from .adapters import (
     editor_project_store as create_editor_project_store,
     ffmpeg_cache_key,
     high_note_vocoder as create_high_note_vocoder,
+    midi_pitch as create_midi_pitch,
     plugin_host as create_plugin_host,
     pymss_tool as create_pymss_tool,
     vocal_enhancement as create_vocal_enhancement,
 )
 from .editor_render_service import RENDER_VERSION, EditorRenderService
 from .high_note_band import refine_high_note_band
+from . import midi_synth
+from .midi_notes import notes_from_f0
 from .ports import (
     AudioEnginePort,
     EditorProjectStorePort,
@@ -57,6 +63,7 @@ from .ports import (
     FfmpegGateway,
     HighNoteVocoderPort,
     ItemRepository,
+    MidiPitchPort,
     PluginHostPort,
     PymssGateway,
     SeparationGateway,
@@ -98,6 +105,7 @@ class AudioEditorService:
         plugin_host: PluginHostPort | None = None,
         store: EditorProjectStorePort | None = None,
         high_note_vocoder: HighNoteVocoderPort | None = None,
+        midi_pitch: MidiPitchPort | None = None,
     ) -> None:
         self._repo = repo
         self._works_repo = works_repo
@@ -113,6 +121,8 @@ class AudioEditorService:
         # 高音声码器：编辑器局部重推理同样在升回原调后重建超高频带；
         # 适配器不可用时自动跳过（见 _restore_high_pitch_guard）。
         self._high_note_vocoder = high_note_vocoder or create_high_note_vocoder()
+        # MIDI 子编辑器：音符级音高重绘（Praat PSOLA），未就绪时前端显示不可用。
+        self._midi_pitch = midi_pitch or create_midi_pitch()
         self._rerun_jobs: dict[str, dict[str, Any]] = {}
         self._rerun_jobs_lock = threading.RLock()
         self._render = EditorRenderService(
@@ -2993,6 +3003,1262 @@ class AudioEditorService:
             return path.read_text(encoding="utf-8") if path.is_file() else ""
         except OSError:
             return ""
+
+    # ---- MIDI 子编辑器（音符级音高） ----
+
+    _MIDI_DIR_NAME = "midi"
+    _MIN_MIDI_SECONDS = 0.3
+
+    def _midi_dir(self, project_id: str) -> Path:
+        folder = self._project_dir(project_id) / self._MIDI_DIR_NAME
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def _midi_path(self, project_id: str, clip_id: str) -> Path:
+        return self._midi_dir(project_id) / f"{clip_id}.json"
+
+    @staticmethod
+    def _clip_span(clip: dict[str, Any]) -> tuple[float, float, float]:
+        start = float(clip.get("start") or 0.0)
+        end = float(clip.get("end") or 0.0)
+        return start, end, max(0.0, end - start)
+
+    @staticmethod
+    def _audio_signature(path: Path) -> dict[str, Any]:
+        try:
+            stat = path.stat()
+            return {
+                "audio": str(path),
+                "audio_mtime": round(float(stat.st_mtime), 3),
+                "audio_size": int(stat.st_size),
+            }
+        except OSError:
+            return {"audio": str(path), "audio_mtime": 0.0, "audio_size": 0}
+
+    @staticmethod
+    def _read_midi_sidecar(path: Path) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _clip_model_config(self, clip: dict[str, Any]) -> str:
+        """优先用该片段重推理时的主模型配置（决定 F0 采样率与 hop）。"""
+        meta = clip.get("metadata") or {}
+        model_id = str(meta.get("rerun_model_id") or "").strip()
+        if not model_id:
+            return ""
+        try:
+            model = self._models.get(model_id)
+        except Exception:  # noqa: BLE001 - 模型仓储异常不应阻塞 MIDI 分析
+            return ""
+        if not isinstance(model, dict):
+            return ""
+        for key in ("main_config_path",):
+            value = str(model.get(key) or "").strip()
+            if value and Path(value).is_file():
+                return value
+        main_config = model.get("main_config") or {}
+        value = str((main_config or {}).get("path") or "").strip() if isinstance(main_config, dict) else ""
+        return value if value and Path(value).is_file() else ""
+
+    def _run_f0_analysis(self, audio: Path, out_path: Path, clip: dict[str, Any]) -> bool:
+        python = config.VOCAL_ENHANCEMENT_PYTHON
+        worker = config.F0_WORKER
+        repo = config.SOVITS_REPO
+        if not python or not Path(python).is_file():
+            return False
+        if not worker or not Path(worker).is_file() or not repo:
+            return False
+        command = [
+            str(python),
+            str(worker),
+            "--repo",
+            str(repo),
+            "--input",
+            str(audio),
+            "--out-npy",
+            str(out_path),
+            "--f0",
+            "rmvpe",
+            "--f0-max",
+            "1100",
+            "--f0-threshold",
+            "0.05",
+            "--device",
+            "auto",
+        ]
+        config_path = self._clip_model_config(clip)
+        if config_path:
+            command.extend(["--config", config_path])
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.unlink(missing_ok=True)
+            subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=900,
+                **config.subprocess_no_window(),
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return out_path.is_file() and out_path.stat().st_size > 64
+
+    def _analyse_clip_notes(
+        self,
+        project_id: str,
+        clip_id: str,
+        source: Path,
+        clip: dict[str, Any],
+        duration: float,
+    ) -> dict[str, Any]:
+        """裁剪片段 → 提取 F0 → 切成音符。"""
+        if not config.midi_analysis_ready():
+            return {
+                "ok": False,
+                "error": "MIDI 音符分析环境未就绪（需要 vocal 运行时与 so-vits-svc 仓库）",
+            }
+        folder = self._midi_dir(project_id)
+        span_path = folder / f"{clip_id}_analyse.wav"
+        offset = float(clip.get("offset") or 0.0)
+        sample_rate = 44100
+        try:
+            sample_rate = int(clip.get("sample_rate") or 44100)
+        except (TypeError, ValueError):
+            sample_rate = 44100
+        if not self._audio.trim(source, offset, offset + duration, span_path, sample_rate=sample_rate):
+            return {"ok": False, "error": "片段裁剪失败，无法分析 MIDI 音符"}
+        f0_path = folder / f"{clip_id}_f0.npy"
+        if not self._run_f0_analysis(span_path, f0_path, clip):
+            return {"ok": False, "error": "F0 分析失败，无法生成 MIDI 音符"}
+        try:
+            import numpy as np
+
+            curve = np.asarray(
+                np.load(str(f0_path), allow_pickle=False), dtype=np.float32
+            ).reshape(-1)
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "error": f"读取 F0 曲线失败：{exc}"}
+        if curve.size < 8:
+            return {"ok": False, "error": "F0 曲线过短，无法生成 MIDI 音符"}
+        times = np.linspace(0.0, duration, curve.size)
+        notes = notes_from_f0(times, curve, duration=duration)
+        voiced = curve > 0.0
+        analysis = {
+            "voiced_ratio": round(float(np.mean(voiced)) if curve.size else 0.0, 3),
+            "median_hz": round(float(np.median(curve[voiced])), 1) if bool(voiced.any()) else 0.0,
+            "note_count": len(notes),
+            "f0_curve": str(f0_path),
+        }
+        if not notes:
+            return {
+                "ok": False,
+                "error": "片段里没有可用的浊音音符（可能不是人声或片段为空）",
+                "analysis": analysis,
+            }
+        return {"ok": True, "notes": notes, "analysis": analysis}
+
+    def clip_midi(
+        self,
+        project_id: str,
+        clip_id: str,
+        *,
+        refresh: bool = False,
+    ) -> dict[str, Any]:
+        """读取片段的可编辑音符；首次或音频变化时自动分析一次。"""
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        track, _idx, clip = self._find_clip_ref_by_clip_id(project, clip_id)
+        if not clip:
+            return {"ok": False, "error": "片段不存在"}
+        source = Path(str(clip.get("file") or ""))
+        if not source.is_file():
+            return {"ok": False, "error": "片段音频不存在"}
+        _start, _end, duration = self._clip_span(clip)
+        if duration < self._MIN_MIDI_SECONDS:
+            return {
+                "ok": False,
+                "error": f"片段过短：至少 {self._MIN_MIDI_SECONDS:.2f} 秒才能编辑 MIDI",
+            }
+        signature = self._audio_signature(source)
+        sidecar_path = self._midi_path(project_id, clip_id)
+        sidecar = None if refresh else self._read_midi_sidecar(sidecar_path)
+        if (
+            isinstance(sidecar, dict)
+            and str(sidecar.get("audio") or "") == signature["audio"]
+            and float(sidecar.get("audio_mtime") or 0.0) == signature["audio_mtime"]
+        ):
+            notes = editor_midi.clean_notes(sidecar.get("notes"), duration)
+            if notes:
+                return {
+                    "ok": True,
+                    "clip_id": clip_id,
+                    "track_id": str(track.get("id") or "") if track else "",
+                    "duration": round(duration, 3),
+                    "notes": notes,
+                    "analysis": sidecar.get("analysis") or {},
+                    "meta": (clip.get("metadata") or {}).get("midi") or {},
+                    "cached": True,
+                    "midi_ready": bool(config.midi_pitch_ready()),
+                }
+        analysed = self._analyse_clip_notes(project_id, clip_id, source, clip, duration)
+        if not analysed.get("ok"):
+            return {**analysed, "clip_id": clip_id}
+        notes = editor_midi.clean_notes(analysed["notes"], duration)
+        payload = {
+            "clip_id": clip_id,
+            **signature,
+            "duration": round(duration, 3),
+            "notes": notes,
+            "analysis": analysed.get("analysis") or {},
+            "extracted_at": self._now(),
+        }
+        try:
+            sidecar_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except OSError as exc:
+            return {"ok": False, "error": f"MIDI 数据写入失败：{exc}"}
+        return {
+            "ok": True,
+            "clip_id": clip_id,
+            "track_id": str(track.get("id") or "") if track else "",
+            "duration": round(duration, 3),
+            "notes": notes,
+            "analysis": analysed.get("analysis") or {},
+            "meta": (clip.get("metadata") or {}).get("midi") or {},
+            "cached": False,
+            "midi_ready": bool(config.midi_pitch_ready()),
+        }
+
+    def _find_clip_ref_by_clip_id(
+        self, project: dict[str, Any] | None, clip_id: str
+    ) -> tuple[dict[str, Any] | None, int, dict[str, Any] | None]:
+        """按片段 ID 定位（MIDI 子编辑器只带 clip_id）。"""
+        if not project:
+            return None, -1, None
+        for track in project.get("tracks", []) or []:
+            for idx, clip in enumerate(track.get("clips", []) or []):
+                if clip.get("id") == clip_id:
+                    return track, idx, clip
+        return None, -1, None
+
+    def save_clip_midi(
+        self,
+        project_id: str,
+        clip_id: str,
+        notes: Any,
+    ) -> dict[str, Any]:
+        """保存音符到工程旁的 sidecar，并在片段元数据里记录摘要。"""
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        _track, _idx, clip = self._find_clip_ref_by_clip_id(project, clip_id)
+        if not clip:
+            return {"ok": False, "error": "片段不存在"}
+        _start, _end, duration = self._clip_span(clip)
+        cleaned = editor_midi.clean_notes(notes, duration)
+        sidecar_path = self._midi_path(project_id, clip_id)
+        payload = self._read_midi_sidecar(sidecar_path) or {}
+        source = Path(str(clip.get("file") or ""))
+        payload.update(
+            {
+                "clip_id": clip_id,
+                **self._audio_signature(source),
+                "duration": round(duration, 3),
+                "notes": cleaned,
+                "updated_at": self._now(),
+            }
+        )
+        try:
+            sidecar_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except OSError as exc:
+            return {"ok": False, "error": f"MIDI 数据写入失败：{exc}"}
+
+        next_project = copy.deepcopy(project)
+        _track2, idx2, next_clip = self._find_clip_ref_by_clip_id(next_project, clip_id)
+        if not next_clip:
+            return {"ok": False, "error": "片段替换失败"}
+        meta = dict(next_clip.get("metadata") or {})
+        previous = meta.get("midi") if isinstance(meta.get("midi"), dict) else {}
+        meta["midi"] = {
+            **previous,
+            "note_count": len(cleaned),
+            "updated_at": self._now(),
+        }
+        next_clip["metadata"] = meta
+        saved = self.save(next_project, push_history=True)
+        return {
+            "ok": True,
+            "project": saved,
+            "notes": cleaned,
+            "duration": round(duration, 3),
+            "meta": meta["midi"],
+        }
+
+    def apply_clip_midi(
+        self,
+        project_id: str,
+        clip_id: str,
+        notes: Any = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """把音符落到音频：生成新音频并替换片段（可撤销）。"""
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        _track, _idx, clip = self._find_clip_ref_by_clip_id(project, clip_id)
+        if not clip:
+            return {"ok": False, "error": "片段不存在"}
+        if clip.get("locked"):
+            return {"ok": False, "error": "片段已锁定"}
+        source = Path(str(clip.get("file") or ""))
+        if not source.is_file():
+            return {"ok": False, "error": "片段音频不存在"}
+        _start, _end, duration = self._clip_span(clip)
+        if duration < self._MIN_MIDI_SECONDS:
+            return {
+                "ok": False,
+                "error": f"片段过短：至少 {self._MIN_MIDI_SECONDS:.2f} 秒才能应用 MIDI",
+            }
+        if notes is None:
+            sidecar = self._read_midi_sidecar(self._midi_path(project_id, clip_id)) or {}
+            notes = sidecar.get("notes")
+        cleaned = editor_midi.clean_notes(notes, duration)
+        if not cleaned:
+            return {"ok": False, "error": "没有 MIDI 音符可以应用"}
+        if not self._midi_pitch.available:
+            return {"ok": False, "error": "MIDI 音高重绘环境未就绪（需要 vocal 运行时）"}
+
+        folder = self._midi_dir(project_id)
+        updated, report = self._apply_notes_to_clip(
+            clip,
+            cleaned,
+            folder,
+            sample_rate=self._project_sample_rate(project),
+        )
+        if updated is None:
+            return {"ok": False, **report}
+        next_project = copy.deepcopy(project)
+        next_track, next_index, _target = self._find_clip_ref_by_clip_id(
+            next_project, clip_id
+        )
+        if not next_track or next_index < 0:
+            return {"ok": False, "error": "片段替换失败"}
+        next_track["clips"][next_index] = updated
+        next_project["waveform_cache"] = {}
+        saved = self.save(next_project, push_history=True)
+        self._write_midi_sidecar(
+            project_id,
+            clip_id,
+            updated.get("file") or source,
+            duration,
+            cleaned,
+            scope="clip",
+        )
+        return {
+            "ok": True,
+            "project": saved,
+            "clip": updated,
+            "report": report,
+            "audio_path": str(updated.get("file") or ""),
+        }
+
+    # ---- MIDI 子编辑器：轨道范围与音频重绘 ----
+
+    _MIDI_TRACK_DEFAULT_SECONDS = 30.0
+
+    @staticmethod
+    def _project_sample_rate(project: dict[str, Any]) -> int:
+        try:
+            return int(project.get("sample_rate") or 44100)
+        except (TypeError, ValueError):
+            return 44100
+
+    def _track_span(self, project: dict[str, Any], track: dict[str, Any]) -> float:
+        """轨道 MIDI 的时间轴：到最后一个片段结束，空白轨道退回工程时长。"""
+        end = 0.0
+        for clip in track.get("clips", []) or []:
+            try:
+                end = max(end, float(clip.get("end") or 0.0))
+            except (TypeError, ValueError):
+                continue
+        if end <= 0.0:
+            try:
+                end = float(project.get("duration") or 0.0)
+            except (TypeError, ValueError):
+                end = 0.0
+        return round(max(self._MIN_MIDI_SECONDS, end or self._MIDI_TRACK_DEFAULT_SECONDS), 3)
+
+    def _track_signature(self, track: dict[str, Any]) -> dict[str, Any]:
+        clips = []
+        for clip in track.get("clips", []) or []:
+            clips.append(
+                {
+                    "id": str(clip.get("id") or ""),
+                    "start": round(float(clip.get("start") or 0.0), 3),
+                    "end": round(float(clip.get("end") or 0.0), 3),
+                    "audio": self._audio_signature(Path(str(clip.get("file") or ""))),
+                }
+            )
+        clips.sort(key=lambda item: (item["start"], item["id"]))
+        return {"clips": clips}
+
+    @staticmethod
+    def _track_clip_spans(track: dict[str, Any]) -> list[dict[str, Any]]:
+        spans = []
+        for clip in track.get("clips", []) or []:
+            spans.append(
+                {
+                    "id": str(clip.get("id") or ""),
+                    "name": str(clip.get("name") or ""),
+                    "start": round(float(clip.get("start") or 0.0), 3),
+                    "end": round(float(clip.get("end") or 0.0), 3),
+                }
+            )
+        spans.sort(key=lambda item: item["start"])
+        return spans
+
+    def _write_midi_sidecar(
+        self,
+        project_id: str,
+        target_id: str,
+        audio_or_track: Any,
+        duration: float,
+        notes: list[dict[str, Any]],
+        *,
+        scope: str = "clip",
+    ) -> None:
+        """写入音符缓存：片段范围记音频签名，轨道范围记整轨片段签名。"""
+        path = self._midi_path(project_id, target_id)
+        payload = self._read_midi_sidecar(path) or {}
+        payload.update(
+            {
+                "scope": scope,
+                "target_id": target_id,
+                "duration": round(float(duration), 3),
+                "notes": notes,
+                "updated_at": self._now(),
+            }
+        )
+        if scope == "track":
+            payload["track_signature"] = audio_or_track
+        else:
+            payload.update(self._audio_signature(Path(str(audio_or_track))))
+        try:
+            path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+    def _apply_notes_to_clip(
+        self,
+        clip: dict[str, Any],
+        notes: list[dict[str, Any]],
+        folder: Path,
+        *,
+        sample_rate: int = 44100,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        """把片段内时间轴上的音符重绘成新片段音频（不落盘工程）。"""
+        clip_id = str(clip.get("id") or "")
+        source = Path(str(clip.get("file") or ""))
+        _start, _end, duration = self._clip_span(clip)
+        span_path = folder / f"{clip_id}_apply_input.wav"
+        offset = float(clip.get("offset") or 0.0)
+        if not self._audio.trim(
+            source, offset, offset + duration, span_path, sample_rate=sample_rate
+        ):
+            return None, {"error": "片段裁剪失败，无法应用 MIDI"}
+        f0_path = folder / f"{clip_id}_f0.npy"
+        f0_curve = f0_path if f0_path.is_file() and f0_path.stat().st_size > 64 else None
+        key = self._rerun_key(span_path, clip, "midi", {"notes": len(notes)})
+        out_dir = folder / "applied"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output = out_dir / f"{clip_id}_{key}.wav"
+        result = self._midi_pitch.apply(
+            source=span_path,
+            notes=notes,
+            destination=output,
+            f0_curve=f0_curve,
+        )
+        if not result.get("applied") or not output.is_file():
+            return None, {
+                "error": str(result.get("reason") or "没有音符需要修改"),
+                "skipped": result.get("skipped") or [],
+            }
+        updated = copy.deepcopy(clip)
+        old_name = str(updated.get("name") or "片段")
+        updated["file"] = str(output)
+        updated["offset"] = 0.0
+        if "MIDI" not in old_name:
+            updated["name"] = f"{old_name} · MIDI"
+        meta = dict(updated.get("metadata") or {})
+        previous = meta.get("midi") if isinstance(meta.get("midi"), dict) else {}
+        meta["midi"] = {
+            **previous,
+            "note_count": len(notes),
+            "applied_at": self._now(),
+            "applied_file": str(output),
+            "applied_notes": int(result.get("applied_notes") or 0),
+            "applied_seconds": float(result.get("applied_seconds") or 0.0),
+            "source_file": str(source),
+        }
+        updated["metadata"] = meta
+        return updated, {
+            "applied_notes": int(result.get("applied_notes") or 0),
+            "applied_seconds": float(result.get("applied_seconds") or 0.0),
+            "skipped": result.get("skipped") or [],
+        }
+
+    def track_midi(
+        self,
+        project_id: str,
+        track_id: str,
+        *,
+        refresh: bool = False,
+    ) -> dict[str, Any]:
+        """读取整轨 MIDI 音符（绝对时间）；空白轨道返回空音符以便直接编排。"""
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        track, _index, clip = self._find_clip_ref_by_track_id(project, track_id)
+        if not track:
+            return {"ok": False, "error": "音轨不存在"}
+        duration = self._track_span(project, track)
+        signature = self._track_signature(track)
+        spans = self._track_clip_spans(track)
+        sidecar_path = self._midi_path(project_id, track_id)
+        sidecar = None if refresh else self._read_midi_sidecar(sidecar_path)
+        if isinstance(sidecar, dict):
+            try:
+                fresh = json.dumps(
+                    sidecar.get("track_signature"), sort_keys=True, ensure_ascii=False
+                ) == json.dumps(signature, sort_keys=True, ensure_ascii=False)
+            except (TypeError, ValueError):
+                fresh = False
+            if fresh:
+                notes = editor_midi.clean_notes(sidecar.get("notes"), duration)
+                return {
+                    "ok": True,
+                    "scope": "track",
+                    "track_id": track_id,
+                    "duration": duration,
+                    "notes": notes,
+                    "analysis": sidecar.get("analysis") or {},
+                    "cached": True,
+                    "midi_ready": bool(config.midi_pitch_ready()),
+                    "clip_spans": spans,
+                }
+        analyses: list[dict[str, Any]] = []
+        collected: list[dict[str, Any]] = []
+        for item in track.get("clips", []) or []:
+            src = Path(str(item.get("file") or ""))
+            if not src.is_file():
+                analyses.append({"clip_id": str(item.get("id") or ""), "error": "音频不存在"})
+                continue
+            _s, _e, clip_duration = self._clip_span(item)
+            if clip_duration < self._MIN_MIDI_SECONDS:
+                continue
+            analysed = self._analyse_clip_notes(
+                project_id, str(item.get("id") or ""), src, item, clip_duration
+            )
+            if not analysed.get("ok"):
+                analyses.append(
+                    {"clip_id": str(item.get("id") or ""), "error": analysed.get("error")}
+                )
+                continue
+            offset = float(item.get("start") or 0.0)
+            for note in analysed.get("notes") or []:
+                collected.append(
+                    {
+                        **note,
+                        "start": round(float(note["start"]) + offset, 3),
+                        "end": round(float(note["end"]) + offset, 3),
+                    }
+                )
+            analyses.append(
+                {"clip_id": str(item.get("id") or ""), **(analysed.get("analysis") or {})}
+            )
+        notes = editor_midi.clean_notes(collected, duration)
+        payload = {
+            "scope": "track",
+            "target_id": track_id,
+            "track_signature": signature,
+            "duration": duration,
+            "notes": notes,
+            "analysis": {"clips": analyses, "empty_track": not spans},
+            "extracted_at": self._now(),
+        }
+        try:
+            sidecar_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except OSError as exc:
+            return {"ok": False, "error": f"MIDI 数据写入失败：{exc}"}
+        if not notes and spans:
+            return {
+                "ok": False,
+                "error": "音轨里没有可用的浊音音符（可能不是人声或已被静音）",
+                "analysis": payload["analysis"],
+                "clip_spans": spans,
+            }
+        return {
+            "ok": True,
+            "scope": "track",
+            "track_id": track_id,
+            "duration": duration,
+            "notes": notes,
+            "analysis": payload["analysis"],
+            "cached": False,
+            "midi_ready": bool(config.midi_pitch_ready()),
+            "clip_spans": spans,
+        }
+
+    def save_track_midi(
+        self,
+        project_id: str,
+        track_id: str,
+        notes: Any,
+    ) -> dict[str, Any]:
+        """保存整轨音符（绝对时间），并在音轨元数据里记录摘要。"""
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        track, _index, _clip = self._find_clip_ref_by_track_id(project, track_id)
+        if not track:
+            return {"ok": False, "error": "音轨不存在"}
+        duration = self._track_span(project, track)
+        cleaned = editor_midi.clean_notes(notes, duration)
+        sidecar_path = self._midi_path(project_id, track_id)
+        payload = self._read_midi_sidecar(sidecar_path) or {}
+        payload.update(
+            {
+                "scope": "track",
+                "target_id": track_id,
+                "track_signature": self._track_signature(track),
+                "duration": duration,
+                "notes": cleaned,
+                "updated_at": self._now(),
+            }
+        )
+        try:
+            sidecar_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except OSError as exc:
+            return {"ok": False, "error": f"MIDI 数据写入失败：{exc}"}
+        next_project = copy.deepcopy(project)
+        next_track, _index2, _clip2 = self._find_clip_ref_by_track_id(
+            next_project, track_id
+        )
+        if not next_track:
+            return {"ok": False, "error": "音轨替换失败"}
+        meta = dict(next_track.get("metadata") or {})
+        previous = meta.get("midi") if isinstance(meta.get("midi"), dict) else {}
+        meta["midi"] = {
+            **previous,
+            "scope": "track",
+            "note_count": len(cleaned),
+            "updated_at": self._now(),
+        }
+        next_track["metadata"] = meta
+        saved = self.save(next_project, push_history=True)
+        return {
+            "ok": True,
+            "project": saved,
+            "notes": cleaned,
+            "duration": duration,
+            "meta": meta["midi"],
+        }
+
+    def apply_track_midi(
+        self,
+        project_id: str,
+        track_id: str,
+        notes: Any = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """把整轨音符按片段切分后逐个重绘，一次推入撤销历史。"""
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        track, _index, _clip = self._find_clip_ref_by_track_id(project, track_id)
+        if not track:
+            return {"ok": False, "error": "音轨不存在"}
+        if track.get("locked"):
+            return {"ok": False, "error": "音轨已锁定"}
+        duration = self._track_span(project, track)
+        if notes is None:
+            sidecar = self._read_midi_sidecar(self._midi_path(project_id, track_id)) or {}
+            notes = sidecar.get("notes")
+        cleaned = editor_midi.clean_notes(notes, duration)
+        if not cleaned:
+            return {"ok": False, "error": "没有 MIDI 音符可以应用"}
+        clips = [clip for clip in track.get("clips", []) or [] if not clip.get("locked")]
+        if not clips:
+            return {"ok": False, "error": "音轨上没有可用片段：先把音频导入该轨再应用 MIDI"}
+        if not self._midi_pitch.available:
+            return {"ok": False, "error": "MIDI 音高重绘环境未就绪（需要 vocal 运行时）"}
+
+        folder = self._midi_dir(project_id)
+        sample_rate = self._project_sample_rate(project)
+        next_project = copy.deepcopy(project)
+        next_track, _index2, _clip2 = self._find_clip_ref_by_track_id(
+            next_project, track_id
+        )
+        if not next_track:
+            return {"ok": False, "error": "音轨替换失败"}
+        updated_clips: list[dict[str, Any]] = []
+        reports: list[dict[str, Any]] = []
+        for clip in list(next_track.get("clips", []) or []):
+            start = float(clip.get("start") or 0.0)
+            end = float(clip.get("end") or 0.0)
+            clip_duration = max(0.0, end - start)
+            if clip.get("locked") or clip_duration < self._MIN_MIDI_SECONDS:
+                continue
+            local: list[dict[str, Any]] = []
+            for note in cleaned:
+                note_start = float(note.get("start") or 0.0)
+                note_end = float(note.get("end") or 0.0)
+                if note_end <= start + 1e-6 or note_start >= end - 1e-6:
+                    continue
+                left = max(0.0, note_start - start)
+                right = min(clip_duration, note_end - start)
+                if right - left < editor_midi.MIN_NOTE_SECONDS:
+                    continue
+                local.append(
+                    {**note, "start": round(left, 3), "end": round(right, 3)}
+                )
+            if not local:
+                continue
+            updated, report = self._apply_notes_to_clip(
+                clip, local, folder, sample_rate=sample_rate
+            )
+            if updated is None:
+                reports.append(
+                    {"clip_id": str(clip.get("id") or ""), "error": report.get("error")}
+                )
+                continue
+            index = next_track["clips"].index(clip)
+            next_track["clips"][index] = updated
+            updated_clips.append(updated)
+            reports.append(
+                {"clip_id": str(updated.get("id") or ""), **(report or {})}
+            )
+        if not updated_clips:
+            errors = [item.get("error") for item in reports if item.get("error")]
+            return {
+                "ok": False,
+                "error": str(errors[0]) if errors else "没有音符落在任何片段上",
+                "report": {"clips": reports},
+            }
+        meta = dict(next_track.get("metadata") or {})
+        previous = meta.get("midi") if isinstance(meta.get("midi"), dict) else {}
+        applied_notes = sum(int(item.get("applied_notes") or 0) for item in reports)
+        applied_seconds = sum(float(item.get("applied_seconds") or 0.0) for item in reports)
+        meta["midi"] = {
+            **previous,
+            "scope": "track",
+            "note_count": len(cleaned),
+            "applied_at": self._now(),
+            "applied_notes": applied_notes,
+            "applied_seconds": round(applied_seconds, 3),
+        }
+        next_track["metadata"] = meta
+        next_project["waveform_cache"] = {}
+        saved = self.save(next_project, push_history=True)
+        self._write_midi_sidecar(
+            project_id,
+            track_id,
+            self._track_signature(next_track),
+            duration,
+            cleaned,
+            scope="track",
+        )
+        return {
+            "ok": True,
+            "project": saved,
+            "clips": updated_clips,
+            "report": {
+                "scope": "track",
+                "applied_notes": applied_notes,
+                "applied_seconds": round(applied_seconds, 3),
+                "clips": reports,
+            },
+        }
+
+    def _find_clip_ref_by_track_id(
+        self, project: dict[str, Any] | None, track_id: str
+    ) -> tuple[dict[str, Any] | None, int, dict[str, Any] | None]:
+        """按音轨 ID 定位。"""
+        if not project:
+            return None, -1, None
+        for index, track in enumerate(project.get("tracks", []) or []):
+            if track.get("id") == track_id:
+                return track, index, None
+        return None, -1, None
+
+    # ---- MIDI 编曲：多乐器音序器（空轨道也能写歌 → 出音频 / 出 .mid） ----
+
+    _MIDI_SESSION_SUFFIX = ".session.json"
+    _MIDI_RENDER_DIR_NAME = "renders"
+    _MAX_MIDI_IMPORT_BYTES = 16 * 1024 * 1024
+
+    def _midi_session_path(self, project_id: str, track_id: str) -> Path:
+        return self._midi_dir(project_id) / f"{track_id}{self._MIDI_SESSION_SUFFIX}"
+
+    def _midi_render_dir(self, project_id: str) -> Path:
+        folder = self._midi_dir(project_id) / self._MIDI_RENDER_DIR_NAME
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def _compose_duration(self, project: dict[str, Any], track: dict[str, Any]) -> float:
+        """编曲时间轴：至少 60 秒，且不短于工程/轨道已有内容。"""
+        base = self._track_span(project, track)
+        try:
+            project_end = float(project.get("duration") or 0.0)
+        except (TypeError, ValueError):
+            project_end = 0.0
+        return round(max(60.0, base, project_end), 3)
+
+    def _load_compose_session(
+        self, project_id: str, track: dict[str, Any], duration: float
+    ) -> dict[str, Any]:
+        """读取编曲会话；老工程没有会话时把已有整轨音符迁移成单声部。"""
+        track_id = str(track.get("id") or "")
+        payload = self._read_midi_sidecar(self._midi_session_path(project_id, track_id)) or {}
+        raw = payload.get("session")
+        if isinstance(raw, dict) and isinstance(raw.get("parts"), list) and raw.get("parts"):
+            return midi_session_model.clean_session(raw, duration)
+        legacy = self._read_midi_sidecar(self._midi_path(project_id, track_id)) or {}
+        notes = legacy.get("notes") if isinstance(legacy, dict) else None
+        return midi_session_model.session_from_notes(
+            notes,
+            duration=duration,
+            instrument=0,
+            name=str(track.get("name") or "旋律")[:24] or "旋律",
+        )
+
+    def _write_compose_session(
+        self, project_id: str, track_id: str, session: dict[str, Any]
+    ) -> bool:
+        path = self._midi_session_path(project_id, track_id)
+        payload = self._read_midi_sidecar(path) or {}
+        payload.update(
+            {
+                "scope": "compose",
+                "target_id": track_id,
+                "session": session,
+                "updated_at": self._now(),
+            }
+        )
+        try:
+            path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except OSError:
+            return False
+        return True
+
+    def midi_session(
+        self,
+        project_id: str,
+        track_id: str = "",
+        clip_id: str = "",
+    ) -> dict[str, Any]:
+        """打开编曲子编辑器所需的全部数据（会话 + 音色表 + 轨道上下文）。"""
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        track: dict[str, Any] | None = None
+        if track_id:
+            track, _index, _clip = self._find_clip_ref_by_track_id(project, track_id)
+        elif clip_id:
+            track, _index, _clip = self._find_clip_ref_by_clip_id(project, clip_id)
+        if not track:
+            return {"ok": False, "error": "音轨不存在"}
+        resolved_id = str(track.get("id") or "")
+        duration = self._compose_duration(project, track)
+        session = self._load_compose_session(project_id, track, duration)
+        spans = self._track_clip_spans(track)
+        return {
+            "ok": True,
+            "track_id": resolved_id,
+            "track_name": str(track.get("name") or ""),
+            "duration": duration,
+            "session": session,
+            "summary": midi_session_model.session_summary(session),
+            "instruments": midi_instruments.catalog(),
+            "families": midi_instruments.families(),
+            "drums": midi_drums.pieces(),
+            "clip_spans": spans,
+            "has_audio": bool(spans),
+            "sample_rate": self._project_sample_rate(project),
+            "midi_ready": bool(config.midi_pitch_ready()),
+        }
+
+    def save_midi_session(
+        self,
+        project_id: str,
+        track_id: str,
+        session: Any,
+    ) -> dict[str, Any]:
+        """保存编曲会话（音符本身不进工程 JSON，只写 sidecar + 摘要）。"""
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        track, _index, _clip = self._find_clip_ref_by_track_id(project, track_id)
+        if not track:
+            return {"ok": False, "error": "音轨不存在"}
+        duration = self._compose_duration(project, track)
+        cleaned = midi_session_model.clean_session(session, duration)
+        if not self._write_compose_session(project_id, track_id, cleaned):
+            return {"ok": False, "error": "MIDI 编曲数据写入失败"}
+        next_project = copy.deepcopy(project)
+        next_track, _index2, _clip2 = self._find_clip_ref_by_track_id(next_project, track_id)
+        if not next_track:
+            return {"ok": False, "error": "音轨替换失败"}
+        meta = dict(next_track.get("metadata") or {})
+        meta["midi_compose"] = midi_session_model.session_summary(cleaned)
+        next_track["metadata"] = meta
+        saved = self.save(next_project, push_history=True)
+        return {
+            "ok": True,
+            "project": saved,
+            "session": cleaned,
+            "summary": midi_session_model.session_summary(cleaned),
+            "duration": duration,
+        }
+
+    @staticmethod
+    def _midi_render_key(session: dict[str, Any], sample_rate: int, mode: str) -> str:
+        return ffmpeg_cache_key(
+            {
+                "kind": "midi-render",
+                "session": session,
+                "sample_rate": sample_rate,
+                "mode": mode,
+            }
+        )[:12]
+
+    def render_midi_session(
+        self,
+        project_id: str,
+        track_id: str,
+        session: Any = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """把编曲渲染成音频：分乐器各生成一条音轨，或混成一条落到当前轨道。"""
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        track, _index, _clip = self._find_clip_ref_by_track_id(project, track_id)
+        if not track:
+            return {"ok": False, "error": "音轨不存在"}
+        if track.get("locked"):
+            return {"ok": False, "error": "音轨已锁定"}
+        duration = self._compose_duration(project, track)
+        source = session if isinstance(session, dict) else self._load_compose_session(
+            project_id, track, duration
+        )
+        cleaned = midi_session_model.clean_session(source, duration)
+        audible = midi_session_model.audible_parts(cleaned)
+        if not audible:
+            return {"ok": False, "error": "没有可渲染的音符（检查静音/独奏与声部内容）"}
+        mode = str((options or {}).get("mode") or "tracks").strip()
+        if mode not in ("tracks", "mix"):
+            mode = "tracks"
+        sample_rate = self._project_sample_rate(project)
+        key = self._midi_render_key(cleaned, sample_rate, mode)
+        folder = self._midi_render_dir(project_id)
+        track_name = str(track.get("name") or "轨道")
+        base_meta = midi_session_model.session_summary(cleaned)
+
+        next_project = copy.deepcopy(project)
+        next_track, next_index, _next_clip = self._find_clip_ref_by_track_id(
+            next_project, track_id
+        )
+        if not next_track or next_index < 0:
+            return {"ok": False, "error": "音轨替换失败"}
+
+        rendered: list[dict[str, Any]] = []
+        created_tracks: list[dict[str, Any]] = []
+        try:
+            if mode == "mix":
+                samples = midi_synth.render_session(cleaned, sample_rate=sample_rate)
+                if getattr(samples, "size", 0) <= 0:
+                    return {"ok": False, "error": "渲染结果为空"}
+                output = folder / f"{track_id}_mix_{key}.wav"
+                if not midi_synth.write_wav(output, samples, sample_rate):
+                    return {"ok": False, "error": "渲染音频写入失败"}
+                length = round(samples.shape[0] / float(sample_rate), 3)
+                clip = self._midi_render_clip(
+                    output,
+                    name=f"MIDI · {track_name}",
+                    start=0.0,
+                    end=length,
+                    metadata={
+                        "midi_render": {
+                            "source_track": track_id,
+                            "mode": "mix",
+                            "summary": base_meta,
+                            "rendered_at": self._now(),
+                        }
+                    },
+                )
+                kept = [
+                    item
+                    for item in list(next_track.get("clips") or [])
+                    if not (isinstance(item.get("metadata"), dict) and item["metadata"].get("midi_render"))
+                ]
+                next_track["clips"] = sorted(
+                    [*kept, clip], key=lambda item: float(item.get("start") or 0.0)
+                )
+                rendered.append(clip)
+            else:
+                # 先清掉上一次渲染出来的「乐器轨」，避免重复叠加。
+                next_project["tracks"] = [
+                    item
+                    for item in list(next_project.get("tracks") or [])
+                    if not (
+                        isinstance(item.get("metadata"), dict)
+                        and str(item["metadata"].get("midi_render_source") or "") == track_id
+                    )
+                ]
+                for part in audible:
+                    bounds = midi_session_model.part_note_bounds(part)
+                    if not bounds:
+                        continue
+                    samples = midi_synth.render_part(
+                        cleaned, part, sample_rate=sample_rate, window=bounds
+                    )
+                    if getattr(samples, "size", 0) <= 0:
+                        continue
+                    part_id = str(part.get("id") or "part")
+                    output = folder / f"{track_id}_{self._safe_stem(part_id)}_{key}.wav"
+                    if not midi_synth.write_wav(output, samples, sample_rate):
+                        continue
+                    length = round(samples.shape[0] / float(sample_rate), 3)
+                    clip = self._midi_render_clip(
+                        output,
+                        name=f"MIDI · {part.get('name') or part_id}",
+                        start=float(bounds[0]),
+                        end=round(float(bounds[0]) + length, 3),
+                        metadata={
+                            "midi_render": {
+                                "source_track": track_id,
+                                "mode": "part",
+                                "part_id": part_id,
+                                "program": part.get("instrument"),
+                                "summary": base_meta,
+                                "rendered_at": self._now(),
+                            }
+                        },
+                    )
+                    created = EditorTrack(
+                        id=new_id("trk_"),
+                        name=f"MIDI · {str(part.get('name') or part_id)[:24]}",
+                        type="audio",
+                        clips=[clip],
+                        mute=bool(part.get("mute")),
+                        volume=float(part.get("volume", 1.0) or 1.0),
+                    ).to_dict()
+                    created["metadata"] = {
+                        "midi_render_source": track_id,
+                        "midi_part": part_id,
+                        "midi_program": part.get("instrument"),
+                    }
+                    created_tracks.append(created)
+                    rendered.append(clip)
+                if not created_tracks:
+                    return {"ok": False, "error": "渲染失败：没有生成任何音频"}
+                insert_at = len(next_project.get("tracks") or [])
+                for offset, created in enumerate(created_tracks):
+                    next_project["tracks"].insert(insert_at + offset, created)
+        except (OSError, ValueError, MemoryError) as exc:
+            return {"ok": False, "error": f"渲染失败：{exc}"}
+
+        next_track = next(
+            (item for item in next_project.get("tracks") or [] if item.get("id") == track_id),
+            next_track,
+        )
+        meta = dict(next_track.get("metadata") or {})
+        meta["midi_compose"] = base_meta
+        meta["midi_render"] = {
+            "mode": mode,
+            "rendered_at": self._now(),
+            "clips": len(rendered),
+            "tracks": len(created_tracks),
+        }
+        next_track["metadata"] = meta
+        next_project["waveform_cache"] = {}
+        self._write_compose_session(project_id, track_id, cleaned)
+        saved = self.save(next_project, push_history=True)
+        return {
+            "ok": True,
+            "project": saved,
+            "mode": mode,
+            "clips": rendered,
+            "tracks": created_tracks,
+            "report": {
+                "mode": mode,
+                "parts": len(audible),
+                "clips": len(rendered),
+                "tracks": len(created_tracks),
+                "summary": base_meta,
+                "sample_rate": sample_rate,
+            },
+        }
+
+    @staticmethod
+    def _midi_render_clip(
+        path: Path,
+        *,
+        name: str,
+        start: float,
+        end: float,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        return EditorClip(
+            id=new_id("clp_"),
+            name=name,
+            start=round(max(0.0, float(start)), 3),
+            end=round(max(float(start) + 0.01, float(end)), 3),
+            offset=0.0,
+            volume=1.0,
+            mute=False,
+            file=str(path),
+            metadata=metadata,
+        ).to_dict()
+
+    def preview_midi_session(
+        self,
+        project_id: str,
+        track_id: str,
+        session: Any = None,
+    ) -> dict[str, Any]:
+        """试听用渲染：不落工程，只返回可直接播放的音频 data URI。"""
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        track, _index, _clip = self._find_clip_ref_by_track_id(project, track_id)
+        if not track:
+            return {"ok": False, "error": "音轨不存在"}
+        duration = self._compose_duration(project, track)
+        source = session if isinstance(session, dict) else self._load_compose_session(
+            project_id, track, duration
+        )
+        cleaned = midi_session_model.clean_session(source, duration)
+        if not midi_session_model.audible_parts(cleaned):
+            return {"ok": False, "error": "没有可试听的音符"}
+        sample_rate = min(44100, max(22050, self._project_sample_rate(project)))
+        key = self._midi_render_key(cleaned, sample_rate, "preview")
+        path = self._store.cache_path(f"midi_preview_{track_id}_{key}.wav")
+        seconds = midi_session_model.session_duration(cleaned)
+        if not path.is_file():
+            samples = midi_synth.render_session(cleaned, sample_rate=sample_rate)
+            if getattr(samples, "size", 0) <= 0:
+                return {"ok": False, "error": "渲染结果为空"}
+            if not midi_synth.write_wav(path, samples, sample_rate):
+                return {"ok": False, "error": "试听音频写入失败"}
+        return {
+            "ok": True,
+            "audio": self._store.audio_data_uri(path, exact=True),
+            "duration": round(seconds, 3),
+            "parts": len(midi_session_model.audible_parts(cleaned)),
+        }
+
+    def export_midi_session(
+        self,
+        project_id: str,
+        track_id: str,
+        session: Any = None,
+    ) -> dict[str, Any]:
+        """导出标准 MIDI 文件（.mid，一轨一声部）到工程的 copied 目录。"""
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        track, _index, _clip = self._find_clip_ref_by_track_id(project, track_id)
+        if not track:
+            return {"ok": False, "error": "音轨不存在"}
+        duration = self._compose_duration(project, track)
+        source = session if isinstance(session, dict) else self._load_compose_session(
+            project_id, track, duration
+        )
+        cleaned = midi_session_model.clean_session(source, duration)
+        if not midi_session_model.audible_parts(cleaned):
+            return {"ok": False, "error": "没有音符可以导出"}
+        try:
+            payload = midi_file.build_smf(cleaned)
+        except ValueError as exc:
+            return {"ok": False, "error": f"MIDI 生成失败：{exc}"}
+        export_dir = self._project_dir(project_id) / "copied"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        name = self._safe_stem(
+            f"{str(track.get('name') or project.get('title') or 'midi')}_MIDI"
+        )
+        destination = self._unique_path(export_dir / f"{name}.mid")
+        try:
+            destination.write_bytes(payload)
+        except OSError as exc:
+            return {"ok": False, "error": f"MIDI 写入失败：{exc}"}
+        self._write_compose_session(project_id, track_id, cleaned)
+        return {
+            "ok": True,
+            "path": str(destination),
+            "bytes": len(payload),
+            "summary": midi_session_model.session_summary(cleaned),
+        }
+
+    def import_midi_session(
+        self,
+        project_id: str,
+        track_id: str,
+        path: str,
+    ) -> dict[str, Any]:
+        """把外部 .mid 文件读成编曲会话（多轨 → 多声部），供用户确认后再保存。"""
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        track, _index, _clip = self._find_clip_ref_by_track_id(project, track_id)
+        if not track:
+            return {"ok": False, "error": "音轨不存在"}
+        source = Path(str(path or ""))
+        if not source.is_file():
+            return {"ok": False, "error": "MIDI 文件不存在"}
+        try:
+            if source.stat().st_size > self._MAX_MIDI_IMPORT_BYTES:
+                return {"ok": False, "error": "MIDI 文件过大（超过 16MB）"}
+            data = source.read_bytes()
+        except OSError as exc:
+            return {"ok": False, "error": f"读取 MIDI 失败：{exc}"}
+        try:
+            parsed = midi_file.parse_smf(data)
+        except (midi_file.MidiFileError, ValueError) as exc:
+            return {"ok": False, "error": f"无法解析 MIDI 文件：{exc}"}
+        if not parsed.get("tracks"):
+            return {"ok": False, "error": "MIDI 文件里没有音符"}
+        duration = self._compose_duration(project, track)
+        session = midi_session_model.clean_session(
+            midi_file.session_payload(parsed), duration
+        )
+        return {
+            "ok": True,
+            "session": session,
+            "source": str(source),
+            "duration": duration,
+            "tempo": parsed.get("tempo"),
+            "summary": midi_session_model.session_summary(session),
+        }
+
 
     def enhance_clip(
         self,

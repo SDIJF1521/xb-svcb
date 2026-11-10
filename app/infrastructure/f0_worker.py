@@ -58,7 +58,11 @@ def _hz_to_note(hz: float) -> str:
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="XB-SVCB so-vits-svc F0 提取 worker")
     p.add_argument("--repo", required=True, help="so-vits-svc 仓库根目录")
-    p.add_argument("--config", required=True, help="主模型 config.json 路径")
+    p.add_argument(
+        "--config",
+        default="",
+        help="主模型 config.json 路径；省略时按 44.1kHz / hop 512 计算（编辑器 MIDI 分析）",
+    )
     p.add_argument("--input", required=True, help="输入人声 wav 路径")
     p.add_argument("--out-npy", required=True, help="F0 曲线输出 .npy 路径")
     p.add_argument("--f0", default="rmvpe", help="F0 预测器")
@@ -103,15 +107,19 @@ def main() -> int:
     f0_threshold = max(0.0, min(1.0, float(args.f0_threshold)))
     patch_sovits_fcpe_fallback(utils, args.f0_max)
 
-    # 从模型配置读取采样率与 hop，保证与推理时一致
-    try:
-        with open(args.config, "r", encoding="utf-8") as f:
-            hps = json.load(f)
-        sampling_rate = int(hps["data"]["sampling_rate"])
-        hop_length = int(hps["data"]["hop_length"])
-    except Exception as exc:  # noqa: BLE001
-        print(f"F0_ERR 读取配置失败: {exc}")
-        return 4
+    # 从模型配置读取采样率与 hop，保证与推理时一致；编辑器 MIDI 分析没有
+    # 主模型时按 44.1kHz / hop 512 的常用取值计算。
+    sampling_rate = 44100
+    hop_length = 512
+    if args.config:
+        try:
+            with open(args.config, "r", encoding="utf-8") as f:
+                hps = json.load(f)
+            sampling_rate = int(hps["data"]["sampling_rate"])
+            hop_length = int(hps["data"]["hop_length"])
+        except Exception as exc:  # noqa: BLE001
+            print(f"F0_ERR 读取配置失败: {exc}")
+            return 4
 
     try:
         resolved_device = resolve_torch_device(args.device, torch)

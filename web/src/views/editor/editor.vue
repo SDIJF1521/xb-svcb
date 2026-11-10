@@ -52,6 +52,45 @@
       @select-plugin="activePluginEffect && selectVst3Plugin(activePluginEffect, $event)"
     />
 
+    <MidiEditorDialog
+      v-model="midiDialogOpen"
+      :mode="midiMode"
+      :scope="midiScope"
+      :clip-name="midiClipName"
+      :track-name="midiTrackName"
+      :duration="midiDuration"
+      :has-audio="midiHasAudio"
+      :notes="midiNotes"
+      :clip-spans="midiClipSpans"
+      :loading="midiLoading"
+      :applying="midiApplying"
+      :ready="midiReady"
+      :error="midiError"
+      :analysis="midiAnalysis"
+      :playhead="clipPlaybackClipId === midiTargetId ? clipPreviewPosition : -1"
+      :playing="playing && clipPlaybackClipId === midiTargetId"
+      :compose-session="composeSession"
+      :compose-duration="composeDuration"
+      :instruments="composeInstruments"
+      :families="composeFamilies"
+      :compose-loading="composeLoading"
+      :compose-busy="composeBusy"
+      :compose-busy-action="composeBusyAction"
+      :compose-error="composeError"
+      :preview-url="composePreviewUrl"
+      :preview-loading="composePreviewLoading"
+      @update:mode="switchMidiMode"
+      @refresh="refreshMidiNotes"
+      @save="saveMidiNotesFromDialog"
+      @apply="applyMidiNotesToAudio"
+      @preview="previewMidiAudio"
+      @save-session="saveComposeSession"
+      @render-session="renderComposeSession"
+      @export-session="exportComposeSession"
+      @preview-session="previewComposeSession"
+      @import-session="importComposeSession"
+    />
+
     <div class="editor-head" data-guide="editor-toolbar">
       <div>
         <p class="eyebrow">// Audio Editor Lite</p>
@@ -314,6 +353,9 @@
             </button>
             <button title="预览片段" @click="playSelectedClip">
               <el-icon><Aim /></el-icon>
+            </button>
+            <button title="MIDI 音高编辑（音符级）" :disabled="!selectedClip" @click="openMidiEditor('clip')">
+              <el-icon><EditPen /></el-icon>
             </button>
             <button title="复制片段音频" :disabled="copyingAudio" @click="copySelectedClipAudio">
               <el-icon><CopyDocument /></el-icon>
@@ -1220,6 +1262,7 @@ import {
   DArrowLeft,
   Delete,
   Download,
+  EditPen,
   FolderAdd,
   Loading,
   Lock,
@@ -1241,12 +1284,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import EditorImportTrackDialog from '@/components/editor/EditorImportTrackDialog.vue'
 import EditorPluginDialog from '@/components/editor/EditorPluginDialog.vue'
 import EditorRoleManager from '@/components/editor/EditorRoleManager.vue'
+import MidiEditorDialog from '@/components/editor/MidiEditorDialog.vue'
 import TimelineTemplatePanel from '@/components/editor/TimelineTemplatePanel.vue'
 import { api } from '@/api'
 import { translatePymssCategory, translatePymssTargetStem, translateUiText } from '@/i18n'
 import { useModelsStore } from '@/stores/models'
 import { useSystemStore } from '@/stores/system'
 import { f0MethodsForFramework, normalizeF0Method } from '@/utils/f0'
+import type { MidiNote } from '@/utils/midi'
 import type {
   EditorClip,
   EditorClipChannel,
@@ -1254,6 +1299,10 @@ import type {
   EditorEffectType,
   EditorPluginHostStatus,
   EditorPluginInspectResult,
+  EditorMidiClipSpan,
+  EditorMidiInstrument,
+  EditorMidiInstrumentFamily,
+  EditorMidiSession,
   EditorProject,
   EditorRole,
   EditorTimelineTemplate,
@@ -1921,6 +1970,7 @@ const contextMenuItems = computed<ContextMenuItem[]>(() => {
   if (state.kind === 'clip') {
     return [
       { id: 'preview', label: '试听片段', icon: VideoPlay, run: () => playClip(state.trackId, state.clipId) },
+      { id: 'clip-midi', label: 'MIDI 音高编辑（片段）', icon: EditPen, run: () => openMidiEditor('clip', state.trackId, state.clipId) },
       { id: 'split', label: '在播放头剪切', icon: Scissor, shortcut: 'Ctrl+K', disabled: !canSplitAtPlayhead.value, run: splitAtPlayhead },
       { id: 'copy-clip', label: '复制片段音频', icon: CopyDocument, shortcut: 'Ctrl+C', disabled: copyingAudio.value, run: copySelectedClipAudio },
       { id: 'merge', label: mergingAudio.value ? '正在合并' : '与下一片段合并', icon: Connection, disabled: !canMergeNextClip.value || mergingAudio.value, run: mergeSelectedClipWithNext },
@@ -1931,7 +1981,9 @@ const contextMenuItems = computed<ContextMenuItem[]>(() => {
   }
   if (state.kind === 'track') {
     return [
-      { id: 'import-track', label: '导入音频到此轨', icon: FolderAdd, disabled: !track || !!track.locked, run: () => importAudioToTrack(state.trackId) },
+      { id: 'track-compose', label: 'MIDI 编曲（多乐器 / 空轨道可用）', icon: EditPen, disabled: !track, run: () => { if (track) openMidiEditor('track', track.id, undefined, 'compose') } },
+      { id: 'track-midi', label: track?.clips.length ? 'MIDI 音高编辑（整轨）' : 'MIDI 编辑（空白轨道）', icon: EditPen, disabled: !track, run: () => { if (track) openMidiEditor('track', track.id, undefined, track.clips.length ? 'pitch' : 'compose') } },
+      { id: 'import-track', label: '导入音频到此轨', icon: FolderAdd, separatorBefore: true, disabled: !track || !!track.locked, run: () => importAudioToTrack(state.trackId) },
       { id: 'paste-track', label: '粘贴到播放头', icon: CopyDocument, shortcut: 'Ctrl+V', disabled: !track || !!track.locked || pastingAudio.value, run: () => pasteAudioToTrack(state.trackId) },
       { id: 'copy-track', label: '复制整轨音频', icon: CopyDocument, disabled: !track?.clips.length || copyingAudio.value, run: copySelectedTrackAudio },
       { id: 'export-track', label: '导出该音轨音频 (WAV)', icon: Download, disabled: !track?.clips.length, run: () => exportTrackAudio(track, 'wav') },
@@ -4739,6 +4791,410 @@ async function enhanceSelectedClip() {
   }
   applyProject(result.project)
   ElMessage.success('当前片段已增强，可使用撤销恢复原片段')
+}
+
+// ---- MIDI 子编辑器：编曲（多乐器）+ 演唱音准（音符级音高） ----
+const midiDialogOpen = ref(false)
+const midiMode = ref<'compose' | 'pitch'>('compose')
+const midiScope = ref<'clip' | 'track'>('clip')
+const midiTargetId = ref('')
+const midiTrackId = ref('')
+const midiClipName = ref('')
+const midiTrackName = ref('')
+const midiClipSpans = ref<EditorMidiClipSpan[]>([])
+const midiDuration = ref(0)
+const midiHasAudio = ref(false)
+const midiNotes = ref<MidiNote[]>([])
+const midiAnalysis = ref<Record<string, unknown>>({})
+const midiLoading = ref(false)
+const midiApplying = ref(false)
+const midiReady = ref(true)
+const midiError = ref('')
+const midiNotesLoaded = ref(false)
+
+// 编曲模式
+const composeSession = ref<EditorMidiSession | null>(null)
+const composeDuration = ref(0)
+const composeInstruments = ref<EditorMidiInstrument[]>([])
+const composeFamilies = ref<EditorMidiInstrumentFamily[]>([])
+const composeLoading = ref(false)
+const composeBusy = ref(false)
+const composeBusyAction = ref('')
+const composeError = ref('')
+const composePreviewUrl = ref('')
+const composePreviewLoading = ref(false)
+const composeLoaded = ref(false)
+
+async function openMidiEditor(
+  scope: 'clip' | 'track' = 'clip',
+  trackId?: string,
+  clipId?: string,
+  mode?: 'compose' | 'pitch',
+) {
+  const currentProject = project.value
+  if (!currentProject) {
+    ElMessage.error('先打开一个编辑工程')
+    return
+  }
+  const targetTrackId = trackId || selected.value?.trackId || ''
+  const track = currentProject.tracks.find((item) => item.id === targetTrackId) || null
+  if (scope === 'clip') {
+    const targetClipId = clipId || selected.value?.clipId || ''
+    const clip = track?.clips.find((item) => item.id === targetClipId) || null
+    if (!track || !clip) {
+      ElMessage.error('先选中一个片段再打开 MIDI 编辑器')
+      return
+    }
+    midiScope.value = 'clip'
+    midiTargetId.value = clip.id
+    midiTrackId.value = track.id
+    midiClipName.value = clip.name || '片段'
+    midiTrackName.value = track.name || ''
+    midiClipSpans.value = []
+    midiHasAudio.value = true
+  } else {
+    if (!track) {
+      ElMessage.error('找不到要编辑的音轨')
+      return
+    }
+    midiScope.value = 'track'
+    midiTargetId.value = track.id
+    midiTrackId.value = track.id
+    midiClipName.value = ''
+    midiTrackName.value = track.name || '音轨'
+    midiClipSpans.value = (track.clips || []).map((clip) => ({
+      id: clip.id,
+      name: clip.name || '片段',
+      start: Number(clip.start) || 0,
+      end: Number(clip.end) || 0,
+    }))
+    midiHasAudio.value = (track.clips || []).length > 0
+  }
+  midiDuration.value =
+    midiScope.value === 'clip' && selectedClip.value
+      ? Math.max(0.01, Number(selectedClip.value.end) - Number(selectedClip.value.start))
+      : Math.max(0.3, Number(currentProject.duration) || 30)
+  // 有音频时默认做音高修正；空白轨道直接进编曲。
+  const fallbackMode: 'compose' | 'pitch' = midiHasAudio.value && midiScope.value === 'clip' ? 'pitch' : 'compose'
+  midiMode.value = mode || (midiHasAudio.value ? 'pitch' : fallbackMode)
+  midiNotes.value = []
+  midiNotesLoaded.value = false
+  midiAnalysis.value = {}
+  midiError.value = ''
+  midiReady.value = true
+  composeSession.value = null
+  composeLoaded.value = false
+  composeError.value = ''
+  composePreviewUrl.value = ''
+  composeLoading.value = false
+  composeBusy.value = false
+  composeBusyAction.value = ''
+  midiDialogOpen.value = true
+  await loadActiveMidiMode()
+}
+
+async function loadActiveMidiMode() {
+  if (midiMode.value === 'compose') {
+    await loadComposeSession()
+    return
+  }
+  if (midiNotesLoaded.value) return
+  await loadMidiNotes(false)
+}
+
+async function switchMidiMode(mode: 'compose' | 'pitch') {
+  if (mode === midiMode.value) return
+  midiMode.value = mode
+  await loadActiveMidiMode()
+}
+
+async function loadComposeSession() {
+  const currentProject = project.value
+  const trackId = midiTrackId.value
+  if (!currentProject || !trackId) return
+  composeLoading.value = true
+  composeError.value = ''
+  try {
+    await saveProject()
+    const result = await api.getEditorMidiSession(currentProject.id, trackId)
+    if (project.value?.id !== currentProject.id || midiTrackId.value !== trackId) return
+    if (!result?.ok || !result.session) {
+      composeSession.value = null
+      composeError.value = translateUiText(result?.error || 'MIDI 编曲会话读取失败')
+      return
+    }
+    composeSession.value = result.session
+    composeDuration.value = Math.max(Number(result.duration) || 0, 60)
+    composeInstruments.value = result.instruments || []
+    composeFamilies.value = result.families || []
+    composeLoaded.value = true
+    composePreviewUrl.value = ''
+    if (result.clip_spans) midiClipSpans.value = result.clip_spans
+    midiHasAudio.value = result.has_audio ?? midiHasAudio.value
+  } catch (err) {
+    composeSession.value = null
+    composeError.value = err instanceof Error ? translateUiText(err.message) : 'MIDI 编曲会话读取失败'
+  } finally {
+    composeLoading.value = false
+  }
+}
+
+async function saveComposeSession(session: EditorMidiSession) {
+  const currentProject = project.value
+  const trackId = midiTrackId.value
+  if (!currentProject || !trackId) return
+  composeBusy.value = true
+  composeBusyAction.value = 'save'
+  composeError.value = ''
+  try {
+    const result = await api.saveEditorMidiSession(currentProject.id, trackId, session)
+    if (!result?.ok) {
+      composeError.value = translateUiText(result?.error || 'MIDI 编曲保存失败')
+      ElMessage.error(composeError.value)
+      return
+    }
+    if (result.session) composeSession.value = result.session
+    if (result.project) applyProject(result.project)
+    const parts = Number(result.summary?.parts ?? session.parts.length)
+    const notes = Number(result.summary?.note_count ?? 0)
+    ElMessage.success(`MIDI 编曲已保存（${parts} 个声部 · ${notes} 个音符）`)
+  } catch (err) {
+    composeError.value = err instanceof Error ? translateUiText(err.message) : 'MIDI 编曲保存失败'
+    ElMessage.error(composeError.value)
+  } finally {
+    composeBusy.value = false
+    composeBusyAction.value = ''
+  }
+}
+
+async function renderComposeSession(session: EditorMidiSession, mode: 'tracks' | 'mix') {
+  const currentProject = project.value
+  const trackId = midiTrackId.value
+  if (!currentProject || !trackId || composeBusy.value) return
+  composeBusy.value = true
+  composeBusyAction.value = mode
+  composeError.value = ''
+  try {
+    await saveProject()
+    const result = await api.renderEditorMidiSession(currentProject.id, trackId, session, { mode })
+    if (!result?.ok) {
+      composeError.value = translateUiText(result?.error || '渲染失败')
+      ElMessage.error(composeError.value)
+      return
+    }
+    composeSession.value = session
+    if (result.project) applyProject(result.project)
+    composePreviewUrl.value = ''
+    const clips = Number(result.clips?.length || 0)
+    if (mode === 'tracks') {
+      ElMessage.success(`已按乐器生成 ${clips} 条音轨，可直接播放或调整音量/效果`)
+    } else {
+      ElMessage.success('已把编曲混合渲染到当前音轨，可用撤销恢复')
+    }
+  } catch (err) {
+    composeError.value = err instanceof Error ? translateUiText(err.message) : '渲染失败'
+    ElMessage.error(composeError.value)
+  } finally {
+    composeBusy.value = false
+    composeBusyAction.value = ''
+  }
+}
+
+async function exportComposeSession(session: EditorMidiSession) {
+  const currentProject = project.value
+  const trackId = midiTrackId.value
+  if (!currentProject || !trackId) return
+  composeBusy.value = true
+  composeBusyAction.value = 'export'
+  composeError.value = ''
+  try {
+    const result = await api.exportEditorMidiFile(currentProject.id, trackId, session)
+    if (result?.cancelled) return
+    if (!result?.ok) {
+      composeError.value = translateUiText(result?.error || 'MIDI 导出失败')
+      ElMessage.error(composeError.value)
+      return
+    }
+    composeSession.value = session
+    ElMessage.success(`MIDI 文件已导出：${result.path || ''}`)
+  } catch (err) {
+    composeError.value = err instanceof Error ? translateUiText(err.message) : 'MIDI 导出失败'
+    ElMessage.error(composeError.value)
+  } finally {
+    composeBusy.value = false
+    composeBusyAction.value = ''
+  }
+}
+
+async function previewComposeSession(session: EditorMidiSession) {
+  const currentProject = project.value
+  const trackId = midiTrackId.value
+  if (!currentProject || !trackId) return
+  composePreviewLoading.value = true
+  composeBusyAction.value = 'preview'
+  composeError.value = ''
+  try {
+    const result = await api.previewEditorMidiSession(currentProject.id, trackId, session)
+    if (!result?.ok) {
+      composeError.value = translateUiText(result?.error || '试听渲染失败')
+      ElMessage.error(composeError.value)
+      return
+    }
+    composePreviewUrl.value = result.audio || ''
+  } catch (err) {
+    composeError.value = err instanceof Error ? translateUiText(err.message) : '试听渲染失败'
+    ElMessage.error(composeError.value)
+  } finally {
+    composePreviewLoading.value = false
+    composeBusyAction.value = ''
+  }
+}
+
+async function importComposeSession() {
+  const currentProject = project.value
+  const trackId = midiTrackId.value
+  if (!currentProject || !trackId) return
+  composeBusy.value = true
+  composeBusyAction.value = 'import'
+  composeError.value = ''
+  try {
+    const result = await api.importEditorMidiFile(currentProject.id, trackId)
+    if (result?.cancelled) return
+    if (!result?.ok || !result.session) {
+      composeError.value = translateUiText(result?.error || 'MIDI 导入失败')
+      ElMessage.error(composeError.value)
+      return
+    }
+    composeSession.value = result.session
+    composeDuration.value = Math.max(Number(result.duration) || composeDuration.value, 60)
+    composeLoaded.value = true
+    composePreviewUrl.value = ''
+    ElMessage.success(`已导入 ${result.session.parts.length} 个声部，记得点「保存编曲」`)
+  } catch (err) {
+    composeError.value = err instanceof Error ? translateUiText(err.message) : 'MIDI 导入失败'
+    ElMessage.error(composeError.value)
+  } finally {
+    composeBusy.value = false
+    composeBusyAction.value = ''
+  }
+}
+
+async function loadMidiNotes(refresh: boolean) {
+  const currentProject = project.value
+  const targetId = midiTargetId.value
+  const scope = midiScope.value
+  if (!currentProject || !targetId) return
+  midiLoading.value = true
+  midiError.value = ''
+  try {
+    await saveProject()
+    const result =
+      scope === 'track'
+        ? await api.getEditorTrackMidi(currentProject.id, targetId, refresh)
+        : await api.getEditorClipMidi(currentProject.id, targetId, refresh)
+    if (project.value?.id !== currentProject.id || midiTargetId.value !== targetId) return
+    midiNotesLoaded.value = true
+    if (!result?.ok) {
+      midiNotes.value = []
+      midiError.value = translateUiText(result?.error || 'MIDI 分析失败')
+      if (result?.clip_spans) midiClipSpans.value = result.clip_spans
+      return
+    }
+    midiNotes.value = (result.notes || []).map((note) => ({
+      id: note.id,
+      start: Number(note.start) || 0,
+      end: Number(note.end) || 0,
+      pitch: Number(note.pitch) || 60,
+      detune: Number(note.detune) || 0,
+    }))
+    midiAnalysis.value = result.analysis || {}
+    midiDuration.value = Number(result.duration) || midiDuration.value
+    midiReady.value = result.midi_ready !== false
+    if (scope === 'track') {
+      midiClipSpans.value = result.clip_spans || midiClipSpans.value
+      midiHasAudio.value = midiClipSpans.value.length > 0
+    }
+  } catch (err) {
+    midiNotes.value = []
+    midiError.value = err instanceof Error ? translateUiText(err.message) : 'MIDI 分析失败'
+  } finally {
+    midiLoading.value = false
+  }
+}
+
+async function refreshMidiNotes() {
+  await loadMidiNotes(true)
+}
+
+async function saveMidiNotesFromDialog(notes: MidiNote[]) {
+  const currentProject = project.value
+  const targetId = midiTargetId.value
+  if (!currentProject || !targetId) return
+  try {
+    const result =
+      midiScope.value === 'track'
+        ? await api.saveEditorTrackMidi(currentProject.id, targetId, notes)
+        : await api.saveEditorClipMidi(currentProject.id, targetId, notes)
+    if (!result?.ok) {
+      ElMessage.error(translateUiText(result?.error || 'MIDI 保存失败'))
+      return
+    }
+    midiNotes.value = notes
+    if (result.project) applyProject(result.project)
+    ElMessage.success(`MIDI 音符已保存（${notes.length} 个）`)
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? translateUiText(err.message) : 'MIDI 保存失败')
+  }
+}
+
+async function applyMidiNotesToAudio(notes: MidiNote[]) {
+  const currentProject = project.value
+  const targetId = midiTargetId.value
+  if (!currentProject || !targetId || midiApplying.value) return
+  midiApplying.value = true
+  try {
+    await saveProject()
+    const result =
+      midiScope.value === 'track'
+        ? await api.applyEditorTrackMidi(currentProject.id, targetId, notes)
+        : await api.applyEditorClipMidi(currentProject.id, targetId, notes)
+    if (!result?.ok) {
+      ElMessage.error(translateUiText(result?.error || '应用 MIDI 到音频失败'))
+      if (result?.report) midiAnalysis.value = { ...midiAnalysis.value, ...result.report }
+      return
+    }
+    midiNotes.value = notes
+    if (result.project) applyProject(result.project)
+    const applied = Number(result.report?.applied_notes || 0)
+    const scopeText = midiScope.value === 'track' ? '轨道片段' : '片段'
+    ElMessage.success(`已把 ${applied} 个音符应用到${scopeText}音频，可用撤销恢复`)
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? translateUiText(err.message) : '应用 MIDI 到音频失败')
+  } finally {
+    midiApplying.value = false
+  }
+}
+
+function previewMidiAudio() {
+  const currentProject = project.value
+  if (!currentProject) return
+  if (midiScope.value === 'clip') {
+    if (midiTrackId.value && midiTargetId.value) {
+      void playClip(midiTrackId.value, midiTargetId.value)
+    }
+    return
+  }
+  const track = currentProject.tracks.find((item) => item.id === midiTargetId.value)
+  const clips = (track?.clips || []).slice().sort((a, b) => Number(a.start) - Number(b.start))
+  if (!clips.length) {
+    ElMessage.warning('空白轨道没有音频可试听：把人声/伴奏导入该轨后再试听')
+    return
+  }
+  const playheadTime = Number(playhead.value) || 0
+  const hit =
+    clips.find((clip) => playheadTime >= Number(clip.start) && playheadTime <= Number(clip.end)) ||
+    clips[0]!
+  void playClip(midiTargetId.value, hit.id)
 }
 
 function seekStart() {
