@@ -376,6 +376,32 @@ class AudioEditorService:
         self._repo.add({**project, "history": [], "future": []})
         return self._public(project)
 
+    def create_blank(self, title: str | None = None) -> dict[str, Any] | None:
+        """创建一个空白工程（含一条空轨道，方便直接进 MIDI 编曲）。"""
+        pid = new_id("edt_")
+        project_dir = self._project_dir(pid)
+        project_dir.mkdir(parents=True, exist_ok=True)
+        now = self._now()
+        track = EditorTrack(
+            id=new_id("trk_"),
+            name="音轨 1",
+            type="audio",
+            clips=[],
+            locked=False,
+        ).to_dict()
+        project = EditorProject(
+            id=pid,
+            title=(title or "空白工程")[:120],
+            tracks=[track],
+            duration=0.0,
+            sample_rate=44100,
+            metadata={"mode": "blank"},
+            created_at=now,
+            updated_at=now,
+        ).to_dict()
+        self._repo.add({**project, "history": [], "future": []})
+        return self._public(project)
+
     @staticmethod
     def _detect_sample_rate(path: Path) -> int:
         """Keep the source rate for WAV imports; compressed sources use the project default."""
@@ -3386,7 +3412,8 @@ class AudioEditorService:
 
     # ---- MIDI 子编辑器：轨道范围与音频重绘 ----
 
-    _MIDI_TRACK_DEFAULT_SECONDS = 30.0
+    # 空白轨道的 MIDI 编曲时间轴默认长度（10 分钟起步，写到更远会自动延伸）。
+    _MIDI_TRACK_DEFAULT_SECONDS = 600.0
 
     @staticmethod
     def _project_sample_rate(project: dict[str, Any]) -> int:
@@ -3837,13 +3864,32 @@ class AudioEditorService:
         return folder
 
     def _compose_duration(self, project: dict[str, Any], track: dict[str, Any]) -> float:
-        """编曲时间轴：至少 60 秒，且不短于工程/轨道已有内容。"""
+        """编曲时间轴：至少 60 秒；空白工程/空轨道给默认长度，方便用户自己填写。"""
         base = self._track_span(project, track)
         try:
             project_end = float(project.get("duration") or 0.0)
         except (TypeError, ValueError):
             project_end = 0.0
+        # 空白工程/空轨道没有实质内容（不足 1 秒）时，用默认时间轴，别被 60 秒兜底卡住。
+        if base <= 1.0 and project_end <= 1.0:
+            return round(max(60.0, self._MIDI_TRACK_DEFAULT_SECONDS), 3)
         return round(max(60.0, base, project_end), 3)
+
+    @staticmethod
+    def _session_extent(session: Any) -> float:
+        """会话里最后一个音符的结束时间（没有音符返回 0）。"""
+        end = 0.0
+        if not isinstance(session, dict):
+            return end
+        for part in session.get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            for note in part.get("notes") or []:
+                try:
+                    end = max(end, float(note.get("end") or 0.0))
+                except (TypeError, ValueError):
+                    continue
+        return end
 
     def _load_compose_session(
         self, project_id: str, track: dict[str, Any], duration: float
@@ -3985,6 +4031,9 @@ class AudioEditorService:
         source = session if isinstance(session, dict) else self._load_compose_session(
             project_id, track, duration
         )
+        # 渲染不能把用户写得更远的音符裁掉：时间轴至少覆盖传入会话的最后一个音符。
+        if isinstance(session, dict):
+            duration = max(duration, self._session_extent(session))
         cleaned = midi_session_model.clean_session(source, duration)
         audible = midi_session_model.audible_parts(cleaned)
         if not audible:
@@ -4172,6 +4221,9 @@ class AudioEditorService:
         source = session if isinstance(session, dict) else self._load_compose_session(
             project_id, track, duration
         )
+        # 试听同样不能裁掉用户写得更远的音符。
+        if isinstance(session, dict):
+            duration = max(duration, self._session_extent(session))
         cleaned = midi_session_model.clean_session(source, duration)
         if not midi_session_model.audible_parts(cleaned):
             return {"ok": False, "error": "没有可试听的音符"}
@@ -4209,6 +4261,8 @@ class AudioEditorService:
         source = session if isinstance(session, dict) else self._load_compose_session(
             project_id, track, duration
         )
+        if isinstance(session, dict):
+            duration = max(duration, self._session_extent(session))
         cleaned = midi_session_model.clean_session(source, duration)
         if not midi_session_model.audible_parts(cleaned):
             return {"ok": False, "error": "没有音符可以导出"}
@@ -4262,7 +4316,16 @@ class AudioEditorService:
             return {"ok": False, "error": f"无法解析 MIDI 文件：{exc}"}
         if not parsed.get("tracks"):
             return {"ok": False, "error": "MIDI 文件里没有音符"}
-        duration = self._compose_duration(project, track)
+        # 时间轴至少覆盖导入文件里最后一个音符，避免工程/轨道比 MIDI 短时把后面的音砍掉。
+        midi_end = max(
+            (
+                float(note.get("end") or 0.0)
+                for track in parsed.get("tracks") or []
+                for note in track.get("notes") or []
+            ),
+            default=0.0,
+        )
+        duration = max(self._compose_duration(project, track), midi_end)
         session = midi_session_model.clean_session(
             midi_file.session_payload(parsed), duration
         )
@@ -4274,6 +4337,48 @@ class AudioEditorService:
             "tempo": parsed.get("tempo"),
             "summary": midi_session_model.session_summary(session),
         }
+
+    def parse_midi_tracks(self, path: str) -> dict[str, Any]:
+        """解析 .mid 文件，返回各轨的音符，供「导入到某个声部」用。"""
+        source = Path(str(path or ""))
+        if not source.is_file():
+            return {"ok": False, "error": "MIDI 文件不存在"}
+        try:
+            if source.stat().st_size > self._MAX_MIDI_IMPORT_BYTES:
+                return {"ok": False, "error": "MIDI 文件过大（超过 16MB）"}
+            data = source.read_bytes()
+        except OSError as exc:
+            return {"ok": False, "error": f"读取 MIDI 失败：{exc}"}
+        try:
+            parsed = midi_file.parse_smf(data)
+        except (midi_file.MidiFileError, ValueError) as exc:
+            return {"ok": False, "error": f"无法解析 MIDI 文件：{exc}"}
+        if not parsed.get("tracks"):
+            return {"ok": False, "error": "MIDI 文件里没有音符"}
+        tracks = []
+        for track in parsed.get("tracks") or []:
+            notes = track.get("notes") or []
+            if not notes:
+                continue
+            tracks.append(
+                {
+                    "name": str(track.get("name") or "").strip(),
+                    "program": int(track.get("program") or 0),
+                    "drum": bool(track.get("drum")),
+                    "notes": [
+                        {
+                            "start": float(note.get("start") or 0.0),
+                            "end": float(note.get("end") or 0.0),
+                            "pitch": int(note.get("pitch") or 0),
+                            "velocity": int(note.get("velocity") or midi_session_model.DEFAULT_VELOCITY),
+                        }
+                        for note in notes
+                    ],
+                }
+            )
+        if not tracks:
+            return {"ok": False, "error": "MIDI 文件里没有音符"}
+        return {"ok": True, "tempo": parsed.get("tempo"), "tracks": tracks}
 
 
     def enhance_clip(

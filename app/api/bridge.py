@@ -912,6 +912,9 @@ class Api:
     def create_editor_project_from_work(self, work_id: str) -> dict[str, Any] | None:
         return self._editor.create_from_work(work_id)
 
+    def create_editor_project_blank(self, title: str | None = None) -> dict[str, Any] | None:
+        return self._editor.create_blank(title)
+
     def export_editor_project_bundle(self, project_id: str) -> dict[str, Any]:
         project = self._editor.get(project_id)
         if not project:
@@ -1323,6 +1326,15 @@ class Api:
         if not paths:
             return {"ok": False, "cancelled": True, "error": ""}
         return self._editor.import_midi_session(project_id, track_id, paths[0])
+
+    def import_midi_tracks(self) -> dict[str, Any]:
+        """导入 .mid 到某个声部：选择文件后解析各轨音符返回给前端。"""
+        paths = self._open_dialog(
+            "导入 MIDI 到声部", False, ("MIDI 文件 (*.mid;*.midi)", "全部文件 (*.*)")
+        )
+        if not paths:
+            return {"ok": False, "cancelled": True, "error": ""}
+        return self._editor.parse_midi_tracks(paths[0])
 
     @staticmethod
     def _reveal(path: Path) -> bool:

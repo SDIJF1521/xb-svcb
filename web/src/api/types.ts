@@ -1224,6 +1224,22 @@ export interface EditorMidiSession {
   metronome?: boolean
 }
 
+/** 按声部导入 .mid：解析后的一轨音符。 */
+export interface EditorMidiImportTrack {
+  name: string
+  program: number
+  drum: boolean
+  notes: Array<{ start: number; end: number; pitch: number; velocity: number }>
+}
+
+export interface EditorMidiImportResult {
+  ok: boolean
+  cancelled?: boolean
+  error?: string
+  tempo?: number
+  tracks?: EditorMidiImportTrack[]
+}
+
 export interface EditorMidiInstrument {
   program: number
   name_en: string

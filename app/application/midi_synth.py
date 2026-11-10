@@ -207,6 +207,50 @@ _VOICE_PARAMS: dict[str, dict[str, Any]] = {
 _MASTER_GAIN = 0.85
 _PEAK_TARGET = 0.94
 
+# gm.dls 采样是 16bit 全幅度，但经过力度缩放 + 主增益 + 声像后整体偏小，
+# 这里补一点增益让鼓组和「直接打开 .mid」的响度接近（保持各鼓件之间比例不变）。
+_DRUM_SAMPLE_GAIN = 1.4
+
+# 只有镲片类鼓件需要「循环余音」：gm.dls 给吊镲/叮叮镲/开镲的采样带了循环点，
+# 直接播放会只剩很短的一下。通鼓等本身是自然衰减的，不要循环（否则会变成嗡鸣）。
+# 余音时长跟「单个音符的长短」挂钩：音符持续多久就多响多久，上面这个只是上限。
+_CYMBAL_RING_MAX: dict[str, float] = {
+    "crash": 4.0,
+    "ride": 3.0,
+    "hat_open": 1.0,
+}
+
+# 鼓组优先用 Windows 自带的 GM 波表（gm.dls）真实采样，和「直接打开 .mid」听到的一致。
+_cached_gm_drums: Any = None
+
+
+def _gm_drum_samples() -> dict[int, tuple[int, Any, float, int, int]] | None:
+    """惰性加载 gm.dls 鼓组采样；不可用时返回 None（退回加法合成）。"""
+    global _cached_gm_drums
+    if _cached_gm_drums is None:
+        try:
+            from infrastructure import gm_drum_samples
+            loaded = gm_drum_samples.load_gm_drums()
+            _cached_gm_drums = loaded if loaded else {}
+        except Exception:
+            _cached_gm_drums = {}
+    return _cached_gm_drums if _cached_gm_drums else None
+
+
+def _resample_mono(data: Any, src_rate: int, dst_rate: int, pitch: float = 1.0) -> Any:
+    """把单声道采样从 src_rate 线性插值到 dst_rate，并按 pitch 比例移调（>1 升调变短）。"""
+    import numpy as np
+    if data is None or len(data) == 0:
+        return data
+    n = len(data)
+    factor = max(0.05, min(20.0, float(pitch or 1.0)))
+    target = max(1, int(round(n * dst_rate / src_rate / factor)))
+    if target == n:
+        return data
+    src_x = np.arange(n, dtype=np.float64)
+    dst_x = np.linspace(0.0, float(n - 1), target, dtype=np.float64)
+    return np.interp(dst_x, src_x, np.asarray(data, dtype=np.float64)).astype(np.float32)
+
 
 def _hz(pitch: float) -> float:
     return 440.0 * (2.0 ** ((float(pitch) - 69.0) / 12.0))
@@ -403,6 +447,71 @@ def _drum_event_gates(
     ]
 
 
+def _loop_ring(
+    signal: Any,
+    loop_start: int,
+    loop_end: int,
+    ring_seconds: float,
+    sample_rate: int,
+) -> Any:
+    """把带循环点的镲片采样循环延展到 ring_seconds，并加指数衰减。"""
+    import numpy as np
+
+    n = len(signal)
+    if loop_end <= loop_start or loop_end > n:
+        return signal
+    want = max(n, int(round(ring_seconds * sample_rate)))
+    if want <= n:
+        return signal
+    body = np.array(signal[loop_start:loop_end], dtype=np.float32)
+    body_len = len(body)
+    if body_len <= 0:
+        return signal
+    # 循环点两端幅度略有差异，交叉淡化抹平，避免每次循环边界「突突」跳变。
+    xfade = min(body_len // 3, max(1, int(round(0.01 * sample_rate))))
+    if xfade > 0:
+        ramp = np.linspace(0.0, 1.0, xfade, dtype=np.float32)
+        body[:xfade] = body[:xfade] * ramp + body[-xfade:] * (1.0 - ramp)
+    tail_len = want - loop_end
+    reps = int(np.ceil(tail_len / body_len))
+    tail = np.tile(body, reps)[:tail_len].astype(np.float32)
+    time = np.arange(tail_len, dtype=np.float32) / float(sample_rate)
+    decay_rate = 4.5 / max(0.3, float(ring_seconds))
+    tail = tail * np.exp(-time * decay_rate, dtype=np.float32)
+    return np.concatenate([signal[:loop_end], tail]).astype(np.float32)
+
+
+def _drum_signal(pitch: int, velocity: int, sample_rate: int, note_duration: float = 0.0) -> Any:
+    """鼓件出声：优先用 gm.dls 真实采样，失败再退回加法合成。
+
+    镲片类鼓件按音符持续时间循环余音：长音多响、短音少响（至少采样自身长度）。
+    """
+    import numpy as np
+
+    gm = _gm_drum_samples()
+    if gm:
+        entry = gm.get(pitch)
+        if entry is not None:
+            src_rate, samples, pitch_factor, loop_start, loop_end = entry
+            signal = _resample_mono(
+                samples, int(src_rate), int(sample_rate), pitch=float(pitch_factor)
+            )
+            if signal is not None and signal.size:
+                info = midi_drums.piece(pitch)
+                ring_max = _CYMBAL_RING_MAX.get(str(info["group"]))
+                if ring_max is not None and loop_end > loop_start:
+                    scale = signal.size / max(1, len(samples))
+                    loop_s = int(round(loop_start * scale))
+                    loop_e = int(round(loop_end * scale))
+                    ring_seconds = min(float(ring_max), max(0.0, float(note_duration)))
+                    signal = _loop_ring(signal, loop_s, loop_e, ring_seconds, sample_rate)
+                return signal * (_DRUM_SAMPLE_GAIN * velocity / 127.0)
+    info = midi_drums.piece(pitch)
+    ring_seconds = max(0.08, min(2.0, 3.2 / max(0.6, float(info["decay"] or 12.0))))
+    n = max(1, int(round(ring_seconds * sample_rate)))
+    return _drum_voice(pitch, n, sample_rate, velocity / 127.0)
+
+
 def _render_part_events(
     part: dict[str, Any],
     *,
@@ -442,40 +551,35 @@ def _render_part_events(
             events.append((begin, finish, pitch, velocity))
 
     for begin, finish, pitch, velocity in events:
-        # 音符自身的长度（不是绝对结束时间）决定按住的采样数，
-        # 否则越靠后的音符就会渲染出越长的缓冲（指数级变慢）。
-        gate = max(1, int(round((finish - begin) * sample_rate)))
-        if drum:
-            # 架子鼓是「一击」：音符很短，但镲片/开镲要能自然响完，
-            # 所以尾巴按鼓件衰减速度给，而不是按音符长度。
-            info = midi_drums.piece(pitch)
-            ring_seconds = max(0.08, min(2.0, 3.2 / max(0.6, float(info["decay"] or 12.0))))
-            tail = int(round(ring_seconds * sample_rate))
-        else:
-            tail = int(round(max(release, 0.05) * sample_rate))
-        total = gate + tail
         first = int(round(begin * sample_rate))
-        if first >= length or total <= 0:
-            continue
-        count = min(total, length - first)
-        if count <= 0:
+        if first >= length:
             continue
         if drum:
-            signal = _drum_voice(pitch, count, sample_rate, velocity / 127.0)
+            signal = _drum_signal(pitch, velocity, sample_rate, note_duration=max(0.0, finish - begin))
         else:
+            # 音符自身的长度（不是绝对结束时间）决定按住的采样数，
+            # 否则越靠后的音符就会渲染出越长的缓冲（指数级变慢）。
+            gate = max(1, int(round((finish - begin) * sample_rate)))
+            tail = int(round(max(release, 0.05) * sample_rate))
             signal = _oscillators(
                 _hz(pitch),
-                count,
+                gate + tail,
                 sample_rate,
                 params,
                 velocity=velocity / 127.0,
             )
-            signal *= _envelope(count, sample_rate, params, gate)
+            signal *= _envelope(gate + tail, sample_rate, params, gate)
+        total = int(len(signal))
+        if total <= 0:
+            continue
+        count = min(total, length - first)
+        if count <= 0:
+            continue
         stereo_left = math.cos((float(pan) + 1.0) * math.pi / 4.0)
         stereo_right = math.sin((float(pan) + 1.0) * math.pi / 4.0)
         scale = float(gain) * float(_MASTER_GAIN)
-        out[first : first + count, 0] += signal * (scale * stereo_left)
-        out[first : first + count, 1] += signal * (scale * stereo_right)
+        out[first : first + count, 0] += signal[:count] * (scale * stereo_left)
+        out[first : first + count, 1] += signal[:count] * (scale * stereo_right)
 
 
 def _apply_reverb(samples: Any, sample_rate: int, mix: float = 0.16) -> Any:

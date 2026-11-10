@@ -54,6 +54,7 @@ import type {
   EditorMidiRenderOptions,
   EditorMidiSession,
   EditorMidiSessionResult,
+  EditorMidiImportResult,
   EditorAudioCopyResult,
   EditorAudioPasteResult,
   EditorPluginHostStatus,
@@ -1834,6 +1835,34 @@ export const mock = {
     mockEditorFuture[project.id] = []
     return { ok: true, path: 'C:/imports/demo.xbproject', project: cloneProject(project) }
   },
+  createEditorProjectBlank(title?: string): EditorProject | null {
+    const created = now()
+    const project: EditorProject = {
+      id: rid('edt_'),
+      title: title || '空白工程',
+      duration: 0,
+      sample_rate: 44100,
+      waveform_cache: {},
+      metadata: { mode: 'blank' },
+      created_at: created,
+      updated_at: created,
+      tracks: [
+        {
+          id: rid('trk_'),
+          name: '音轨 1',
+          type: 'audio',
+          volume: 1,
+          mute: false,
+          locked: false,
+          clips: [],
+        },
+      ],
+    }
+    mockEditorProjects.unshift(project)
+    mockEditorHistory[project.id] = []
+    mockEditorFuture[project.id] = []
+    return cloneProject(project)
+  },
   createEditorProjectFromWork(workId: string): EditorProject | null {
     const work = mockWorks.find((w) => w.id === workId)
     if (!work) return null
@@ -2965,6 +2994,9 @@ export const mock = {
       track_id: trackId,
       error: '浏览器 mock 不支持导入本地 MIDI 文件',
     }
+  },
+  importEditorMidiTracks(): EditorMidiImportResult {
+    return { ok: false, cancelled: true, error: '浏览器 mock 不支持导入本地 MIDI 文件' }
   },
 }
 

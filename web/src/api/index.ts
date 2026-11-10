@@ -58,6 +58,7 @@ import type {
   EditorClipMidiApplyResult,
   EditorClipMidiSaveResult,
   EditorMidiNote,
+  EditorMidiImportResult,
   EditorMidiRenderOptions,
   EditorMidiSession,
   EditorMidiSessionResult,
@@ -623,6 +624,11 @@ export const api = {
       mock.createEditorProjectFromWork(workId),
     ),
 
+  createEditorProjectBlank: (title?: string) =>
+    invoke<EditorProject | null>('create_editor_project_blank', [title], () =>
+      mock.createEditorProjectBlank(title),
+    ),
+
   exportEditorProjectBundle: (projectId: string) =>
     invoke<EditorProjectTransferResult>('export_editor_project_bundle', [projectId], () =>
       mock.exportEditorProjectBundle(projectId),
@@ -916,6 +922,11 @@ export const api = {
   importEditorMidiFile: (projectId: string, trackId: string) =>
     invoke<EditorMidiSessionResult>('import_editor_midi_file', [projectId, trackId], () =>
       mock.importEditorMidiFile(projectId, trackId),
+    ),
+
+  importEditorMidiTracks: () =>
+    invoke<EditorMidiImportResult>('import_midi_tracks', [], () =>
+      mock.importEditorMidiTracks(),
     ),
 }
 

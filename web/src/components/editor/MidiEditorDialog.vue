@@ -121,6 +121,19 @@
               </option>
             </select>
           </label>
+          <label class="midi-field">
+            <span>时长</span>
+            <input
+              :value="durationSeconds > 0 ? durationSeconds : Math.round(duration)"
+              type="number"
+              min="1"
+              max="86400"
+              step="1"
+              title="时间轴长度（秒），留空或 0 为自动"
+              @change="applyDuration"
+            />
+            <em>秒</em>
+          </label>
         </template>
 
         <label class="midi-field">
@@ -260,30 +273,31 @@
               </button>
               <button class="mini danger" title="删除声部" @click.stop="removePart(part)">×</button>
               <select
-                v-if="!part.drum"
                 class="midi-part-inst"
-                :value="part.instrument"
-                :title="instrumentLabel(part.instrument)"
+                :value="part.drum ? 'drum' : String(part.instrument)"
+                :title="part.drum ? '架子鼓 · GM 鼓组' : instrumentLabel(part.instrument)"
                 @change="onInstrumentChange(part, $event)"
                 @click.stop
                 @keydown.stop
               >
+                <option value="drum">架子鼓 · GM 鼓组</option>
                 <optgroup v-for="group in instrumentGroups" :key="group.id" :label="group.label">
-                  <option v-for="item in group.options" :key="item.program" :value="item.program">
+                  <option v-for="item in group.options" :key="item.program" :value="String(item.program)">
                     {{ item.name }}
                   </option>
                 </optgroup>
               </select>
-              <div v-else class="midi-part-drum" @click.stop>
-                <span class="midi-part-drum-tag">架子鼓 · GM 鼓组</span>
-                <button
-                  class="mini"
-                  title="填充 4/4 基本节奏（底鼓/军鼓/八分踩镲）"
-                  @click.stop="fillDrumBeat(part)"
-                >
-                  填充节奏
-                </button>
-              </div>
+              <button
+                v-if="part.drum"
+                class="mini"
+                title="填充 4/4 基本节奏（底鼓/军鼓/八分踩镲）"
+                @click.stop="fillDrumBeat(part)"
+              >
+                填充节奏
+              </button>
+              <button class="mini" title="导入 .mid 到这个声部" @click.stop="importMidiToPart(part)">
+                ⇩ MIDI
+              </button>
               <span class="midi-part-count">
                 <template v-if="part.drum">{{ part.notes.length }} 件</template>
                 <template v-else>{{ part.notes.length }} 个音</template>
@@ -357,6 +371,7 @@
 
           <div
             v-if="contextMenu.visible"
+            ref="menuRef"
             class="midi-menu"
             :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
             role="menu"
@@ -501,7 +516,9 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 
+import { api } from '@/api'
 import type {
   EditorMidiInstrument,
   EditorMidiInstrumentFamily,
@@ -535,6 +552,7 @@ import {
   clampDetune,
   clampPitch,
   clampTempo,
+  clampVelocity,
   composeNoteAtPoint,
   copyNotes,
   createComposeNote,
@@ -665,7 +683,7 @@ const emit = defineEmits<{
 
 const ROW_HEIGHT = 16
 const KEY_WIDTH = 62
-const RULER_HEIGHT = 26
+const RULER_HEIGHT = 34
 const MIN_NOTE_LENGTH = 0.12
 const VELOCITY_HEIGHT = 88
 const gridOptions = MIDI_GRID_OPTIONS
@@ -680,6 +698,7 @@ const rowHeight = ref<number>(ROW_HEIGHT)
 const velocityHeight = VELOCITY_HEIGHT
 const scrollRef = ref<HTMLDivElement | null>(null)
 const bodyRef = ref<HTMLDivElement | null>(null)
+const menuRef = ref<HTMLDivElement | null>(null)
 const keyCanvasRef = ref<HTMLCanvasElement | null>(null)
 const gridCanvasRef = ref<HTMLCanvasElement | null>(null)
 const velocityCanvasRef = ref<HTMLCanvasElement | null>(null)
@@ -757,12 +776,21 @@ const busyText = computed(() => {
   return '正在处理…'
 })
 const errorText = computed(() => (isCompose.value ? props.composeError : props.error))
-const duration = computed(() =>
-  Math.max(
-    0.05,
-    isCompose.value ? Number(props.composeDuration) || Number(props.duration) || 60 : Number(props.duration) || 0.05,
-  ),
-)
+// 用户手动填写的时间轴长度（秒）；0 表示自动（按工程/内容）。
+const durationSeconds = ref(0)
+const duration = computed(() => {
+  const autoBase = isCompose.value
+    ? Number(props.composeDuration) || Number(props.duration) || 600
+    : Number(props.duration) || 0.05
+  const base = durationSeconds.value > 0 ? durationSeconds.value : autoBase
+  // 自动延伸：音符写到哪儿，时间轴就至少长到哪儿（末尾再留 8 秒余量）。
+  let end = 0
+  for (const part of session.value.parts || []) {
+    for (const note of part.notes || []) end = Math.max(end, Number(note.end) || 0)
+  }
+  for (const note of draft.value) end = Math.max(end, Number(note.end) || 0)
+  return Math.max(0.05, base, end > 0 ? end + 8 : 0)
+})
 const parts = computed<MidiPart[]>(() => session.value.parts || [])
 const partCount = computed(() => parts.value.length)
 const totalNotes = computed(() => sessionNoteCount(session.value))
@@ -951,6 +979,7 @@ watch(
   () => props.composeSession,
   (value) => {
     if (!value) return
+    durationSeconds.value = 0
     session.value = normalizeSession(value, duration.value)
     if (!session.value.parts.some((part) => part.id === activePartId.value)) {
       activePartId.value = session.value.parts[0]?.id || ''
@@ -1294,7 +1323,15 @@ function usableWidth() {
 
 function fitZoomToWidth() {
   measureViewport()
-  pxPerSecond.value = fitZoom(duration.value, usableWidth(), 12, 800)
+  const hasNotes = isCompose.value
+    ? parts.value.some((part) => (part.notes || []).length > 0)
+    : draft.value.length > 0
+  if (hasNotes) {
+    pxPerSecond.value = fitZoom(duration.value, usableWidth(), 12, 800)
+    return
+  }
+  // 空白会话：不要缩到 12px/s 只剩一小段可视区，用能直接写音符的默认缩放。
+  pxPerSecond.value = Math.max(48, Math.min(160, Math.round(usableWidth() / 8)))
 }
 
 function zoomToFit() {
@@ -1518,6 +1555,54 @@ function fillDrumBeat(part: MidiPart) {
   scheduleDraw()
 }
 
+/** 把 .mid 文件的音符导入到指定声部（鼓组轨会把声部切到鼓组）。 */
+async function importMidiToPart(part: MidiPart) {
+  const result = await api.importEditorMidiTracks()
+  if (!result?.ok) {
+    if (result?.error) ElMessage.error(result.error)
+    return
+  }
+  const tracks = (result.tracks || []).filter((track) => track.notes.length)
+  if (!tracks.length) {
+    ElMessage.error('MIDI 文件里没有音符')
+    return
+  }
+  pushUndo()
+  const stamp = Date.now().toString(36)
+  let counter = 0
+  const imported: MidiComposeNote[] = []
+  for (const track of tracks) {
+    for (const note of track.notes) {
+      const span = clampNoteSpan(note.start, note.end, duration.value)
+      imported.push({
+        id: `im_${stamp}_${counter++}`,
+        start: span.start,
+        end: span.end,
+        pitch: clampComposePitch(note.pitch),
+        velocity: clampVelocity(note.velocity),
+      })
+    }
+  }
+  part.notes = sortNotes(imported)
+  const first = tracks[0]!
+  const autoName =
+    !part.name || /^声部\s*\d+$/.test(part.name) || part.name === '旋律' || part.name === '架子鼓'
+  if (first.drum) {
+    part.drum = true
+    part.instrument = 0
+    if (autoName) part.name = '架子鼓'
+  } else {
+    part.drum = false
+    part.instrument = clampProgram(first.program)
+    if (autoName) part.name = instrumentLabel(part.instrument)
+  }
+  activePartId.value = part.id
+  selection.value = imported.map((note) => note.id)
+  dirty.value = true
+  markPreviewStale()
+  scheduleDraw()
+}
+
 function removePart(part: MidiPart) {
   if (parts.value.length <= 1) return
   pushUndo()
@@ -1544,11 +1629,28 @@ function toggleSolo(part: MidiPart) {
 
 function onInstrumentChange(part: MidiPart, event: Event) {
   const target = event.target as HTMLSelectElement
-  const program = Number(target.value)
+  const value = target.value
+  if (value === 'drum') {
+    // 切到鼓组：把已有音符吸附到真实鼓件。
+    if (!part.drum) {
+      const autoName = !part.name || /^声部\s*\d+$/.test(part.name) || part.name === '旋律'
+      part.drum = true
+      part.instrument = 0
+      if (autoName) part.name = '架子鼓'
+      part.notes = part.notes.map((note) => ({ ...note, pitch: nearestDrumPitch(note.pitch) }))
+    }
+    dirty.value = true
+    markPreviewStale()
+    scheduleDraw()
+    return
+  }
+  const program = Number(value)
   if (!Number.isFinite(program)) return
-  const autoName = !part.name || /^声部\s*\d+$/.test(part.name) || part.name === '旋律'
+  const autoName =
+    !part.name || /^声部\s*\d+$/.test(part.name) || part.name === '旋律' || part.name === '架子鼓'
+  part.drum = false
   part.instrument = clampProgram(program)
-  if (autoName && !part.drum) part.name = instrumentLabel(part.instrument)
+  if (autoName) part.name = instrumentLabel(part.instrument)
   dirty.value = true
   markPreviewStale()
   scheduleDraw()
@@ -1581,6 +1683,17 @@ function applySignature(event: Event) {
   const [numerator, denominator] = target.value.split('/').map((item) => Number(item) || 4)
   session.value.time_signature = [numerator || 4, denominator || 4]
   dirty.value = true
+  scheduleDraw()
+}
+
+function applyDuration(event: Event) {
+  const target = event.target as HTMLInputElement
+  const raw = Number(target.value)
+  const next = Number.isFinite(raw) ? Math.max(0, Math.min(86400, Math.round(raw))) : 0
+  durationSeconds.value = next
+  target.value = String(next || Math.round(duration.value))
+  dirty.value = true
+  markPreviewStale()
   scheduleDraw()
 }
 
@@ -2464,12 +2577,14 @@ function drawRuler(
   offsetX: number,
 ) {
   const height = viewHeight.value
+  const dividerY = RULER_HEIGHT - 16 // 上面是小节/拍，下面是秒刻度
   context.fillStyle = '#0b0f18'
   context.fillRect(0, 0, width, RULER_HEIGHT)
   context.font = '10px ui-sans-serif, system-ui'
   context.textBaseline = 'middle'
   context.strokeStyle = 'rgba(255,255,255,0.16)'
 
+  // 上排：编曲模式画小节/拍，音高模式画秒刻度。
   if (isCompose.value) {
     const tempo = session.value.tempo
     const signature = session.value.time_signature
@@ -2484,47 +2599,53 @@ function drawRuler(
       if (x >= -60 && x <= width + 60) {
         context.strokeStyle = 'rgba(160,210,255,0.4)'
         context.beginPath()
-        context.moveTo(x, RULER_HEIGHT - 10)
-        context.lineTo(x, RULER_HEIGHT)
+        context.moveTo(x, dividerY - 7)
+        context.lineTo(x, dividerY)
         context.stroke()
         context.fillStyle = '#9db8dd'
-        context.fillText(`${index + 1}`, x + 3, 9)
+        context.fillText(`${index + 1}`, x + 3, 7)
         for (let offset = 1; offset < beatsPerBar; offset += 1) {
           const beatTime = barTime + offset * beat
           const bx = Math.round(timeToX(beatTime, pps) - offsetX) + 0.5
           if (bx < -4 || bx > width + 4) continue
           context.strokeStyle = 'rgba(255,255,255,0.14)'
           context.beginPath()
-          context.moveTo(bx, RULER_HEIGHT - 5)
-          context.lineTo(bx, RULER_HEIGHT)
+          context.moveTo(bx, dividerY - 3)
+          context.lineTo(bx, dividerY)
           context.stroke()
         }
       }
     }
-  } else {
-    const secondPx = timeToX(1, pps)
-    const labelEvery = secondPx >= 64 ? 1 : secondPx >= 28 ? 2 : 5
-    const firstLabel = Math.max(
-      0,
-      Math.floor(xToTime(offsetX, pps) / labelEvery) * labelEvery,
-    )
-    for (
-      let second = firstLabel;
-      second <= duration.value + 1e-6 && timeToX(second, pps) - offsetX <= width;
-      second += labelEvery
-    ) {
-      const x = Math.round(timeToX(second, pps) - offsetX) + 0.5
-      if (x < -20) continue
-      context.beginPath()
-      context.moveTo(x, RULER_HEIGHT - 6)
-      context.lineTo(x, RULER_HEIGHT)
-      context.stroke()
-      context.fillStyle = '#75839c'
-      context.fillText(`${second}s`, x + 3, RULER_HEIGHT / 2)
-    }
+  }
+
+  // 下排：秒刻度，两种模式都显示，方便和主编辑器的秒级时间轴对齐。
+  const secondPx = timeToX(1, pps)
+  const labelEvery = secondPx >= 64 ? 1 : secondPx >= 28 ? 2 : secondPx >= 10 ? 5 : 10
+  const firstLabel = Math.max(
+    0,
+    Math.floor(xToTime(offsetX, pps) / labelEvery) * labelEvery,
+  )
+  for (
+    let second = firstLabel;
+    second <= duration.value + 1e-6 && timeToX(second, pps) - offsetX <= width;
+    second += labelEvery
+  ) {
+    const x = Math.round(timeToX(second, pps) - offsetX) + 0.5
+    if (x < -20) continue
+    context.strokeStyle = 'rgba(255,255,255,0.10)'
+    context.beginPath()
+    context.moveTo(x, dividerY + 5)
+    context.lineTo(x, RULER_HEIGHT)
+    context.stroke()
+    context.fillStyle = '#75839c'
+    context.fillText(`${second}s`, x + 3, dividerY + 11)
   }
 
   context.strokeStyle = 'rgba(120,180,255,0.22)'
+  context.beginPath()
+  context.moveTo(0, dividerY + 0.5)
+  context.lineTo(width, dividerY + 0.5)
+  context.stroke()
   context.beginPath()
   context.moveTo(0, RULER_HEIGHT - 0.5)
   context.lineTo(width, RULER_HEIGHT - 0.5)
@@ -3103,6 +3224,19 @@ function onContextMenu(event: MouseEvent) {
   contextMenu.time = timeOf(point.x)
   contextMenu.pitch = pitchOf(point.y)
   event.preventDefault()
+  nextTick(clampContextMenu)
+}
+
+/** 菜单贴边时往回夹，避免超出钢琴卷帘可视区导致显示不全。 */
+function clampContextMenu() {
+  const menu = menuRef.value
+  const host = bodyRef.value
+  if (!menu || !host) return
+  const margin = 6
+  const maxX = Math.max(margin, host.clientWidth - menu.offsetWidth - margin)
+  const maxY = Math.max(margin, host.clientHeight - menu.offsetHeight - margin)
+  contextMenu.x = Math.max(margin, Math.min(contextMenu.x, maxX))
+  contextMenu.y = Math.max(margin, Math.min(contextMenu.y, maxY))
 }
 
 function hideContextMenu() {

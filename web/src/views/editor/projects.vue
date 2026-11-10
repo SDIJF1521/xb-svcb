@@ -10,6 +10,9 @@
         <el-button round class="ghost-btn" :loading="loading" @click="loadProjects">
           <el-icon class="el-icon--left"><Refresh /></el-icon>刷新
         </el-button>
+        <el-button round class="ghost-btn" @click="createBlank">
+          <el-icon class="el-icon--left"><Plus /></el-icon>新建空白工程
+        </el-button>
         <el-button round class="ghost-btn" @click="importProject">
           <el-icon class="el-icon--left"><FolderOpened /></el-icon>导入工程
         </el-button>
@@ -85,6 +88,7 @@ import {
   FolderAdd,
   FolderOpened,
   Headset,
+  Plus,
   Refresh,
   Right,
   Scissor,
@@ -141,6 +145,15 @@ async function importAudio() {
   const project = await api.createEditorProjectFromAudio(path)
   if (!project) {
     ElMessage.error('导入音频失败')
+    return
+  }
+  await router.push({ path: '/editor', query: { project: project.id } })
+}
+
+async function createBlank() {
+  const project = await api.createEditorProjectBlank()
+  if (!project) {
+    ElMessage.error('创建空白工程失败')
     return
   }
   await router.push({ path: '/editor', query: { project: project.id } })

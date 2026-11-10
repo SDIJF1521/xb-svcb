@@ -1504,6 +1504,7 @@ let clipStopTimer: ReturnType<typeof setTimeout> | null = null
 let rerunPollTimer: ReturnType<typeof setInterval> | null = null
 let clipPlaybackClipId = ''
 let clipPreviewFrame = 0
+let mixPlayheadFrame = 0
 let lastPlayToggleAt = 0
 let mixPreviewRequestId = 0
 let clipPreviewRequestId = 0
@@ -4284,6 +4285,31 @@ function startClipPreviewTicker() {
   clipPreviewFrame = requestAnimationFrame(update)
 }
 
+function stopMixPlayheadTicker() {
+  if (!mixPlayheadFrame) return
+  cancelAnimationFrame(mixPlayheadFrame)
+  mixPlayheadFrame = 0
+}
+
+// 混音播放时用 requestAnimationFrame 每帧把播放线贴到真实 currentTime，
+// 而不是只靠 HTMLMediaElement 约 4Hz 的 timeupdate 事件，否则播放线会一顿一顿地跳。
+function startMixPlayheadTicker() {
+  stopMixPlayheadTicker()
+  const update = () => {
+    const el = audioEl.value
+    if (!el || playbackMode.value !== 'mix' || el.paused || el.ended) {
+      mixPlayheadFrame = 0
+      return
+    }
+    if (!timelineSeeking.value) {
+      playhead.value = clamp(el.currentTime, 0, project.value?.duration || el.currentTime)
+      followPlayheadIntoView()
+    }
+    mixPlayheadFrame = requestAnimationFrame(update)
+  }
+  mixPlayheadFrame = requestAnimationFrame(update)
+}
+
 function htmlAudioOutputActive() {
   return [audioPrimaryEl.value, audioSecondaryEl.value]
     .some((el) => !!el?.src && !el.paused)
@@ -4873,7 +4899,7 @@ async function openMidiEditor(
   midiDuration.value =
     midiScope.value === 'clip' && selectedClip.value
       ? Math.max(0.01, Number(selectedClip.value.end) - Number(selectedClip.value.start))
-      : Math.max(0.3, Number(currentProject.duration) || 30)
+      : Math.max(0.3, Number(currentProject.duration) || 600)
   // 有音频时默认做音高修正；空白轨道直接进编曲。
   const fallbackMode: 'compose' | 'pitch' = midiHasAudio.value && midiScope.value === 'clip' ? 'pitch' : 'compose'
   midiMode.value = mode || (midiHasAudio.value ? 'pitch' : fallbackMode)
@@ -5212,6 +5238,7 @@ function isActiveAudioEvent(event: Event) {
 function onAudioPause(event: Event) {
   if (!isActiveAudioEvent(event)) return
   if (playbackMode.value === 'clip') stopClipPreviewTicker()
+  else if (playbackMode.value === 'mix') stopMixPlayheadTicker()
   if (audioEl.value?.ended) playing.value = false
 }
 function onAudioPlaying(event: Event) {
@@ -5219,6 +5246,7 @@ function onAudioPlaying(event: Event) {
   playbackBuffering.value = false
   playing.value = true
   if (playbackMode.value === 'clip') startClipPreviewTicker()
+  else if (playbackMode.value === 'mix') startMixPlayheadTicker()
 }
 function onAudioWaiting(event: Event) {
   if (!isActiveAudioEvent(event) || audioEl.value?.paused) return
@@ -5227,6 +5255,7 @@ function onAudioWaiting(event: Event) {
 function onAudioError(event: Event) {
   if (!isActiveAudioEvent(event)) return
   stopClipPreviewTicker()
+  stopMixPlayheadTicker()
   playbackBuffering.value = false
   playing.value = false
   if (playbackMode.value === 'clip') {
@@ -5239,6 +5268,7 @@ function onAudioEnded(event: Event) {
   if (!isActiveAudioEvent(event)) return
   const endedMode = playbackMode.value
   stopClipPreviewTicker()
+  stopMixPlayheadTicker()
   cancelScheduledLiveMixRefresh()
   clipPlaybackClipId = ''
   clipPreviewPosition.value = 0
@@ -5531,6 +5561,8 @@ function isTypingTarget(target: EventTarget | null) {
 }
 function onKey(e: KeyboardEvent) {
   if (!project.value || isTypingTarget(e.target)) return
+  // MIDI 子编辑器打开时，全局快捷键（尤其是空格）交给它自己处理，避免主编辑器也同时播放。
+  if (midiDialogOpen.value) return
   const key = e.key.toLowerCase()
   const command = e.ctrlKey || e.metaKey
   if (key === 'escape') {
@@ -5597,6 +5629,7 @@ onMounted(() => {
 onUnmounted(() => {
   cancelScheduledLiveMixRefresh()
   stopClipPreviewTicker()
+  stopMixPlayheadTicker()
   if (liveControlSaveTimer) clearTimeout(liveControlSaveTimer)
   resetAudioPlayer(audioPrimaryEl.value)
   resetAudioPlayer(audioSecondaryEl.value)
