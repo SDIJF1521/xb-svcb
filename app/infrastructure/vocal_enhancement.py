@@ -30,9 +30,11 @@ class VocalEnhancementControls(TypedDict):
 class VocalEnhancementProcessor:
     """运行人声分析、DeepFilterNet3 修复与可选歌声增强。"""
 
-    LEVEL_BASIC = "basic"
-    LEVEL_ADVANCED = "advanced"
-    LEVELS = {LEVEL_BASIC, LEVEL_ADVANCED}
+    # 显式标注 str / set[str]：端口协议里这些是可变属性（invariant），
+    # 若这里被推断成 Literal["basic"]，就无法结构化匹配 VocalEnhancementPort。
+    LEVEL_BASIC: str = "basic"
+    LEVEL_ADVANCED: str = "advanced"
+    LEVELS: set[str] = {LEVEL_BASIC, LEVEL_ADVANCED}
     DEFAULT_PITCH_CORRECTION = 0.45
     DEFAULT_TIMING_ALIGNMENT = 0.45
     DEFAULT_TIMBRE_FOCUS = 0.60

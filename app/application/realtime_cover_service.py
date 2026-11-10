@@ -27,7 +27,11 @@ from .adapters import (
     system_audio_writer,
 )
 from .ports import EngineRegistryPort, FfmpegGateway, SeparationGateway
-from .conversion_service import ConversionService
+from .conversion_service import (
+    ConversionService,
+    _HighNoteQuality,
+    _with_failed_regions,
+)
 from .model_service import ModelService
 
 
@@ -790,7 +794,7 @@ class RealtimeCoverService:
                 guard_regions = ConversionService._confirmed_guard_regions(issue)
                 best_bad_frames = float(issue.get("bad_frames") or float("inf"))
             else:
-                quality = (
+                quality: _HighNoteQuality = (
                     ConversionService._guard_candidate_high_note_quality(
                         source,
                         output,
@@ -801,7 +805,7 @@ class RealtimeCoverService:
                         else None,
                     )
                     if rendered != output
-                    else {"available": False}
+                    else _HighNoteQuality(available=False)
                 )
                 if quality.get("available"):
                     entry["quality"] = quality
@@ -832,10 +836,7 @@ class RealtimeCoverService:
                             not in accepted_keys
                         ]
                     issue = ConversionService._quality_failure_issue(
-                        {
-                            **quality,
-                            "failed_regions": unresolved_failure_regions,
-                        },
+                        _with_failed_regions(quality, unresolved_failure_regions),
                         issue,
                     )
                     entry["issue"] = issue

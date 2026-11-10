@@ -201,7 +201,9 @@ def stage_wheelhouse(root: Path, stack: str, output: Path) -> dict[str, object]:
         groups[relative.parent.as_posix()] += 1
 
     expected_paths: set[Path] = set()
-    for item in source_profile["wheels"]:
+    raw_wheels = source_profile.get("wheels")
+    wheels: list[object] = raw_wheels if isinstance(raw_wheels, list) else []
+    for item in wheels:
         if not isinstance(item, dict) or not isinstance(item.get("path"), str):
             continue
         relative = Path(item["path"])

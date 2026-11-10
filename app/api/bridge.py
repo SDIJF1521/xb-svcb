@@ -1273,6 +1273,15 @@ class Api:
     ) -> dict[str, Any]:
         return self._editor.preview_midi_session(project_id, track_id, session)
 
+    def export_editor_midi_session(
+        self,
+        project_id: str,
+        track_id: str,
+        session: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """导出 .mid 到工程目录（不弹对话框，供 HTTP / 自动化调用）。"""
+        return self._editor.export_midi_session(project_id, track_id, session)
+
     def export_editor_midi_file(
         self,
         project_id: str,

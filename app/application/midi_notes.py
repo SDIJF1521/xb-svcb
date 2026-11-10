@@ -10,7 +10,7 @@ MIDI 子编辑器打开时先做一次「分析」：把片段当前的基频曲
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain import editor_midi
 
@@ -18,13 +18,17 @@ if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
+# 输入曲线可能来自 np.linspace / np.load / 任意浮点数组，统一按「浮点数组」收，
+# 函数内部再用 np.asarray(..., dtype=np.float64) 收敛精度。
+NoteDict = dict[str, Any]
+
 _MIN_NOTE_SECONDS = 0.06
 _SPLIT_SEMITONES = 0.6
 _SMOOTH_SECONDS = 0.09
 _JOIN_GAP_SECONDS = 0.02
 
 
-def _median_filter(values: "NDArray[np.float64]", size: int) -> "NDArray[np.float64]":
+def _median_filter(values: "NDArray[np.floating[Any]]", size: int) -> "NDArray[np.float64]":
     import numpy as np
 
     data = np.asarray(values, dtype=np.float64).reshape(-1)
@@ -38,7 +42,7 @@ def _median_filter(values: "NDArray[np.float64]", size: int) -> "NDArray[np.floa
     return np.nanmedian(windows, axis=1)
 
 
-def _frame_spacing(times: "NDArray[np.float64]") -> float:
+def _frame_spacing(times: "NDArray[np.floating[Any]]") -> float:
     import numpy as np
 
     values = np.asarray(times, dtype=np.float64).reshape(-1)
@@ -65,14 +69,14 @@ def _voiced_runs(voiced: "NDArray[np.bool_]") -> list[tuple[int, int]]:
 
 
 def notes_from_f0(
-    times: "NDArray[np.float64]",
-    f0: "NDArray[np.float32]",
+    times: "NDArray[np.floating[Any]]",
+    f0: "NDArray[np.floating[Any]]",
     *,
     min_note_seconds: float = _MIN_NOTE_SECONDS,
     split_semitones: float = _SPLIT_SEMITONES,
     smooth_seconds: float = _SMOOTH_SECONDS,
     duration: float | None = None,
-) -> list[dict[str, object]]:
+) -> list[NoteDict]:
     """把逐帧 F0 切成音符列表（片段内时间，秒）。"""
     import numpy as np
 
@@ -95,7 +99,7 @@ def notes_from_f0(
     window = max(3, int(round(max(0.02, smooth_seconds) / max(spacing, 1e-4))) | 1)
 
     limit = float(duration) if duration else float(timeline[-1] + spacing)
-    notes: list[dict[str, object]] = []
+    notes: list[NoteDict] = []
 
     def emit(run_start: int, run_end: int) -> None:
         if run_end - run_start < 3:
@@ -145,7 +149,7 @@ def notes_from_f0(
     if not notes:
         return []
     notes.sort(key=lambda note: float(note["start"]))
-    joined: list[dict[str, object]] = []
+    joined: list[NoteDict] = []
     for note in notes:
         if joined:
             previous = joined[-1]

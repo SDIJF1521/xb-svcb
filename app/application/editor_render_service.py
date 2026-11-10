@@ -70,6 +70,8 @@ class EditorRenderService:
         dst = self._store.cache_path(f"{project_id}_{key}.{fmt}")
         if dst.exists():
             return dst
+        if self._audio is None:
+            return None
         ok = self._audio.render_timeline(project, dst, self._cache_dir(), fmt)
         return dst if ok and dst.exists() else None
 
@@ -157,6 +159,8 @@ class EditorRenderService:
             dst = export_dir / f"{name}_{key}.{output_format}"
         if dst.exists():
             return dst
+        if self._audio is None:
+            return None
         ok = self._audio.render_timeline(preview_project, dst, self._cache_dir(), output_format)
         return dst if ok and dst.exists() else None
 
@@ -193,6 +197,8 @@ class EditorRenderService:
         dst = export_dir / f"{self._safe_stem(str(track.get('name') or 'track'))}_{key}.{output_format}"
         if dst.exists():
             return dst
+        if self._audio is None:
+            return None
         ok = self._audio.render_timeline(track_project, dst, self._cache_dir(), output_format)
         return dst if ok and dst.exists() else None
 

@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 from domain.vocal_enhancement import VocalEnhancementControls
 
@@ -92,36 +92,94 @@ class ToolAdapter(Protocol):
 
 @runtime_checkable
 class StatusToolAdapter(ToolAdapter, Protocol):
-    """带可读状态描述的工具（UVR / PyMSS）。"""
+    """带可读状态描述的工具（UVR / PyMSS）。
 
-    def status(self) -> str: ...
+    UVR 的状态与 PyMSS 的状态形状不同（前者按引擎整体，后者按模型），
+    因此这里只约束「可查询状态」，具体返回类型由各自的实现决定。
+    """
+
+    def status(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 @runtime_checkable
 class FfmpegGateway(ToolAdapter, Protocol):
-    """音频转码与混音能力（FFmpeg）。"""
+    """音频转码与混音能力（FFmpeg）。
+
+    方法签名与 ``infrastructure.ffmpeg_tool.FfmpegTool`` 保持一致：
+    端口只描述用例层真正依赖的参数，默认值在实现里给出。
+    """
 
     def probe_duration(self, src: Path) -> float | None: ...
 
-    def detect_silences(self, src: Path, **kwargs: Any) -> list[dict[str, Any]]: ...
+    def detect_silences(
+        self,
+        src: Path,
+        start: float = 0.0,
+        end: float | None = None,
+        noise_db: float = -40.0,
+        min_duration: float = 0.35,
+    ) -> list[dict[str, float]]: ...
 
     def convert(self, src: Path, dst: Path, sample_rate: int = 44100) -> bool: ...
 
-    def slice(self, *args: Any, **kwargs: Any) -> Any: ...
+    def slice(
+        self,
+        src: Path,
+        start: float,
+        end: float,
+        dst: Path,
+        sample_rate: int = 44100,
+        fade: float = 0.0,
+    ) -> bool: ...
 
     def concat(self, parts: list[Path], dst: Path, sample_rate: int = 44100) -> bool: ...
 
-    def concat_crossfade(self, *args: Any, **kwargs: Any) -> Any: ...
+    def concat_crossfade(
+        self,
+        parts: list[Path],
+        dst: Path,
+        xf: float = 0.03,
+        sample_rate: int = 44100,
+    ) -> bool: ...
 
-    def pad_or_trim(self, *args: Any, **kwargs: Any) -> Any: ...
+    def pad_or_trim(
+        self, src: Path, dst: Path, seconds: float, sample_rate: int = 44100
+    ) -> bool: ...
 
-    def pitch_shift(self, *args: Any, **kwargs: Any) -> Any: ...
+    def pitch_shift(
+        self,
+        src: Path,
+        dst: Path,
+        semitones: int,
+        *,
+        mask_source: Path | None = None,
+        loudness_source: Path | None = None,
+        high_threshold: float = 800.0,
+        report_path: Path | None = None,
+        regions: list[tuple[float, float]] | None = None,
+        f0_curve: Path | None = None,
+    ) -> bool: ...
 
-    def mix(self, *args: Any, **kwargs: Any) -> Any: ...
+    def mix(
+        self,
+        vocals: Path,
+        instrumental: Path,
+        dst: Path,
+        sample_rate: int = 44100,
+        vocal_gain_db: float = ...,
+        instrumental_gain_db: float = ...,
+        glue: bool = False,
+    ) -> bool: ...
 
-    def mix_vocals(self, *args: Any, **kwargs: Any) -> Any: ...
+    def mix_vocals(
+        self, inputs: list[Path], dst: Path, sample_rate: int = 44100
+    ) -> bool: ...
 
-    def adaptive_mix_profile(self, *args: Any, **kwargs: Any) -> Any: ...
+    def adaptive_mix_profile(
+        self,
+        vocals: Path,
+        instrumental: Path,
+    ) -> dict[str, float | bool | None]: ...
 
 
 @runtime_checkable
@@ -225,17 +283,56 @@ class PluginHostPort(Protocol):
 
 @runtime_checkable
 class VocalEnhancementPort(ToolAdapter, Protocol):
-    """歌声增强（修音 / 音色美化 / 修复）能力。"""
+    """歌声增强（修音 / 音色美化 / 修复）能力。
+
+    参数与 ``infrastructure.vocal_enhancement.VocalEnhancementProcessor`` 对齐：
+    默认值只出现在实现里，端口声明 ``...`` 占位，便于实现按需调整默认值。
+    """
 
     LEVEL_BASIC: str
     LEVEL_ADVANCED: str
     LEVELS: set[str]
 
-    def enhance(self, *args: Any, **kwargs: Any) -> Any: ...
+    def enhance(
+        self,
+        source: Path,
+        output: Path,
+        *,
+        level: str = ...,
+        device: str = ...,
+        log_file: Path | None = None,
+        reference: Path | None = None,
+        pitch_correction: float = ...,
+        timing_alignment: float = ...,
+        timbre_focus: float = ...,
+        ai_eq: float = ...,
+        ai_compressor: float = ...,
+        ai_exciter: float = ...,
+        stereo_width: float = ...,
+        loudness_envelope: float = ...,
+        skip_repair: bool = False,
+        preserve_model_high_band: bool = False,
+        progress_callback: Callable[[int], None] | None = None,
+    ) -> Path: ...
 
-    def analyze(self, *args: Any, **kwargs: Any) -> Any: ...
+    def analyze(
+        self,
+        source: Path,
+        *,
+        log_file: Path | None = None,
+    ) -> dict[str, float | bool]: ...
 
-    def repair(self, *args: Any, **kwargs: Any) -> Any: ...
+    def repair(
+        self,
+        source: Path,
+        output: Path,
+        *,
+        stage: str = ...,
+        device: str = ...,
+        log_file: Path | None = None,
+        profile: dict[str, float | bool] | None = None,
+        reference: Path | None = None,
+    ) -> Path: ...
 
     def normalize_strength(self, value: float, fallback: float) -> float: ...
 

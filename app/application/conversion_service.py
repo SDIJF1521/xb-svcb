@@ -55,6 +55,19 @@ class _HighNoteQuality(TypedDict, total=False):
     failed_regions: list[_TimeRegion]
 
 
+def _with_failed_regions(
+    quality: _HighNoteQuality, regions: list[_TimeRegion]
+) -> _HighNoteQuality:
+    """复制质量报告并替换失败区间（TypedDict 不能直接用 dict 解包重新赋值）。"""
+    return _HighNoteQuality(
+        available=bool(quality.get("available")),
+        passed=bool(quality.get("passed")),
+        regions=list(quality.get("regions") or []),
+        accepted_regions=list(quality.get("accepted_regions") or []),
+        failed_regions=list(regions),
+    )
+
+
 def _wants_vocal_output(work: dict[str, Any]) -> bool:
     return (
         work.get("mode") == "multi"

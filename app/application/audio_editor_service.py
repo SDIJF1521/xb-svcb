@@ -169,8 +169,16 @@ class AudioEditorService:
 
     @property
     def _audio(self) -> AudioEnginePort:
-        """时间线渲染引擎：读写都落在渲染子服务上，既有装配点保持不变。"""
-        return self._render._audio
+        """时间线渲染引擎：读写都落在渲染子服务上，既有装配点保持不变。
+
+        渲染子服务允许以 ``audio=None`` 创建（只做波形/缓存的场景），
+        这里按需回落到默认 FFmpeg 适配器，保证调用方拿到的永远是可用的引擎。
+        """
+        engine = self._render._audio
+        if engine is None:
+            engine = create_audio_engine(self._ffmpeg)
+            self._render._audio = engine
+        return engine
 
     @_audio.setter
     def _audio(self, engine: AudioEnginePort) -> None:
@@ -2414,7 +2422,11 @@ class AudioEditorService:
         duration: float,
     ) -> tuple[Path, list[dict[str, Any]], bool]:
         """Retry an editor clip only when the converted high note collapses."""
-        from application.conversion_service import ConversionService
+        from application.conversion_service import (
+            ConversionService,
+            _HighNoteQuality,
+            _with_failed_regions,
+        )
 
         profile = profile_model or model
         threshold = self._model_high_pitch_threshold(params, profile)
@@ -2557,7 +2569,7 @@ class AudioEditorService:
                     ),
                 )
             else:
-                quality = (
+                quality: _HighNoteQuality = (
                     ConversionService._guard_candidate_high_note_quality(
                         source,
                         output,
@@ -2568,7 +2580,7 @@ class AudioEditorService:
                         else None,
                     )
                     if rendered != output
-                    else {"available": False}
+                    else _HighNoteQuality(available=False)
                 )
                 if quality.get("available"):
                     entry["quality"] = quality
@@ -2599,10 +2611,7 @@ class AudioEditorService:
                             not in accepted_keys
                         ]
                     issue = ConversionService._quality_failure_issue(
-                        {
-                            **quality,
-                            "failed_regions": unresolved_failure_regions,
-                        },
+                        _with_failed_regions(quality, unresolved_failure_regions),
                         issue,
                     )
                     entry["issue"] = issue
@@ -3145,7 +3154,10 @@ class AudioEditorService:
             return {"ok": False, "error": f"读取 F0 曲线失败：{exc}"}
         if curve.size < 8:
             return {"ok": False, "error": "F0 曲线过短，无法生成 MIDI 音符"}
-        times = np.linspace(0.0, duration, curve.size)
+        # 显式 float64：notes_from_f0 按双精度处理时间轴，避免 Pylance 报 dtype 不匹配。
+        times: "np.ndarray[Any, np.dtype[np.float64]]" = np.linspace(
+            0.0, duration, curve.size, dtype=np.float64
+        )
         notes = notes_from_f0(times, curve, duration=duration)
         voiced = curve > 0.0
         analysis = {
@@ -3287,7 +3299,8 @@ class AudioEditorService:
         if not next_clip:
             return {"ok": False, "error": "片段替换失败"}
         meta = dict(next_clip.get("metadata") or {})
-        previous = meta.get("midi") if isinstance(meta.get("midi"), dict) else {}
+        raw_previous = meta.get("midi")
+        previous: dict[str, Any] = raw_previous if isinstance(raw_previous, dict) else {}
         meta["midi"] = {
             **previous,
             "note_count": len(cleaned),
@@ -3501,7 +3514,8 @@ class AudioEditorService:
         if "MIDI" not in old_name:
             updated["name"] = f"{old_name} · MIDI"
         meta = dict(updated.get("metadata") or {})
-        previous = meta.get("midi") if isinstance(meta.get("midi"), dict) else {}
+        raw_previous = meta.get("midi")
+        previous: dict[str, Any] = raw_previous if isinstance(raw_previous, dict) else {}
         meta["midi"] = {
             **previous,
             "note_count": len(notes),
@@ -3662,7 +3676,8 @@ class AudioEditorService:
         if not next_track:
             return {"ok": False, "error": "音轨替换失败"}
         meta = dict(next_track.get("metadata") or {})
-        previous = meta.get("midi") if isinstance(meta.get("midi"), dict) else {}
+        raw_previous = meta.get("midi")
+        previous: dict[str, Any] = raw_previous if isinstance(raw_previous, dict) else {}
         meta["midi"] = {
             **previous,
             "scope": "track",
@@ -3761,7 +3776,8 @@ class AudioEditorService:
                 "report": {"clips": reports},
             }
         meta = dict(next_track.get("metadata") or {})
-        previous = meta.get("midi") if isinstance(meta.get("midi"), dict) else {}
+        raw_previous = meta.get("midi")
+        previous: dict[str, Any] = raw_previous if isinstance(raw_previous, dict) else {}
         applied_notes = sum(int(item.get("applied_notes") or 0) for item in reports)
         applied_seconds = sum(float(item.get("applied_seconds") or 0.0) for item in reports)
         meta["midi"] = {

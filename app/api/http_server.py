@@ -3322,7 +3322,8 @@ def create_http_app(
             code = 503 if "未就绪" in error else 409
             raise HTTPException(status_code=code, detail=error)
         project = result.get("project")
-        clips = result.get("clips") if isinstance(result.get("clips"), list) else []
+        raw_clips = result.get("clips")
+        clips: list[Any] = raw_clips if isinstance(raw_clips, list) else []
         return {
             "ok": True,
             "scope": "track",

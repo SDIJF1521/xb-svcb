@@ -1405,7 +1405,7 @@ def main() -> int:
         if stale_requirements.exists():
             shutil.rmtree(stale_requirements)
 
-    requested_stacks = set(args.stack or STACKS)
+    requested_stacks: set[str] = {str(item) for item in (args.stack or STACKS)}
     installer = _load_installer(root)
     batches = build_plan(root, requested_stacks)
     if len(requested_stacks) == 1:

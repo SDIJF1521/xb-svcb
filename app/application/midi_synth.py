@@ -548,7 +548,7 @@ def render_session(
     if any(part.get("drum") for part in selected):
         tail_seconds = max(tail_seconds, 1.2)
     length = int(round((end_limit - start_offset + tail_seconds) * sample_rate))
-    length = max(1, min(length, sample_rate * midi_session.MAX_SESSION_SECONDS))
+    length = max(1, min(length, int(sample_rate * midi_session.MAX_SESSION_SECONDS)))
     out = np.zeros((length, 2), dtype=np.float32)
     for part in selected:
         _render_part_events(
