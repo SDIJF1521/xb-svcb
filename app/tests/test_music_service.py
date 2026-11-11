@@ -38,7 +38,14 @@ class MusicServiceApiCompatibilityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([item["name"] for item in service.list_downloaded()], ["first"])
                 self.assertEqual(scandir.call_count, 1)
                 (music_dir / "second.mp3").write_bytes(b"audio")
-                os.utime(music_dir, None)
+                # Force a distinct directory mtime: on CI the write and
+                # os.utime(None) can land in the same filesystem timestamp tick,
+                # leaving the cache key unchanged.
+                stat = music_dir.stat()
+                os.utime(
+                    music_dir,
+                    ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000),
+                )
                 self.assertEqual({item["name"] for item in service.list_downloaded()}, {"first", "second"})
                 self.assertEqual(scandir.call_count, 2)
                 self.assertTrue(service.delete_downloaded(str(music_dir / "first.mp3")))
