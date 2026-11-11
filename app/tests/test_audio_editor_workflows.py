@@ -313,7 +313,12 @@ class AudioEditorWorkflowTests(unittest.TestCase):
             target = root / "picked-name.m4a"
             self.assertEqual(result, str(target))
             self.assertEqual(target.read_bytes(), b"finished-audio-converted")
-            self.assertEqual(converter.calls, [(source, target)])
+            # TemporaryDirectory may use an 8.3 short path (RUNNER~1) on CI while
+            # the service resolves to the long form; compare canonical paths.
+            self.assertEqual(
+                [(Path(src).resolve(), Path(dst).resolve()) for src, dst in converter.calls],
+                [(source.resolve(), target.resolve())],
+            )
 
     def test_work_media_access_rejects_paths_outside_data_dir(self) -> None:
         with tempfile.TemporaryDirectory() as td:
