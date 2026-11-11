@@ -19,7 +19,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     env:
-      # Pin the project environment so `uv sync` and later steps agree on the path.
+      # Keep `uv sync` and the explicit interpreter path on the same environment.
       UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/app/.venv
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8
