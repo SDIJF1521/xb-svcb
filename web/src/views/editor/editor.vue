@@ -1552,7 +1552,7 @@ const SEPARATION_PREFS_KEY = 'xb-editor-separation-params'
 const rerunFramework = () => models.value.find((m) => m.id === rerunModelId.value)?.framework || 'so-vits-svc'
 const rerunF0Methods = computed(() => f0MethodsForFramework(rerunFramework()))
 const deviceOptions = computed(() => systemStore.optionsForFramework(rerunFramework()))
-const rvcVersions = ['v2', 'v1']
+const rvcVersions = ['v2', 'v1', 'v3']
 const channelOptions: { value: EditorClipChannel; label: string; title: string }[] = [
   { value: 'stereo', label: '双', title: '双声道' },
   { value: 'left', label: 'L', title: '左声道' },
@@ -1911,7 +1911,7 @@ const selectedRerunModel = computed(() => models.value.find((m) => m.id === reru
 const selectedRerunFramework = computed(() => selectedRerunModel.value?.framework || 'so-vits-svc')
 const detectedRerunRvcVersion = computed(() => {
   const value = String(selectedRerunModel.value?.metadata?.rvc_version || '').toLowerCase()
-  return value === 'v1' || value === 'v2' ? value : ''
+  return value === 'v1' || value === 'v2' || value === 'v3' ? value : ''
 })
 const rerunSpeakerOptions = computed(() => selectedRerunModel.value?.speakers || [])
 const isRvcRerunModel = computed(() => selectedRerunFramework.value === 'rvc')

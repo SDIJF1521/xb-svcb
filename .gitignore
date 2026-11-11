@@ -104,7 +104,13 @@ Thumbs.db
 desktop.ini
 
 # ===== 安装器生成的引擎与模型（开箱即用，由 install.ps1 重建）=====
-engines/
+# engines/rvc 例外：内置官方 RVC 推理栈随仓库分发（底模仍在 pretrain/ 下，
+# 与 so-vits-svc 一样由安装器从 assets/models 预置，不进版本库）。
+engines/*
+!engines/rvc/
+!engines/rvc/**
+engines/rvc/pretrain/
+engines/rvc/**/__pycache__/
 models/
 # 发布构建会下载并分卷携带 Windows FFmpeg，本地二进制不提交源码仓库。
 assets/tools/ffmpeg/bin/*.exe

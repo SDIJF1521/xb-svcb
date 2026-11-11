@@ -582,7 +582,7 @@ JOB_CREATE_API_DOC = _api_operation_description(
         ("params.rms_mix", "number", "否", "0.25", "仅 RVC；响度包络融合，范围 0~1"),
         ("params.protect", "number", "否", "0.33", "仅 RVC；清辅音保护，范围 0~0.5"),
         ("params.filter_radius", "integer", "否", "3", "仅 RVC；F0 中值滤波半径，范围 0~7"),
-        ("params.rvc_version", "string", "否", "v2", "仅 RVC；必须与模型训练版本一致"),
+        ("params.rvc_version", "string", "否", "v2", "仅 RVC；v1/v2/v3，必须与模型训练版本一致；v3 与 v2 网络结构一致，按 v2 兼容路径推理"),
         ("params.reference_audio", "string", "否", '""', "仅 SeedVC；本机参考音频绝对路径"),
         ("params.ddsp_infer_steps", "integer", "否", "50", "仅 DDSP；采样步数，最小 1，推荐 50~100"),
         ("params.ddsp_formant_shift", "number", "否", "0", "仅 DDSP；共振峰半音偏移，范围 -2~2"),
@@ -831,11 +831,12 @@ class InferenceParamsRequest(BaseModel):
             "等算法产生的呼吸杂音，对部分 F0 算法可能没有明显影响。"
         ),
     )
-    rvc_version: Literal["v1", "v2"] = Field(
+    rvc_version: Literal["v1", "v2", "v3"] = Field(
         default="v2",
         description=(
             "RVC 网络版本，必须与导入的模型训练版本一致。当前大多数新模型使用 v2；"
-            "版本选错可能导致维度不匹配或音质异常。"
+            "v3 微调模型沿用 v2 网络结构，按 v2 兼容路径推理。版本选错可能导致维度"
+            "不匹配或音质异常。"
         ),
     )
     reference_audio: str = Field(

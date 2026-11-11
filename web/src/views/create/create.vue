@@ -1503,7 +1503,7 @@ const stereoWidth = ref(Math.max(0, Math.min(1, num(prefs.stereoWidth, 0.30))))
 const loudnessEnvelope = ref(Math.max(0, Math.min(1, num(prefs.loudnessEnvelope, 0.58))))
 
 /* RVC 专属参数 */
-const rvcVersions = ['v2', 'v1']
+const rvcVersions = ['v2', 'v1', 'v3']
 const protect = ref(num(prefs.protect, 0.33))
 const filterRadius = ref(num(prefs.filterRadius, 3))
 const rvcVersion = ref(str(prefs.rvcVersion, 'v2'))
@@ -1514,7 +1514,7 @@ function frameworkOf(id: string): string {
 }
 function detectedRvcVersionFor(id: string): string {
   const value = String(models.value.find((m) => m.id === id)?.metadata?.rvc_version || '').toLowerCase()
-  return value === 'v1' || value === 'v2' ? value : ''
+  return value === 'v1' || value === 'v2' || value === 'v3' ? value : ''
 }
 function speakerOptionsFor(id: string): string[] {
   return models.value.find((m) => m.id === id)?.speakers || []

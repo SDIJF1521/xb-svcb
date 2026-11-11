@@ -279,7 +279,7 @@ export interface InferenceParams {
   protect?: number
   /** RVC：F0 中值滤波半径 (0~7)。 */
   filter_radius?: number
-  /** RVC：模型版本 v1 / v2。 */
+  /** RVC：模型版本 v1 / v2 / v3（v3 沿用 v2 网络结构）。 */
   rvc_version?: string
   /** SeedVC：本次推理的目标音色参考音频。 */
   reference_audio?: string

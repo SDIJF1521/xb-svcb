@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "stack": "cu126",
+  "layout": "consolidated",
+  "python": {
+    "svc": "runtimes/svc-cu126/Scripts/python.exe",
+    "ddsp": "runtimes/core-cu126/Scripts/python.exe",
+    "rvc": "runtimes/svc-cu126/Scripts/python.exe",
+    "seedvc": "runtimes/core-cu126/Scripts/python.exe",
+    "uvr": "runtimes/core-cu126/Scripts/python.exe",
+    "vocal": "runtimes/svc-cu126/Scripts/python.exe"
+  },
+  "compatibility": {
+    "experimental": true,
+    "profile": "numpy2-protobuf7-xb1"
+  }
+}

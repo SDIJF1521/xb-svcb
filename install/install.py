@@ -16,7 +16,9 @@
   engines/so-vits-svc/          —— 安装分卷自带的 so-vits-svc 4.1 仓库
   engines/seed-vc/              —— 安装分卷自带的 Seed-VC 仓库
   engines/ddsp-svc/             —— 安装分卷自带的 DDSP-SVC 仓库
+  engines/rvc/                  —— 内置官方 RVC 推理栈（RVC-Project 2.2.231006 推理子集）
   engines/so-vits-svc/pretrain —— 底模（contentvec / nsf_hifigan / rmvpe）
+  engines/rvc/pretrain          —— RVC 底模（hubert_base / rmvpe）
   models/uvr/    —— UVR 分离模型（5_HP-Karaoke / DeEcho-DeReverb）
   web/dist/      —— 前端构建产物
 
@@ -101,6 +103,7 @@ ENGINES_DIR = ROOT / "engines"
 SOVITS_DIR = ENGINES_DIR / "so-vits-svc"
 SEEDVC_DIR = ENGINES_DIR / "seed-vc"
 DDSP_DIR = ENGINES_DIR / "ddsp-svc"
+RVC_DIR = ENGINES_DIR / "rvc"
 PRETRAIN_DIR = SOVITS_DIR / "pretrain"
 UVR_VENV = ROOT / ".venv-uvr"
 PLUGIN_VENV = ROOT / ".venv-plugins"
@@ -108,6 +111,9 @@ PYMSS_VENV = ROOT / ".venv-pymss"
 SVC_VENV = ROOT / ".venv-svc"
 HUB_VENV = ROOT / ".venv-hub"
 RVC_VENV = ROOT / ".venv-rvc"
+# 官方推理栈的底模目录（hubert_base.pt / rmvpe.pt）：与 so-vits-svc 一致，
+# 放在 engines/rvc/pretrain，由安装器从 assets/models 预置
+RVC_BASE_MODEL_DIR = RVC_DIR / "pretrain"
 SEEDVC_VENV = ROOT / ".venv-seedvc"
 DDSP_VENV = ROOT / ".venv-ddsp"
 VOCAL_VENV = ROOT / ".venv-vocal"
@@ -133,6 +139,7 @@ ASSETS_WHEELS_DIR = ASSETS_DIR / "wheels"
 def _derive_paths(root: Path) -> None:
     """以 root 为基准重新计算所有产物路径（供 --root 覆盖）。"""
     global ROOT, APP_DIR, WEB_DIR, ENGINES_DIR, SOVITS_DIR, SEEDVC_DIR, DDSP_DIR, PRETRAIN_DIR
+    global RVC_DIR, RVC_BASE_MODEL_DIR
     global UVR_VENV, PLUGIN_VENV, PYMSS_VENV, SVC_VENV, HUB_VENV, RVC_VENV, SEEDVC_VENV, DDSP_VENV, VOCAL_VENV
     global RUNTIMES_DIR, CORE_VENV, RUNTIME_MANIFEST
     global UVR_MODELS_DIR, VOCAL_MODELS_DIR
@@ -143,6 +150,8 @@ def _derive_paths(root: Path) -> None:
     SOVITS_DIR = ENGINES_DIR / "so-vits-svc"
     SEEDVC_DIR = ENGINES_DIR / "seed-vc"
     DDSP_DIR = ENGINES_DIR / "ddsp-svc"
+    RVC_DIR = ENGINES_DIR / "rvc"
+    RVC_BASE_MODEL_DIR = RVC_DIR / "pretrain"
     PRETRAIN_DIR = SOVITS_DIR / "pretrain"
     UVR_VENV = root / ".venv-uvr"
     PLUGIN_VENV = root / ".venv-plugins"
@@ -316,6 +325,22 @@ PYTHON_FOR_RVC = "3.12"
 # CUDA126/CUDA128 同样使用 3.12；现代 torch 有完整 cp312 wheels。
 PYTHON_FOR_SVC_BLACKWELL = "3.12"
 PYTHON_FOR_RVC_BLACKWELL = "3.12"
+
+# 官方 RVC 推理栈（内置 engines/rvc）在独立环境里只缺这些运行时依赖。
+# 不再安装第三方 rvc-python：模型代码已随程序分发，这里只装 fairseq HuBERT、
+# RMVPE、FAISS 检索和 F0 提取所需的库。
+RVC_INFERENCE_DEPS = (
+    "fairseq-fixed==0.12.3.1",
+    "faiss-cpu>=1.8.0,<2",
+    "pyworld>=0.3.4,<0.4",
+    "torchcrepe>=0.0.20,<0.1",
+    "praat-parselmouth>=0.4.2",
+    "av>=12,<20",
+    "librosa>=0.10.2,<0.11",
+    "soundfile>=0.12.1",
+    "numpy>=1.26.4,<2",
+    "scipy>=1.13,<2",
+)
 
 # The core UVR/SeedVC/DDSP consolidation remains opt-in because their pinned
 # NumPy/protobuf sets can conflict.  ROCm SVC/RVC/Vocal use one compatible
@@ -1283,6 +1308,20 @@ def have(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
 
+def _npm_executable() -> str:
+    """Resolve npm to an image CreateProcess can launch.
+
+    Windows npm is a ``.cmd`` shim. ``shutil.which("npm")`` finds it, but
+    ``subprocess.run(["npm", ...])`` makes CreateProcess append only ``.exe``
+    and fails with WinError 2, so always pass the resolved shim path.
+    """
+    for name in ("npm.cmd", "npm.exe", "npm"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return "npm"
+
+
 def find_nvidia_smi() -> str | None:
     """Locate nvidia-smi even when it is not exposed through PATH."""
     found = shutil.which("nvidia-smi")
@@ -1898,7 +1937,7 @@ tmp.replace(dest)
 
 
 def _find_rvc_base_source(*rels: str) -> Path | None:
-    roots = [ASSETS_MODELS_DIR, PRETRAIN_DIR]
+    roots = [ASSETS_MODELS_DIR, RVC_BASE_MODEL_DIR, PRETRAIN_DIR]
     for root in roots:
         for rel in rels:
             rel_path = Path(rel)
@@ -1909,27 +1948,8 @@ def _find_rvc_base_source(*rels: str) -> Path | None:
 
 
 def seed_rvc_base_models(py: Path) -> None:
-    """把自带底模预置到 rvc-python 包内，避免首次推理再连 HuggingFace。"""
-    try:
-        out = subprocess.run(
-            [
-                str(py),
-                "-c",
-                "import pathlib,rvc_python;print(pathlib.Path(rvc_python.__file__).resolve().parent)",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        print(c("y", f"    定位 rvc-python 失败，跳过 RVC 底模预置：{exc}"))
-        return
-    if out.returncode != 0 or not out.stdout.strip():
-        tail = (out.stderr or out.stdout or "").strip().splitlines()[-1:]
-        print(c("y", f"    rvc-python 尚不可导入，跳过 RVC 底模预置：{' '.join(tail)}"))
-        return
-
-    base_dir = Path(out.stdout.strip()) / "base_model"
+    """把官方推理栈需要的底模预置到 engines/rvc/pretrain，避免首次推理再连 HuggingFace。"""
+    base_dir = RVC_BASE_MODEL_DIR
     base_dir.mkdir(parents=True, exist_ok=True)
     mapping = {
         "hubert_base.pt": (
@@ -1942,11 +1962,6 @@ def seed_rvc_base_models(py: Path) -> None:
             "rvc/rmvpe.pt",
             "pretrain/rmvpe.pt",
             "rmvpe.pt",
-        ),
-        "rmvpe.onnx": (
-            "rvc/rmvpe.onnx",
-            "pretrain/rmvpe.onnx",
-            "rmvpe.onnx",
         ),
     }
     for name, rels in mapping.items():
@@ -1970,11 +1985,11 @@ def seed_rvc_base_models(py: Path) -> None:
             except OSError:
                 pass
         if src is None:
-            if name != "rmvpe.onnx":
-                print(c("y", f"    未找到自带 RVC 底模 {name}，运行时将尝试镜像下载"))
+            print(c("y", f"    未找到自带 RVC 底模 {name}，运行时将尝试镜像下载"))
             continue
         _link_or_copy_model(src, dest)
         print(c("g", f"    RVC 底模已预置：{name}"))
+
 
 
 # ---------- 各安装步骤 ----------
@@ -2001,14 +2016,15 @@ def step_plugins(uv: str) -> None:
 
 def step_web() -> None:
     hr("3/12 前端构建 web/dist")
+    npm = _npm_executable()
     if not have("npm"):
         raise RuntimeError("未检测到 npm，请先安装 Node.js LTS 后重试（或 --skip-web）")
     # 优先 npm ci（依赖 lock）；无 lock 时回退 npm install
     if (WEB_DIR / "package-lock.json").exists():
-        run(["npm", "ci"], cwd=WEB_DIR)
+        run([npm, "ci"], cwd=WEB_DIR)
     else:
-        run(["npm", "install"], cwd=WEB_DIR)
-    run(["npm", "run", "build"], cwd=WEB_DIR)
+        run([npm, "install"], cwd=WEB_DIR)
+    run([npm, "run", "build"], cwd=WEB_DIR)
     print(c("g", "前端构建完成"))
 
 
@@ -2811,7 +2827,7 @@ def _reaffirm_torch_wheels(
 ) -> None:
     """保留可导入且匹配的 PyTorch；仅修复损坏或错误构建。
 
-    audio-separator / fairseq / rvc-python 等依赖在解析时可能把 CUDA torch 换成
+    audio-separator / fairseq 等依赖在解析时可能把 CUDA torch 换成
     PyPI 默认的「同版本号 CPU 版」，导致 torch.cuda.is_available()=False，
     推理时报 "Attempting to deserialize object on a CUDA device but
     torch.cuda.is_available() is False"。普通 install 因版本号相同会判定已满足而不覆盖，
@@ -3048,15 +3064,28 @@ def _patch_fairseq_weights_only(py: Path) -> None:
         print(c("g", "    fairseq checkpoint_utils 无需修复（weights_only 由 worker 运行时处理）"))
 
 
+def _require_rvc_engine_source() -> None:
+    """Ensure the bundled official RVC engine is present (like so-vits-svc)."""
+    pipeline = RVC_DIR / "infer" / "modules" / "vc" / "pipeline.py"
+    session = RVC_DIR / "rvc_session.py"
+    if pipeline.is_file() and session.is_file():
+        return
+    raise RuntimeError(
+        "engines/rvc 官方推理代码缺失。请用完整安装包安装，"
+        "或从仓库/分卷补齐 engines/rvc 后重试。"
+    )
+
+
 def step_rvc(uv: str, gpu_stack: str) -> None:
-    hr(f"7/12 RVC 推理环境 {RVC_VENV.name}（rvc-python）")
+    hr(f"7/12 RVC 推理环境 {RVC_VENV.name}（官方 infer 栈）")
+    _require_rvc_engine_source()
     use_blackwell = gpu_stack == "cu128"
     use_modern_cuda = gpu_stack in {"cu126", "cu128", ROCM_STACK}
     use_gpu = gpu_stack in {"cu126", "cu128"}
     use_directml = gpu_stack == "directml"
-    # RVC 推理在独立环境运行（rvc-python），与 so-vits 栈隔离。
-    # rvc-python 默认会在首次推理时下载 hubert / rmvpe；这里安装后立即预置，
-    # 避免新用户运行 RVC 时因为 HuggingFace 连接失败而报 HTTPSConnectionPool。
+    # RVC 推理在独立环境运行（内置官方 infer 栈），与 so-vits 栈隔离。
+    # 官方代码随程序分发，这里只装 fairseq/faiss/pyworld 等推理依赖，并在安装后
+    # 立即预置 hubert / rmvpe 底模，避免首次推理因 HuggingFace 连接失败而报错。
     target_py = _rvc_python_for_stack(gpu_stack)
     venv = runtime_venv("rvc", RVC_VENV)
     ensure_venv(uv, venv, target_py)
@@ -3069,12 +3098,11 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
         python_version=target_py,
     )
 
-    # uv venv 默认不含 setuptools；fairseq/rvc 运行时可能用到 pkg_resources，先补齐
+    # uv venv 默认不含 setuptools；fairseq 运行时可能用到 pkg_resources，先补齐
     pip("setuptools<81", "wheel")
-    rvc_wheel = _prepare_rvc_compat(gpu_stack)
     if use_directml:
         _install_directml_runtime(pip)
-        pip(str(rvc_wheel))
+        pip(*RVC_INFERENCE_DEPS)
         _reaffirm_directml_runtime(
             uv,
             py,
@@ -3095,12 +3123,12 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
         return
     if use_modern_cuda:
         # CUDA and ROCm use Python 3.12 with modern Torch.
-        # rvc-python 会带回 fairseq，装完再就地打 weights_only 补丁，
+        # fairseq 会带回 hydra/omegaconf，装完再就地打 weights_only 补丁，
         # 否则新 torch 加载 hubert/字典会报 "Weights only load failed"。
         pip(*_modern_torch_specs(gpu_stack), index=_modern_torch_index(gpu_stack))
-        pip(str(rvc_wheel))
+        pip(*RVC_INFERENCE_DEPS)
         seed_rvc_base_models(venv_python(RVC_VENV))
-        # 兜底：rvc-python/fairseq 可能把 CUDA torch 换成同号 CPU 版 → 强制校正回当前栈
+        # 兜底：fairseq 可能把 CUDA torch 换成同号 CPU 版 → 强制校正回当前栈
         _reaffirm_modern_torch(
             uv,
             py,
@@ -3113,7 +3141,7 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
             uv,
             component="rvc",
             venv=venv,
-            imports=("rvc_python.infer",),
+            imports=("faiss", "fairseq", "pyworld", "torchcrepe"),
             gpu_stack=gpu_stack,
         )
         print(c("g", f"RVC 推理环境就绪（共享 {gpu_stack}）"))
@@ -3123,8 +3151,8 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
     torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
     torch_index = TORCH_RVC_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX
     pip(*torch_specs, index=torch_index)
-    # rvc-python（含 fairseq / faiss 等推理依赖）
-    pip(str(rvc_wheel))
+    # 官方 RVC 推理栈依赖（fairseq / faiss / F0 提取等）
+    pip(*RVC_INFERENCE_DEPS)
     if use_gpu:
         _reaffirm_torch_wheels(
             uv,
@@ -3138,19 +3166,6 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
         )
     seed_rvc_base_models(venv_python(RVC_VENV))
     print(c("g", "RVC 推理环境就绪"))
-
-
-def _prepare_rvc_compat(gpu_stack: str) -> Path:
-    spec = importlib.util.spec_from_file_location("xb_rvc_compat", Path(__file__).with_name("build_rvc_compat.py"))
-    if spec is None or spec.loader is None:
-        raise RuntimeError("无法加载 RVC 兼容构建模块")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.prepare(
-        ROOT / ".tmp" / "rvc-compat",
-        _wheelhouse_dirs(component="rvc", gpu_stack=gpu_stack, python_version=PYTHON_FOR_ENGINES),
-        offline=bool(_wheelhouse_root() and _wheelhouse_strict()),
-    )
 
 
 SEEDVC_REQ_DENY = {

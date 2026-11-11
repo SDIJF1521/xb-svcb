@@ -23,6 +23,13 @@ from .ports import ItemRepository, SettingsRepository
 
 class ModelService:
     _RVC_INSPECT_MARKER = "RVC_INSPECT\t"
+    # Inspector diagnostics that deserve a user-facing explanation. A v3 label on
+    # a layout that is not the v2 graph cannot be mapped to any known RVC loader.
+    _RVC_VERSION_DETAILS = {
+        "v3_architecture_unsupported": "RVC v3 网络结构与 v2 不一致，暂无法自动选择推理图",
+        "unknown_layout": "未能从 checkpoint 识别 RVC 网络结构",
+        "unsupported_checkpoint": "checkpoint 不是可识别的 RVC 权重文件",
+    }
 
     def __init__(self, repo: ItemRepository, settings: SettingsRepository) -> None:
         self._repo = repo
@@ -434,7 +441,7 @@ class ModelService:
                     }
                     if repair and detected_version != previous_version:
                         fixed.append("rvc_version")
-                elif previous_version not in {"v1", "v2"}:
+                elif previous_version not in {"v1", "v2", "v3"}:
                     normalized["metadata"] = {
                         **(normalized.get("metadata") or {}),
                         **detected,
@@ -443,7 +450,7 @@ class ModelService:
                         {
                             "key": "rvc_version",
                             "level": "warn",
-                            "message": "无法自动识别 RVC v1/v2，将保留兼容版本设置",
+                            "message": "无法自动识别 RVC v1/v2/v3，将保留兼容版本设置",
                         }
                     )
 
@@ -495,7 +502,7 @@ class ModelService:
         )
         metadata = model.get("metadata") or model.get("model_metadata") or {}
         version = str(metadata.get("rvc_version") or "").strip().lower() if isinstance(metadata, dict) else ""
-        if framework == "rvc" and version in {"v1", "v2"}:
+        if framework == "rvc" and version in {"v1", "v2", "v3"}:
             resolved["rvc_version"] = version
         return resolved
 
@@ -509,7 +516,7 @@ class ModelService:
             model.get("framework") or config.modelhub_guess_framework(model.get("type"))
         )
         metadata = dict(model.get("metadata") or {})
-        if framework != "rvc" or str(metadata.get("rvc_version") or "").lower() in {"v1", "v2"}:
+        if framework != "rvc" or str(metadata.get("rvc_version") or "").lower() in {"v1", "v2", "v3"}:
             return model
         # Unknown/broken custom layouts are retried only through the explicit
         # model inspection action. An unavailable runtime is cheap to recheck
@@ -567,15 +574,16 @@ class ModelService:
             except (TypeError, ValueError):
                 break
             version = str(result.get("version") or "").strip().lower()
-            if version in {"v1", "v2"}:
+            if version in {"v1", "v2", "v3"}:
                 return {
                     "rvc_version": version,
                     "rvc_version_detection": "detected",
                     "rvc_version_source": str(result.get("source") or "checkpoint"),
                 }
+            detail = str(result.get("source") or "unknown_layout")
             return {
                 "rvc_version_detection": "unknown",
-                "rvc_version_detail": str(result.get("source") or "unknown_layout"),
+                "rvc_version_detail": cls._RVC_VERSION_DETAILS.get(detail, detail),
             }
         detail = (completed.stderr or completed.stdout or "RVC 检查进程未返回结果").strip()
         return {

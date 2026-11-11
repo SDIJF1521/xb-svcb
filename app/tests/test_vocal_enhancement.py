@@ -1170,7 +1170,11 @@ def test_dropout_core_regions_exclude_guard_context_from_final_merge() -> None:
             ]
         }
     )
-    assert core == pytest.approx([(27.18, 27.26), (45.42, 45.48)])
+    assert core is not None
+    assert np.allclose(
+        np.asarray(core, dtype=np.float64),
+        [(27.18, 27.26), (45.42, 45.48)],
+    )
 
 
 def test_dropout_recovery_uses_guard_only_after_verified_failure_and_falls_back(
@@ -3855,6 +3859,38 @@ def test_deepfilter_uses_model_rate_then_restores_input_rate(
     }
 
 
+def test_deepfilter_chunk_plan_weights_sum_to_unity() -> None:
+    """Long tracks are split so peak VRAM stays bounded without seam gain.
+
+    Every sample must keep total crossfade weight 1.0 and the last window must
+    reach the final sample, otherwise the chunked path would attenuate the head
+    or tail of the repaired vocal.
+    """
+    sample_rate = 48000
+    total = sample_rate * 137
+    chunk = sample_rate * 60
+    overlap = sample_rate
+    prime = sample_rate * 3
+
+    plan = vocal_enhancement_worker._chunk_plan(total, chunk, overlap, prime)
+    assert len(plan) > 1
+    assert plan[0][1] == 0 and plan[0][3] == 0
+    assert plan[-1][2] == total and plan[-1][4] == 0
+    # Interior windows are primed with context that is trimmed afterwards.
+    assert plan[1][0] == plan[1][1] - prime
+
+    weight = np.zeros(total, dtype=np.float64)
+    for run_start, start, end, head, tail in plan:
+        assert run_start <= start < end <= total
+        window = np.ones(end - start, dtype=np.float64)
+        if head:
+            window[:head] = np.linspace(0.0, 1.0, head + 2)[1:-1]
+        if tail:
+            window[-tail:] = 1.0 - np.linspace(0.0, 1.0, tail + 2)[1:-1]
+        weight[start:end] += window
+    assert np.allclose(weight, 1.0)
+
+
 def test_float_writer_rejects_non_finite_audio(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -3960,6 +3996,43 @@ def test_noise_classified_model_output_still_enters_deepfilter(
     assert output.read_bytes() == b"RIFF-filtered"
 
 
+class _FinishedWorkerProcess:
+    """``subprocess.Popen`` stand-in for a worker that has already exited."""
+
+    def __init__(self, result: subprocess.CompletedProcess[str]) -> None:
+        self.args = result.args
+        self.returncode = int(result.returncode)
+        self.killed = False
+        self._stdout = result.stdout
+        self._stderr = result.stderr
+
+    def poll(self) -> int:
+        return self.returncode
+
+    def communicate(self) -> tuple[str | None, str | None]:
+        return self._stdout, self._stderr
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+
+def _popen_from_run(fake_run):
+    """Adapt a ``subprocess.run`` fake to the enhancement ``Popen`` path.
+
+    ``VocalEnhancementProcessor.enhance`` starts the worker with Popen so it can
+    poll for progress and enforce the hour-long timeout, while analysis, repair
+    and tuning still use ``subprocess.run``.  Both fakes must therefore see the
+    same command and keyword arguments, and the fake process reports the exit
+    code and captured output the test already declared.
+    """
+
+    def popen(cmd, **kwargs):
+        return _FinishedWorkerProcess(fake_run(cmd, **kwargs))
+
+    return popen
+
+
 def test_processor_invokes_isolated_worker_and_uses_project_cache(tmp_path: Path) -> None:
     source = tmp_path / "source.wav"
     output = tmp_path / "enhanced.wav"
@@ -3992,6 +4065,10 @@ def test_processor_invokes_isolated_worker_and_uses_project_cache(tmp_path: Path
         patch.object(config, "VOCAL_ENHANCEMENT_MARKER", marker),
         patch.object(config, "VOCAL_ENHANCEMENT_MODEL_DIR", cache_home),
         patch("infrastructure.vocal_enhancement.subprocess.run", side_effect=fake_run),
+        patch(
+            "infrastructure.vocal_enhancement.subprocess.Popen",
+            side_effect=_popen_from_run(fake_run),
+        ),
     ):
         result = VocalEnhancementProcessor().enhance(
             source,
@@ -4091,6 +4168,10 @@ def test_processor_tunes_before_enhancement_and_passes_strengths(
         patch.object(config, "SVC_PYTHON", svc_python),
         patch.object(config, "VOCAL_TUNING_WORKER", tuning_worker),
         patch("infrastructure.vocal_enhancement.subprocess.run", side_effect=fake_run),
+        patch(
+            "infrastructure.vocal_enhancement.subprocess.Popen",
+            side_effect=_popen_from_run(fake_run),
+        ),
     ):
         result = VocalEnhancementProcessor().enhance(
             source,
@@ -4146,6 +4227,10 @@ def test_processor_continues_when_natural_tuning_fails(tmp_path: Path) -> None:
         patch.object(config, "SVC_PYTHON", svc_python),
         patch.object(config, "VOCAL_TUNING_WORKER", tuning_worker),
         patch("infrastructure.vocal_enhancement.subprocess.run", side_effect=fake_run),
+        patch(
+            "infrastructure.vocal_enhancement.subprocess.Popen",
+            side_effect=_popen_from_run(fake_run),
+        ),
     ):
         result = VocalEnhancementProcessor().enhance(
             source,
@@ -4195,6 +4280,10 @@ def test_processor_rejects_unstable_natural_tuning_result(tmp_path: Path) -> Non
         patch.object(config, "VOCAL_ENHANCEMENT_MODEL_DIR", cache_home),
         patch.object(config, "VOCAL_TUNING_WORKER", tuning_worker),
         patch("infrastructure.vocal_enhancement.subprocess.run", side_effect=fake_run),
+        patch(
+            "infrastructure.vocal_enhancement.subprocess.Popen",
+            side_effect=_popen_from_run(fake_run),
+        ),
     ):
         result = VocalEnhancementProcessor().enhance(
             source,

@@ -445,6 +445,10 @@ class HttpApiContractTests(unittest.TestCase):
             inference["f0_method"]["enum"],
             ["rmvpe", "crepe", "harvest", "pm", "fcpe", "dio", "parselmouth"],
         )
+        self.assertEqual(
+            inference["rvc_version"]["enum"],
+            ["v1", "v2", "v3"],
+        )
 
         job_fields = components["JobCreateRequest"]["properties"]
         for name, field in job_fields.items():

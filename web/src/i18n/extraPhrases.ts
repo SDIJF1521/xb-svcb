@@ -199,7 +199,7 @@ export const enExtraPhrases: Record<string, string> = {
   'PyMSS 分离模型': 'PyMSS Separation Models',
   'ModelScope 设置': 'ModelScope Settings',
   '主模型 + 配置为必填，扩散模型可选': 'Main model and config are required; diffusion model is optional',
-  '主模型(.pth) 必填，检索文件(.index) 可选；v1/v2 将自动检测': 'Main .pth model is required; .index is optional. v1/v2 is detected automatically.',
+  '主模型(.pth) 必填，检索文件(.index) 可选；v1/v2/v3 将自动检测': 'Main .pth model is required; .index is optional. v1/v2/v3 is detected automatically.',
   'checkpoint + 配置必填；参考音频在推理时选择': 'Checkpoint and config are required; choose reference audio during inference.',
   '导入失败，请检查所选文件': 'Import failed. Check the selected files.',
   '已收藏模型': 'Model added to favorites',

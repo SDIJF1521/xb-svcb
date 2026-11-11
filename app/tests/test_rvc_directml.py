@@ -13,6 +13,8 @@ from infrastructure import rvc_worker
 from infrastructure import rvc_engine
 from domain import InferenceParams
 
+import config
+
 
 def test_directml_crepe_checkpoint_is_deserialized_on_cpu() -> None:
     calls: list[tuple[tuple, dict]] = []
@@ -50,11 +52,12 @@ def test_rvc_torch_load_keeps_non_directml_location_and_legacy_default() -> None
     assert calls[-1][1]["weights_only"] is False
 
 
-def test_rvc_prepares_pytorch_models_and_keeps_onnx_optional(
+def test_rvc_prepares_official_base_models(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     downloaded: list[str] = []
 
+    monkeypatch.setenv("XB_RVC_BASE_DIR", str(tmp_path / "rvc-base"))
     monkeypatch.setattr(rvc_worker, "_copy_bundled_base_model", lambda *_a, **_k: False)
     monkeypatch.setattr(
         rvc_worker,
@@ -62,8 +65,9 @@ def test_rvc_prepares_pytorch_models_and_keeps_onnx_optional(
         lambda name, _dest: downloaded.append(name) or True,
     )
 
-    rvc_worker._prepare_rvc_base_models(str(tmp_path))
+    base_dir = rvc_worker._prepare_rvc_base_models()
 
+    assert base_dir == tmp_path / "rvc-base"
     assert downloaded == ["hubert_base.pt", "rmvpe.pt"]
 
 
@@ -305,6 +309,35 @@ def test_rvc_miopen_timer_failure_has_actionable_error() -> None:
 
     assert "ROCm/MIOpen" in message
     assert "FAST" in message
+
+
+def test_rvc_worker_resolves_vendored_official_engine() -> None:
+    engine_dir = rvc_worker._resolve_engine_dir()
+
+    assert (engine_dir / "rvc_session.py").is_file()
+    assert (engine_dir / "infer" / "modules" / "vc" / "pipeline.py").is_file()
+    assert (engine_dir / "infer" / "lib" / "infer_pack" / "models.py").is_file()
+
+
+def test_rvc_engine_and_base_models_live_under_engines() -> None:
+    """RVC follows the so-vits-svc/DDSP layout: engines/rvc (+ pretrain)."""
+
+    assert config.RVC_ENGINE_DIR.name == "rvc"
+    assert config.RVC_ENGINE_DIR.parent.name == "engines"
+    assert config.RVC_BASE_DIR == config.RVC_ENGINE_DIR / "pretrain"
+    assert rvc_worker._rvc_base_dir() == config.RVC_BASE_DIR
+
+
+def test_rvc_engine_passes_engine_and_base_dirs_to_worker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(rvc_engine.config, "RVC_ENGINE_DIR", tmp_path / "engines" / "rvc")
+    monkeypatch.setattr(rvc_engine.config, "RVC_BASE_DIR", tmp_path / "models" / "rvc-base")
+
+    env = rvc_engine.RvcEngine._worker_env()
+
+    assert env["XB_RVC_ENGINE_DIR"] == str(tmp_path / "engines" / "rvc")
+    assert env["XB_RVC_BASE_DIR"] == str(tmp_path / "models" / "rvc-base")
 
 
 def test_realtime_rvc_session_passes_custom_parameters(

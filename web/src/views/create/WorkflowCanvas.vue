@@ -1555,13 +1555,13 @@ function num(node: WorkflowNode, key: string, fallback = 0): number {
   return Number.isFinite(value) ? value : fallback
 }
 
-/** 软件检测出的 RVC 版本（v1/v2）；未检测到返回空串。 */
+/** 软件检测出的 RVC 版本（v1/v2/v3）；未检测到返回空串。 */
 function detectedRvcVersion(node: WorkflowNode): string {
   const id = String(node.params?.model_id || '')
   const value = String(
     props.models.find((m) => m.id === id)?.metadata?.rvc_version || '',
   ).toLowerCase()
-  return value === 'v1' || value === 'v2' ? value : ''
+  return value === 'v1' || value === 'v2' || value === 'v3' ? value : ''
 }
 
 /** RVC 版本展示文案：自动 · vX（无需用户手动选择）。 */

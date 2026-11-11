@@ -418,7 +418,49 @@ def test_consolidated_runtime_is_disabled_for_directml() -> None:
     assert installer.RVC_VENV == installer.ROOT / ".venv-rvc-directml"
 
 
-def test_directml_wheel_plan_includes_cpu_legacy_and_rvc_compat(tmp_path: Path, monkeypatch) -> None:
+def test_rvc_recipe_installs_official_stack_dependencies(tmp_path: Path) -> None:
+    installer = _load_install_module()
+    installer._derive_paths(tmp_path)
+    assert installer.RVC_BASE_MODEL_DIR == tmp_path / "engines" / "rvc" / "pretrain"
+    deps = installer.RVC_INFERENCE_DEPS
+
+    assert any(dep.startswith("fairseq-fixed") for dep in deps)
+    assert any(dep.startswith("faiss-cpu") for dep in deps)
+    assert any(dep.startswith("pyworld") for dep in deps)
+    assert any(dep.startswith("torchcrepe") for dep in deps)
+    assert not any("rvc-python" in dep for dep in deps)
+
+
+def test_rvc_base_models_are_seeded_into_the_models_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    installer = _load_install_module()
+    base_dir = tmp_path / "engines" / "rvc" / "pretrain"
+    source = tmp_path / "pretrain" / "hubert_base.pt"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"x" * (32 * 1024 * 1024 + 1))
+    rmvpe_source = tmp_path / "pretrain" / "rmvpe.pt"
+    rmvpe_source.write_bytes(b"y" * (32 * 1024 * 1024 + 1))
+
+    monkeypatch.setattr(installer, "RVC_BASE_MODEL_DIR", base_dir)
+    monkeypatch.setattr(
+        installer,
+        "_find_rvc_base_source",
+        lambda *names: source if any(n.endswith("hubert_base.pt") for n in names) else rmvpe_source,
+    )
+    def fake_normalize(_py, src, dest):  # noqa: ANN001, ANN202
+        Path(dest).write_bytes(Path(src).read_bytes())
+        return True
+
+    monkeypatch.setattr(installer, "_normalize_rvc_rmvpe_checkpoint", fake_normalize)
+
+    installer.seed_rvc_base_models(tmp_path / "python.exe")
+
+    assert (base_dir / "hubert_base.pt").is_file()
+    assert (base_dir / "rmvpe.pt").is_file()
+
+
+def test_directml_wheel_plan_includes_cpu_legacy_and_rvc_deps(tmp_path: Path, monkeypatch) -> None:
     wheelhouse = _load_wheelhouse_module()
     installer = _load_install_module()
     installer._derive_paths(tmp_path)
@@ -437,11 +479,45 @@ def test_directml_wheel_plan_includes_cpu_legacy_and_rvc_compat(tmp_path: Path, 
                batch.packages == ("pymss==2.0.18",) for batch in plan)
     assert any(batch.label == "svc directml source wheels" and
                batch.packages == ("fairseq-fixed==0.12.3.1",) for batch in plan)
+    assert any(batch.label == "rvc directml source wheels" and
+               batch.packages == ("fairseq-fixed==0.12.3.1",) and batch.build_source
+               for batch in plan)
     assert any(batch.label == "rvc directml" and
-               batch.packages == ("rvc-python==0.1.5+xb312",) for batch in plan)
+               batch.packages == tuple(
+                   dep for dep in installer.RVC_INFERENCE_DEPS
+                   if not dep.startswith("fairseq")
+               ) for batch in plan)
     assert any(batch.label == "ddsp legacy directml torch" and
                batch.dest == tmp_path / "assets/wheels/ddsp-legacy/py312/cpu" and
                batch.packages == ("torch==2.5.1", "torchaudio==2.5.1") for batch in plan)
+
+
+def test_npm_resolves_to_the_windows_command_shim(monkeypatch) -> None:
+    installer = _load_install_module()
+    monkeypatch.setattr(
+        installer.shutil,
+        "which",
+        lambda name: r"C:\node\npm.cmd" if name == "npm.cmd" else None,
+    )
+
+    assert installer._npm_executable() == r"C:\node\npm.cmd"
+
+
+def test_web_step_launches_the_resolved_npm_shim(tmp_path: Path, monkeypatch) -> None:
+    installer = _load_install_module()
+    (tmp_path / "package-lock.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(installer, "WEB_DIR", tmp_path)
+    monkeypatch.setattr(installer, "have", lambda _cmd: True)
+    monkeypatch.setattr(installer, "_npm_executable", lambda: r"C:\node\npm.cmd")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(installer, "run", lambda cmd, **_kw: calls.append(cmd))
+
+    installer.step_web()
+
+    assert calls == [
+        [r"C:\node\npm.cmd", "ci"],
+        [r"C:\node\npm.cmd", "run", "build"],
+    ]
 
 
 def test_directml_default_install_includes_pymss(tmp_path: Path, monkeypatch) -> None:

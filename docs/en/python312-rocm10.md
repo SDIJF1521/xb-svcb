@@ -66,6 +66,6 @@ UVR PyTorch models use ROCm. Windows ONNX Runtime still defaults to its CPU prov
 
 SVC/RVC/Vocal use NumPy 1.26.4, SciPy 1.13.1, and Python 3.12-compatible dependencies. SVC uses `fairseq-fixed==0.12.3.1`, which provides Windows cp312 wheels and still imports as `fairseq`.
 
-Upstream RVC 0.1.5 pins old fairseq, NumPy, faiss, and OmegaConf versions that cannot resolve on Python 3.12. `install/build_rvc_compat.py` verifies the original wheel RECORD, then creates `rvc-python==0.1.5+xb312`, changing only those four dependencies, the Python requirement, and local package version while preserving upstream inference code and its license. Offline packaging builds the same wheel and does not bypass dependency checks.
+RVC no longer depends on the third-party `rvc-python` package: the official inference code (RVC-Project 2.2.231006) ships with the application under `engines/rvc`. The RVC runtime only needs `fairseq-fixed`, `faiss-cpu`, `pyworld`, `torchcrepe`, `parselmouth`, and `librosa`; the hubert/rmvpe base models are seeded into `engines/rvc/pretrain`, and offline bundles ship the same dependency wheels.
 
 Acceptance must cover imports, real short-audio inference, CPU/CUDA regression, and ROCm 10 hardware. Unit tests and wheel metadata checks cannot replace these tests.

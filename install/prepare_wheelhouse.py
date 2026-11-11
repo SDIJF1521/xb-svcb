@@ -220,6 +220,13 @@ def _torch_specs(installer, stack: str, version: str) -> tuple[tuple[str, ...], 
     return packages, installer.TORCH_CPU_INDEX
 
 
+def _rvc_binary_deps(installer) -> tuple[str, ...]:
+    """Binary-downloadable part of the RVC dependency set."""
+    return tuple(
+        dep for dep in installer.RVC_INFERENCE_DEPS if not dep.startswith("fairseq")
+    )
+
+
 def _directml_runtime(installer) -> tuple[str, ...]:
     return (
         f"torch-directml=={installer.TORCH_DIRECTML_VER}",
@@ -446,11 +453,20 @@ def _py312_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
                 constraints=dml_constraints,
             ),
             DownloadBatch(
+                "rvc directml source wheels",
+                dest,
+                py,
+                ("fairseq-fixed==0.12.3.1",),
+                build_source=True,
+                no_deps=True,
+                constraints=dml_constraints,
+                no_build_isolation=True,
+            ),
+            DownloadBatch(
                 "rvc directml",
                 dest,
                 py,
-                ("rvc-python==0.1.5+xb312",),
-                build_source=True,
+                _rvc_binary_deps(installer),
                 constraints=dml_constraints,
             ),
             DownloadBatch(
@@ -571,7 +587,17 @@ def _py312_batches(root: Path, installer, reqs: dict[str, Path], stack: str) -> 
                 no_build_isolation=True,
             ),
             DownloadBatch(f"rvc {stack} torch", dest, py, torch_packages, index=torch_index, constraints=torch_constraints),
-            DownloadBatch(f"rvc {stack}", dest, py, ("rvc-python==0.1.5+xb312",), build_source=True, constraints=torch_constraints),
+            DownloadBatch(
+                f"rvc {stack} source wheels",
+                dest,
+                py,
+                ("fairseq-fixed==0.12.3.1",),
+                build_source=True,
+                no_deps=True,
+                constraints=torch_constraints,
+                no_build_isolation=True,
+            ),
+            DownloadBatch(f"rvc {stack}", dest, py, _rvc_binary_deps(installer), constraints=torch_constraints),
         ]
     batches += [
         DownloadBatch("seedvc torch", dest, py, torch_packages, index=torch_index, constraints=torch_constraints),
@@ -688,7 +714,17 @@ def _cpu_compat_batches(root: Path, installer, reqs: dict[str, Path], stack: str
             constraints=rvc_constraints,
             no_build_isolation=True,
         ),
-        DownloadBatch(f"rvc {py_tag}", rvc_dest, py, ("rvc-python==0.1.5+xb312",), build_source=True, constraints=rvc_constraints),
+        DownloadBatch(
+            f"rvc {py_tag} source wheels",
+            rvc_dest,
+            py,
+            ("fairseq-fixed==0.12.3.1",),
+            build_source=True,
+            no_deps=True,
+            constraints=rvc_constraints,
+            no_build_isolation=True,
+        ),
+        DownloadBatch(f"rvc {py_tag}", rvc_dest, py, _rvc_binary_deps(installer), constraints=rvc_constraints),
     ]
 
 
@@ -1139,27 +1175,6 @@ def _download_batch(root: Path, installer, batch: DownloadBatch) -> None:
                     build_source=True,
                 ),
             )
-    if "rvc-python==0.1.5+xb312" in batch.packages:
-        spec = importlib.util.spec_from_file_location("xb_rvc_compat_build", Path(__file__).with_name("build_rvc_compat.py"))
-        if spec is None or spec.loader is None:
-            raise RuntimeError("无法加载 RVC 兼容构建模块")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        indexes = [
-            value
-            for value in (
-                installer.PYPI_MIRROR,
-                installer.PYPI_FALLBACK_INDEX,
-                PYPI_OFFICIAL_INDEX,
-            )
-            if value
-        ]
-        module.prepare(
-            batch.dest,
-            [batch.dest],
-            python=_ensure_tool_python(root, installer),
-            index_urls=indexes,
-        )
     # Requirement sets default to the wheel builder because upstream engine
     # lists can contain source-only packages. A reviewed frozen lock may opt
     # into the platform-specific binary downloader explicitly.

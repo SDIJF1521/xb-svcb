@@ -297,8 +297,8 @@ def svc_engine_ready() -> bool:
     )
 
 
-# ---- RVC 推理引擎（rvc-python）----
-# 在独立运行时中运行 rvc-python（依赖与 so-vits-svc 环境隔离，避免 torch/numpy 冲突）。
+# ---- RVC 推理引擎（内置官方 infer 栈）----
+# 推理代码随应用分发（engines/rvc），运行时仍放在独立环境中执行，避免 torch/numpy 冲突。
 # 缺失时 RvcEngine 自动降级为占位音频，整条链路仍可跑通。
 RVC_VENV_DIR = ROOT_DIR / ".venv-rvc"
 RVC_DIRECTML_VENV_DIR = ROOT_DIR / ".venv-rvc-directml"
@@ -333,18 +333,29 @@ def _detect_rvc_directml_python() -> Path | None:
     return _first_file(candidates)
 
 
-# 运行 RVC 推理的 Python 解释器（需装有 rvc-python + torch）
+# 运行 RVC 推理的 Python 解释器（需装有 torch / fairseq / faiss 等推理依赖）
 RVC_PYTHON = _detect_rvc_python()
 # Optional independent DirectML interpreter. It is selected only when the
 # request explicitly uses ``device=directml``.
 RVC_DIRECTML_PYTHON = _detect_rvc_directml_python()
 # RVC 推理子进程脚本（由隔离环境的 Python 读取，需为磁盘真实文件）
 RVC_WORKER = BUNDLE_DIR / "infrastructure" / "rvc_worker.py"
+# 内置的官方 RVC 推理代码（RVC-Project infer 栈，与 so-vits/DDSP 一样放在 engines/）
+RVC_ENGINE_DIR = ROOT_DIR / "engines" / "rvc"
+# hubert_base.pt / rmvpe.pt 所在目录（engines/rvc/pretrain），安装器会预置
+RVC_BASE_DIR = Path(
+    os.environ.get("XB_RVC_BASE_DIR", str(RVC_ENGINE_DIR / "pretrain"))
+).expanduser()
 
 
 def rvc_engine_ready() -> bool:
-    """RVC 推理环境是否齐备：worker 存在、解释器存在。"""
-    return bool(RVC_WORKER.is_file() and RVC_PYTHON and RVC_PYTHON.is_file())
+    """RVC 推理环境是否齐备：worker、内置官方推理代码与解释器都存在。"""
+    return bool(
+        RVC_WORKER.is_file()
+        and (RVC_ENGINE_DIR / "rvc_session.py").is_file()
+        and RVC_PYTHON
+        and RVC_PYTHON.is_file()
+    )
 
 
 # ---- SeedVC 推理引擎（Seed-VC）----

@@ -67,6 +67,6 @@ UVR 的 PyTorch 模型使用 ROCm；Windows ONNX Runtime 默认仍为 CPU provid
 
 SVC/RVC/Vocal 使用 NumPy 1.26.4、SciPy 1.13.1 和支持 3.12 的依赖。SVC 改用提供 Windows cp312 wheel 的 `fairseq-fixed==0.12.3.1`（导入名仍为 `fairseq`）。
 
-RVC 上游 0.1.5 固定旧 fairseq、NumPy、faiss 和 OmegaConf，无法在 3.12 直接解析。`install/build_rvc_compat.py` 先验证原 wheel 的 RECORD，再生成 `rvc-python==0.1.5+xb312`，只调整这四项依赖、Python 版本声明和本地包版本，保留上游推理代码及许可。离线打包时同样构建该 wheel，不跳过依赖一致性检查。
+RVC 不再依赖第三方 `rvc-python`：官方推理代码（RVC-Project 2.2.231006）已内置在 `engines/rvc`，随程序分发。RVC 环境只需要 `fairseq-fixed`、`faiss-cpu`、`pyworld`、`torchcrepe`、`parselmouth`、`librosa` 等推理依赖；hubert/rmvpe 底模预置到 `engines/rvc/pretrain`，离线包同样包含这些依赖 wheel。
 
 验收需覆盖各模型的导入、短音频真实推理、CPU/CUDA 回归和 ROCm 10 实机测试。普通单元测试和 wheel 元数据检查不能代替这些验收。

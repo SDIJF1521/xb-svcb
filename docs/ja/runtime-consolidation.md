@@ -54,7 +54,7 @@ DirectML RVC分離環境だけを導入:
 python install/install.py --directml --only rvc
 ```
 
-ROCm RVCは既定でrvc-pythonのfp16 GPU経路を維持します。不安定な場合は一時的に`XB_RVC_ROCM_FP32=1`を設定してください。ログの`RVC_COMPONENT_DEVICES`と`RVC_TIMING`にコンポーネントのデバイスとモデル/後処理時間が出ます。
+ROCm RVCは既定で公式推論スタックのfp16 GPU経路を維持します。不安定な場合は一時的に`XB_RVC_ROCM_FP32=1`を設定してください。ログの`RVC_COMPONENT_DEVICES`と`RVC_TIMING`にコンポーネントのデバイスとモデル/後処理時間が出ます。
 
 SVC、RVC、SeedVC、DDSP-SVC、UVR、PyMSS、F0、Vocal Workerは品質優先のPyTorch方針を共有します。勾配記録を無効化し、CUDA/ROCmデバイスを固定し、FP32行列演算を最高精度にし、NVIDIA CUDAのTF32を無効化します。CPUは既定で最大8 Torch threadで、`XB_INFERENCE_CPU_THREADS`で変更できます。モデル別FP16/FP32とDirectML fallbackは各Workerが決め、`*_RUNTIME`行へbackend、device、精度方針を記録します。
 

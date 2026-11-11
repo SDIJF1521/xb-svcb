@@ -1,10 +1,10 @@
-"""RVC 推理子进程脚本（运行于隔离环境中，依赖 rvc-python）。
+"""RVC 推理子进程脚本（运行于隔离环境中，使用内置官方 RVC 推理代码）。
 
 由 ``RvcEngine`` 以子进程方式调用，与主程序的依赖环境隔离。约定输出：
 - 成功：``RVC_OK <output_path>``
 - 失败：``RVC_ERR <message>``
 
-rvc-python 默认会在首次实例化时下载 hubert / rmvpe 底模；本 worker 会先从安装包
+官方推理栈需要 hubert / rmvpe 底模；本 worker 会先从安装包
 自带的 ``assets/models/pretrain`` 预置底模，避免新用户首次 RVC 推理时卡在外网下载。
 ``load_model`` 直接接受 ``.pth`` 路径与可选 ``.index`` 路径。
 """
@@ -77,6 +77,9 @@ except ImportError:  # package import used by tests/application tooling
     )
 
 
+# RVC 官方推理代码（vendored，见 engines/rvc）与底模目录。
+# 底模（hubert_base.pt / rmvpe.pt）由安装器预置；缺失时这里会从应用自带资源
+# 复制或从官方 HuggingFace 镜像下载。
 # RVC 支持的 F0 算法；其余（如 so-vits 的 dio/fcpe）统一回退 rmvpe
 _RVC_F0_METHODS = {"harvest", "crepe", "rmvpe", "pm"}
 _MIN_BASE_MODEL_BYTES = 32 * 1024 * 1024
@@ -85,18 +88,16 @@ _HF_MIRROR = (
     or os.environ.get("HF_ENDPOINT")
     or "https://hf-mirror.com"
 ).strip().rstrip("/")
+# 官方 RVC 推理代码（vendored，见 engines/rvc）与底模目录。底模由安装器预置；
+# 缺失时这里从应用自带资源复制，或从官方 HuggingFace 仓库/镜像下载。
 _RVC_BASE_DOWNLOADS = {
     "hubert_base.pt": [
-        f"{_HF_MIRROR}/Daswer123/RVC_Base/resolve/main/hubert_base.pt",
-        "https://huggingface.co/Daswer123/RVC_Base/resolve/main/hubert_base.pt",
+        f"{_HF_MIRROR}/lj1995/VoiceConversionWebUI/resolve/main/hubert_base.pt",
+        "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/hubert_base.pt",
     ],
     "rmvpe.pt": [
-        f"{_HF_MIRROR}/Daswer123/RVC_Base/resolve/main/rmvpe.pt",
-        "https://huggingface.co/Daswer123/RVC_Base/resolve/main/rmvpe.pt",
-    ],
-    "rmvpe.onnx": [
-        f"{_HF_MIRROR}/Daswer123/RVC_Base/resolve/main/rmvpe.onnx",
-        "https://huggingface.co/Daswer123/RVC_Base/resolve/main/rmvpe.onnx",
+        f"{_HF_MIRROR}/lj1995/VoiceConversionWebUI/resolve/main/rmvpe.pt",
+        "https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/rmvpe.pt",
     ],
 }
 _RVC_BASE_SOURCES = {
@@ -111,11 +112,6 @@ _RVC_BASE_SOURCES = {
         "pretrain/rmvpe.pt",
         "rmvpe.pt",
     ),
-    "rmvpe.onnx": (
-        "rvc/rmvpe.onnx",
-        "pretrain/rmvpe.onnx",
-        "rmvpe.onnx",
-    ),
 }
 _RVC_DIRECTML_DEFAULT_THREADS = 1
 _RVC_DIRECTML_DEFAULT_WINDOWS = {
@@ -124,6 +120,15 @@ _RVC_DIRECTML_DEFAULT_WINDOWS = {
     "x_center": 12,
     "x_max": 14,
 }
+# RVC v3 checkpoints fine-tuned from the newer v3 pretrained base keep the v2
+# network layout: same 768-wide ContentVec phone encoder, same generator and
+# flow shapes. The official inference graphs cover v1/v2, so v3 is loaded
+# through the v2 path. The v3 label is preserved for the UI and model metadata,
+# while a checkpoint whose shapes do not match v2 is reported as unknown rather
+# than guessed at.
+_RVC_INFERENCE_VERSIONS = {"v1": "v1", "v2": "v2", "v3": "v2"}
+_RVC_DECLARED_VERSIONS = {"v1", "v2", "v3"}
+_RVC_PHONE_WIDTHS = {256: "v1", 768: "v2"}
 
 
 def _normalize_rvc_checkpoint_version(value) -> str:  # noqa: ANN001
@@ -132,24 +137,23 @@ def _normalize_rvc_checkpoint_version(value) -> str:  # noqa: ANN001
             value = value.decode("utf-8", errors="ignore")
         except Exception:  # noqa: BLE001
             return ""
-    normalized = str(value or "").strip().lower().replace("rvc", "").strip(" -_v")
-    if normalized in {"1", "1.0"}:
-        return "v1"
-    if normalized in {"2", "2.0"}:
-        return "v2"
-    return ""
+    normalized = str(value or "").strip().lower().replace("rvc", "").strip(" -_")
+    if normalized.startswith("v"):
+        normalized = normalized[1:].strip(" -_")
+    if not normalized or not normalized[0].isdigit():
+        return ""
+    major = normalized.split(".", 1)[0].strip()
+    return f"v{major}" if major in {"1", "2", "3"} else ""
 
 
-def _rvc_checkpoint_version(checkpoint) -> tuple[str, str]:  # noqa: ANN001
-    """Identify RVC v1/v2 from declared metadata, then phone-encoder width."""
-    if not isinstance(checkpoint, dict):
-        return "", "unsupported_checkpoint"
+def _rvc_inference_version(value) -> str:  # noqa: ANN001
+    """Map a declared RVC version to the graph the official stack can build."""
+    normalized = str(value or "").strip().lower()
+    return _RVC_INFERENCE_VERSIONS.get(normalized, "v2")
 
-    for key in ("version", "rvc_version", "model_version"):
-        version = _normalize_rvc_checkpoint_version(checkpoint.get(key))
-        if version:
-            return version, f"checkpoint.{key}"
 
+def _rvc_phone_encoder_width(checkpoint: dict) -> tuple[int | None, str]:
+    """Return the phone-encoder output width and its weight key."""
     containers = [checkpoint]
     for key in ("weight", "model", "state_dict"):
         value = checkpoint.get(key)
@@ -163,13 +167,42 @@ def _rvc_checkpoint_version(checkpoint) -> tuple[str, str]:  # noqa: ANN001
             if not shape or len(shape) < 2:
                 continue
             try:
-                phone_width = int(shape[-1])
+                return int(shape[-1]), str(key)
             except (TypeError, ValueError):
                 continue
-            if phone_width == 256:
-                return "v1", f"weight.{key}[{phone_width}]"
-            if phone_width == 768:
-                return "v2", f"weight.{key}[{phone_width}]"
+    return None, ""
+
+
+def _rvc_checkpoint_version(checkpoint) -> tuple[str, str]:  # noqa: ANN001
+    """Identify RVC v1/v2/v3 from declared metadata, then phone-encoder width.
+
+    v3 keeps the v2 graph, so it is only reported when the checkpoint's phone
+    encoder still has the v2 width. A v3 label on an unrecognised layout is
+    returned as unknown: the caller must not silently pick an inference graph.
+    """
+    if not isinstance(checkpoint, dict):
+        return "", "unsupported_checkpoint"
+
+    declared = ""
+    declared_source = ""
+    for key in ("version", "rvc_version", "model_version"):
+        version = _normalize_rvc_checkpoint_version(checkpoint.get(key))
+        if version:
+            declared = version
+            declared_source = f"checkpoint.{key}"
+            break
+
+    width, _key = _rvc_phone_encoder_width(checkpoint)
+    if declared == "v3":
+        if width is None:
+            return "v3", declared_source
+        if width == 768:
+            return "v3", f"{declared_source}[{width}]"
+        return "", "v3_architecture_unsupported"
+    if declared in _RVC_DECLARED_VERSIONS:
+        return declared, declared_source
+    if width in _RVC_PHONE_WIDTHS:
+        return _RVC_PHONE_WIDTHS[width], f"weight.{_key}[{width}]"
     return "", "unknown_layout"
 
 
@@ -247,7 +280,7 @@ def _apply_rvc_directml_memory_profile(rvc) -> tuple[int, int, int, int]:  # noq
 
 
 def _configure_rvc_torch_load(torch_module, *, directml: bool) -> None:  # noqa: ANN001
-    """Apply checkpoint compatibility before importing rvc-python/torchcrepe."""
+    """Apply checkpoint compatibility before importing the RVC stack/torchcrepe."""
     if directml:
         # torchcrepe passes the privateuseone torch.device to map_location.
         # Deserialize on CPU; torchcrepe moves the initialized model to DML next.
@@ -451,9 +484,37 @@ def _download_base_model(name: str, dest: Path) -> bool:
     return False
 
 
-def _prepare_rvc_base_models(lib_dir: str) -> None:
-    """Pre-seed rvc-python base models from XB bundled assets before it goes online."""
-    base_dir = Path(lib_dir) / "base_model"
+def _resolve_engine_dir() -> Path:
+    """Locate the vendored official RVC inference stack (``engines/rvc``)."""
+    raw = os.environ.get("XB_RVC_ENGINE_DIR")
+    candidates: list[Path] = [Path(raw).expanduser()] if raw else []
+    here = Path(__file__).resolve()
+    candidates.extend(parent / "engines" / "rvc" for parent in here.parents)
+    candidates.extend(parent / "engines" / "rvc" for parent in here.parents)
+    for candidate in candidates:
+        if (candidate / "rvc_session.py").is_file() and (candidate / "infer").is_dir():
+            return candidate
+    raise RuntimeError(
+        "内置官方 RVC 推理代码缺失（engines/rvc）。请重新安装或修复程序文件。"
+    )
+
+
+def _rvc_base_dir() -> Path:
+    """Directory that holds hubert_base.pt and rmvpe.pt for the RVC stack."""
+    raw = os.environ.get("XB_RVC_BASE_DIR")
+    if raw:
+        return Path(raw).expanduser()
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "engines" / "rvc" / "pretrain"
+        if candidate.is_dir():
+            return candidate
+    return here.parents[2] / "engines" / "rvc" / "pretrain"
+
+
+def _prepare_rvc_base_models() -> Path:
+    """Prepare the official base models and return the directory holding them."""
+    base_dir = _rvc_base_dir()
     base_dir.mkdir(parents=True, exist_ok=True)
 
     missing: list[str] = []
@@ -465,10 +526,6 @@ def _prepare_rvc_base_models(lib_dir: str) -> None:
             continue
         missing.append(name)
 
-    # rvc-python checks for this file in its generic downloader, but XB uses
-    # PyTorch RMVPE for CUDA/CPU and the stable CPU RMVPE path for DirectML.
-    _copy_bundled_base_model("rmvpe.onnx", base_dir / "rmvpe.onnx", required=False)
-
     if missing:
         raise RuntimeError(
             "RVC 底模缺失，且本地自带模型/镜像下载都不可用："
@@ -476,6 +533,7 @@ def _prepare_rvc_base_models(lib_dir: str) -> None:
             + "。请重新运行“搭建/修复运行环境”，或把这些文件放到 "
             + str(base_dir)
         )
+    return base_dir
 
 
 def _resolve_device(requested: str) -> ResolvedDevice:
@@ -567,7 +625,7 @@ def _configure_faiss_runtime(faiss_module) -> int:  # noqa: ANN001
 
 
 def _infer_file_checked(rvc, input_path: str, output_path: str) -> str:  # noqa: ANN001
-    """Run rvc-python inference and surface vc_single failures before wav writing."""
+    """Run RVC inference and surface vc_single failures before wav writing."""
     if not rvc.current_model:
         raise ValueError("Please load a model first.")
 
@@ -622,7 +680,7 @@ def _warm_up_realtime(rvc) -> None:  # noqa: ANN001
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="RVC inference worker (rvc-python)")
+    parser = argparse.ArgumentParser(description="RVC inference worker (official infer stack)")
     parser.add_argument("--model", required=True, help=".pth 主模型路径")
     parser.add_argument("--index", default="", help=".index 检索特征路径（可选）")
     parser.add_argument("--input", default="", help="输入人声 wav")
@@ -640,14 +698,14 @@ def main() -> int:
     parser.add_argument(
         "--inspect-model",
         action="store_true",
-        help="只读取 checkpoint 并输出自动识别的 RVC v1/v2",
+        help="只读取 checkpoint 并输出自动识别的 RVC v1/v2/v3",
     )
     args = parser.parse_args()
 
     try:
         # 50 系（torch>=2.6/cu128）适配：torch>=2.6 起 torch.load 默认 weights_only=True，
-        # rvc-python / fairseq 加载 hubert、字典、.pth 主模型时会报 "Weights only load failed"。
-        # 导入 rvc-python 之前还原旧默认（RVC 的 .pth/.index/底模均为本地可信文件）。
+        # fairseq 加载 hubert、字典、.pth 主模型时会报 "Weights only load failed"。
+        # 导入 fairseq / 官方推理栈之前还原旧默认（RVC 的 .pth/.index/底模均为本地可信文件）。
         # 老栈（torch 2.1.1，默认即 False）加这层无副作用。
         import torch  # noqa: WPS433
         if args.inspect_model:
@@ -674,45 +732,63 @@ def main() -> int:
             directml=resolved_device.backend == "directml",
         )
 
-        import rvc_python.download_model as rvc_download_model
-        import rvc_python.infer as rvc_infer
-        import rvc_python.lib.rmvpe as rvc_rmvpe
+        engine_dir = _resolve_engine_dir()
+        if str(engine_dir) not in sys.path:
+            sys.path.insert(0, str(engine_dir))
         import faiss  # noqa: WPS433
+        import rvc_session  # noqa: WPS433 - vendored official infer stack
 
         _configure_faiss_runtime(faiss)
-        rvc_download_model.download_rvc_models = _prepare_rvc_base_models
-        rvc_infer.download_rvc_models = _prepare_rvc_base_models
+        base_dir = _prepare_rvc_base_models()
+        hubert_path = base_dir / "hubert_base.pt"
+        rmvpe_path = base_dir / "rmvpe.pt"
+        print(
+            "XB: RVC 官方推理栈 "
+            f"{rvc_session.engine_version()} hubert={hubert_path} rmvpe={rmvpe_path}",
+            flush=True,
+        )
         if resolved_device.backend == "directml":
-            patch_directml_rmvpe_cpu(rvc_rmvpe)
+            import infer.lib.rmvpe as official_rmvpe  # noqa: WPS433
+
+            patch_directml_rmvpe_cpu(official_rmvpe)
             print("XB: RVC RMVPE 使用 CPU 稳定路径，主模型继续使用 AMD DirectML", flush=True)
             import torch_directml  # type: ignore
 
             torch_directml.default_device = lambda: resolved_device.index
-            original_config = rvc_infer.Config
-
-            def directml_config(lib_dir, _device):  # noqa: ANN001, ANN202
-                return original_config(lib_dir, "cpu", is_dml=True)
-
-            rvc_infer.Config = directml_config
-        RVCInference = rvc_infer.RVCInference
+        RvcSession = rvc_session.RvcSession
     except Exception as exc:  # noqa: BLE001
-        print(f"RVC_ERR rvc-python 未安装或导入失败: {exc}", flush=True)
+        print(f"RVC_ERR 官方 RVC 推理栈加载失败: {exc}", flush=True)
+        traceback.print_exc()
         return 1
 
     try:
         device = str(resolved_device.device)
         method = args.method if args.method in _RVC_F0_METHODS else "rmvpe"
-        version = args.version if args.version in ("v1", "v2") else "v2"
+        requested_version = str(args.version or "").strip().lower()
+        if requested_version not in _RVC_INFERENCE_VERSIONS:
+            requested_version = "v2"
+        version = _rvc_inference_version(requested_version)
+        if requested_version != version:
+            print(
+                f"XB: RVC {requested_version} 模型与 v2 网络结构一致，"
+                "按 v2 兼容路径推理",
+                flush=True,
+            )
         index_path = args.index if args.index else ""
 
         # 先不传 model_path 构造（避免在构造期就按默认 is_half=True 把模型转半精度），
         # 以便在加载模型前按需切换精度。
-        rvc = RVCInference(device=device, version=version)
+        rvc = RvcSession(
+            device=resolved_device.device,
+            version=version,
+            hubert_path=hubert_path,
+            rmvpe_path=rmvpe_path,
+            is_half=resolved_device.backend in {"cuda", "rocm"},
+        )
         if resolved_device.backend in {"cuda", "rocm", "directml"}:
-            # rvc-python's Config performs its own hardware detection and can
-            # rewrite the device on older AMD/Windows combinations.  The
-            # resolver above has already validated the selected backend, so
-            # keep every RVC object on that exact device.
+            # The resolver above has already validated the selected backend, so
+            # keep every RVC object on that exact device instead of letting a
+            # library-level probe pick another adapter.
             rvc.device = resolved_device.device
             rvc.config.device = resolved_device.device
             rvc.vc.device = resolved_device.device
@@ -727,7 +803,7 @@ def main() -> int:
 
         # CPU 适配：PyTorch 不支持 CPU half batch_norm，RMVPE 在 is_half=True 时会报
         # "batch_norm not implemented for Half"。CPU 路径必须在加载模型前切 fp32。
-        # 50 系（Blackwell, torch>=2.6/cu128）适配：rvc-python 对 5060/5070/5090 默认开
+        # 50 系（Blackwell, torch>=2.6/cu128）适配：RVC 默认对 5060/5070/5090 开
         # fp16（is_half=True），但 fp16 在 Blackwell + 新 torch 上会产生「虚弱/没气/哑音」
         # 的劣化输出。这里在加载模型前强制 fp32，并切到 fp32 对应的切片窗口参数。
         # 老栈（torch 2.1.1 / 40 系及以下）保持默认 fp16（更快且本就正常），不受影响。
@@ -747,7 +823,7 @@ def main() -> int:
             _cuda_mem_gb = 0.0
         # PyTorch 2.6+ needs fp32 for the affected NVIDIA Blackwell CUDA
         # stack, but the same version test must not catch ROCm.  ROCm wheels
-        # expose HIP through the CUDA API and rvc-python's default fp16 path
+        # expose HIP through the CUDA API and the stack's default fp16 path
         # is the GPU fast path.  Forcing ROCm 10 (Torch 2.13) to fp32 makes
         # the RVC model look like a CPU workload on supported AMD cards.
         rocm_fp32 = (

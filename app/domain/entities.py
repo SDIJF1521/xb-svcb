@@ -175,7 +175,7 @@ class InferenceParams:
     通用：``pitch``（变调，半音）、``f0_method``（F0 算法）、``device``。
     so-vits-svc：``diffusion_ratio``（扩散占比 0~1）、``speaker``（目标说话人）。
     RVC：``index_rate``（检索特征占比）、``rms_mix``（音量包络混合）、
-    ``protect``（清辅音保护）、``filter_radius``（中值滤波半径）、``rvc_version``（v1/v2）。
+    ``protect``（清辅音保护）、``filter_radius``（中值滤波半径）、``rvc_version``（v1/v2/v3）。
     SeedVC：``reference_audio``（本次推理使用的目标音色参考音频）。
     DDSP-SVC：``ddsp_infer_steps``（Rectified Flow 采样步数）、
     ``ddsp_formant_shift``（共振峰偏移，半音）、``speaker``（说话人 id）。
@@ -198,7 +198,7 @@ class InferenceParams:
     # RVC 专属参数
     protect: float = 0.33  # 清辅音/呼吸保护 (0~0.5)
     filter_radius: int = 3  # F0 中值滤波半径 (0~7)
-    rvc_version: str = "v2"  # RVC 模型版本 v1 / v2
+    rvc_version: str = "v2"  # RVC 模型版本 v1 / v2 / v3（v3 沿用 v2 网络结构）
     reference_audio: str = ""  # SeedVC 目标音色参考音频路径
     ddsp_infer_steps: int = 50  # DDSP-SVC Rectified Flow 采样步数（官方默认质量）
     ddsp_formant_shift: float = 0.0  # DDSP-SVC 共振峰偏移（-2~2 半音）

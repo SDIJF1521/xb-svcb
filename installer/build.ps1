@@ -621,6 +621,8 @@ function Stage-EngineTree([string]$SourceDir, [string]$DestinationDir, [string]$
       $skip = $skip -or ($lowerParts -contains 'exp') -or ($lowerParts -contains 'pretrain')
     } elseif ($Engine -eq 'ddsp') {
       $skip = $skip -or ($lowerParts -contains 'pretrain')
+    } elseif ($Engine -eq 'rvc') {
+      $skip = $skip -or ($lowerParts -contains 'pretrain')
     } elseif ($Engine -eq 'seedvc') {
       $skip = $skip -or ($lowerParts -contains 'checkpoints') -or ($lowerParts -contains 'assets')
       $skip = $skip -or ($file.Name -ieq 'campplus_cn_common.bin')
@@ -641,6 +643,7 @@ function Prepare-BundledEnginePayloads([string]$PayloadRoot) {
   Stage-EngineTree (Join-Path $Root 'engines\so-vits-svc') (Join-Path $PayloadRoot 'so-vits-svc') 'sovits'
   Stage-EngineTree (Join-Path $Root 'engines\ddsp-svc') (Join-Path $PayloadRoot 'ddsp-svc') 'ddsp'
   Stage-EngineTree (Join-Path $Root 'engines\seed-vc') (Join-Path $PayloadRoot 'seed-vc') 'seedvc'
+  Stage-EngineTree (Join-Path $Root 'engines\rvc') (Join-Path $PayloadRoot 'rvc') 'rvc'
   $contentvec = Join-Path $PayloadRoot 'ddsp-svc\pretrain\contentvec\pytorch_model.bin'
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $contentvec) | Out-Null
   Copy-Item -LiteralPath (Join-Path $Root 'engines\ddsp-svc\pretrain\contentvec\pytorch_model.bin') -Destination $contentvec -Force
@@ -652,6 +655,8 @@ function Prepare-BundledEnginePayloads([string]$PayloadRoot) {
     (Join-Path $PayloadRoot 'ddsp-svc\6.2\main_reflow.py'),
     (Join-Path $PayloadRoot 'seed-vc\inference.py'),
     (Join-Path $PayloadRoot 'seed-vc\inference_v2.py'),
+    (Join-Path $PayloadRoot 'rvc\rvc_session.py'),
+    (Join-Path $PayloadRoot 'rvc\infer\modules\vc\pipeline.py'),
     $contentvec
   )) { Require-File $marker 'Staged bundled engine payload' }
 }

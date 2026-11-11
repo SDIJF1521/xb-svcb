@@ -54,7 +54,7 @@ Install only the separate DirectML RVC environment:
 python install/install.py --directml --only rvc
 ```
 
-ROCm RVC retains rvc-python's fp16 GPU path by default. If a driver or model is unstable in fp16, temporarily set `XB_RVC_ROCM_FP32=1`. Worker log entries `RVC_COMPONENT_DEVICES` and `RVC_TIMING` show component devices and model/post-processing time.
+ROCm RVC retains the official inference stack's fp16 GPU path by default. If a driver or model is unstable in fp16, temporarily set `XB_RVC_ROCM_FP32=1`. Worker log entries `RVC_COMPONENT_DEVICES` and `RVC_TIMING` show component devices and model/post-processing time.
 
 SVC, RVC, SeedVC, DDSP-SVC, UVR, PyMSS, F0, and Vocal workers share a quality-first PyTorch policy: disable gradient recording, pin the active CUDA/ROCm device, use highest-precision FP32 matrix operations, and disable TF32 on NVIDIA CUDA. CPU inference uses at most eight Torch threads by default; override with `XB_INFERENCE_CPU_THREADS`. Each worker still chooses FP16/FP32 and DirectML fallback according to its own stability requirements and logs a `*_RUNTIME` line with the backend, device, and precision policy.
 

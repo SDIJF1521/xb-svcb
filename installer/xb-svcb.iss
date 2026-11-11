@@ -481,7 +481,6 @@ Source: "..\install\runtime_profiles\*"; DestDir: "{app}\install\runtime_profile
 Source: "..\assets\runtime\*"; DestDir: "{app}\assets\runtime"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression skipifsourcedoesntexist
 Source: "..\install\configure_user_env.py"; DestDir: "{app}\install"; Flags: ignoreversion
 Source: "..\install\detect_python.bat"; DestDir: "{app}\install"; Flags: ignoreversion
-Source: "..\install\build_rvc_compat.py"; DestDir: "{app}\install"; Flags: ignoreversion
 Source: "..\setup_env.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\setup_shared_env.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\install_prereqs.bat"; DestDir: "{app}"; Flags: ignoreversion
@@ -495,6 +494,7 @@ Source: "..\assets\tools\ffmpeg\*"; DestDir: "{app}\tools\ffmpeg"; Flags: recurs
 Source: "..\.tmp\bundled-engines\so-vits-svc\*"; DestDir: "{app}\engines\so-vits-svc"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\.tmp\bundled-engines\ddsp-svc\*"; DestDir: "{app}\engines\ddsp-svc"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\.tmp\bundled-engines\seed-vc\*"; DestDir: "{app}\engines\seed-vc"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\.tmp\bundled-engines\rvc\*"; DestDir: "{app}\engines\rvc"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; 自带底模与 UVR 模型（随安装包分发；安装时由 install.py 本地复制，免联网慢下载）
 ; 模型为已压缩的二进制权重，用 nocompression 跳过再压缩，显著加快编译与安装速度
 ; FCPE 用于检测到极高音时自动扩展 F0 覆盖；分卷仍由 DiskSliceSize 控制在 2 GB 内
@@ -2039,6 +2039,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'So-VITS-SVC bundled source', PathJoin(AppDir, 'engines\so-vits-svc\inference\infer_tool.py'));
   if not FileExists(PathJoin(AppDir, 'engines\seed-vc\inference.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC bundled source', PathJoin(AppDir, 'engines\seed-vc\inference.py'));
+  if not FileExists(PathJoin(AppDir, 'engines\rvc\rvc_session.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'RVC official inference stack', PathJoin(AppDir, 'engines\rvc\rvc_session.py'));
   if not FileExists(PathJoin(AppDir, 'engines\ddsp-svc\main_reflow.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC bundled source', PathJoin(AppDir, 'engines\ddsp-svc\main_reflow.py'));
   if not FileExists(PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt')) then

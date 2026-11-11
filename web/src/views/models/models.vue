@@ -793,7 +793,7 @@ function baseName(p: string): string {
 
 function detectedRvcVersion(model: ModelVM): string {
   const value = String(model.metadata?.rvc_version || '').toLowerCase()
-  return value === 'v1' || value === 'v2' ? value : ''
+  return value === 'v1' || value === 'v2' || value === 'v3' ? value : ''
 }
 
 function rvcVersionTitle(model: ModelVM): string {
@@ -804,7 +804,7 @@ function rvcVersionTitle(model: ModelVM): string {
 
 const suggestedName = computed(() => baseName(imp.value.mainModel).replace(/\.[^.]+$/, ''))
 const importHint = computed(() => {
-  if (impFramework.value === 'rvc') return '主模型(.pth) 必填，检索文件(.index) 可选；v1/v2 将自动检测'
+  if (impFramework.value === 'rvc') return '主模型(.pth) 必填，检索文件(.index) 可选；v1/v2/v3 将自动检测'
   if (impFramework.value === 'seed-vc') return 'checkpoint + 配置必填；参考音频在推理时选择'
   if (impFramework.value === 'ddsp-svc') return 'DDSP / Diffusion / Rectified Flow checkpoint + config.yaml'
   return '主模型 + 配置为必填，扩散模型可选'
