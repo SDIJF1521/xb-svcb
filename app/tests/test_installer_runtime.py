@@ -593,8 +593,11 @@ def test_rocm_runtime_lock_guard_reports_process_using_hip_dll(
 
 def test_rocm_svc_requirements_replace_legacy_starlette(tmp_path: Path) -> None:
     installer = _load_install_module()
+    source = ROOT / "engines" / "so-vits-svc" / "requirements_win.txt"
+    if not source.is_file():
+        pytest.skip("so-vits-svc engine source is fetched by the installer and absent from this checkout")
     filtered = installer._filter_requirements(
-        ROOT / "engines" / "so-vits-svc" / "requirements_win.txt",
+        source,
         extra_deny=installer.BLACKWELL_EXTRA_DENY,
         overrides=installer.SVC_SHARED_REQ_OVERRIDES,
         output=tmp_path / "svc-requirements.txt",
