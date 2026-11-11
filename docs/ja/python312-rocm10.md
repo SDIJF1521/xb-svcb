@@ -66,6 +66,6 @@ UVRのPyTorchモデルはROCmを使います。Windows ONNX Runtimeは既定でC
 
 SVC/RVC/VocalはNumPy 1.26.4、SciPy 1.13.1、Python 3.12対応依存関係を使います。SVCはWindows cp312 wheelのある`fairseq-fixed==0.12.3.1`を使い、import名は`fairseq`です。
 
-RVCはサードパーティの`rvc-python`に依存しなくなりました。公式推論コード（RVC-Project 2.2.231006）は`engines/rvc`としてアプリに同梱されます。RVC実行環境に必要なのは`fairseq-fixed`、`faiss-cpu`、`pyworld`、`torchcrepe`、`parselmouth`、`librosa`などだけで、hubert/rmvpe底模は`engines/rvc/pretrain`に配置されます。
+RVCはサードパーティの`rvc-python`に依存しなくなりました。公式推論コード（RVC-Project 2.2.231006）は`engines/rvc`としてアプリに同梱されます。RVC実行環境に必要なのは`fairseq-fixed`、`faiss-cpu`、`pyworld`、`torchcrepe`、`parselmouth`、`av`、`librosa`、`soundfile`などだけで、hubert/rmvpe底模は`engines/rvc/pretrain`に配置されます。
 
 受け入れでは各モデルのimport、短音声の実推論、CPU/CUDA回帰、ROCm 10実機テストが必要です。単体テストやwheel metadata検査では代替できません。

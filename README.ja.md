@@ -180,7 +180,7 @@ FastAPIは既定で無効です。アプリの「資料庫 → API接入」を�
 xb-svcb/
 ├─ app/               Pythonバックエンド、サービス、アダプター、テスト
 ├─ web/               Vue 3 + Viteフロントエンド
-├─ engines/           So-VITS-SVC、SeedVC、DDSP-SVCなどのエンジン
+├─ engines/           So-VITS-SVC、RVC（公式inferスタック）、SeedVC、DDSP-SVCなどのエンジン
 ├─ assets/            同梱モデル、ツール、オフラインwheelhouse
 ├─ install/           環境構築・モデル配置スクリプト
 ├─ installer/         PyInstaller / Inno Setupパッケージ
@@ -241,10 +241,10 @@ XB-SVCB の開発と保守に参加してくださったすべての皆様に感
 ## 謝辞
 
 - 同梱・デモ用音声モデルの大部分は**白菜工厂1145号员工**氏から提供されました。モデルの著作権は各作者に帰属します。各モデルのライセンスまたは許諾範囲内で使用してください。
-- XB-SVCBは、[so-vits-svc](https://github.com/svc-develop-team/so-vits-svc)、[rvc-python](https://github.com/daswer123/rvc-python)、[Seed-VC](https://github.com/Plachtaa/seed-vc)、[DDSP-SVC](https://github.com/yxlllc/DDSP-SVC)、[Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)、[DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)、[Pedalboard](https://github.com/spotify/pedalboard)、[ModelScope](https://www.modelscope.cn/)などのプロジェクトを利用しています。
+- XB-SVCBは、[so-vits-svc](https://github.com/svc-develop-team/so-vits-svc)、[RVC / Retrieval-based-Voice-Conversion-WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)、[Seed-VC](https://github.com/Plachtaa/seed-vc)、[DDSP-SVC](https://github.com/yxlllc/DDSP-SVC)、[Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)、[DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)、[Pedalboard](https://github.com/spotify/pedalboard)、[ModelScope](https://www.modelscope.cn/)などのプロジェクトを利用しています。
 
 ## ライセンス
 
 本プロジェクトが独自に作成したソースコードは、**[GNU General Public License v3.0 only](LICENSE)**で提供されます。Copyright © 2026 SDIJF1521。
 
-同梱するサードパーティ製コンポーネント、モデル、リソースには、それぞれ元のライセンスが適用されます。特にso-vits-svc 4.1はAGPL-3.0、DDSP-SVC 6.3はMIT Licenseです。基本モデルとUVRモデルにも各上流プロジェクトの条件が適用され、GPL-3.0-onlyがそれらを置き換えることはありません。
+同梱するサードパーティ製コンポーネント、モデル、リソースには、それぞれ元のライセンスが適用されます。特にso-vits-svc 4.1はAGPL-3.0、DDSP-SVC 6.3はMIT License、同梱のRVC推論スタックもMIT Licenseです。基本モデルとUVRモデルにも各上流プロジェクトの条件が適用され、GPL-3.0-onlyがそれらを置き換えることはありません。

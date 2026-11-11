@@ -18,6 +18,8 @@ NVIDIA CUDA126 / CUDA128は既定で二つの共有環境を使用します。RO
 
 「共有」は依存関係の構成であり、全コンポーネントを一つのPythonプロセスへ入れる意味ではありません。二層化で新しいNumPy/protobuf/AudioToolsと旧SVC/RVC依存関係の競合を分離します。
 
+RVCの推論コードは`engines/rvc`（RVC-Project 2.2.231006のMIT推論サブセット）に同梱され、底模は`engines/rvc/pretrain`に置きます。インストーラーは`fairseq-fixed`、`faiss-cpu`、`pyworld`、`torchcrepe`、`parselmouth`、`av`、`librosa`、`soundfile`などの推論依存だけをインストールし、サードパーティの`rvc-python`はインストールしません。
+
 ROCm 10構築ではROCmメジャーバージョン、HIP、実GPU演算を検証し、CPU TorchをAMD構築成功とは判定しません。DirectML RVCは`.venv-rvc-directml`に分離し、`runtime.json`の`rvc-directml`routeで選択します。ROCm Torchと同じ環境へ混在させられません。`device=directml`を明示した場合だけ起動し、`device=rocm`と`auto`はROCm routeを使います。
 
 ## コンポーネントのルーティング

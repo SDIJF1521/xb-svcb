@@ -72,7 +72,7 @@ XB-SVCB 是一个本地优先的桌面应用。前端负责交互和状态展示
 
 ### app/infrastructure/
 
-负责文件存储、路径、FFmpeg、系统音频、UVR、F0、模型引擎适配和 Worker 进程。svc_engine.py、rvc_engine.py、seedvc_engine.py、ddsp_engine.py 是框架适配入口。
+负责文件存储、路径、FFmpeg、系统音频、UVR、F0、模型引擎适配和 Worker 进程。svc_engine.py、rvc_engine.py、seedvc_engine.py、ddsp_engine.py 是框架适配入口；RVC 适配器加载 `engines/rvc` 内置的官方推理栈，不再依赖第三方 `rvc-python`。
 
 ### web/
 

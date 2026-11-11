@@ -35,6 +35,8 @@ CUDA126 / CUDA128 は既定でランタイムを共有します。
 
 CPU では `.venv-uvr`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp`、`.venv-vocal` などの分離ディレクトリを使用します。DirectML も分離構成ですが、RVC は `.venv-rvc-directml` を使用します。ROCm 10 では SVC / RVC / Vocal が `runtimes/svc-rocm10` を共有し、その他のコンポーネントは分離されます。アプリケーションは `runtime.json` から実際のインタープリターを特定します。ディレクトリ名だけでインストール完了を判断しないでください。
 
+RVCの推論コードは`engines/rvc`（RVC-Project 2.2.231006のMITライセンス推論サブセット）に同梱され、`hubert_base.pt`と`rmvpe.pt`は`engines/rvc/pretrain`に配置されてインストーラーが`assets/models`から配置します。サードパーティの`rvc-python`はインストールしません。
+
 完全な構成と旧インストールとの互換規則については、[共有ランタイムと互換構成](runtime-consolidation.md)を参照してください。
 
 ## 旧バージョン 0.0.31 のみ：RTX 50 インストール修復

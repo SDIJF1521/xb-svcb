@@ -245,7 +245,7 @@ xb-svcb/
 │  ├─ domain/                   任务、模型、工程等领域对象
 │  └─ infrastructure/           Worker、FFmpeg、仓储和引擎实现
 ├─ web/                         Vue 3 + Vite 前端
-├─ engines/                     So-VITS-SVC、SeedVC、DDSP-SVC 等引擎源码
+├─ engines/                     So-VITS-SVC、RVC（官方 infer 栈）、SeedVC、DDSP-SVC 等引擎源码
 ├─ assets/                      随包模型、工具和离线 wheelhouse
 ├─ install/                     环境搭建和模型部署脚本
 ├─ installer/                   PyInstaller / Inno Setup 安装器
@@ -365,7 +365,7 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 
 - 🧁 **模型来源** —— 目前软件内可用 / 演示的**绝大部分声音模型，均由「白菜工厂1145号员工」提供**。在此特别致谢 🙏，正是这些模型让本工具能开箱即用地体验完整翻唱流程。
 - 📌 模型版权归原作者所有，请在其授权范围内使用；如有侵权或需要下架，请联系作者处理。
-- 🛠️ 同时感谢上游开源项目：[so-vits-svc](https://github.com/svc-develop-team/so-vits-svc)、[rvc-python](https://github.com/daswer123/rvc-python) / RVC、[Seed-VC](https://github.com/Plachtaa/seed-vc)、[DDSP-SVC](https://github.com/yxlllc/DDSP-SVC)、[Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)、[DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)、[Pedalboard](https://github.com/spotify/pedalboard)、[ModelScope 魔搭社区](https://www.modelscope.cn/) 等。
+- 🛠️ 同时感谢上游开源项目：[so-vits-svc](https://github.com/svc-develop-team/so-vits-svc)、[RVC / Retrieval-based-Voice-Conversion-WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)、[Seed-VC](https://github.com/Plachtaa/seed-vc)、[DDSP-SVC](https://github.com/yxlllc/DDSP-SVC)、[Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)、[DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)、[Pedalboard](https://github.com/spotify/pedalboard)、[ModelScope 魔搭社区](https://www.modelscope.cn/)、[pymss](https://github.com/pymss-project/pymss)等。
 - 🚀 后续会把更多模型逐一上传到「模型站」，方便在软件内直接搜索下载。
 
 ---
@@ -378,6 +378,7 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 >
 > - **so-vits-svc 4.1**（`svc-develop-team/so-vits-svc`）：源码随安装分卷携带，遵循上游 **AGPL-3.0**。
 > - **DDSP-SVC 6.3**（`yxlllc/DDSP-SVC`）：源码随安装分卷携带，遵循上游 **MIT License**。
+> - **RVC 推理栈**（`RVC-Project/Retrieval-based-Voice-Conversion-WebUI` 2.2.231006）：内置在 `engines/rvc`，遵循上游 **MIT License**。
 > - **底模**：ContentVec、NSF-HiFiGAN、RMVPE、FCPE 等各有其许可。
 > - **UVR 模型**：`5_HP-Karaoke-UVR`、`UVR-DeEcho-DeReverb` 等遵循 Ultimate Vocal Remover 项目相应许可。
 >

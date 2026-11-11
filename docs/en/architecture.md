@@ -69,7 +69,7 @@ Contains domain objects and enums for editor projects, tasks, and models, with m
 
 ### `app/infrastructure/`
 
-Implements file storage, paths, FFmpeg, system audio, UVR, F0, engine adapters, and workers. `svc_engine.py`, `rvc_engine.py`, `seedvc_engine.py`, and `ddsp_engine.py` are the framework adapter entry points.
+Implements file storage, paths, FFmpeg, system audio, UVR, F0, engine adapters, and workers. `svc_engine.py`, `rvc_engine.py`, `seedvc_engine.py`, and `ddsp_engine.py` are the framework adapter entry points. The RVC adapter loads the vendored official inference stack in `engines/rvc` instead of the third-party `rvc-python` package.
 
 ### `web/`
 

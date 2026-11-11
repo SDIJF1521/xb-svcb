@@ -69,7 +69,7 @@ XB-SVCBはローカル優先のデスクトップアプリケーションです�
 
 ### `app/infrastructure/`
 
-ファイル保存、パス、FFmpeg、システム音声、UVR、F0、エンジンアダプター、Workerを実装します。`svc_engine.py`、`rvc_engine.py`、`seedvc_engine.py`、`ddsp_engine.py`が各フレームワークの入口です。
+ファイル保存、パス、FFmpeg、システム音声、UVR、F0、エンジンアダプター、Workerを実装します。`svc_engine.py`、`rvc_engine.py`、`seedvc_engine.py`、`ddsp_engine.py`が各フレームワークの入口です。RVCアダプターは`engines/rvc`の公式推論スタックを読み込み、サードパーティの`rvc-python`には依存しません。
 
 ### `web/`
 

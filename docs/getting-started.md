@@ -35,6 +35,8 @@ CUDA126/CUDA128 默认共享：
 
 CPU 使用 `.venv-uvr`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp` 和 `.venv-vocal` 等隔离目录。DirectML 也隔离，但 RVC 使用 `.venv-rvc-directml`。ROCm 10 的 SVC/RVC/Vocal 共用 `runtimes/svc-rocm10`，其余组件隔离。应用通过 `runtime.json` 识别实际解释器，不应只根据目录名判断安装是否完成。
 
+RVC 的推理代码内置在 `engines/rvc`（官方 RVC-Project 2.2.231006 的 MIT 推理子集），底模 `hubert_base.pt` / `rmvpe.pt` 位于 `engines/rvc/pretrain`，由安装器从 `assets/models` 预置；不再安装第三方 `rvc-python`。
+
 完整布局和旧安装兼容规则见 [共享运行时与兼容布局](runtime-consolidation.md)。
 
 ## 仅旧版 0.0.31：RTX 50 安装修复

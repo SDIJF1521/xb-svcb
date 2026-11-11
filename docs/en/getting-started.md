@@ -35,6 +35,8 @@ CUDA126 and CUDA128 share runtimes by default:
 
 CPU uses isolated directories such as `.venv-uvr`, `.venv-svc`, `.venv-rvc`, `.venv-seedvc`, `.venv-ddsp`, and `.venv-vocal`. DirectML is also isolated, but RVC uses `.venv-rvc-directml`. On ROCm 10, SVC / RVC / Vocal share `runtimes/svc-rocm10`, while the other components remain isolated. The application identifies the actual interpreter through `runtime.json`; do not determine whether installation is complete from directory names alone.
 
+RVC inference code ships in `engines/rvc` (an MIT-licensed subset of RVC-Project 2.2.231006); `hubert_base.pt` and `rmvpe.pt` live in `engines/rvc/pretrain` and are seeded by the installer from `assets/models`. The third-party `rvc-python` package is no longer installed.
+
 For the complete layout and compatibility rules for older installations, see [Shared Runtime and Compatibility Layout](runtime-consolidation.md).
 
 ## Legacy v0.0.31 Only: RTX 50 Installation Repair

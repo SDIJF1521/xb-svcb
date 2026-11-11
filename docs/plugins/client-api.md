@@ -207,7 +207,7 @@ const work = await host.createWork({
 | `device` | `string` | 推理设备，例如 `auto`、`cpu` |
 | `protect` | `number` | RVC 清辅音/呼吸保护，通常 0-0.5 |
 | `filter_radius` | `number` | RVC F0 中值滤波半径，通常 0-7 |
-| `rvc_version` | `string` | RVC `v1` 或 `v2` |
+| `rvc_version` | `string` | RVC `v1`、`v2` 或 `v3`（v3 使用 v2 网络结构） |
 | `reference_audio` | `string` | SeedVC 目标音色参考音频路径 |
 | `ddsp_infer_steps` | `number` | DDSP-SVC 采样步数 |
 | `ddsp_formant_shift` | `number` | DDSP-SVC 共振峰偏移，通常 -2 到 2 |

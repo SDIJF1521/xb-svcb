@@ -180,7 +180,7 @@ Start with the [English plugin documentation](docs/en/plugins/README.md). The se
 xb-svcb/
 ├─ app/               Python backend, services, adapters, and tests
 ├─ web/               Vue 3 + Vite frontend
-├─ engines/           So-VITS-SVC, SeedVC, DDSP-SVC, and other engines
+├─ engines/           So-VITS-SVC, RVC (official infer stack), SeedVC, DDSP-SVC, and other engines
 ├─ assets/            Bundled models, tools, and offline wheelhouse
 ├─ install/           Environment and model deployment scripts
 ├─ installer/         PyInstaller / Inno Setup packaging
@@ -241,10 +241,10 @@ Contributors: **SDIJF1521 (YGXB) · emptyelse · GFMAA · SugarCatCat**. Click a
 ## Acknowledgements
 
 - Most bundled and demonstration voice models were provided by **白菜工厂1145号员工**. Model copyrights remain with their respective authors; use each model only within its license or authorization.
-- XB-SVCB builds on projects including [so-vits-svc](https://github.com/svc-develop-team/so-vits-svc), [rvc-python](https://github.com/daswer123/rvc-python), [Seed-VC](https://github.com/Plachtaa/seed-vc), [DDSP-SVC](https://github.com/yxlllc/DDSP-SVC), [Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui), [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet), [Pedalboard](https://github.com/spotify/pedalboard), and [ModelScope](https://www.modelscope.cn/).
+- XB-SVCB builds on projects including [so-vits-svc](https://github.com/svc-develop-team/so-vits-svc), [RVC / Retrieval-based-Voice-Conversion-WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI), [Seed-VC](https://github.com/Plachtaa/seed-vc), [DDSP-SVC](https://github.com/yxlllc/DDSP-SVC), [Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui), [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet), [Pedalboard](https://github.com/spotify/pedalboard), and [ModelScope](https://www.modelscope.cn/).
 
 ## License
 
 The project's own source code is licensed under **[GNU General Public License v3.0 only](LICENSE)**. Copyright © 2026 SDIJF1521.
 
-Bundled third-party components, models, and resources retain their original licenses. In particular, so-vits-svc 4.1 is AGPL-3.0, DDSP-SVC 6.3 is MIT-licensed, and base models and UVR models use their respective upstream terms. GPL-3.0-only does not replace those third-party terms.
+Bundled third-party components, models, and resources retain their original licenses. In particular, so-vits-svc 4.1 is AGPL-3.0, DDSP-SVC 6.3 is MIT-licensed, the bundled RVC inference stack is MIT-licensed, and base models and UVR models use their respective upstream terms. GPL-3.0-only does not replace those third-party terms.

@@ -18,6 +18,8 @@ NVIDIA CUDA126 and CUDA128 use two shared environments by default. SVC/RVC/Vocal
 
 “Shared” describes dependency layout, not one Python process for every component. The two layers separate modern NumPy/protobuf/AudioTools dependencies from older SVC/RVC constraints.
 
+RVC inference code ships in `engines/rvc` (MIT-licensed subset of RVC-Project 2.2.231006), with base models under `engines/rvc/pretrain`; the installer only adds inference dependencies such as `fairseq-fixed`, `faiss-cpu`, `pyworld`, `torchcrepe`, `parselmouth`, `av`, `librosa`, and `soundfile` — the third-party `rvc-python` package is no longer installed.
+
 ROCm 10 setup validates the ROCm major version, HIP, and an actual GPU operation, so CPU Torch cannot be reported as a successful AMD setup. DirectML RVC must remain in `.venv-rvc-directml` and is selected by the `rvc-directml` route in `runtime.json`; it cannot share an environment with ROCm Torch. Only an explicit `device=directml` starts that interpreter. `device=rocm` and `auto` continue to use the ROCm route.
 
 ## Component Routing

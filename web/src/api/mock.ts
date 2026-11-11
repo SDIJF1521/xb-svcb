@@ -802,7 +802,7 @@ export const mock = {
         { key: 'pymss', name: 'PyMSS 人声分离', desc: '可选 PyMSS 音乐源分离引擎，模型可从模型站下载', version: '2.0', status: '已就绪', ok: true },
         { key: 'ffmpeg', name: 'ffmpeg', desc: '音频转码 / 重采样 / 剪辑，统一格式与采样率', version: 'v6.1', status: '已就绪', ok: true },
         { key: 'svc', name: 'So-VITS-SVC 推理引擎', desc: '加载用户 So-VITS-SVC 模型进行歌声转换推理', version: 'torch', status: 'cuda', ok: true },
-        { key: 'rvc', name: 'RVC 推理引擎', desc: '加载用户 RVC 模型（.pth + 可选 .index）进行歌声转换推理', version: 'rvc-python', status: 'cuda', ok: true },
+        { key: 'rvc', name: 'RVC 推理引擎', desc: '加载用户 RVC 模型（.pth + 可选 .index）进行歌声转换推理', version: 'RVC 官方推理栈', status: 'cuda', ok: true },
         { key: 'seedvc', name: 'SeedVC 推理引擎', desc: '加载 SeedVC checkpoint + 参考音频进行歌声转换推理', version: 'Seed-VC', status: 'cuda', ok: true },
         { key: 'ddsp', name: 'DDSP-SVC 推理引擎', desc: '加载 DDSP-SVC Rectified Flow 模型进行歌声转换', version: 'DDSP-SVC', status: 'cuda', ok: true },
         { key: 'vocal-enhancement', name: 'AI Vocal Enhancement', desc: '原曲参考对齐与 AI 歌声增强', version: 'Natural Voice', status: '已就绪', ok: true },
