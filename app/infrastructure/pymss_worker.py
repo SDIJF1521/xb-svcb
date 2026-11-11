@@ -59,6 +59,21 @@ def _has_token(name: str, token: str) -> bool:
     return re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", name) is not None
 
 
+def _match_configured_stem(filename_stem: str, configured_names: list[str]) -> str | None:
+    """把输出文件名映射到模型声明的音轨名（整词匹配）。
+
+    之前用子串 ``name in output_key`` 匹配，``male`` 会命中 ``female``，
+    导致「男/女声分离」模型两路输出都标成 ``male``（第二路退化成 ``male_2``），
+    前端按声明音轨（male / female）连的线就对不上。这里改成整词匹配。
+    """
+    output_key = str(filename_stem or "").casefold().replace("_", " ").replace("-", " ")
+    for name in configured_names:
+        token = str(name or "").casefold().replace("_", " ").replace("-", " ").strip()
+        if _has_token(output_key, token):
+            return str(name)
+    return None
+
+
 def _name_score(path: Path, purpose: str, preferred_stem: str = "") -> int:
     """Prefer explicit PyMSS stem names over arbitrary filesystem order."""
     name = _normalized_name(path)
@@ -310,11 +325,7 @@ def main() -> int:
     raw_outputs = _audio_files(raw_dir)
     configured_names = [str(value) for value in configured_stems or () if str(value).strip()]
     for index, output in enumerate(raw_outputs):
-        output_key = output.stem.casefold().replace("_", " ").replace("-", " ")
-        label = next(
-            (name for name in configured_names if name.casefold().replace("_", " ").replace("-", " ") in output_key),
-            output.stem,
-        )
+        label = _match_configured_stem(output.stem, configured_names) or output.stem
         if output == vocal:
             destination = vocals_dest
         elif instrumental and output == instrumental and instrumental_dest:

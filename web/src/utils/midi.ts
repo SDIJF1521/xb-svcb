@@ -27,6 +27,8 @@ export const MIDI_DEFAULT_GRID = 0.1
 export const MIDI_GRID_OPTIONS = [0.02, 0.05, 0.1, 0.25, 0.5] as const
 /** 最小可点击宽度：短音符按真实时长画会小到点不中，命中与显示都按这个下限。 */
 export const MIDI_MIN_NOTE_PX = 7
+/** 可拉伸音符的最小像素宽度：低于此宽度两侧边缘会重叠，按「移动」处理。 */
+export const MIN_RESIZE_PX = 12
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
 export function clampPitch(pitch: number): number {
@@ -268,13 +270,16 @@ export function noteEdgeAt(
   topPitch: number,
   rowHeight: number,
   pxPerSecond: number,
-  edgeWidth = 6,
+  edgeWidth = 8,
   minWidth = MIDI_MIN_NOTE_PX,
 ): 'start' | 'end' | 'move' {
   const rect = noteRect(note, topPitch, rowHeight, pxPerSecond, minWidth)
-  if (rect.width < edgeWidth * 2 + 4) return 'move'
-  if (x - rect.x <= edgeWidth) return 'start'
-  if (rect.x + rect.width - x <= edgeWidth) return 'end'
+  // 低于可拉伸宽度的音符两侧边缘会重叠，无法可靠区分 start / end，按移动处理。
+  if (rect.width < MIN_RESIZE_PX) return 'move'
+  // 窄音符按比例缩窄可抓取边缘，让常用的 1/16 音符（约 15px）也能直接拖边缘伸缩。
+  const edge = Math.min(edgeWidth, Math.max(3, rect.width / 3))
+  if (x - rect.x <= edge) return 'start'
+  if (rect.x + rect.width - x <= edge) return 'end'
   return 'move'
 }
 
@@ -316,7 +321,7 @@ export function moveNotes(
   const minStart = Math.min(...group.map((note) => note.start))
   const maxEnd = Math.max(...group.map((note) => note.end))
   const limited = Math.min(Math.max(deltaSeconds, -minStart), Math.max(0, duration - maxEnd))
-  const shifted = snapTime(limited, grid)
+  const shifted = grid > 0 ? snapTime(limited, grid) : limited
   const bounded = Math.min(Math.max(shifted, -minStart), Math.max(0, duration - maxEnd))
   const lowest = Math.min(...group.map((note) => note.pitch))
   const highest = Math.max(...group.map((note) => note.pitch))

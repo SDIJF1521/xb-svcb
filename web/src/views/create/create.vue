@@ -1198,7 +1198,6 @@
             @error="onWorkflowAudioPause"
           />
           <span v-if="isGenerating" class="wf-status running">生成中 {{ currentWork?.progress || 0 }}%</span>
-          <span v-else-if="failed" class="wf-status failed">{{ currentWork?.error || '生成失败' }}</span>
           <template v-else-if="done">
             <span class="wf-status done">已完成</span>
             <router-link
@@ -1217,6 +1216,12 @@
             <el-icon class="el-icon--left"><MagicStick /></el-icon>
             {{ isGenerating ? '生成中...' : '运行工作流' }}
           </el-button>
+        </div>
+
+        <!-- 失败信息：独占一行并自动换行，避免长错误文本撑破顶栏、压住运行按钮 -->
+        <div v-if="failed" class="wf-error-row">
+          <span class="wf-error-label">运行失败</span>
+          <span class="wf-error-text">{{ currentWork?.error || '生成失败' }}</span>
         </div>
 
         <div v-if="done" class="wf-audition-row">
@@ -3727,6 +3732,22 @@ onUnmounted(() => {
 .workflow-bar-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; flex-wrap: nowrap; }
 .workflow-bar-right .wf-status,
 .workflow-bar-right .head-link { white-space: nowrap; flex-shrink: 0; }
+/* 失败信息独占一行、自动换行，长错误文本不再撑破顶栏压住运行按钮。 */
+.wf-error-row {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-left: 3px solid #f43f5e;
+  border-radius: 8px;
+  background: rgba(244, 63, 94, 0.08);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.wf-error-label { flex-shrink: 0; color: #f43f5e; font-weight: 700; }
+.wf-error-text { min-width: 0; color: #ffb4c0; word-break: break-word; overflow-wrap: anywhere; }
 .workflow-title h2 { font-size: 16px; }
 .workflow-bar .song-file { flex: 1; }
 .song-pick {

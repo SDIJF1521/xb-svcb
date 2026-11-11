@@ -175,6 +175,40 @@ class FfmpegGateway(ToolAdapter, Protocol):
         self, inputs: list[Path], dst: Path, sample_rate: int = 44100
     ) -> bool: ...
 
+    def merge_tracks(
+        self, inputs: list[Path], dst: Path, sample_rate: int = 44100
+    ) -> bool: ...
+
+    def apply_effect(
+        self,
+        src: Path,
+        dst: Path,
+        effect_type: str,
+        params: dict[str, Any],
+        sample_rate: int = 44100,
+    ) -> bool: ...
+
+    def loudnorm(
+        self, src: Path, dst: Path, target_lufs: float = -14.0, sample_rate: int = 44100
+    ) -> bool: ...
+
+    def tempo(
+        self, src: Path, dst: Path, speed: float, sample_rate: int = 44100
+    ) -> bool: ...
+
+    def pitch(
+        self, src: Path, dst: Path, semitones: int, sample_rate: int = 44100
+    ) -> bool: ...
+
+    def fade(
+        self,
+        src: Path,
+        dst: Path,
+        fade_in: float,
+        fade_out: float,
+        sample_rate: int = 44100,
+    ) -> bool: ...
+
     def adaptive_mix_profile(
         self,
         vocals: Path,

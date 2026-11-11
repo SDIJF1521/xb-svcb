@@ -20,7 +20,8 @@
       ]
     }
 
-``blend``（人声合唱叠加）的输入端口允许多条连线；其余端口默认单输入。
+``blend``（人声合唱叠加）、``merge``（多轨混合）、``concat``（顺序拼接）与
+``output``（保存）的输入端口允许多条连线；其余端口默认单输入。
 """
 
 from __future__ import annotations
@@ -49,6 +50,17 @@ NODE_TYPES: dict[str, dict[str, Any]] = {
     "blend": {"inputs": ["audio"], "outputs": ["audio"], "multi_inputs": {"audio"}},
     "enhance": {"inputs": ["audio"], "outputs": ["audio"], "multi_inputs": set()},
     "mix": {"inputs": ["vocals", "instrumental"], "outputs": ["audio"], "multi_inputs": set()},
+    # 通用多轨混合：任意多路音频求和（男女声合并 + 伴奏等），不做去相关/微失谐。
+    "merge": {"inputs": ["audio"], "outputs": ["audio"], "multi_inputs": {"audio"}},
+    # 顺序拼接：把多段音频按连线顺序首尾相接。
+    "concat": {"inputs": ["audio"], "outputs": ["audio"], "multi_inputs": {"audio"}},
+    # 音频效果器：effect 参数选择具体效果（EQ / 压缩 / 混响 / 降噪等）。
+    "effect": {"inputs": ["audio"], "outputs": ["audio"], "multi_inputs": set()},
+    "trim": {"inputs": ["audio"], "outputs": ["audio"], "multi_inputs": set()},
+    "fade": {"inputs": ["audio"], "outputs": ["audio"], "multi_inputs": set()},
+    "pitch": {"inputs": ["audio"], "outputs": ["audio"], "multi_inputs": set()},
+    "stretch": {"inputs": ["audio"], "outputs": ["audio"], "multi_inputs": set()},
+    "normalize": {"inputs": ["audio"], "outputs": ["audio"], "multi_inputs": set()},
     # 保存节点允许多路音轨接入（可同时保存人声/伴奏/混音等），也允许多个保存节点并存。
     "output": {"inputs": ["audio"], "outputs": [], "multi_inputs": {"audio"}},
 }
@@ -110,6 +122,14 @@ NODE_LABELS: dict[str, str] = {
     "blend": "人声合唱叠加",
     "enhance": "AI 歌声增强",
     "mix": "混音合成",
+    "merge": "多轨混合",
+    "concat": "顺序拼接",
+    "effect": "音频效果",
+    "trim": "裁剪片段",
+    "fade": "淡入淡出",
+    "pitch": "变调",
+    "stretch": "变速",
+    "normalize": "响度归一化",
     "output": "输出成品",
 }
 
@@ -123,6 +143,14 @@ NODE_DESCRIPTIONS: dict[str, str] = {
     "blend": "多路转换人声叠加为合唱",
     "enhance": "AI 自然修音 / 音色美化",
     "mix": "转换人声与伴奏重新混音",
+    "merge": "多路音频叠加合并（男声 + 女声 + 伴奏等）",
+    "concat": "多段音频按顺序拼接为完整音频",
+    "effect": "EQ / 压缩 / 混响 / 降噪等效果处理",
+    "trim": "截取音频的起止时间段，可加淡变",
+    "fade": "音频首尾音量淡入淡出",
+    "pitch": "整体升 / 降半音（保持时长）",
+    "stretch": "改变速度与时长（保持音高）",
+    "normalize": "按目标响度（LUFS）统一音量",
     "output": "最终翻唱成品输出",
 }
 

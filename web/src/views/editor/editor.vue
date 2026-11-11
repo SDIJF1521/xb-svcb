@@ -354,7 +354,7 @@
             <button title="预览片段" @click="playSelectedClip">
               <el-icon><Aim /></el-icon>
             </button>
-            <button title="MIDI 音高编辑（音符级）" :disabled="!selectedClip" @click="openMidiEditor('clip')">
+            <button :title="translateUiText('MIDI 音高编辑（音符级）')" :disabled="!selectedClip" @click="openMidiEditor('clip')">
               <el-icon><EditPen /></el-icon>
             </button>
             <button title="复制片段音频" :disabled="copyingAudio" @click="copySelectedClipAudio">
@@ -4868,7 +4868,7 @@ async function openMidiEditor(
     const targetClipId = clipId || selected.value?.clipId || ''
     const clip = track?.clips.find((item) => item.id === targetClipId) || null
     if (!track || !clip) {
-      ElMessage.error('先选中一个片段再打开 MIDI 编辑器')
+      ElMessage.error(translateUiText('先选中一个片段再打开 MIDI 编辑器'))
       return
     }
     midiScope.value = 'clip'
@@ -4983,7 +4983,7 @@ async function saveComposeSession(session: EditorMidiSession) {
     if (result.project) applyProject(result.project)
     const parts = Number(result.summary?.parts ?? session.parts.length)
     const notes = Number(result.summary?.note_count ?? 0)
-    ElMessage.success(`MIDI 编曲已保存（${parts} 个声部 · ${notes} 个音符）`)
+    ElMessage.success(translateUiText(`MIDI 编曲已保存（${parts} 个声部 · ${notes} 个音符）`))
   } catch (err) {
     composeError.value = err instanceof Error ? translateUiText(err.message) : 'MIDI 编曲保存失败'
     ElMessage.error(composeError.value)

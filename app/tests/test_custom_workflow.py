@@ -17,7 +17,7 @@ from application.conversion_service import ConversionService
 from application.work_service import WorkService
 from domain.workflow_graph import topological_order, validate_graph
 from infrastructure import pymss_catalog_meta
-from infrastructure.pymss_worker import _name_score
+from infrastructure.pymss_worker import _match_configured_stem, _name_score
 from infrastructure.pymss_tool import PymssTool
 from infrastructure.storage import ListRepository, SettingsStore
 
@@ -95,6 +95,46 @@ class _FakeFfmpeg:
     def convert(self, source: Path, output: Path, *_args, **_kwargs) -> bool:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(source.read_bytes())
+        return True
+
+    def slice(self, src: Path, start: float, end: float, dst: Path, sample_rate: int = 44100, fade: float = 0.0) -> bool:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(b"trim:" + str(round(end - start, 2)).encode() + b":" + src.read_bytes())
+        return True
+
+    def concat(self, parts: list[Path], dst: Path, sample_rate: int = 44100) -> bool:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(b"".join(p.read_bytes() for p in parts))
+        return True
+
+    def merge_tracks(self, inputs: list[Path], dst: Path, sample_rate: int = 44100) -> bool:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(b"merged:" + b"+".join(p.read_bytes() for p in inputs))
+        return True
+
+    def apply_effect(self, src: Path, dst: Path, effect_type: str, params: dict, sample_rate: int = 44100) -> bool:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(b"fx:" + effect_type.encode() + b":" + src.read_bytes())
+        return True
+
+    def loudnorm(self, src: Path, dst: Path, target_lufs: float = -14.0, sample_rate: int = 44100) -> bool:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(b"loudnorm:" + src.read_bytes())
+        return True
+
+    def tempo(self, src: Path, dst: Path, speed: float, sample_rate: int = 44100) -> bool:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(b"tempo:" + src.read_bytes())
+        return True
+
+    def pitch(self, src: Path, dst: Path, semitones: int, sample_rate: int = 44100) -> bool:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(b"pitch:" + str(semitones).encode() + b":" + src.read_bytes())
+        return True
+
+    def fade(self, src: Path, dst: Path, fade_in: float, fade_out: float, sample_rate: int = 44100) -> bool:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(b"fade:" + src.read_bytes())
         return True
 
 
@@ -265,6 +305,16 @@ def test_pymss_primary_stem_uses_whole_word_match() -> None:
     assert _name_score(Path("song_(male).wav"), "generic", "male") > _name_score(
         Path("song_(female).wav"), "generic", "male"
     )
+
+
+def test_pymss_stem_label_uses_whole_word_match() -> None:
+    """男/女声分离：female 输出不能被误标成 male（否则端口会变成 male_2）。"""
+    names = ["male", "female"]
+    assert _match_configured_stem("song_(male)", names) == "male"
+    assert _match_configured_stem("song_(female)", names) == "female"
+    assert _match_configured_stem("song (Female)", names) == "female"
+    # 文件名没带音轨名时不猜测，交给上层按声明顺序兜底。
+    assert _match_configured_stem("song_stem_01", names) is None
 
 
 def test_parse_instruments_supports_inline_and_block_lists() -> None:
@@ -641,6 +691,82 @@ def test_parse_workflow_file_rejects_invalid_graph() -> None:
         )
 
 
+def test_save_workflow_avoids_duplicate_names(wtmp: Path, monkeypatch) -> None:  # noqa: ANN001
+    """同一名称保存两次时自动加序号，更新已有工作流则保留原名。"""
+    repo = _repo(wtmp, monkeypatch)
+    service = WorkService(repo, _QueuedConversion(), _FakeModels([]), SettingsStore(config.SETTINGS_DB))
+    first = service.save_workflow("我的工作流", _graph())
+    second = service.save_workflow("我的工作流", _graph())
+    assert first["name"] == "我的工作流"
+    assert second["name"] == "我的工作流 (2)"
+    assert second["id"] != first["id"]
+    # 按 id 更新同一条工作流时不会误加序号
+    updated = service.save_workflow("我的工作流", {**_graph(), "id": first["id"]})
+    assert updated["id"] == first["id"]
+    assert updated["name"] == "我的工作流"
+
+
+def test_run_workflow_dedupes_duplicate_edges_and_labels(wtmp: Path, monkeypatch) -> None:  # noqa: ANN001
+    """重复连线只保存一次；不同节点同名标签自动加序号，避免重名素材。"""
+    repo = _repo(wtmp, monkeypatch)
+    graph = {
+        "name": "去重",
+        "nodes": [
+            {"id": "i", "type": "input", "x": 0, "y": 0, "params": {}},
+            {"id": "s", "type": "separate", "x": 1, "y": 0, "params": {"engine": "uvr", "model": "MDX-Net", "device": "auto"}},
+            {"id": "c1", "type": "convert", "x": 2, "y": 0, "params": {"model_id": "mdl_a", "auto_high_pitch_guard": False, "device": "auto"}},
+            {"id": "c2", "type": "convert", "x": 2, "y": 1, "params": {"model_id": "mdl_b", "auto_high_pitch_guard": False, "device": "auto"}},
+            {"id": "o", "type": "output", "x": 3, "y": 0, "params": {"file_template": "%filename%_%stem%_%model%"}},
+        ],
+        "edges": [
+            {"id": "e1", "from": {"node": "i", "port": "audio"}, "to": {"node": "s", "port": "audio"}},
+            {"id": "e2", "from": {"node": "s", "port": "vocals"}, "to": {"node": "c1", "port": "audio"}},
+            {"id": "e3", "from": {"node": "s", "port": "vocals"}, "to": {"node": "c2", "port": "audio"}},
+            {"id": "e4", "from": {"node": "c1", "port": "audio"}, "to": {"node": "o", "port": "audio"}},
+            {"id": "e5", "from": {"node": "c2", "port": "audio"}, "to": {"node": "o", "port": "audio"}},
+            # 重复连线：同一输出接到保存节点两次
+            {"id": "e6", "from": {"node": "c1", "port": "audio"}, "to": {"node": "o", "port": "audio"}},
+        ],
+    }
+    source = wtmp / "song.wav"
+    source.write_bytes(b"song")
+    order = topological_order(graph["nodes"], graph["edges"]) or []
+    repo.add(
+        {
+            "id": "wrk_dedupe",
+            "title": "去重",
+            "mode": "workflow",
+            "workflow": "workflow",
+            "status": "queue",
+            "progress": 0,
+            "source_path": str(source),
+            "workflow_graph": graph,
+            "workflow_models": {
+                "c1": {"name": "Model A", "framework": "rvc", "main_model_path": "/m/a.pth", "main_config_path": "", "diffusion_model_path": "", "diffusion_config_path": "", "index_path": "", "params": {"auto_high_pitch_guard": False, "device": "auto"}},
+                "c2": {"name": "Model B", "framework": "rvc", "main_model_path": "/m/b.pth", "main_config_path": "", "diffusion_model_path": "", "diffusion_config_path": "", "index_path": "", "params": {"auto_high_pitch_guard": False, "device": "auto"}},
+            },
+            "steps": [{"key": key, "label": key, "status": "wait"} for key in order],
+            "params": {},
+            "vocal_enhancement": {},
+            "preprocess": {},
+        }
+    )
+
+    service = _run_service(repo)
+    service._run_workflow("wrk_dedupe")  # noqa: SLF001
+
+    saved = repo.get("wrk_dedupe")
+    assert saved is not None
+    assert saved["status"] == "done", saved.get("error")
+    outputs = saved["workflow_outputs"]
+    # 重复连线只算一路；两个转换节点各保存一路
+    assert len(outputs) == 2
+    paths = [item["path"] for item in outputs]
+    assert len(paths) == len(set(paths))
+    labels = [item["label"] for item in outputs]
+    assert len(labels) == len(set(labels))
+
+
 class _FakeAudioEngine:
     """替代 FFmpegEngine：直接写出一个文件，用轨道数量标记渲染内容。"""
 
@@ -702,3 +828,163 @@ def test_run_workflow_fails_when_save_node_has_no_input(wtmp: Path, monkeypatch)
     assert saved is not None
     assert saved["status"] == "failed"
     assert saved.get("error")
+
+
+# ---- 扩展节点：结构 / 音频处理 ----
+def test_validate_new_processing_nodes() -> None:
+    """新增的音频处理 / 结构节点通过图校验。"""
+    graph = {
+        "nodes": [
+            {"id": "i", "type": "input", "params": {}},
+            {"id": "fx", "type": "effect", "params": {"effect": "eq"}},
+            {"id": "t", "type": "trim", "params": {"start": 0, "end": 10}},
+            {"id": "f", "type": "fade", "params": {}},
+            {"id": "p", "type": "pitch", "params": {"semitones": 2}},
+            {"id": "st", "type": "stretch", "params": {"speed": 1.2}},
+            {"id": "n", "type": "normalize", "params": {"target_lufs": -14}},
+            {"id": "o", "type": "output", "params": {}},
+        ],
+        "edges": [
+            {"id": "e1", "from": {"node": "i", "port": "audio"}, "to": {"node": "fx", "port": "audio"}},
+            {"id": "e2", "from": {"node": "fx", "port": "audio"}, "to": {"node": "t", "port": "audio"}},
+            {"id": "e3", "from": {"node": "t", "port": "audio"}, "to": {"node": "f", "port": "audio"}},
+            {"id": "e4", "from": {"node": "f", "port": "audio"}, "to": {"node": "p", "port": "audio"}},
+            {"id": "e5", "from": {"node": "p", "port": "audio"}, "to": {"node": "st", "port": "audio"}},
+            {"id": "e6", "from": {"node": "st", "port": "audio"}, "to": {"node": "n", "port": "audio"}},
+            {"id": "e7", "from": {"node": "n", "port": "audio"}, "to": {"node": "o", "port": "audio"}},
+        ],
+    }
+    assert validate_graph(graph) is None
+
+
+def test_validate_merge_and_concat_allow_multi_input() -> None:
+    """多轨混合 / 顺序拼接允许一个输入端口接入多路（fan-out → fan-in）。"""
+    graph = {
+        "nodes": [
+            {"id": "i", "type": "input", "params": {}},
+            {"id": "a", "type": "convert", "params": {}},
+            {"id": "b", "type": "convert", "params": {}},
+            {"id": "g", "type": "merge", "params": {}},
+            {"id": "o", "type": "output", "params": {}},
+        ],
+        "edges": [
+            {"id": "e1", "from": {"node": "i", "port": "audio"}, "to": {"node": "a", "port": "audio"}},
+            {"id": "e2", "from": {"node": "i", "port": "audio"}, "to": {"node": "b", "port": "audio"}},
+            {"id": "e3", "from": {"node": "a", "port": "audio"}, "to": {"node": "g", "port": "audio"}},
+            {"id": "e4", "from": {"node": "b", "port": "audio"}, "to": {"node": "g", "port": "audio"}},
+            {"id": "e5", "from": {"node": "g", "port": "audio"}, "to": {"node": "o", "port": "audio"}},
+        ],
+    }
+    assert validate_graph(graph) is None
+
+
+def test_run_workflow_merges_two_converted_vocals(wtmp: Path, monkeypatch) -> None:  # noqa: ANN001
+    """男女声分别转换后再合并为一首歌（fan-out → convert ×2 → merge → 保存）。"""
+    repo = _repo(wtmp, monkeypatch)
+    monkeypatch.setattr(config, "pymss_model_ready", lambda *_args, **_kwargs: True)
+    fake = _FakePymssMultiStem()
+    graph = {
+        "name": "男女声翻唱",
+        "nodes": [
+            {"id": "i", "type": "input", "x": 0, "y": 0, "params": {}},
+            {"id": "s", "type": "separate", "x": 1, "y": 0, "params": {"engine": "pymss", "model": "multi_stem_model", "device": "auto"}},
+            {"id": "c1", "type": "convert", "x": 2, "y": 0, "params": {"model_id": "mdl_a", "auto_high_pitch_guard": False, "device": "auto"}},
+            {"id": "c2", "type": "convert", "x": 2, "y": 1, "params": {"model_id": "mdl_b", "auto_high_pitch_guard": False, "device": "auto"}},
+            {"id": "g", "type": "merge", "x": 3, "y": 0, "params": {}},
+            {"id": "o", "type": "output", "x": 4, "y": 0, "params": {"file_template": "%filename%_%stem%_%model%"}},
+        ],
+        "edges": [
+            {"id": "e1", "from": {"node": "i", "port": "audio"}, "to": {"node": "s", "port": "audio"}},
+            {"id": "e2", "from": {"node": "s", "port": "vocals"}, "to": {"node": "c1", "port": "audio"}},
+            {"id": "e3", "from": {"node": "s", "port": "stem:drums"}, "to": {"node": "c2", "port": "audio"}},
+            {"id": "e4", "from": {"node": "c1", "port": "audio"}, "to": {"node": "g", "port": "audio"}},
+            {"id": "e5", "from": {"node": "c2", "port": "audio"}, "to": {"node": "g", "port": "audio"}},
+            {"id": "e6", "from": {"node": "g", "port": "audio"}, "to": {"node": "o", "port": "audio"}},
+        ],
+    }
+    source = wtmp / "song.wav"
+    source.write_bytes(b"song")
+    order = topological_order(graph["nodes"], graph["edges"]) or []
+    repo.add(
+        {
+            "id": "wrk_merge",
+            "title": "男女声翻唱",
+            "mode": "workflow",
+            "workflow": "workflow",
+            "status": "queue",
+            "progress": 0,
+            "source_path": str(source),
+            "workflow_graph": graph,
+            "workflow_models": {
+                "c1": {"name": "Model A", "framework": "rvc", "main_model_path": "/m/a.pth", "main_config_path": "", "diffusion_model_path": "", "diffusion_config_path": "", "index_path": "", "params": {"auto_high_pitch_guard": False, "device": "auto"}},
+                "c2": {"name": "Model B", "framework": "rvc", "main_model_path": "/m/b.pth", "main_config_path": "", "diffusion_model_path": "", "diffusion_config_path": "", "index_path": "", "params": {"auto_high_pitch_guard": False, "device": "auto"}},
+            },
+            "steps": [{"key": key, "label": key, "status": "wait"} for key in order],
+            "params": {},
+            "vocal_enhancement": {},
+            "preprocess": {},
+        }
+    )
+
+    service = ConversionService(
+        repo,
+        _FakeFfmpeg(),
+        _FakeUvr(),
+        _FakeEngines(),
+        vocal_enhancement=_FakeEnhancer(),
+        pymss=fake,
+    )
+    service._run_workflow("wrk_merge")  # noqa: SLF001
+
+    saved = repo.get("wrk_merge")
+    assert saved is not None
+    assert saved["status"] == "done", saved.get("error")
+    assert Path(saved["output_path"]).read_bytes() == b"merged:converted-vocals+converted-drums"
+
+
+def test_run_workflow_applies_effect_and_trim(wtmp: Path, monkeypatch) -> None:  # noqa: ANN001
+    """音频效果 / 裁剪节点在推理后按顺序应用。"""
+    repo = _repo(wtmp, monkeypatch)
+    graph = {
+        "name": "处理链",
+        "nodes": [
+            {"id": "i", "type": "input", "x": 0, "y": 0, "params": {}},
+            {"id": "fx", "type": "effect", "x": 1, "y": 0, "params": {"effect": "eq", "frequency_hz": 1000, "gain_db": 2, "q": 1}},
+            {"id": "t", "type": "trim", "x": 2, "y": 0, "params": {"start": 1, "end": 5, "fade": 0.2}},
+            {"id": "o", "type": "output", "x": 3, "y": 0, "params": {}},
+        ],
+        "edges": [
+            {"id": "e1", "from": {"node": "i", "port": "audio"}, "to": {"node": "fx", "port": "audio"}},
+            {"id": "e2", "from": {"node": "fx", "port": "audio"}, "to": {"node": "t", "port": "audio"}},
+            {"id": "e3", "from": {"node": "t", "port": "audio"}, "to": {"node": "o", "port": "audio"}},
+        ],
+    }
+    source = wtmp / "song.wav"
+    source.write_bytes(b"song")
+    order = topological_order(graph["nodes"], graph["edges"]) or []
+    repo.add(
+        {
+            "id": "wrk_fx",
+            "title": "处理链",
+            "mode": "workflow",
+            "workflow": "workflow",
+            "status": "queue",
+            "progress": 0,
+            "source_path": str(source),
+            "workflow_graph": graph,
+            "workflow_models": {},
+            "steps": [{"key": key, "label": key, "status": "wait"} for key in order],
+            "params": {},
+            "vocal_enhancement": {},
+            "preprocess": {},
+        }
+    )
+
+    service = _run_service(repo)
+    service._run_workflow("wrk_fx")  # noqa: SLF001
+
+    saved = repo.get("wrk_fx")
+    assert saved is not None
+    assert saved["status"] == "done", saved.get("error")
+    # 效果（fx:eq:…）先应用，随后裁剪（trim:4.0:…）叠加。
+    assert Path(saved["output_path"]).read_bytes() == b"trim:4.0:fx:eq:song"

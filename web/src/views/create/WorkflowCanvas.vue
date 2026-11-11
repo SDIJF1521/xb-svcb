@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, ArrowUp, Close, Delete, Download, FolderOpened, FullScreen, Grid, MagicStick, Plus, RefreshLeft, RefreshRight, Setting, Upload } from '@element-plus/icons-vue'
 import { api, type CoverWorkflow, type PymssModel, type WorkflowEdge, type WorkflowGraph, type WorkflowNode, type WorkflowNodeType } from '@/api'
@@ -68,6 +68,14 @@ const NODE_META: Record<WorkflowNodeType, NodeMeta> = {
   blend: { label: '合唱叠加', desc: '多路转换人声叠加', color: '#f59e0b', inputs: ['audio'], outputs: ['audio'] },
   enhance: { label: '歌声增强', desc: '自然修音 / 音色美化', color: '#35d07f', inputs: ['audio'], outputs: ['audio'] },
   mix: { label: '混音合成', desc: '人声与伴奏重新混音', color: '#e879f9', inputs: ['vocals', 'instrumental'], outputs: ['audio'] },
+  merge: { label: '多轨混合', desc: '多路音频叠加合并（男女声 + 伴奏）', color: '#22c55e', inputs: ['audio'], outputs: ['audio'] },
+  concat: { label: '顺序拼接', desc: '多段音频按顺序拼接', color: '#0ea5e9', inputs: ['audio'], outputs: ['audio'] },
+  effect: { label: '音频效果', desc: 'EQ / 压缩 / 混响 / 降噪', color: '#a855f7', inputs: ['audio'], outputs: ['audio'] },
+  trim: { label: '裁剪片段', desc: '截取起止时间段', color: '#f97316', inputs: ['audio'], outputs: ['audio'] },
+  fade: { label: '淡入淡出', desc: '首尾音量淡变', color: '#fbbf24', inputs: ['audio'], outputs: ['audio'] },
+  pitch: { label: '变调', desc: '整体升 / 降半音', color: '#e11d48', inputs: ['audio'], outputs: ['audio'] },
+  stretch: { label: '变速', desc: '改变速度保持音高', color: '#6366f1', inputs: ['audio'], outputs: ['audio'] },
+  normalize: { label: '响度归一化', desc: '统一响度 LUFS', color: '#14b8a6', inputs: ['audio'], outputs: ['audio'] },
   output: { label: '保存', desc: '最终翻唱成品', color: '#f59e0b', inputs: ['audio'], outputs: [] },
 }
 
@@ -76,6 +84,74 @@ const PORT_LABELS: Record<string, string> = {
   vocals: '人声',
   instrumental: '伴奏',
   other: '其他音轨',
+}
+
+// ---- 音频效果器（effect 节点）----
+interface EffectParamDef {
+  key: string
+  label: string
+  min: number
+  max: number
+  step: number
+  default: number
+}
+interface EffectTypeDef {
+  value: string
+  label: string
+  params: EffectParamDef[]
+}
+const EFFECT_TYPES: EffectTypeDef[] = [
+  { value: 'gain', label: '增益', params: [{ key: 'gain_db', label: '增益 (dB)', min: -36, max: 36, step: 0.5, default: 0 }] },
+  { value: 'highpass', label: '高通滤波', params: [{ key: 'cutoff_frequency_hz', label: '截止频率 (Hz)', min: 10, max: 20000, step: 10, default: 80 }] },
+  { value: 'lowpass', label: '低通滤波', params: [{ key: 'cutoff_frequency_hz', label: '截止频率 (Hz)', min: 10, max: 22000, step: 10, default: 16000 }] },
+  { value: 'eq', label: '均衡器 (EQ)', params: [
+    { key: 'frequency_hz', label: '频率 (Hz)', min: 20, max: 20000, step: 10, default: 1200 },
+    { key: 'gain_db', label: '增益 (dB)', min: -24, max: 24, step: 0.5, default: 0 },
+    { key: 'q', label: 'Q 值', min: 0.1, max: 12, step: 0.1, default: 1 },
+  ] },
+  { value: 'limiter', label: '限制器', params: [{ key: 'threshold_db', label: '阈值 (dB)', min: -30, max: 0, step: 0.5, default: -1 }] },
+  { value: 'compressor', label: '压缩器', params: [
+    { key: 'threshold_db', label: '阈值 (dB)', min: -60, max: 0, step: 0.5, default: -18 },
+    { key: 'ratio', label: '压缩比', min: 1, max: 20, step: 0.1, default: 2.5 },
+    { key: 'attack_ms', label: '启动 (ms)', min: 0.1, max: 200, step: 0.1, default: 8 },
+    { key: 'release_ms', label: '释放 (ms)', min: 1, max: 1000, step: 1, default: 120 },
+  ] },
+  { value: 'noise_gate', label: '噪声门', params: [
+    { key: 'threshold_db', label: '阈值 (dB)', min: -96, max: 0, step: 0.5, default: -42 },
+    { key: 'ratio', label: '压缩比', min: 1, max: 20, step: 0.1, default: 2.5 },
+  ] },
+  { value: 'denoise', label: '降噪', params: [
+    { key: 'noise_floor_db', label: '噪声底 (dB)', min: -80, max: -20, step: 0.5, default: -35 },
+    { key: 'reduction_db', label: '降噪量 (dB)', min: 0.01, max: 48, step: 0.5, default: 12 },
+  ] },
+  { value: 'reverb', label: '混响', params: [
+    { key: 'wet_level', label: '干湿比', min: 0, max: 1, step: 0.01, default: 0.18 },
+    { key: 'delay_ms', label: '预延迟 (ms)', min: 1, max: 250, step: 1, default: 52 },
+    { key: 'decay', label: '衰减', min: 0, max: 0.95, step: 0.01, default: 0.35 },
+  ] },
+  { value: 'delay', label: '延迟 / 回声', params: [
+    { key: 'delay_seconds', label: '延迟 (s)', min: 0, max: 3, step: 0.01, default: 0.18 },
+    { key: 'feedback', label: '反馈', min: 0, max: 0.95, step: 0.01, default: 0.18 },
+    { key: 'mix', label: '干湿比', min: 0, max: 1, step: 0.01, default: 0.18 },
+  ] },
+  { value: 'chorus', label: '合唱', params: [] },
+  { value: 'distortion', label: '失真', params: [{ key: 'drive_db', label: '驱动 (dB)', min: 0, max: 36, step: 0.5, default: 6 }] },
+]
+
+function effectTypeOf(node: WorkflowNode): string {
+  return String(node.params?.effect || 'eq')
+}
+function effectDefOf(effectType: string): EffectTypeDef | undefined {
+  return EFFECT_TYPES.find((item) => item.value === effectType)
+}
+function effectParamsOf(node: WorkflowNode): EffectParamDef[] {
+  return effectDefOf(effectTypeOf(node))?.params || []
+}
+function onEffectTypeChange(node: WorkflowNode) {
+  const def = effectDefOf(effectTypeOf(node))
+  for (const p of def?.params || []) {
+    node.params[p.key] = p.default
+  }
 }
 
 /** 端口可读名：stem:<label> 这类动态端口回落为音轨名。 */
@@ -250,6 +326,22 @@ function defaultParams(type: WorkflowNodeType): Record<string, any> {
       }
     case 'mix':
       return { enhanced: false }
+    case 'merge':
+      return {}
+    case 'concat':
+      return {}
+    case 'effect':
+      return { effect: 'eq', frequency_hz: 1200, gain_db: 0, q: 1 }
+    case 'trim':
+      return { start: 0, end: 0, fade: 0 }
+    case 'fade':
+      return { fade_in: 0.5, fade_out: 0.5 }
+    case 'pitch':
+      return { semitones: 0 }
+    case 'stretch':
+      return { speed: 1 }
+    case 'normalize':
+      return { target_lufs: -14 }
     case 'output':
       return { file_template: '%filename%_%stem%_%model%' }
     default:
@@ -274,6 +366,7 @@ const selectedEdgeId = ref<string | null>(null)
 const inspectorOpen = ref(false)
 const connecting = ref<{ fromNode: string; fromPort: string; x: number; y: number } | null>(null)
 const savedWorkflows = ref<CoverWorkflow[]>([])
+const savedPanelOpen = ref(false)
 const portOffsets = ref<Record<string, { x: number; y: number }>>({})
 
 const nodes = computed(() => graph.value.nodes)
@@ -703,8 +796,8 @@ function connectPorts(fromNode: string, fromPort: string, toNode: string, toPort
   if (!sourceNode || !nodeOutputs(sourceNode).includes(fromPort)) return
   const meta = NODE_META[nodeById(toNode)?.type || 'input']
   const multiType = nodeById(toNode)?.type
-  // 合唱叠加与保存节点允许一个输入端口接入多路音轨。
-  const multi = (multiType === 'blend' || multiType === 'output') && meta.inputs.includes(toPort)
+  // 合唱叠加、多轨混合、顺序拼接与保存节点允许一个输入端口接入多路音轨。
+  const multi = (multiType === 'blend' || multiType === 'merge' || multiType === 'concat' || multiType === 'output') && meta.inputs.includes(toPort)
   if (multi) {
     const dup = edges.value.find(
       (e) => e.from.node === fromNode && e.from.port === fromPort && e.to.node === toNode && e.to.port === toPort,
@@ -835,6 +928,24 @@ function nodeSubtitle(node: WorkflowNode): string {
       return translateUiText('人声 + 伴奏')
     case 'blend':
       return translateUiText('多路合唱')
+    case 'merge':
+      return translateUiText('多路合并')
+    case 'concat':
+      return translateUiText('多段拼接')
+    case 'effect':
+      return translateUiText(effectDefOf(effectTypeOf(node))?.label || '效果')
+    case 'trim':
+      return translateUiText('裁剪片段')
+    case 'fade':
+      return translateUiText('淡入淡出')
+    case 'pitch': {
+      const semitones = num(node, 'semitones', 0)
+      return translateUiText(semitones > 0 ? `+${semitones} 半音` : `${semitones} 半音`)
+    }
+    case 'stretch':
+      return translateUiText(`${num(node, 'speed', 1)}x 速度`)
+    case 'normalize':
+      return translateUiText(`${num(node, 'target_lufs', -14)} LUFS`)
     default:
       return ''
   }
@@ -899,6 +1010,213 @@ function deleteSelectedEdge() {
   selectedEdgeId.value = null
 }
 
+// ---- 右键菜单 / 节点复制粘贴（CV） ----
+type MenuTarget = 'node' | 'edge' | 'canvas'
+const contextMenu = reactive<{
+  visible: boolean
+  x: number
+  y: number
+  target: MenuTarget
+  nodeId: string
+  edgeId: string
+}>({ visible: false, x: 0, y: 0, target: 'canvas', nodeId: '', edgeId: '' })
+const nodeClipboard = ref<WorkflowNode | null>(null)
+
+function cloneNodeData(node: WorkflowNode): WorkflowNode {
+  return JSON.parse(JSON.stringify(node)) as WorkflowNode
+}
+
+/** 以模板（复制源 / 剪贴板）创建一个新节点：新 id、偏移位置、保留全部参数。 */
+function addNodeFromTemplate(template: WorkflowNode, at?: { x: number; y: number }): WorkflowNode | null {
+  // 保存节点唯一：复制保存节点时不再新增。
+  if (template.type === 'output' && saveNode()) {
+    ElMessage.info('一个工作流只保留一个保存节点')
+    return null
+  }
+  const node: WorkflowNode = {
+    ...cloneNodeData(template),
+    id: nextId('n_'),
+    x: Math.round(at?.x ?? template.x + 60),
+    y: Math.round(at?.y ?? template.y + 60),
+  }
+  nodes.value.push(node)
+  selectedNodeId.value = node.id
+  selectedEdgeId.value = null
+  void measurePorts()
+  return node
+}
+
+function copyNode(node: WorkflowNode | null = selectedNode.value) {
+  if (!node) return
+  nodeClipboard.value = cloneNodeData(node)
+  ElMessage.success('已复制节点')
+}
+
+function cutNode(node: WorkflowNode | null = selectedNode.value) {
+  if (!node) return
+  nodeClipboard.value = cloneNodeData(node)
+  removeNode(node.id)
+  ElMessage.success('已剪切节点')
+}
+
+function pasteNode(at?: { x: number; y: number }) {
+  const template = nodeClipboard.value
+  if (!template) {
+    ElMessage.info('剪贴板里还没有节点，先复制一个节点')
+    return
+  }
+  // 键盘粘贴没有明确位置时，从当前选中节点继续偏移，连续粘贴会依次错开。
+  const base = at ?? (selectedNode.value
+    ? { x: selectedNode.value.x + 40, y: selectedNode.value.y + 40 }
+    : undefined)
+  const node = addNodeFromTemplate(template, base)
+  if (node) ElMessage.success('已粘贴节点')
+}
+
+function duplicateNode(node: WorkflowNode | null = selectedNode.value) {
+  if (!node) return
+  const created = addNodeFromTemplate(node, { x: node.x + 48, y: node.y + 48 })
+  if (created) ElMessage.success('已复制一份节点')
+}
+
+/** 断开节点上的全部连线（输入与输出）。 */
+function disconnectNode(node: WorkflowNode) {
+  let removed = 0
+  for (let i = edges.value.length - 1; i >= 0; i -= 1) {
+    const edge = edges.value[i]
+    if (edge && (edge.from.node === node.id || edge.to.node === node.id)) {
+      edges.value.splice(i, 1)
+      removed += 1
+    }
+  }
+  void measurePorts()
+  if (removed) ElMessage.success(`已断开 ${removed} 条连线`)
+}
+
+function openContextMenu(e: MouseEvent, target: MenuTarget, nodeId = '', edgeId = '') {
+  e.preventDefault()
+  e.stopPropagation()
+  contextMenu.visible = true
+  contextMenu.target = target
+  contextMenu.nodeId = nodeId
+  contextMenu.edgeId = edgeId
+  contextMenu.x = e.clientX
+  contextMenu.y = e.clientY
+  nextTick(clampContextMenu)
+}
+
+function onCanvasContextMenu(e: MouseEvent) {
+  // 点到节点 / 连线上时由它们自己的 handler 处理，这里只处理空白画布。
+  const el = e.target as HTMLElement | null
+  if (el?.closest('.wf-node') || el?.closest('.wf-edge-hit')) return
+  selectedEdgeId.value = null
+  openContextMenu(e, 'canvas')
+}
+
+function onNodeContextMenu(node: WorkflowNode, e: MouseEvent) {
+  selectedNodeId.value = node.id
+  selectedEdgeId.value = null
+  openContextMenu(e, 'node', node.id)
+}
+
+function onEdgeContextMenu(edgeId: string, e: MouseEvent) {
+  selectedEdgeId.value = edgeId
+  selectedNodeId.value = null
+  openContextMenu(e, 'edge', '', edgeId)
+}
+
+function closeContextMenu() {
+  contextMenu.visible = false
+}
+
+function clampContextMenu() {
+  if (!contextMenu.visible) return
+  const width = 200
+  const height = contextMenu.target === 'node' ? 300 : 180
+  const margin = 8
+  contextMenu.x = Math.max(margin, Math.min(contextMenu.x, window.innerWidth - width - margin))
+  contextMenu.y = Math.max(margin, Math.min(contextMenu.y, window.innerHeight - height - margin))
+}
+
+function locateMenuNode(): WorkflowNode | null {
+  // 右键在节点上时用该节点；在空白画布上时回落到当前选中节点。
+  if (contextMenu.nodeId) return nodeById(contextMenu.nodeId) || null
+  return selectedNode.value
+}
+
+/** 右键位置对应的画布世界坐标（粘贴时把节点放在鼠标处）。 */
+function canvasMenuPoint(): { x: number; y: number } | undefined {
+  const rect = canvasEl.value?.getBoundingClientRect()
+  if (!rect) return undefined
+  return {
+    x: (contextMenu.x - rect.left - panX.value) / zoom.value - NODE_W / 2,
+    y: (contextMenu.y - rect.top - panY.value) / zoom.value - 40,
+  }
+}
+
+function menuCopy() {
+  copyNode(locateMenuNode())
+  closeContextMenu()
+}
+
+function menuCut() {
+  cutNode(locateMenuNode())
+  closeContextMenu()
+}
+
+function menuPaste() {
+  pasteNode(canvasMenuPoint())
+  closeContextMenu()
+}
+
+function menuDuplicate() {
+  duplicateNode(locateMenuNode())
+  closeContextMenu()
+}
+
+function menuDisconnect() {
+  const node = locateMenuNode()
+  if (node) disconnectNode(node)
+  closeContextMenu()
+}
+
+function menuDeleteNode() {
+  const node = locateMenuNode()
+  if (node) removeNode(node.id)
+  closeContextMenu()
+}
+
+function menuDeleteEdge() {
+  if (contextMenu.edgeId) removeEdgeById(contextMenu.edgeId)
+  closeContextMenu()
+}
+
+function menuInspector() {
+  const node = locateMenuNode()
+  if (node) focusInspector(node)
+  closeContextMenu()
+}
+
+function menuTidy() {
+  closeContextMenu()
+  void tidyLayout()
+}
+
+function menuFit() {
+  closeContextMenu()
+  void fitView()
+}
+
+function onWindowPointerDown(e: PointerEvent) {
+  const target = e.target instanceof Element ? e.target : null
+  if (savedPanelOpen.value && !target?.closest('.wf-saved')) {
+    savedPanelOpen.value = false
+  }
+  if (!contextMenu.visible) return
+  if (target?.closest('.wf-menu')) return
+  closeContextMenu()
+}
+
 function isEditableTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null
   if (!el) return false
@@ -908,23 +1226,73 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 function onKeydown(e: KeyboardEvent) {
   const mod = e.ctrlKey || e.metaKey
+  if (e.key === 'Escape') {
+    if (savedPanelOpen.value) {
+      savedPanelOpen.value = false
+      return
+    }
+    if (contextMenu.visible) {
+      closeContextMenu()
+      return
+    }
+    if (selectedNodeId.value || selectedEdgeId.value || inspectorOpen.value) {
+      selectedNodeId.value = null
+      selectedEdgeId.value = null
+      inspectorOpen.value = false
+    }
+    return
+  }
+  if (isEditableTarget(e.target)) return
   if (mod && e.key.toLowerCase() === 'z') {
-    if (isEditableTarget(e.target)) return
     e.preventDefault()
     if (e.shiftKey) redo()
     else undo()
     return
   }
   if (mod && e.key.toLowerCase() === 'y') {
-    if (isEditableTarget(e.target)) return
     e.preventDefault()
     redo()
     return
   }
+  if (mod && e.key.toLowerCase() === 'c') {
+    if (!selectedNodeId.value) return
+    e.preventDefault()
+    copyNode()
+    return
+  }
+  if (mod && e.key.toLowerCase() === 'x') {
+    if (!selectedNodeId.value) return
+    e.preventDefault()
+    cutNode()
+    return
+  }
+  if (mod && e.key.toLowerCase() === 'v') {
+    e.preventDefault()
+    pasteNode()
+    return
+  }
+  if (mod && e.key.toLowerCase() === 'd') {
+    if (!selectedNodeId.value) return
+    e.preventDefault()
+    duplicateNode()
+    return
+  }
   if (e.key === 'Delete' || e.key === 'Backspace') {
-    if (isEditableTarget(e.target)) return
     if (selectedEdgeId.value) deleteSelectedEdge()
     else if (selectedNodeId.value) removeNode(selectedNodeId.value)
+    return
+  }
+  // 选中节点后方向键微调位置（Shift 加速，每次 40px）。
+  if (selectedNodeId.value && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+    const node = nodeById(selectedNodeId.value)
+    if (!node) return
+    e.preventDefault()
+    const step = e.shiftKey ? 40 : 1
+    if (e.key === 'ArrowUp') node.y = Math.round((node.y - step) * 10) / 10
+    else if (e.key === 'ArrowDown') node.y = Math.round((node.y + step) * 10) / 10
+    else if (e.key === 'ArrowLeft') node.x = Math.round((node.x - step) * 10) / 10
+    else node.x = Math.round((node.x + step) * 10) / 10
+    void measurePorts()
   }
 }
 
@@ -1012,6 +1380,8 @@ async function saveWorkflow() {
     const saved = await api.saveCoverWorkflow(graph.value.name, { ...graph.value })
     graph.value.id = saved.id
     graph.value.updated_at = saved.updated_at
+    // 后端重名时会自动加序号，界面同步成实际保存名。
+    if (saved.name) graph.value.name = saved.name
     ElMessage.success('工作流已保存')
     await refreshWorkflows()
   } catch (err) {
@@ -1089,11 +1459,21 @@ async function importWorkflowFile() {
   }
 }
 
-async function deleteWorkflow() {
-  if (!graph.value.id) return
+// ---- 已保存工作流：列表 / 载入 / 删除 ----
+function toggleSavedPanel() {
+  savedPanelOpen.value = !savedPanelOpen.value
+  if (savedPanelOpen.value) void refreshWorkflows()
+}
+
+async function pickSavedWorkflow(id: string) {
+  await loadWorkflow(id)
+  savedPanelOpen.value = false
+}
+
+async function deleteSavedWorkflow(workflow: CoverWorkflow) {
   try {
-    await api.deleteCoverWorkflow(graph.value.id)
-    graph.value.id = ''
+    await api.deleteCoverWorkflow(workflow.id)
+    if (graph.value.id === workflow.id) graph.value.id = ''
     ElMessage.success('已删除已保存的工作流')
     await refreshWorkflows()
   } catch {
@@ -1206,6 +1586,7 @@ const DEVICE_OPTIONS = [
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
+  window.addEventListener('pointerdown', onWindowPointerDown, true)
   if (!graph.value.nodes?.length) newWorkflow()
   else void fitView()
   normalizeNodes()
@@ -1214,6 +1595,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('pointerdown', onWindowPointerDown, true)
   window.removeEventListener('pointermove', onPanMove)
   window.removeEventListener('pointerup', onPanEnd)
   window.removeEventListener('pointermove', onNodeDragMove)
@@ -1365,18 +1747,40 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
       <el-button round size="small" class="ghost-btn" @click="exportWorkflowFile">
         <el-icon class="el-icon--left"><Download /></el-icon>导出文件
       </el-button>
-      <el-select
-        :model-value="graph.id"
-        size="small"
-        class="wf-load"
-        placeholder="载入已保存工作流"
-        @update:model-value="loadWorkflow"
-      >
-        <el-option v-for="w in savedWorkflows" :key="w.id" :label="w.name" :value="w.id" />
-      </el-select>
-      <el-button v-if="graph.id" round size="small" class="ghost-btn" @click="deleteWorkflow">
-        <el-icon class="el-icon--left"><Delete /></el-icon>删除已保存
-      </el-button>
+      <div class="wf-saved">
+        <el-button
+          round
+          size="small"
+          class="ghost-btn"
+          :class="{ active: savedPanelOpen }"
+          @click.stop="toggleSavedPanel"
+        >
+          <el-icon class="el-icon--left"><FolderOpened /></el-icon>已保存工作流<span v-if="savedWorkflows.length" class="wf-saved-count">{{ savedWorkflows.length }}</span>
+        </el-button>
+        <div v-if="savedPanelOpen" class="wf-saved-panel" @pointerdown.stop>
+          <div class="wf-saved-head">
+            <span>已保存工作流</span>
+            <button class="wf-saved-close" title="关闭" @click="savedPanelOpen = false">
+              <el-icon><Close /></el-icon>
+            </button>
+          </div>
+          <div v-if="!savedWorkflows.length" class="wf-saved-empty">还没有保存的工作流</div>
+          <div
+            v-for="w in savedWorkflows"
+            :key="w.id"
+            class="wf-saved-row"
+            :class="{ active: w.id === graph.id }"
+          >
+            <button class="wf-saved-pick" :title="`载入「${w.name}」`" @click="pickSavedWorkflow(w.id)">
+              <span class="wf-saved-name">{{ w.name }}</span>
+              <span v-if="w.updated_at" class="wf-saved-meta">{{ w.updated_at }}</span>
+            </button>
+            <button class="wf-saved-del" title="删除该工作流" @click.stop="deleteSavedWorkflow(w)">
+              <el-icon><Delete /></el-icon>
+            </button>
+          </div>
+        </div>
+      </div>
       <el-button round size="small" class="ghost-btn" :disabled="!canUndo" @click="undo">
         <el-icon class="el-icon--left"><RefreshLeft /></el-icon>撤销
       </el-button>
@@ -1396,7 +1800,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
       <el-button round size="small" class="ghost-btn" @click="toggleMaximize">
         <el-icon class="el-icon--left"><FullScreen /></el-icon>{{ isMaximized ? '退出全屏' : '全屏' }}
       </el-button>
-      <span class="wf-hint">拖拽节点入库 · 输出圆点拖到输入圆点连线 · 滚轮缩放 · Ctrl+Z 撤销 / Ctrl+Shift+Z 重做 · Delete 删除</span>
+      <span class="wf-hint">拖拽节点入库 · 输出圆点拖到输入圆点连线 · 滚轮缩放 · 右键菜单 · Ctrl+C/X/V 复制粘贴 · Ctrl+D 复制一份 · Delete 删除</span>
     </div>
 
     <div class="wf-body">
@@ -1419,7 +1823,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
         </button>
       </aside>
 
-      <div ref="canvasEl" class="wf-canvas" @wheel.prevent="onWheel" @dragover.prevent @drop.prevent="onPaletteDrop">
+      <div ref="canvasEl" class="wf-canvas" @wheel.prevent="onWheel" @dragover.prevent @drop.prevent="onPaletteDrop" @contextmenu.prevent="onCanvasContextMenu">
         <div ref="worldEl" class="wf-world" :style="worldStyle">
           <div class="wf-bg" @pointerdown="onPanStart" />
           <svg class="wf-svg">
@@ -1429,6 +1833,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                 :d="p.d"
                 :class="{ active: p.id === selectedEdgeId }"
                 @pointerdown.stop="selectedEdgeId = p.id; selectedNodeId = null; inspectorOpen = false"
+                @contextmenu.prevent.stop="onEdgeContextMenu(p.id, $event)"
               />
               <path class="wf-edge" :d="p.d" :class="{ active: p.id === selectedEdgeId }" />
               <template v-if="p.a && p.b">
@@ -1456,6 +1861,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
             :data-node-el="node.id"
             :style="{ left: `${node.x}px`, top: `${node.y}px`, width: `${NODE_W}px`, '--acc': NODE_META[node.type].color }"
             @pointerdown.stop="selectedNodeId = node.id; selectedEdgeId = null; inspectorOpen = false"
+            @contextmenu.prevent.stop="onNodeContextMenu(node, $event)"
           >
             <div class="wf-node-head" @pointerdown.stop="onNodeDragStart(node, $event)">
               <span class="wf-node-badge"></span>
@@ -1691,6 +2097,73 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                 </label>
               </template>
 
+              <template v-else-if="node.type === 'merge'">
+                <p class="wf-note">将多路音频（如男声、女声、伴奏）叠加合并为一路。多个上游节点可同时接入本节点的「音频」输入圆点。</p>
+              </template>
+
+              <template v-else-if="node.type === 'concat'">
+                <p class="wf-note">将多段音频按连线顺序首尾拼接为完整音频。多个上游节点可同时接入本节点的「音频」输入圆点。</p>
+              </template>
+
+              <template v-else-if="node.type === 'effect'">
+                <label class="wf-field"><span>效果类型</span>
+                  <el-select :model-value="effectTypeOf(node)" size="small" class="wf-mini" @update:model-value="node.params.effect = $event; onEffectTypeChange(node)">
+                    <el-option v-for="e in EFFECT_TYPES" :key="e.value" :label="e.label" :value="e.value" />
+                  </el-select>
+                </label>
+                <label class="wf-field" v-for="p in effectParamsOf(node)" :key="p.key">
+                  <span>{{ p.label }}</span>
+                  <el-slider v-model="node.params[p.key]" :min="p.min" :max="p.max" :step="p.step" :show-tooltip="false" />
+                </label>
+                <p class="wf-hint-line">{{ effectParamsOf(node).length ? '参数实时生效，效果在推理后按节点顺序应用。' : '该效果无额外参数。' }}</p>
+              </template>
+
+              <template v-else-if="node.type === 'trim'">
+                <label class="wf-field"><span>开始 (s)</span>
+                  <el-input-number v-model="node.params.start" :min="0" :step="0.5" size="small" class="wf-mini" controls-position="right" />
+                </label>
+                <label class="wf-field"><span>结束 (s)</span>
+                  <el-input-number v-model="node.params.end" :min="0" :step="0.5" size="small" class="wf-mini" controls-position="right" />
+                </label>
+                <div class="wf-slider">
+                  <div class="wf-slider-head"><span>淡变 (s)</span><b>{{ num(node, 'fade', 0) }}</b></div>
+                  <el-slider v-model="node.params.fade" :min="0" :max="3" :step="0.05" :show-tooltip="false" />
+                </div>
+                <p class="wf-hint-line">结束时间为 0 时自动取到音频末尾。</p>
+              </template>
+
+              <template v-else-if="node.type === 'fade'">
+                <div class="wf-slider">
+                  <div class="wf-slider-head"><span>淡入 (s)</span><b>{{ num(node, 'fade_in', 0.5) }}</b></div>
+                  <el-slider v-model="node.params.fade_in" :min="0" :max="5" :step="0.1" :show-tooltip="false" />
+                </div>
+                <div class="wf-slider">
+                  <div class="wf-slider-head"><span>淡出 (s)</span><b>{{ num(node, 'fade_out', 0.5) }}</b></div>
+                  <el-slider v-model="node.params.fade_out" :min="0" :max="5" :step="0.1" :show-tooltip="false" />
+                </div>
+              </template>
+
+              <template v-else-if="node.type === 'pitch'">
+                <div class="wf-slider">
+                  <div class="wf-slider-head"><span>变调（半音）</span><b>{{ num(node, 'semitones', 0) > 0 ? '+' + num(node, 'semitones', 0) : num(node, 'semitones', 0) }}</b></div>
+                  <el-slider v-model="node.params.semitones" :min="-12" :max="12" :step="1" :show-tooltip="false" />
+                </div>
+              </template>
+
+              <template v-else-if="node.type === 'stretch'">
+                <div class="wf-slider">
+                  <div class="wf-slider-head"><span>速度倍率</span><b>{{ num(node, 'speed', 1) }}x</b></div>
+                  <el-slider v-model="node.params.speed" :min="0.25" :max="4" :step="0.05" :show-tooltip="false" />
+                </div>
+              </template>
+
+              <template v-else-if="node.type === 'normalize'">
+                <div class="wf-slider">
+                  <div class="wf-slider-head"><span>目标响度 (LUFS)</span><b>{{ num(node, 'target_lufs', -14) }}</b></div>
+                  <el-slider v-model="node.params.target_lufs" :min="-24" :max="-5" :step="0.5" :show-tooltip="false" />
+                </div>
+              </template>
+
               <template v-else-if="node.type === 'output'">
                 <div class="wf-save">
                   <div class="wf-save-head">
@@ -1920,6 +2393,48 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
               <p class="wf-note">人声与伴奏重新混音；无伴奏时仅输出人声。</p>
             </template>
 
+            <template v-else-if="selectedNode.type === 'merge'">
+              <p class="wf-note">将多路音频（如男声、女声、伴奏）叠加合并为一路，用于把多段翻唱人声合成为完整歌曲。</p>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'concat'">
+              <p class="wf-note">将多段音频按连线顺序首尾拼接为完整音频。</p>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'effect'">
+              <div class="wf-stack">
+                <div class="wf-stack-label">效果类型</div>
+                <el-select :model-value="effectTypeOf(selectedNode)" size="small" class="wf-full" @update:model-value="selectedNode.params.effect = $event; onEffectTypeChange(selectedNode)">
+                  <el-option v-for="e in EFFECT_TYPES" :key="e.value" :label="e.label" :value="e.value" />
+                </el-select>
+              </div>
+              <label class="wf-field" v-for="p in effectParamsOf(selectedNode)" :key="p.key">
+                <span>{{ p.label }}</span>
+                <el-slider v-model="selectedNode.params[p.key]" :min="p.min" :max="p.max" :step="p.step" :show-tooltip="false" />
+              </label>
+              <p class="wf-note">内置 FFmpeg 效果器，效果在推理后按节点顺序应用。</p>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'trim'">
+              <p class="wf-note">截取音频的起止时间段，可加淡变；结束时间为 0 时取到音频末尾。</p>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'fade'">
+              <p class="wf-note">对音频首尾做淡入 / 淡出，不改变总时长。</p>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'pitch'">
+              <p class="wf-note">整体升 / 降半音，保持时长不变。</p>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'stretch'">
+              <p class="wf-note">改变速度与时长，保持音高不变。</p>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'normalize'">
+              <p class="wf-note">按目标响度（LUFS）统一音量。</p>
+            </template>
+
             <template v-else-if="selectedNode.type === 'input'">
               <p class="wf-note">使用工作台已上传的歌曲作为源音频。</p>
             </template>
@@ -1940,8 +2455,57 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
 
         <div v-if="!selectedNode && !selectedEdge" class="wf-tip">
           <el-icon><MagicStick /></el-icon>
-          点击节点右上角 ⚙ 打开设置 · 点击连线可删除
+          点击节点右上角 ⚙ 打开设置 · 右键菜单可复制 / 粘贴 / 断开连线 · 点击连线可删除
         </div>
+
+        <!-- 右键菜单（节点 / 连线 / 空白画布） -->
+        <Teleport to="body">
+          <div
+            v-if="contextMenu.visible"
+            class="wf-menu"
+            :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
+            @pointerdown.stop
+            @contextmenu.prevent
+          >
+            <template v-if="contextMenu.target === 'node'">
+              <button type="button" class="wf-menu-item" @click="menuCopy">
+                复制节点 <kbd>Ctrl+C</kbd>
+              </button>
+              <button type="button" class="wf-menu-item" @click="menuCut">
+                剪切节点 <kbd>Ctrl+X</kbd>
+              </button>
+              <button type="button" class="wf-menu-item" @click="menuPaste">
+                粘贴节点 <kbd>Ctrl+V</kbd>
+              </button>
+              <button type="button" class="wf-menu-item" @click="menuDuplicate">
+                复制一份 <kbd>Ctrl+D</kbd>
+              </button>
+              <i class="wf-menu-sep" aria-hidden="true"></i>
+              <button type="button" class="wf-menu-item" @click="menuDisconnect">断开全部连线</button>
+              <button type="button" class="wf-menu-item" @click="menuInspector">打开设置</button>
+              <i class="wf-menu-sep" aria-hidden="true"></i>
+              <button type="button" class="wf-menu-item danger" @click="menuDeleteNode">
+                删除节点 <kbd>Del</kbd>
+              </button>
+            </template>
+            <template v-else-if="contextMenu.target === 'edge'">
+              <button type="button" class="wf-menu-item danger" @click="menuDeleteEdge">
+                删除连线 <kbd>Del</kbd>
+              </button>
+            </template>
+            <template v-else>
+              <button type="button" class="wf-menu-item" @click="menuPaste">
+                粘贴节点 <kbd>Ctrl+V</kbd>
+              </button>
+              <button type="button" class="wf-menu-item" :disabled="!selectedNode" @click="menuCopy">
+                复制选中节点 <kbd>Ctrl+C</kbd>
+              </button>
+              <i class="wf-menu-sep" aria-hidden="true"></i>
+              <button type="button" class="wf-menu-item" @click="menuTidy">一键整理</button>
+              <button type="button" class="wf-menu-item" @click="menuFit">适应画布</button>
+            </template>
+          </div>
+        </Teleport>
       </div>
     </div>
   </div>
@@ -1982,7 +2546,90 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
   background: color-mix(in srgb, var(--xb-panel) 92%, var(--xb-primary) 2%);
 }
 .wf-name { width: 190px; }
-.wf-load { width: 200px; }
+/* 已保存工作流下拉面板（可载入 / 删除任意已保存工作流） */
+.wf-saved { position: relative; flex-shrink: 0; }
+.wf-saved-count {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--xb-primary) 26%, transparent);
+  color: var(--xb-text);
+  font-size: 10px;
+  line-height: 16px;
+}
+.wf-saved-panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--xb-border);
+  background: color-mix(in srgb, var(--xb-panel) 97%, #000);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+.wf-saved-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--xb-muted);
+}
+.wf-saved-close {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--xb-muted);
+  cursor: pointer;
+}
+.wf-saved-close:hover { background: rgba(127, 127, 127, 0.16); color: var(--xb-text); }
+.wf-saved-empty { padding: 12px 8px; font-size: 12px; color: var(--xb-muted); text-align: center; }
+.wf-saved-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 7px;
+  padding: 2px;
+}
+.wf-saved-row:hover { background: color-mix(in srgb, var(--xb-primary) 12%, transparent); }
+.wf-saved-row.active { background: color-mix(in srgb, var(--xb-primary) 18%, transparent); }
+.wf-saved-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: var(--xb-text);
+  text-align: left;
+  cursor: pointer;
+}
+.wf-saved-name { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wf-saved-meta { font-size: 10.5px; color: var(--xb-muted); }
+.wf-saved-del {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--xb-muted);
+  cursor: pointer;
+}
+.wf-saved-del:hover { background: rgba(255, 90, 110, 0.18); color: #ff7a8a; }
 .wf-hint { margin-left: auto; color: var(--xb-muted); font-size: 12px; }
 
 .wf-body { display: flex; height: calc(100vh - 250px); min-height: 640px; }
@@ -2576,6 +3223,61 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
   border: 1px solid var(--xb-border);
   color: var(--xb-muted);
   font-size: 12px;
+}
+/* 右键菜单（节点 / 连线 / 空白画布） */
+.wf-menu {
+  position: fixed;
+  z-index: 4000;
+  min-width: 184px;
+  padding: 5px;
+  border-radius: 10px;
+  border: 1px solid var(--xb-border);
+  background: color-mix(in srgb, var(--xb-panel) 96%, #000);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wf-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--xb-text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.wf-menu-item:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--xb-primary) 18%, transparent);
+}
+.wf-menu-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.wf-menu-item.danger {
+  color: #ff7a8a;
+}
+.wf-menu-item.danger:hover:not(:disabled) {
+  background: rgba(255, 90, 110, 0.16);
+}
+.wf-menu-item kbd {
+  font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--xb-muted);
+  background: rgba(127, 127, 127, 0.14);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.wf-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--xb-border);
 }
 .wf-edge-chip {
   position: absolute;

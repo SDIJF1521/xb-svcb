@@ -382,6 +382,14 @@ export type WorkflowNodeType =
   | 'blend'
   | 'enhance'
   | 'mix'
+  | 'merge'
+  | 'concat'
+  | 'effect'
+  | 'trim'
+  | 'fade'
+  | 'pitch'
+  | 'stretch'
+  | 'normalize'
   | 'output'
 
 /** 自定义工作流：画布节点。 */

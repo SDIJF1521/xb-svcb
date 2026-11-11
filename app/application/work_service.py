@@ -370,9 +370,13 @@ class WorkService:
             raise ValueError(error)
         workflows = self.list_workflows()
         existing_id = str((graph or {}).get("id") or "").strip()
+        display_name = (name or "未命名工作流").strip() or "未命名工作流"
+        # 重名会让列表里出现两条同名工作流、导出时也分不清；自动加序号保证唯一。
+        others = [w for w in workflows if str(w.get("id") or "") != existing_id]
+        display_name = self._unique_workflow_name(display_name, others)
         workflow = {
             "id": existing_id or new_id("wf_"),
-            "name": (name or "未命名工作流").strip() or "未命名工作流",
+            "name": display_name,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "nodes": (graph or {}).get("nodes") or [],
             "edges": (graph or {}).get("edges") or [],
@@ -381,6 +385,17 @@ class WorkService:
         workflows.insert(0, workflow)
         self._settings.set("cover_workflows", workflows[:50])
         return workflow
+
+    @staticmethod
+    def _unique_workflow_name(name: str, workflows: list[dict[str, Any]]) -> str:
+        """同名时追加 (2)、(3)… 直到唯一。"""
+        names = {str(w.get("name") or "").strip() for w in workflows}
+        if name not in names:
+            return name
+        index = 2
+        while f"{name} ({index})" in names:
+            index += 1
+        return f"{name} ({index})"
 
     def delete_workflow(self, workflow_id: str) -> bool:
         workflows = self.list_workflows()

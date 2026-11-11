@@ -482,11 +482,55 @@ const mockWorks: WorkDTO[] = [
 ]
 
 const cloneProject = (p: EditorProject): EditorProject => JSON.parse(JSON.stringify(p)) as EditorProject
-const mockEditorProjects: EditorProject[] = []
+
+// 浏览器 mock 的音频编辑器状态（工程 / MIDI 音符 / 编曲会话）持久化到 localStorage：
+// 否则刷新页面后内存全部清空，会表现为「刷新后变成暂无编辑工程」。
+const MOCK_EDITOR_STATE_KEY = 'xb-mock-editor-state'
+
+interface MockEditorState {
+  projects: EditorProject[]
+  midiNotes: Record<string, EditorMidiNote[]>
+  midiSessions: Record<string, EditorMidiSession>
+}
+
+function loadMockEditorState(): MockEditorState {
+  const empty: MockEditorState = { projects: [], midiNotes: {}, midiSessions: {} }
+  try {
+    const raw = localStorage.getItem(MOCK_EDITOR_STATE_KEY)
+    if (!raw) return empty
+    const parsed = JSON.parse(raw) as Partial<MockEditorState>
+    return {
+      projects: Array.isArray(parsed.projects) ? parsed.projects : [],
+      midiNotes: parsed.midiNotes && typeof parsed.midiNotes === 'object' ? parsed.midiNotes : {},
+      midiSessions: parsed.midiSessions && typeof parsed.midiSessions === 'object' ? parsed.midiSessions : {},
+    }
+  } catch {
+    return empty
+  }
+}
+
+const mockEditorState = loadMockEditorState()
+const mockEditorProjects: EditorProject[] = mockEditorState.projects
 const mockRerunJobs: Record<string, EditorRerunResult & { log?: string }> = {}
-const mockMidiNotes: Record<string, EditorMidiNote[]> = {}
+const mockMidiNotes: Record<string, EditorMidiNote[]> = mockEditorState.midiNotes
 /** MIDI 编曲：浏览器 mock 下的会话存储（键为 `projectId:trackId`）。 */
-const mockMidiSessions: Record<string, EditorMidiSession> = {}
+const mockMidiSessions: Record<string, EditorMidiSession> = mockEditorState.midiSessions
+
+/** 把当前编辑器 mock 状态写回 localStorage，刷新后仍能恢复。 */
+function persistMockEditorState() {
+  try {
+    localStorage.setItem(
+      MOCK_EDITOR_STATE_KEY,
+      JSON.stringify({
+        projects: mockEditorProjects,
+        midiNotes: mockMidiNotes,
+        midiSessions: mockMidiSessions,
+      }),
+    )
+  } catch {
+    /* localStorage 不可用或超限时忽略，mock 退化为纯内存存储 */
+  }
+}
 /** 浏览器 mock 下的鼓件表（真名由后端下发，这里只放常用的几件）。 */
 const mockDrumKit: EditorMidiDrumPiece[] = [
   { pitch: 35, name_zh: '底鼓 2', name_en: 'Acoustic Bass Drum', group: 'kick', group_zh: '底鼓' },
@@ -1269,9 +1313,19 @@ export const mock = {
     return [...mockCoverWorkflows]
   },
   saveCoverWorkflow(name: string, graph: WorkflowGraph): CoverWorkflow {
+    const existingId = String(graph.id || '').trim()
+    let displayName = (name || graph.name || '未命名工作流').trim() || '未命名工作流'
+    // 与后端一致：新建保存时重名自动加序号，避免列表里出现两条同名工作流。
+    const others = mockCoverWorkflows.filter((w) => w.id !== existingId)
+    const names = new Set(others.map((w) => w.name))
+    if (names.has(displayName)) {
+      let index = 2
+      while (names.has(`${displayName} (${index})`)) index += 1
+      displayName = `${displayName} (${index})`
+    }
     const workflow: CoverWorkflow = {
-      id: graph.id || rid('wf_'),
-      name: name || graph.name || '未命名工作流',
+      id: existingId || rid('wf_'),
+      name: displayName,
       updated_at: now(),
       nodes: graph.nodes,
       edges: graph.edges,
@@ -1812,6 +1866,7 @@ export const mock = {
     mockEditorProjects.splice(idx, 1)
     delete mockEditorHistory[projectId]
     delete mockEditorFuture[projectId]
+    persistMockEditorState()
     return true
   },
   createEditorProjectFromAudio(path: string, title?: string): EditorProject | null {
@@ -1820,6 +1875,7 @@ export const mock = {
     mockEditorProjects.unshift(project)
     mockEditorHistory[project.id] = []
     mockEditorFuture[project.id] = []
+    persistMockEditorState()
     return cloneProject(project)
   },
   exportEditorProjectBundle(projectId: string): EditorProjectTransferResult {
@@ -1833,6 +1889,7 @@ export const mock = {
     mockEditorProjects.unshift(project)
     mockEditorHistory[project.id] = []
     mockEditorFuture[project.id] = []
+    persistMockEditorState()
     return { ok: true, path: 'C:/imports/demo.xbproject', project: cloneProject(project) }
   },
   createEditorProjectBlank(title?: string): EditorProject | null {
@@ -1861,6 +1918,7 @@ export const mock = {
     mockEditorProjects.unshift(project)
     mockEditorHistory[project.id] = []
     mockEditorFuture[project.id] = []
+    persistMockEditorState()
     return cloneProject(project)
   },
   createEditorProjectFromWork(workId: string): EditorProject | null {
@@ -1969,6 +2027,7 @@ export const mock = {
     mockEditorProjects.unshift(project)
     mockEditorHistory[project.id] = []
     mockEditorFuture[project.id] = []
+    persistMockEditorState()
     return cloneProject(project)
   },
   addEditorTrack(projectId: string, name?: string, kind = 'audio'): EditorTrackMutationResult {
@@ -2072,6 +2131,7 @@ export const mock = {
       mockEditorHistory[next.id] = []
       mockEditorFuture[next.id] = []
     }
+    persistMockEditorState()
     return cloneProject(next)
   },
   undoEditorProject(projectId: string): EditorProject | null {
@@ -2082,6 +2142,7 @@ export const mock = {
     const prev = hist.pop()!
     mockEditorFuture[projectId] = [...(mockEditorFuture[projectId] || []), cloneProject(current)]
     mockEditorProjects[idx] = cloneProject(prev)
+    persistMockEditorState()
     return cloneProject(prev)
   },
   redoEditorProject(projectId: string): EditorProject | null {
@@ -2092,6 +2153,7 @@ export const mock = {
     const next = future.pop()!
     mockEditorHistory[projectId] = [...(mockEditorHistory[projectId] || []), cloneProject(current)]
     mockEditorProjects[idx] = cloneProject(next)
+    persistMockEditorState()
     return cloneProject(next)
   },
   getEditorClipAudio(projectId: string, clipId: string): string {
@@ -2646,6 +2708,7 @@ export const mock = {
       midi: { note_count: notes.length, updated_at: now() },
     }
     found.project.updated_at = now()
+    persistMockEditorState()
     return {
       ok: true,
       clip_id: clipId,
@@ -2676,6 +2739,7 @@ export const mock = {
     }
     if (!found.clip.name.includes('MIDI')) found.clip.name = `${found.clip.name} · MIDI`
     found.project.updated_at = now()
+    persistMockEditorState()
     return {
       ok: true,
       scope: 'clip',
@@ -2738,6 +2802,7 @@ export const mock = {
       midi: { scope: 'track', note_count: notes.length, updated_at: now() },
     }
     found.project.updated_at = now()
+    persistMockEditorState()
     return {
       ok: true,
       scope: 'track',
@@ -2783,6 +2848,7 @@ export const mock = {
       },
     }
     found.project.updated_at = now()
+    persistMockEditorState()
     return {
       ok: true,
       scope: 'track',
@@ -2867,6 +2933,7 @@ export const mock = {
       },
     }
     found.project.updated_at = now()
+    persistMockEditorState()
     return {
       ok: true,
       track_id: trackId,
@@ -2948,6 +3015,7 @@ export const mock = {
       }
     }
     found.project.updated_at = now()
+    persistMockEditorState()
     return {
       ok: true,
       mode,
@@ -2980,6 +3048,7 @@ export const mock = {
     const found = findMockMidiTrack(projectId, trackId)
     if (!found) return { ok: false, error: '工程或音轨不存在' }
     mockMidiSessions[`${projectId}:${trackId}`] = session
+    persistMockEditorState()
     return {
       ok: true,
       track_id: trackId,

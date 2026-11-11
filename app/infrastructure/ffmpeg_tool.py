@@ -14,7 +14,7 @@ import struct
 import subprocess
 import wave
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import config
 
@@ -899,6 +899,284 @@ class FfmpegTool:
             ]
             res = subprocess.run(
                 cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+                **config.subprocess_no_window(),
+            )
+            return res.returncode == 0 and dst.exists()
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def merge_tracks(
+        self, inputs: list[Path], dst: Path, sample_rate: int = 44100
+    ) -> bool:
+        """把任意多路音频叠加为一路（通用求和，不做去相关 / 微失谐）。
+
+        与 ``mix_vocals`` 不同：这里不做声像展开、失谐或 Haas 延迟，保持各路
+        原始音高与相位，适合合并男女声、多段人声，或把多轨与伴奏合成完整歌曲。
+        求和后走软限幅，避免叠加破音。
+        """
+        if not self.ffmpeg:
+            return False
+        srcs = [p for p in inputs if p and Path(p).exists()]
+        if not srcs:
+            return False
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if len(srcs) == 1:
+            return self.convert(srcs[0], dst, sample_rate)
+        try:
+            n = len(srcs)
+            labels = ""
+            parts: list[str] = []
+            for i in range(n):
+                parts.append(
+                    f"[{i}:a]aresample={sample_rate},"
+                    "aformat=sample_fmts=s16:channel_layouts=stereo[a"
+                    f"{i}];"
+                )
+                labels += f"[a{i}]"
+            filt = (
+                "".join(parts)
+                + f"{labels}amix=inputs={n}:duration=longest:normalize=0[mx];"
+                "[mx]alimiter=limit=0.97[a]"
+            )
+            cmd = [self.ffmpeg, "-y"]
+            for p in srcs:
+                cmd += ["-i", str(p)]
+            cmd += [
+                "-filter_complex",
+                filt,
+                "-map",
+                "[a]",
+                "-ar",
+                str(sample_rate),
+                "-ac",
+                "2",
+                str(dst),
+            ]
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+                **config.subprocess_no_window(),
+            )
+            return res.returncode == 0 and dst.exists()
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def apply_effect(
+        self,
+        src: Path,
+        dst: Path,
+        effect_type: str,
+        params: dict[str, Any],
+        sample_rate: int = 44100,
+    ) -> bool:
+        """对音频应用单个内置效果（EQ / 压缩 / 混响 / 降噪等）。
+
+        效果参数与编辑器效果链保持一致，映射逻辑复用 ``AudioEffectsProcessor``；
+        未知效果或缺少 ffmpeg 时返回 False（上层沿用输入）。
+        """
+        if not self.ffmpeg or not Path(src).exists():
+            return False
+        from infrastructure.audio_effects import AudioEffectsProcessor
+
+        processor = AudioEffectsProcessor(self)
+        effect = {
+            "type": str(effect_type or ""),
+            "params": dict(params or {}),
+        }
+        try:
+            result = processor.render_file(src, [effect], dst, dst.parent, sample_rate)
+            return bool(result and Path(result).exists())
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def loudnorm(
+        self, src: Path, dst: Path, target_lufs: float = -14.0, sample_rate: int = 44100
+    ) -> bool:
+        """按目标响度（EBU R128 单遍 loudnorm）统一音量。"""
+        if not self.ffmpeg:
+            return False
+        try:
+            target = max(-70.0, min(-5.0, float(target_lufs)))
+        except (TypeError, ValueError):
+            target = -14.0
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            res = subprocess.run(
+                [
+                    self.ffmpeg,
+                    "-y",
+                    "-i",
+                    str(src),
+                    "-af",
+                    f"aresample={sample_rate},loudnorm=I={target:.1f}:TP=-1.5:LRA=11",
+                    "-ar",
+                    str(sample_rate),
+                    "-ac",
+                    "2",
+                    str(dst),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+                **config.subprocess_no_window(),
+            )
+            return res.returncode == 0 and dst.exists()
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def tempo(
+        self, src: Path, dst: Path, speed: float, sample_rate: int = 44100
+    ) -> bool:
+        """时间拉伸：以 ``speed`` 倍速改变时长，保持音高不变（atempo）。"""
+        if not self.ffmpeg:
+            return False
+        try:
+            speed = max(0.25, min(4.0, float(speed)))
+        except (TypeError, ValueError):
+            speed = 1.0
+        if abs(speed - 1.0) < 0.0001:
+            return self.convert(src, dst, sample_rate)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        filters = [f"aresample={sample_rate}", *self._atempo_filters(speed)]
+        try:
+            res = subprocess.run(
+                [
+                    self.ffmpeg,
+                    "-y",
+                    "-i",
+                    str(src),
+                    "-af",
+                    ",".join(filters),
+                    "-ar",
+                    str(sample_rate),
+                    "-ac",
+                    "2",
+                    str(dst),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+                **config.subprocess_no_window(),
+            )
+            return res.returncode == 0 and dst.exists()
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    @staticmethod
+    def _atempo_filters(speed: float) -> list[str]:
+        """把任意倍速拆成 FFmpeg 支持的 0.5..2.0 区间内的多段 atempo。"""
+        value = max(0.25, min(4.0, float(speed or 1.0)))
+        filters: list[str] = []
+        while value < 0.5:
+            filters.append("atempo=0.5")
+            value /= 0.5
+        while value > 2.0:
+            filters.append("atempo=2.0")
+            value /= 2.0
+        if abs(value - 1.0) > 0.0001:
+            filters.append(f"atempo={value:.6f}")
+        return filters
+
+    def pitch(
+        self, src: Path, dst: Path, semitones: int, sample_rate: int = 44100
+    ) -> bool:
+        """整体升 / 降 ``semitones`` 个半音，保持时长不变（asetrate + atempo）。"""
+        if not self.ffmpeg:
+            return False
+        try:
+            semitones = int(semitones)
+        except (TypeError, ValueError):
+            semitones = 0
+        if semitones == 0:
+            return self.convert(src, dst, sample_rate)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        ratio = 2.0 ** (semitones / 12.0)
+        filters = (
+            f"aresample={sample_rate},"
+            f"asetrate={int(sample_rate * ratio)},"
+            f"aresample={sample_rate},"
+            f"atempo={1.0 / ratio:.6f}"
+        )
+        try:
+            res = subprocess.run(
+                [
+                    self.ffmpeg,
+                    "-y",
+                    "-i",
+                    str(src),
+                    "-af",
+                    filters,
+                    "-ar",
+                    str(sample_rate),
+                    "-ac",
+                    "2",
+                    str(dst),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+                **config.subprocess_no_window(),
+            )
+            return res.returncode == 0 and dst.exists()
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def fade(
+        self,
+        src: Path,
+        dst: Path,
+        fade_in: float,
+        fade_out: float,
+        sample_rate: int = 44100,
+    ) -> bool:
+        """对整段音频应用首尾淡入 / 淡出（不改变时长）。"""
+        if not self.ffmpeg:
+            return False
+        dur = max(0.0, float(self.probe_duration(src) or 0.0))
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fin = max(0.0, min(float(fade_in or 0.0), dur / 2 if dur else 0.0))
+            fout = max(0.0, min(float(fade_out or 0.0), dur / 2 if dur else 0.0))
+        except (TypeError, ValueError):
+            fin = 0.0
+            fout = 0.0
+        if fin <= 0 and fout <= 0:
+            return self.convert(src, dst, sample_rate)
+        filters = [f"aresample={sample_rate}"]
+        if fin > 0:
+            filters.append(f"afade=t=in:st=0:d={fin:.3f}")
+        if fout > 0 and dur > 0:
+            filters.append(f"afade=t=out:st={max(0.0, dur - fout):.3f}:d={fout:.3f}")
+        try:
+            res = subprocess.run(
+                [
+                    self.ffmpeg,
+                    "-y",
+                    "-i",
+                    str(src),
+                    "-af",
+                    ",".join(filters),
+                    "-ar",
+                    str(sample_rate),
+                    "-ac",
+                    "2",
+                    str(dst),
+                ],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

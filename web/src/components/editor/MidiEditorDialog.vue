@@ -17,21 +17,21 @@
         <div class="midi-title">
           <p class="eyebrow">// MIDI {{ isCompose ? 'Composer' : 'Pitch Editor' }}</p>
           <h2>
-            {{ isCompose ? 'MIDI 编曲' : 'MIDI 音高编辑器' }}
+            {{ isCompose ? t('MIDI 编曲') : t('MIDI 音高编辑器') }}
             <span class="midi-scope" :class="isCompose ? 'compose' : scope">
-              {{ isCompose ? `${partCount} 声部` : scope === 'track' ? '轨道' : '片段' }}
+              {{ isCompose ? `${partCount} ${t('声部')}` : scope === 'track' ? t('轨道') : t('片段') }}
             </span>
           </h2>
           <p class="midi-sub">
             <template v-if="isCompose">
-              {{ trackName || '未命名音轨' }} · {{ formatClock(duration) }} · {{ totalNotes }} 个音符
-              <template v-if="!hasAudio"> · 空白轨道也可以直接写</template>
+              {{ trackName || t('未命名音轨') }} · {{ formatClock(duration) }} · {{ totalNotes }} {{ t('个音符') }}
+              <template v-if="!hasAudio"> · {{ t('空白轨道也可以直接写') }}</template>
             </template>
             <template v-else>
-              {{ scope === 'track' ? trackName || '未命名音轨' : clipName || '未命名片段' }} ·
-              {{ duration.toFixed(2) }}s · {{ draft.length }} 个音符
+              {{ scope === 'track' ? trackName || t('未命名音轨') : clipName || t('未命名片段') }} ·
+              {{ duration.toFixed(2) }}s · {{ draft.length }} {{ t('个音符') }}
               <template v-if="scope === 'track' && clipSpans.length">
-                · {{ clipSpans.length }} 个片段分段
+                · {{ clipSpans.length }} {{ t('个片段分段') }}
               </template>
               <template v-if="analysisText"> · {{ analysisText }}</template>
             </template>
@@ -42,37 +42,37 @@
           <button
             type="button"
             :class="{ active: isCompose }"
-            title="多乐器编曲：从零写谱，可直接生成音频与 .mid"
+            :title="t('多乐器编曲：从零写谱，可直接生成音频与 .mid')"
             @click="setMode('compose')"
           >
-            MIDI 编曲
+            {{ t('MIDI 编曲') }}
           </button>
           <button
             type="button"
             :class="{ active: !isCompose }"
             :disabled="!hasAudio"
-            :title="hasAudio ? '修正这段演唱的音高（保存到音频）' : '这条轨道还没有音频'"
+            :title="hasAudio ? t('修正这段演唱的音高（保存到音频）') : t('这条轨道还没有音频')"
             @click="setMode('pitch')"
           >
-            演唱音准
+            {{ t('演唱音准') }}
           </button>
         </div>
 
         <div class="midi-head-actions">
           <button v-if="!isCompose" class="ghost" :disabled="loading || applying" @click="refresh">
-            重新分析
+            {{ t('重新分析') }}
           </button>
-          <button class="ghost" :disabled="!canUndo" title="Ctrl+Z" @click="undo">撤销</button>
-          <button class="ghost" :disabled="!canRedo" title="Ctrl+Shift+Z" @click="redo">重做</button>
+          <button class="ghost" :disabled="!canUndo" title="Ctrl+Z" @click="undo">{{ t('撤销') }}</button>
+          <button class="ghost" :disabled="!canRedo" title="Ctrl+Shift+Z" @click="redo">{{ t('重做') }}</button>
           <button
             class="ghost"
             :class="{ active: maximized }"
-            :title="maximized ? '退出全屏（Esc）' : '铺满整个窗口'"
+            :title="maximized ? t('退出全屏（Esc）') : t('铺满整个窗口')"
             @click="toggleMaximized"
           >
-            {{ maximized ? '退出全屏' : '全屏' }}
+            {{ maximized ? t('退出全屏') : t('全屏') }}
           </button>
-          <button class="ghost" @click="close">关闭</button>
+          <button class="ghost" @click="close">{{ t('关闭') }}</button>
         </div>
       </header>
 
@@ -86,17 +86,17 @@
           >
             {{ transportLabel }}
           </button>
-          <button class="ghost" :disabled="transportDisabled" title="停止" @click="stopPlay">■</button>
+          <button class="ghost" :disabled="transportDisabled" :title="t('停止')" @click="stopPlay">■</button>
           <button
             class="ghost"
             :class="{ active: loopEnabled }"
             :disabled="transportDisabled"
-            title="循环播放"
+            :title="t('循环播放')"
             @click="toggleLoop"
           >
-            循环
+            {{ t('循环') }}
           </button>
-          <span class="midi-clock" :title="isCompose ? '小节:拍 + 时间' : '播放头时间'">
+          <span class="midi-clock" :title="isCompose ? t('小节:拍 + 时间') : t('播放头时间')">
             {{ clockLabel }}
           </span>
         </div>
@@ -114,7 +114,7 @@
             />
           </label>
           <label class="midi-field">
-            <span>拍号</span>
+            <span>{{ t('拍号') }}</span>
             <select :value="timeSignatureLabel(session.time_signature)" @change="applySignature">
               <option v-for="option in signatureOptions" :key="option.value" :value="option.value">
                 {{ option.label }}
@@ -122,22 +122,22 @@
             </select>
           </label>
           <label class="midi-field">
-            <span>时长</span>
+            <span>{{ t('时长') }}</span>
             <input
               :value="durationSeconds > 0 ? durationSeconds : Math.round(duration)"
               type="number"
               min="1"
               max="86400"
               step="1"
-              title="时间轴长度（秒），留空或 0 为自动"
+              :title="t('时间轴长度（秒），留空或 0 为自动')"
               @change="applyDuration"
             />
-            <em>秒</em>
+            <em>{{ t('秒') }}</em>
           </label>
         </template>
 
         <label class="midi-field">
-          <span>网格</span>
+          <span>{{ t('网格') }}</span>
           <select v-if="isCompose" v-model="gridDivisionId">
             <option v-for="option in GRID_DIVISIONS" :key="option.id" :value="option.id">
               {{ option.label }}
@@ -151,29 +151,29 @@
         </label>
 
         <label v-if="isCompose" class="midi-field">
-          <span>量化强度</span>
+          <span>{{ t('量化强度') }}</span>
           <input v-model.number="quantizeStrength" type="range" min="0" max="1" step="0.05" />
           <b>{{ Math.round(quantizeStrength * 100) }}%</b>
         </label>
 
-        <div class="midi-group midi-zoom" title="Ctrl+滚轮：横向缩放；Ctrl+Shift+滚轮：音域缩放">
-          <button class="ghost mini" title="横向缩小 (-)" @click="zoomTime(0.8)">－</button>
+        <div class="midi-group midi-zoom" :title="t('Ctrl+滚轮：横向缩放；Ctrl+Shift+滚轮：音域缩放')">
+          <button class="ghost mini" :title="t('横向缩小 (-)')" @click="zoomTime(0.8)">－</button>
           <label class="midi-field">
-            <span>缩放</span>
+            <span>{{ t('缩放') }}</span>
             <input v-model.number="pxPerSecond" type="range" min="12" max="800" step="2" />
             <b>{{ Math.round(pxPerSecond) }}px/s</b>
           </label>
-          <button class="ghost mini" title="横向放大 (+)" @click="zoomTime(1.25)">＋</button>
+          <button class="ghost mini" :title="t('横向放大 (+)')" @click="zoomTime(1.25)">＋</button>
           <label class="midi-field">
-            <span>音域</span>
+            <span>{{ t('音域') }}</span>
             <input v-model.number="rowHeight" type="range" min="8" max="40" step="1" />
             <b>{{ rowHeight }}px</b>
           </label>
         </div>
 
         <div class="midi-group">
-          <button class="ghost" title="放大到选区" @click="zoomToSelection">放大到选区</button>
-          <button class="ghost" @click="zoomToFit">适应宽度</button>
+          <button class="ghost" :title="t('放大到选区')" @click="zoomToSelection">{{ t('放大到选区') }}</button>
+          <button class="ghost" @click="zoomToFit">{{ t('适应宽度') }}</button>
         </div>
 
         <div v-if="isCompose" class="midi-group midi-tools">
@@ -187,14 +187,14 @@
           >
             {{ tool.label }}
           </button>
-          <label class="midi-field midi-toggle" title="新建/选中音符时用振荡器发一个提示音">
+          <label class="midi-field midi-toggle" :title="t('新建/选中音符时用振荡器发一个提示音')">
             <input v-model="notePreview" type="checkbox" />
-            <span>点击试听</span>
+            <span>{{ t('点击试听') }}</span>
           </label>
         </div>
 
         <label v-if="!isCompose" class="midi-field">
-          <span>音准偏移</span>
+          <span>{{ t('音准偏移') }}</span>
           <input
             :value="primaryPitchNote?.detune ?? 0"
             type="number"
@@ -204,12 +204,12 @@
             :disabled="!selection.length"
             @change="setSelectionDetune($event)"
           />
-          <em>音分</em>
+          <em>{{ t('音分') }}</em>
         </label>
 
         <div v-if="!isCompose" class="midi-group">
           <button class="ghost" :disabled="!selection.length" title="Ctrl+Q" @click="quantizeSelection">
-            量化
+            {{ t('量化') }}
           </button>
           <button class="ghost" :disabled="!selection.length" title="Alt+↑" @click="transposeSelection(1)">
             +1
@@ -226,17 +226,17 @@
 
       <p v-if="errorText" class="midi-error">{{ errorText }}</p>
       <p v-else-if="!isCompose && scope === 'track' && !clipSpans.length" class="midi-tip">
-        这条音轨还是空的：切到「MIDI 编曲」直接写谱，渲染后会自动生成音频。
+        {{ t('这条音轨还是空的：切到「MIDI 编曲」直接写谱，渲染后会自动生成音频。') }}
       </p>
       <p v-else-if="isCompose && !hasAudio" class="midi-tip">
-        空白轨道：直接在下方钢琴卷帘上写音符，点「渲染为分乐器音轨」就会生成可播放的音频。
+        {{ t('空白轨道：直接在下方钢琴卷帘上写音符，点「渲染为分乐器音轨」就会生成可播放的音频。') }}
       </p>
 
       <div class="midi-workspace">
         <aside v-if="isCompose" class="midi-parts">
           <header class="midi-parts-head">
-            <span>声部 · 乐器</span>
-            <button class="ghost mini" title="新增声部" @click="addPart">＋</button>
+            <span>{{ t('声部 · 乐器') }}</span>
+            <button class="ghost mini" :title="t('新增声部')" @click="addPart">＋</button>
           </header>
           <div class="midi-part-list">
             <div
@@ -258,7 +258,7 @@
               <button
                 class="mini"
                 :class="{ active: part.mute }"
-                title="静音"
+                :title="t('静音')"
                 @click.stop="toggleMute(part)"
               >
                 M
@@ -266,21 +266,21 @@
               <button
                 class="mini"
                 :class="{ active: part.solo }"
-                title="独奏"
+                :title="t('独奏')"
                 @click.stop="toggleSolo(part)"
               >
                 S
               </button>
-              <button class="mini danger" title="删除声部" @click.stop="removePart(part)">×</button>
+              <button class="mini danger" :title="t('删除声部')" @click.stop="removePart(part)">×</button>
               <select
                 class="midi-part-inst"
                 :value="part.drum ? 'drum' : String(part.instrument)"
-                :title="part.drum ? '架子鼓 · GM 鼓组' : instrumentLabel(part.instrument)"
+                :title="part.drum ? t('架子鼓 · GM 鼓组') : instrumentLabel(part.instrument)"
                 @change="onInstrumentChange(part, $event)"
                 @click.stop
                 @keydown.stop
               >
-                <option value="drum">架子鼓 · GM 鼓组</option>
+                <option value="drum">{{ t('架子鼓 · GM 鼓组') }}</option>
                 <optgroup v-for="group in instrumentGroups" :key="group.id" :label="group.label">
                   <option v-for="item in group.options" :key="item.program" :value="String(item.program)">
                     {{ item.name }}
@@ -290,24 +290,24 @@
               <button
                 v-if="part.drum"
                 class="mini"
-                title="填充 4/4 基本节奏（底鼓/军鼓/八分踩镲）"
+                :title="t('填充 4/4 基本节奏（底鼓/军鼓/八分踩镲）')"
                 @click.stop="fillDrumBeat(part)"
               >
-                填充节奏
+                {{ t('填充节奏') }}
               </button>
-              <button class="mini" title="导入 .mid 到这个声部" @click.stop="importMidiToPart(part)">
+              <button class="mini" :title="t('导入 .mid 到这个声部')" @click.stop="importMidiToPart(part)">
                 ⇩ MIDI
               </button>
               <span class="midi-part-count">
-                <template v-if="part.drum">{{ part.notes.length }} 件</template>
-                <template v-else>{{ part.notes.length }} 个音</template>
+                <template v-if="part.drum">{{ part.notes.length }} {{ t('件') }}</template>
+                <template v-else>{{ part.notes.length }} {{ t('个音') }}</template>
               </span>
             </div>
           </div>
           <footer class="midi-parts-foot">
-            <button class="ghost mini" @click="addPart">＋ 新声部</button>
-            <button class="ghost mini" @click="addDrumPart">＋ 鼓组</button>
-            <button class="ghost mini" @click="emit('import-session')">导入 .mid</button>
+            <button class="ghost mini" @click="addPart">＋ {{ t('新声部') }}</button>
+            <button class="ghost mini" @click="addDrumPart">＋ {{ t('鼓组') }}</button>
+            <button class="ghost mini" @click="emit('import-session')">{{ t('导入 .mid') }}</button>
           </footer>
         </aside>
 
@@ -315,9 +315,9 @@
           <div v-if="busy" class="midi-busy">{{ busyText }}</div>
           <div v-else-if="!hasContent" class="midi-empty">
             <template v-if="isCompose">
-              还没有音符。用「画笔」在网格上拖出新音符，或双击空白处；空白轨道也能直接开始编曲。
+              {{ t('还没有音符。用「画笔」在网格上拖出新音符，或双击空白处；空白轨道也能直接开始编曲。') }}
             </template>
-            <template v-else>还没有音符。双击网格新建，或点“重新分析”从音频里提取。</template>
+            <template v-else>{{ t('还没有音符。双击网格新建，或点“重新分析”从音频里提取。') }}</template>
           </div>
           <div
             ref="scrollRef"
@@ -378,54 +378,54 @@
             @pointerdown.stop
             @contextmenu.prevent
           >
-            <button type="button" role="menuitem" @click="menuAddNote">在此添加音符</button>
+            <button type="button" role="menuitem" @click="menuAddNote">{{ t('在此添加音符') }}</button>
             <button type="button" role="menuitem" :disabled="!selection.length" @click="menuDelete">
-              删除选中 ({{ selection.length }})
+              {{ t('删除选中') }} ({{ selection.length }})
             </button>
             <button type="button" role="menuitem" :disabled="!selection.length" @click="menuCopy">
-              复制 (Ctrl+C)
+              {{ t('复制') }} (Ctrl+C)
             </button>
             <button type="button" role="menuitem" :disabled="!hasClipboard" @click="menuPaste">
-              在指针处粘贴 (Ctrl+V)
+              {{ t('在指针处粘贴') }} (Ctrl+V)
             </button>
             <i class="midi-menu-sep" aria-hidden="true"></i>
             <button type="button" role="menuitem" :disabled="!selection.length" @click="menuQuantize">
-              量化到网格 (Ctrl+Q)
+              {{ t('量化到网格') }} (Ctrl+Q)
             </button>
             <button type="button" role="menuitem" :disabled="!selection.length" @click="menuTranspose(1)">
-              升高半音 (Alt+↑)
+              {{ t('升高半音') }} (Alt+↑)
             </button>
             <button type="button" role="menuitem" :disabled="!selection.length" @click="menuTranspose(-1)">
-              降低半音 (Alt+↓)
+              {{ t('降低半音') }} (Alt+↓)
             </button>
             <button type="button" role="menuitem" :disabled="!selection.length" @click="menuTranspose(12)">
-              升高八度 (Shift+↑)
+              {{ t('升高八度') }} (Shift+↑)
             </button>
             <button type="button" role="menuitem" :disabled="!selection.length" @click="menuTranspose(-12)">
-              降低八度 (Shift+↓)
+              {{ t('降低八度') }} (Shift+↓)
             </button>
             <template v-if="isCompose">
               <i class="midi-menu-sep" aria-hidden="true"></i>
               <button type="button" role="menuitem" :disabled="!selection.length" @click="menuVelocity(1.1)">
-                力度 +10%
+                {{ t('力度') }} +10%
               </button>
               <button type="button" role="menuitem" :disabled="!selection.length" @click="menuVelocity(0.9)">
-                力度 -10%
+                {{ t('力度') }} -10%
               </button>
               <button type="button" role="menuitem" :disabled="!selection.length" @click="menuLegato">
-                连奏（接上后一个音）
+                {{ t('连奏（接上后一个音）') }}
               </button>
               <button type="button" role="menuitem" :disabled="!selection.length" @click="menuSplitAtPlayhead">
-                在播放头切开
+                {{ t('在播放头切开') }}
               </button>
               <button type="button" role="menuitem" :disabled="!selection.length" @click="menuDuplicate">
-                复制到后面 (Ctrl+D)
+                {{ t('复制到后面') }} (Ctrl+D)
               </button>
             </template>
             <i class="midi-menu-sep" aria-hidden="true"></i>
-            <button type="button" role="menuitem" @click="menuSelectAll">全选 (Ctrl+A)</button>
-            <button type="button" role="menuitem" :disabled="!canUndo" @click="menuUndo">撤销 (Ctrl+Z)</button>
-            <button type="button" role="menuitem" :disabled="!canRedo" @click="menuRedo">重做 (Ctrl+Shift+Z)</button>
+            <button type="button" role="menuitem" @click="menuSelectAll">{{ t('全选') }} (Ctrl+A)</button>
+            <button type="button" role="menuitem" :disabled="!canUndo" @click="menuUndo">{{ t('撤销') }} (Ctrl+Z)</button>
+            <button type="button" role="menuitem" :disabled="!canRedo" @click="menuRedo">{{ t('重做') }} (Ctrl+Shift+Z)</button>
           </div>
         </div>
       </div>
@@ -433,49 +433,49 @@
       <footer class="midi-foot">
         <div class="midi-selected">
           <template v-if="selection.length > 1">
-            已选 {{ selection.length }} 个音符
+            {{ t('已选') }} {{ selection.length }} {{ t('个音符') }}
             <template v-if="isCompose">
-              · 力度 {{ selectionVelocityRange }}
+              · {{ t('力度') }} {{ selectionVelocityRange }}
             </template>
-            <template v-else> · {{ noteName(primaryNote?.pitch ?? 60) }} 等</template>
+            <template v-else> · {{ noteName(primaryNote?.pitch ?? 60) }} {{ t('等') }}</template>
           </template>
           <template v-else-if="primaryNote">
             <b>{{ noteLabel(primaryNote.pitch) }}</b>
             <span>{{ primaryNote.start.toFixed(3) }}s → {{ primaryNote.end.toFixed(3) }}s</span>
-            <span>长度 {{ (primaryNote.end - primaryNote.start).toFixed(3) }}s</span>
-            <span v-if="isCompose">力度 {{ primaryNote.velocity }}</span>
+            <span>{{ t('长度') }} {{ (primaryNote.end - primaryNote.start).toFixed(3) }}s</span>
+            <span v-if="isCompose">{{ t('力度') }} {{ primaryNote.velocity }}</span>
             <span v-else-if="primaryPitchNote?.detune">
-              原始音准 {{ primaryPitchNote.detune > 0 ? '+' : '' }}{{ primaryPitchNote.detune.toFixed(1) }} 音分
+              {{ t('原始音准') }} {{ primaryPitchNote.detune > 0 ? '+' : '' }}{{ primaryPitchNote.detune.toFixed(1) }} {{ t('音分') }}
             </span>
           </template>
-          <span v-else>未选中音符</span>
-          <span v-if="isCompose" class="midi-dirty">{{ dirty ? '· 未保存' : '· 已同步' }}</span>
+          <span v-else>{{ t('未选中音符') }}</span>
+          <span v-if="isCompose" class="midi-dirty">{{ dirty ? t('· 未保存') : t('· 已同步') }}</span>
         </div>
 
         <div class="midi-actions">
           <template v-if="isCompose">
-            <button class="ghost" :disabled="!hasContent" @click="resetDraft">还原本次编辑</button>
+            <button class="ghost" :disabled="!hasContent" @click="resetDraft">{{ t('还原本次编辑') }}</button>
             <button class="ghost" :disabled="busy || !hasContent" @click="emitSaveSession">
-              保存编曲
+              {{ t('保存编曲') }}
             </button>
             <button class="ghost" :disabled="busy || !hasContent" :title="previewTitle" @click="requestPreview">
-              试听编曲
+              {{ t('试听编曲') }}
             </button>
             <button class="ghost" :disabled="busy || !hasContent" @click="emitRender('mix')">
-              {{ busyAction === 'mix' ? '渲染中…' : '渲染到本轨' }}
+              {{ busyAction === 'mix' ? t('渲染中…') : t('渲染到本轨') }}
             </button>
-            <button class="ghost" @click="emitExport">导出 .mid</button>
+            <button class="ghost" @click="emitExport">{{ t('导出 .mid') }}</button>
             <button class="primary" :disabled="busy || !hasContent" @click="emitRender('tracks')">
-              {{ busyAction === 'tracks' ? '渲染中…' : '渲染为分乐器音轨' }}
+              {{ busyAction === 'tracks' ? t('渲染中…') : t('渲染为分乐器音轨') }}
             </button>
           </template>
           <template v-else>
-            <button class="ghost" :disabled="!draft.length" @click="resetDraft">还原本次编辑</button>
+            <button class="ghost" :disabled="!draft.length" @click="resetDraft">{{ t('还原本次编辑') }}</button>
             <button class="ghost" :disabled="loading || applying || !draft.length" @click="emitSave">
-              保存音符
+              {{ t('保存音符') }}
             </button>
             <button class="ghost" :disabled="loading || !canPreview" :title="previewHint" @click="emitPreview">
-              试听音频
+              {{ t('试听音频') }}
             </button>
             <button
               class="primary"
@@ -483,7 +483,7 @@
               :title="applyHint"
               @click="emitApply"
             >
-              {{ applying ? '应用音频中…' : scope === 'track' ? '应用到轨道片段' : '应用音频' }}
+              {{ applying ? t('应用音频中…') : scope === 'track' ? t('应用到轨道片段') : t('应用音频') }}
             </button>
           </template>
         </div>
@@ -491,12 +491,10 @@
 
       <p class="midi-note">
         <template v-if="isCompose">
-          渲染使用内置多乐器合成器：每个声部一件 GM 乐器，可「分乐器各生成一条音轨」（可单独调音量/加效果），
-          也可混成一条片段落回当前轨。导出 .mid 可在其他 DAW 里继续编辑；试听播放的是合成结果。
+          {{ t('渲染使用内置多乐器合成器：每个声部一件 GM 乐器，可「分乐器各生成一条音轨」（可单独调音量/加效果），也可混成一条片段落回当前轨。导出 .mid 可在其他 DAW 里继续编辑；试听播放的是合成结果。') }}
         </template>
         <template v-else>
-          试听播放的是片段音频本身（应用后为编辑结果），不会用 MIDI 音源直接出声；应用会生成新音频并可撤销。
-          未改动的音符保留原始音准，只有被拖动/改过分度的音符才会移动。
+          {{ t('试听播放的是片段音频本身（应用后为编辑结果），不会用 MIDI 音源直接出声；应用会生成新音频并可撤销。未改动的音符保留原始音准，只有被拖动/改过分度的音符才会移动。') }}
         </template>
       </p>
 
@@ -519,6 +517,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { ElMessage } from 'element-plus'
 
 import { api } from '@/api'
+import { translateUiText } from '@/i18n'
 import type {
   EditorMidiInstrument,
   EditorMidiInstrumentFamily,
@@ -571,6 +570,7 @@ import {
   moveNotes,
   normalizeNotes,
   normalizeSession,
+  MIN_RESIZE_PX,
   noteAtPoint,
   noteEdgeAt,
   noteName,
@@ -596,6 +596,16 @@ import {
   xToTime,
   yToPitch,
 } from '@/utils/midi'
+
+const t = translateUiText
+
+/** 声部名是不是默认名（空 / 「旋律」/「架子鼓」/「声部 N」等，含本地化后的写法）。 */
+function isDefaultPartName(name: string): boolean {
+  const value = String(name || '').trim()
+  if (!value) return true
+  if (value === t('旋律') || value === t('架子鼓')) return true
+  return new RegExp(`^${t('声部')}\\s*\\d+$`).test(value)
+}
 
 interface ClipSpan {
   id: string
@@ -688,9 +698,9 @@ const MIN_NOTE_LENGTH = 0.12
 const VELOCITY_HEIGHT = 88
 const gridOptions = MIDI_GRID_OPTIONS
 const tools: Array<{ id: ToolId; label: string; hint: string }> = [
-  { id: 'draw', label: '画笔', hint: '拖出新音符（D）' },
-  { id: 'select', label: '选择', hint: '框选/拖动/拖边缘改长度（V）' },
-  { id: 'erase', label: '橡皮', hint: '点掉音符（E）' },
+  { id: 'draw', label: t('画笔'), hint: t('空白处写音符 · 拖动移动 · 拖边缘改长度（D）') },
+  { id: 'select', label: t('选择'), hint: t('框选/拖动/拖边缘改长度（V）') },
+  { id: 'erase', label: t('橡皮'), hint: t('点掉音符（E）') },
 ]
 
 const keyWidth = KEY_WIDTH
@@ -727,6 +737,10 @@ const playingState = ref(false)
 const activePartId = ref('')
 const notePreview = ref(true)
 const maximized = ref(false)
+/** 音符左右边缘的可抓取宽度（像素），与 utils/midi noteEdgeAt 默认值保持一致。 */
+const EDGE_GRAB_PX = 8
+/** 当前悬停的音符 id：用于画出「可拉伸」的边缘把手与抓取光标。 */
+const hoveredNoteId = ref<string | null>(null)
 
 // 演唱音准模式的草稿与历史
 const draft = ref<MidiNote[]>([])
@@ -766,14 +780,14 @@ const busy = computed(() =>
   isCompose.value ? !!props.composeBusy || !!props.composeLoading : !!props.loading || !!props.applying,
 )
 const busyText = computed(() => {
-  if (!isCompose.value) return props.loading ? '正在分析片段基频…' : '正在处理…'
-  if (props.composeLoading) return '正在读取 MIDI 编曲…'
+  if (!isCompose.value) return props.loading ? t('正在分析片段基频…') : t('正在处理…')
+  if (props.composeLoading) return t('正在读取 MIDI 编曲…')
   const action = props.composeBusyAction || busyAction.value
-  if (action === 'tracks') return '正在按乐器渲染音频…'
-  if (action === 'mix') return '正在渲染混合音频…'
-  if (action === 'preview') return '正在渲染试听…'
-  if (action === 'save') return '正在保存编曲…'
-  return '正在处理…'
+  if (action === 'tracks') return t('正在按乐器渲染音频…')
+  if (action === 'mix') return t('正在渲染混合音频…')
+  if (action === 'preview') return t('正在渲染试听…')
+  if (action === 'save') return t('正在保存编曲…')
+  return t('正在处理…')
 })
 const errorText = computed(() => (isCompose.value ? props.composeError : props.error))
 // 用户手动填写的时间轴长度（秒）；0 表示自动（按工程/内容）。
@@ -897,17 +911,17 @@ const primaryNote = computed(() =>
 
 const transportDisabled = computed(() => (isCompose.value ? !hasContent.value : !canPreview.value))
 const transportHint = computed(() => {
-  if (isCompose.value) return hasContent.value ? '用内置乐器渲染并播放' : '还没有音符'
-  return canPreview.value ? '播放片段音频（不是 MIDI 音源）' : '空白轨道没有音频可试听'
+  if (isCompose.value) return hasContent.value ? t('用内置乐器渲染并播放') : t('还没有音符')
+  return canPreview.value ? t('播放片段音频（不是 MIDI 音源）') : t('空白轨道没有音频可试听')
 })
 const previewTitle = computed(() => {
-  if (props.previewLoading) return '正在渲染试听…'
-  return hasContent.value ? '用内置乐器渲染并播放' : '还没有音符'
+  if (props.previewLoading) return t('正在渲染试听…')
+  return hasContent.value ? t('用内置乐器渲染并播放') : t('还没有音符')
 })
 const playing = computed(() => (isCompose.value ? playingState.value : props.playing))
 const transportLabel = computed(() => {
-  if (isCompose.value && props.previewLoading) return '渲染试听…'
-  return playing.value ? '⏸ 暂停' : '▶ 试听'
+  if (isCompose.value && props.previewLoading) return t('渲染试听…')
+  return playing.value ? t('⏸ 暂停') : t('▶ 试听')
 })
 const playheadSeconds = computed(() => (isCompose.value ? previewTime.value : props.playhead))
 const clockLabel = computed(() => {
@@ -919,8 +933,8 @@ const clockLabel = computed(() => {
 })
 const hintText = computed(() =>
   isCompose.value
-    ? 'D 画笔 / V 选择 / E 橡皮 · 双击新建 · 拖边缘改长度 · 下方拖力度条 · 空格试听 · Del 删除'
-    : '双击空白新建 · 拖动移动 · 拖边缘改长度 · 框选多选 · 右键菜单 · Del 删除 · 空格试听',
+    ? t('D 画笔 / V 选择 / E 橡皮 · 双击新建 · 拖音符移动 · 拖边缘改长度 · [ ] 伸缩 · 下方拖力度条 · 空格试听 · Del 删除')
+    : t('双击空白新建 · 拖动移动 · 拖边缘改长度 · 框选多选 · 右键菜单 · Del 删除 · 空格试听'),
 )
 const canUndo = computed(() =>
   isCompose.value ? composeUndo.length > 0 : pitchUndoVersion.value >= 0 && pitchUndo.length > 0,
@@ -934,21 +948,21 @@ const hasClipboard = computed(() =>
 const canPreview = computed(() => (props.scope === 'track' ? props.clipSpans.length > 0 : true))
 const canApply = computed(() => (props.scope === 'track' ? props.clipSpans.length > 0 : true))
 const applyHint = computed(() => {
-  if (!props.ready) return 'MIDI 音高重绘环境未就绪'
-  if (!canApply.value) return '音轨上还没有片段：先切到「MIDI 编曲」写谱并渲染'
-  return props.scope === 'track' ? '把音符按片段切分后落到音频' : '把音符应用到音频（保共振峰移调）'
+  if (!props.ready) return t('MIDI 音高重绘环境未就绪')
+  if (!canApply.value) return t('音轨上还没有片段：先切到「MIDI 编曲」写谱并渲染')
+  return props.scope === 'track' ? t('把音符按片段切分后落到音频') : t('把音符应用到音频（保共振峰移调）')
 })
 const previewHint = computed(() =>
-  canPreview.value ? '播放片段音频（不是 MIDI 音源）' : '空白轨道没有音频可试听',
+  canPreview.value ? t('播放片段音频（不是 MIDI 音源）') : t('空白轨道没有音频可试听'),
 )
 const analysisText = computed(() => {
   const data = props.analysis || {}
   const chunks: string[] = []
   const median = Number(data.median_hz ?? 0)
-  if (median > 0) chunks.push(`中位基频 ${median.toFixed(1)}Hz`)
+  if (median > 0) chunks.push(`${t('中位基频')} ${median.toFixed(1)}Hz`)
   const voiced = Number(data.voiced_ratio ?? 0)
-  if (voiced > 0) chunks.push(`浊音 ${Math.round(voiced * 100)}%`)
-  if (data.empty_track) chunks.push('空白轨道')
+  if (voiced > 0) chunks.push(`${t('浊音')} ${Math.round(voiced * 100)}%`)
+  if (data.empty_track) chunks.push(t('空白轨道'))
   return chunks.join(' · ')
 })
 
@@ -1002,6 +1016,7 @@ watch(
     if (!open) {
       maximized.value = false
       drag.value = null
+      hoveredNoteId.value = null
       contextMenu.visible = false
       stopPlay()
       return
@@ -1035,6 +1050,7 @@ watch(
   { deep: true },
 )
 watch(previewTime, () => scheduleDraw())
+watch(hoveredNoteId, () => scheduleDraw())
 
 onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
@@ -1073,6 +1089,7 @@ function setMode(mode: EditorMode) {
   if (mode === 'pitch' && !props.hasAudio) return
   activeMode.value = mode
   selection.value = []
+  hoveredNoteId.value = null
   emit('update:mode', mode)
   nextTick(() => {
     measureViewport()
@@ -1521,7 +1538,7 @@ function addPart() {
   pushUndo()
   const part = createPart(parts.value.length, {
     instrument: parts.value.length === 0 ? 0 : 48,
-    name: parts.value.length === 0 ? '旋律' : `声部 ${parts.value.length + 1}`,
+    name: parts.value.length === 0 ? t('旋律') : `${t('声部')} ${parts.value.length + 1}`,
   })
   session.value.parts = [...session.value.parts, part]
   activePartId.value = part.id
@@ -1531,7 +1548,7 @@ function addPart() {
 
 function addDrumPart() {
   pushUndo()
-  const part = createPart(parts.value.length, { drum: true, name: '架子鼓' })
+  const part = createPart(parts.value.length, { drum: true, name: t('架子鼓') })
   session.value.parts = [...session.value.parts, part]
   activePartId.value = part.id
   markPreviewStale()
@@ -1559,12 +1576,12 @@ function fillDrumBeat(part: MidiPart) {
 async function importMidiToPart(part: MidiPart) {
   const result = await api.importEditorMidiTracks()
   if (!result?.ok) {
-    if (result?.error) ElMessage.error(result.error)
+    if (result?.error) ElMessage.error(t(result.error))
     return
   }
   const tracks = (result.tracks || []).filter((track) => track.notes.length)
   if (!tracks.length) {
-    ElMessage.error('MIDI 文件里没有音符')
+    ElMessage.error(t('MIDI 文件里没有音符'))
     return
   }
   pushUndo()
@@ -1585,12 +1602,11 @@ async function importMidiToPart(part: MidiPart) {
   }
   part.notes = sortNotes(imported)
   const first = tracks[0]!
-  const autoName =
-    !part.name || /^声部\s*\d+$/.test(part.name) || part.name === '旋律' || part.name === '架子鼓'
+  const autoName = isDefaultPartName(part.name)
   if (first.drum) {
     part.drum = true
     part.instrument = 0
-    if (autoName) part.name = '架子鼓'
+    if (autoName) part.name = t('架子鼓')
   } else {
     part.drum = false
     part.instrument = clampProgram(first.program)
@@ -1633,10 +1649,10 @@ function onInstrumentChange(part: MidiPart, event: Event) {
   if (value === 'drum') {
     // 切到鼓组：把已有音符吸附到真实鼓件。
     if (!part.drum) {
-      const autoName = !part.name || /^声部\s*\d+$/.test(part.name) || part.name === '旋律'
+      const autoName = isDefaultPartName(part.name)
       part.drum = true
       part.instrument = 0
-      if (autoName) part.name = '架子鼓'
+      if (autoName) part.name = t('架子鼓')
       part.notes = part.notes.map((note) => ({ ...note, pitch: nearestDrumPitch(note.pitch) }))
     }
     dirty.value = true
@@ -1646,8 +1662,7 @@ function onInstrumentChange(part: MidiPart, event: Event) {
   }
   const program = Number(value)
   if (!Number.isFinite(program)) return
-  const autoName =
-    !part.name || /^声部\s*\d+$/.test(part.name) || part.name === '旋律' || part.name === '架子鼓'
+  const autoName = isDefaultPartName(part.name)
   part.drum = false
   part.instrument = clampProgram(program)
   if (autoName) part.name = instrumentLabel(part.instrument)
@@ -2251,6 +2266,13 @@ function onKeyDown(event: KeyboardEvent) {
     return
   }
   if (!selection.value.length) return
+  // 选中音符伸缩：] 加长、[ 缩短（以网格步长为步长，网格关闭时用 0.05s）。
+  if (key === ']' || key === '[') {
+    event.preventDefault()
+    const step = snapStep.value > 0 ? snapStep.value : 0.05
+    stretchSelection(key === ']' ? step : -step)
+    return
+  }
   if (key === 'ArrowUp' || key === 'ArrowDown') {
     event.preventDefault()
     const step = event.shiftKey ? 12 : 1
@@ -2288,6 +2310,29 @@ function nudgeSelection(deltaSeconds: number) {
     const span = clampNoteSpan(note.start + deltaSeconds, note.end + deltaSeconds, duration.value)
     return { ...note, start: span.start, end: span.end }
   })
+}
+
+/** 单个/多个选中音符伸缩：只改结束时间（右手边），带最小长度与时间轴边界。 */
+function stretchSelection(deltaSeconds: number) {
+  if (!selection.value.length) return
+  const ids = selectionSet()
+  pushUndo()
+  if (isCompose.value) {
+    session.value.parts = parts.value.map((part) => ({
+      ...part,
+      notes: part.notes.map((note) =>
+        ids.has(note.id)
+          ? resizeComposeNote(note, 'end', note.end + deltaSeconds, duration.value, 0)
+          : note,
+      ),
+    }))
+    markPreviewStale()
+    scheduleDraw()
+    return
+  }
+  draft.value = draft.value.map((note) =>
+    ids.has(note.id) ? resizeNote(note, 'end', note.end + deltaSeconds, duration.value, 0) : note,
+  )
 }
 
 /* ---------------------------------------------------------------- 画布绘制 */
@@ -2505,6 +2550,9 @@ function drawGrid() {
             y + rect.height / 2,
           )
         }
+        if (active || hoveredNoteId.value === note.id) {
+          drawNoteEdgeHandles(context, x, y, rect.width, rect.height, active)
+        }
       }
     }
   } else {
@@ -2528,6 +2576,9 @@ function drawGrid() {
         context.fillStyle = active ? '#04121c' : '#08222e'
         context.font = '9px ui-sans-serif, system-ui'
         context.fillText(noteName(note.pitch), x + 3, y + rect.height / 2)
+      }
+      if (active || hoveredNoteId.value === note.id) {
+        drawNoteEdgeHandles(context, x, y, rect.width, rect.height, active)
       }
     }
   }
@@ -2674,7 +2725,7 @@ function drawVelocity() {
   context.fillStyle = '#6d7f9c'
   context.font = '9px ui-sans-serif, system-ui'
   context.textBaseline = 'middle'
-  context.fillText('力度', 6, 10)
+  context.fillText(t('力度'), 6, 10)
   const selected = selectionSet()
   for (const part of parts.value) {
     if (part.mute) continue
@@ -2717,6 +2768,26 @@ function roundRect(
   context.arcTo(x, y + height, x, y, r)
   context.arcTo(x, y, x + width, y, r)
   context.closePath()
+}
+
+/** 在音符左右边缘画「可拉伸」把手：选中或悬停时提示拖这里改长度。 */
+function drawNoteEdgeHandles(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  active: boolean,
+) {
+  // 太窄的音符按 noteEdgeAt 的逻辑不开放边缘拉伸，也就不画把手。
+  if (width < MIN_RESIZE_PX) return
+  const handleW = Math.min(EDGE_GRAB_PX, Math.max(3, width / 3))
+  context.fillStyle = active ? 'rgba(255,255,255,0.96)' : 'rgba(222,238,255,0.9)'
+  context.fillRect(x + 0.5, y + 1, handleW - 1, height - 2)
+  context.fillRect(x + width - handleW + 0.5, y + 1, handleW - 1, height - 2)
+  context.fillStyle = 'rgba(4,10,18,0.55)'
+  context.fillRect(x + handleW - 0.5, y + 1, 1, height - 2)
+  context.fillRect(x + width - handleW + 0.5, y + 1, 1, height - 2)
 }
 
 /* ---------------------------------------------------------------- 指针交互 */
@@ -2849,9 +2920,10 @@ function onPointerDown(event: PointerEvent) {
       pitchRange.value.max,
       rowHeight.value,
       pxPerSecond.value,
+      EDGE_GRAB_PX,
     )
     drag.value = {
-      mode: currentTool.value === 'select' ? edge : 'move',
+      mode: edge,
       originX: point.x,
       originY: point.y,
       baseAll: [],
@@ -2887,7 +2959,7 @@ function onPointerDown(event: PointerEvent) {
   }
   if (event.shiftKey || event.ctrlKey || event.metaKey) toggleSelect(note.id)
   else if (!selection.value.includes(note.id)) selectOnly(note.id)
-  const edge = noteEdgeAt(note, point.x, pitchRange.value.max, rowHeight.value, pxPerSecond.value)
+  const edge = noteEdgeAt(note, point.x, pitchRange.value.max, rowHeight.value, pxPerSecond.value, EDGE_GRAB_PX)
   drag.value = {
     mode: edge,
     originX: point.x,
@@ -2917,15 +2989,18 @@ function onPointerMove(event: PointerEvent) {
     const canvas = gridCanvasRef.value
     if (!canvas) return
     const hovered = isCompose.value ? composeNoteAt(point) : pitchNoteAt(point)
-    if (hovered) {
-      const note = 'note' in hovered ? hovered.note : hovered
-      const edge = noteEdgeAt(note, point.x, pitchRange.value.max, rowHeight.value, pxPerSecond.value)
-      canvas.style.cursor =
-        currentTool.value === 'draw'
-          ? 'crosshair'
-          : edge === 'move'
-            ? 'grab'
-            : 'ew-resize'
+    const hoveredNote = hovered ? ('note' in hovered ? hovered.note : hovered) : null
+    hoveredNoteId.value = hoveredNote?.id || null
+    if (hoveredNote) {
+      const edge = noteEdgeAt(
+        hoveredNote,
+        point.x,
+        pitchRange.value.max,
+        rowHeight.value,
+        pxPerSecond.value,
+        EDGE_GRAB_PX,
+      )
+      canvas.style.cursor = edge === 'move' ? 'grab' : 'ew-resize'
     } else {
       canvas.style.cursor =
         currentTool.value === 'erase' ? 'not-allowed' : point.vy < RULER_HEIGHT ? 'pointer' : 'crosshair'
@@ -2983,6 +3058,8 @@ function onPointerMove(event: PointerEvent) {
     if (current.mode === 'move') {
       const base = current.baseSession
       if (!base) return
+      // 拖动移动跟随鼠标 1:1，不做网格吸附（吸附交给「量化」按钮 / Ctrl+Q）。
+      // 之前按网格把「位移量」吸附，拖一小段就会跳一整格，手感很差。
       session.value.parts = snapDrumPitches(
         moveComposeNotes(
           base.parts,
@@ -2990,7 +3067,7 @@ function onPointerMove(event: PointerEvent) {
           deltaSeconds,
           deltaPitch,
           duration.value,
-          step,
+          0,
         ),
         ids,
       )
@@ -3004,12 +3081,13 @@ function onPointerMove(event: PointerEvent) {
     const targetItem = located.find((item) => ids.has(item.note.id))
     if (!targetItem) return
     const anchor = current.mode === 'start' ? targetItem.note.start : targetItem.note.end
+    // 拉缩边缘同样跟随鼠标 1:1，不吸附网格（网格对齐交给「量化」）。
     const updated = resizeComposeNote(
       targetItem.note,
       current.mode === 'start' ? 'start' : 'end',
       anchor + deltaSeconds,
       duration.value,
-      step,
+      0,
     )
     session.value.parts = base.parts.map((part) => ({
       ...part,
@@ -3027,19 +3105,22 @@ function onPointerMove(event: PointerEvent) {
   }
   if (current.mode === 'move') {
     if (!current.baseAll.some((note) => current.ids.includes(note.id))) return
+    // 拖动移动同样跟随鼠标 1:1，不吸附网格。
     draft.value = moveNotes(
       current.baseAll,
       current.ids,
       deltaSeconds,
       deltaPitch,
       duration.value,
-      pitchGrid.value,
+      0,
     )
     return
   }
   const base = current.baseAll.find((note) => note.id === current.ids[0])
   if (!base) return
-  const target = snapTime(base.start + deltaSeconds, pitchGrid.value)
+  // 拉缩边缘跟随鼠标 1:1：以被抓取的边缘为锚点（start / end），不吸附网格。
+  const anchor = current.mode === 'start' ? base.start : base.end
+  const target = anchor + deltaSeconds
   draft.value = current.baseAll.map((note) =>
     note.id === base.id
       ? resizeNote(
@@ -3049,7 +3130,7 @@ function onPointerMove(event: PointerEvent) {
             ? Math.min(target, base.end - MIN_NOTE_LENGTH / 2)
             : Math.max(target, base.start + MIN_NOTE_LENGTH / 2),
           duration.value,
-          pitchGrid.value,
+          0,
         )
       : note,
   )
@@ -3119,6 +3200,8 @@ function onPointerUp(event: PointerEvent) {
 
 function onPointerLeave() {
   // 指针移出画布时保留正在进行的拖动，由 pointerup/pointercancel 收尾。
+  hoveredNoteId.value = null
+  if (gridCanvasRef.value) gridCanvasRef.value.style.cursor = ''
 }
 
 function onDoubleClick(event: MouseEvent) {

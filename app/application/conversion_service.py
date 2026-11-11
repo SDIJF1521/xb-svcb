@@ -4743,6 +4743,157 @@ class ConversionService:
                         outs["audio"] = vocals
                         self._log(log_file, "  混音失败，输出原始人声")
 
+                elif ntype == "merge":
+                    in_files = inputs_of(node_id, "audio")
+                    if not in_files:
+                        raise RuntimeError(f"多轨混合节点缺少输入{missing_hint(node_id, 'audio')}")
+                    if len(in_files) == 1:
+                        outs["audio"] = in_files[0]
+                    else:
+                        merged = work_dir / f"wf_merge_{node_id}.wav"
+                        if self._ffmpeg.available and self._ffmpeg.merge_tracks(in_files, merged):
+                            outs["audio"] = merged
+                            self._log(log_file, f"  多轨混合 {len(in_files)} 路音频")
+                        else:
+                            outs["audio"] = in_files[0]
+                            self._log(log_file, "  多轨混合失败，沿用第一路输入")
+
+                elif ntype == "concat":
+                    in_files = inputs_of(node_id, "audio")
+                    if not in_files:
+                        raise RuntimeError(f"顺序拼接节点缺少输入{missing_hint(node_id, 'audio')}")
+                    if len(in_files) == 1:
+                        outs["audio"] = in_files[0]
+                    else:
+                        joined = work_dir / f"wf_concat_{node_id}.wav"
+                        if self._ffmpeg.available and self._ffmpeg.concat(in_files, joined):
+                            outs["audio"] = joined
+                            self._log(log_file, f"  顺序拼接 {len(in_files)} 段音频")
+                        else:
+                            outs["audio"] = in_files[0]
+                            self._log(log_file, "  顺序拼接失败，沿用第一段输入")
+
+                elif ntype == "effect":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"音频效果节点缺少输入{missing_hint(node_id, 'audio')}")
+                    effect_type = str(params.get("effect") or "").strip().lower()
+                    if not effect_type or not self._ffmpeg.available:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  音频效果跳过：未选择效果或 ffmpeg 不可用")
+                    else:
+                        effect_params = dict(params.get("effect_params") or {})
+                        reserved = {"effect", "effect_params", "device"}
+                        effect_params.update(
+                            {k: v for k, v in params.items() if k not in reserved}
+                        )
+                        out = work_dir / f"wf_effect_{node_id}.wav"
+                        if self._ffmpeg.apply_effect(in_audio, out, effect_type, effect_params):
+                            outs["audio"] = out
+                            self._log(log_file, f"  音频效果: {effect_type}")
+                        else:
+                            outs["audio"] = in_audio
+                            self._log(log_file, f"  音频效果失败，沿用输入: {effect_type}")
+
+                elif ntype == "trim":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"裁剪片段节点缺少输入{missing_hint(node_id, 'audio')}")
+                    try:
+                        start = max(0.0, float(params.get("start") or 0.0))
+                        end = float(params.get("end") or 0.0)
+                        fade = max(0.0, float(params.get("fade") or 0.0))
+                    except (TypeError, ValueError):
+                        start = 0.0
+                        end = 0.0
+                        fade = 0.0
+                    if end <= start and self._ffmpeg.available:
+                        end = float(self._ffmpeg.probe_duration(in_audio) or 0.0)
+                    if end <= start:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  裁剪跳过：未提供有效结束时间")
+                    else:
+                        out = work_dir / f"wf_trim_{node_id}.wav"
+                        if self._ffmpeg.available and self._ffmpeg.slice(
+                            in_audio, start, end, out, fade=fade
+                        ):
+                            outs["audio"] = out
+                            self._log(
+                                log_file,
+                                f"  裁剪 [{start:.2f}s, {end:.2f}s]"
+                                + (f"（淡变 {fade:.2f}s）" if fade > 0 else ""),
+                            )
+                        else:
+                            outs["audio"] = in_audio
+                            self._log(log_file, "  裁剪失败，沿用输入")
+
+                elif ntype == "fade":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"淡入淡出节点缺少输入{missing_hint(node_id, 'audio')}")
+                    try:
+                        fade_in = max(0.0, float(params.get("fade_in") or 0.0))
+                        fade_out = max(0.0, float(params.get("fade_out") or 0.0))
+                    except (TypeError, ValueError):
+                        fade_in = 0.0
+                        fade_out = 0.0
+                    out = work_dir / f"wf_fade_{node_id}.wav"
+                    if self._ffmpeg.available and self._ffmpeg.fade(in_audio, out, fade_in, fade_out):
+                        outs["audio"] = out
+                        self._log(log_file, f"  淡入 {fade_in:.2f}s / 淡出 {fade_out:.2f}s")
+                    else:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  淡入淡出失败，沿用输入")
+
+                elif ntype == "pitch":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"变调节点缺少输入{missing_hint(node_id, 'audio')}")
+                    try:
+                        semitones = int(round(float(params.get("semitones") or 0.0)))
+                    except (TypeError, ValueError):
+                        semitones = 0
+                    semitones = max(-24, min(24, semitones))
+                    out = work_dir / f"wf_pitch_{node_id}.wav"
+                    if self._ffmpeg.available and self._ffmpeg.pitch(in_audio, out, semitones):
+                        outs["audio"] = out
+                        self._log(log_file, f"  变调 {semitones:+d} 半音")
+                    else:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  变调失败，沿用输入")
+
+                elif ntype == "stretch":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"变速节点缺少输入{missing_hint(node_id, 'audio')}")
+                    try:
+                        speed = max(0.25, min(4.0, float(params.get("speed") or 1.0)))
+                    except (TypeError, ValueError):
+                        speed = 1.0
+                    out = work_dir / f"wf_stretch_{node_id}.wav"
+                    if self._ffmpeg.available and self._ffmpeg.tempo(in_audio, out, speed):
+                        outs["audio"] = out
+                        self._log(log_file, f"  变速 {speed:.2f}x")
+                    else:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  变速失败，沿用输入")
+
+                elif ntype == "normalize":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"响度归一化节点缺少输入{missing_hint(node_id, 'audio')}")
+                    try:
+                        target = float(params.get("target_lufs") or -14.0)
+                    except (TypeError, ValueError):
+                        target = -14.0
+                    out = work_dir / f"wf_normalize_{node_id}.wav"
+                    if self._ffmpeg.available and self._ffmpeg.loudnorm(in_audio, out, target):
+                        outs["audio"] = out
+                        self._log(log_file, f"  响度归一化到 {target:.1f} LUFS")
+                    else:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  响度归一化失败，沿用输入")
+
                 elif ntype == "output":
                     tracks = inputs_of(node_id, "audio")
                     if not tracks:
@@ -4762,6 +4913,7 @@ class ConversionService:
             # 第一路作为「翻唱成品」（output.wav，进入作品库）；其余只落在本次任务
             # 目录的 outputs/ 下，作为音频编辑器的素材。
             saved_tracks: list[tuple[Path, str, str]] = []
+            seen_tracks: set[tuple[str, str]] = set()
             for onode in nodes:
                 if str(onode.get("type") or "") != "output":
                     continue
@@ -4772,6 +4924,12 @@ class ConversionService:
                     track = upstream.get(port)
                     if not track or not Path(track).exists():
                         continue
+                    # 完全相同的连线（同一上游节点 + 端口重复连到保存节点）只保存一次；
+                    # 不同端口（如 other 与 stem:drums）即使指向同一音频也各自保留。
+                    track_key = (str(frm.get("node") or ""), port)
+                    if track_key in seen_tracks:
+                        continue
+                    seen_tracks.add(track_key)
                     source_node = node_by_id.get(str(frm.get("node") or "")) or {}
                     label = NODE_LABELS.get(str(source_node.get("type") or ""), "音频")
                     # 不同模型可能同时保存人声/伴奏/附加音轨，标题要带上端口名才分得清。
@@ -4781,8 +4939,25 @@ class ConversionService:
             if not saved_tracks:
                 raise RuntimeError("工作流缺少可用的保存音轨")
 
+            # 标签去重：多个节点用同一模型/端口名时 label 会重复，编辑器里分不清。
+            label_counts: dict[str, int] = {}
+            unique_tracks: list[tuple[Path, str, str]] = []
+            for track, label, port in saved_tracks:
+                count = label_counts.get(label, 0) + 1
+                label_counts[label] = count
+                unique_tracks.append((track, f"{label} ({count})" if count > 1 else label, port))
+            saved_tracks = unique_tracks
+
             primary_label, primary_port = saved_tracks[0][1], saved_tracks[0][2]
             primary = saved_tracks[0][0]
+            # 清理上一次运行残留的附加音轨，避免重跑后目录里留下过期 track_XX.wav。
+            outputs_dir = work_dir / "outputs"
+            if outputs_dir.is_dir():
+                for stale in outputs_dir.glob("track_*.wav"):
+                    try:
+                        stale.unlink(missing_ok=True)
+                    except OSError:
+                        pass
             output = work_dir / "output.wav"
             if self._ffmpeg.available and self._ffmpeg.convert(primary, output):
                 primary = output
@@ -4795,7 +4970,6 @@ class ConversionService:
                     "port": primary_port,
                 }
             ]
-            outputs_dir = work_dir / "outputs"
             for index, (track, label, port) in enumerate(saved_tracks[1:], start=1):
                 outputs_dir.mkdir(parents=True, exist_ok=True)
                 dest = outputs_dir / f"track_{index:02d}.wav"
