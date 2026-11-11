@@ -1,0 +1,47 @@
+name: main
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-tests:
+    name: Python unit tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            app/uv.lock
+            app/pyproject.toml
+
+      - name: Sync application environment
+        run: uv sync --project app --frozen
+
+      - name: Install test dependencies
+        run: uv pip install --project app pytest numpy scipy soundfile librosa
+
+      - name: Install CPU PyTorch for inference tests
+        run: uv pip install --project app torch --torch-backend cpu
+
+      - name: Run unit tests
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: app/.venv/Scripts/python.exe -m pytest app/tests -q

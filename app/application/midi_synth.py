@@ -229,8 +229,9 @@ def _gm_drum_samples() -> dict[int, tuple[int, Any, float, int, int]] | None:
     global _cached_gm_drums
     if _cached_gm_drums is None:
         try:
-            from infrastructure import gm_drum_samples
-            loaded = gm_drum_samples.load_gm_drums()
+            from .adapters import gm_drum_samples
+
+            loaded = gm_drum_samples()
             _cached_gm_drums = loaded if loaded else {}
         except Exception:
             _cached_gm_drums = {}

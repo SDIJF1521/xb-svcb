@@ -86,6 +86,13 @@ def midi_pitch() -> MidiPitchPort:
     return MidiPitchProcessor()
 
 
+def gm_drum_samples() -> Any:
+    """Load the bundled GM drum samples (Windows gm.dls) for MIDI synthesis."""
+    from infrastructure import gm_drum_samples as module
+
+    return module.load_gm_drums()
+
+
 def engine_registry(engines: list[Any]) -> EngineRegistryPort:
     from infrastructure.engine import EngineRegistry
 

@@ -3887,6 +3887,7 @@ class HttpApiServer:
                 f"http://127.0.0.1:{status['port']}/api/v1/models",
                 headers={"X-API-Key": status["api_key"]},
                 timeout=5.0,
+                trust_env=False,
             )
             response.raise_for_status()
             data = response.json()
