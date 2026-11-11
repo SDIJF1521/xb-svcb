@@ -21,6 +21,7 @@ AIカバー制作の全工程を一つのワークフローで実行できます
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](#)
 [![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
 [![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
+[![main](https://github.com/SDIJF1521/xb-svcb/actions/workflows/main.yml/badge.svg?branch=dev)](https://github.com/SDIJF1521/xb-svcb/actions/workflows/main.yml)
 
 ### [ModelScope版オンラインインストーラー: CPU / AMD / NVIDIA を自動選択](https://github.com/SDIJF1521/xb-svcb/releases/latest)
 

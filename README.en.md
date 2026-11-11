@@ -21,6 +21,7 @@ Create a complete AI song cover in one workflow. Supports **So-VITS-SVC and RVC 
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](#)
 [![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
 [![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
+[![main](https://github.com/SDIJF1521/xb-svcb/actions/workflows/main.yml/badge.svg?branch=dev)](https://github.com/SDIJF1521/xb-svcb/actions/workflows/main.yml)
 
 ### [Download the ModelScope online installer: automatic CPU / AMD / NVIDIA selection](https://github.com/SDIJF1521/xb-svcb/releases/latest)
 
