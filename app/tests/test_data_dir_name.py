@@ -115,7 +115,11 @@ def test_xb_svcb_path_repair_handles_forward_slashes(tmp_path: Path) -> None:
 
 
 def test_data_home_written_by_legacy_ansi_installer_is_still_readable(tmp_path: Path) -> None:
-    """旧安装器按 ANSI 代码页写 data_home.json，不能因此让应用启动失败。"""
+    """旧安装器按 ANSI 代码页写 data_home.json，不能因此让应用启动失败。
+
+    单字节 ANSI 代码页（如 cp1252）也能"成功"解码 GBK 字节，因此读取端不能
+    停在第一个可解码的候选，必须选择真正指向已存在数据目录的那个。
+    """
     target = tmp_path / "音频数据"
     target.mkdir()
     home = tmp_path / "data_home.json"
@@ -123,6 +127,42 @@ def test_data_home_written_by_legacy_ansi_installer_is_still_readable(tmp_path: 
     home.write_bytes(payload.encode("gbk"))
 
     row = config._read_data_home_file(home)
+
+    assert row is not None
+    assert row[0] == target.resolve()
+
+
+def test_data_home_written_by_legacy_japanese_installer_is_still_readable(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "音声データ"
+    target.mkdir()
+    home = tmp_path / "data_home.json"
+    payload = json.dumps({"data_dir": str(target)}, ensure_ascii=False)
+    home.write_bytes(payload.encode("cp932"))
+
+    row = config._read_data_home_file(home)
+
+    assert row is not None
+    assert row[0] == target.resolve()
+
+
+def test_data_home_candidates_cover_legacy_cjk_code_pages(tmp_path: Path) -> None:
+    payload = json.dumps({"data_dir": str(tmp_path / "音频数据")}, ensure_ascii=False)
+    texts = config._data_home_text_candidates(payload.encode("gbk"))
+
+    assert any("音频数据" in text for text in texts)
+
+
+def test_mojibake_ansi_candidate_loses_to_the_real_cjk_path(tmp_path: Path) -> None:
+    """英文 Windows（ACP=CP1252）把 GBK 字节解码成乱码时，仍要选中真实路径。"""
+    target = tmp_path / "音频数据"
+    target.mkdir()
+    payload = json.dumps({"data_dir": str(target)}, ensure_ascii=False)
+    mojibake = payload.encode("gbk").decode("cp1252")
+
+    assert mojibake != payload
+    row = config._select_data_home_row([mojibake, payload], target.stat().st_mtime)
 
     assert row is not None
     assert row[0] == target.resolve()
@@ -139,3 +179,21 @@ def test_data_home_with_utf8_bom_is_readable(tmp_path: Path) -> None:
 
     assert row is not None
     assert row[0] == target.resolve()
+
+
+def test_data_home_for_not_yet_created_data_dir_still_resolves(tmp_path: Path) -> None:
+    target = tmp_path / "not-created-yet"
+    home = tmp_path / "data_home.json"
+    home.write_bytes(json.dumps({"data_dir": str(target)}).encode("utf-8"))
+
+    row = config._read_data_home_file(home)
+
+    assert row is not None
+    assert row[0] == target.resolve()
+
+
+def test_undecodable_data_home_is_ignored_instead_of_raising(tmp_path: Path) -> None:
+    home = tmp_path / "data_home.json"
+    home.write_bytes(b"\xff\xfe\x00garbage")
+
+    assert config._read_data_home_file(home) is None

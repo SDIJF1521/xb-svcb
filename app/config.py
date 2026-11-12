@@ -894,38 +894,85 @@ def data_dir_env_override() -> str | None:
     )
 
 
-def _read_data_home_text(path: Path) -> str:
-    """Read ``data_home.json`` whatever encoding the installer used.
+def _data_home_text_candidates(raw: bytes) -> list[str]:
+    """Decode ``data_home.json`` bytes in preference order.
 
     Current installers write UTF-8; older builds wrote the file with the ANSI
-    code page, so a Chinese data directory raises ``UnicodeDecodeError`` under
-    the strict UTF-8 decode.  That must never take the whole app down.
+    code page of the machine that ran the installer, which may be GBK (Chinese),
+    CP932 (Japanese) or a single-byte code page.  A single-byte code page such
+    as CP1252 can "successfully" decode CJK bytes into mojibake, so every
+    candidate is returned instead of stopping at the first one that decodes;
+    the caller validates them against the real data directory.
     """
-    raw = path.read_bytes()
-    candidates = ("utf-8-sig", "utf-8", "mbcs", "gbk", locale.getpreferredencoding(False))
+    candidates = (
+        "utf-8-sig",
+        "utf-8",
+        "mbcs",
+        "gbk",
+        "cp932",
+        "cp950",
+        "cp949",
+        locale.getpreferredencoding(False),
+    )
+    texts: list[str] = []
     for encoding in dict.fromkeys(candidates):
         try:
-            return raw.decode(encoding)
+            texts.append(raw.decode(encoding))
         except (LookupError, UnicodeDecodeError):
             continue
-    return raw.decode("utf-8", errors="replace")
+    if not texts:
+        texts.append(raw.decode("utf-8", errors="replace"))
+    return texts
+
+
+def _parse_data_home_text(
+    text: str, mtime: float
+) -> tuple[Path, dict[str, str], float] | None:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw_dir = data.get("data_dir")
+    if not raw_dir:
+        return None
+    try:
+        target = Path(str(raw_dir)).expanduser().resolve()
+    except (OSError, ValueError):
+        return None
+    payload = {str(k): str(v) for k, v in data.items() if isinstance(k, str)}
+    return target, payload, mtime
+
+
+def _select_data_home_row(
+    candidates: list[str], mtime: float
+) -> tuple[Path, dict[str, str], float] | None:
+    """Pick the decoding that resolves to an existing data directory.
+
+    单字节 ANSI 代码页（英文 Windows 上是 CP1252）能把 GBK 字节"成功"解码成
+    乱码，因此不能停在第一个可解码的候选；旧编码写出的数据目录通常真实存在，
+    用它作为判据。目录尚未创建时退回第一个可解析的候选。
+    """
+    fallback: tuple[Path, dict[str, str], float] | None = None
+    for text in candidates:
+        row = _parse_data_home_text(text, mtime)
+        if row is None:
+            continue
+        if row[0].exists():
+            return row
+        if fallback is None:
+            fallback = row
+    return fallback
 
 
 def _read_data_home_file(path: Path) -> tuple[Path, dict[str, str], float] | None:
     try:
-        data = json.loads(_read_data_home_text(path))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return None
-    raw = data.get("data_dir") if isinstance(data, dict) else None
-    if not raw:
-        return None
-    try:
-        target = Path(str(raw)).expanduser().resolve()
+        raw = path.read_bytes()
         mtime = path.stat().st_mtime
     except OSError:
         return None
-    payload = {str(k): str(v) for k, v in data.items() if isinstance(k, str)}
-    return target, payload, mtime
+    return _select_data_home_row(_data_home_text_candidates(raw), mtime)
 
 
 def _read_data_home_rows() -> list[tuple[Path, Path, dict[str, str], float]]:
