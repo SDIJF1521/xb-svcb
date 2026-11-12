@@ -111,7 +111,7 @@ def build_api() -> Api:
         midi_pitch=midi_pitch,
     )
     plugin_service = PluginService(settings)
-    realtime_cover_service = RealtimeCoverService(model_service, ffmpeg, uvr, engines)
+    realtime_cover_service = RealtimeCoverService(model_service, ffmpeg, uvr, engines, pymss)
     media_service = MediaService(works_repo, ffmpeg)
     theme_media_service = ThemeMediaService(ThemeMediaStore())
     audio_import_service = AudioImportService(AudioImportStore())

@@ -6,14 +6,17 @@
 from __future__ import annotations
 
 import json
+import time
 import types
 import wave
 from pathlib import Path
 
 import numpy as np
+import config
 import pytest
 
 from application import midi_synth
+from application import audio_editor_service as editor_service_module
 from application.audio_editor_service import AudioEditorService
 from domain import midi_file, midi_instruments, midi_session
 from infrastructure.storage import ListRepository
@@ -197,6 +200,23 @@ def test_render_session_produces_audio_of_expected_length() -> None:
     assert not bool(np.isnan(samples).any())
 
 
+def test_render_session_reports_monotonic_progress() -> None:
+    seen: list[float] = []
+    midi_synth.render_session(_session(), sample_rate=22050, progress=seen.append)
+
+    assert seen, "渲染应上报进度"
+    assert seen[-1] == pytest.approx(1.0)
+    assert all(later >= earlier for earlier, later in zip(seen, seen[1:]))
+
+
+def test_render_session_is_deterministic_with_note_cache() -> None:
+    session = _session()
+    first = midi_synth.render_session(session, sample_rate=22050)
+    second = midi_synth.render_session(session, sample_rate=22050)
+
+    assert np.array_equal(first, second)
+
+
 def test_render_session_handles_every_family_without_failure() -> None:
     notes = [{"start": 0.0, "end": 0.3, "pitch": 60, "velocity": 96}]
     parts = [
@@ -321,6 +341,56 @@ def _service(tmp_path: Path, project: dict | None = None) -> AudioEditorService:
     return service
 
 
+def test_preview_clip_midi_returns_audio_without_saving(tmp_path: Path, monkeypatch) -> None:
+    clip_file = tmp_path / "clip.wav"
+    clip_file.write_bytes(b"audio")
+    project = {
+        "id": PROJECT_ID,
+        "title": "试听测试",
+        "sample_rate": 44100,
+        "duration": 10.0,
+        "waveform_cache": {},
+        "tracks": [
+            {
+                "id": TRACK_ID,
+                "name": "人声",
+                "type": "audio",
+                "clips": [
+                    {
+                        "id": "clp_test",
+                        "name": "片段",
+                        "start": 0.0,
+                        "end": 2.0,
+                        "offset": 0.0,
+                        "file": str(clip_file),
+                    }
+                ],
+            }
+        ],
+    }
+    service = _service(tmp_path, project)
+    before = json.dumps(service._repo.get(PROJECT_ID), ensure_ascii=False, sort_keys=True)
+
+    preview_file = tmp_path / "midi-preview.wav"
+    preview_file.write_bytes(b"\0" * 128)
+
+    def fake_apply(clip, notes, folder, **_kwargs):
+        return {**clip, "file": str(preview_file)}, {"applied_notes": len(notes)}
+
+    monkeypatch.setattr(service, "_apply_notes_to_clip", fake_apply)
+
+    result = service.preview_clip_midi(
+        PROJECT_ID,
+        "clp_test",
+        [{"start": 0.0, "end": 0.5, "pitch": 62, "velocity": 100}],
+    )
+
+    assert result["ok"] is True, result.get("error")
+    assert str(result["audio"]).startswith("data:audio/")
+    after = json.dumps(service._repo.get(PROJECT_ID), ensure_ascii=False, sort_keys=True)
+    assert after == before
+
+
 def test_midi_session_works_on_empty_track(tmp_path: Path) -> None:
     service = _service(tmp_path)
 
@@ -403,6 +473,60 @@ def test_render_midi_session_on_empty_track_creates_instrument_tracks(tmp_path: 
         if (track.get("metadata") or {}).get("midi_render_source") == TRACK_ID
     ]
     assert len(rerendered) == 2
+
+
+def test_midi_f0_analysis_uses_the_svc_runtime(tmp_path: Path, monkeypatch) -> None:
+    svc_python = tmp_path / "svc-python.exe"
+    svc_python.write_bytes(b"")
+    worker = tmp_path / "f0_worker.py"
+    worker.write_bytes(b"")
+    repo = tmp_path / "so-vits-svc"
+    repo.mkdir()
+    output = tmp_path / "f0.npy"
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd, **_kwargs):
+        captured["cmd"] = list(cmd)
+        output.write_bytes(b"\0" * 128)
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(config, "SVC_PYTHON", svc_python)
+    monkeypatch.setattr(config, "F0_WORKER", worker)
+    monkeypatch.setattr(config, "SOVITS_REPO", repo)
+    monkeypatch.setattr(editor_service_module.subprocess, "run", fake_run)
+
+    service = AudioEditorService.__new__(AudioEditorService)
+    assert service._run_f0_analysis(tmp_path / "in.wav", output, {}) is True
+    assert captured["cmd"][0] == str(svc_python)
+    assert "--repo" in captured["cmd"]
+
+
+def test_midi_analysis_ready_requires_the_svc_runtime(monkeypatch) -> None:
+    monkeypatch.setattr(config, "SVC_PYTHON", None)
+    assert config.midi_analysis_ready() is False
+
+
+def test_start_midi_render_reports_progress_and_result(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    started = service.start_midi_render(PROJECT_ID, TRACK_ID, _session(), {"mode": "mix"})
+
+    assert started["ok"] is True
+    job_id = started["job_id"]
+    state: dict | None = None
+    deadline = time.time() + 10.0
+    while time.time() < deadline:
+        state = service.midi_render_status(job_id)
+        assert state is not None
+        if state["status"] in {"done", "error"}:
+            break
+        time.sleep(0.02)
+
+    assert state is not None
+    assert state["status"] == "done", state.get("error")
+    assert state["result"]["ok"] is True
+    assert state["progress"] == 100
+    assert state["message"]
+    assert service.midi_render_status("missing") is None
 
 
 def test_render_midi_session_mix_mode_replaces_previous_clip(tmp_path: Path) -> None:

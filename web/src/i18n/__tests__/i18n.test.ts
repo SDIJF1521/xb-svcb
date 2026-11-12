@@ -135,6 +135,36 @@ describe('application localization', () => {
     expect(translateUiText('昨天 16:00')).toBe('昨日 16:00')
   })
 
+  it('translates realtime voice changer, PyMSS and VB-CABLE copy', () => {
+    const cableNote =
+      'VB-CABLE：输入用麦克风时，输出可直接选“CABLE Output”；应用会自动写入同一条虚拟线的 CABLE Input，OBS/语音软件仍选择 CABLE Output 接收。'
+
+    setLocale('en-US')
+    expect(translateUiText('混合音频 · 保留伴奏')).toBe('Mixed Audio · Keep Instrumental')
+    expect(translateUiText('纯人声 · 直播低延迟')).toBe('Dry Vocal · Live Low Latency')
+    expect(translateUiText('人声分离引擎')).toBe('Vocal Separation Engine')
+    expect(translateUiText('端到端延迟')).toBe('End-to-end Latency')
+    expect(translateUiText('1.50 秒')).toBe('1.50 s')
+    expect(translateUiText('1 块 · 0.50 秒')).toBe('Blocks 1 · 0.50 s')
+    expect(translateUiText('实时播放已停止')).toBe('Realtime playback stopped')
+    expect(translateUiText('实时音频来源')).toBe('Realtime Audio Source')
+    expect(translateUiText('+2 半音')).toBe('+2 semitones')
+    expect(translateUiText('4 步')).toBe('4 steps')
+    expect(translateUiText('自动 · v2')).toBe('Auto · v2')
+    expect(translateUiText(cableNote)).toContain('CABLE Output')
+    expect(translateUiText(cableNote)).not.toBe(cableNote)
+
+    setLocale('ja-JP')
+    expect(translateUiText('纯人声 · 直播低延迟')).toBe('ドライボーカル · 低遅延ライブ')
+    expect(translateUiText('处理负载')).toBe('処理負荷')
+    expect(translateUiText('1.50 秒')).toBe('1.50秒')
+    expect(translateUiText('1 块 · 0.50 秒')).toBe('ブロック 1 · 0.50秒')
+    expect(translateUiText('实时播放已停止')).toBe('リアルタイム再生を停止しました')
+    expect(translateUiText('实时音频来源')).toBe('リアルタイム音声ソース')
+    expect(translateUiText('+2 半音')).toBe('+2半音')
+    expect(translateUiText('4 步')).toBe('4ステップ')
+  })
+
   it('persists the selected locale and updates the document language', async () => {
     setLocale('ja-JP')
     await nextTick()

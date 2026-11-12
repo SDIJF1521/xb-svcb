@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import config
+from infrastructure.persistent_worker import PersistentInferenceSession
 from infrastructure.pymss_catalog_meta import attach_model_stems, model_stems
 from infrastructure.uvr_tool import SeparationResult
 
@@ -469,25 +470,12 @@ class PymssTool:
             del self._download_jobs[str(key)]
             return True
 
-    def separate(
+    def _resolve_model(
         self,
-        src: Path,
-        out_dir: Path,
-        model: str = "",
-        device: str = "auto",
-        purpose: str = "",
-        primary_stem: str = "",
-    ) -> SeparationResult:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        if not self.available or not src or not Path(src).exists():
-            raise RuntimeError("PyMSS 环境未安装或输入音频不存在，请先安装环境并下载模型")
-        requested = str(device or "auto").strip().lower()
-        aliases = {"gpu": "auto", "dml": "directml", "hip": "rocm", "amd": "rocm", "rocm10": "rocm"}
-        requested = aliases.get(requested, requested)
-        if requested == "directml":
-            raise RuntimeError("PyMSS 的 AMD 加速需要 ROCm，不支持 DirectML")
-        if requested not in {"auto", "cuda", "rocm", "directml", "cpu", "mps", "mlx"}:
-            raise RuntimeError(f"不支持的 PyMSS 推理设备: {device}")
+        model: str,
+        purpose: str,
+    ) -> tuple[str, dict[str, Any], str]:
+        """Resolve one catalog model and normalize its purpose."""
         model_name = str(model or config.PYMSS_DEFAULT_MODEL).strip()
         model_purpose = str(purpose or config.PYMSS_PURPOSE_VOCAL).strip().lower()
         if model_purpose == config.PYMSS_PURPOSE_HARMONY_LEGACY:
@@ -510,13 +498,92 @@ class PymssTool:
         requested_model = model_name.casefold()
         resolved = model_aliases.get(requested_model)
         if resolved is None:
-            matches = sorted({full for alias, full in model_aliases.items() if alias.startswith(requested_model)})
+            matches = sorted(
+                {
+                    full
+                    for alias, full in model_aliases.items()
+                    if alias.startswith(requested_model)
+                }
+            )
             if len(matches) == 1:
                 resolved = matches[0]
         if not resolved:
             raise RuntimeError("该模型不属于受支持的 PyMSS 人声处理类别")
-        model_name = resolved
-        model_entry = catalog_by_name.get(model_name.casefold(), {})
+        return resolved, catalog_by_name.get(resolved.casefold(), {}), model_purpose
+
+    def open_realtime_session(
+        self,
+        model: str = "",
+        device: str = "auto",
+        out_dir: Path | None = None,
+        log_file: Path | None = None,
+        *,
+        purpose: str = "",
+        primary_stem: str = "",
+    ) -> PersistentInferenceSession:
+        """Keep one PyMSS model loaded for per-block live separation."""
+        if not self.available:
+            raise RuntimeError("PyMSS 环境未安装，无法启动实时人声分离")
+        model_dir = config.PYMSS_MODEL_DIR
+        if model_dir is None:
+            raise RuntimeError("PyMSS 模型目录未配置")
+        model_name, model_entry, model_purpose = self._resolve_model(model, purpose)
+        if not config.pymss_model_ready(model_name):
+            raise RuntimeError(f"PyMSS 模型未下载: {model_name}")
+        requested = str(device or "auto").strip().lower()
+        aliases = {"gpu": "auto", "dml": "directml", "hip": "rocm", "amd": "rocm", "rocm10": "rocm"}
+        requested = aliases.get(requested, requested)
+        if requested == "directml":
+            raise RuntimeError("PyMSS 的 AMD 加速需要 ROCm，不支持 DirectML")
+        if requested not in {"auto", "cuda", "rocm", "cpu", "mps", "mlx"}:
+            raise RuntimeError(f"不支持的 PyMSS 推理设备: {device}")
+        directory = Path(out_dir or config.TEMP_DIR / "realtime-pymss")
+        directory.mkdir(parents=True, exist_ok=True)
+        command = [
+            str(config.PYMSS_PYTHON),
+            str(config.PYMSS_WORKER),
+            "--server",
+            "--model", model_name,
+            "--model-dir", str(model_dir),
+            "--out-dir", str(directory),
+            "--device", requested,
+            "--purpose", model_purpose,
+        ]
+        target_stem = str(model_entry.get("target_stem") or "").strip()
+        if target_stem:
+            command.extend(["--target-stem", target_stem])
+        chosen_stem = str(primary_stem or "").strip()
+        if chosen_stem:
+            command.extend(["--primary-stem", chosen_stem])
+        return PersistentInferenceSession(
+            command,
+            ready_marker="PYMSS_SERVER_READY",
+            result_marker="PYMSS_SERVER_RESULT\t",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+            log_file=log_file,
+            startup_timeout=900.0,
+        )
+
+    def separate(
+        self,
+        src: Path,
+        out_dir: Path,
+        model: str = "",
+        device: str = "auto",
+        purpose: str = "",
+        primary_stem: str = "",
+    ) -> SeparationResult:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if not self.available or not src or not Path(src).exists():
+            raise RuntimeError("PyMSS 环境未安装或输入音频不存在，请先安装环境并下载模型")
+        requested = str(device or "auto").strip().lower()
+        aliases = {"gpu": "auto", "dml": "directml", "hip": "rocm", "amd": "rocm", "rocm10": "rocm"}
+        requested = aliases.get(requested, requested)
+        if requested == "directml":
+            raise RuntimeError("PyMSS 的 AMD 加速需要 ROCm，不支持 DirectML")
+        if requested not in {"auto", "cuda", "rocm", "directml", "cpu", "mps", "mlx"}:
+            raise RuntimeError(f"不支持的 PyMSS 推理设备: {device}")
+        model_name, model_entry, model_purpose = self._resolve_model(model, purpose)
         cmd = [
             str(config.PYMSS_PYTHON), str(config.PYMSS_WORKER),
             "--model", model_name,

@@ -26,7 +26,12 @@ from .adapters import (
     system_audio_reader,
     system_audio_writer,
 )
-from .ports import EngineRegistryPort, FfmpegGateway, SeparationGateway
+from .ports import (
+    EngineRegistryPort,
+    FfmpegGateway,
+    PymssGateway,
+    SeparationGateway,
+)
 from .conversion_service import (
     ConversionService,
     _HighNoteQuality,
@@ -49,11 +54,13 @@ class RealtimeCoverService:
         ffmpeg: FfmpegGateway,
         uvr: SeparationGateway,
         engines: EngineRegistryPort,
+        pymss: PymssGateway | None = None,
     ) -> None:
         self._models = models
         self._ffmpeg = ffmpeg
         self._uvr = uvr
         self._engines = engines
+        self._pymss = pymss
         self._sessions: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
 
@@ -89,6 +96,42 @@ class RealtimeCoverService:
         duration = float(self._ffmpeg.probe_duration(source) or 0.0)
         if duration <= 0:
             raise ValueError("无法读取歌曲时长")
+        params = (
+            payload.get("params")
+            if isinstance(payload.get("params"), dict)
+            else {}
+        )
+        separator_engine = str(
+            payload.get("separator_engine")
+            or params.get("preprocess_engine")
+            or "uvr"
+        ).strip().lower()
+        if separator_engine not in {"uvr", "pymss"}:
+            separator_engine = "uvr"
+        separator_device = str(params.get("device") or "auto").strip()
+        if separator_engine == "pymss":
+            if self._pymss is None or not self._pymss.available:
+                raise RuntimeError(
+                    "已选择 PyMSS 人声分离，但 PyMSS 环境未就绪；"
+                    "请先安装 PyMSS 并下载模型"
+                )
+            separator_model = str(
+                payload.get("pymss_model")
+                or params.get("pymss_model")
+                or config.PYMSS_DEFAULT_MODEL
+            ).strip()
+            if not config.pymss_model_ready(separator_model):
+                raise RuntimeError(
+                    f"PyMSS 模型未下载: {separator_model}，请先在模型站下载"
+                )
+            if separator_device.lower() in {"directml", "dml"}:
+                separator_device = "auto"
+        else:
+            separator_model = str(
+                payload.get("uvr_model")
+                or params.get("uvr_model")
+                or config.UVR_MODEL
+            ).strip()
         chunk_seconds = self._bounded_float(payload.get("chunk_seconds"), 4.0, 12.0, 8.0)
         buffer_seconds = self._bounded_float(payload.get("buffer_seconds"), 8.0, 60.0, 20.0)
         session: dict[str, Any] = {
@@ -103,6 +146,9 @@ class RealtimeCoverService:
             "duration": round(duration, 3),
             "chunk_seconds": chunk_seconds,
             "buffer_seconds": buffer_seconds,
+            "separator_engine": separator_engine,
+            "separator_model": separator_model,
+            "separator_device": separator_device,
             "ready_seconds": 0.0,
             "processed_seconds": 0.0,
             "realtime_factor": None,
@@ -139,22 +185,50 @@ class RealtimeCoverService:
         return list_system_audio_devices()
 
     def start_system(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Start a streaming changer for a mixed WASAPI loopback input.
+        """Start a streaming changer for a live WASAPI/VB-CABLE input.
 
-        QQ Music and similar players expose one mixed signal. UVR is therefore
-        kept resident and extracts the vocal stem per block before RVC/SeedVC
-        inference. The residual of that same block is the accompaniment, so
-        both streams keep the original clock and no second capture is needed.
+        Two live profiles are supported:
+
+        * ``separate`` keeps UVR in the loop so QQ Music style mixed audio
+          retains its accompaniment.  UVR (especially MDX-Net) pays a fixed
+          segment cost per call, so this profile uses ~1.5 s blocks.
+        * ``direct`` expects a dry vocal/microphone signal and skips UVR.  This
+          is the low-latency path used by live-stream RVC voice changers.
+
+        Both profiles process blocks as they arrive instead of waiting for a
+        long playback buffer; stale blocks are dropped when the model cannot
+        keep up so latency never grows without bound.
         """
         input_device = str(payload.get("input_device") or "").strip()
         output_device = str(payload.get("output_device") or "").strip()
         if input_device and output_device and input_device == output_device:
             raise ValueError("人声输入和输出设备不能相同")
         if not input_device or not output_device:
-            raise ValueError("请选择系统混合音频回环输入和输出设备")
+            raise ValueError("请选择音频输入和输出设备")
+        vocal_mode = str(payload.get("vocal_mode") or "separate").strip().lower()
+        if vocal_mode not in {"separate", "direct"}:
+            vocal_mode = "separate"
+        separate_vocals = vocal_mode == "separate"
+        params = (
+            payload.get("params")
+            if isinstance(payload.get("params"), dict)
+            else {}
+        )
+        separator_engine = str(
+            payload.get("separator_engine")
+            or params.get("preprocess_engine")
+            or "uvr"
+        ).strip().lower()
+        if separator_engine not in {"uvr", "pymss"}:
+            separator_engine = "uvr"
         devices = list_system_audio_devices()
         if not devices:
             raise RuntimeError("未检测到系统音频设备，请安装 soundcard 并配置虚拟音频线")
+        input_ids = {
+            str(item.get("id") or "")
+            for item in devices
+            if item.get("kind") == "input"
+        }
         system_input_ids = {
             str(item.get("id") or "")
             for item in devices
@@ -165,10 +239,17 @@ class RealtimeCoverService:
             for item in devices
             if item.get("kind") == "output"
         }
-        if not system_input_ids:
+        if not input_ids:
+            raise RuntimeError("未检测到音频输入设备，请连接麦克风或虚拟音频线后重试")
+        if separate_vocals and not system_input_ids:
             raise RuntimeError("未检测到系统混合音频输入，请启用 WASAPI 回环、VB-CABLE 或 Voicemeeter")
-        if input_device not in system_input_ids:
-            raise ValueError("所选设备不是系统混合音频输入，请改选回环或虚拟音频线设备")
+        if input_device not in input_ids:
+            raise ValueError("音频输入设备不存在，请刷新设备列表")
+        if separate_vocals and input_device not in system_input_ids:
+            raise ValueError(
+                "所选设备不是系统混合音频输入，请改选回环/虚拟音频线，"
+                "或切换到纯人声直播模式"
+            )
         if output_ids and output_device not in output_ids:
             raise ValueError("系统音频输出设备不存在，请刷新设备列表")
         if payload.get("mode") == "multi" or payload.get("segments"):
@@ -176,32 +257,78 @@ class RealtimeCoverService:
         resolved_models = self._resolve_models(payload or {})
         if len(resolved_models) != 1:
             raise ValueError("实时变声只支持单个 RVC 或 SeedVC 模型")
-        if not self._uvr.available:
-            raise RuntimeError("系统混合音频变声需要 UVR 人声分离环境与模型")
         model = resolved_models[0]
         self._validate_models(resolved_models)
+        separator_model = ""
+        separator_device = str(params.get("device") or "auto").strip()
+        if separate_vocals:
+            if separator_engine == "pymss":
+                if self._pymss is None or not self._pymss.available:
+                    raise RuntimeError(
+                        "已选择 PyMSS 人声分离，但 PyMSS 环境未就绪；"
+                        "请先安装 PyMSS 并下载模型"
+                    )
+                separator_model = str(
+                    payload.get("pymss_model")
+                    or params.get("pymss_model")
+                    or config.PYMSS_DEFAULT_MODEL
+                ).strip()
+                if not config.pymss_model_ready(separator_model):
+                    raise RuntimeError(
+                        f"PyMSS 模型未下载: {separator_model}，请先在模型站下载"
+                    )
+                if separator_device.lower() in {"directml", "dml"}:
+                    # PyMSS only supports ROCm for AMD acceleration. Keep the
+                    # RVC device on DirectML while letting separation pick a
+                    # supported backend instead of failing to start.
+                    separator_device = "auto"
+            else:
+                if not self._uvr.available:
+                    raise RuntimeError("系统混合音频变声需要 UVR 人声分离环境与模型")
+                separator_model = str(
+                    payload.get("uvr_model")
+                    or params.get("uvr_model")
+                    or config.UVR_MODEL
+                ).strip()
         session_id = new_id("system_")
         session_dir = config.TEMP_DIR / "realtime-covers" / session_id
-        # UVR + RVC each have a fixed per-request cost. Four-second blocks
-        # amortize model/file overhead and avoid the repeated short-block
-        # underruns that make playback sound like dropped packets.
-        chunk_seconds = self._bounded_float(payload.get("chunk_seconds"), 4.0, 12.0, 8.0)
+        profile = self._system_timing_profile(
+            payload,
+            str(model.get("framework") or ""),
+            separate_vocals,
+        )
+        chunk_seconds = float(profile["chunk_seconds"])
+        prebuffer_blocks = int(profile["prebuffer_blocks"])
+        low_latency = bool(profile["low_latency"])
         sample_rate = int(self._bounded_float(payload.get("sample_rate"), 16000, 48000, 44100))
         session: dict[str, Any] = {
             "id": session_id,
             "input_mode": "system",
             "status": "preparing",
-            "message": "正在加载实时人声分离与变声模型",
+            "message": (
+                "正在加载实时人声分离与变声模型"
+                if separate_vocals
+                else "正在加载实时变声模型（纯人声低延迟）"
+            ),
             "title": "系统音频实时变声",
             "model_ids": [model["model_id"]],
             "model_names": [model["name"]],
             "models": [model],
             "mode": "single",
+            "vocal_mode": "separate" if separate_vocals else "direct",
+            "separate_vocals": separate_vocals,
+            "separator_engine": separator_engine if separate_vocals else "none",
+            "separator_model": separator_model,
+            "separator_device": separator_device,
+            "latency_mode": str(profile["latency_mode"]),
+            "low_latency": low_latency,
             "duration": 0.0,
             "chunk_seconds": chunk_seconds,
+            "prebuffer_blocks": prebuffer_blocks,
+            "max_lag_blocks": int(profile["max_lag_blocks"]),
             "sample_rate": sample_rate,
             "crossfade_ms": self._bounded_float(payload.get("crossfade_ms"), 10.0, 120.0, 40.0),
-            "buffer_seconds": self._bounded_float(payload.get("buffer_seconds"), 0.5, 8.0, 1.0),
+            "buffer_seconds": round(chunk_seconds * prebuffer_blocks, 3),
             "vocal_gain_db": self._bounded_float(payload.get("vocal_gain_db"), -12.0, 6.0, 0.0),
             "instrumental_gain_db": self._bounded_float(payload.get("instrumental_gain_db"), -12.0, 6.0, 0.0),
             "input_device": input_device,
@@ -209,6 +336,10 @@ class RealtimeCoverService:
             "ready_seconds": 0.0,
             "processed_seconds": 0.0,
             "realtime_factor": None,
+            "latency_ms": 0,
+            "block_ms": None,
+            "infer_ms": None,
+            "dropped_seconds": 0.0,
             "input_silent": False,
             "ready_chunks": 0,
             "total_chunks": 0,
@@ -295,14 +426,25 @@ class RealtimeCoverService:
         try:
             directory.mkdir(parents=True, exist_ok=True)
             source = Path(session["source_path"])
-            separation = self._uvr.separate(
-                source,
-                directory / "stems",
-                str((session["models"][0].get("params") or {}).get("uvr_model") or ""),
-                str((session["models"][0].get("params") or {}).get("device") or "auto"),
-            )
+            if session.get("separator_engine") == "pymss":
+                if self._pymss is None:
+                    raise RuntimeError("PyMSS 未接入实时变声服务")
+                separation = self._pymss.separate(
+                    source,
+                    directory / "stems",
+                    session.get("separator_model") or config.PYMSS_DEFAULT_MODEL,
+                    session.get("separator_device") or "auto",
+                    purpose=config.PYMSS_PURPOSE_VOCAL,
+                )
+            else:
+                separation = self._uvr.separate(
+                    source,
+                    directory / "stems",
+                    session.get("separator_model") or config.UVR_MODEL,
+                    session.get("separator_device") or "auto",
+                )
             if not separation.instrumental or not Path(separation.instrumental).is_file():
-                raise RuntimeError("实时翻唱需要可用的 UVR 人声/伴奏分离环境")
+                raise RuntimeError("实时翻唱需要可用的 PyMSS/UVR 人声/伴奏分离环境")
             vocals = Path(separation.vocals)
             instrumental = Path(separation.instrumental) if separation.instrumental else None
             spans = self._build_spans(session)
@@ -465,15 +607,33 @@ class RealtimeCoverService:
             directory.mkdir(parents=True, exist_ok=True)
             model = session["models"][0]
             model_params = InferenceParams.from_dict(model.get("params") or {})
-            separator_opener = getattr(self._uvr, "open_realtime_session", None)
-            if not callable(separator_opener):
-                raise RuntimeError("当前 UVR 分离环境不支持常驻实时处理")
-            separator = separator_opener(
-                str((model.get("params") or {}).get("uvr_model") or config.UVR_MODEL),
-                str((model.get("params") or {}).get("device") or "auto"),
-                directory / "uvr",
-                directory / "realtime-system.log",
-            )
+            separate_vocals = bool(session.get("separate_vocals", True))
+            if separate_vocals:
+                if session.get("separator_engine") == "pymss":
+                    if self._pymss is None:
+                        raise RuntimeError("PyMSS 未接入实时变声服务")
+                    separator_opener = getattr(
+                        self._pymss, "open_realtime_session", None
+                    )
+                    if not callable(separator_opener):
+                        raise RuntimeError("当前 PyMSS 环境不支持常驻实时分离")
+                    separator = separator_opener(
+                        session.get("separator_model") or config.PYMSS_DEFAULT_MODEL,
+                        session.get("separator_device") or "auto",
+                        directory / "pymss",
+                        directory / "realtime-system.log",
+                        purpose=config.PYMSS_PURPOSE_VOCAL,
+                    )
+                else:
+                    separator_opener = getattr(self._uvr, "open_realtime_session", None)
+                    if not callable(separator_opener):
+                        raise RuntimeError("当前 UVR 分离环境不支持常驻实时处理")
+                    separator = separator_opener(
+                        session.get("separator_model") or config.UVR_MODEL,
+                        session.get("separator_device") or "auto",
+                        directory / "uvr",
+                        directory / "realtime-system.log",
+                    )
             engine = self._engines.for_framework(model["framework"])
             opener = getattr(engine, "open_realtime_session", None)
             if not callable(opener):
@@ -482,41 +642,96 @@ class RealtimeCoverService:
                 model,
                 model_params,
                 directory / "realtime-system.log",
-                low_latency=True,
+                low_latency=bool(session.get("low_latency", True)),
             )
             frames = max(1, round(session["sample_rate"] * session["chunk_seconds"]))
+            if separate_vocals:
+                # UVR and RVC each pay a fixed per-call cost. In the separated
+                # profile a slightly longer block amortizes UVR's segment
+                # padding while still staying far below the old 8 s + 2-block
+                # playback buffer.
+                frames = max(frames, round(session["sample_rate"] * 0.5))
             crossfade_frames = min(
                 max(1, frames // 4),
                 max(1, round(session["sample_rate"] * session["crossfade_ms"] / 1000.0)),
             )
+            prebuffer_blocks = max(1, int(session.get("prebuffer_blocks") or 1))
+            max_lag_blocks = max(1, int(session.get("max_lag_blocks") or 2))
             started = time.monotonic()
-            self._update(session, status="ready", message="混合音频分离与变声已就绪，开始流式输出")
+            self._update(
+                session,
+                status="ready",
+                message=(
+                    "混合音频分离与变声已就绪，开始低延迟流式输出"
+                    if separate_vocals
+                    else "纯人声变声已就绪，开始直播低延迟输出"
+                ),
+            )
             with (
                 system_audio_reader(session["input_device"], session["sample_rate"], 2) as reader,
-                # Playback runs on its own thread and starts after two blocks;
-                # this prevents player.play() from stalling the conversion
-                # pipeline at every block boundary.
+                # Playback runs on its own thread and starts as soon as the
+                # first converted block is available. A prebuffer of one block
+                # adds no extra delay; higher values trade latency for jitter
+                # tolerance.
                 system_audio_writer(
                     session["output_device"],
                     session["sample_rate"],
                     2,
-                    prebuffer_blocks=2,
+                    prebuffer_blocks=prebuffer_blocks,
                     crossfade_frames=crossfade_frames,
                 ) as writer,
             ):
-                captured_queue: queue.Queue[Any] = queue.Queue(maxsize=8)
-                separated_queue: queue.Queue[Any] = queue.Queue(maxsize=4)
+                captured_queue: queue.Queue[Any] = queue.Queue(maxsize=max_lag_blocks)
+                # Only one prepared block may wait for RVC. Any additional
+                # backlog is stale for a live stream and is dropped at capture.
+                separated_queue: queue.Queue[Any] = queue.Queue(maxsize=1)
                 pipeline_stop = threading.Event()
                 capture_done = threading.Event()
                 separation_done = threading.Event()
                 errors: list[Exception] = []
+                log_file = directory / "realtime-system.log"
 
                 def capture_loop() -> None:
                     index = 0
                     try:
                         while not session["stop_event"].is_set() and not pipeline_stop.is_set():
                             block = np.asarray(reader.read(frames), dtype=np.float32)
-                            captured_queue.put((index, block))
+                            item = (index, block, time.monotonic(), False)
+                            while True:
+                                try:
+                                    captured_queue.put_nowait(item)
+                                    break
+                                except queue.Full:
+                                    # Processing is slower than capture.
+                                    # Discard the whole stale backlog and feed
+                                    # the freshest block, otherwise the next
+                                    # queued block would still crossfade
+                                    # against a non-adjacent tail.
+                                    dropped_items: list[Any] = []
+                                    while True:
+                                        try:
+                                            dropped_items.append(captured_queue.get_nowait())
+                                        except queue.Empty:
+                                            break
+                                    if not dropped_items:
+                                        continue
+                                    item = (index, block, time.monotonic(), True)
+                                    dropped_frames = sum(
+                                        int(np.asarray(dropped[1]).shape[0])
+                                        for dropped in dropped_items
+                                    )
+                                    with self._lock:
+                                        session["dropped_seconds"] = round(
+                                            float(session.get("dropped_seconds") or 0.0)
+                                            + dropped_frames / max(1, int(session["sample_rate"])),
+                                            3,
+                                        )
+                                    self._append_realtime_log(
+                                        log_file,
+                                        "LATENCY_DROP\t"
+                                        f"blocks={len(dropped_items)}\t"
+                                        f"frames={dropped_frames}\n",
+                                    )
                             index += 1
                     except Exception as exc:  # noqa: BLE001
                         errors.append(exc)
@@ -534,10 +749,16 @@ class RealtimeCoverService:
                                 if capture_done.is_set():
                                     break
                                 continue
-                            index, captured = item
+                            index, captured, captured_at, discontinuity = item
                             current = np.asarray(captured, dtype=np.float32)
                             overlap_frames = 0
                             processing = current
+                            if discontinuity:
+                                previous_tail = None
+                                self._append_realtime_log(
+                                    log_file,
+                                    f"LATENCY_RESET\tblock={index}\n",
+                                )
                             if previous_tail is not None and previous_tail.shape[0]:
                                 overlap_frames = int(previous_tail.shape[0])
                                 processing = np.concatenate((previous_tail, current), axis=0)
@@ -551,8 +772,15 @@ class RealtimeCoverService:
                                 session["sample_rate"],
                                 output_frames=frames,
                                 overlap_frames=overlap_frames,
+                                discontinuity=discontinuity,
                             )
-                            separated_queue.put(prepared)
+                            prepared["captured_at"] = captured_at
+                            while not pipeline_stop.is_set():
+                                try:
+                                    separated_queue.put(prepared, timeout=0.2)
+                                    break
+                                except queue.Full:
+                                    continue
                     except Exception as exc:  # noqa: BLE001
                         errors.append(exc)
                         pipeline_stop.set()
@@ -624,7 +852,7 @@ class RealtimeCoverService:
     def _prepare_system_block(
         self,
         directory: Path,
-        separator: Any,
+        separator: Any | None,
         captured: Any,
         frames: int,
         index: int,
@@ -632,6 +860,7 @@ class RealtimeCoverService:
         *,
         output_frames: int | None = None,
         overlap_frames: int = 0,
+        discontinuity: bool = False,
     ) -> dict[str, Any]:
         import numpy as np
 
@@ -657,15 +886,32 @@ class RealtimeCoverService:
                 "overlap_frames": overlap_frames,
                 "length": length,
                 "silent": True,
+                "discontinuity": discontinuity,
             }
         raw = directory / f"system_input_{index:06d}.wav"
+        self._write_pcm16(raw, captured, sample_rate)
+        if separator is None:
+            # Direct vocal profile: the captured signal is already the voice
+            # to convert. Keeping UVR out of the loop removes its fixed
+            # segment cost and is what makes sub-second live latency possible.
+            return {
+                "index": index,
+                "captured": captured,
+                "frames": frames,
+                "overlap_frames": overlap_frames,
+                "length": length,
+                "raw": raw,
+                "separated": raw,
+                "rendered": directory / f"system_render_{index:06d}.wav",
+                "direct": True,
+                "discontinuity": discontinuity,
+            }
         separated = directory / f"system_vocal_{index:06d}.wav"
         accompaniment = directory / f"system_music_{index:06d}.wav"
-        self._write_pcm16(raw, captured, sample_rate)
         separator.infer(
             raw,
             separated,
-            timeout=max(120.0, length * 20.0),
+            timeout=max(30.0, length * 30.0),
             instrumental=str(accompaniment),
         )
         return {
@@ -678,6 +924,8 @@ class RealtimeCoverService:
             "separated": separated,
             "accompaniment": accompaniment,
             "rendered": directory / f"system_render_{index:06d}.wav",
+            "direct": False,
+            "discontinuity": discontinuity,
         }
 
     def _infer_with_dropout_recovery(
@@ -966,101 +1214,142 @@ class RealtimeCoverService:
         worker: Any,
         writer: Any,
         prepared: dict[str, Any],
-        started: float,
+        _started: float,
         np: Any,
     ) -> None:
+        block_started = time.monotonic()
         frame_count = int(prepared["frames"])
         overlap_frames = int(prepared.get("overlap_frames") or 0)
+        discontinuity = bool(prepared.get("discontinuity"))
+        direct = bool(prepared.get("direct"))
+        chunk_ms = max(1.0, float(session.get("chunk_seconds") or 1.0) * 1000.0)
+        captured_at = float(prepared.get("captured_at") or block_started)
+        log_file = Path(session["directory"]) / "realtime-system.log"
         if prepared.get("silent"):
             # Keep the output clock continuous while the source player is
             # paused/stopped. No separator or voice-conversion inference is
             # needed for a zero block, and no UVR output error is possible.
             silent = np.zeros_like(self._fit_audio(prepared["captured"], frame_count))
-            writer.write(silent, overlap_frames=overlap_frames)
+            writer.write(
+                silent,
+                overlap_frames=overlap_frames,
+                discontinuity=discontinuity,
+            )
+            self._record_system_block(
+                session,
+                prepared,
+                block_started,
+                captured_at,
+                chunk_ms,
+                infer_ms=0.0,
+            )
             with self._lock:
-                session["status"] = "live"
                 session["input_silent"] = True
-                session["ready_chunks"] += 1
-                session["processed_seconds"] = round(
-                    session["processed_seconds"] + float(prepared["length"]), 3
-                )
-                session["ready_seconds"] = session["processed_seconds"]
-                session["realtime_factor"] = round(
-                    (time.monotonic() - started) / max(0.001, session["processed_seconds"]),
-                    3,
-                )
                 session["message"] = "未检测到系统音频，等待播放器继续播放"
             return
         separated = Path(prepared["separated"])
-        accompaniment_stem = Path(prepared["accompaniment"])
+        accompaniment_stem = (
+            Path(prepared["accompaniment"]) if prepared.get("accompaniment") else None
+        )
         rendered = Path(prepared["rendered"])
         model_params = InferenceParams.from_dict(
             (session["models"][0].get("params") or {})
         )
+        if (
+            session.get("low_latency", True)
+            and (
+                session.get("vocal_mode") == "direct"
+                or float(session.get("chunk_seconds") or 1.5) <= 0.75
+            )
+        ):
+            # Per-block high-note recovery re-reads the block several times
+            # and can multiply inference time. Sub-second live blocks keep the
+            # first render; mixed-audio blocks still honor the user's guard
+            # setting.
+            model_params.auto_high_pitch_guard = False
         def infer_once(vocal: Path, destination: Path) -> None:
             worker.infer(
                 vocal,
                 destination,
-                timeout=max(120.0, float(prepared["length"]) * 20.0),
+                timeout=max(15.0, float(prepared["length"]) * 20.0),
             )
 
+        infer_started = time.monotonic()
         rendered, recovery_history = self._infer_with_dropout_recovery(
             source=separated,
             output=rendered,
             params=model_params,
             model=session["models"][0],
             infer=infer_once,
-            log_file=Path(session["directory"]) / "realtime-system.log",
+            log_file=log_file,
         )
+        infer_ms = (time.monotonic() - infer_started) * 1000.0
         unresolved_dropout = bool(
             recovery_history
             and recovery_history[-1].get("issue")
         )
         if (
-            model_params.auto_high_pitch_guard
-            and unresolved_dropout
-            and self._is_nearly_silent(rendered, separated)
-        ):
+            (model_params.auto_high_pitch_guard and unresolved_dropout)
+            or not model_params.auto_high_pitch_guard
+        ) and self._is_nearly_silent(rendered, separated):
             self._append_realtime_log(
-                Path(session["directory"]) / "realtime-system.log",
-                "PITCH_GUARD_FALLBACK\t重试后整块仍接近静音，回退原始人声\n",
+                log_file,
+                "MODEL_SILENCE_FALLBACK\t整块接近静音，回退原始人声\n",
             )
             rendered = separated
-        extracted = self._fit_audio(
-            self._read_pcm16(separated, session["sample_rate"], frame_count),
-            frame_count,
-        )
-        if accompaniment_stem.is_file():
-            accompaniment = self._fit_audio(
-                self._read_pcm16(accompaniment_stem, session["sample_rate"], frame_count),
-                frame_count,
-            )
-        else:
-            accompaniment = self._fit_audio(prepared["captured"], frame_count) - extracted
         output_audio = self._fit_audio(
             self._read_pcm16(rendered, session["sample_rate"], frame_count),
             frame_count,
         )
+        if direct:
+            # Dry-vocal profile: the converted voice is the whole output.
+            accompaniment = np.zeros_like(output_audio)
+        else:
+            extracted = self._fit_audio(
+                self._read_pcm16(separated, session["sample_rate"], frame_count),
+                frame_count,
+            )
+            if accompaniment_stem is not None and accompaniment_stem.is_file():
+                accompaniment = self._fit_audio(
+                    self._read_pcm16(accompaniment_stem, session["sample_rate"], frame_count),
+                    frame_count,
+                )
+            else:
+                accompaniment = self._fit_audio(prepared["captured"], frame_count) - extracted
         output_audio *= 10.0 ** (float(session["vocal_gain_db"]) / 20.0)
         accompaniment *= 10.0 ** (float(session["instrumental_gain_db"]) / 20.0)
         mixed = output_audio + accompaniment
         peak = float(np.max(np.abs(mixed))) if mixed.size else 0.0
         if peak > 0.98:
             mixed *= 0.98 / peak
-        writer.write(np.clip(mixed, -1.0, 1.0), overlap_frames=overlap_frames)
+        writer.write(
+            np.clip(mixed, -1.0, 1.0),
+            overlap_frames=overlap_frames,
+            discontinuity=discontinuity,
+        )
+        self._record_system_block(
+            session,
+            prepared,
+            block_started,
+            captured_at,
+            chunk_ms,
+            infer_ms=infer_ms,
+        )
         with self._lock:
-            session["status"] = "live"
             session["input_silent"] = False
-            session["ready_chunks"] += 1
-            session["processed_seconds"] = round(
-                session["processed_seconds"] + float(prepared["length"]), 3
+        index = int(prepared.get("index") or 0)
+        load = float(session.get("realtime_factor") or 0.0)
+        if index % 5 == 0 or load > 1.2:
+            self._append_realtime_log(
+                log_file,
+                "REALTIME_BLOCK\t"
+                f"index={index}\t"
+                f"chunk_ms={chunk_ms:.0f}\t"
+                f"infer_ms={infer_ms:.0f}\t"
+                f"block_ms={float(session.get('block_ms') or 0.0):.0f}\t"
+                f"latency_ms={int(session.get('latency_ms') or 0)}\t"
+                f"dropped={float(session.get('dropped_seconds') or 0.0):.2f}\n",
             )
-            session["ready_seconds"] = session["processed_seconds"]
-            session["realtime_factor"] = round(
-                (time.monotonic() - started) / max(0.001, session["processed_seconds"]),
-                3,
-            )
-            session["message"] = "变声人声与伴奏已按块对齐输出"
         cleanup_paths: set[Path] = {
             Path(str(prepared[key]))
             for key in ("raw", "separated", "accompaniment", "rendered")
@@ -1082,6 +1371,45 @@ class RealtimeCoverService:
                 path.unlink(missing_ok=True)
             except OSError:
                 pass
+
+    def _record_system_block(
+        self,
+        session: dict[str, Any],
+        prepared: dict[str, Any],
+        block_started: float,
+        captured_at: float,
+        chunk_ms: float,
+        *,
+        infer_ms: float,
+    ) -> None:
+        """Publish live latency/load metrics for the UI and diagnostics."""
+        finished_at = time.monotonic()
+        block_ms = (finished_at - block_started) * 1000.0
+        load = block_ms / max(1.0, chunk_ms)
+        with self._lock:
+            session["status"] = "live"
+            session["ready_chunks"] += 1
+            session["processed_seconds"] = round(
+                float(session.get("processed_seconds") or 0.0)
+                + float(prepared["length"]),
+                3,
+            )
+            session["ready_seconds"] = session["processed_seconds"]
+            previous = session.get("realtime_factor")
+            session["realtime_factor"] = round(
+                load if previous is None else float(previous) * 0.7 + load * 0.3,
+                3,
+            )
+            session["block_ms"] = round(block_ms, 1)
+            session["infer_ms"] = round(infer_ms, 1)
+            session["latency_ms"] = int(
+                max(0.0, (finished_at - captured_at) * 1000.0)
+            )
+            session["message"] = (
+                "纯人声变声输出中"
+                if prepared.get("direct")
+                else "变声人声与伴奏已按块对齐输出"
+            )
 
     @staticmethod
     def _append_realtime_log(path: Path, message: str) -> None:
@@ -1340,6 +1668,45 @@ class RealtimeCoverService:
         except (TypeError, ValueError):
             number = default
         return max(minimum, min(maximum, number))
+
+    @classmethod
+    def _system_timing_profile(
+        cls,
+        payload: dict[str, Any],
+        framework: str,
+        separate_vocals: bool,
+    ) -> dict[str, Any]:
+        """Resolve the live block/buffer profile for the system changer.
+
+        The separated profile must pay UVR's fixed segment cost, so it uses
+        longer blocks; the direct vocal profile can use the short blocks that
+        live-stream voice changers use.
+        """
+        if separate_vocals:
+            minimum, maximum = 0.5, 4.0
+            default = 1.5 if framework == "rvc" else 2.0
+        else:
+            minimum, maximum = 0.25, 2.0
+            default = 0.5 if framework == "rvc" else 1.0
+        mode = str(payload.get("latency_mode") or "live").strip().lower()
+        return {
+            "chunk_seconds": cls._bounded_float(
+                payload.get("chunk_seconds"), minimum, maximum, default
+            ),
+            # One block is the no-extra-delay value: the writer plays the
+            # first completed block immediately.
+            "prebuffer_blocks": int(
+                cls._bounded_float(payload.get("prebuffer_blocks"), 1.0, 4.0, 1.0)
+            ),
+            # A small capture backlog absorbs scheduling jitter. When it
+            # overflows, capture drops the oldest block instead of letting
+            # latency grow without bound.
+            "max_lag_blocks": int(
+                cls._bounded_float(payload.get("max_lag_blocks"), 1.0, 6.0, 2.0)
+            ),
+            "latency_mode": "quality" if mode == "quality" else "live",
+            "low_latency": mode != "quality",
+        }
 
     def cleanup(self, session_id: str) -> bool:
         """Remove a stopped session's temporary files."""

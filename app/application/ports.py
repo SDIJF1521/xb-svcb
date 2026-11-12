@@ -388,7 +388,13 @@ class SystemAudioWriterPort(Protocol):
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None: ...
 
-    def write(self, audio: Any, *, overlap_frames: int = 0) -> None: ...
+    def write(
+        self,
+        audio: Any,
+        *,
+        overlap_frames: int = 0,
+        discontinuity: bool = False,
+    ) -> None: ...
 
 
 # ---- 本地媒体文件存储 ----

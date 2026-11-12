@@ -15,6 +15,14 @@
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
+# 统一使用 UTF-8：下面用 & py 捕获解释器路径，Windows PowerShell 默认按系统
+# 代码页（GBK/CP932/CP1252）解码子进程输出，中文用户名或中文安装路径会变成
+# 乱码，导致「未检测到匹配的 Python」而安装失败。
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+try { $OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+
 function Test-Cmd($name) { return [bool](Get-Command $name -ErrorAction SilentlyContinue) }
 
 Write-Host "==== XB-SVCB 安装前环境检查 ====" -ForegroundColor Cyan

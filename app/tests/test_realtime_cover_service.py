@@ -97,6 +97,18 @@ class FakeUvr:
         return SeparationResult(vocals=vocals, instrumental=music)
 
 
+class FakePymss(FakeUvr):
+    available = True
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def separate(self, source: Path, out_dir: Path, *args, **kwargs) -> SeparationResult:
+        self.calls.append((source, out_dir, args, kwargs))
+        return super().separate(source, out_dir)
+
+
+
 def _record(tmp_path: Path, model_id: str, framework: str = "rvc") -> dict:
     model = tmp_path / f"{model_id}.pth"
     model.write_bytes(b"model")
@@ -156,6 +168,52 @@ def test_realtime_cover_produces_fixed_timeline_chunks(tmp_path: Path, monkeypat
     assert last["end"] == 18.0
     assert last["audio"].startswith("data:audio/wav;base64,")
     assert service._engines.engine.open_count == 1  # type: ignore[attr-defined]  # noqa: SLF001
+
+
+def test_file_realtime_can_use_pymss_separation(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr("application.realtime_cover_service.config.TEMP_DIR", tmp_path / "temp")
+    monkeypatch.setattr(
+        "application.realtime_cover_service.config.pymss_model_ready",
+        lambda _model: True,
+    )
+    source = tmp_path / "song.wav"
+    source.write_bytes(b"song")
+    pymss = FakePymss()
+    service = RealtimeCoverService(
+        FakeModels({
+            "rvc-a": _record(tmp_path, "rvc-a"),
+            "seed-b": _record(tmp_path, "seed-b", "seed-vc"),
+        }),  # type: ignore[arg-type]
+        FakeFfmpeg(),  # type: ignore[arg-type]
+        FakeUvr(),  # type: ignore[arg-type]
+        FakeRegistry(),  # type: ignore[arg-type]
+        pymss,  # type: ignore[arg-type]
+    )
+
+    status = service.start(
+        {
+            "source_path": str(source),
+            "mode": "single",
+            "model_id": "rvc-a",
+            "params": {
+                "device": "auto",
+                "preprocess_engine": "pymss",
+                "pymss_model": "demo.ckpt",
+            },
+            "chunk_seconds": 8,
+            "buffer_seconds": 8,
+        }
+    )
+    for _ in range(100):
+        status = service.status(status["id"])
+        if status["status"] in {"done", "failed"}:
+            break
+        time.sleep(0.01)
+
+    assert status["status"] == "done"
+    assert status["separator_engine"] == "pymss"
+    assert status["separator_model"] == "demo.ckpt"
+    assert pymss.calls
 
 
 def test_realtime_cover_rejects_multiple_models(tmp_path: Path) -> None:
@@ -230,6 +288,50 @@ def test_system_silent_block_ignores_non_silent_overlap(tmp_path: Path) -> None:
     assert prepared["overlap_frames"] == 2
     assert prepared["length"] == 1.0
     assert not (tmp_path / "system_input_000001.wav").exists()
+
+
+def test_system_timing_profiles_default_to_live_latency() -> None:
+    separated = RealtimeCoverService._system_timing_profile(  # type: ignore[attr-defined]  # noqa: SLF001
+        {}, "rvc", True
+    )
+    assert separated["chunk_seconds"] == 1.5
+    assert separated["prebuffer_blocks"] == 1
+    assert separated["max_lag_blocks"] == 2
+    assert separated["low_latency"] is True
+
+    direct = RealtimeCoverService._system_timing_profile(  # type: ignore[attr-defined]  # noqa: SLF001
+        {}, "rvc", False
+    )
+    assert direct["chunk_seconds"] == 0.5
+    assert direct["low_latency"] is True
+
+    legacy = RealtimeCoverService._system_timing_profile(  # type: ignore[attr-defined]  # noqa: SLF001
+        {"chunk_seconds": 8, "prebuffer_blocks": 4, "latency_mode": "quality"},
+        "rvc",
+        True,
+    )
+    assert legacy["chunk_seconds"] == 4.0
+    assert legacy["prebuffer_blocks"] == 4
+    assert legacy["low_latency"] is False
+
+
+def test_direct_vocal_block_skips_uvr_and_reuses_captured_audio(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    captured = np.full((16, 2), 0.08, dtype=np.float32)
+
+    prepared = service._prepare_system_block(  # type: ignore[attr-defined]  # noqa: SLF001
+        tmp_path,
+        None,
+        captured,
+        16,
+        0,
+        8000,
+    )
+
+    assert prepared["direct"] is True
+    assert prepared["separated"] == prepared["raw"]
+    assert Path(prepared["raw"]).is_file()
+    assert "accompaniment" not in prepared
 
 
 def test_realtime_dropout_recovery_uses_model_render_for_loudness_and_adaptive_shift(
@@ -468,6 +570,7 @@ def test_system_non_silent_block_finishes_cleanup_without_guard_variable_error(
         "frames": frames,
         "overlap_frames": 0,
         "length": frames / sample_rate,
+        "captured_at": time.monotonic() - 0.2,
     }
 
     service._render_system_block(
@@ -482,6 +585,9 @@ def test_system_non_silent_block_finishes_cleanup_without_guard_variable_error(
     assert len(writer.blocks) == 1
     assert writer.blocks[0].shape == (frames, 2)
     assert session["ready_chunks"] == 1
+    assert session["latency_ms"] >= 150
+    assert session["block_ms"] is not None
+    assert session["realtime_factor"] is not None
     assert not raw.exists()
     assert not separated.exists()
     assert not accompaniment.exists()

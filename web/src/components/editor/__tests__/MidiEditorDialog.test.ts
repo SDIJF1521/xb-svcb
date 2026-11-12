@@ -96,7 +96,7 @@ const composeSession: EditorMidiSession = {
   ],
 }
 
-function mountCompose() {
+function mountCompose(extra: Record<string, unknown> = {}) {
   return mount(MidiEditorDialog, {
     props: {
       modelValue: true,
@@ -107,6 +107,7 @@ function mountCompose() {
       composeDuration: 60,
       composeSession,
       hasAudio: false,
+      ...extra,
     },
     attachTo: document.body,
   })
@@ -291,6 +292,21 @@ describe('MidiEditorDialog 画布尺寸', () => {
 })
 
 describe('MidiEditorDialog 编曲模式', () => {
+  it('渲染期间显示进度条与百分比', async () => {
+    const wrapper = mountCompose({
+      renderProgress: { percent: 42, message: '渲染声部 2/4' },
+    })
+    await flush()
+
+    const bar = dialogRoot().querySelector('.midi-render-bar i') as HTMLElement | null
+    expect(bar).not.toBeNull()
+    expect(bar!.getAttribute('style') || '').toContain('42%')
+    expect(dialogRoot().textContent).toContain('渲染声部 2/4')
+    expect(dialogRoot().textContent).toContain('42%')
+
+    wrapper.unmount()
+  })
+
   it('列出每个声部与乐器、音符数', async () => {
     const wrapper = mountCompose()
     await flush()

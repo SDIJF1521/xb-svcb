@@ -6,6 +6,7 @@ import argparse
 import json
 import re
 import shutil
+import sys
 from pathlib import Path
 
 try:
@@ -212,6 +213,196 @@ def _resolve_device(requested: str) -> tuple[str, str]:
     return requested, requested
 
 
+def _pick_server_stems(
+    results: dict[str, object],
+    purpose: str,
+    primary_stem: str,
+) -> tuple[object | None, object | None]:
+    """Select vocal/instrumental arrays from one PyMSS result mapping."""
+    if not results:
+        return None, None
+    keys = list(results)
+
+    def norm(value: object) -> str:
+        return str(value).casefold().replace("_", " ").replace("-", " ")
+
+    instrumental_key = None
+    for key in keys:
+        name = norm(key)
+        if any(
+            token in name
+            for token in ("instrumental", "accompaniment", "karaoke", "music", "other")
+        ):
+            instrumental_key = key
+            break
+
+    vocal_key = None
+    preferred = norm(primary_stem).strip()
+    if preferred:
+        for key in keys:
+            name = norm(key)
+            if name == preferred or preferred in name:
+                vocal_key = key
+                break
+    if vocal_key is None:
+        positive = (
+            ("no reverb", "noreverb", "no echo", "dry", "clean", "vocal", "voice")
+            if str(purpose or "").lower() == "dereverb"
+            else ("vocal", "vocals", "voice", "singing", "lead")
+        )
+        for key in keys:
+            if key == instrumental_key:
+                continue
+            if any(token in norm(key) for token in positive):
+                vocal_key = key
+                break
+    if vocal_key is None:
+        for key in keys:
+            if key != instrumental_key:
+                vocal_key = key
+                break
+    if vocal_key is None and len(keys) == 1:
+        vocal_key = keys[0]
+
+    vocal = results.get(vocal_key) if vocal_key is not None else None
+    instrumental = (
+        results.get(instrumental_key)
+        if instrumental_key is not None and instrumental_key != vocal_key
+        else None
+    )
+    return vocal, instrumental
+
+
+def _write_server_stem(path: str, audio: object, sample_rate: int) -> None:
+    import numpy as np
+
+    from pymss import save_audio
+
+    data = np.asarray(audio, dtype=np.float32)
+    # PyMSS results are sample-major, but accept channel-first inputs too.
+    if data.ndim == 2 and data.shape[0] <= 8 and data.shape[1] > data.shape[0]:
+        data = data.T
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    save_audio(
+        str(destination),
+        data,
+        int(sample_rate),
+        "wav",
+        {"wav_bit_depth": "PCM_16"},
+    )
+
+
+def _run_server(args) -> int:  # noqa: ANN001
+    """Keep one PyMSS model resident and separate one block per JSON line."""
+    import traceback
+
+    from pymss import MSSeparator, load_audio
+
+    model_dir = Path(args.model_dir)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(args.out_dir) if args.out_dir else model_dir / ".xb-realtime"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        import torch
+
+        device_name, device_backend = _resolve_device(args.device)
+        if device_backend != "mlx":
+            resolved_device = ResolvedDevice(
+                torch.device(device_name),
+                device_backend,
+                device_backend.upper(),
+            )
+            runtime_profile = configure_torch_inference(torch, resolved_device)
+            print(f"PYMSS_RUNTIME {runtime_profile.summary}", flush=True)
+        separator = MSSeparator.from_model_name(
+            args.model,
+            model_dir=str(model_dir),
+            download=False,
+            device=device_name,
+            device_ids=[0],
+            output_format="wav",
+            store_dirs=str(out_dir),
+            save_as_folder=False,
+            inference_params={"normalize": False},
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"PYMSS_ERR PyMSS 实时分离初始化失败: {exc}", flush=True)
+        traceback.print_exc()
+        return 4
+
+    configured_stems = getattr(getattr(separator, "config", None), "training", {})
+    if hasattr(configured_stems, "get"):
+        configured_stems = configured_stems.get("instruments", ())
+    if isinstance(configured_stems, str):
+        configured_stems = (configured_stems,)
+    elif not isinstance(configured_stems, (list, tuple)):
+        configured_stems = ()
+    primary_stem = str(
+        args.primary_stem
+        or args.target_stem
+        or (configured_stems[0] if configured_stems else "")
+    )
+    try:
+        import numpy as np
+
+        sample_rate = 44100
+        timeline = np.arange(sample_rate, dtype=np.float32) / sample_rate
+        warmup = (0.01 * np.sin(2.0 * np.pi * 220.0 * timeline)).astype(np.float32)
+        separator.separate(np.stack((warmup, warmup), axis=0), pbar=False)
+        print("XB: PyMSS 实时组件预热完成", flush=True)
+    except Exception as exc:  # noqa: BLE001 - first real block may still succeed
+        print(f"XB: PyMSS 实时预热失败（继续启动）: {exc}", flush=True)
+    print("PYMSS_SERVER_READY", flush=True)
+
+    try:
+        for raw in sys.stdin:
+            try:
+                request = json.loads(raw)
+                if request.get("command") == "close":
+                    break
+                source = str(request.get("input") or "")
+                output = str(request.get("output") or "")
+                instrumental_output = str(request.get("instrumental") or "")
+                if not source or not output:
+                    raise ValueError("输入或输出路径为空")
+                # The vocal models used by the app operate at 44.1 kHz; VR
+                # stems are resampled to 44.1 kHz internally as well. Keep one
+                # rate for both outputs so the realtime mixer stays aligned.
+                audio, _ = load_audio(source, sr=44100, mono=False)
+                results = separator.separate(audio, pbar=False)
+                vocal, instrumental = _pick_server_stems(
+                    results,
+                    args.purpose,
+                    primary_stem,
+                )
+                if vocal is None:
+                    raise RuntimeError("PyMSS 未生成有效人声音轨")
+                _write_server_stem(output, vocal, 44100)
+                if instrumental_output and instrumental is not None:
+                    _write_server_stem(instrumental_output, instrumental, 44100)
+                result = {
+                    "ok": True,
+                    "output": output,
+                    "instrumental": (
+                        instrumental_output
+                        if instrumental_output and instrumental is not None
+                        else None
+                    ),
+                }
+            except Exception as exc:  # noqa: BLE001 - keep serving after one bad block
+                result = {"ok": False, "error": str(exc)}
+            print(
+                "PYMSS_SERVER_RESULT\t" + json.dumps(result, ensure_ascii=False),
+                flush=True,
+            )
+    finally:
+        close = getattr(separator, "close", None)
+        if callable(close):
+            close()
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
@@ -228,7 +419,11 @@ def main() -> int:
     parser.add_argument("--target-stem", default="")
     parser.add_argument("--primary-stem", default="", help="用户指定的主音轨（覆盖模型默认目标音轨）")
     parser.add_argument("--download", action="store_true")
+    parser.add_argument("--server", action="store_true", help="常驻进程，逐行接收实时分离块")
     args = parser.parse_args()
+
+    if args.server:
+        return _run_server(args)
 
     from pymss import MSSeparator, download_model
 

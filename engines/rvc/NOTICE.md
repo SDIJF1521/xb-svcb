@@ -15,7 +15,7 @@ package. That package is no longer required: this directory is imported by
 | `infer/lib/infer_pack/{attentions,commons,models,modules,transforms}.py` | official |
 | `infer/lib/rmvpe.py` | official |
 | `infer/lib/jit/{__init__,get_hubert,get_rmvpe,get_synthesizer}.py` | official |
-| `infer/modules/vc/pipeline.py` | official |
+| `infer/modules/vc/pipeline.py` | official (realtime slicing/cache hooks, see below) |
 | `configs/v1/*.json`, `configs/v2/*.json` | official |
 
 ## Local modifications
@@ -35,6 +35,13 @@ untouched.
 3. **`rvc_session.py`** (project code, not upstream) — the adapter that keeps the
    previous `RvcSession`/`vc_single` surface for the worker and owns device
    selection, fp16/fp32, slicing windows and the HuBERT/RMVPE base-model paths.
+   It also exposes `configure_low_latency()` for the live voice-changer profile.
+4. **`infer/modules/vc/pipeline.py`** — the official inference math is
+   untouched. Three runtime hooks make per-block live inference viable:
+   the slicing constants are cast to integer sample counts so `x_pad` can be a
+   fraction of a second, a small LRU cache avoids re-reading/reconstructing the
+   FAISS index on every block, and `torch.cuda.empty_cache()` is skipped when
+   `Pipeline.empty_cache` is disabled by the low-latency profile.
 
 ## Not vendored
 

@@ -884,6 +884,18 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001
                 print(f"XB: 设置低显存切片失败（继续用默认切片）: {exc}", flush=True)
 
+        if args.low_latency:
+            # Live blocks are only 0.25-2 s long. The official 1-3 s context
+            # on each side would make every block several times longer than
+            # the audio it actually returns.
+            rvc.configure_low_latency()
+            print(
+                "XB: RVC 直播低延迟切片 "
+                f"x_pad={rvc.config.x_pad}s "
+                f"x_max={rvc.config.x_max}s",
+                flush=True,
+            )
+
         rvc.load_model(args.model, version=version, index_path=index_path)
         print(
             "RVC_DEVICE "

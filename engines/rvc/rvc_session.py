@@ -201,6 +201,7 @@ class RvcSession:
         self.pipeline: Pipeline | None = None
         self.if_f0: int | None = None
         self.last_times: list[float] = [0.0, 0.0, 0.0]
+        self.low_latency = False
         # Parameter defaults mirror the previous adapter so callers that skip
         # set_params still get the same numbers.
         self.f0method = "harvest"
@@ -217,6 +218,29 @@ class RvcSession:
         # The official pipeline resolves ``<rmvpe_root>/rmvpe.pt``; point it at
         # the application's model directory instead of the WebUI assets tree.
         os.environ["rmvpe_root"] = str(Path(self.config.rmvpe_path).parent)
+
+    def configure_low_latency(
+        self,
+        *,
+        pad_seconds: float = 0.1,
+        query_seconds: float = 0.04,
+        center_seconds: float = 0.5,
+        max_seconds: float = 30.0,
+    ) -> None:
+        """Use a short slicing window for per-block live inference.
+
+        The official defaults keep 3 s of context on each side of the block
+        and split anything longer than 65 s. For a 0.5 s live block that means
+        the synthesizer encodes 6.5 s of audio for every 0.5 s produced. Short
+        but non-zero context keeps RVC stable while staying inside the
+        realtime budget.
+        """
+        self.low_latency = True
+        self.config.x_pad = max(0.01, float(pad_seconds))
+        self.config.x_query = max(0.01, float(query_seconds))
+        self.config.x_center = max(0.05, float(center_seconds))
+        # Keep short live blocks in a single pass (no query-point splitting).
+        self.config.x_max = max(1.0, float(max_seconds))
 
     def _load_hubert(self):  # noqa: ANN202
         from fairseq import checkpoint_utils
@@ -277,6 +301,11 @@ class RvcSession:
         self.net_g = self.net_g.half() if self.config.is_half else self.net_g.float()
 
         self.pipeline = Pipeline(self.tgt_sr, self.config)
+        if self.low_latency:
+            # Per-call ``empty_cache`` synchronizes the device and is a large
+            # fixed cost for 0.25-0.5 s blocks; the resident worker already
+            # bounds memory use.
+            self.pipeline.empty_cache = False
         self.current_model = model_path.name
         self.models[self.current_model] = {"pth": str(model_path), "index": index_path}
         declared_note = (

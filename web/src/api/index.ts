@@ -59,6 +59,7 @@ import type {
   EditorClipMidiSaveResult,
   EditorMidiNote,
   EditorMidiImportResult,
+  EditorMidiRenderJob,
   EditorMidiRenderOptions,
   EditorMidiSession,
   EditorMidiSessionResult,
@@ -864,6 +865,11 @@ export const api = {
       mock.applyEditorClipMidi(projectId, clipId, notes),
     ),
 
+  previewEditorClipMidi: (projectId: string, clipId: string, notes?: EditorMidiNote[]) =>
+    invoke<EditorClipMidiApplyResult>('preview_editor_clip_midi', [projectId, clipId, notes], () =>
+      mock.previewEditorClipMidi(projectId, clipId, notes),
+    ),
+
   getEditorTrackMidi: (projectId: string, trackId: string, refresh = false) =>
     invoke<EditorClipMidi>('get_editor_track_midi', [projectId, trackId, refresh], () =>
       mock.getEditorTrackMidi(projectId, trackId, refresh),
@@ -905,6 +911,25 @@ export const api = {
       'render_editor_midi_session',
       [projectId, trackId, session, options],
       () => mock.renderEditorMidiSession(projectId, trackId, session, options),
+    ),
+
+  startEditorMidiRender: (
+    projectId: string,
+    trackId: string,
+    session: EditorMidiSession,
+    options: EditorMidiRenderOptions = {},
+  ) =>
+    invoke<EditorMidiRenderJob>(
+      'start_editor_midi_render',
+      [projectId, trackId, session, options],
+      () => mock.startEditorMidiRender(projectId, trackId, session, options),
+    ),
+
+  editorMidiRenderStatus: (jobId: string) =>
+    invoke<EditorMidiRenderJob>(
+      'editor_midi_render_status',
+      [jobId],
+      () => mock.editorMidiRenderStatus(jobId),
     ),
 
   previewEditorMidiSession: (projectId: string, trackId: string, session: EditorMidiSession) =>

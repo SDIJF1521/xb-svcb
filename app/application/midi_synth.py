@@ -14,8 +14,9 @@
 from __future__ import annotations
 
 import math
+import threading
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from domain import midi_drums, midi_instruments, midi_session
 
@@ -223,6 +224,10 @@ _CYMBAL_RING_MAX: dict[str, float] = {
 # 鼓组优先用 Windows 自带的 GM 波表（gm.dls）真实采样，和「直接打开 .mid」听到的一致。
 _cached_gm_drums: Any = None
 
+# 同一鼓件在整首曲子会重复触发成百上千次；gm.dls 采样是固定的，
+# 重采样结果按 (pitch, 源采样率, 目标采样率, 音高系数) 缓存，避免每次重算。
+_gm_resample_cache: dict[tuple[int, int, int, int], Any] = {}
+
 
 def _gm_drum_samples() -> dict[int, tuple[int, Any, float, int, int]] | None:
     """惰性加载 gm.dls 鼓组采样；不可用时返回 None（退回加法合成）。"""
@@ -273,13 +278,47 @@ def _envelope(n: int, sr: int, params: dict[str, Any], gate_samples: int) -> Any
     sustain = float(params["sustain"])
     release = max(1.0, float(params["release"]) * sr)
 
-    rising = np.clip(index / attack, 0.0, 1.0)
-    falling = 1.0 - (1.0 - sustain) * np.clip((index - attack) / decay, 0.0, 1.0)
+    # np.minimum/np.maximum are markedly faster than np.clip on float32
+    # arrays; every note builds this envelope, so it dominates render time.
+    rising = np.minimum(index / attack, np.float32(1.0))
+    falling = np.float32(1.0) - np.float32(1.0 - sustain) * np.minimum(
+        np.maximum((index - attack) / decay, np.float32(0.0)), np.float32(1.0)
+    )
     body = np.minimum(rising, falling)
     tail_index = index - float(max(0, gate_samples))
-    tail = np.clip(1.0 - tail_index / release, 0.0, 1.0)
-    envelope = body * np.where(tail_index >= 0.0, tail, 1.0)
-    return np.clip(envelope, 0.0, 1.0).astype(np.float32)
+    tail = np.minimum(
+        np.maximum(np.float32(1.0) - tail_index / release, np.float32(0.0)),
+        np.float32(1.0),
+    )
+    envelope = body * np.where(tail_index >= 0.0, tail, np.float32(1.0))
+    return envelope.astype(np.float32)
+
+
+_NOISE_TABLE: Any = None
+_NOISE_HIGHPASS: Any = None
+
+# 同一首歌里相同音高/时值/力度的音符会反复出现（和弦、循环、鼓点），
+# 合成结果只依赖这些参数，缓存后重复音符只需一次数组加法。
+_NOTE_CACHE: dict[tuple[int, int, int, int, int, int], Any] = {}
+_NOTE_CACHE_BYTES = 0
+_NOTE_CACHE_LIMIT = 96 * 1024 * 1024
+_NOTE_CACHE_LOCK = threading.Lock()
+
+
+def _noise_highpass(n: int, seed: int) -> Any:
+    """Slice a cached high-passed noise table instead of generating noise per note."""
+    import numpy as np
+
+    global _NOISE_TABLE, _NOISE_HIGHPASS
+    size = max(n, 48000 * 8)
+    if _NOISE_HIGHPASS is None or _NOISE_TABLE is None or _NOISE_TABLE.size < size:
+        rng = np.random.default_rng(20240501)
+        table = rng.standard_normal(max(size, 48000 * 16), dtype=np.float32)
+        _NOISE_TABLE = table
+        _NOISE_HIGHPASS = np.diff(table, prepend=np.float32(0.0))
+    span = int(_NOISE_HIGHPASS.size) - int(n)
+    offset = int(seed) % max(1, span) if span > 0 else 0
+    return _NOISE_HIGHPASS[offset : offset + n]
 
 
 def _oscillators(
@@ -294,12 +333,13 @@ def _oscillators(
 
     time = np.arange(n, dtype=np.float32) / float(sr)
     vibrato = params.get("vibrato")
+    mod = None
     if vibrato:
         rate, depth = vibrato
-        ramp = np.clip(time / 0.18, 0.0, 1.0)
-        mod = 1.0 + float(depth) * ramp * np.sin(2.0 * math.pi * float(rate) * time)
-    else:
-        mod = None
+        ramp = np.minimum(time / np.float32(0.18), np.float32(1.0))
+        mod = 1.0 + float(depth) * ramp * np.sin(
+            np.float32(2.0 * math.pi * float(rate)) * time
+        )
 
     detune = float(params.get("detune") or 0.0)
     ratios = (1.0,) if detune <= 0.0 else (1.0, 2.0 ** (detune / 1200.0))
@@ -312,22 +352,60 @@ def _oscillators(
             partial = base * float(harmonic)
             if partial >= sr * 0.47:
                 continue
-            phase = 2.0 * math.pi * partial * time
+            phase = np.float32(2.0 * math.pi * partial) * time
             if mod is not None:
                 phase = phase * mod
             tone = np.sin(phase, dtype=np.float32)
             if brightness > 0.0:
-                tone *= np.exp(-brightness * (float(harmonic) - 1.0) * time, dtype=np.float32)
-            signal += (float(amp) / weight / len(ratios)) * tone
+                tone *= np.exp(
+                    np.float32(-brightness * (float(harmonic) - 1.0)) * time,
+                    dtype=np.float32,
+                )
+            signal += np.float32(float(amp) / weight / len(ratios)) * tone
 
     noise_amount = float(params.get("noise") or 0.0)
     if noise_amount > 0.0:
-        rng = np.random.default_rng(int(abs(freq) * 31) + n)
-        noise = rng.standard_normal(n, dtype=np.float32)
         # 一阶差分做高通，让气声落在高频，避免糊住低音。
-        noise = np.diff(noise, prepend=np.float32(0.0))
-        signal += noise_amount * noise * 0.5
+        noise = _noise_highpass(n, int(abs(freq) * 31) + n)
+        signal += noise_amount * noise * np.float32(0.5)
     return signal * (0.28 + 0.72 * velocity)
+
+
+def _note_signal(
+    pitch: int,
+    gate: int,
+    tail: int,
+    sample_rate: int,
+    params: dict[str, Any],
+    velocity: int,
+) -> Any:
+    """合成一个旋律音符（含包络），结果按参数缓存给重复音符复用。"""
+    import numpy as np
+
+    key = (int(pitch), int(gate), int(tail), int(sample_rate), int(velocity), id(params))
+    with _NOTE_CACHE_LOCK:
+        cached = _NOTE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    n = gate + tail
+    signal = _oscillators(
+        _hz(pitch), n, sample_rate, params, velocity=velocity / 127.0
+    )
+    signal *= _envelope(n, sample_rate, params, gate)
+    signal = signal.astype(np.float32, copy=False)
+
+    global _NOTE_CACHE_BYTES
+    size = int(getattr(signal, "nbytes", 0))
+    if size and size <= _NOTE_CACHE_LIMIT:
+        with _NOTE_CACHE_LOCK:
+            if key not in _NOTE_CACHE:
+                while _NOTE_CACHE and _NOTE_CACHE_BYTES + size > _NOTE_CACHE_LIMIT:
+                    oldest_key, oldest = next(iter(_NOTE_CACHE.items()))
+                    del _NOTE_CACHE[oldest_key]
+                    _NOTE_CACHE_BYTES -= int(getattr(oldest, "nbytes", 0))
+                _NOTE_CACHE[key] = signal
+                _NOTE_CACHE_BYTES += size
+    return signal
 
 
 def _drum_voice(
@@ -494,9 +572,18 @@ def _drum_signal(pitch: int, velocity: int, sample_rate: int, note_duration: flo
         entry = gm.get(pitch)
         if entry is not None:
             src_rate, samples, pitch_factor, loop_start, loop_end = entry
-            signal = _resample_mono(
-                samples, int(src_rate), int(sample_rate), pitch=float(pitch_factor)
+            cache_key = (
+                int(pitch),
+                int(src_rate),
+                int(sample_rate),
+                int(round(float(pitch_factor) * 1_000_000)),
             )
+            signal = _gm_resample_cache.get(cache_key)
+            if signal is None:
+                signal = _resample_mono(
+                    samples, int(src_rate), int(sample_rate), pitch=float(pitch_factor)
+                )
+                _gm_resample_cache[cache_key] = signal
             if signal is not None and signal.size:
                 info = midi_drums.piece(pitch)
                 ring_max = _CYMBAL_RING_MAX.get(str(info["group"]))
@@ -522,6 +609,7 @@ def _render_part_events(
     gain: float,
     pan: float,
     out: Any,
+    progress: Callable[[float], None] | None = None,
 ) -> None:
     """把一个声部的音符累加进立体声缓冲（鼓组走专用的鼓件渲染）。"""
     import numpy as np
@@ -551,7 +639,15 @@ def _render_part_events(
                 continue
             events.append((begin, finish, pitch, velocity))
 
-    for begin, finish, pitch, velocity in events:
+    event_total = len(events)
+    report_every = max(1, event_total // 100) if progress else 0
+    stereo_left = math.cos((float(pan) + 1.0) * math.pi / 4.0)
+    stereo_right = math.sin((float(pan) + 1.0) * math.pi / 4.0)
+    scale = float(gain) * float(_MASTER_GAIN) * stereo_left
+    scale_right = float(gain) * float(_MASTER_GAIN) * stereo_right
+    for event_index, (begin, finish, pitch, velocity) in enumerate(events):
+        if progress and event_total and (event_index % report_every == 0):
+            progress((event_index + 1) / float(event_total))
         first = int(round(begin * sample_rate))
         if first >= length:
             continue
@@ -562,25 +658,15 @@ def _render_part_events(
             # 否则越靠后的音符就会渲染出越长的缓冲（指数级变慢）。
             gate = max(1, int(round((finish - begin) * sample_rate)))
             tail = int(round(max(release, 0.05) * sample_rate))
-            signal = _oscillators(
-                _hz(pitch),
-                gate + tail,
-                sample_rate,
-                params,
-                velocity=velocity / 127.0,
-            )
-            signal *= _envelope(gate + tail, sample_rate, params, gate)
+            signal = _note_signal(pitch, gate, tail, sample_rate, params, velocity)
         total = int(len(signal))
         if total <= 0:
             continue
         count = min(total, length - first)
         if count <= 0:
             continue
-        stereo_left = math.cos((float(pan) + 1.0) * math.pi / 4.0)
-        stereo_right = math.sin((float(pan) + 1.0) * math.pi / 4.0)
-        scale = float(gain) * float(_MASTER_GAIN)
-        out[first : first + count, 0] += signal[:count] * (scale * stereo_left)
-        out[first : first + count, 1] += signal[:count] * (scale * stereo_right)
+        out[first : first + count, 0] += signal[:count] * scale
+        out[first : first + count, 1] += signal[:count] * scale_right
 
 
 def _apply_reverb(samples: Any, sample_rate: int, mix: float = 0.16) -> Any:
@@ -593,16 +679,18 @@ def _apply_reverb(samples: Any, sample_rate: int, mix: float = 0.16) -> Any:
     taps = ((0.031, 0.34), (0.047, 0.27), (0.073, 0.21), (0.109, 0.15))
     for delay_seconds, feedback in taps:
         delay = max(1, int(sample_rate * delay_seconds))
-        for channel in range(samples.shape[1]):
-            buffer = np.zeros(total, dtype=np.float32)
-            for start in range(0, total, delay):
-                stop = min(total, start + delay)
-                previous = buffer[start - delay : stop - delay] if start >= delay else None
-                if previous is None:
-                    buffer[start:stop] = samples[start:stop, channel]
-                else:
-                    buffer[start:stop] = samples[start:stop, channel] + feedback * previous
-            wet[:, channel] += buffer
+        buffer = np.zeros_like(samples)
+        # Process both channels in one block loop: half the Python overhead of
+        # the per-channel comb filter, with identical output.
+        for start in range(0, total, delay):
+            stop = min(total, start + delay)
+            if start >= delay:
+                buffer[start:stop] = (
+                    samples[start:stop] + feedback * buffer[start - delay : stop - delay]
+                )
+            else:
+                buffer[start:stop] = samples[start:stop]
+        wet += buffer
     return samples * (1.0 - mix) + wet * (mix / float(len(taps)))
 
 
@@ -629,6 +717,7 @@ def render_session(
     tail: float = 0.45,
     parts: Iterable[dict[str, Any]] | None = None,
     reverb: float = 0.16,
+    progress: Callable[[float], None] | None = None,
 ) -> Any:
     """渲染会话（或指定声部集合）为 float32 立体声（n, 2）。"""
     import numpy as np
@@ -655,7 +744,19 @@ def render_session(
     length = int(round((end_limit - start_offset + tail_seconds) * sample_rate))
     length = max(1, min(length, int(sample_rate * midi_session.MAX_SESSION_SECONDS)))
     out = np.zeros((length, 2), dtype=np.float32)
-    for part in selected:
+    note_counts = [max(1, len(part.get("notes") or [])) for part in selected]
+    total_notes = float(sum(note_counts))
+    done_notes = 0.0
+    for part, note_count in zip(selected, note_counts):
+        if progress:
+            base = done_notes
+
+            def _part_progress(fraction: float, _base: float = base, _count: float = note_count) -> None:
+                progress((_base + fraction * _count) / total_notes * 0.90)
+
+            part_progress: Callable[[float], None] | None = _part_progress
+        else:
+            part_progress = None
         _render_part_events(
             part,
             sample_rate=sample_rate,
@@ -664,9 +765,18 @@ def render_session(
             gain=float(part.get("volume", 1.0) or 1.0),
             pan=float(part.get("pan", 0.0) or 0.0),
             out=out,
+            progress=part_progress,
         )
+        done_notes += note_count
+    if progress:
+        progress(0.92)
     out = _apply_reverb(out, sample_rate, mix=float(reverb))
-    return _finalise(out)
+    if progress:
+        progress(0.97)
+    final = _finalise(out)
+    if progress:
+        progress(1.0)
+    return final
 
 
 def render_part(
@@ -677,6 +787,7 @@ def render_part(
     window: tuple[float, float] | None = None,
     tail: float = 0.45,
     reverb: float = 0.16,
+    progress: Callable[[float], None] | None = None,
 ) -> Any:
     """单独渲染一个声部（分乐器渲染成各自音轨时用）。"""
     return render_session(
@@ -686,6 +797,7 @@ def render_part(
         window=window,
         tail=tail,
         reverb=reverb,
+        progress=progress,
     )
 
 

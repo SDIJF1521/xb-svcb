@@ -376,9 +376,11 @@ def test_realtime_rvc_session_passes_custom_parameters(
     rvc_engine.RvcEngine().open_realtime_session(
         {"main_model_path": str(model), "index_path": str(index)},
         params,
+        low_latency=True,
     )
 
     command = captured["command"]
+    assert "--low-latency" in command
     assert command[command.index("--device") + 1] == "cpu"
     assert command[command.index("--method") + 1] == "harvest"
     assert command[command.index("--pitch") + 1] == "-5"

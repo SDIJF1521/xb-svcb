@@ -119,7 +119,7 @@ export const workflowEnPhrases: Record<string, string> = {
 
   // 端口与状态
   '音频': 'Audio',
-  '人声': 'Vocals',
+  '人声': 'Vocal',
   '伴奏': 'Instrumental',
   '已连接': 'Connected',
   '待连接': 'Pending',
@@ -143,7 +143,7 @@ export const workflowEnPhrases: Record<string, string> = {
   '增强参数': 'Enhancement',
   '检索比率': 'Index rate',
   '音量包络': 'RMS mix',
-  '扩散占比': 'Diffusion ratio',
+  '扩散占比': 'Diffusion Ratio',
   '清辅音保护': 'Consonant protection',
   '中值滤波半径': 'Median filter radius',
   'RVC 版本': 'RVC version',
@@ -267,7 +267,7 @@ export const workflowEnPhrases: Record<string, string> = {
   '连线': 'connections',
   '主 / 扩散比例': 'Main / Diffusion ratio',
   '推理质量（扩散）': 'Quality (diffusion)',
-  '采样步数': 'Sampling steps',
+  '采样步数': 'Sampling Steps',
   '共振峰偏移': 'Formant shift',
   '选择模型后显示对应框架的高级参数。': 'Select a model to show its framework-specific advanced parameters.',
   '模型与推理参数在节点内调整：会按模型框架只显示对应的参数（So-VITS / RVC / SeedVC / DDSP）。':

@@ -112,3 +112,30 @@ def test_xb_svcb_path_repair_handles_forward_slashes(tmp_path: Path) -> None:
     assert result == target
     payload = json.loads((target / "models.json").read_text(encoding="utf-8"))
     assert payload["main_model_path"] == str(current)
+
+
+def test_data_home_written_by_legacy_ansi_installer_is_still_readable(tmp_path: Path) -> None:
+    """旧安装器按 ANSI 代码页写 data_home.json，不能因此让应用启动失败。"""
+    target = tmp_path / "音频数据"
+    target.mkdir()
+    home = tmp_path / "data_home.json"
+    payload = json.dumps({"data_dir": str(target)}, ensure_ascii=False)
+    home.write_bytes(payload.encode("gbk"))
+
+    row = config._read_data_home_file(home)
+
+    assert row is not None
+    assert row[0] == target.resolve()
+
+
+def test_data_home_with_utf8_bom_is_readable(tmp_path: Path) -> None:
+    target = tmp_path / "音频数据"
+    target.mkdir()
+    home = tmp_path / "data_home.json"
+    payload = json.dumps({"data_dir": str(target)}, ensure_ascii=False)
+    home.write_bytes(b"\xef\xbb\xbf" + payload.encode("utf-8"))
+
+    row = config._read_data_home_file(home)
+
+    assert row is not None
+    assert row[0] == target.resolve()

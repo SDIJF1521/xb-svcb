@@ -548,6 +548,12 @@ export interface RealtimeCoverPayload {
   accompaniment_device?: string
   output_device?: string
   sample_rate?: number
+  vocal_mode?: 'separate' | 'direct'
+  separator_engine?: 'uvr' | 'pymss'
+  pymss_model?: string
+  uvr_model?: string
+  prebuffer_blocks?: number
+  latency_mode?: 'live' | 'quality'
 }
 
 export interface SystemAudioDevice {
@@ -556,6 +562,7 @@ export interface SystemAudioDevice {
   kind: 'input' | 'output'
   loopback?: boolean
   system_mix?: boolean
+  virtual_capture?: boolean
 }
 
 export interface RealtimeCoverStatus {
@@ -566,6 +573,16 @@ export interface RealtimeCoverStatus {
   duration?: number
   chunk_seconds?: number
   buffer_seconds?: number
+  prebuffer_blocks?: number
+  vocal_mode?: 'separate' | 'direct'
+  separator_engine?: 'uvr' | 'pymss' | 'none'
+  separator_model?: string
+  separator_device?: string
+  latency_mode?: 'live' | 'quality'
+  latency_ms?: number
+  block_ms?: number | null
+  infer_ms?: number | null
+  dropped_seconds?: number
   ready_seconds?: number
   processed_seconds?: number
   realtime_factor?: number | null
@@ -1191,6 +1208,7 @@ export interface EditorClipMidiApplyResult {
     clips?: unknown[]
   }
   audio_path?: string
+  audio?: string
   project?: EditorProject | null
   clip?: EditorClip | null
   clips?: EditorClip[]
@@ -1306,6 +1324,16 @@ export interface EditorMidiSessionResult {
 
 export interface EditorMidiRenderOptions {
   mode?: 'tracks' | 'mix'
+}
+
+export interface EditorMidiRenderJob {
+  ok: boolean
+  job_id?: string
+  status?: 'queued' | 'running' | 'done' | 'error'
+  progress?: number
+  message?: string
+  error?: string | null
+  result?: EditorMidiSessionResult | null
 }
 
 export interface EditorPluginHostStatus {

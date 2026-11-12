@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import locale
 import os
 import shutil
 import subprocess
@@ -588,10 +589,10 @@ def midi_pitch_ready() -> bool:
 
 
 def midi_analysis_ready() -> bool:
-    """MIDI 音符分析需要 F0 worker + so-vits-svc 仓库。"""
+    """MIDI 音符分析需要 F0 worker + so-vits-svc 仓库，并在 SVC 运行时里执行。"""
     return bool(
-        VOCAL_ENHANCEMENT_PYTHON
-        and VOCAL_ENHANCEMENT_PYTHON.is_file()
+        SVC_PYTHON
+        and SVC_PYTHON.is_file()
         and F0_WORKER.is_file()
         and SOVITS_REPO
         and Path(SOVITS_REPO).is_dir()
@@ -893,10 +894,27 @@ def data_dir_env_override() -> str | None:
     )
 
 
+def _read_data_home_text(path: Path) -> str:
+    """Read ``data_home.json`` whatever encoding the installer used.
+
+    Current installers write UTF-8; older builds wrote the file with the ANSI
+    code page, so a Chinese data directory raises ``UnicodeDecodeError`` under
+    the strict UTF-8 decode.  That must never take the whole app down.
+    """
+    raw = path.read_bytes()
+    candidates = ("utf-8-sig", "utf-8", "mbcs", "gbk", locale.getpreferredencoding(False))
+    for encoding in dict.fromkeys(candidates):
+        try:
+            return raw.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
 def _read_data_home_file(path: Path) -> tuple[Path, dict[str, str], float] | None:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(_read_data_home_text(path))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None
     raw = data.get("data_dir") if isinstance(data, dict) else None
     if not raw:

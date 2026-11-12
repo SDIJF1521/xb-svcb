@@ -444,6 +444,9 @@ ja.RuntimeCacheCleaned=ランタイムのセットアップが完了し、イン
 zhcn.RuntimePreparing=准备搭建运行环境…
 en.RuntimePreparing=Preparing runtime setup...
 ja.RuntimePreparing=ランタイムセットアップを準備しています...
+zhcn.DiskSpaceLow=安装目录所在磁盘仅剩 %1 GB（%2），而搭建 AI 运行环境通常需要 10-20 GB：uv 缓存、wheel 解包与虚拟环境都会写入该磁盘。%n%n可以继续安装，但依赖下载可能因空间不足中途失败。建议先清理磁盘，或设置 XB_UV_CACHE_DIR / XB_PIP_CACHE_DIR 指向空间更大的磁盘后重试。
+en.DiskSpaceLow=Only %1 GB is free on the drive that holds the install folder (%2), while building the AI runtime usually needs 10-20 GB: uv caches, wheel extraction and virtual environments all write there.%n%nSetup can continue, but package installation may fail halfway when the disk fills up. Free some space, or point XB_UV_CACHE_DIR / XB_PIP_CACHE_DIR at a larger drive and retry.
+ja.DiskSpaceLow=インストール先ドライブの空き容量は %1 GB です（%2）。AI ランタイムの構築には通常 10-20 GB 必要で、uv キャッシュ、wheel の展開、仮想環境がすべてこのドライブに書き込まれます。%n%n続行できますが、容量不足で依存関係のインストールが途中で失敗する可能性があります。空き容量を確保するか、XB_UV_CACHE_DIR / XB_PIP_CACHE_DIR を容量の大きいドライブに設定してから再試行してください。
 zhcn.PrereqsConfiguring=正在检测前置依赖并配置环境变量…
 en.PrereqsConfiguring=Checking prerequisites and configuring environment variables...
 ja.PrereqsConfiguring=前提条件を確認し、環境変数を設定しています...
@@ -706,6 +709,78 @@ begin
     Result := '...' + Copy(S, Length(S) - MaxLen + 1, MaxLen);
 end;
 
+{ ---- Byte decoding ------------------------------------------------------ }
+{ install.py, uv and pip all write UTF-8 (the batch console runs at
+  chcp 65001), but LoadStringFromFile returns raw bytes and String() decodes
+  them with the ANSI code page. Chinese log lines and Chinese install paths
+  therefore turned into mojibake. Decode UTF-8 first and keep the old ANSI
+  conversion only for content that is clearly not UTF-8 (console tools such as
+  where.exe emit the OEM code page). }
+function LooksLikeUtf8(const Raw: AnsiString): Boolean;
+var
+  I, N, B, Need, J: Integer;
+begin
+  Result := True;
+  I := 1;
+  N := Length(Raw);
+  while I <= N do
+  begin
+    B := Ord(Raw[I]);
+    if B < $80 then
+      Inc(I)
+    else
+    begin
+      if (B and $E0) = $C0 then
+        Need := 1
+      else if (B and $F0) = $E0 then
+        Need := 2
+      else if (B and $F8) = $F0 then
+        Need := 3
+      else
+      begin
+        Result := False;
+        Exit;
+      end;
+      Inc(I);
+      for J := 1 to Need do
+      begin
+        if I > N then
+        begin
+          Result := False;
+          Exit;
+        end;
+        B := Ord(Raw[I]);
+        if (B and $C0) <> $80 then
+        begin
+          Result := False;
+          Exit;
+        end;
+        Inc(I);
+      end;
+    end;
+  end;
+end;
+
+function SafeUtf8Decode(const Raw: AnsiString): String;
+begin
+  Result := '';
+  if Length(Raw) = 0 then
+    Exit;
+  try
+    Result := Utf8Decode(Raw);
+  except
+    Result := String(Raw);
+  end;
+end;
+
+function DecodeConsoleText(const Raw: AnsiString): String;
+begin
+  if LooksLikeUtf8(Raw) then
+    Result := SafeUtf8Decode(Raw)
+  else
+    Result := String(Raw);
+end;
+
 function CmdAvailable(const Exe: String): Boolean;
 var
   ResultCode: Integer;
@@ -834,7 +909,7 @@ begin
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
   begin
     if LoadStringFromFile(TempFile, Text) then
-      Result := String(Text);
+      Result := DecodeConsoleText(Text);
   end;
   DeleteFile(TempFile);
 end;
@@ -845,6 +920,32 @@ begin
     Result := '"' + S + '"'
   else
     Result := S;
+end;
+
+function FreeSpaceGigabytes(const Dir: String): Int64;
+var
+  Free, Total: Int64;
+begin
+  Result := -1;
+  if GetSpaceOnDisk64(Dir, Free, Total) then
+    Result := Free div (1024 * 1024 * 1024);
+end;
+
+procedure WarnLowDiskSpace();
+var
+  Dir: String;
+  FreeGb: Int64;
+begin
+  { uv caches, wheel extraction and the venvs all live under the install
+    folder's .tmp directory, so a nearly full install drive is the most common
+    cause of a half-finished setup. Tell the user before the long download
+    starts instead of failing with a uv "no space left" error later. }
+  Dir := ExpandConstant('{app}\.tmp');
+  ForceDirectories(Dir);
+  FreeGb := FreeSpaceGigabytes(Dir);
+  if (FreeGb < 0) or (FreeGb >= 12) then
+    Exit;
+  MsgBox(M2('DiskSpaceLow', IntToStr(FreeGb), Dir), mbInformation, MB_OK);
 end;
 
 function NvidiaSmiCommand(): String;
@@ -1456,7 +1557,7 @@ begin
   if Error then
     Line := '[err] ' + Line;
   if CurrentLogPath <> '' then
-    SaveStringToFile(CurrentLogPath, Line + #13#10, True);
+    SaveStringToFile(CurrentLogPath, Utf8Encode(Line + #13#10), True);
   AppendInstallDetail(Line);
 end;
 
@@ -1489,7 +1590,10 @@ begin
   Result := False;
   if not LoadStringFromFile(LogPath, LogText) then
     Exit;
-  CurrentText := String(LogText);
+  { The step log is UTF-8: install.py forces UTF-8 stdio and uv/pip always
+    emit UTF-8. Decoding it with the ANSI code page garbled every Chinese line
+    in the details panel and in the saved log. }
+  CurrentText := SafeUtf8Decode(LogText);
   if (Length(CurrentText) < Length(SeenText)) or
      (Copy(CurrentText, 1, Length(SeenText)) <> SeenText) then
   begin
@@ -1864,11 +1968,19 @@ begin
     'set "XB_WHEELHOUSE=' + BatchEscape(ExpandConstant('{app}\assets\wheels')) + '"' + #13#10 +
     'set "XB_WHEELHOUSE_STRICT=1"' + #13#10 +
     'set "UV_LINK_MODE=copy"' + #13#10 +
+    'set "PYTHONUTF8=1"' + #13#10 +
+    'set "PYTHONIOENCODING=utf-8"' + #13#10 +
     'set "XB_UV_CACHE_DIR=' + BatchEscape(ExpandConstant('{app}\.tmp\uv-cache')) + '"' + #13#10 +
     'set "UV_CACHE_DIR=%XB_UV_CACHE_DIR%"' + #13#10 +
+    'set "XB_PIP_CACHE_DIR=' + BatchEscape(ExpandConstant('{app}\.tmp\pip-cache')) + '"' + #13#10 +
+    'set "PIP_CACHE_DIR=%XB_PIP_CACHE_DIR%"' + #13#10 +
+    'set "UV_PYTHON_INSTALL_DIR=' + BatchEscape(ExpandConstant('{app}\.tmp\uv-python')) + '"' + #13#10 +
     'set "XB_RUNTIME_TEMP=' + BatchEscape(ExpandConstant('{app}\.tmp\runtime-temp')) + '"' + #13#10 +
     'set "PIP_DISABLE_PIP_VERSION_CHECK=1"' + #13#10;
-  SaveStringToFile(ExpandConstant('{app}\installer_env.cmd'), Payload, False);
+  { cmd parses this file with the console code page (chcp 65001), so it must be
+    UTF-8: an ANSI write turns a Chinese install path into a broken %XB_*%
+    value and Python/uv can no longer be found. }
+  SaveStringToFile(ExpandConstant('{app}\installer_env.cmd'), Utf8Encode(Payload), False);
 end;
 
 function RunSetupBatch(const BatchName, Args, Status: String; ProgressStart, ProgressEnd: Integer): Boolean;
@@ -1890,10 +2002,10 @@ begin
   LastInstallLog := LogPath;
   CurrentLogPath := LogPath;
   SaveStringToFile(LogPath,
-    'XB-SVCB installer step: ' + BatchName + #13#10 +
+    Utf8Encode('XB-SVCB installer step: ' + BatchName + #13#10 +
     'Started at: ' + GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':') + #13#10 +
     'Command args: ' + Args + #13#10 +
-    '------------------------------------------------------------' + #13#10,
+    '------------------------------------------------------------' + #13#10),
     False);
   AppendInstallDetail('');
   AppendInstallDetail('============================================================');
@@ -1915,7 +2027,7 @@ begin
   SeenText := '';
   PendingLine := '';
   if LoadStringFromFile(LogPath, FinalLogText) then
-    SeenText := FinalLogText;
+    SeenText := SafeUtf8Decode(FinalLogText);
   try
     { Start the batch asynchronously. The polling loop keeps the Inno window
       repainting while uv/pip performs long wheel installs. }
@@ -1958,7 +2070,7 @@ begin
   end;
   CurrentLogPath := '';
   if LoadStringFromFile(LogPath, FinalLogText) then
-    LastInstallSummary := TailText(FinalLogText, 1600);
+    LastInstallSummary := TailText(SafeUtf8Decode(FinalLogText), 1600);
   if (not Result) or (ResultCode <> 0) then
   begin
     MsgBox(M3('BatchFailed', BatchName, IntToStr(ResultCode), LogPath), mbError, MB_OK);
@@ -1972,7 +2084,7 @@ procedure AppendInstallValidation(const Line: String);
 begin
   AppendInstallDetail(Line);
   if LastInstallLog <> '' then
-    SaveStringToFile(LastInstallLog, Line + #13#10, True);
+    SaveStringToFile(LastInstallLog, Utf8Encode(Line + #13#10), True);
 end;
 
 function AddMissingRuntimeFile(const MissingText, ItemLabel, FilePath: String): String;
@@ -2147,13 +2259,15 @@ begin
     turn a valid manifest route into a silent legacy-path fallback. }
   TempFile := ExpandConstant('{tmp}\xb_svcb_runtime_' + Component + '.txt');
   DeleteFile(TempFile);
+  { runtime_manifest.py writes UTF-8; an ANSI decode would corrupt a Chinese
+    install path and report a valid runtime as missing. }
   if Exec(HelperPython, CmdPath(Resolver) +
       ' --root ' + CmdPath(AppDir) + ' --component ' + Component +
       ' --legacy ' + CmdPath(LegacyRelative) +
       ' --output-file ' + CmdPath(TempFile),
       AppDir, SW_HIDE, ewWaitUntilTerminated, ResultCode) and
       (ResultCode = 0) and LoadStringFromFile(TempFile, Text) then
-    Resolved := Trim(String(Text))
+    Resolved := Trim(DecodeConsoleText(Text))
   else
     Resolved := '';
   DeleteFile(TempFile);
@@ -2419,14 +2533,18 @@ begin
     Payload := '{' + #13#10 +
       '  "data_dir": "' + JsonEscape(DataDir) + '"' + #13#10 +
       '}' + #13#10;
-    SaveStringToFile(ExpandConstant('{app}\data_home.json'), Payload, False);
+    { app/config.py reads this as UTF-8. Writing it with the ANSI code page
+      broke every Chinese/Japanese data directory and the app then failed to
+      start, so always write UTF-8 bytes without a BOM. }
+    SaveStringToFile(ExpandConstant('{app}\data_home.json'), Utf8Encode(Payload), False);
     ForceDirectories(ExpandConstant('{userappdata}\XB-SVCB'));
-    SaveStringToFile(ExpandConstant('{userappdata}\XB-SVCB\data_home.json'), Payload, False);
+    SaveStringToFile(ExpandConstant('{userappdata}\XB-SVCB\data_home.json'), Utf8Encode(Payload), False);
 
     ValidateBundledRuntime();
 
     if BuildEnvSelected() or EnvConfigureSelected() then
     begin
+      WarnLowDiskSpace();
       SetEnvProgress(0, M('RuntimePreparing'));
       WriteInstallerEnv();
       PrereqsReady := True;

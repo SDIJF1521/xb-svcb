@@ -49,6 +49,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import locale
 import os
 import re
 import shutil
@@ -88,11 +89,37 @@ os.environ.setdefault("PIP_INDEX_URL", PYPI_MIRROR)
 os.environ.setdefault("UV_DEFAULT_INDEX", PYPI_MIRROR)
 os.environ.setdefault("UV_LINK_MODE", "copy")
 os.environ.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+# Child interpreters (uv's pip bootstrap, engine probes, audit scripts) must
+# write UTF-8: the launchers run at chcp 65001 and the graphical installer
+# decodes their output as UTF-8, while Python defaults to the ANSI code page
+# whenever stdout is redirected. A profile path such as
+# ``C:\Users\端木雪堂\...`` would otherwise be mangled or kill a reader thread.
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+os.environ.setdefault("PYTHONUTF8", "1")
 
-for _stream in (sys.stdout, sys.stderr):
-    _reconfigure = getattr(_stream, "reconfigure", None)
-    if callable(_reconfigure):
-        _reconfigure(errors="replace")
+
+def _force_utf8_output() -> None:
+    """Write UTF-8 even when stdout is redirected into the installer log.
+
+    ``errors="replace"`` alone keeps printing Chinese on a console whose ANSI
+    code page cannot encode it, but that code page is then also what lands in
+    the log file (or ``?`` on cp1252).  Inno Setup decodes the step log as
+    UTF-8, so pin the encoding and keep the replace fallback.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            try:
+                reconfigure(errors="replace")
+            except (OSError, ValueError):
+                continue
+
+
+_force_utf8_output()
 
 # 所有产物（引擎/虚拟环境/模型）都落在 ROOT 下。默认取本脚本上级目录；
 # 安装器会用 --root 显式指定为用户选择的安装目录，确保依赖装进该目录。
@@ -135,15 +162,34 @@ ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 ASSETS_MODELS_DIR = ASSETS_DIR / "models"
 ASSETS_WHEELS_DIR = ASSETS_DIR / "wheels"
 
+# 记录已经解析过的安装根目录。install_shared.py 会在调用组件实现前显式
+# 解析路径；main() 只在尚未解析时补做，避免把测试/调用方选择的目录覆盖回
+# 脚本所在目录。
+_DERIVED_ROOT: Path | None = None
+
+# uv 缓存在安装 CUDA 依赖栈时会增长到 10-20 GB。低于该阈值时只告警，
+# 由用户改用 XB_UV_CACHE_DIR 指定空间更大的磁盘。
+STORAGE_MIN_FREE_BYTES = 12 * 1024 ** 3
+
+# 存储目录可用环境变量覆盖：默认全部落在安装盘，不使用系统盘的 %LOCALAPPDATA%。
+STORAGE_ENV = {
+    "uv_cache": "XB_UV_CACHE_DIR",
+    "pip_cache": "XB_PIP_CACHE_DIR",
+    "uv_python": "XB_UV_PYTHON_DIR",
+    "runtime_temp": "XB_RUNTIME_TEMP",
+}
+
 
 def _derive_paths(root: Path) -> None:
     """以 root 为基准重新计算所有产物路径（供 --root 覆盖）。"""
+    global _DERIVED_ROOT
     global ROOT, APP_DIR, WEB_DIR, ENGINES_DIR, SOVITS_DIR, SEEDVC_DIR, DDSP_DIR, PRETRAIN_DIR
     global RVC_DIR, RVC_BASE_MODEL_DIR
     global UVR_VENV, PLUGIN_VENV, PYMSS_VENV, SVC_VENV, HUB_VENV, RVC_VENV, SEEDVC_VENV, DDSP_VENV, VOCAL_VENV
     global RUNTIMES_DIR, CORE_VENV, RUNTIME_MANIFEST
     global UVR_MODELS_DIR, VOCAL_MODELS_DIR
     ROOT = root
+    _DERIVED_ROOT = root
     APP_DIR = root / "app"
     WEB_DIR = root / "web"
     ENGINES_DIR = root / "engines"
@@ -170,19 +216,75 @@ def _derive_paths(root: Path) -> None:
     # Keep extraction and generic temporary traffic on the user-selected
     # installation drive. Global caches can be read-only, locked by security
     # software, or unexpectedly consume the system drive during large installs.
-    runtime_temp = Path(
-        os.environ.get("XB_RUNTIME_TEMP") or root / ".tmp" / "runtime-temp"
-    ).resolve()
-    runtime_temp.mkdir(parents=True, exist_ok=True)
-    os.environ["TEMP"] = str(runtime_temp)
-    os.environ["TMP"] = str(runtime_temp)
-    uv_cache = Path(
-        os.environ.get("XB_UV_CACHE_DIR") or root / ".tmp" / "uv-cache"
-    ).resolve()
-    os.environ["UV_CACHE_DIR"] = str(uv_cache)
+    storage = storage_paths(root)
+    try:
+        for directory in storage.values():
+            directory.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            "无法创建安装缓存/临时目录，请确认安装目录可写；也可以先把缓存指向其他磁盘后重试：\n"
+            '    set "XB_UV_CACHE_DIR=D:\\xb-cache\\uv"\n'
+            f"    详细错误：{exc}"
+        ) from exc
+    os.environ["TEMP"] = str(storage["runtime_temp"])
+    os.environ["TMP"] = str(storage["runtime_temp"])
+    os.environ["UV_CACHE_DIR"] = str(storage["uv_cache"])
+    # pip 仍用于引导 uv（以及少数兜底安装），它的缓存同样不能落在系统盘。
+    os.environ["PIP_CACHE_DIR"] = str(storage["pip_cache"])
+    # uv 托管的 Python（例如 legacy 3.9 环境）默认下载到 %LOCALAPPDATA%，
+    # 固定到安装盘后系统盘不会被额外占用。
+    os.environ["UV_PYTHON_INSTALL_DIR"] = str(storage["uv_python"])
     # tempfile caches its first selected directory. Reset it for repairs and
     # test processes that call _derive_paths more than once.
-    tempfile.tempdir = str(runtime_temp)
+    tempfile.tempdir = str(storage["runtime_temp"])
+
+
+def storage_paths(root: Path | None = None) -> dict[str, Path]:
+    """Return cache/temp locations, honouring the XB_* overrides."""
+    base = root or ROOT
+    defaults = {
+        "uv_cache": base / ".tmp" / "uv-cache",
+        "pip_cache": base / ".tmp" / "pip-cache",
+        "uv_python": base / ".tmp" / "uv-python",
+        "runtime_temp": base / ".tmp" / "runtime-temp",
+    }
+    resolved: dict[str, Path] = {}
+    for key, default in defaults.items():
+        raw = os.environ.get(STORAGE_ENV[key])
+        resolved[key] = Path(raw).expanduser().resolve() if raw else default.resolve()
+    return resolved
+
+
+def _free_space_bytes(path: Path) -> int | None:
+    try:
+        return shutil.disk_usage(path).free
+    except OSError:
+        return None
+
+
+def storage_warning(free_bytes: int | None, path: Path) -> str | None:
+    """Return an actionable warning when the cache drive is nearly full."""
+    if free_bytes is None or free_bytes >= STORAGE_MIN_FREE_BYTES:
+        return None
+    return (
+        f"磁盘剩余空间不足：{path} 所在磁盘仅剩 {free_bytes / 1024 ** 3:.1f} GB，"
+        "而 CUDA 依赖缓存通常需要 10-20 GB，安装可能中途失败。\n"
+        "    请先清理磁盘，或在运行安装器前把缓存指向空间更大的磁盘，例如：\n"
+        '    set "XB_UV_CACHE_DIR=D:\\xb-cache\\uv"\n'
+        '    set "XB_PIP_CACHE_DIR=D:\\xb-cache\\pip"'
+    )
+
+
+def report_storage_layout() -> None:
+    """Print where caches land so failures are diagnosable before uv runs."""
+    storage = storage_paths()
+    print(c("b", f"uv 缓存目录: {storage['uv_cache']}"))
+    print(c("b", f"pip 缓存目录: {storage['pip_cache']}"))
+    print(c("b", f"临时目录: {storage['runtime_temp']}"))
+    warning = storage_warning(_free_space_bytes(storage["uv_cache"]), storage["uv_cache"])
+    if warning:
+        print(c("y", warning))
+
 
 SOVITS_REPO_URL = "https://github.com/svc-develop-team/so-vits-svc.git"
 SOVITS_BRANCH = "4.1-Stable"
@@ -1127,20 +1229,59 @@ def venv_python(venv_dir: Path) -> Path:
     )
 
 
+def _decode_console_output(raw: bytes | None) -> str:
+    """Decode a console tool's output without trusting the process locale.
+
+    The launchers switch the console to UTF-8 (``chcp 65001``), so tools such as
+    ``where``/``py``/``nvidia-smi`` emit UTF-8 bytes while ``text=True`` would
+    decode them with the ANSI code page.  On Chinese Windows that code page is
+    GBK, and a profile path like ``C:\\Users\\端木雪堂\\...`` cannot be decoded:
+    subprocess' reader thread dies, ``stdout`` silently becomes ``None`` and the
+    caller then crashes on ``None.splitlines()``.  Prefer UTF-8, keep the locale
+    and ``mbcs`` as fallbacks, and never raise on undecodable bytes.
+    """
+    if not raw:
+        return ""
+    if isinstance(raw, str):
+        # Some callers (and tests) run subprocess in text mode.
+        return raw
+    candidates = ("utf-8", locale.getpreferredencoding(False), "mbcs")
+    for encoding in dict.fromkeys(candidates):
+        try:
+            return raw.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _run_capture(
+    cmd: list[str],
+    *,
+    timeout: float | None,
+    env: dict | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a helper and decode its output with :func:`_decode_console_output`."""
+    completed = subprocess.run(cmd, capture_output=True, timeout=timeout, env=env)
+    return subprocess.CompletedProcess(
+        completed.args,
+        completed.returncode,
+        _decode_console_output(completed.stdout),
+        _decode_console_output(completed.stderr),
+    )
+
+
 def _python_minor_version(py: Path) -> str | None:
     """Return a Python executable's major.minor version, or None if unusable."""
     try:
-        out = subprocess.run(
+        out = _run_capture(
             [str(py), "-c", "import sys;print('%d.%d'%sys.version_info[:2])"],
-            capture_output=True,
-            text=True,
             timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
         return None
     if out.returncode != 0:
         return None
-    ver = out.stdout.strip()
+    ver = (out.stdout or "").strip()
     return ver if re.match(r"^\d+\.\d+$", ver) else None
 
 
@@ -1171,36 +1312,36 @@ def _python_launcher_path(python_version: str) -> str | None:
     if os.name != "nt":
         return None
     try:
-        out = subprocess.run(
+        out = _run_capture(
             [
                 "py",
                 f"-{python_version}",
                 "-c",
                 "import sys;print(sys.executable)",
             ],
-            capture_output=True,
-            text=True,
             timeout=20,
         )
     except (OSError, subprocess.SubprocessError):
         return None
     if out.returncode != 0:
         return None
-    return out.stdout.strip() or None
+    return (out.stdout or "").strip() or None
 
 
 def _where_python_paths() -> list[str]:
+    found = shutil.which("python")
     try:
-        found = shutil.which("python")
-        out = subprocess.run(
+        out = _run_capture(
             ["where", "python"] if os.name == "nt" else ["which", "-a", "python"],
-            capture_output=True,
-            text=True,
             timeout=20,
         )
     except (OSError, subprocess.SubprocessError):
         return [found] if found else []
-    values = out.stdout.splitlines() if out.returncode == 0 else []
+    values = [
+        line.strip()
+        for line in (out.stdout or "").splitlines()
+        if out.returncode == 0 and line.strip()
+    ]
     if found:
         values.insert(0, found)
     return values
@@ -1354,13 +1495,11 @@ def detect_gpu_stack() -> str:
     if smi:
         try:
             subprocess.run([smi], capture_output=True, check=True, timeout=15)
-            out = subprocess.run(
+            out = _run_capture(
                 [smi, "--query-gpu=compute_cap", "--format=csv,noheader"],
-                capture_output=True,
-                text=True,
                 timeout=15,
             )
-            for line in out.stdout.splitlines():
+            for line in (out.stdout or "").splitlines():
                 try:
                     caps.append(float(line.strip()))
                 except ValueError:
@@ -1374,13 +1513,11 @@ def detect_gpu_stack() -> str:
         # for Blackwell.  Always query the adapter name as a second signal so
         # an RTX 50xx card cannot accidentally enter the cu126 stack.
         try:
-            out = subprocess.run(
+            out = _run_capture(
                 [smi, "--query-gpu=name", "--format=csv,noheader"],
-                capture_output=True,
-                text=True,
                 timeout=15,
             )
-            names = out.stdout.strip()
+            names = (out.stdout or "").strip()
             if re.search(r"RTX\s*50\d0", names, flags=re.IGNORECASE):
                 return "cu128"
             if names and any(cap >= 5.0 for cap in caps):
@@ -1920,10 +2057,8 @@ torch.save(obj, tmp)
 tmp.replace(dest)
 """
     try:
-        out = subprocess.run(
+        out = _run_capture(
             [str(py), "-c", script, str(src), str(dest)],
-            capture_output=True,
-            text=True,
             timeout=180,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -3035,14 +3170,14 @@ def _patch_fairseq_weights_only(py: Path) -> None:
     幂等：无损坏时不改动。
     """
     try:
-        out = subprocess.run(
+        out = _run_capture(
             [str(py), "-c", "import os,fairseq;print(os.path.dirname(fairseq.__file__))"],
-            capture_output=True, text=True, timeout=60,
+            timeout=60,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         print(c("y", f"    定位 fairseq 失败，跳过修复：{exc}"))
         return
-    base = out.stdout.strip()
+    base = (out.stdout or "").strip()
     if not base:
         print(c("y", "    未找到 fairseq 安装路径，跳过修复"))
         return
@@ -3464,9 +3599,9 @@ init_df(sys.argv[1], log_file=None)
         # or missing DLL details from the installer log.
         print(c("r", f"DeepFilterNet3 模型初始化失败（exit {exc.returncode}）："))
         try:
-            probe = subprocess.run(
+            probe = _run_capture(
                 [py, "-c", check, str(model_dir)],
-                check=False, text=True, capture_output=True,
+                timeout=None,
                 env={**os.environ, **compatibility_env},
             )
             if probe.stdout:
@@ -3755,8 +3890,17 @@ def main() -> int:
     selected = args.only if args.only else [s for s in ORDER if not getattr(args, f"skip_{s}")]
 
     installer_progress(2, "Resolving runtime root")
-    if args.root:
-        _derive_paths(Path(args.root).expanduser().resolve())
+    try:
+        if args.root:
+            _derive_paths(Path(args.root).expanduser().resolve())
+        elif _DERIVED_ROOT is None:
+            # 直接运行 python install/install.py（install.ps1 与 README 的用
+            # 法）时也必须把 uv/pip 缓存固定到安装目录；否则 uv 默认把几 GB
+            # 缓存写进系统盘的 %LOCALAPPDATA%，小容量 C: 会中途装失败。
+            _derive_paths(ROOT)
+    except (OSError, RuntimeError) as exc:
+        print(c("r", str(exc)))
+        return 1
     try:
         _configure_core_profile(args.core_profile)
     except (OSError, ValueError, KeyError) as exc:
@@ -3765,6 +3909,7 @@ def main() -> int:
 
     hr("XB-SVCB 安装器")
     print(f"安装根目录: {ROOT}")
+    report_storage_layout()
 
     if args.rocm10 and (args.cpu or args.directml or args.cu126 or args.cu128 or args.no_cu128):
         p.error("--rocm10 不能与 CPU/DirectML/CUDA 栈参数同时使用")

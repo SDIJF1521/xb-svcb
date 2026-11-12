@@ -52,6 +52,7 @@ import type {
   EditorMidiNote,
   EditorMidiDrumPiece,
   EditorMidiRenderOptions,
+  EditorMidiRenderJob,
   EditorMidiSession,
   EditorMidiSessionResult,
   EditorMidiImportResult,
@@ -515,6 +516,7 @@ const mockRerunJobs: Record<string, EditorRerunResult & { log?: string }> = {}
 const mockMidiNotes: Record<string, EditorMidiNote[]> = mockEditorState.midiNotes
 /** MIDI 编曲：浏览器 mock 下的会话存储（键为 `projectId:trackId`）。 */
 const mockMidiSessions: Record<string, EditorMidiSession> = mockEditorState.midiSessions
+const mockMidiRenderJobs: Record<string, EditorMidiRenderJob> = {}
 
 /** 把当前编辑器 mock 状态写回 localStorage，刷新后仍能恢复。 */
 function persistMockEditorState() {
@@ -1238,6 +1240,16 @@ export const mock = {
       duration: 0,
       chunk_seconds: payload.chunk_seconds,
       buffer_seconds: payload.buffer_seconds,
+      prebuffer_blocks: payload.prebuffer_blocks ?? 1,
+      vocal_mode: payload.vocal_mode ?? 'separate',
+      separator_engine: payload.separator_engine ?? 'uvr',
+      separator_model: payload.separator_engine === 'pymss' ? payload.pymss_model : payload.uvr_model,
+      separator_device: 'auto',
+      latency_mode: payload.latency_mode ?? 'live',
+      latency_ms: 0,
+      block_ms: null,
+      infer_ms: null,
+      dropped_seconds: 0,
       ready_seconds: 0,
       processed_seconds: 0,
       ready_chunks: 0,
@@ -2749,6 +2761,13 @@ export const mock = {
       clip: { ...found.clip },
     }
   },
+  previewEditorClipMidi(
+    _projectId: string,
+    _clipId: string,
+    _notes?: EditorMidiNote[],
+  ): EditorClipMidiApplyResult {
+    return { ok: false, error: '浏览器 mock 没有 MIDI 音高重绘：请用桌面版试听' }
+  },
   getEditorTrackMidi(projectId: string, trackId: string, refresh = false): EditorClipMidi {
     const found = findMockMidiTrack(projectId, trackId)
     if (!found) return { ok: false, error: '工程或音轨不存在' }
@@ -3023,6 +3042,31 @@ export const mock = {
       clips: renderedClips,
       report: { mode, parts: audible.length, clips: renderedClips.length },
       project: cloneProject(found.project),
+    }
+  },
+  startEditorMidiRender(
+    projectId: string,
+    trackId: string,
+    session: EditorMidiSession,
+    options?: EditorMidiRenderOptions,
+  ): EditorMidiRenderJob {
+    const result = mock.renderEditorMidiSession(projectId, trackId, session, options)
+    const jobId = `mrender_mock_${Date.now().toString(36)}`
+    mockMidiRenderJobs[jobId] = {
+      ok: true,
+      job_id: jobId,
+      status: result.ok ? 'done' : 'error',
+      progress: result.ok ? 100 : 0,
+      message: result.ok ? '渲染完成' : String(result.error || '渲染失败'),
+      error: result.error || null,
+      result,
+    }
+    return { ok: true, job_id: jobId, status: 'queued', progress: 0, message: '等待开始' }
+  },
+  editorMidiRenderStatus(jobId: string): EditorMidiRenderJob {
+    return mockMidiRenderJobs[jobId] || {
+      ok: false,
+      error: '渲染任务不存在或已过期',
     }
   },
   previewEditorMidiSession(

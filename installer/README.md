@@ -371,7 +371,9 @@ XB-SVCB-Setup-CUDA128-2.bin
 
 安装器执行 `setup_env.bat` 时会异步启动批处理，并轮询真实进程状态；安装窗口会持续刷新，不会因为 `uv`/`pip` 安装大型 wheel 长时间没有输出而显示为无响应。进度条优先使用脚本输出的 `[XB-PROGRESS]` 标记，等待依赖安装期间只做受限心跳推进，绝不会在进程退出前报告完成。每一步的完整输出保存在安装目录的 `install_logs\install_prereqs.log` 或 `install_logs\setup_env.log`；只有批处理返回 0 后才会继续进行各模型运行时校验。
 
-运行环境安装始终优先使用 `assets\wheels\bootstrap` 中固定版本的 `uv`，执行文件提取到安装目录的 `.tmp\uv-tools`，缓存写入 `.tmp\uv-cache`。安装会话的 `TEMP` / `TMP` 也会指向安装目录的 `.tmp\runtime-temp`，Python 临时目录、wheel 解包和依赖检测不会占用系统盘的大量空间；这些变量只对安装脚本进程生效，不修改用户永久环境变量。在线安装器的完整离线包仍保存在在线安装器旁边的 `XB-SVCB-Downloads`。Windows 和 Inno Setup 启动自身仍可能使用少量系统临时空间，因此 C 盘不能完全为 0 字节可用。过滤后的临时 requirements 会自动创建父目录，因此全新安装中不存在 `.tmp` 时也能安装 DDSP legacy 环境。
+运行环境安装始终优先使用 `assets\wheels\bootstrap` 中固定版本的 `uv`，执行文件提取到安装目录的 `.tmp\uv-tools`，缓存写入 `.tmp\uv-cache`。引导 `uv` 用的 `pip` 缓存写入 `.tmp\pip-cache`，`uv` 托管的 Python 写入 `.tmp\uv-python`；安装会话的 `TEMP` / `TMP` 也会指向安装目录的 `.tmp\runtime-temp`，Python 临时目录、wheel 解包和依赖检测不会占用系统盘的大量空间；这些变量只对安装脚本进程生效，不修改用户永久环境变量。直接运行 `python install/install.py`（不传 `--root`）同样会把以上目录固定在脚本所在安装目录，`setup_env.bat`、`setup_shared_env.bat`、`install_prereqs.bat` 也会显式设置，因此 uv 不会退回 `%LOCALAPPDATA%\uv\cache`。磁盘剩余空间低于 12 GB 时安装器会打印中文告警；需要把缓存放到其他磁盘时，可在运行安装器前设置 `XB_UV_CACHE_DIR` / `XB_PIP_CACHE_DIR`（例如 `D:\xb-cache\uv` 与 `D:\xb-cache\pip`）。在线安装器的完整离线包仍保存在在线安装器旁边的 `XB-SVCB-Downloads`。Windows 和 Inno Setup 启动自身仍可能使用少量系统临时空间，因此 C 盘不能完全为 0 字节可用。过滤后的临时 requirements 会自动创建父目录，因此全新安装中不存在 `.tmp` 时也能安装 DDSP legacy 环境。
+
+安装器全链路统一使用 UTF-8：入口批处理先 `chcp 65001`，并给子 Python 设置 `PYTHONUTF8` / `PYTHONIOENCODING`，批处理里用 `for /f` 读取的路径由 Python 直接写出 UTF-8 字节；`install.py` 强制 stdout/stderr 使用 UTF-8；`installer_env.cmd`、`data_home.json` 与 `install_logs\*.log` 均按 UTF-8 写入，Inno Setup 也按 UTF-8 解码日志与命令输出。这样中文/日文用户名与中文安装路径（如 `D:\翻唱工具`）不会因为系统 ANSI 代码页（GBK/CP932/CP1252）不同而出现乱码或“找不到 Python”的安装失败。旧版安装器写出的 ANSI `data_home.json` 仍可被应用读取。
 
 ## 文件职责
 

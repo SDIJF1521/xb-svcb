@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 import wave
 import zipfile
 from datetime import datetime
@@ -125,6 +126,9 @@ class AudioEditorService:
         self._midi_pitch = midi_pitch or create_midi_pitch()
         self._rerun_jobs: dict[str, dict[str, Any]] = {}
         self._rerun_jobs_lock = threading.RLock()
+        # MIDI 编曲渲染放在后台线程，前端轮询进度，避免长请求卡住桥接调用。
+        self._midi_render_jobs: dict[str, dict[str, Any]] = {}
+        self._midi_render_jobs_lock = threading.RLock()
         self._render = EditorRenderService(
             repo=repo,
             audio=audio or create_audio_engine(ffmpeg),
@@ -3099,7 +3103,9 @@ class AudioEditorService:
         return value if value and Path(value).is_file() else ""
 
     def _run_f0_analysis(self, audio: Path, out_path: Path, clip: dict[str, Any]) -> bool:
-        python = config.VOCAL_ENHANCEMENT_PYTHON
+        # F0 提取导入的是 so-vits-svc 的 utils（faiss / sklearn / torch），
+        # 必须用 SVC 运行时；vocal 环境只装 DeepFilterNet/Praat，缺少这些依赖。
+        python = config.SVC_PYTHON
         worker = config.F0_WORKER
         repo = config.SOVITS_REPO
         if not python or not Path(python).is_file():
@@ -3155,7 +3161,7 @@ class AudioEditorService:
         if not config.midi_analysis_ready():
             return {
                 "ok": False,
-                "error": "MIDI 音符分析环境未就绪（需要 vocal 运行时与 so-vits-svc 仓库）",
+                "error": "MIDI 音符分析环境未就绪（需要 SVC 运行时与 so-vits-svc 仓库）",
             }
         folder = self._midi_dir(project_id)
         span_path = folder / f"{clip_id}_analyse.wav"
@@ -3408,6 +3414,65 @@ class AudioEditorService:
             "clip": updated,
             "report": report,
             "audio_path": str(updated.get("file") or ""),
+        }
+
+    def preview_clip_midi(
+        self,
+        project_id: str,
+        clip_id: str,
+        notes: Any = None,
+    ) -> dict[str, Any]:
+        """按当前音符重绘片段音频供试听；只写临时文件，不修改工程。"""
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        _track, _idx, clip = self._find_clip_ref_by_clip_id(project, clip_id)
+        if not clip:
+            return {"ok": False, "error": "片段不存在"}
+        source = Path(str(clip.get("file") or ""))
+        if not source.is_file():
+            return {"ok": False, "error": "片段音频不存在"}
+        _start, _end, duration = self._clip_span(clip)
+        if duration < self._MIN_MIDI_SECONDS:
+            return {
+                "ok": False,
+                "error": f"片段过短：至少 {self._MIN_MIDI_SECONDS:.2f} 秒才能试听",
+            }
+        if notes is None:
+            sidecar = self._read_midi_sidecar(self._midi_path(project_id, clip_id)) or {}
+            notes = sidecar.get("notes")
+        cleaned = editor_midi.clean_notes(notes, duration)
+        if not cleaned:
+            return {"ok": False, "error": "没有 MIDI 音符可以试听"}
+        if not self._midi_pitch.available:
+            return {"ok": False, "error": "MIDI 音高重绘环境未就绪（需要 vocal 运行时）"}
+
+        folder = self._midi_dir(project_id)
+        preview_root = folder / "preview" / new_id("prev_")
+        preview_root.mkdir(parents=True, exist_ok=True)
+        f0_source = folder / f"{clip_id}_f0.npy"
+        if f0_source.is_file():
+            try:
+                shutil.copyfile(f0_source, preview_root / f"{clip_id}_f0.npy")
+            except OSError:
+                pass
+        updated, report = self._apply_notes_to_clip(
+            clip,
+            cleaned,
+            preview_root,
+            sample_rate=self._project_sample_rate(project),
+        )
+        if updated is None:
+            return {"ok": False, **report}
+        output = Path(str(updated.get("file") or ""))
+        if not output.is_file():
+            return {"ok": False, "error": "试听音频生成失败"}
+        return {
+            "ok": True,
+            "audio": self._store.audio_data_uri(output, exact=True),
+            "audio_path": str(output),
+            "duration": round(duration, 3),
+            "report": report,
         }
 
     # ---- MIDI 子编辑器：轨道范围与音频重绘 ----
@@ -4017,8 +4082,11 @@ class AudioEditorService:
         track_id: str,
         session: Any = None,
         options: dict[str, Any] | None = None,
+        progress: Callable[[int, str], None] | None = None,
     ) -> dict[str, Any]:
         """把编曲渲染成音频：分乐器各生成一条音轨，或混成一条落到当前轨道。"""
+        report = progress or (lambda _value, _message: None)
+        report(2, "读取编曲")
         project = self._repo.get(project_id)
         if not project:
             return {"ok": False, "error": "工程不存在"}
@@ -4058,12 +4126,22 @@ class AudioEditorService:
         created_tracks: list[dict[str, Any]] = []
         try:
             if mode == "mix":
-                samples = midi_synth.render_session(cleaned, sample_rate=sample_rate)
+                report(6, "合成音频")
+                samples = midi_synth.render_session(
+                    cleaned,
+                    sample_rate=sample_rate,
+                    progress=(
+                        lambda fraction: report(6 + int(72 * fraction), "合成音频")
+                    )
+                    if progress
+                    else None,
+                )
                 if getattr(samples, "size", 0) <= 0:
                     return {"ok": False, "error": "渲染结果为空"}
                 output = folder / f"{track_id}_mix_{key}.wav"
                 if not midi_synth.write_wav(output, samples, sample_rate):
                     return {"ok": False, "error": "渲染音频写入失败"}
+                report(82, "写入音频文件")
                 length = round(samples.shape[0] / float(sample_rate), 3)
                 clip = self._midi_render_clip(
                     output,
@@ -4098,12 +4176,28 @@ class AudioEditorService:
                         and str(item["metadata"].get("midi_render_source") or "") == track_id
                     )
                 ]
-                for part in audible:
+                total_parts = max(1, len(audible))
+                for part_index, part in enumerate(audible):
+                    report(
+                        6 + int(80 * part_index / total_parts),
+                        f"渲染声部 {part_index + 1}/{total_parts}",
+                    )
                     bounds = midi_session_model.part_note_bounds(part)
                     if not bounds:
                         continue
                     samples = midi_synth.render_part(
-                        cleaned, part, sample_rate=sample_rate, window=bounds
+                        cleaned,
+                        part,
+                        sample_rate=sample_rate,
+                        window=bounds,
+                        progress=(
+                            lambda fraction, _index=part_index: report(
+                                6 + int(80 * (_index + fraction) / total_parts),
+                                f"渲染声部 {_index + 1}/{total_parts}",
+                            )
+                        )
+                        if progress
+                        else None,
                     )
                     if getattr(samples, "size", 0) <= 0:
                         continue
@@ -4148,6 +4242,7 @@ class AudioEditorService:
                 insert_at = len(next_project.get("tracks") or [])
                 for offset, created in enumerate(created_tracks):
                     next_project["tracks"].insert(insert_at + offset, created)
+                report(88, "整理音轨")
         except (OSError, ValueError, MemoryError) as exc:
             return {"ok": False, "error": f"渲染失败：{exc}"}
 
@@ -4166,7 +4261,9 @@ class AudioEditorService:
         next_track["metadata"] = meta
         next_project["waveform_cache"] = {}
         self._write_compose_session(project_id, track_id, cleaned)
+        report(94, "保存工程")
         saved = self.save(next_project, push_history=True)
+        report(100, "渲染完成")
         return {
             "ok": True,
             "project": saved,
@@ -4182,6 +4279,111 @@ class AudioEditorService:
                 "sample_rate": sample_rate,
             },
         }
+
+    _MIDI_RENDER_JOB_LIMIT = 20
+    _MIDI_RENDER_JOB_TTL = 3600.0
+
+    def start_midi_render(
+        self,
+        project_id: str,
+        track_id: str,
+        session: Any = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """后台渲染 MIDI 编曲；立即返回 job_id，前端轮询 midi_render_status。"""
+        jobs: dict[str, dict[str, Any]] = self.__dict__.setdefault(
+            "_midi_render_jobs", {}
+        )
+        lock: threading.RLock = self.__dict__.setdefault(
+            "_midi_render_jobs_lock", threading.RLock()
+        )
+        job_id = f"mrender_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+        state: dict[str, Any] = {
+            "id": job_id,
+            "project_id": project_id,
+            "track_id": track_id,
+            "status": "queued",
+            "progress": 0,
+            "message": "等待开始",
+            "result": None,
+            "error": None,
+            "started_at": time.time(),
+            "updated_at": time.time(),
+        }
+        with lock:
+            self._prune_midi_render_jobs_locked(jobs)
+            jobs[job_id] = state
+
+        def update(value: int, message: str) -> None:
+            with lock:
+                current = jobs.get(job_id)
+                if current is None:
+                    return
+                current["progress"] = max(0, min(100, int(value)))
+                current["message"] = message
+                current["updated_at"] = time.time()
+
+        def finish(**fields: Any) -> None:
+            with lock:
+                current = jobs.get(job_id)
+                if current is not None:
+                    current.update(fields)
+                    current["updated_at"] = time.time()
+
+        def worker() -> None:
+            update(1, "准备渲染")
+            try:
+                result = self.render_midi_session(
+                    project_id, track_id, session, options, progress=update
+                )
+                ok = bool(result.get("ok"))
+                finish(
+                    result=result,
+                    status="done" if ok else "error",
+                    error=result.get("error"),
+                    message="渲染完成" if ok else str(result.get("error") or "渲染失败"),
+                )
+                if ok:
+                    finish(progress=100)
+            except Exception as exc:  # noqa: BLE001
+                finish(status="error", error=str(exc), message="渲染失败")
+
+        threading.Thread(
+            target=worker,
+            name=f"editor-midi-render-{job_id}",
+            daemon=True,
+        ).start()
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "status": "queued",
+            "progress": 0,
+            "message": "等待开始",
+        }
+
+    def _prune_midi_render_jobs_locked(self, jobs: dict[str, dict[str, Any]]) -> None:
+        now = time.time()
+        for key, job in list(jobs.items()):
+            if (
+                job.get("status") in {"done", "error"}
+                and now - float(job.get("updated_at") or 0) > self._MIDI_RENDER_JOB_TTL
+            ):
+                jobs.pop(key, None)
+        while len(jobs) >= self._MIDI_RENDER_JOB_LIMIT:
+            oldest = min(
+                jobs.items(),
+                key=lambda item: float(item[1].get("started_at") or 0),
+            )[0]
+            jobs.pop(oldest, None)
+
+    def midi_render_status(self, job_id: str) -> dict[str, Any] | None:
+        jobs = self.__dict__.get("_midi_render_jobs") or {}
+        lock = self.__dict__.get("_midi_render_jobs_lock")
+        if lock is None:
+            return copy.deepcopy(jobs.get(job_id)) if job_id in jobs else None
+        with lock:
+            state = jobs.get(job_id)
+            return copy.deepcopy(state) if state else None
 
     @staticmethod
     def _midi_render_clip(

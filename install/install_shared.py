@@ -93,7 +93,11 @@ def _resolve_root(raw: str | None) -> Path:
 
 def _run_shared(args: argparse.Namespace, impl) -> int:
     root = _resolve_root(args.root)
-    impl._derive_paths(root)
+    try:
+        impl._derive_paths(root)
+    except (OSError, RuntimeError) as exc:
+        print(impl.c("r", str(exc)))
+        return 1
 
     detected = impl.detect_gpu_stack()
     if args.cu128:
@@ -131,6 +135,7 @@ def _run_shared(args: argparse.Namespace, impl) -> int:
 
     impl.hr("XB-SVCB 共享运行时安装器")
     print(f"安装根目录: {impl.ROOT}")
+    impl.report_storage_layout()
     print(
         "安装模式: CUDA · "
         + ("Blackwell/50系 (cu128 + torch2.7.1)" if stack == "cu128"

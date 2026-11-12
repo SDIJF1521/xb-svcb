@@ -1216,6 +1216,15 @@ class Api:
     ) -> dict[str, Any]:
         return self._editor.apply_clip_midi(project_id, clip_id, notes, options or {})
 
+    def preview_editor_clip_midi(
+        self,
+        project_id: str,
+        clip_id: str,
+        notes: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """试听：按当前音符重绘片段音频，返回可直接播放的 audio data URI。"""
+        return self._editor.preview_clip_midi(project_id, clip_id, notes)
+
     def get_editor_track_midi(
         self,
         project_id: str,
@@ -1267,6 +1276,22 @@ class Api:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._editor.render_midi_session(project_id, track_id, session, options or {})
+
+    def start_editor_midi_render(
+        self,
+        project_id: str,
+        track_id: str,
+        session: dict[str, Any] | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """后台渲染 MIDI 编曲；立即返回 job_id，前端用 editor_midi_render_status 轮询。"""
+        return self._editor.start_midi_render(project_id, track_id, session, options or {})
+
+    def editor_midi_render_status(self, job_id: str = "") -> dict[str, Any]:
+        state = self._editor.midi_render_status(job_id)
+        if not state:
+            return {"ok": False, "error": "渲染任务不存在或已过期"}
+        return {"ok": True, **state}
 
     def preview_editor_midi_session(
         self,

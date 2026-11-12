@@ -232,3 +232,22 @@ describe('realtime model selection during initialization', () => {
     expect(selectedNames(wrapper)).toEqual(['Manual'])
   })
 })
+
+describe('realtime live latency controls', () => {
+  it('uses short system blocks and switches to the direct vocal profile', async () => {
+    const wrapper = mountPage(RealtimeCoverPage)
+    await flushPromises()
+
+    const chunk = wrapper.get('[data-test="chunk-seconds"]')
+    expect((chunk.element as HTMLInputElement).min).toBe('0.5')
+    expect((chunk.element as HTMLInputElement).value).toBe('1.5')
+
+    const direct = wrapper.findAll('button').find((button) => button.text().includes('纯人声'))
+    if (!direct) throw new Error('Missing direct vocal mode button')
+    await direct.trigger('click')
+
+    expect((chunk.element as HTMLInputElement).min).toBe('0.25')
+    expect((chunk.element as HTMLInputElement).value).toBe('0.5')
+    expect(wrapper.get('[data-test="system-prebuffer"]')).toBeTruthy()
+  })
+})

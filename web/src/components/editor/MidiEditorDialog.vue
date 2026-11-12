@@ -430,6 +430,13 @@
         </div>
       </div>
 
+      <div v-if="renderProgress" class="midi-render-progress">
+        <div class="midi-render-bar">
+          <i :style="{ width: `${renderPercent}%` }"></i>
+        </div>
+        <span>{{ renderProgress.message || t('渲染中…') }} · {{ renderPercent }}%</span>
+      </div>
+
       <footer class="midi-foot">
         <div class="midi-selected">
           <template v-if="selection.length > 1">
@@ -474,8 +481,13 @@
             <button class="ghost" :disabled="loading || applying || !draft.length" @click="emitSave">
               {{ t('保存音符') }}
             </button>
-            <button class="ghost" :disabled="loading || !canPreview" :title="previewHint" @click="emitPreview">
-              {{ t('试听音频') }}
+            <button
+              class="ghost"
+              :disabled="loading || previewLoading || !canPreview"
+              :title="previewHint"
+              @click="requestPreview"
+            >
+              {{ previewLoading ? t('渲染试听…') : t('试听音频') }}
             </button>
             <button
               class="primary"
@@ -517,7 +529,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { ElMessage } from 'element-plus'
 
 import { api } from '@/api'
-import { translateUiText } from '@/i18n'
+import { translateUiText, useI18n } from '@/i18n'
 import type {
   EditorMidiInstrument,
   EditorMidiInstrumentFamily,
@@ -598,6 +610,12 @@ import {
 } from '@/utils/midi'
 
 const t = translateUiText
+const { locale } = useI18n()
+
+/** 乐器/音色族名称：中文用中文名，英文/日文优先用英文名（数据里已有 name_en）。 */
+function localizeName(zh: string, en: string): string {
+  return locale.value === 'zh-CN' ? zh || en : en || zh
+}
 
 /** 声部名是不是默认名（空 / 「旋律」/「架子鼓」/「声部 N」等，含本地化后的写法）。 */
 function isDefaultPartName(name: string): boolean {
@@ -647,6 +665,7 @@ const props = withDefaults(
     composeError?: string
     previewUrl?: string
     previewLoading?: boolean
+    renderProgress?: { percent: number; message: string } | null
   }>(),
   {
     mode: 'compose',
@@ -674,6 +693,7 @@ const props = withDefaults(
     composeError: '',
     previewUrl: '',
     previewLoading: false,
+    renderProgress: null,
   },
 )
 
@@ -683,7 +703,8 @@ const emit = defineEmits<{
   save: [notes: MidiNote[]]
   apply: [notes: MidiNote[]]
   refresh: []
-  preview: []
+  preview: [notes: MidiNote[]]
+  seek: [seconds: number]
   'save-session': [session: MidiSession]
   'render-session': [session: MidiSession, mode: 'tracks' | 'mix']
   'export-session': [session: MidiSession]
@@ -760,7 +781,7 @@ let resizeObserver: ResizeObserver | null = null
 let drawHandle = 0
 let rafPlayhead = 0
 const drag = ref<{
-  mode: 'move' | 'start' | 'end' | 'marquee' | 'create' | 'velocity' | 'erase'
+  mode: 'move' | 'start' | 'end' | 'marquee' | 'create' | 'velocity' | 'erase' | 'seek'
   originX: number
   originY: number
   baseAll: MidiNote[]
@@ -790,6 +811,10 @@ const busyText = computed(() => {
   return t('正在处理…')
 })
 const errorText = computed(() => (isCompose.value ? props.composeError : props.error))
+const renderPercent = computed(() => {
+  const value = Number(props.renderProgress?.percent ?? 0)
+  return Math.max(1, Math.min(100, Math.round(Number.isFinite(value) ? value : 0)))
+})
 // 用户手动填写的时间轴长度（秒）；0 表示自动（按工程/内容）。
 const durationSeconds = ref(0)
 const duration = computed(() => {
@@ -843,31 +868,43 @@ const signatureOptions = TIME_SIGNATURE_CHOICES.map((item) => ({
  * 无论走哪条路径，显示的都是具体乐器名（不会出现「钢琴 1」这种编号占位）。
  */
 const instrumentGroups = computed(() => {
-  const names = new Map<number, string>()
-  for (const item of GM_INSTRUMENTS) names.set(item.program, item.name_zh)
+  const names = new Map<number, { zh: string; en: string }>()
+  for (const item of GM_INSTRUMENTS) {
+    names.set(item.program, { zh: item.name_zh, en: item.name_en })
+  }
   for (const item of props.instruments || []) {
-    if (Number.isFinite(item.program)) names.set(item.program, item.name_zh || item.name_en)
+    if (Number.isFinite(item.program)) {
+      names.set(item.program, {
+        zh: item.name_zh || item.name_en,
+        en: item.name_en || item.name_zh,
+      })
+    }
   }
   const families = props.families?.length
     ? props.families.map((family) => ({
         id: family.id,
-        label: family.name_zh || family.name_en,
+        zh: family.name_zh || family.name_en,
+        en: family.name_en || family.name_zh,
         programs: family.programs || [],
       }))
     : GM_FAMILIES.map((family) => ({
         id: family.id,
-        label: family.name,
+        zh: family.name,
+        en: family.name_en,
         programs: family.programs,
       }))
   return families
     .map((family) => ({
       id: family.id,
-      label: family.label,
+      label: localizeName(family.zh, family.en),
       options: family.programs
-        .map((program) => ({
-          program,
-          name: names.get(program) || instrumentName(program),
-        }))
+        .map((program) => {
+          const entry = names.get(program)
+          return {
+            program,
+            name: entry ? localizeName(entry.zh, entry.en) : instrumentName(program),
+          }
+        })
         .filter((item) => Number.isFinite(item.program)),
     }))
     .filter((family) => family.options.length > 0)
@@ -918,12 +955,17 @@ const previewTitle = computed(() => {
   if (props.previewLoading) return t('正在渲染试听…')
   return hasContent.value ? t('用内置乐器渲染并播放') : t('还没有音符')
 })
-const playing = computed(() => (isCompose.value ? playingState.value : props.playing))
+const playing = computed(() => (isCompose.value ? playingState.value : props.playing || playingState.value))
 const transportLabel = computed(() => {
-  if (isCompose.value && props.previewLoading) return t('渲染试听…')
+  if (props.previewLoading) return t('渲染试听…')
   return playing.value ? t('⏸ 暂停') : t('▶ 试听')
 })
-const playheadSeconds = computed(() => (isCompose.value ? previewTime.value : props.playhead))
+const playheadSeconds = computed(() => {
+  if (isCompose.value) return previewTime.value
+  // 演唱音准模式：一旦有本地试听音频，就显示它自己的播放位置。
+  if (props.previewUrl) return previewTime.value
+  return props.playhead
+})
 const clockLabel = computed(() => {
   const seconds = Math.max(0, playheadSeconds.value)
   if (isCompose.value) {
@@ -1110,7 +1152,7 @@ function formatGrid(value: number) {
 }
 
 function noteLabel(pitch: number) {
-  return drumMode.value ? drumName(pitch) : noteName(pitch)
+  return drumMode.value ? t(drumName(pitch)) : noteName(pitch)
 }
 
 /* ---------------------------------------------------------------- 点击试听（WebAudio 提示音） */
@@ -1228,7 +1270,9 @@ function playDrumBlip(pitch: number, velocity = 110) {
 
 function instrumentLabel(program: number) {
   const found = (props.instruments || []).find((item) => item.program === program)
-  return found?.name_zh || instrumentName(program)
+  if (found) return localizeName(found.name_zh, found.name_en)
+  const item = GM_INSTRUMENTS[clampProgram(program)]
+  return item ? localizeName(item.name_zh, item.name_en) : instrumentName(program)
 }
 
 /* ---------------------------------------------------------------- 视口与缩放 */
@@ -2009,10 +2053,6 @@ function emitApply() {
   emit('apply', normalizeNotes(draft.value, duration.value))
 }
 
-function emitPreview() {
-  emit('preview')
-}
-
 function emitSaveSession() {
   busyAction.value = 'save'
   emit('save-session', normalizeSession(session.value, duration.value))
@@ -2028,6 +2068,7 @@ function emitExport() {
 }
 
 function requestPreview() {
+  if (props.previewLoading) return
   busyAction.value = 'preview'
   previewPending.value = true
   if (props.previewUrl && !previewStale.value) {
@@ -2035,7 +2076,11 @@ function requestPreview() {
     void playPreview()
     return
   }
-  emit('preview-session', normalizeSession(session.value, duration.value))
+  if (isCompose.value) {
+    emit('preview-session', normalizeSession(session.value, duration.value))
+    return
+  }
+  emit('preview', draft.value.slice())
 }
 
 const previewStale = ref(true)
@@ -2080,10 +2125,6 @@ async function playPreview() {
 }
 
 function togglePlay() {
-  if (!isCompose.value) {
-    emitPreview()
-    return
-  }
   if (playingState.value) {
     audioEl.value?.pause()
     return
@@ -2376,7 +2417,7 @@ function drawKeys() {
         context.fillStyle = piece.group === 'kick' ? '#1c2a3a' : '#3a4356'
         context.font = '10px ui-sans-serif, system-ui'
         context.textBaseline = 'middle'
-        context.fillText(piece.name_zh, 6, y + rowHeight.value / 2)
+        context.fillText(t(piece.name_zh), 6, y + rowHeight.value / 2)
       } else {
         context.fillStyle = '#243044'
         context.fillRect(KEY_WIDTH - 8, y + rowHeight.value / 2, 2, 1)
@@ -2545,7 +2586,7 @@ function drawGrid() {
           context.fillStyle = 'rgba(4,10,18,0.82)'
           context.font = '9px ui-sans-serif, system-ui'
           context.fillText(
-            part.drum ? drumName(note.pitch) : noteName(note.pitch),
+            part.drum ? t(drumName(note.pitch)) : noteName(note.pitch),
             x + 3,
             y + rect.height / 2,
           )
@@ -2846,10 +2887,21 @@ function onPointerDown(event: PointerEvent) {
   hideContextMenu()
   const point = canvasPoint(event)
   if (point.vy < RULER_HEIGHT) {
-    // 刻度尺：点一下把播放头移过去
+    // 刻度尺：按下并拖动可以连续移动播放头。
     const target = timeOf(point.x)
     cursorTime.value = target
     seek(target)
+    drag.value = {
+      mode: 'seek',
+      originX: point.x,
+      originY: point.y,
+      baseAll: [],
+      baseSession: null,
+      partId: '',
+      ids: [],
+    }
+    ;(event.target as HTMLCanvasElement).setPointerCapture?.(event.pointerId)
+    event.preventDefault()
     return
   }
   cursorTime.value = timeOf(point.x)
@@ -2979,7 +3031,10 @@ function seek(seconds: number) {
   const el = audioEl.value
   if (el && el.src) {
     el.currentTime = Math.min(target, Math.max(0, (el.duration || target) - 0.001))
+    return
   }
+  // 还没有本地试听音频时，拖播放头同步到主编辑器播放器。
+  if (!isCompose.value) emit('seek', target)
 }
 
 function onPointerMove(event: PointerEvent) {
@@ -3005,6 +3060,12 @@ function onPointerMove(event: PointerEvent) {
       canvas.style.cursor =
         currentTool.value === 'erase' ? 'not-allowed' : point.vy < RULER_HEIGHT ? 'pointer' : 'crosshair'
     }
+    return
+  }
+  if (current.mode === 'seek') {
+    const target = timeOf(point.x)
+    cursorTime.value = target
+    seek(target)
     return
   }
   if (current.mode === 'erase') {
@@ -3140,6 +3201,11 @@ function onPointerUp(event: PointerEvent) {
   const current = drag.value
   if (!current) return
   ;(event.target as HTMLCanvasElement).releasePointerCapture?.(event.pointerId)
+  if (current.mode === 'seek') {
+    drag.value = null
+    scheduleDraw()
+    return
+  }
   if (current.mode === 'marquee' && current.marqueeStart && current.marqueeEnd) {
     const left = Math.min(current.marqueeStart.x, current.marqueeEnd.x)
     const right = Math.max(current.marqueeStart.x, current.marqueeEnd.x)
@@ -3918,6 +3984,32 @@ function menuRedo() {
   height: 1px;
   margin: 4px 6px;
   background: rgba(120, 180, 255, 0.18);
+}
+
+.midi-render-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 2px;
+  font-size: 12px;
+  color: var(--muted, #8b93a7);
+}
+
+.midi-render-bar {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.midi-render-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6ee7b7, #38bdf8);
+  transition: width 0.18s ease-out;
 }
 
 .midi-foot {

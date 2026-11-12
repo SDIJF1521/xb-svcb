@@ -18,10 +18,19 @@
             <button :class="{ active: inputMode === 'file' }" :disabled="sessionActive" @click="setInputMode('file')">歌曲文件实时播放</button>
           </div>
           <div v-if="inputMode === 'system'" class="system-audio-setup">
-            <p class="system-audio-note">QQ 音乐保持原始歌曲（含人声和伴奏），把播放设备切换到虚拟音频线；应用从回环读取混合信号，自动分离人声后只替换人声，伴奏由原始信号恢复。</p>
-            <label class="select-field"><span>系统混合音频输入</span><select v-model="systemInputId" :disabled="sessionActive"><option value="">选择承载 QQ 音乐的回环/虚拟线路</option><option v-for="device in systemInputDevices" :key="device.id" :value="device.id">{{ device.name }}</option></select></label>
+            <div class="source-mode vocal-mode" role="group" aria-label="系统音频变声模式">
+              <button :class="{ active: vocalMode === 'separate' }" :disabled="sessionActive" @click="setVocalMode('separate')">混合音频 · 保留伴奏</button>
+              <button :class="{ active: vocalMode === 'direct' }" :disabled="sessionActive" @click="setVocalMode('direct')">纯人声 · 直播低延迟</button>
+            </div>
+            <p class="system-audio-note">
+              {{ vocalMode === 'direct'
+                ? '跳过 UVR 人声分离，直接把麦克风或已分离的人声送入 RVC/SeedVC，延迟最低。直播时把输出设备选为虚拟音频线，避免扬声器回授。'
+                : 'QQ 音乐保持原始歌曲，把播放设备切换到虚拟音频线；应用从回环读取混合信号，自动分离人声后只替换人声，伴奏由原始信号恢复。' }}
+            </p>
+            <label class="select-field"><span>{{ vocalMode === 'direct' ? '人声输入设备' : '系统混合音频输入' }}</span><select v-model="systemInputId" :disabled="sessionActive"><option value="">{{ vocalMode === 'direct' ? '选择麦克风或虚拟音频线' : '选择承载 QQ 音乐的回环/虚拟线路' }}</option><option v-for="device in inputDeviceOptions" :key="device.id" :value="device.id">{{ device.name }}</option></select></label>
             <label class="select-field"><span>变声输出设备</span><select v-model="systemOutputId" :disabled="sessionActive"><option value="">选择扬声器或耳机</option><option v-for="device in systemOutputDevices" :key="device.id" :value="device.id">{{ device.name }}</option></select></label>
             <button class="refresh-devices" :disabled="sessionActive" @click="loadSystemDevices"><el-icon><Refresh /></el-icon>刷新设备</button>
+            <p class="system-audio-note virtual-output-note">VB-CABLE：输入用麦克风时，输出可直接选“CABLE Output”；应用会自动写入同一条虚拟线的 CABLE Input，OBS/语音软件仍选择 CABLE Output 接收。</p>
           </div>
           <button
             v-if="inputMode === 'file' && !song"
@@ -138,11 +147,11 @@
             </div>
             <div class="pitch-guard-grid">
               <label class="toggle-field">
-                <input v-model="paramsFor(id).autoHighPitchGuard" type="checkbox" :disabled="sessionActive" />
-                <span><b>自动高音保护</b><small>高音先保共振峰降调，翻唱后升回原调</small></span>
+                <input v-model="paramsFor(id).autoHighPitchGuard" type="checkbox" :disabled="sessionActive || pitchGuardDisabled" />
+                <span><b>自动高音保护</b><small>{{ pitchGuardDisabled ? '直播低延迟模式关闭逐块高音重试' : '高音先保共振峰降调，翻唱后升回原调' }}</small></span>
               </label>
             </div>
-            <label v-if="manualParamsEnabled && paramsFor(id).autoHighPitchGuard" class="range-row threshold-row">
+            <label v-if="manualParamsEnabled && paramsFor(id).autoHighPitchGuard && !pitchGuardDisabled" class="range-row threshold-row">
               <span>高音保护轮次 <b>{{ paramsFor(id).highPitchGuardRounds }} 轮</b></span>
               <input v-model.number="paramsFor(id).highPitchGuardRounds" type="range" min="0" max="8" step="1" :disabled="sessionActive || !manualParamsEnabled" />
             </label>
@@ -158,18 +167,41 @@
           <div class="card-head"><span class="step-no">03</span><h2>实时参数</h2></div>
           <div class="control-grid">
             <label v-if="inputMode === 'file'" class="control"><span>输出缓冲 <b>{{ bufferSeconds }} 秒</b></span><input v-model.number="bufferSeconds" type="range" min="8" max="60" step="2" :disabled="sessionActive" /></label>
-            <label class="control"><span>转换块 <b>{{ chunkSeconds }} 秒</b></span><input v-model.number="chunkSeconds" type="range" :min="inputMode === 'system' ? 4 : 4" :max="inputMode === 'system' ? 12 : 12" :step="inputMode === 'system' ? 2 : 1" :disabled="sessionActive" /></label>
+            <label class="control"><span>转换块 <b>{{ chunkLabel }}</b></span><input v-model.number="chunkSeconds" data-test="chunk-seconds" type="range" :min="chunkMin" :max="chunkMax" :step="chunkStep" :disabled="sessionActive" /></label>
+            <label v-if="inputMode === 'system'" class="control"><span>播放缓冲 <b>{{ bufferLabel }}</b></span><input v-model.number="systemPrebuffer" data-test="system-prebuffer" type="range" min="1" max="3" step="1" :disabled="sessionActive" /></label>
             <label class="control"><span>转换人声 <b>{{ signedDb(vocalGain) }}</b></span><input v-model.number="vocalGain" type="range" min="-12" max="6" step="0.5" :disabled="sessionActive" /></label>
             <label v-if="inputMode === 'file'" class="control"><span>伴奏 <b>{{ signedDb(musicGain) }}</b></span><input v-model.number="musicGain" type="range" min="-12" max="6" step="0.5" :disabled="sessionActive" /></label>
-            <div v-else class="direct-music"><el-icon><Connection /></el-icon><span><b>原始伴奏保持不变</b><small>从同一混合音频扣除提取的人声，再与变声人声按样本时钟混合</small></span></div>
+            <div v-else class="direct-music"><el-icon><Connection /></el-icon><span><b>{{ vocalMode === 'direct' ? '纯人声输出' : '原始伴奏保持不变' }}</b><small>{{ vocalMode === 'direct' ? '不加载 UVR，转换结果直接送往输出设备' : '从同一混合音频扣除提取的人声，再与变声人声按样本时钟混合' }}</small></span></div>
           </div>
-          <div class="select-grid realtime-selects">
-            <label class="select-field">
-              <span>人声分离模型</span>
-                <select v-model="uvrModel" :disabled="sessionActive">
+          <p v-if="inputMode === 'system'" class="latency-note">{{ latencyHint }}</p>
+          <div v-if="inputMode === 'file' || vocalMode === 'separate'" class="separation-picker">
+            <div class="separation-parent">
+              <span class="separation-label">人声分离引擎</span>
+              <span class="separation-hint">PyMSS 质量更高；UVR 兼容现有模型</span>
+            </div>
+            <div class="source-mode separation-engines">
+              <button :class="{ active: separatorEngine === 'uvr' }" :disabled="sessionActive" @click="separatorEngine = 'uvr'">UVR</button>
+              <button :class="{ active: separatorEngine === 'pymss' }" :disabled="sessionActive" @click="separatorEngine = 'pymss'">PyMSS</button>
+            </div>
+            <label v-if="separatorEngine === 'uvr'" class="select-field">
+              <span>UVR 模型</span>
+              <select v-model="uvrModel" :disabled="sessionActive">
                 <option v-for="model in uvrModels" :key="model" :value="model">{{ model }}</option>
               </select>
             </label>
+            <div v-else class="pymss-live-picker">
+              <label class="select-field">
+                <span>PyMSS 人声分离模型</span>
+                <select v-model="pymssModel" :disabled="sessionActive">
+                  <option v-if="!downloadedPymssModels.length" value="">请先在模型站下载 PyMSS 人声分离模型</option>
+                  <option v-for="model in downloadedPymssModels" :key="model.name" :value="model.name">{{ model.name }}</option>
+                </select>
+              </label>
+              <router-link to="/models?tab=pymss" class="text-action">打开模型站 <el-icon><Right /></el-icon></router-link>
+              <span class="preprocess-status" :class="{ ready: pymssStatus?.ok }">
+                <span class="state-dot"></span>{{ pymssStatus?.status || '正在检查 PyMSS 环境' }}
+              </span>
+            </div>
           </div>
         </section>
 
@@ -191,11 +223,19 @@
           </div>
           <div v-if="inputMode !== 'system'" class="buffer-track"><span :style="{ width: processPercent + '%' }"></span></div>
           <div v-if="inputMode === 'system'" class="system-performance">
-            <span>实时处理倍率</span>
-            <b :class="{ slow: (status.realtime_factor || 0) > 1 }">{{ status.realtime_factor ? `${status.realtime_factor.toFixed(2)}x` : '--' }}</b>
+            <span>端到端延迟</span>
+            <b :class="{ slow: (status.latency_ms || 0) > 800 }">{{ latencyLabel }}</b>
+          </div>
+          <div v-if="inputMode === 'system'" class="system-performance">
+            <span>处理负载</span>
+            <b :class="{ slow: (status.realtime_factor || 0) > 1 }">{{ loadLabel }}</b>
+          </div>
+          <div v-if="inputMode === 'system' && (status.dropped_seconds || 0) > 0.05" class="system-performance">
+            <span>为保证实时已丢弃</span>
+            <b class="slow">{{ (status.dropped_seconds || 0).toFixed(1) }}s</b>
           </div>
           <p class="monitor-message">{{ status.error || status.message || '配置完成后启动实时工程' }}</p>
-          <p v-if="inputMode === 'system' && !status.input_silent && (status.realtime_factor || 0) > 1" class="monitor-warning">当前模型处理速度低于输入速度，输出会产生延迟；请增大转换块或改用更快的推理设备。</p>
+          <p v-if="inputMode === 'system' && !status.input_silent && (status.realtime_factor || 0) > 1" class="monitor-warning">处理速度低于音频块时长，已自动丢弃过期音频以保持直播实时；请增大转换块、降低 UVR 负载或改用 GPU。</p>
 
           <div class="transport">
             <button class="round-btn" :disabled="!canTogglePlayback" :title="playing ? '暂停' : '继续'" @click="togglePlayback">
@@ -229,6 +269,8 @@ import {
   isDesktop,
   type DownloadedMusic,
   type InferenceParams,
+  type PymssModel,
+  type PymssStatus,
   type RealtimeCoverStatus,
 } from '@/api'
 import { useModelsStore } from '@/stores/models'
@@ -270,14 +312,28 @@ const downloaded = ref<DownloadedMusic[]>([])
 const selectedId = ref('')
 const systemInputId = ref('')
 const systemOutputId = ref('')
+const vocalMode = ref<'separate' | 'direct'>('separate')
 const systemInputDevices = ref<Array<{ id: string; name: string; kind: 'input' | 'output'; loopback?: boolean; system_mix?: boolean }>>([])
-const systemOutputDevices = ref<Array<{ id: string; name: string; kind: 'input' | 'output'; loopback?: boolean }>>([])
+const systemOutputDevices = ref<Array<{ id: string; name: string; kind: 'input' | 'output'; loopback?: boolean; virtual_capture?: boolean }>>([])
+const inputDeviceOptions = computed(() =>
+  vocalMode.value === 'direct'
+    ? systemInputDevices.value
+    : systemInputDevices.value.filter((device) => device.system_mix),
+)
 const modelParams = reactive<Record<string, LiveParams>>({})
 const manualParamsEnabled = ref(false)
 const uvrModels = ['MDX-Net', 'Demucs v4', 'VR Arch']
 const uvrModel = ref('MDX-Net')
+const separatorEngine = ref<'uvr' | 'pymss'>('uvr')
+const pymssModels = ref<PymssModel[]>([])
+const pymssModel = ref('')
+const pymssStatus = ref<PymssStatus | null>(null)
+const downloadedPymssModels = computed(() =>
+  pymssModels.value.filter((item) => item.purpose === 'vocal_separation' && item.downloaded),
+)
 const bufferSeconds = ref(8)
-const chunkSeconds = ref(8)
+const chunkSeconds = ref(1.5)
+const systemPrebuffer = ref(1)
 const vocalGain = ref(0)
 const musicGain = ref(0)
 const sessionId = ref('')
@@ -292,6 +348,11 @@ const canStart = computed(() => {
   if (!selectedId.value) return false
   if (inputMode.value === 'file' && !song.value) return false
   if (inputMode.value === 'system' && (!systemInputId.value || !systemOutputId.value)) return false
+  if (
+    (inputMode.value === 'file' || vocalMode.value === 'separate')
+    && separatorEngine.value === 'pymss'
+    && !pymssModel.value
+  ) return false
   return frameworkOf(selectedId.value) !== 'seed-vc' || Boolean(paramsFor(selectedId.value).referenceAudio)
 })
 const canTogglePlayback = computed(() => Boolean(audioContext) && ['ready', 'done'].includes(status.value.status))
@@ -303,12 +364,44 @@ const statusLabel = computed(() => {
     preparing: inputMode.value === 'system' ? '加载变声模型' : '分离音轨',
     buffering: '预缓冲',
     ready: playing.value ? '实时播放' : '缓冲就绪',
-    live: inputMode.value === 'system' ? '混合音频流式变声中' : '独立人声变声中',
+    live: inputMode.value === 'system'
+      ? (vocalMode.value === 'direct' ? '纯人声直播变声中' : '混合音频流式变声中')
+      : '独立人声变声中',
     done: playing.value ? '实时播放' : '转换完成',
     failed: '转换失败',
     stopped: '已停止',
   }
   return labels[status.value.status] || '待启动'
+})
+const chunkMin = computed(() => (
+  inputMode.value === 'file' ? 4 : (vocalMode.value === 'direct' ? 0.25 : 0.5)
+))
+const chunkMax = computed(() => (
+  inputMode.value === 'file' ? 12 : (vocalMode.value === 'direct' ? 2 : 4)
+))
+const chunkStep = computed(() => (
+  inputMode.value === 'file' ? 1 : (vocalMode.value === 'direct' ? 0.25 : 0.5)
+))
+const chunkLabel = computed(() => `${chunkSeconds.value.toFixed(2)} 秒`)
+const bufferLabel = computed(() => (
+  `${systemPrebuffer.value} 块 · ${(systemPrebuffer.value * chunkSeconds.value).toFixed(2)} 秒`
+))
+const pitchGuardDisabled = computed(() => (
+  inputMode.value === 'system'
+  && (vocalMode.value === 'direct' || chunkSeconds.value <= 0.75)
+))
+const latencyLabel = computed(() => (
+  status.value.latency_ms ? `${Math.round(status.value.latency_ms)} ms` : '--'
+))
+const loadLabel = computed(() => (
+  status.value.realtime_factor != null ? `${status.value.realtime_factor.toFixed(2)}x` : '--'
+))
+const latencyHint = computed(() => {
+  if (inputMode.value !== 'system') return ''
+  if (vocalMode.value === 'direct') {
+    return '直播低延迟：默认 0.5 秒块 + 1 块缓冲，约 0.6–1.2 秒；把转换块降到 0.25 秒可进一步接近 0.5 秒。'
+  }
+  return '混合音频：UVR 每块有固定开销，默认 1.5 秒块，约 2.5–4 秒；仍远低于旧的 8 秒块加双缓冲。'
 })
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -373,21 +466,72 @@ function setInputMode(mode: 'system' | 'file') {
   if (sessionActive.value) return
   inputMode.value = mode
   if (mode === 'system') {
-    chunkSeconds.value = Math.min(12, Math.max(4, chunkSeconds.value))
+    chunkSeconds.value = liveChunkSeconds()
   } else {
     bufferSeconds.value = Math.max(8, bufferSeconds.value)
     chunkSeconds.value = Math.max(4, chunkSeconds.value)
   }
 }
 
+function liveChunkSeconds() {
+  if (inputMode.value === 'file') return 8
+  const seedVc = frameworkOf(selectedId.value) === 'seed-vc'
+  if (vocalMode.value === 'direct') return seedVc ? 1 : 0.5
+  return seedVc ? 2 : 1.5
+}
+
+function setVocalMode(mode: 'separate' | 'direct') {
+  if (sessionActive.value) return
+  vocalMode.value = mode
+  systemPrebuffer.value = 1
+  chunkSeconds.value = liveChunkSeconds()
+}
+
+async function loadPymssModels() {
+  try {
+    pymssModels.value = await api.pymssModels(undefined, true)
+    const downloaded = downloadedPymssModels.value
+    if (!pymssModel.value || !downloaded.some((item) => item.name === pymssModel.value)) {
+      pymssModel.value = downloaded[0]?.name || ''
+    }
+    await refreshPymssStatus()
+  } catch {
+    pymssModels.value = []
+    pymssStatus.value = null
+  }
+}
+
+async function refreshPymssStatus() {
+  if (!pymssModel.value) {
+    pymssStatus.value = null
+    return
+  }
+  try {
+    pymssStatus.value = await api.pymssStatus(pymssModel.value)
+  } catch {
+    pymssStatus.value = null
+  }
+}
+
 async function loadSystemDevices() {
   try {
     const devices = await api.listSystemAudioDevices()
-    systemInputDevices.value = devices.filter((device) => device.kind === 'input' && device.system_mix)
+    systemInputDevices.value = devices.filter((device) => device.kind === 'input')
     systemOutputDevices.value = devices.filter((device) => device.kind === 'output')
-    if (!systemInputId.value) systemInputId.value = systemInputDevices.value[0]?.id || ''
-    if (!systemOutputId.value) systemOutputId.value = systemOutputDevices.value[0]?.id || ''
-    if (!systemInputDevices.value.length) ElMessage.warning('请把 QQ 音乐输出切换到虚拟音频线后再刷新设备')
+    const options = inputDeviceOptions.value
+    if (!systemInputId.value || !options.some((device) => device.id === systemInputId.value)) {
+      systemInputId.value = options[0]?.id || ''
+    }
+    if (!systemOutputId.value || !systemOutputDevices.value.some((device) => device.id === systemOutputId.value)) {
+      systemOutputId.value = systemOutputDevices.value[0]?.id || ''
+    }
+    if (!options.length) {
+      ElMessage.warning(
+        vocalMode.value === 'direct'
+          ? '请连接麦克风或虚拟音频线后再刷新设备'
+          : '请把 QQ 音乐输出切换到虚拟音频线后再刷新设备',
+      )
+    }
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '系统音频设备读取失败')
   }
@@ -463,6 +607,8 @@ function inferenceParams(id: string): InferenceParams {
     pitch: Math.round(effective.pitch),
     device: effective.device,
     uvr_model: uvrModel.value,
+    preprocess_engine: separatorEngine.value,
+    pymss_model: pymssModel.value,
     auto_high_pitch_guard: effective.autoHighPitchGuard,
     high_pitch_guard_rounds: Math.max(0, Math.min(8, Math.round(effective.highPitchGuardRounds ?? 3))),
     f0_filter_threshold: effective.f0FilterThreshold,
@@ -506,6 +652,12 @@ async function startSession() {
       params: inferenceParams(selectedId.value),
       chunk_seconds: chunkSeconds.value,
       buffer_seconds: bufferSeconds.value,
+      prebuffer_blocks: inputMode.value === 'system' ? systemPrebuffer.value : 1,
+      vocal_mode: inputMode.value === 'system' ? vocalMode.value : undefined,
+      separator_engine: separatorEngine.value,
+      pymss_model: separatorEngine.value === 'pymss' ? pymssModel.value : undefined,
+      uvr_model: uvrModel.value,
+      latency_mode: 'live' as const,
       vocal_gain_db: vocalGain.value,
       instrumental_gain_db: musicGain.value,
       input_device: systemInputId.value,
@@ -633,12 +785,29 @@ watch(realtimeModels, (items) => {
   if (!selectedId.value && items[0]) toggleModel(items[0].id)
 }, { immediate: true })
 
+watch(inputDeviceOptions, (items) => {
+  if (!items.some((device) => device.id === systemInputId.value)) {
+    systemInputId.value = items[0]?.id || ''
+  }
+})
+
+watch(selectedId, () => {
+  if (!sessionActive.value && inputMode.value === 'system') {
+    chunkSeconds.value = liveChunkSeconds()
+  }
+})
+
+watch(pymssModel, () => {
+  void refreshPymssStatus()
+})
+
 onMounted(async () => {
   await Promise.all([
     modelsStore.load(),
     systemStore.load(),
     api.listMusic().then((items) => { downloaded.value = items }),
   ])
+  void loadPymssModels()
   await loadSystemDevices()
 })
 
@@ -677,7 +846,20 @@ h1 { margin: 0; font-size: 30px; letter-spacing: 0; } .page-sub { margin: 8px 0 
 .system-performance b.slow, .monitor-warning { color: #ffae00; }
 .monitor-warning { margin: 6px 0 0; font-size: 12px; line-height: 1.5; }
 .system-audio-setup { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; margin-bottom: 14px; }
+.system-audio-setup .source-mode { grid-column: 1 / -1; margin-bottom: 0; }
+.latency-note { margin: 10px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.separation-picker { display: grid; gap: 9px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-color); }
+.separation-parent { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.separation-label { color: var(--text-primary); font-size: 13px; font-weight: 650; }
+.separation-hint { color: var(--text-muted); font-size: 11px; }
+.separation-engines { margin-bottom: 0; }
+.pymss-live-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; }
+.pymss-live-picker .text-action { color: var(--accent); font-size: 12px; }
+.pymss-live-picker .preprocess-status { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 11px; }
+.preprocess-status .state-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+.preprocess-status.ready .state-dot { background: #43d17c; }
 .system-audio-note { grid-column: 1 / -1; margin: 0; padding: 10px 12px; border-left: 2px solid #ffae00; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+.virtual-output-note { font-size: 11px; }
 .refresh-devices { height: 34px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; border: 1px solid var(--border-color); background: transparent; color: var(--text-muted); cursor: pointer; white-space: nowrap; }
 .source-library-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .source-item { min-width: 0; display: flex; align-items: center; gap: 8px; padding: 9px 10px; border: 1px solid var(--border-color); background: color-mix(in srgb, var(--xb-panel) 74%, transparent); color: inherit; text-align: left; cursor: pointer; }

@@ -8,6 +8,11 @@ rem ============================================================
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 chcp 65001 >nul
+rem The console runs at UTF-8. Child Python processes must match it: cmd decodes
+rem piped output (for /f) with the console code page, so an ANSI-encoded child
+rem mangles Chinese install paths and the uv discovery below fails.
+if not defined PYTHONUTF8 set "PYTHONUTF8=1"
+if not defined PYTHONIOENCODING set "PYTHONIOENCODING=utf-8"
 
 if exist "%~dp0installer_env.cmd" call "%~dp0installer_env.cmd"
 
@@ -25,6 +30,11 @@ if defined XB_WHEELHOUSE if not defined XB_WHEELHOUSE_STRICT set "XB_WHEELHOUSE_
 if not defined UV_LINK_MODE set "UV_LINK_MODE=copy"
 if not defined XB_UV_CACHE_DIR set "XB_UV_CACHE_DIR=%~dp0.tmp\uv-cache"
 set "UV_CACHE_DIR=%XB_UV_CACHE_DIR%"
+rem pip bootstraps uv with --user; that download must not fill the system drive.
+if not defined XB_PIP_CACHE_DIR set "XB_PIP_CACHE_DIR=%~dp0.tmp\pip-cache"
+set "PIP_CACHE_DIR=%XB_PIP_CACHE_DIR%"
+if not exist "%XB_UV_CACHE_DIR%" mkdir "%XB_UV_CACHE_DIR%" >nul 2>&1
+if not exist "%XB_PIP_CACHE_DIR%" mkdir "%XB_PIP_CACHE_DIR%" >nul 2>&1
 if not defined XB_RUNTIME_TEMP set "XB_RUNTIME_TEMP=%~dp0.tmp\runtime-temp"
 if not exist "%XB_RUNTIME_TEMP%" mkdir "%XB_RUNTIME_TEMP%" >nul 2>&1
 if not exist "%XB_RUNTIME_TEMP%" (
@@ -499,7 +509,9 @@ if exist "%USERPROFILE%\.local\bin\uv.exe" (
   exit /b 0
 )
 set "XB_UV_BIN="
-for /f "delims=" %%P in ('"%XB_PYTHON_EXE%" -c "import sysconfig; print(sysconfig.get_path('scripts') or '')" 2^>nul') do if not defined XB_UV_BIN set "XB_UV_BIN=%%P"
+rem Emit UTF-8 bytes explicitly: the console is at chcp 65001, while a plain
+rem print() would encode the path with the ANSI code page on a redirect.
+for /f "delims=" %%P in ('"%XB_PYTHON_EXE%" -c "import sys,sysconfig; sys.stdout.buffer.write((sysconfig.get_path('scripts') or '').encode('utf-8'))" 2^>nul') do if not defined XB_UV_BIN set "XB_UV_BIN=%%P"
 if defined XB_UV_BIN if exist "!XB_UV_BIN!\uv.exe" (
   set "XB_PYTHON_SCRIPTS=!XB_UV_BIN!"
   set "PATH=!XB_UV_BIN!;!PATH!"
@@ -507,7 +519,7 @@ if defined XB_UV_BIN if exist "!XB_UV_BIN!\uv.exe" (
   exit /b 0
 )
 set "XB_UV_BIN="
-for /f "delims=" %%P in ('"%XB_PYTHON_EXE%" -c "import sysconfig; print(sysconfig.get_path('scripts', scheme='nt_user') or '')" 2^>nul') do if not defined XB_UV_BIN set "XB_UV_BIN=%%P"
+for /f "delims=" %%P in ('"%XB_PYTHON_EXE%" -c "import sys,sysconfig; sys.stdout.buffer.write((sysconfig.get_path('scripts', scheme='nt_user') or '').encode('utf-8'))" 2^>nul') do if not defined XB_UV_BIN set "XB_UV_BIN=%%P"
 if defined XB_UV_BIN if exist "!XB_UV_BIN!\uv.exe" (
   set "XB_PYTHON_SCRIPTS=!XB_UV_BIN!"
   set "PATH=!XB_UV_BIN!;!PATH!"

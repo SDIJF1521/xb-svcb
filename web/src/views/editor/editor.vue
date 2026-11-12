@@ -79,11 +79,13 @@
       :compose-error="composeError"
       :preview-url="composePreviewUrl"
       :preview-loading="composePreviewLoading"
+      :render-progress="composeRenderProgress"
       @update:mode="switchMidiMode"
       @refresh="refreshMidiNotes"
       @save="saveMidiNotesFromDialog"
       @apply="applyMidiNotesToAudio"
       @preview="previewMidiAudio"
+      @seek="seekMidiPlayhead"
       @save-session="saveComposeSession"
       @render-session="renderComposeSession"
       @export-session="exportComposeSession"
@@ -1303,6 +1305,7 @@ import type {
   EditorMidiInstrument,
   EditorMidiInstrumentFamily,
   EditorMidiSession,
+  EditorMidiSessionResult,
   EditorProject,
   EditorRole,
   EditorTimelineTemplate,
@@ -4846,6 +4849,7 @@ const composeFamilies = ref<EditorMidiInstrumentFamily[]>([])
 const composeLoading = ref(false)
 const composeBusy = ref(false)
 const composeBusyAction = ref('')
+const composeRenderProgress = ref<{ percent: number; message: string } | null>(null)
 const composeError = ref('')
 const composePreviewUrl = ref('')
 const composePreviewLoading = ref(false)
@@ -4931,6 +4935,8 @@ async function loadActiveMidiMode() {
 async function switchMidiMode(mode: 'compose' | 'pitch') {
   if (mode === midiMode.value) return
   midiMode.value = mode
+  composePreviewUrl.value = ''
+  composePreviewLoading.value = false
   await loadActiveMidiMode()
 }
 
@@ -4999,10 +5005,34 @@ async function renderComposeSession(session: EditorMidiSession, mode: 'tracks' |
   if (!currentProject || !trackId || composeBusy.value) return
   composeBusy.value = true
   composeBusyAction.value = mode
+  composeRenderProgress.value = { percent: 1, message: '准备渲染' }
   composeError.value = ''
   try {
     await saveProject()
-    const result = await api.renderEditorMidiSession(currentProject.id, trackId, session, { mode })
+    const started = await api.startEditorMidiRender(currentProject.id, trackId, session, { mode })
+    if (!started?.ok || !started.job_id) {
+      throw new Error(started?.error || '无法启动 MIDI 渲染')
+    }
+    const jobId = started.job_id
+    const deadline = Date.now() + 10 * 60 * 1000
+    let result: EditorMidiSessionResult | null = null
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      const status = await api.editorMidiRenderStatus(jobId)
+      if (!status?.ok) throw new Error(status?.error || '渲染任务不存在或已过期')
+      composeRenderProgress.value = {
+        percent: Number(status.progress ?? 0),
+        message: status.message || '渲染中…',
+      }
+      if (status.status === 'done') {
+        result = status.result || null
+        break
+      }
+      if (status.status === 'error') {
+        throw new Error(status.error || status.message || '渲染失败')
+      }
+      if (Date.now() > deadline) throw new Error('渲染超时，请重试')
+    }
     if (!result?.ok) {
       composeError.value = translateUiText(result?.error || '渲染失败')
       ElMessage.error(composeError.value)
@@ -5023,6 +5053,7 @@ async function renderComposeSession(session: EditorMidiSession, mode: 'tracks' |
   } finally {
     composeBusy.value = false
     composeBusyAction.value = ''
+    composeRenderProgress.value = null
   }
 }
 
@@ -5201,12 +5232,26 @@ async function applyMidiNotesToAudio(notes: MidiNote[]) {
   }
 }
 
-function previewMidiAudio() {
+async function previewMidiAudio(notes?: MidiNote[]) {
   const currentProject = project.value
   if (!currentProject) return
   if (midiScope.value === 'clip') {
-    if (midiTrackId.value && midiTargetId.value) {
-      void playClip(midiTrackId.value, midiTargetId.value)
+    const clipId = midiTargetId.value
+    if (!currentProject || !clipId) return
+    composePreviewLoading.value = true
+    composePreviewUrl.value = ''
+    audioEl.value?.pause()
+    try {
+      const result = await api.previewEditorClipMidi(currentProject.id, clipId, notes || [])
+      if (!result?.ok || !result.audio) {
+        ElMessage.error(translateUiText(result?.error || '试听渲染失败'))
+        return
+      }
+      composePreviewUrl.value = result.audio
+    } catch (err) {
+      ElMessage.error(err instanceof Error ? translateUiText(err.message) : '试听渲染失败')
+    } finally {
+      composePreviewLoading.value = false
     }
     return
   }
@@ -5221,6 +5266,15 @@ function previewMidiAudio() {
     clips.find((clip) => playheadTime >= Number(clip.start) && playheadTime <= Number(clip.end)) ||
     clips[0]!
   void playClip(midiTargetId.value, hit.id)
+}
+
+function seekMidiPlayhead(seconds: number) {
+  const total = Number(project.value?.duration || 0)
+  const target = Math.max(0, total ? Math.min(seconds, total) : seconds)
+  playhead.value = target
+  if (audioEl.value && playbackMode.value === 'mix') {
+    audioEl.value.currentTime = Math.max(0, target)
+  }
 }
 
 function seekStart() {

@@ -1,7 +1,9 @@
 import os
 import sys
+import threading
 import traceback
 import logging
+from collections import OrderedDict
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,32 @@ sys.path.append(now_dir)
 bh, ah = signal.butter(N=5, Wn=48, btype="high", fs=16000)
 
 input_audio_path2wav = {}
+
+# Loading the FAISS index and reconstructing its feature matrix is a fixed
+# per-call cost in the official pipeline. Live voice conversion calls the
+# pipeline many times per second, so keep a few recently used indices.
+_INDEX_CACHE: "OrderedDict[tuple[str, int, int], tuple[object, np.ndarray]]" = OrderedDict()
+_INDEX_CACHE_LOCK = threading.Lock()
+_INDEX_CACHE_LIMIT = 1
+
+
+def _load_index_cached(file_index):
+    """Return ``(faiss_index, reconstructed_features)`` with a small LRU cache."""
+    path = os.path.abspath(str(file_index))
+    stat = os.stat(path)
+    key = (path, int(stat.st_mtime_ns), int(stat.st_size))
+    with _INDEX_CACHE_LOCK:
+        cached = _INDEX_CACHE.get(key)
+        if cached is not None:
+            _INDEX_CACHE.move_to_end(key)
+            return cached
+    index = faiss.read_index(path)
+    big_npy = index.reconstruct_n(0, index.ntotal)
+    with _INDEX_CACHE_LOCK:
+        _INDEX_CACHE[key] = (index, big_npy)
+        while len(_INDEX_CACHE) > _INDEX_CACHE_LIMIT:
+            _INDEX_CACHE.popitem(last=False)
+    return index, big_npy
 
 
 @lru_cache
@@ -73,13 +101,18 @@ class Pipeline(object):
         )
         self.sr = 16000  # hubert输入采样率
         self.window = 160  # 每帧点数
-        self.t_pad = self.sr * self.x_pad  # 每条前后pad时间
-        self.t_pad_tgt = tgt_sr * self.x_pad
-        self.t_pad2 = self.t_pad * 2
-        self.t_query = self.sr * self.x_query  # 查询切点前后查询时间
-        self.t_center = self.sr * self.x_center  # 查询切点位置
-        self.t_max = self.sr * self.x_max  # 免查询时长阈值
+        # ``x_pad`` may be fractional for the low-latency live profile, so
+        # every slicing value must be an integer sample/frame count.
+        self.t_pad = int(self.sr * self.x_pad)  # 每条前后pad时间
+        self.t_pad_tgt = int(tgt_sr * self.x_pad)
+        self.t_pad2 = int(self.t_pad * 2)
+        self.t_query = int(self.sr * self.x_query)  # 查询切点前后查询时间
+        self.t_center = int(self.sr * self.x_center)  # 查询切点位置
+        self.t_max = int(self.sr * self.x_max)  # 免查询时长阈值
         self.device = config.device
+        # Live sessions disable this; empty_cache() is a device-wide
+        # synchronization and dominates short-block latency.
+        self.empty_cache = True
 
     def get_f0(
         self,
@@ -271,7 +304,7 @@ class Pipeline(object):
             audio1 = (net_g.infer(*arg)[0][0, 0]).data.cpu().float().numpy()
             del hasp, arg
         del feats, p_len, padding_mask
-        if torch.cuda.is_available():
+        if self.empty_cache and torch.cuda.is_available():
             torch.cuda.empty_cache()
         t2 = ttime()
         times[0] += t1 - t0
@@ -307,10 +340,8 @@ class Pipeline(object):
             and index_rate != 0
         ):
             try:
-                index = faiss.read_index(file_index)
-                # big_npy = np.load(file_big_npy)
-                big_npy = index.reconstruct_n(0, index.ntotal)
-            except:
+                index, big_npy = _load_index_cached(file_index)
+            except Exception:
                 traceback.print_exc()
                 index = big_npy = None
         else:
@@ -452,6 +483,6 @@ class Pipeline(object):
             max_int16 /= audio_max
         audio_opt = (audio_opt * max_int16).astype(np.int16)
         del pitch, pitchf, sid
-        if torch.cuda.is_available():
+        if self.empty_cache and torch.cuda.is_available():
             torch.cuda.empty_cache()
         return audio_opt
