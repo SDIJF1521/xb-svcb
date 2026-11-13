@@ -1,6 +1,6 @@
 # XB-SVCB 应用本体
 
-版本：`0.1.0`
+版本：`0.1.1`
 
 这里是 XB-SVCB 的桌面应用壳、本地 API、应用服务、领域对象和基础设施适配层。
 
@@ -9,6 +9,13 @@
 - `app/main.py` 启动 pywebview 桌面壳。
 - `app/config.py` 提供应用元信息、路径与运行环境位置。
 - 重型 AI 依赖不打进应用本体。CUDA126/CUDA128 默认放入 `runtimes/core-*` 与 `runtimes/svc-*` 两层共享环境；ROCm 10 的 SVC/RVC/Vocal 共用 `runtimes/svc-rocm10`；CPU、DirectML 和其余 ROCm 组件使用隔离环境。实际解释器路由由 `runtime.json` 决定。
+
+## v0.1.1 版本说明
+
+- 音频编辑器新增 MIDI 子编辑器：音符级音高重绘、多乐器编曲、GM 鼓组真实采样与音高曲线编辑。
+- AI 翻唱工作台新增可视化自定义工作流；PyMSS 全功能接入；RVC 换回原始项目实现；高音保护补充高频带声码器重建。
+- 修复安装器在中文路径下因控制台编码导致安装失败的问题；DDD 分层与类型注解继续收束。
+- 详细更新内容见 [v0.1.1 更新说明](../docs/release-notes/release_notes_v0_1_1.md)。
 
 ## v0.1.0 版本说明
 

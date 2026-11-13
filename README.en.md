@@ -229,7 +229,7 @@ Current version: **v0.1.0**
 
 The core multi-framework inference workflow, timeline-based multi-singer covers, Audio Editor Lite, ModelScope model hub, FastAPI integration, CUDA / ROCm 10 / DirectML / CPU paths, and plugin runtime are available. Current priorities include automatic lyric recognition, improved automatic timelines, standardized model metadata, project import/export and autosave, more conversion frameworks, video and lyric-video export, and improved Intel GPU / CPU / multi-GPU scheduling.
 
-See the [release-notes directory](docs/release-notes/) for the full version history. The current release is available as [v0.1.0 release notes](docs/release-notes/release_notes_v0_1_0.en.md).
+See the [release-notes directory](docs/release-notes/) for the full version history. The current release is available as [v0.1.1 release notes](docs/release-notes/release_notes_v0_1_1.en.md).
 
 ## Contributors
 

@@ -344,9 +344,9 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 
 ## Roadmap
 
-当前版本：**v0.1.0**
+当前版本：**v0.1.1**
 
-完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.1.0 更新说明](docs/release-notes/release_notes_v0_1_0.md)。
+完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.1.1 更新说明](docs/release-notes/release_notes_v0_1_1.md)。
 
 ## 🤝 贡献者
 

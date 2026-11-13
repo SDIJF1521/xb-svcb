@@ -41,6 +41,7 @@
 
 全バージョンの履歴は[`docs/release-notes`](../release-notes/)にあります。v0.1.0以降のリリースノートは簡体字中国語、英語、日本語で公開します。
 
+- [v0.1.1](../release-notes/release_notes_v0_1_1.ja.md): MIDIサブエディターとピッチカーブ、カスタムワークフロー、リアルタイム変換とRVCスタックの更新、インストーラーの文字コード修正。
 - [v0.1.0](../release-notes/release_notes_v0_1_0.ja.md): 作成と推論、オーディオエディター、多言語UIとインストーラー、オンラインセットアップ、モデルリポジトリ変更。
 - [v0.0.32](../release-notes/release_notes_v032.md): Python 3.12、ROCm 10、DirectML推論の修正。
 - [v0.0.31](../release-notes/release_notes_v031.md): 共有ランタイム、初回ガイド、高音・ベルティングの安定性。

@@ -229,7 +229,7 @@ npm run build
 
 複数フレームワークでの推論、タイムライン式の複数歌手カバー、Audio Editor Lite、ModelScopeモデルハブ、FastAPI連携、CUDA / ROCm 10 / DirectML / CPU対応、プラグインランタイムは実装済みです。今後は歌詞の自動認識とタイムライン生成、モデルメタデータの標準化、プロジェクトの入出力と自動保存、対応フレームワークの追加、動画・歌詞動画の書き出し、Intel GPU / CPU / マルチGPUの最適化に取り組みます。
 
-全バージョンの履歴は[リリースノート](docs/release-notes/)を参照してください。現行版は[v0.1.0リリースノート](docs/release-notes/release_notes_v0_1_0.ja.md)で確認できます。
+全バージョンの履歴は[リリースノート](docs/release-notes/)を参照してください。現行版は[v0.1.1リリースノート](docs/release-notes/release_notes_v0_1_1.ja.md)で確認できます。
 
 ## コントリビューター
 
