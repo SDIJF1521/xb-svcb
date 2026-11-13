@@ -67,6 +67,95 @@ def clamp_detune(value: Any) -> float:
     return round(max(-MAX_DETUNE_CENTS, min(MAX_DETUNE_CENTS, detune)), 1)
 
 
+# ---- 音高曲线（OpenUtau 风格滑音 / 颤音）----
+# 控制点 ``{"t": 相对音符起点秒, "v": 相对音符音高的半音偏移}``；
+# 少于两个点视为「没有曲线」，避免把用户没画过的音符也塞一堆点。
+MAX_CURVE_POINTS = 256
+CURVE_SEMITONE_LIMIT = 12.0
+
+
+def clamp_curve(value: Any, span: float) -> list[dict[str, float]] | None:
+    """归一化音高曲线：裁到音符时长内、限幅、排序、限点数。"""
+    if not isinstance(value, list):
+        return None
+    try:
+        length = max(0.0, float(span or 0.0))
+    except (TypeError, ValueError):
+        length = 0.0
+    points: list[dict[str, float]] = []
+    for item in value[:MAX_CURVE_POINTS]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            t = float(item.get("t", 0.0))
+            v = float(item.get("v", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(t) or not math.isfinite(v):
+            continue
+        points.append(
+            {
+                "t": round(max(0.0, min(length, t)), 3),
+                "v": round(max(-CURVE_SEMITONE_LIMIT, min(CURVE_SEMITONE_LIMIT, v)), 3),
+            }
+        )
+    if len(points) < 2:
+        return None
+    points.sort(key=lambda point: point["t"])
+    # 时间必须严格递增：同一时刻只保留最后一个，避免曲线上出现垂直跳变。
+    deduped: list[dict[str, float]] = []
+    for point in points:
+        if deduped and abs(point["t"] - deduped[-1]["t"]) < 1e-6:
+            deduped[-1] = point
+        else:
+            deduped.append(point)
+    if len(deduped) < 2:
+        return None
+    return deduped
+
+
+def shift_curve(value: Any, shift: float, span: float) -> list[dict[str, float]] | None:
+    """把曲线平移到新起点并裁到 ``span`` 内（整轨按片段切分时用）。
+
+    被片段边界裁掉的端点不丢弃，而是把时间夹到 0 / span，
+    这样曲线的形状（滑音方向）还在，只是首尾被截平。
+    """
+    if not isinstance(value, list):
+        return None
+    length = max(0.0, float(span or 0.0))
+    moved: list[dict[str, float]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        try:
+            t = float(item.get("t", 0.0)) - float(shift)
+            v = float(item.get("v", 0.0))
+        except (TypeError, ValueError):
+            continue
+        moved.append({"t": max(0.0, min(length, t)), "v": v})
+    return clamp_curve(moved, length)
+
+
+def curve_value_at(curve: list[dict[str, float]] | None, t: float) -> float:
+    """曲线在相对时刻 t 的偏移（半音）；线性插值，端点外取端点值。"""
+    if not curve or len(curve) < 2:
+        return 0.0
+    if t <= curve[0]["t"]:
+        return float(curve[0]["v"])
+    if t >= curve[-1]["t"]:
+        return float(curve[-1]["v"])
+    for index in range(1, len(curve)):
+        prev = curve[index - 1]
+        nxt = curve[index]
+        if t <= nxt["t"]:
+            delta = nxt["t"] - prev["t"]
+            if delta <= 1e-6:
+                return float(nxt["v"])
+            ratio = (t - prev["t"]) / delta
+            return float(prev["v"]) + (float(nxt["v"]) - float(prev["v"])) * ratio
+    return float(curve[-1]["v"])
+
+
 def clean_note(
     raw: Any,
     duration: float,
@@ -98,6 +187,9 @@ def clean_note(
         "pitch": clamp_pitch(raw.get("pitch", 60.0)),
         "detune": clamp_detune(raw.get("detune", 0.0)),
     }
+    curve = clamp_curve(raw.get("curve"), end - start)
+    if curve:
+        note["curve"] = curve
     return note
 
 

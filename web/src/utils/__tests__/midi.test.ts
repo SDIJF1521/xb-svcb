@@ -11,6 +11,7 @@ import {
   MIDI_MIN_NOTE_PX,
   MIDI_MIN_NOTE_SECONDS,
   basicDrumBeat,
+  clampCurve,
   clampPitch,
   clampProgram,
   composeNoteAtPoint,
@@ -18,6 +19,7 @@ import {
   createComposeNote,
   createNote,
   createPart,
+  curveOffsetAt,
   drumGroupLabel,
   drumName,
   drumPiece,
@@ -57,7 +59,12 @@ import {
   sessionDuration,
   sessionNoteCount,
   sessionPitchRange,
+  setCurvePoint,
+  simplifyCurve,
+  smoothCurve,
   snapTime,
+  splitPitchNote,
+  tidyCurve,
   splitNoteAt,
   timeSignatureLabel,
   transposeNotes,
@@ -466,6 +473,147 @@ describe('架子鼓（GM 打击乐）', () => {
 
     const shifted = basicDrumBeat(beat, { bars: 2, start: 2 })
     expect(Math.min(...shifted.map((note) => note.start))).toBeCloseTo(2)
+  })
+})
+
+describe('pitch curve', () => {
+  const note = { id: 'n1', start: 1, end: 3, pitch: 60, detune: 0 }
+
+  it('归一化：裁到音符时长、限幅、少于两点视为没有曲线', () => {
+    const curve = clampCurve(
+      [
+        { t: -1, v: 0 },
+        { t: 1, v: 2 },
+        { t: 99, v: 99 },
+      ],
+      2,
+    )
+    expect(curve).toBeDefined()
+    expect(curve![0]!.t).toBe(0)
+    expect(curve![curve!.length - 1]!.t).toBe(2)
+    expect(curve![curve!.length - 1]!.v).toBe(12)
+
+    expect(clampCurve([{ t: 0, v: 1 }], 2)).toBeUndefined()
+  })
+
+  it('按时间线性插值，端点外取端点值', () => {
+    const curve = clampCurve([{ t: 0, v: 0 }, { t: 2, v: 2 }], 2)!
+    expect(curveOffsetAt(curve, 1)).toBeCloseTo(1)
+    expect(curveOffsetAt(curve, -1)).toBeCloseTo(0)
+    expect(curveOffsetAt(curve, 9)).toBeCloseTo(2)
+    expect(curveOffsetAt(undefined, 1)).toBe(0)
+  })
+
+  it('写入控制点会覆盖同一位置并保持有序', () => {
+    let curve = setCurvePoint([], 0.5, 1, 2)
+    expect(curve).toHaveLength(1)
+    curve = setCurvePoint(curve, 0.5, 2, 2)
+    expect(curve).toHaveLength(1)
+    expect(curve[0]!.v).toBeCloseTo(2)
+    curve = setCurvePoint(curve, 1.5, -1, 2)
+    expect(curve.map((point) => point.t)).toEqual([0.5, 1.5])
+  })
+
+  it('拉起点时曲线跟着平移，拉终点时被裁到新长度', () => {
+    const withCurve = {
+      ...note,
+      curve: [
+        { t: 0, v: 0 },
+        { t: 1, v: 1 },
+        { t: 2, v: 0 },
+      ],
+    }
+
+    // 起点从 1s 拉到 1.5s：曲线相对起点的时间整体前移 0.5s
+    const trimmed = resizeNote(withCurve, 'start', 1.5, 10, 0)
+    expect(trimmed.start).toBeCloseTo(1.5)
+    expect(trimmed.curve!.map((point) => point.t)).toEqual([0, 0.5, 1.5])
+
+    // 终点从 3s 拉到 2.5s：超出新长度（1.5s）的点被夹到 1.5s
+    const shortened = resizeNote(withCurve, 'end', 2.5, 10, 0)
+    expect(shortened.end).toBeCloseTo(2.5)
+    expect(shortened.curve![shortened.curve!.length - 1]!.t).toBeCloseTo(1.5)
+  })
+
+  it('归一化音符时保留曲线', () => {
+    const normalized = normalizeNotes(
+      [{ ...note, curve: [{ t: 0, v: 0 }, { t: 2, v: 1 }] }],
+      10,
+    )
+    expect(normalized[0]!.curve).toHaveLength(2)
+  })
+
+  it('平滑后端点不动，中间抖动变小', () => {
+    const curve = [
+      { t: 0, v: 0 },
+      { t: 0.1, v: 1 },
+      { t: 0.2, v: -1 },
+      { t: 0.3, v: 1 },
+      { t: 0.4, v: 0 },
+    ]
+    const smoothed = smoothCurve(curve, 3)!
+    expect(smoothed[0]!.v).toBe(0)
+    expect(smoothed[smoothed.length - 1]!.v).toBe(0)
+    expect(Math.abs(smoothed[1]!.v)).toBeLessThan(1)
+  })
+
+  it('简化：直线只剩两端，尖峰保留', () => {
+    const line = [
+      { t: 0, v: 0 },
+      { t: 1, v: 0.5 },
+      { t: 2, v: 1 },
+    ]
+    expect(simplifyCurve(line, 0.05)).toHaveLength(2)
+
+    const spike = [
+      { t: 0, v: 0 },
+      { t: 1, v: 1 },
+      { t: 2, v: 0 },
+    ]
+    expect(simplifyCurve(spike, 0.05)).toHaveLength(3)
+  })
+
+  it('tidyCurve 平滑+简化后仍然连贯（时间严格递增、点数变少）', () => {
+    const noisy: Array<{ t: number; v: number }> = []
+    for (let index = 0; index < 80; index += 1) {
+      const t = (2 * index) / 79
+      noisy.push({ t, v: Math.sin(t * Math.PI * 4) * 0.3 + (index % 2 ? 0.03 : -0.03) })
+    }
+    const tidy = tidyCurve(noisy, 2, 0.04)!
+    expect(tidy.length).toBeGreaterThan(2)
+    expect(tidy.length).toBeLessThan(noisy.length)
+    for (let index = 1; index < tidy.length; index += 1) {
+      expect(tidy[index]!.t).toBeGreaterThan(tidy[index - 1]!.t)
+    }
+  })
+
+  it('写入控制点时同一时间只保留一个，避免垂直跳变', () => {
+    let curve = setCurvePoint([], 1, 0, 2)
+    curve = setCurvePoint(curve, 1, 0.5, 2)
+    curve = setCurvePoint(curve, 1, 0.8, 2)
+    expect(curve.filter((point) => point.t === 1)).toHaveLength(1)
+    expect(curve.find((point) => point.t === 1)!.v).toBeCloseTo(0.8)
+  })
+
+  it('拆分音符会把音高曲线在切点断开（前后段各保留曲线）', () => {
+    const withCurve = {
+      ...note,
+      curve: [
+        { t: 0, v: 0 },
+        { t: 1, v: 2 },
+        { t: 2, v: 0 },
+      ],
+    }
+    const [first, second] = splitPitchNote(withCurve, 2)!
+    expect(first.end).toBeCloseTo(2)
+    expect(second.start).toBeCloseTo(2)
+    expect(first.curve).toBeDefined()
+    expect(second.curve).toBeDefined()
+    // 前半段曲线时间在 [0,1]，后半段平移到 [0,1]（原 [1,2] 平移后）
+    expect(first.curve![first.curve!.length - 1]!.t).toBeCloseTo(1)
+    expect(second.curve![0]!.t).toBeCloseTo(0)
+    // 切点处两段的值一致（连续性在切点被干净断开）
+    expect(first.curve![first.curve!.length - 1]!.v).toBeCloseTo(second.curve![0]!.v)
   })
 })
 

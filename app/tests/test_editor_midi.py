@@ -16,7 +16,7 @@ from application import midi_notes
 from application.audio_editor_service import AudioEditorService
 from domain import editor_midi
 from infrastructure import midi_pitch
-from infrastructure.midi_pitch_worker import note_offsets
+from infrastructure.midi_pitch_worker import _ratio_at, note_offsets
 from infrastructure.storage import ListRepository
 
 CLIP_ID = "clip_midi_1"
@@ -155,6 +155,135 @@ def test_note_offsets_clamps_and_skips_unvoiced_spans() -> None:
     assert results[0]["offset_semitones"] == pytest.approx(12.0)
     assert results[1]["applied"] is False
     assert "浊音" in results[1]["reason"]
+
+
+def test_clean_f0_drops_octave_spikes_and_keeps_real_pitch() -> None:
+    """原始音高清理：单帧跳八度/爆音被丢掉，正常音高与清音标记保留。"""
+    values = np.full(20, 220.0)
+    values[10] = 440.0  # 整帧跳八度
+    values[12] = 0.0  # 清音
+    values[15] = 660.0  # 爆音（约 +9 半音）
+    cleaned = AudioEditorService._clean_f0(values)
+
+    assert cleaned[0] == pytest.approx(220.0)
+    assert cleaned[10] == 0.0
+    assert cleaned[12] == 0.0
+    assert cleaned[15] == 0.0
+
+
+def test_f0_points_downsample_and_skip_unvoiced(tmp_path: Path) -> None:
+    """原始音高曲线：清音帧要跳过、点数受限、时间落在片段内、Hz 正确转成 MIDI。"""
+    path = tmp_path / "clip_f0.npy"
+    values = np.full(200, 220.0, dtype=np.float32)
+    values[:40] = 0.0  # 清音
+    np.save(str(path), values)
+
+    points = AudioEditorService._f0_points(path, 2.0, max_points=50)
+
+    assert points
+    assert len(points) <= 50
+    assert all(0.0 <= time <= 2.0 for time, _ in points)
+    assert all(abs(midi - 57.0) < 0.01 for _, midi in points)  # 220Hz = A3
+
+
+def test_curve_helpers_clamp_shift_and_interpolate() -> None:
+    curve = editor_midi.clamp_curve(
+        [
+            {"t": -1.0, "v": 0.0},
+            {"t": 0.5, "v": 1.0},
+            {"t": 99.0, "v": 99.0},
+            {"t": 0.5, "v": 2.0},
+        ],
+        1.0,
+    )
+    assert curve is not None
+    # 同一时刻只保留最后一个点（去重后时间严格递增），避免垂直跳变
+    assert [point["t"] for point in curve] == pytest.approx([0.0, 0.5, 1.0])
+    assert curve[1]["v"] == pytest.approx(2.0)
+    assert curve[-1]["v"] == pytest.approx(editor_midi.CURVE_SEMITONE_LIMIT)
+
+    # 少于两个点不算曲线
+    assert editor_midi.clamp_curve([{"t": 0.0, "v": 1.0}], 1.0) is None
+
+    simple = [{"t": 0.0, "v": 0.0}, {"t": 1.0, "v": 2.0}]
+    assert editor_midi.curve_value_at(simple, 0.5) == pytest.approx(1.0)
+    assert editor_midi.curve_value_at(simple, -1.0) == pytest.approx(0.0)
+    assert editor_midi.curve_value_at(simple, 9.0) == pytest.approx(2.0)
+
+    shifted = editor_midi.shift_curve(simple, 0.25, 0.75)
+    assert shifted is not None
+    assert shifted[0]["t"] == pytest.approx(0.0)
+    assert shifted[-1]["t"] == pytest.approx(0.75)
+    assert shifted[-1]["v"] == pytest.approx(2.0)
+
+
+def test_note_offsets_applies_curve_only_notes() -> None:
+    """整体没偏移、但画了音高曲线的音符也要重绘（否则滑音/颤音被跳过）。"""
+    times = _frames(2.0)
+    f0 = np.full(times.shape, 220.0)
+    notes = [
+        {
+            "start": 0.0,
+            "end": 1.5,
+            "pitch": 57.0,
+            "detune": 0.0,
+            "curve": [{"t": 0.0, "v": 0.0}, {"t": 1.5, "v": 2.0}],
+        },
+        {"start": 0.0, "end": 1.5, "pitch": 57.0, "detune": 0.0},
+    ]
+
+    results = note_offsets(notes, times, f0)
+
+    assert results[0]["applied"] is True
+    assert results[0]["curve"] is True
+    assert results[0]["offset_semitones"] == pytest.approx(0.0, abs=0.05)
+    assert results[1]["applied"] is False
+
+
+def test_clean_note_keeps_curve_and_clamps_it() -> None:
+    note = editor_midi.clean_note(
+        {
+            "start": 1.0,
+            "end": 2.0,
+            "pitch": 60,
+            "detune": 0,
+            "curve": [{"t": 0.0, "v": 0.0}, {"t": 5.0, "v": 3.0}],
+        },
+        4.0,
+    )
+    assert note is not None
+    assert note["curve"] == [{"t": 0.0, "v": 0.0}, {"t": 1.0, "v": 3.0}]
+
+
+def test_ratio_at_follows_curve_within_note() -> None:
+    """有曲线时按「绝对目标音高 / 实际音高」算倍率，音符外保持 1。
+
+    这里故意让原唱保持在 220Hz（A3=57），曲线从 0 升到 +12 半音，
+    期望倍率依次是 1 / √2 / 2 —— 不会把原唱自身的偏差再叠加一次。
+    """
+    times = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 2.5], dtype=np.float64)
+    tier_hz = np.full(times.shape, 220.0, dtype=np.float64)
+    spans = [(1.0, 2.0, 0.0, [{"t": 0.0, "v": 0.0}, {"t": 1.0, "v": 12.0}], 57.0)]
+
+    ratios = _ratio_at(times, spans, 0.0, tier_hz)
+
+    assert ratios[0] == pytest.approx(1.0)
+    assert ratios[1] == pytest.approx(1.0)  # 音符之前
+    assert ratios[2] == pytest.approx(1.0)  # 音符起点：曲线 0
+    assert ratios[3] == pytest.approx(2 ** (6 / 12))  # 中点：曲线 +6 半音
+    assert ratios[4] == pytest.approx(2.0)  # 终点：曲线 +12 半音
+    assert ratios[5] == pytest.approx(1.0)  # 音符之后
+
+
+def test_ratio_at_without_curve_keeps_flat_offset() -> None:
+    """没有曲线时只整体平移，不凭空改变音高轮廓（保留原唱自身的颤音）。"""
+    times = np.array([0.0, 1.0, 2.0], dtype=np.float64)
+    tier_hz = np.array([220.0, 220.0, 220.0], dtype=np.float64)
+    spans = [(0.0, 2.0, 2.0, None, 57.0)]
+
+    ratios = _ratio_at(times, spans, 0.0, tier_hz)
+
+    assert ratios.tolist() == pytest.approx([2 ** (2 / 12)] * 3)
 
 
 # ---------------------------------------------------------------- 适配器

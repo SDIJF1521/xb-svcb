@@ -159,7 +159,10 @@ class FFmpegEngine:
             self._has_enabled_effects(track.get("effects"))
             for track in (project.get("tracks") or [])
             if isinstance(track, dict)
-        ) or any(self._has_enabled_effects(role.get("effects")) for role in roles.values())
+        ) or any(
+            self._has_enabled_effects(role.get("effects")) or self._role_pitch(role) != 0
+            for role in roles.values()
+        )
         if not has_bus_effects:
             return self._render_flat_timeline(project, dst, cache_dir, output_format)
         return self._render_scoped_timeline(project, roles, dst, cache_dir, output_format)
@@ -193,7 +196,15 @@ class FFmpegEngine:
                 metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
                 role_id = str(metadata.get("role_id") or track_role_id)
                 role = roles.get(role_id)
-                group_key = role_id if role and self._has_enabled_effects(role.get("effects")) else "__dry__"
+                # 角色的「变调」和效果一样需要单独一条总线，否则改了参数也不会进渲染。
+                needs_role_bus = bool(
+                    role
+                    and (
+                        self._has_enabled_effects(role.get("effects"))
+                        or self._role_pitch(role) != 0
+                    )
+                )
+                group_key = role_id if needs_role_bus else "__dry__"
                 groups.setdefault(group_key, []).append(clip)
             if not groups:
                 continue
@@ -227,6 +238,21 @@ class FFmpegEngine:
                     role_buses.append(wet_bus if wet_bus.exists() else dry_bus)
                 else:
                     role_buses.append(dry_bus)
+
+            # 角色「变调」：在角色总线整体升降半音（保持时长），之前只存了参数没有落进渲染。
+            pitched_buses: list[Path] = []
+            for group_index, (group_key, bus) in enumerate(zip(groups.keys(), role_buses)):
+                pitch = self._role_pitch(roles.get(group_key))
+                if pitch == 0:
+                    pitched_buses.append(bus)
+                    continue
+                pitch_hash = self.cache_key({"input": bus.name, "pitch": pitch})
+                pitched = cache_dir / f"bus_role_pitch_{track_index:03d}_{group_index:03d}_{pitch_hash}.wav"
+                if pitched.exists() or self._pitch_file(bus, pitched, pitch, sample_rate):
+                    pitched_buses.append(pitched if pitched.exists() else bus)
+                else:
+                    pitched_buses.append(bus)
+            role_buses = pitched_buses
 
             track_hash = self.cache_key(
                 {
@@ -287,6 +313,33 @@ class FFmpegEngine:
             and effect.get("enabled", True) is not False
             for effect in raw
         )
+
+    @staticmethod
+    def _role_pitch(role: dict[str, Any] | None) -> int:
+        """角色「变调」半音数；非法值或 0 视为不变调。"""
+        if not isinstance(role, dict):
+            return 0
+        try:
+            value = int(round(float(role.get("pitch") or 0)))
+        except (TypeError, ValueError):
+            return 0
+        return max(-24, min(24, value))
+
+    def _pitch_file(self, src: Path, dst: Path, semitones: int, sample_rate: int) -> bool:
+        """对单条总线做整体变调（保持时长）；宿主不支持时返回 False 由调用方回退。"""
+        tool = getattr(self, "_tool", None)
+        fn = getattr(tool, "pitch", None)
+        if not callable(fn):
+            return False
+        try:
+            return bool(fn(src, dst, int(semitones), sample_rate=sample_rate))
+        except TypeError:
+            try:
+                return bool(fn(src, dst, int(semitones)))
+            except OSError:
+                return False
+        except OSError:
+            return False
 
     @staticmethod
     def _bus_project(paths: list[Path], duration: float, sample_rate: int) -> dict[str, Any]:

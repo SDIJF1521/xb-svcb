@@ -5,13 +5,29 @@
  * 计算都放在这里，方便单测，也保证前后端对音符边界的理解一致。
  */
 
+/** 音高曲线控制点：``t`` 相对音符起点（秒），``v`` 相对音符音高（半音）。 */
+export interface MidiCurvePoint {
+  t: number
+  v: number
+}
+
 export interface MidiNote {
   id: string
   start: number
   end: number
   pitch: number
   detune: number
+  /**
+   * OpenUtau 风格的音高曲线（滑音 / 颤音 / 拐音）。
+   * 缺省或少于两个点表示整段保持恒定音高（只用 pitch + detune）。
+   */
+  curve?: MidiCurvePoint[]
 }
+
+/** 单个音符最多保留的控制点数量：够画滑音和几秒颤音，又不会让请求体失控。 */
+export const MAX_CURVE_POINTS = 256
+/** 音高曲线相对音符中心的最大偏移（半音），避免画出听不出也没法重绘的极端值。 */
+export const CURVE_SEMITONE_LIMIT = 12
 
 /** 任何「有时间、有音高」的音符（音高重绘音符与编曲音符共用的几何接口）。 */
 export interface NoteLike {
@@ -40,6 +56,149 @@ export function clampDetune(detune: number): number {
   const value = Number.isFinite(detune) ? detune : 0
   return Math.min(99, Math.max(-99, Math.round(value)))
 }
+
+/** 归一化音高曲线：裁到音符时长内、限制幅度与点数、按时间排序。 */
+export function clampCurve(
+  curve: unknown,
+  span: number,
+  limit = MAX_CURVE_POINTS,
+): MidiCurvePoint[] | undefined {
+  if (!Array.isArray(curve)) return undefined
+  const length = Math.max(0, Number(span) || 0)
+  const points: MidiCurvePoint[] = []
+  for (const raw of curve.slice(0, Math.max(0, limit))) {
+    if (!raw || typeof raw !== 'object') continue
+    const t = Number((raw as MidiCurvePoint).t)
+    const v = Number((raw as MidiCurvePoint).v)
+    if (!Number.isFinite(t) || !Number.isFinite(v)) continue
+    points.push({
+      t: round(Math.min(Math.max(0, t), length)),
+      v: round(Math.min(CURVE_SEMITONE_LIMIT, Math.max(-CURVE_SEMITONE_LIMIT, v))),
+    })
+  }
+  if (points.length < 2) return undefined
+  points.sort((a, b) => a.t - b.t)
+  return points
+}
+
+/** 取某时刻（相对音符起点）的曲线偏移；曲线之外沿用端点值。 */
+export function curveOffsetAt(curve: MidiCurvePoint[] | undefined, t: number): number {
+  if (!curve || curve.length < 2) return 0
+  const first = curve[0]!
+  if (t <= first.t) return first.v
+  const last = curve[curve.length - 1]!
+  if (t >= last.t) return last.v
+  for (let index = 1; index < curve.length; index += 1) {
+    const prev = curve[index - 1]!
+    const next = curve[index]!
+    if (t <= next.t) {
+      const span = next.t - prev.t
+      if (span <= 1e-6) return next.v
+      return prev.v + ((next.v - prev.v) * (t - prev.t)) / span
+    }
+  }
+  return last.v
+}
+
+/** 在曲线上写入/替换一个控制点（同位置就近覆盖），返回新的排序结果。 */
+export function setCurvePoint(
+  curve: MidiCurvePoint[] | undefined,
+  t: number,
+  v: number,
+  span: number,
+  tolerance = 0.02,
+): MidiCurvePoint[] {
+  const length = Math.max(0, Number(span) || 0)
+  const point = {
+    t: round(Math.min(Math.max(0, Number(t) || 0), length)),
+    v: round(Math.min(CURVE_SEMITONE_LIMIT, Math.max(-CURVE_SEMITONE_LIMIT, Number(v) || 0))),
+  }
+  const next = (curve || []).filter((item) => Math.abs(item.t - point.t) > tolerance)
+  next.push(point)
+  next.sort((a, b) => a.t - b.t)
+  // 时间必须严格递增：夹到末尾的多个点只保留最后一个，避免出现垂直跳变。
+  const deduped: MidiCurvePoint[] = []
+  for (const item of next) {
+    const previous = deduped[deduped.length - 1]
+    if (previous && Math.abs(item.t - previous.t) < 1e-6) deduped[deduped.length - 1] = item
+    else deduped.push(item)
+  }
+  return deduped.slice(0, MAX_CURVE_POINTS)
+}
+
+/** 滑动平均：把抖动抹平，同时保持整体形状（端点保持不动）。 */
+export function smoothCurve(
+  curve: MidiCurvePoint[] | undefined,
+  window = 5,
+): MidiCurvePoint[] | undefined {
+  if (!curve || curve.length < 3 || window < 3) return curve
+  const radius = Math.floor(window / 2)
+  const result = curve.map((point, index) => {
+    if (index === 0 || index === curve.length - 1) return { ...point }
+    let total = 0
+    let count = 0
+    for (let offset = -radius; offset <= radius; offset += 1) {
+      const neighbour = curve[index + offset]
+      if (!neighbour) continue
+      total += neighbour.v
+      count += 1
+    }
+    return { t: point.t, v: round(count ? total / count : point.v) }
+  })
+  return result
+}
+
+/**
+ * Douglas–Peucker 简化：在「垂直于弦」的误差不超过 ``tolerance`` 的前提下尽量少留点，
+ * 这样曲线看着连贯、控制点不会密密麻麻，但颤音/滑音的峰值仍然保留。
+ */
+export function simplifyCurve(
+  curve: MidiCurvePoint[] | undefined,
+  tolerance = 0.04,
+): MidiCurvePoint[] | undefined {
+  if (!curve || curve.length <= 2) return curve
+  const keep = new Array<boolean>(curve.length).fill(false)
+  keep[0] = true
+  keep[curve.length - 1] = true
+  const stack: Array<[number, number]> = [[0, curve.length - 1]]
+  while (stack.length) {
+    const [first, last] = stack.pop()!
+    const from = curve[first]!
+    const to = curve[last]!
+    const spanT = to.t - from.t || 1e-6
+    let worst = 0
+    let pivot = -1
+    for (let index = first + 1; index < last; index += 1) {
+      const point = curve[index]!
+      const expected = from.v + ((to.v - from.v) * (point.t - from.t)) / spanT
+      const distance = Math.abs(point.v - expected)
+      if (distance > worst) {
+        worst = distance
+        pivot = index
+      }
+    }
+    if (pivot >= 0 && worst > tolerance) {
+      keep[pivot] = true
+      stack.push([first, pivot], [pivot, last])
+    }
+  }
+  return curve.filter((_, index) => keep[index])
+}
+
+/** 生成曲线后统一整理：排序 → 去重 → 平滑 → 简化，保证连贯且点不多。 */
+export function tidyCurve(
+  curve: MidiCurvePoint[] | undefined,
+  span: number,
+  tolerance = 0.04,
+  window = 3,
+): MidiCurvePoint[] | undefined {
+  const clamped = clampCurve(curve, span)
+  if (!clamped) return undefined
+  const smoothed = smoothCurve(clamped, window)
+  const simplified = simplifyCurve(smoothed, tolerance)
+  return clampCurve(simplified, span)
+}
+
 
 export function noteName(pitch: number): string {
   const index = Math.round(pitch)
@@ -87,13 +246,17 @@ function round(value: number): number {
 export function normalizeNote(note: Partial<MidiNote>, duration: number, index = 0): MidiNote | null {
   const span = clampNoteSpan(Number(note.start ?? 0), Number(note.end ?? 0), duration)
   if (span.end - span.start < MIDI_MIN_NOTE_SECONDS) return null
-  return {
+  const normalized: MidiNote = {
     id: String(note.id || `midi_${index + 1}`),
     start: span.start,
     end: span.end,
     pitch: clampPitch(Number(note.pitch ?? 60)),
     detune: clampDetune(Number(note.detune ?? 0)),
   }
+  // 音高曲线跟着音符一起归一化（没有被编辑过就不写回，保持请求体干净）。
+  const curve = clampCurve(note.curve, span.end - span.start)
+  if (curve) normalized.curve = curve
+  return normalized
 }
 
 /** 归一化整串音符：排序、去重叠、去重 ID。 */
@@ -159,12 +322,25 @@ export function resizeNote(
   grid: number,
 ): MidiNote {
   const target = snapTime(clampTime(time, duration), grid)
+  let next: MidiNote
   if (edge === 'start') {
     const span = clampNoteSpan(Math.min(target, note.end - MIDI_MIN_NOTE_SECONDS), note.end, duration)
-    return { ...note, start: span.start, end: span.end }
+    next = { ...note, start: span.start, end: span.end }
+  } else {
+    const span = clampNoteSpan(note.start, Math.max(target, note.start + MIDI_MIN_NOTE_SECONDS), duration)
+    next = { ...note, start: span.start, end: span.end }
   }
-  const span = clampNoteSpan(note.start, Math.max(target, note.start + MIDI_MIN_NOTE_SECONDS), duration)
-  return { ...note, start: span.start, end: span.end }
+  // 音高曲线的时间是「相对音符起点」的：拉起点时整体平移，拉终点时按新长度裁切。
+  if (note.curve && note.curve.length) {
+    const shift = edge === 'start' ? next.start - note.start : 0
+    const curve = clampCurve(
+      note.curve.map((point) => ({ t: point.t - shift, v: point.v })),
+      next.end - next.start,
+    )
+    if (curve) next.curve = curve
+    else delete next.curve
+  }
+  return next
 }
 
 /** 自动音域：围绕实际音符上下各留一个八度，最少两个八度；无音符时用默认音域。 */
@@ -1069,6 +1245,45 @@ export function splitNoteAt(
     { ...note, id: `${note.id}_a${stamp}`, end: round(time) },
     { ...note, id: `${note.id}_b${stamp}`, start: round(time) },
   ]
+}
+
+/**
+ * 在时间点 ``time`` 把音准音符切成两半，音高曲线也一并在切点断开：
+ * 前半段曲线留在前半音符，后半段曲线平移到后半音符（切点各补一个点，保证连续处干净）。
+ */
+export function splitPitchNote(
+  note: MidiNote,
+  time: number,
+): [MidiNote, MidiNote] | null {
+  if (!(time > note.start + MIDI_MIN_NOTE_SECONDS)) return null
+  if (!(time < note.end - MIDI_MIN_NOTE_SECONDS)) return null
+  const stamp = Date.now().toString(36)
+  const totalSpan = note.end - note.start
+  const splitT = time - note.start
+  const first: MidiNote = { ...note, id: `${note.id}_a${stamp}`, end: round(time) }
+  const second: MidiNote = { ...note, id: `${note.id}_b${stamp}`, start: round(time) }
+  delete first.curve
+  delete second.curve
+  if (note.curve && note.curve.length >= 2) {
+    const valueAt = curveOffsetAt(note.curve, splitT)
+    const before = note.curve
+      .filter((point) => point.t <= splitT)
+      .map((point) => ({ t: point.t, v: point.v }))
+    const after = note.curve
+      .filter((point) => point.t >= splitT)
+      .map((point) => ({ t: point.t - splitT, v: point.v }))
+    if (!before.length || Math.abs(before[before.length - 1]!.t - splitT) > 1e-3) {
+      before.push({ t: splitT, v: valueAt })
+    }
+    if (!after.length || Math.abs(after[0]!.t) > 1e-3) {
+      after.unshift({ t: 0, v: valueAt })
+    }
+    const curveA = clampCurve(before, splitT)
+    const curveB = clampCurve(after, totalSpan - splitT)
+    if (curveA) first.curve = curveA
+    if (curveB) second.curve = curveB
+  }
+  return [first, second]
 }
 
 /** 复制选中的音符并整体后移（返回新音符，调用方负责并进声部）。 */

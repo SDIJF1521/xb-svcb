@@ -92,6 +92,49 @@ def _midi_to_hz(pitch: float) -> float:
     return 440.0 * (2.0 ** ((float(pitch) - 69.0) / 12.0))
 
 
+def _curve_value_at(curve, t: float) -> float:
+    """音高曲线在相对时刻 t 的偏移（半音）；线性插值、端点外取端点值。
+
+    与 ``domain.editor_midi.curve_value_at`` 保持一致，这里内联一份，
+    避免 worker 在隔离环境里还要依赖 app 包的导入路径。
+    """
+    if not isinstance(curve, (list, tuple)) or len(curve) < 2:
+        return 0.0
+    try:
+        first = curve[0]
+        if t <= float(first.get("t", 0.0)):
+            return float(first.get("v", 0.0))
+        last = curve[-1]
+        if t >= float(last.get("t", 0.0)):
+            return float(last.get("v", 0.0))
+        for index in range(1, len(curve)):
+            prev = curve[index - 1]
+            nxt = curve[index]
+            prev_t = float(prev.get("t", 0.0))
+            next_t = float(nxt.get("t", 0.0))
+            if t <= next_t:
+                span = next_t - prev_t
+                if span <= 1e-6:
+                    return float(nxt.get("v", 0.0))
+                ratio = (t - prev_t) / span
+                return float(prev.get("v", 0.0)) + (
+                    float(nxt.get("v", 0.0)) - float(prev.get("v", 0.0))
+                ) * ratio
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+    return float(curve[-1].get("v", 0.0))
+
+
+def _has_curve(note: dict) -> bool:
+    curve = note.get("curve")
+    if not isinstance(curve, (list, tuple)) or len(curve) < 2:
+        return False
+    try:
+        return max(abs(float(point.get("v", 0.0))) for point in curve) > 0.01
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
 def note_offsets(
     notes: list[dict],
     times,  # noqa: ANN001 - numpy array
@@ -140,40 +183,78 @@ def note_offsets(
         target = pitch + detune / 100.0
         offset = max(-limit, min(limit, target - median_midi))
         cents = offset * 100.0
+        # 画了音高曲线的音符即使整体没怎么偏也要重绘，否则滑音/颤音会被跳过。
+        curved = _has_curve(note)
+        applied = curved or abs(cents) >= float(min_offset_cents)
         results.append(
             {
                 "note": note,
-                "applied": abs(cents) >= float(min_offset_cents),
-                "reason": "" if abs(cents) >= float(min_offset_cents) else "音高几乎没有变化",
+                "applied": applied,
+                "reason": ""
+                if applied
+                else "音高几乎没有变化",
                 "offset_semitones": round(offset, 3),
                 "source_midi": round(median_midi, 3),
                 "target_midi": round(target, 3),
                 "voiced_ratio": round(float(ratio), 3),
+                "curve": bool(curved),
             }
         )
     return results
 
 
-def _ratio_at(seconds, spans, ramp: float):  # noqa: ANN001, ANN202
-    """返回某时刻的移调倍率；音符外为 1，边缘按 ``ramp`` 过渡。"""
+def _ratio_at(seconds, spans, ramp: float, tier_hz=None):  # noqa: ANN001, ANN202
+    """返回某时刻的移调倍率；音符外为 1，边缘按 ``ramp`` 过渡。
+
+    ``spans`` 每项是 ``(start, end, offset_semitones, curve, anchor_midi)``。
+
+    两种模式：
+    * **没有曲线**：只按 ``offset`` 整体平移，保留原唱本身的颤音/滑音（温和修音准）。
+    * **有曲线**：曲线给的是**绝对目标音高**（``anchor + curve(t)``），这里按每个
+      Praat 采样点的实际频率算出「目标 / 实际」的倍率，直接把音高拉到目标上。
+      之前是乘上 ``offset + curve`` 的倍率，会把原唱自身的偏差再叠加一次，
+      导致渲染出来出现原本不存在的滑音/夸张的颤音。
+    """
     import numpy as np
 
     times = np.asarray(seconds, dtype=np.float64).reshape(-1)
     ratios = np.ones(times.shape, dtype=np.float64)
-    for start, end, ratio in spans:
+    hz = (
+        np.asarray(tier_hz, dtype=np.float64).reshape(-1)
+        if tier_hz is not None
+        else None
+    )
+    for start, end, offset, curve, anchor in spans:
+        flattened = 2.0 ** (offset / 12.0)
         inner = (times >= start) & (times <= end)
-        ratios[inner] = ratio
+        indices = np.nonzero(inner)[0]
+        first_ratio = flattened
+        last_ratio = flattened
+        if indices.size:
+            if curve and hz is not None and hz.size >= times.size:
+                for index in indices:
+                    value = float(hz[index])
+                    if not (value > 0.0):
+                        ratios[index] = 1.0
+                        continue
+                    target = anchor + _curve_value_at(curve, float(times[index]) - start)
+                    ratios[index] = (440.0 * 2.0 ** ((target - 69.0) / 12.0)) / value
+                first_ratio = float(ratios[indices[0]])
+                last_ratio = float(ratios[indices[-1]])
+            else:
+                ratios[indices] = flattened
         if ramp <= 0.0:
             continue
         lead = (times >= start - ramp) & (times < start)
         if bool(lead.any()):
             phase = (times[lead] - (start - ramp)) / ramp
-            ratios[lead] = 1.0 + (ratio - 1.0) * (phase ** 2)
+            ratios[lead] = 1.0 + (first_ratio - 1.0) * (phase ** 2)
         tail = (times > end) & (times <= end + ramp)
         if bool(tail.any()):
             phase = (times[tail] - end) / ramp
-            ratios[tail] = ratio + (1.0 - ratio) * (phase ** 2)
+            ratios[tail] = last_ratio + (1.0 - last_ratio) * (phase ** 2)
     return ratios
+
 
 
 def _restore_channels(original, tuned):  # noqa: ANN001, ANN202
@@ -283,7 +364,7 @@ def apply_notes(
         min_offset_cents=min_offset_cents,
         max_semitones=max_semitones,
     )
-    spans: list[tuple[float, float, float]] = []
+    spans: list[tuple[float, float, float, list | None, float]] = []
     applied: list[dict] = []
     for item in computed:
         if not item.get("applied"):
@@ -294,13 +375,17 @@ def apply_notes(
         if end <= start:
             continue
         offset = float(item.get("offset_semitones") or 0.0)
-        spans.append((start, end, 2.0 ** (offset / 12.0)))
+        curve = note.get("curve") if isinstance(note.get("curve"), list) else None
+        # anchor = 音符目标音高：有曲线时用它 + curve(t) 作为绝对目标音高。
+        anchor = float(item.get("target_midi") or 0.0)
+        spans.append((start, end, offset, curve, anchor))
         applied.append(
             {
                 "start": round(start, 3),
                 "end": round(end, 3),
-                "pitch": round(float(item["target_midi"]), 3),
+                "pitch": round(anchor, 3),
                 "offset_semitones": round(offset, 3),
+                "curve_points": len(curve) if curve else 0,
             }
         )
 
@@ -308,7 +393,7 @@ def apply_notes(
         "applied": bool(spans),
         "note_count": len(notes or []),
         "applied_notes": len(spans),
-        "applied_seconds": round(sum(end - start for start, end, _ in spans), 3),
+        "applied_seconds": round(sum(end - start for start, end, *_ in spans), 3),
         "notes": applied,
         "skipped": [
             {
@@ -337,7 +422,7 @@ def apply_notes(
     tier_times, tier_values = _tier_points(source_tier, call)
     if tier_times.size < 2:
         raise RuntimeError("Praat 没有取到可用的音高曲线")
-    ratios = _ratio_at(tier_times, spans, float(ramp_seconds))
+    ratios = _ratio_at(tier_times, spans, float(ramp_seconds), tier_values)
     modified_tier = call(
         "Create PitchTier",
         "xb-midi-pitch",
@@ -363,7 +448,7 @@ def apply_notes(
         tuned = np.pad(tuned, ((0, 0), (0, expected - tuned.shape[-1])))
 
     tuned = _restore_channels(original, tuned)
-    blended = _blend_spans(original, tuned, [(start, end) for start, end, _ in spans], rate)
+    blended = _blend_spans(original, tuned, [(start, end) for start, end, *_ in spans], rate)
     peak = float(np.max(np.abs(blended))) if blended.size else 0.0
     if peak > 0.99:
         blended *= 0.99 / peak

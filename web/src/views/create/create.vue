@@ -1247,6 +1247,23 @@
             @input="seekWorkflowAudio"
           />
           <span class="wf-audition-time">{{ formatPreviewTime(workflowAudioDuration) }}</span>
+          <!-- 自定义工作流也提供成品下载，不必绕回普通模式的播放器。 -->
+          <el-dropdown
+            trigger="click"
+            @command="(fmt: string | number | object) => onExport(String(fmt) as WorkAudioExportFormat)"
+          >
+            <el-button round class="ghost-btn wf-audition-export">
+              <el-icon class="el-icon--left"><Download /></el-icon>{{ translateUiText('下载成品') }}
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="wav">WAV 无损</el-dropdown-item>
+                <el-dropdown-item command="flac">FLAC 无损压缩</el-dropdown-item>
+                <el-dropdown-item command="mp3">MP3 通用格式</el-dropdown-item>
+                <el-dropdown-item command="m4a">M4A 移动设备</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </section>
 
@@ -3813,6 +3830,10 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--xb-muted);
   font-variant-numeric: tabular-nums;
+}
+.wf-audition-export {
+  flex-shrink: 0;
+  margin-left: 4px;
 }
 .wf-status { font-size: 13px; font-weight: 600; }
 .wf-status.running { color: var(--xb-primary); }

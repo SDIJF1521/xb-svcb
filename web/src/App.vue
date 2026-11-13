@@ -1,5 +1,5 @@
 <template>
-  <el-config-provider :locale="elementLocale">
+  <el-config-provider :locale="elementLocale" :message="messageConfig">
     <router-view />
   </el-config-provider>
 </template>
@@ -17,6 +17,9 @@ const { locale } = useI18n()
 const elementLocale = computed(() => (
   locale.value === 'en-US' ? en : locale.value === 'ja-JP' ? ja : zhCn
 ))
+// 顶部导航栏高 64px：消息提示默认从 top:16 出现会压住搜索框/导航，这里统一下移，
+// 让提示落在导航栏下沿之外，不再遮挡任何导航元素。
+const messageConfig = { offset: 84 }
 </script>
 
 <style>

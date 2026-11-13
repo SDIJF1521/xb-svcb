@@ -3149,6 +3149,107 @@ class AudioEditorService:
             return False
         return out_path.is_file() and out_path.stat().st_size > 64
 
+    @staticmethod
+    def _clean_f0(curve: Any, window: int = 5, tolerance: float = 2.0) -> Any:
+        """清理 F0 野值：局部中值滤波 + 剔除八度跳变/爆音。
+
+        RMVPE 偶尔会给出整帧跳八度或爆音的野值，直接画出来就是「原始音高不正确」。
+        这里以邻域浊音帧的中位数为参照，偏差超过 ``tolerance`` 个半音的帧视为野值丢弃。
+        """
+        import warnings
+
+        import numpy as np
+
+        values = np.asarray(curve, dtype=np.float64).reshape(-1)
+        if values.size < window + 2:
+            return values
+        radius = max(1, window // 2)
+        padded = np.pad(values, (radius, radius), mode="edge")
+        try:
+            windows = np.lib.stride_tricks.sliding_window_view(padded, window)
+            work = np.where(windows > 0, windows, np.nan)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                reference = np.nanmedian(work, axis=1)
+        except (AttributeError, ValueError):
+            reference = np.full(values.shape, np.nan)
+            work = np.where(padded > 0, padded, np.nan)
+            for index in range(values.size):
+                neighbour = work[index : index + window]
+                if np.isfinite(neighbour).any():
+                    reference[index] = np.nanmedian(neighbour)
+        safe = (reference > 0) & (values > 0)
+        deviation = np.ones(values.shape, dtype=np.float64)
+        deviation[safe] = np.abs(
+            12.0 * np.log2(values[safe] / np.maximum(reference[safe], 1e-9))
+        )
+        keep = safe & (deviation <= float(tolerance))
+        return np.where(keep, values, 0.0)
+
+    @staticmethod
+    def _f0_points(
+        f0_path: Path,
+        duration: float,
+        max_points: int = 4000,
+    ) -> list[list[float]]:
+        """把 F0 曲线清理并降采样成 ``[[相对秒, MIDI 音高], ...]``，供钢琴卷帘画原始音高。
+
+        先做野值清理（见 :meth:`_clean_f0`），只保留浊音帧；点数按 ``max_points`` 均摊。
+        默认留 4000 点，108 秒的片段也有 ~27ms 的采样间隔，5.5Hz 颤音不会被抹平。
+        """
+        if not f0_path.is_file() or f0_path.stat().st_size <= 64:
+            return []
+        try:
+            import numpy as np
+
+            curve = np.asarray(
+                np.load(str(f0_path), allow_pickle=False), dtype=np.float64
+            ).reshape(-1)
+        except (OSError, ValueError, TypeError):
+            return []
+        if curve.size < 8:
+            return []
+        curve = AudioEditorService._clean_f0(curve)
+        span = max(0.001, float(duration or 0.0))
+        step = max(1, int((curve.size + max_points - 1) // max_points))
+        points: list[list[float]] = []
+        denominator = max(1, curve.size - 1)
+        for index in range(0, curve.size, step):
+            value = float(curve[index])
+            if not (value > 0.0) or value != value:  # NaN / 清音
+                continue
+            points.append(
+                [
+                    round(span * index / denominator, 3),
+                    round(editor_midi.hz_to_midi(value), 3),
+                ]
+            )
+        return points
+
+    def _track_f0_points(
+        self,
+        project_id: str,
+        track: dict[str, Any],
+        limit: int = 6000,
+    ) -> list[list[float]]:
+        """整轨原始音高曲线：把各片段的 F0 按片段起点拼成绝对时间。"""
+        folder = self._midi_dir(project_id)
+        points: list[list[float]] = []
+        for clip in track.get("clips", []) or []:
+            clip_id = str(clip.get("id") or "")
+            _start, _end, clip_duration = self._clip_span(clip)
+            try:
+                offset = float(clip.get("start") or 0.0)
+            except (TypeError, ValueError):
+                offset = 0.0
+            for t, midi in self._f0_points(folder / f"{clip_id}_f0.npy", clip_duration):
+                points.append([round(offset + t, 3), midi])
+        points.sort(key=lambda item: item[0])
+        if len(points) > limit:
+            step = (len(points) + limit - 1) // limit
+            points = points[::step]
+        return points
+
     def _analyse_clip_notes(
         self,
         project_id: str,
@@ -3246,6 +3347,9 @@ class AudioEditorService:
                     "duration": round(duration, 3),
                     "notes": notes,
                     "analysis": sidecar.get("analysis") or {},
+                    "pitch_curve": self._f0_points(
+                        self._midi_dir(project_id) / f"{clip_id}_f0.npy", duration
+                    ),
                     "meta": (clip.get("metadata") or {}).get("midi") or {},
                     "cached": True,
                     "midi_ready": bool(config.midi_pitch_ready()),
@@ -3275,6 +3379,9 @@ class AudioEditorService:
             "duration": round(duration, 3),
             "notes": notes,
             "analysis": analysed.get("analysis") or {},
+            "pitch_curve": self._f0_points(
+                self._midi_dir(project_id) / f"{clip_id}_f0.npy", duration
+            ),
             "meta": (clip.get("metadata") or {}).get("midi") or {},
             "cached": False,
             "midi_ready": bool(config.midi_pitch_ready()),
@@ -3659,6 +3766,7 @@ class AudioEditorService:
                     "duration": duration,
                     "notes": notes,
                     "analysis": sidecar.get("analysis") or {},
+                    "pitch_curve": self._track_f0_points(project_id, track),
                     "cached": True,
                     "midi_ready": bool(config.midi_pitch_ready()),
                     "clip_spans": spans,
@@ -3723,6 +3831,7 @@ class AudioEditorService:
             "duration": duration,
             "notes": notes,
             "analysis": payload["analysis"],
+            "pitch_curve": self._track_f0_points(project_id, track),
             "cached": False,
             "midi_ready": bool(config.midi_pitch_ready()),
             "clip_spans": spans,
@@ -3841,9 +3950,16 @@ class AudioEditorService:
                 right = min(clip_duration, note_end - start)
                 if right - left < editor_midi.MIN_NOTE_SECONDS:
                     continue
-                local.append(
-                    {**note, "start": round(left, 3), "end": round(right, 3)}
+                local_note = {**note, "start": round(left, 3), "end": round(right, 3)}
+                # 曲线的时间是相对音符起点的；音符被片段边界裁过时要跟着平移。
+                curve = editor_midi.shift_curve(
+                    note.get("curve"), (start + left) - note_start, right - left
                 )
+                if curve:
+                    local_note["curve"] = curve
+                else:
+                    local_note.pop("curve", None)
+                local.append(local_note)
             if not local:
                 continue
             updated, report = self._apply_notes_to_clip(

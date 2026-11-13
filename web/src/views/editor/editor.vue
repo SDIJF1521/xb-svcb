@@ -67,6 +67,7 @@
       :ready="midiReady"
       :error="midiError"
       :analysis="midiAnalysis"
+      :pitch-curve="midiPitchCurve"
       :playhead="clipPlaybackClipId === midiTargetId ? clipPreviewPosition : -1"
       :playing="playing && clipPlaybackClipId === midiTargetId"
       :compose-session="composeSession"
@@ -4223,7 +4224,12 @@ function mixRenderSignature(value: EditorProject) {
     projectId: value.id,
     duration: value.duration,
     sampleRate: value.sample_rate,
-    roleEffects: (value.roles || []).map((role) => ({ id: role.id, effects: role.effects || [] })),
+    roleEffects: (value.roles || []).map((role) => ({
+      id: role.id,
+      effects: role.effects || [],
+      // 角色变调也必须进签名，否则改了变调仍会复用旧的混音缓存（听起来「没效果」）。
+      pitch: Number(role.pitch) || 0,
+    })),
     tracks: value.tracks.map((track) => ({
       volume: track.volume,
       mute: track.mute,
@@ -4835,6 +4841,8 @@ const midiDuration = ref(0)
 const midiHasAudio = ref(false)
 const midiNotes = ref<MidiNote[]>([])
 const midiAnalysis = ref<Record<string, unknown>>({})
+/** 音频原本的音高曲线（[[秒, MIDI], ...]），钢琴卷帘里画成参考线。 */
+const midiPitchCurve = ref<Array<[number, number]>>([])
 const midiLoading = ref(false)
 const midiApplying = ref(false)
 const midiReady = ref(true)
@@ -4910,6 +4918,7 @@ async function openMidiEditor(
   midiNotes.value = []
   midiNotesLoaded.value = false
   midiAnalysis.value = {}
+  midiPitchCurve.value = []
   midiError.value = ''
   midiReady.value = true
   composeSession.value = null
@@ -5157,14 +5166,26 @@ async function loadMidiNotes(refresh: boolean) {
       if (result?.clip_spans) midiClipSpans.value = result.clip_spans
       return
     }
-    midiNotes.value = (result.notes || []).map((note) => ({
-      id: note.id,
-      start: Number(note.start) || 0,
-      end: Number(note.end) || 0,
-      pitch: Number(note.pitch) || 60,
-      detune: Number(note.detune) || 0,
-    }))
+    midiNotes.value = (result.notes || []).map((note) => {
+      const mapped: MidiNote = {
+        id: note.id,
+        start: Number(note.start) || 0,
+        end: Number(note.end) || 0,
+        pitch: Number(note.pitch) || 60,
+        detune: Number(note.detune) || 0,
+      }
+      // 音高曲线（滑音/颤音）要跟着一起回来，否则重开编辑器就丢了。
+      if (Array.isArray(note.curve) && note.curve.length >= 2) {
+        mapped.curve = note.curve.map((point) => ({ t: Number(point.t) || 0, v: Number(point.v) || 0 }))
+      }
+      return mapped
+    })
     midiAnalysis.value = result.analysis || {}
+    midiPitchCurve.value = Array.isArray(result.pitch_curve)
+      ? result.pitch_curve
+          .filter((point): point is [number, number] => Array.isArray(point) && point.length >= 2)
+          .map((point) => [Number(point[0]) || 0, Number(point[1]) || 0])
+      : []
     midiDuration.value = Number(result.duration) || midiDuration.value
     midiReady.value = result.midi_ready !== false
     if (scope === 'track') {

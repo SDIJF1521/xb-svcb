@@ -1159,6 +1159,8 @@ export interface EditorMidiNote {
   end: number
   pitch: number
   detune: number
+  /** 音高曲线（OpenUtau 风格滑音/颤音）：t 相对音符起点秒，v 相对音高半音。 */
+  curve?: Array<{ t: number; v: number }>
 }
 
 export interface EditorMidiClipSpan {
@@ -1177,6 +1179,8 @@ export interface EditorClipMidi {
   duration?: number
   notes?: EditorMidiNote[]
   analysis?: Record<string, unknown>
+  /** 音频片段原本的音高曲线：[[秒, MIDI 音高], ...]，只含浊音帧。 */
+  pitch_curve?: Array<[number, number]>
   meta?: Record<string, unknown>
   cached?: boolean
   midi_ready?: boolean

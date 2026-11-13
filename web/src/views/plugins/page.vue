@@ -255,6 +255,8 @@ function notify(type: unknown, message: unknown) {
     message: text,
     position: 'top-right',
     customClass: 'xb-notification-center',
+    // 顶部导航高 64px，提示下移避免压住导航。
+    offset: 84,
     duration: next === 'error' ? 4200 : 2600,
     showClose: true,
   })
