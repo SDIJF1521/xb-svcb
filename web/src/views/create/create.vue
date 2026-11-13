@@ -1290,7 +1290,17 @@
           <span v-if="currentWork?.mode === 'workflow'" class="wf-runlog-status" :class="currentWork.status">
             {{ currentWork.status === 'running' ? `运行中 ${currentWork.progress}%` : currentWork.status === 'queue' ? '排队中' : currentWork.status === 'done' ? '已完成' : currentWork.status === 'failed' ? '失败' : '' }}
           </span>
-          <button class="head-link" @click="logPanelOpen = !logPanelOpen">{{ logPanelOpen ? '收起' : '展开' }}</button>
+          <button
+            type="button"
+            class="wf-runlog-toggle"
+            :class="{ collapsed: !logPanelOpen }"
+            :aria-expanded="logPanelOpen"
+            :title="translateUiText(logPanelOpen ? '收起日志与流程' : '展开日志与流程')"
+            @click="logPanelOpen = !logPanelOpen"
+          >
+            <span>{{ translateUiText(logPanelOpen ? '收起' : '展开') }}</span>
+            <el-icon class="wf-runlog-chevron"><ArrowDown /></el-icon>
+          </button>
         </div>
         <div v-if="logPanelOpen" class="wf-runlog-body">
           <div class="wf-runlog-steps">
@@ -1311,7 +1321,7 @@
               <span>运行日志</span>
               <button v-if="currentWork?.log_path" class="wf-runlog-open" @click="openLog">打开完整日志</button>
             </div>
-            <pre class="wf-runlog-pre">{{ workflowLog || '暂无日志' }}</pre>
+            <pre class="wf-runlog-pre">{{ workflowLog ? translateLogText(workflowLog) : translateUiText('暂无日志') }}</pre>
           </div>
         </div>
       </section>
@@ -1328,6 +1338,7 @@ import {
   Headset,
   Close,
   Right,
+  ArrowDown,
   Microphone,
   Select,
   MagicStick,
@@ -1355,7 +1366,7 @@ import {
   Cpu,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { translateUiText } from '@/i18n'
+import { translateLogText, translateUiText } from '@/i18n'
 import {
   api,
   isDesktop,
@@ -3843,6 +3854,45 @@ onUnmounted(() => {
 /* 执行流程与日志 */
 .wf-runlog { display: flex; flex-direction: column; }
 .wf-runlog-status { margin-left: 10px; font-size: 12px; font-weight: 700; }
+/* 收起 / 展开：跟随主题的胶囊按钮，替换浏览器默认按钮样式 */
+.wf-runlog-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--xb-border);
+  background: rgba(var(--xb-fill-rgb), 0.06);
+  color: var(--xb-muted);
+  font-family: var(--xb-font);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+.wf-runlog-toggle:hover {
+  color: var(--xb-primary);
+  border-color: var(--xb-primary);
+  background: rgba(var(--xb-primary-rgb), 0.12);
+}
+.wf-runlog-toggle:active { transform: translateY(0.5px); }
+.wf-runlog-toggle:focus-visible {
+  outline: 2px solid var(--xb-primary);
+  outline-offset: 2px;
+}
+.wf-runlog-chevron {
+  font-size: 12px;
+  transition: transform 0.2s ease;
+}
+.wf-runlog-toggle.collapsed .wf-runlog-chevron { transform: rotate(-90deg); }
+@media (prefers-reduced-motion: reduce) {
+  .wf-runlog-toggle,
+  .wf-runlog-chevron { transition: none; }
+}
 .wf-runlog-status.running { color: var(--xb-primary); }
 .wf-runlog-status.done { color: #35d07f; }
 .wf-runlog-status.failed { color: #f43f5e; }

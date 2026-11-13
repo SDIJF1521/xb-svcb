@@ -455,6 +455,25 @@ export function translateUiText(source: string, targetLocale = currentLocale.val
   return `${match[1] ?? ''}${translateExact(match[2] ?? '', targetLocale)}${match[3] ?? ''}`
 }
 
+/**
+ * 逐行本地化后端写入的运行日志。
+ *
+ * 日志是后端按行追加的纯文本（``[HH:MM:SS] 内容``），这里保留时间戳前缀，
+ * 只翻译内容部分；缩进由 ``translateUiText`` 自己保留。这样日志面板在英文 /
+ * 日文界面下也是可读的，而不是整段中文。
+ */
+export function translateLogText(source: string, targetLocale = currentLocale.value): string {
+  if (!source || targetLocale === 'zh-CN') return source
+  return source
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^(\[\d{1,2}:\d{2}:\d{2}\]\s*)([\s\S]*)$/)
+      if (!match) return translateUiText(line, targetLocale)
+      return `${match[1] ?? ''}${translateUiText(match[2] ?? '', targetLocale)}`
+    })
+    .join('\n')
+}
+
 // PyMSS returns stable category ids alongside labels. Translate from those ids
 // so catalog versions that return Chinese, English, or shortened labels render
 // consistently in every supported UI language.

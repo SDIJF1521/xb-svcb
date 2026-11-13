@@ -2615,6 +2615,7 @@ export const mock = {
       stereo_width?: number
       loudness_envelope?: number
     },
+    locale?: string,
   ): EditorRerunResult {
     const project = mockEditorProjects.find((p) => p.id === projectId)
     if (!project) return { ok: false, error: '工程不存在' }

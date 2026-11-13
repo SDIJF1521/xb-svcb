@@ -974,7 +974,7 @@
             <div v-if="rerunJobId" class="rerun-progress" aria-live="polite">
               <div class="rerun-progress-head"><span>{{ translateUiText(rerunMessage || '正在处理') }}</span><b>{{ rerunProgress }}%</b></div>
               <div class="rerun-progress-track"><i :style="{ width: `${rerunProgress}%` }"></i></div>
-              <pre v-if="rerunLog" class="rerun-log">{{ rerunLog }}</pre>
+              <pre v-if="rerunLog" class="rerun-log">{{ translateLogText(rerunLog) }}</pre>
             </div>
           </div>
         </div>
@@ -1290,7 +1290,7 @@ import EditorRoleManager from '@/components/editor/EditorRoleManager.vue'
 import MidiEditorDialog from '@/components/editor/MidiEditorDialog.vue'
 import TimelineTemplatePanel from '@/components/editor/TimelineTemplatePanel.vue'
 import { api } from '@/api'
-import { translatePymssCategory, translatePymssTargetStem, translateUiText } from '@/i18n'
+import { translateLogText, translatePymssCategory, translatePymssTargetStem, translateUiText } from '@/i18n'
 import { useModelsStore } from '@/stores/models'
 import { useSystemStore } from '@/stores/system'
 import { f0MethodsForFramework, normalizeF0Method } from '@/utils/f0'

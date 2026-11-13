@@ -225,7 +225,7 @@ export const workflowEnPhrases: Record<string, string> = {
   '删除节点': 'Delete node',
   '删除连线': 'Delete connection',
   '关闭设置': 'Close settings',
-  '点击节点右上角 ⚙ 打开设置 · 点击连线可删除': 'Click the ⚙ on a node to open settings · Click a connection to delete it',
+  '点击节点右上角 ⚙ 打开设置 · 右键菜单可复制 / 粘贴 / 断开连线 · 点击连线可删除': "Click the ⚙ at a node's top-right to open settings · right-click for copy / paste / disconnect · click a connection to delete it",
   '一个工作流只保留一个保存节点': 'Only one save node is allowed per workflow',
   // 面板
   '执行流程与日志': 'Execution Flow & Log',
@@ -498,7 +498,7 @@ export const workflowJaPhrases: Record<string, string> = {
   '删除节点': 'ノードを削除',
   '删除连线': '接続を削除',
   '关闭设置': '設定を閉じる',
-  '点击节点右上角 ⚙ 打开设置 · 点击连线可删除': 'ノード右上の⚙で設定を開く · 接続をクリックで削除',
+  '点击节点右上角 ⚙ 打开设置 · 右键菜单可复制 / 粘贴 / 断开连线 · 点击连线可删除': 'ノード右上の⚙で設定を開く · 右クリックでコピー / 貼り付け / 接続切断 · 接続をクリックで削除',
   '一个工作流只保留一个保存节点': '1つのワークフローに保存ノードは1つだけです',
   '执行流程与日志': '実行フローとログ',
   '执行流程': '実行フロー',

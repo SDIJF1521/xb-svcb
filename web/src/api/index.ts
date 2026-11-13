@@ -1,5 +1,6 @@
 // 前端统一 API 入口：桌面环境调用 pywebview 后端，浏览器回退 mock。
 
+import { useI18n } from '@/i18n'
 import { hasDesktopApiMethod, invoke, isDesktop, whenReady } from './bridge'
 import { mock } from './mock'
 import type {
@@ -100,6 +101,14 @@ import type {
 export * from './types'
 export { isDesktop, whenReady } from './bridge'
 
+/**
+ * 把当前界面语言带进任务负载：后端据此翻译写入磁盘的运行日志，
+ * 用户直接打开 run.log 也能读懂。
+ */
+function withUiLocale<T extends object>(payload: T): T & { ui_locale: string } {
+  return { ...payload, ui_locale: useI18n().locale.value }
+}
+
 function migrationResultToProgress(
   res: DataMigrationResult,
   targetDir: string,
@@ -123,6 +132,10 @@ function migrationResultToProgress(
 }
 
 export const api = {
+  // 原生打开 / 保存对话框由后端弹出，先把当前界面语言同步过去
+  setUiLocale: (locale: string) =>
+    invoke<boolean>('set_ui_locale', [locale], () => true),
+
   getSystemStatus: () =>
     invoke<SystemStatus>('get_system_status', [], () => mock.getSystemStatus()),
 
@@ -336,10 +349,10 @@ export const api = {
     invoke<WorkDTO | null>('get_work', [id], () => mock.getWork(id)),
 
   createWork: (payload: CreateWorkPayload) =>
-    invoke<WorkDTO>('create_work', [payload], () => mock.createWork(payload)),
+    invoke<WorkDTO>('create_work', [withUiLocale(payload)], () => mock.createWork(withUiLocale(payload))),
 
   createBatchWork: (payload: CreateBatchWorkPayload) =>
-    invoke<WorkDTO[]>('create_batch_work', [payload], () => mock.createBatchWork(payload)),
+    invoke<WorkDTO[]>('create_batch_work', [withUiLocale(payload)], () => mock.createBatchWork(withUiLocale(payload))),
 
   startRealtimeCover: (payload: RealtimeCoverPayload) =>
     invoke<RealtimeCoverStatus>('start_realtime_cover', [payload], () => mock.startRealtimeCover(payload)),
@@ -829,8 +842,19 @@ export const api = {
       loudness_envelope?: number
     },
   ) =>
-    invoke<EditorRerunResult>('rerun_editor_clip', [projectId, trackId, clipId, modelId, params, enhance], () =>
-      mock.rerunEditorClip(projectId, trackId, clipId, modelId, params, enhance),
+    invoke<EditorRerunResult>(
+      'rerun_editor_clip',
+      [projectId, trackId, clipId, modelId, params, enhance, useI18n().locale.value],
+      () =>
+        mock.rerunEditorClip(
+          projectId,
+          trackId,
+          clipId,
+          modelId,
+          params,
+          enhance,
+          useI18n().locale.value,
+        ),
     ),
 
   getEditorRerunStatus: (jobId: string) =>
