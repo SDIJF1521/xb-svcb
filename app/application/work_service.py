@@ -10,6 +10,7 @@ from typing import Any
 
 import config
 from domain import FRAMEWORK_DEFAULT, JobStatus, ModelInfo, Work
+from domain import log_text
 from domain.formatting import file_size_label
 from domain.identity import new_id
 from domain.work_request import (
@@ -474,6 +475,7 @@ class WorkService:
         )
         record = work.to_dict()
         record.update(self._resolve_model_paths(model))
+        record["ui_locale"] = self._ui_locale(payload)
         self._repo.add(record)
         self._conversion.start(work.id)
         return self._view(record)
@@ -531,6 +533,7 @@ class WorkService:
                 "target_instrumental_path": str((parent or {}).get("instrumental_path") or ""),
             }
         )
+        record["ui_locale"] = self._ui_locale(payload)
         self._repo.add(record)
         self._conversion.start(work.id)
         return self._view(record)
@@ -662,6 +665,7 @@ class WorkService:
         )
         record = work.to_dict()
         record["seg_models"] = seg_models
+        record["ui_locale"] = self._ui_locale(payload)
         self._repo.add(record)
         self._conversion.start(work.id)
         return self._view(record)
@@ -735,9 +739,15 @@ class WorkService:
         record = work.to_dict()
         record["workflow_graph"] = graph
         record["workflow_models"] = workflow_models
+        record["ui_locale"] = self._ui_locale(payload)
         self._repo.add(record)
         self._conversion.start(work.id)
         return self._view(record)
+
+    @staticmethod
+    def _ui_locale(payload: dict[str, Any]) -> str:
+        """记录创建任务时的界面语言，运行日志按它翻译。"""
+        return log_text.normalize_locale((payload or {}).get("ui_locale"))
 
     @classmethod
     def _workflow(cls, payload: dict[str, Any], mode: str = "single") -> str:

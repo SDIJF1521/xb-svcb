@@ -1,31 +1,17 @@
 <div align="center">
 
-[简体中文](release_notes_v0_1_1.md) | **English** | [日本語](release_notes_v0_1_1.ja.md)
-
-<img src="../../assets/icon/xb-svcb.png" width="96" alt="XB-SVCB" />
-
-# 🎉 XB-SVCB v0.1.1 Release Notes
-
-#### A release focused on editing and arranging
-
-[![release](https://img.shields.io/badge/release-v0.1.1-ff6b9d?style=flat)](../../README.en.md)
-[![commits](https://img.shields.io/badge/commits-28-8a2be2?style=flat)](#)
-[![date](https://img.shields.io/badge/date-2026--11--13-informational?style=flat)](#)
-
-</div>
-
 > **In one sentence:** the audio editor grew a complete MIDI sub-editor (fix intonation, write arrangements, draw pitch curves), the AI Cover workspace grew a visual custom workflow, and PyMSS is fully integrated — alongside upgrades to real-time conversion and the RVC inference stack, and a fix for installer failures on Chinese install paths.
 
 ## ✨ Highlights
 
-| Area | What changed |
-| :--- | :--- |
-| 🎼 **MIDI sub-editor** | New: note-level pitch redraw · 128 GM instruments · real drum samples · full timeline · pitch curves |
-| 🧩 **Custom workflow** | New: visual node canvas · save and reuse · per-node status and progress · one-click export |
-| 🎚️ **Audio editor** | Track rename · role pitch shift now applied · export-path layout fixed · messages no longer cover the nav |
-| 🎧 **Real-time conversion** | Automatic virtual-cable endpoint pairing · lower monitoring latency · clearer device errors |
-| 🚀 **Inference engines** | Full PyMSS integration · RVC back on the original implementation · high-band rebuild in high-pitch protection |
-| 📦 **Installer** | Fixed installation on Chinese paths · pip cache moved off the system drive · reproducible CI |
+| Area                              | What changed                                                                                                    |
+| :-------------------------------- | :-------------------------------------------------------------------------------------------------------------- |
+| 🎼 **MIDI sub-editor**      | New: note-level pitch redraw · 128 GM instruments · real drum samples · full timeline · pitch curves        |
+| 🧩 **Custom workflow**      | New: visual node canvas · save and reuse · per-node status and progress · one-click export                   |
+| 🎚️ **Audio editor**       | Track rename · role pitch shift now applied · export-path layout fixed · messages no longer cover the nav    |
+| 🎧 **Real-time conversion** | Automatic virtual-cable endpoint pairing · lower monitoring latency · clearer device errors                   |
+| 🚀 **Inference engines**    | Full PyMSS integration · RVC back on the original implementation · high-band rebuild in high-pitch protection |
+| 📦 **Installer**            | Fixed installation on Chinese paths · pip cache moved off the system drive · reproducible CI                  |
 
 ## 📌 Release scope
 
@@ -62,12 +48,12 @@ Use the following range when generating commit lists or auditing changes:
 
 Wire the whole cover pipeline on a canvas:
 
-| Category | Nodes |
-| :--- | :--- |
-| Input / output | Input audio · Final output |
+| Category         | Nodes                                                                                                                                    |
+| :--------------- | :--------------------------------------------------------------------------------------------------------------------------------------- |
+| Input / output   | Input audio · Final output                                                                                                              |
 | Vocal processing | Vocal separation (UVR / PyMSS) · Dereverb cleanup · Vocal repair · Voice conversion · Vocal harmony stacking · AI vocal enhancement |
-| Synthesis | Mixdown · Multi-track merge · Sequential concat |
-| Audio shaping | Audio effects · Trim · Fade · Pitch shift · Time stretch · Loudness normalization |
+| Synthesis        | Mixdown · Multi-track merge · Sequential concat                                                                                        |
+| Audio shaping    | Audio effects · Trim · Fade · Pitch shift · Time stretch · Loudness normalization                                                   |
 
 - Workflows can be **saved and reused**, and nodes report their own status and progress while running.
 - Nodes support **copy / cut / paste** and shortcuts; choosing a separation method switches to the matching separation / dereverb node automatically.
@@ -115,9 +101,3 @@ Wire the whole cover pipeline on a canvas:
 ---
 
 <div align="center">
-
-Setup: [source installation and startup](../en/getting-started.md) · Build and release: [installer documentation](../../installer/README.md)
-
-Full version history: [docs/release-notes/](../release-notes/)
-
-</div>

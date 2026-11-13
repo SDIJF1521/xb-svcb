@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 import config
 from domain import InferenceParams, JobStatus, PipelineStep, StepStatus, apply_step_status
+from domain import log_text
 from domain.formatting import file_size_label
 from domain.vocal_enhancement import VocalEnhancementControls, enhancement_settings
 from domain.workflow_graph import (
@@ -138,6 +139,18 @@ def default_steps_ai_enhancement() -> list[dict[str, Any]]:
         ("enhance", "AI 歌声增强"),
         ("mix", "增强成品混音"),
     )
+
+
+# 每个 run.log 对应的界面语言：日志由后端写盘，用户排查问题时直接看文件，
+# 所以写入前按这里的语言翻译。键是日志文件路径，不同任务的日志互不影响。
+_LOG_LOCALES: dict[str, str] = {}
+
+
+def _register_log_locale(log_file: Path, work: dict[str, Any]) -> str:
+    """记录本次运行日志的语言，并返回它。"""
+    locale = log_text.normalize_locale(work.get("ui_locale"))
+    _LOG_LOCALES[str(log_file)] = locale
+    return locale
 
 
 class ConversionService:
@@ -2978,11 +2991,16 @@ class ConversionService:
 
     @staticmethod
     def _log(log_file: Path, msg: str) -> None:
-        """向作品日志追加一行带时间戳的记录（失败不抛出）。"""
+        """向作品日志追加一行带时间戳的记录（失败不抛出）。
+
+        写入前按任务的界面语言翻译，保证用户直接打开 ``run.log`` 也能读懂。
+        """
         try:
+            locale = _LOG_LOCALES.get(str(log_file), "zh-CN")
             stamp = datetime.now().strftime("%H:%M:%S")
+            text = log_text.translate_log_text(msg, locale)
             with log_file.open("a", encoding="utf-8") as f:
-                f.write(f"[{stamp}] {msg}\n")
+                f.write(f"[{stamp}] {text}\n")
         except OSError:
             pass
 
@@ -3005,11 +3023,15 @@ class ConversionService:
         work_dir.mkdir(parents=True, exist_ok=True)
         log_file = work_dir / "run.log"
         try:
+            locale = _register_log_locale(log_file, work)
             log_file.write_text(
-                f"=== {work.get('title', work_id)} ===\n"
-                f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n"
-                f"原始歌曲: {work.get('original_audio_path', '')}\n"
-                f"待增强作品: {work.get('parent_work_id', '')}\n",
+                log_text.translate_log_text(
+                    f"=== {work.get('title', work_id)} ===\n"
+                    f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n"
+                    f"原始歌曲: {work.get('original_audio_path', '')}\n"
+                    f"待增强作品: {work.get('parent_work_id', '')}\n",
+                    locale,
+                ),
                 encoding="utf-8",
             )
         except OSError:
@@ -3194,10 +3216,14 @@ class ConversionService:
         log_file = work_dir / "run.log"
         # 每次运行重写日志头，记录路径供前端展示与打开
         try:
+            locale = _register_log_locale(log_file, work)
             log_file.write_text(
-                f"=== {work.get('title', work_id)} ===\n"
-                f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n"
-                f"参数: {work.get('params', {})}\n",
+                log_text.translate_log_text(
+                    f"=== {work.get('title', work_id)} ===\n"
+                    f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n"
+                    f"参数: {work.get('params', {})}\n",
+                    locale,
+                ),
                 encoding="utf-8",
             )
         except OSError:
@@ -3766,9 +3792,13 @@ class ConversionService:
         work_dir.mkdir(parents=True, exist_ok=True)
         log_file = work_dir / "run.log"
         try:
+            locale = _register_log_locale(log_file, work)
             log_file.write_text(
-                f"=== {work.get('title', work_id)} (多模型混合) ===\n"
-                f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n",
+                log_text.translate_log_text(
+                    f"=== {work.get('title', work_id)} (多模型混合) ===\n"
+                    f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n",
+                    locale,
+                ),
                 encoding="utf-8",
             )
         except OSError:
@@ -4338,10 +4368,14 @@ class ConversionService:
         log_file = work_dir / "run.log"
         try:
             graph = work.get("workflow_graph") or {}
+            locale = _register_log_locale(log_file, work)
             log_file.write_text(
-                f"=== {work.get('title', work_id)} (自定义工作流) ===\n"
-                f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n"
-                f"工作流: {graph.get('name', '未命名')}\n",
+                log_text.translate_log_text(
+                    f"=== {work.get('title', work_id)} (自定义工作流) ===\n"
+                    f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n"
+                    f"工作流: {graph.get('name', '未命名')}\n",
+                    locale,
+                ),
                 encoding="utf-8",
             )
         except OSError:

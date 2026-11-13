@@ -18,6 +18,7 @@ from typing import Any, Callable
 import config
 from domain import EditorClip, EditorProject, EditorTrack, InferenceParams, ModelInfo
 from domain import editor_midi, midi_drums, midi_file, midi_instruments
+from domain import log_text
 from domain import midi_session as midi_session_model
 from domain.identity import new_id
 from domain.audio_editor_rules import (
@@ -78,6 +79,57 @@ def _bundle_path(root: Path, arcname: str) -> Path:
     return root.joinpath(*PurePosixPath(arcname).parts)
 
 
+# 自动生成的音轨名 / 工程名：创建时按界面语言落库，之后用户仍可自行重命名。
+_TRACK_LABELS: dict[str, dict[str, str]] = {
+    "en-US": {
+        "原始音频": "Original audio",
+        "原始人声": "Original vocal",
+        "BGM 轨": "BGM track",
+        "翻唱成品": "Cover mix",
+        "AI 翻唱干声": "AI cover dry vocal",
+        "素材": "Material",
+        "人声": "Vocals",
+        "伴奏": "Instrumental",
+        "音频": "Audio",
+        "其他音轨": "Other tracks",
+        "音轨": "Track",
+        "音轨 1": "Track 1",
+        "空白工程": "Blank project",
+        "音频工程": "Audio project",
+        "中间片段": "Intermediate clips",
+        "翻唱作品": "Cover",
+        "编辑": "Edit",
+    },
+    "ja-JP": {
+        "原始音频": "元の音声",
+        "原始人声": "元のボーカル",
+        "BGM 轨": "BGMトラック",
+        "翻唱成品": "カバーミックス",
+        "AI 翻唱干声": "AIカバーのドライボーカル",
+        "素材": "素材",
+        "人声": "ボーカル",
+        "伴奏": "伴奏",
+        "音频": "音声",
+        "其他音轨": "その他トラック",
+        "音轨": "トラック",
+        "音轨 1": "トラック 1",
+        "空白工程": "空のプロジェクト",
+        "音频工程": "音声プロジェクト",
+        "中间片段": "中間クリップ",
+        "翻唱作品": "カバー",
+        "编辑": "編集",
+    },
+}
+
+
+def _label(text: str, locale: str) -> str:
+    """把自动生成的名称翻译成当前界面语言；未知名称原样返回。"""
+    table = _TRACK_LABELS.get(log_text.normalize_locale(locale))
+    if not table or not text:
+        return text
+    return table.get(text, text)
+
+
 class AudioEditorService:
     """Timeline Project 的应用层服务。"""
 
@@ -124,6 +176,7 @@ class AudioEditorService:
         self._high_note_vocoder = high_note_vocoder or create_high_note_vocoder()
         # MIDI 子编辑器：音符级音高重绘（Praat PSOLA），未就绪时前端显示不可用。
         self._midi_pitch = midi_pitch or create_midi_pitch()
+        self._user_locale = "zh-CN"
         self._rerun_jobs: dict[str, dict[str, Any]] = {}
         self._rerun_jobs_lock = threading.RLock()
         # MIDI 编曲渲染放在后台线程，前端轮询进度，避免长请求卡住桥接调用。
@@ -331,7 +384,17 @@ class AudioEditorService:
         except (OSError, RuntimeError):
             return
 
-    def create_from_audio(self, path: str, title: str | None = None) -> dict[str, Any] | None:
+    def set_ui_locale(self, locale: str) -> None:
+        """记录界面语言：新建工程时自动生成的音轨名按它落库。"""
+        self._user_locale = log_text.normalize_locale(locale)
+
+    def _locale(self, locale: str | None = None) -> str:
+        return log_text.normalize_locale(locale or getattr(self, "_user_locale", "zh-CN"))
+
+    def create_from_audio(
+        self, path: str, title: str | None = None, locale: str = ""
+    ) -> dict[str, Any] | None:
+        locale = self._locale(locale)
         src = Path(path) if path else None
         if src is None or not src.exists():
             return None
@@ -362,14 +425,14 @@ class AudioEditorService:
         ).to_dict()
         track = EditorTrack(
             id=new_id("trk_"),
-            name="原始音频",
+            name=_label("原始音频", locale),
             type="source",
             clips=[clip],
             locked=False,
         ).to_dict()
         project = EditorProject(
             id=pid,
-            title=(title or src.stem or "音频工程")[:120],
+            title=(title or src.stem or _label("音频工程", locale))[:120],
             tracks=[track],
             duration=max(duration, 0.05),
             sample_rate=sample_rate,
@@ -380,22 +443,23 @@ class AudioEditorService:
         self._repo.add({**project, "history": [], "future": []})
         return self._public(project)
 
-    def create_blank(self, title: str | None = None) -> dict[str, Any] | None:
+    def create_blank(self, title: str | None = None, locale: str = "") -> dict[str, Any] | None:
         """创建一个空白工程（含一条空轨道，方便直接进 MIDI 编曲）。"""
+        locale = self._locale(locale)
         pid = new_id("edt_")
         project_dir = self._project_dir(pid)
         project_dir.mkdir(parents=True, exist_ok=True)
         now = self._now()
         track = EditorTrack(
             id=new_id("trk_"),
-            name="音轨 1",
+            name=_label("音轨 1", locale),
             type="audio",
             clips=[],
             locked=False,
         ).to_dict()
         project = EditorProject(
             id=pid,
-            title=(title or "空白工程")[:120],
+            title=(title or _label("空白工程", locale))[:120],
             tracks=[track],
             duration=0.0,
             sample_rate=44100,
@@ -684,7 +748,7 @@ class AudioEditorService:
         if track is None:
             track = EditorTrack(
                 id=new_id("trk_"),
-                name=f"音轨 {len(tracks) + 1}",
+                name=f"{_label('音轨', self._locale())} {len(tracks) + 1}",
                 type="audio",
                 clips=[],
             ).to_dict()
@@ -1153,7 +1217,8 @@ class AudioEditorService:
                     continue
         return files.issubset(present)
 
-    def create_from_work(self, work_id: str) -> dict[str, Any] | None:
+    def create_from_work(self, work_id: str, locale: str = "") -> dict[str, Any] | None:
+        locale = self._locale(locale)
         work = self._works_repo.get(work_id)
         if not work:
             return None
@@ -1379,9 +1444,9 @@ class AudioEditorService:
                 added = True
             return added
 
-        add_track("原始音频", "source", work.get("source_path"), locked=True, mute=True)
-        add_track("原始人声", "vocal", work.get("vocals_path"), mute=True)
-        add_track("BGM 轨", "bgm", work.get("instrumental_path"), mute=vocal_export)
+        add_track(_label("原始音频", locale), "source", work.get("source_path"), locked=True, mute=True)
+        add_track(_label("原始人声", locale), "vocal", work.get("vocals_path"), mute=True)
+        add_track(_label("BGM 轨", locale), "bgm", work.get("instrumental_path"), mute=vocal_export)
 
         work_dir = config.WORKS_DIR / work_id
         ai_merged = work.get("ai_merged_vocal_path") or work.get("converted_path")
@@ -1419,7 +1484,7 @@ class AudioEditorService:
                 (item for item in workflow_outputs if item.get("primary")), None
             )
             cover_path = (primary_item or {}).get("path") or ai_merged or work.get("output_path")
-            add_track("翻唱成品", "ai", cover_path)
+            add_track(_label("翻唱成品", locale), "ai", cover_path)
             for item in workflow_outputs:
                 if item.get("primary"):
                     continue
@@ -1427,8 +1492,9 @@ class AudioEditorService:
                 label = str(item.get("label") or "").strip()
                 fallback_name = port_name.get(port)
                 if not fallback_name and port.startswith("stem:"):
-                    fallback_name = f"音轨 {port.split(':', 1)[1]}"
-                track_name = f"素材 · {label}" if label else f"素材 · {fallback_name or '音频'}"
+                    fallback_name = f"{_label('音轨', locale)} {port.split(':', 1)[1]}"
+                stem_name = _label(label, locale) if label else _label(fallback_name or "音频", locale)
+                track_name = f"{_label('素材', locale)} · {stem_name}"
                 add_track(
                     track_name,
                     port_kind.get(port, "ai"),
@@ -1441,7 +1507,7 @@ class AudioEditorService:
                     },
                 )
         else:
-            add_track("AI 翻唱干声", "ai", ai_merged or (ai_paths[0] if ai_paths else None))
+            add_track(_label("AI 翻唱干声", locale), "ai", ai_merged or (ai_paths[0] if ai_paths else None))
 
         # 成品音轨已加入后，再标记整轨成品路径，避免「中间片段」重复导入。
         remember(work.get("output_path"))
@@ -1490,7 +1556,7 @@ class AudioEditorService:
             tracks.append(
                 EditorTrack(
                     id=new_id("trk_"),
-                    name="中间片段",
+                    name=_label("中间片段", self._locale()),
                     type="effect",
                     clips=mid_clips,
                     mute=True,
@@ -1502,7 +1568,7 @@ class AudioEditorService:
         duration = self._project_duration({"tracks": tracks})
         project = EditorProject(
             id=pid,
-            title=f"{work.get('title', '翻唱作品')} · 编辑",
+            title=f"{work.get('title') or _label('翻唱作品', locale)} · {_label('编辑', locale)}",
             tracks=tracks,
             duration=max(duration, 0.05),
             metadata={
@@ -2979,6 +3045,7 @@ class AudioEditorService:
         model_id: str,
         params: dict[str, Any] | None = None,
         enhance: dict[str, Any] | None = None,
+        locale: str = "zh-CN",
     ) -> dict[str, Any]:
         """Queue a local rerun so the editor can show progress and logs."""
         job_id = f"rerun_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
@@ -2999,8 +3066,9 @@ class AudioEditorService:
 
         def write_log(message: str) -> None:
             log_path.parent.mkdir(parents=True, exist_ok=True)
+            text = log_text.translate_log_text(message, locale)
             with log_path.open("a", encoding="utf-8") as handle:
-                handle.write(f"[{datetime.now().strftime('%H:%M:%S')}] {message}\n")
+                handle.write(f"[{datetime.now().strftime('%H:%M:%S')}] {text}\n")
 
         def update(value: int, message: str) -> None:
             with self._rerun_jobs_lock:

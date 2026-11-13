@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, cast
 
 import config
+from api import dialog_text
 from application import (
     AudioEditorService,
     AudioImportService,
@@ -45,6 +46,9 @@ def _safe_filename(name: str) -> str:
     cleaned = re.sub(r'[\\/:*?"<>|\r\n\t]', "_", name or "").strip().strip(".")
     return cleaned[:120] or "翻唱作品"
 
+
+# 前端当前界面语言：原生对话框由后端弹出，需要它才能本地化标题与文件类型。
+_UI_LOCALE = "zh-CN"
 
 
 class Api:
@@ -101,6 +105,14 @@ class Api:
         self._window = window
 
     # ---- 系统 ----
+    def set_ui_locale(self, locale: str) -> bool:
+        """记录前端当前界面语言，供原生打开/保存对话框本地化标题与文件名。"""
+        global _UI_LOCALE
+        _UI_LOCALE = dialog_text.normalize_locale(locale)
+        # 编辑器自动生成的音轨 / 工程名也按这个语言落库
+        self._editor.set_ui_locale(_UI_LOCALE)
+        return True
+
     def get_system_status(self) -> dict[str, Any]:
         return self._system.status()
 
@@ -180,7 +192,9 @@ class Api:
         source = Path(str(status.get("output_path") or ""))
         if not source.is_file():
             return ""
-        destination = self._save_dialog("导出实时翻唱", "实时翻唱.wav")
+        destination = self._save_dialog(
+            "导出实时翻唱", "实时翻唱.wav", ("音频文件 (*.wav)",)
+        )
         if not destination:
             return ""
         target = Path(destination)
@@ -696,7 +710,11 @@ class Api:
         graph = graph or {}
         payload = self._works.workflow_file_payload(graph)
         default_name = f"{_safe_filename(str(payload.get('name') or 'cover-workflow'))}.xbworkflow.json"
-        destination = self._save_dialog(dialog_title or "导出工作流文件", default_name)
+        destination = self._save_dialog(
+            dialog_title or "导出工作流文件",
+            default_name,
+            ("工作流文件 (*.json)",),
+        )
         if not destination:
             return {"ok": False, "cancelled": True}
         target = Path(destination)
@@ -792,7 +810,11 @@ class Api:
             output_format = "wav"
         ext = f".{output_format}"
         filename = f"{_safe_filename(title)}{ext}"
-        dest = self._save_dialog(f"导出翻唱作品 · {output_format.upper()}", filename)
+        dest = self._save_dialog(
+            f"导出翻唱作品 · {output_format.upper()}",
+            filename,
+            (f"音频文件 (*.{output_format})",),
+        )
         if not dest:
             return ""
         return self._media.export(work_id, dest, output_format)
@@ -907,22 +929,23 @@ class Api:
     def create_editor_project_from_audio(
         self, path: str, title: str | None = None
     ) -> dict[str, Any] | None:
-        return self._editor.create_from_audio(path, title)
+        return self._editor.create_from_audio(path, title, _UI_LOCALE)
 
     def create_editor_project_from_work(self, work_id: str) -> dict[str, Any] | None:
-        return self._editor.create_from_work(work_id)
+        return self._editor.create_from_work(work_id, _UI_LOCALE)
 
     def create_editor_project_blank(self, title: str | None = None) -> dict[str, Any] | None:
-        return self._editor.create_blank(title)
+        return self._editor.create_blank(title, _UI_LOCALE)
 
     def export_editor_project_bundle(self, project_id: str) -> dict[str, Any]:
         project = self._editor.get(project_id)
         if not project:
             return {"ok": False, "error": "工程不存在"}
-        title = str(project.get("title") or "音频编辑工程").strip()
+        title = str(project.get("title") or self._dialog_text("音频编辑工程")).strip()
         destination = self._save_dialog(
             "导出音频编辑工程",
             f"{_safe_filename(title)}.xbproject",
+            ("音频编辑工程 (*.xbproject)",),
         )
         if not destination:
             return {"ok": False, "cancelled": True}
@@ -1074,7 +1097,7 @@ class Api:
             if metadata.get("export_mode") == "vocal"
             else "导出编辑器混音"
         )
-        dest = self._save_dialog(dialog_title, filename)
+        dest = self._save_dialog(dialog_title, filename, (f"音频文件 (*.{ext.lstrip('.')})",))
         if not dest:
             return ""
         dest_path = Path(dest)
@@ -1101,10 +1124,10 @@ class Api:
         if src is None:
             return ""
         ext = "." + self._editor._normalize_format(fmt)
-        title = str(project.get("title") or "音频编辑").strip()
-        track_name = str((track or {}).get("name") or "音轨").strip()
+        title = str(project.get("title") or self._dialog_text("音频编辑")).strip()
+        track_name = str((track or {}).get("name") or self._dialog_text("音轨")).strip()
         filename = f"{_safe_filename(title)}_{_safe_filename(track_name)}{ext}"
-        dest = self._save_dialog("导出音轨音频", filename)
+        dest = self._save_dialog("导出音轨音频", filename, (f"音频文件 (*.{ext.lstrip('.')})",))
         if not dest:
             return ""
         dest_path = Path(dest)
@@ -1164,8 +1187,17 @@ class Api:
         model_id: str,
         params: dict[str, Any] | None = None,
         enhance: dict[str, Any] | None = None,
+        locale: str = "",
     ) -> dict[str, Any]:
-        return self._editor.rerun_clip(project_id, track_id, clip_id, model_id, params or {}, enhance or {})
+        return self._editor.rerun_clip(
+            project_id,
+            track_id,
+            clip_id,
+            model_id,
+            params or {},
+            enhance or {},
+            locale or _UI_LOCALE,
+        )
 
     def get_editor_rerun_status(self, job_id: str) -> dict[str, Any] | None:
         return self._editor.rerun_status(job_id)
@@ -1326,7 +1358,9 @@ class Api:
         project = self._editor.get(project_id) or {}
         title = str(project.get("title") or "MIDI").strip()
         destination = self._save_dialog(
-            "导出 MIDI 文件", f"{_safe_filename(title)}_MIDI.mid"
+            "导出 MIDI 文件",
+            f"{_safe_filename(title)}_MIDI.mid",
+            ("MIDI 文件 (*.mid;*.midi)",),
         )
         if not destination:
             return {**result, "cancelled": True}
@@ -1381,7 +1415,19 @@ class Api:
             return False
 
     # ---- 内部：文件对话框 ----
+    def _dialog_text(self, text: str) -> str:
+        """按前端当前界面语言翻译对话框标题 / 默认文件名。"""
+        return dialog_text.translate_dialog_text(text, _UI_LOCALE)
+
+    @staticmethod
+    def _dialog_file_types(file_types: tuple[str, ...]) -> tuple[str, ...]:
+        """翻译 ``名称 (*.ext)`` 中的名称，保留扩展名筛选语法。"""
+        return tuple(dialog_text.translate_file_type(item, _UI_LOCALE) for item in file_types)
+
     def _open_dialog(self, title: str, multiple: bool, file_types: tuple[str, ...]) -> list[str]:
+        # pywebview 不接收标题，但保留翻译以便将来支持；文件类型是用户可见的筛选名。
+        title = self._dialog_text(title)
+        file_types = self._dialog_file_types(file_types)
         try:
             import webview
 
@@ -1401,7 +1447,16 @@ class Api:
         except Exception:  # noqa: BLE001 - 无 GUI 环境时静默返回
             return []
 
-    def _save_dialog(self, title: str, filename: str) -> str:
+    def _save_dialog(
+        self,
+        title: str,
+        filename: str,
+        file_types: tuple[str, ...] = (),
+    ) -> str:
+        # 保存对话框里用户最先看到的是默认文件名与类型筛选，都要跟随界面语言。
+        title = self._dialog_text(title)
+        filename = self._dialog_text(filename)
+        file_types = self._dialog_file_types(file_types)
         try:
             import webview
 
@@ -1413,6 +1468,7 @@ class Api:
             result = window.create_file_dialog(
                 cast(int, webview.SAVE_DIALOG),
                 save_filename=filename,
+                file_types=file_types,
             )
             if not result:
                 return ""
@@ -1421,6 +1477,7 @@ class Api:
             return ""
 
     def _folder_dialog(self, title: str) -> str:
+        title = self._dialog_text(title)
         try:
             import webview
 

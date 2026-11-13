@@ -245,6 +245,40 @@ class AudioEditorWorkflowTests(unittest.TestCase):
             self.assertEqual(first["id"], second["id"])
             self.assertEqual(len(project_repo.all()), 1)
 
+    def test_create_from_work_uses_interface_locale_for_track_names(self) -> None:
+        """自动生成的音轨名 / 工程名要按界面语言落库。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "source.wav"
+            source.write_bytes(b"audio")
+            works_repo = ListRepository(root / "works.json")
+            works_repo.add(
+                {
+                    "id": "work-1",
+                    "title": "Existing cover",
+                    "status": "done",
+                    "mode": "single",
+                    "workflow": "auto_mix",
+                    "duration": "0:12",
+                    "source_path": str(source),
+                }
+            )
+            service = object.__new__(AudioEditorService)
+            service._repo = ListRepository(root / "projects.json")
+            service._works_repo = works_repo
+            service._ffmpeg = _FakeFfmpeg()
+            service._ffmpeg.probe_duration = lambda _path: 12.0
+            service.set_ui_locale("en-US")
+
+            with patch("application.audio_editor_service.config.WORKS_DIR", root / "work-files"):
+                project = service.create_from_work("work-1")
+
+            self.assertIsNotNone(project)
+            names = [track["name"] for track in project["tracks"]]
+            self.assertIn("Original audio", names)
+            self.assertNotIn("原始音频", names)
+            self.assertTrue(project["title"].endswith(" · Edit"))
+
     def test_project_bundle_round_trip_includes_media_and_creates_new_project(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
