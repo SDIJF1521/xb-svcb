@@ -11,6 +11,16 @@ from api import bridge, dialog_text
 from api.bridge import Api
 
 
+class _FakeEditor:
+    """记录界面语言是否同步给了编辑器服务。"""
+
+    def __init__(self) -> None:
+        self.locales: list[str] = []
+
+    def set_ui_locale(self, locale: str) -> None:
+        self.locales.append(locale)
+
+
 class _FakeWindow:
     """记录 pywebview 对话框收到的参数。"""
 
@@ -69,6 +79,7 @@ def test_translate_file_type_keeps_extension_spec() -> None:
 
 def test_api_set_ui_locale_drives_dialog_text() -> None:
     api = object.__new__(Api)
+    api._editor = _FakeEditor()
     try:
         assert api.set_ui_locale("en-US") is True
         assert api._dialog_text("选择歌词文件") == "Choose a lyrics file"
@@ -76,6 +87,8 @@ def test_api_set_ui_locale_drives_dialog_text() -> None:
             "Lyrics files (*.lrc;*.txt)",
             "All files (*.*)",
         )
+        # 语言同时同步给编辑器，自动生成的音轨名才会本地化
+        assert api._editor.locales == ["en-US"]
 
         assert api.set_ui_locale("ja-JP") is True
         assert api._dialog_text("选择歌词文件") == "歌詞ファイルを選択"
@@ -83,6 +96,17 @@ def test_api_set_ui_locale_drives_dialog_text() -> None:
         # 非法语言回到简体中文
         assert api.set_ui_locale("xx-YY") is True
         assert api._dialog_text("选择歌词文件") == "选择歌词文件"
+        assert api._editor.locales == ["en-US", "ja-JP", "zh-CN"]
+    finally:
+        _reset_locale()
+
+
+def test_set_ui_locale_without_editor_does_not_raise() -> None:
+    """回归：缺少 _editor（例如精简构造的实例）时不能抛出。"""
+    api = object.__new__(Api)
+    try:
+        assert api.set_ui_locale("en-US") is True
+        assert api._dialog_text("选择歌词文件") == "Choose a lyrics file"
     finally:
         _reset_locale()
 

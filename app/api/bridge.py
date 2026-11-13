@@ -110,7 +110,9 @@ class Api:
         global _UI_LOCALE
         _UI_LOCALE = dialog_text.normalize_locale(locale)
         # 编辑器自动生成的音轨 / 工程名也按这个语言落库
-        self._editor.set_ui_locale(_UI_LOCALE)
+        editor = getattr(self, "_editor", None)
+        if editor is not None:
+            editor.set_ui_locale(_UI_LOCALE)
         return True
 
     def get_system_status(self) -> dict[str, Any]:
