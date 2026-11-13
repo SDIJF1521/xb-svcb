@@ -6,9 +6,9 @@ Most users should use the online installer, which selects the hardware package a
 
 ## Online Installation
 
-Download and run the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`, from GitHub Releases. Choose **Auto detect (recommended)** or select a hardware build manually. The bootstrapper downloads only that complete EXE/BIN set from the ModelScope `v0.1.0` revision, verifies every file with SHA-256, and then starts the localized offline setup. Keep the network connection available and allow access to `www.modelscope.cn`.
+Download and run the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`, from GitHub Releases. Choose **Auto detect (recommended)** or select a hardware build manually. The bootstrapper downloads only that complete EXE/BIN set from the ModelScope `v0.1.1` revision, verifies every file with SHA-256, and then starts the localized offline setup. Keep the network connection available and allow access to `www.modelscope.cn`.
 
-GitHub does not publicly provide the fallback `XB-SVCB-Online-Setup.exe`; contact the developer if you need it separately. The bootstrapper does not store repository or OSS credentials on the computer. Verified EXE/BIN files are retained in `XB-SVCB-Downloads\0.1.0\<hardware-stack>\` next to the online installer and launched from there; this directory is not removed when the bootstrapper exits. The folder containing the online installer must be writable. If a download is interrupted or verification fails, run it again. The retained EXE and all same-prefix BIN files can also be kept as a complete offline package.
+GitHub does not publicly provide the fallback `XB-SVCB-Online-Setup.exe`; contact the developer if you need it separately. The bootstrapper does not store repository or OSS credentials on the computer. Verified EXE/BIN files are retained in `XB-SVCB-Downloads\0.1.1\<hardware-stack>\` next to the online installer and launched from there; this directory is not removed when the bootstrapper exits. The folder containing the online installer must be writable. If a download is interrupted or verification fails, run it again. The retained EXE and all same-prefix BIN files can also be kept as a complete offline package.
 
 ## Choose an Installer
 

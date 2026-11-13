@@ -24,7 +24,7 @@
 
 #define MyAppName "XB-SVCB"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.1.1"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 #ifndef XB_PACKAGE_STACK
@@ -506,9 +506,9 @@ Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubd
 Source: "..\.tmp\installer-wheelhouse\*"; DestDir: "{app}\assets\wheels"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\docs\release-notes\release_notes_v0_1_0.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
-Source: "..\docs\release-notes\release_notes_v0_1_0.en.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
-Source: "..\docs\release-notes\release_notes_v0_1_0.ja.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
+Source: "..\docs\release-notes\release_notes_v0_1_1.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
+Source: "..\docs\release-notes\release_notes_v0_1_1.en.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
+Source: "..\docs\release-notes\release_notes_v0_1_1.ja.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
 Source: "..\docs\api.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 #endif
 

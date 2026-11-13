@@ -46,7 +46,7 @@
 <div align="center">
   <img src="docs/images/xb-svcb-app.png" width="100%" alt="XB-SVCB AI 翻唱工作台真实运行界面" />
   <br/>
-  <sub>XB-SVCB 0.1.0 · AI 翻唱工作台实际运行界面</sub>
+  <sub>XB-SVCB 0.1.1 · AI 翻唱工作台实际运行界面</sub>
 </div>
 
 ## 项目简介
@@ -74,7 +74,7 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 
 ### 使用安装包
 
-普通用户建议直接使用 GitHub Releases 中的魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`。该安装器从 ModelScope 的 `v0.1.0` 版本下载经过校验的离线安装包。备用版 `XB-SVCB-Online-Setup.exe` 不在 GitHub 公开发布，如有需要请联系开发者单独获取。
+普通用户建议直接使用 GitHub Releases 中的魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`。该安装器从 ModelScope 的 `v0.1.1` 版本下载经过校验的离线安装包。备用版 `XB-SVCB-Online-Setup.exe` 不在 GitHub 公开发布，如有需要请联系开发者单独获取。
 
 1. 运行在线安装器，使用自动检测或手动选择 CPU、ROCm 10、DirectML、CUDA126、CUDA128。
 2. 等待对应的完整安装包下载并通过 SHA-256 校验，然后选择应用安装目录和用户数据目录。

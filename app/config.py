@@ -15,7 +15,7 @@ from domain.entities import normalize_framework as _domain_normalize_framework
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 APP_BG = "#05060d"
 
 

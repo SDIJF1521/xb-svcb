@@ -41,7 +41,7 @@ AIカバー制作の全工程を一つのワークフローで実行できます
 <div align="center">
   <img src="docs/images/xb-svcb-app-ja.png" width="100%" alt="XB-SVCB AIカバー制作画面の日本語表示" />
   <br/>
-  <sub>XB-SVCB 0.1.0 · 日本語で表示した実際のAIカバー制作画面</sub>
+  <sub>XB-SVCB 0.1.1 · 日本語で表示した実際のAIカバー制作画面</sub>
 </div>
 
 ## 概要
@@ -69,7 +69,7 @@ So-VITS-SVC、RVC、SeedVC、DDSP-SVCをサポートしています。また、U
 
 ### インストーラーを使う
 
-通常の利用では、GitHub Releasesの最新版からModelScope版`XB-SVCB-Online-Setup-ModelScope.exe`をダウンロードしてください。このインストーラーはModelScopeの`v0.1.0`リビジョンから検証済みオフラインパッケージを取得します。予備版`XB-SVCB-Online-Setup.exe`はGitHubで公開しないため、必要な場合は開発者から個別に入手してください。
+通常の利用では、GitHub Releasesの最新版からModelScope版`XB-SVCB-Online-Setup-ModelScope.exe`をダウンロードしてください。このインストーラーはModelScopeの`v0.1.1`リビジョンから検証済みオフラインパッケージを取得します。予備版`XB-SVCB-Online-Setup.exe`はGitHubで公開しないため、必要な場合は開発者から個別に入手してください。
 
 1. オンラインインストーラーを実行し、自動検出を使用するか、CPU、ROCm 10、DirectML、CUDA126、CUDA128を手動で選択します。
 2. 対応する完全パッケージのダウンロードとSHA-256検証が完了したら、アプリケーションのインストール先とユーザーデータの保存先を選択します。
@@ -225,7 +225,7 @@ npm run build
 
 ## ロードマップ
 
-現在のバージョン: **v0.1.0**
+現在のバージョン: **v0.1.1**
 
 複数フレームワークでの推論、タイムライン式の複数歌手カバー、Audio Editor Lite、ModelScopeモデルハブ、FastAPI連携、CUDA / ROCm 10 / DirectML / CPU対応、プラグインランタイムは実装済みです。今後は歌詞の自動認識とタイムライン生成、モデルメタデータの標準化、プロジェクトの入出力と自動保存、対応フレームワークの追加、動画・歌詞動画の書き出し、Intel GPU / CPU / マルチGPUの最適化に取り組みます。
 

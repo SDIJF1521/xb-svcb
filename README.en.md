@@ -41,7 +41,7 @@ Create a complete AI song cover in one workflow. Supports **So-VITS-SVC and RVC 
 <div align="center">
   <img src="docs/images/xb-svcb-app-en.png" width="100%" alt="XB-SVCB AI cover workspace running in English" />
   <br/>
-  <sub>XB-SVCB 0.1.0 · Actual AI cover workspace in English</sub>
+  <sub>XB-SVCB 0.1.1 · Actual AI cover workspace in English</sub>
 </div>
 
 ## Overview
@@ -69,7 +69,7 @@ The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UV
 
 ### Installer
 
-For normal use, download the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`, from the latest GitHub release. It downloads verified offline packages from the ModelScope `v0.1.0` revision. The fallback `XB-SVCB-Online-Setup.exe` is not published on GitHub; contact the developer to obtain it separately.
+For normal use, download the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`, from the latest GitHub release. It downloads verified offline packages from the ModelScope `v0.1.1` revision. The fallback `XB-SVCB-Online-Setup.exe` is not published on GitHub; contact the developer to obtain it separately.
 
 1. Run the online installer and use automatic detection, or manually select CPU, ROCm 10, DirectML, CUDA126, or CUDA128.
 2. Wait for the matching complete package to download and pass SHA-256 verification, then select both the application directory and user-data directory.
@@ -225,7 +225,7 @@ See the [documentation index](docs/en/README.md) for architecture, startup, test
 
 ## Roadmap
 
-Current version: **v0.1.0**
+Current version: **v0.1.1**
 
 The core multi-framework inference workflow, timeline-based multi-singer covers, Audio Editor Lite, ModelScope model hub, FastAPI integration, CUDA / ROCm 10 / DirectML / CPU paths, and plugin runtime are available. Current priorities include automatic lyric recognition, improved automatic timelines, standardized model metadata, project import/export and autosave, more conversion frameworks, video and lyric-video export, and improved Intel GPU / CPU / multi-GPU scheduling.
 
