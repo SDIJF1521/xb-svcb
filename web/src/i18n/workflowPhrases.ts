@@ -198,8 +198,8 @@ export const workflowEnPhrases: Record<string, string> = {
     'PyMSS models produce different stems (vocals / instrumental / dry / extra). Tick the stems this model actually outputs; unticking removes the now-invalid connections.',
   '主音轨': 'Primary track',
   '主': 'Main',
-  '未读取到模型配置（可能尚未下载），暂按用途推断输出音轨':
-    'No model config found (it may not be downloaded yet); output stems are inferred from the model purpose.',
+  '模型尚未下载：先提供通用 audio 端口，下载后按模型配置自动适配输出音轨':
+    'Model not downloaded yet: only a generic audio port is shown; tracks adapt to the model config after download.',
   '端口按所选 PyMSS 模型声明的音轨生成（每个模型输出的音轨不同）；取消勾选会同步移除失效连线。':
     'Ports follow the stems declared by the selected PyMSS model (each model differs); unticking removes the now-invalid connections.',
   '去混响节点固定输出一路「音频」（净化后的干声）。':
@@ -474,8 +474,8 @@ export const workflowJaPhrases: Record<string, string> = {
     'PyMSS のモデルごとに出力トラックが異なります（ボーカル / 伴奏 / ドライ / 追加トラック）。実際の出力に合わせて選択してください。解除すると無効な接続も削除されます。',
   '主音轨': 'メイントラック',
   '主': 'メイン',
-  '未读取到模型配置（可能尚未下载），暂按用途推断输出音轨':
-    'モデル設定を読み込めませんでした（未ダウンロードの可能性）。出力トラックは用途から推定します。',
+  '模型尚未下载：先提供通用 audio 端口，下载后按模型配置自动适配输出音轨':
+    'モデルが未ダウンロードです：まず汎用の audio ポートのみ提供し、ダウンロード後にモデル設定へ自動適応します。',
   '端口按所选 PyMSS 模型声明的音轨生成（每个模型输出的音轨不同）；取消勾选会同步移除失效连线。':
     'ポートは選択した PyMSS モデルが宣言するトラックに従って生成されます（モデルごとに異なります）。解除すると無効な接続も削除されます。',
   '去混响节点固定输出一路「音频」（净化后的干声）。':
@@ -566,6 +566,8 @@ const workflowEnRules: readonly (readonly [RegExp, string])[] = [
   [/^(\d+) 路音轨$/u, '$1 tracks'],
   [/^生成中 (\d+)%$/u, 'Generating $1%'],
   [/^(\d+) 个模型 · 点击即可切换$/u, '$1 models · Click to switch'],
+  [/^输出音轨：(.+?)（下载后按模型配置自动适配）$/u, 'Tracks: $1 (adapts to the model config after download)'],
+  [/^(.+)（下载后按模型配置自动适配）$/u, '$1 (adapts to the model config after download)'],
   [/^输出音轨：(.+)$/u, 'Tracks: $1'],
   [/^该模型声明 (\d+) 路音轨（读取模型配置）$/u, 'This model declares $1 stems (read from model config)'],
   [/^工作流已导出到：(.+)$/u, 'Workflow exported to: $1'],
@@ -586,6 +588,8 @@ const workflowJaRules: readonly (readonly [RegExp, string])[] = [
   [/^(\d+) 路音轨$/u, '$1 トラック'],
   [/^生成中 (\d+)%$/u, '生成中 $1%'],
   [/^(\d+) 个模型 · 点击即可切换$/u, '$1 モデル · クリックで切り替え'],
+  [/^输出音轨：(.+?)（下载后按模型配置自动适配）$/u, '出力トラック：$1（ダウンロード後、モデル設定に合わせて自動適応）'],
+  [/^(.+)（下载后按模型配置自动适配）$/u, '$1（ダウンロード後、モデル設定に合わせて自動適応）'],
   [/^输出音轨：(.+)$/u, '出力トラック：$1'],
   [/^该模型声明 (\d+) 路音轨（读取模型配置）$/u, 'このモデルは $1 トラックを宣言しています（モデル設定から取得）'],
   [/^工作流已导出到：(.+)$/u, 'ワークフローを書き出しました：$1'],

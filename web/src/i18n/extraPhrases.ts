@@ -1590,6 +1590,9 @@ Object.assign(jaExtraPhrases, {
 type DynamicRule = readonly [RegExp, string]
 
 const enDynamicRules: readonly DynamicRule[] = [
+  [/^正在下载 (\d+)%（(.+)）$/u, 'Downloading $1% ($2)'],
+  [/^正在下载$/u, 'Downloading'],
+  [/^已开始下载：(.+)$/u, 'Download started: $1'],
   // 优先级最高：更具体的规则必须排在通用规则（如 ``^已导入 (.+)$``）前面，
   // 否则会被通用规则先匹配、导致参数里残留中文。
   [/^已下载原始歌曲：(.+)$/u, 'Original song downloaded: $1'],
@@ -1839,7 +1842,6 @@ const enDynamicRules: readonly DynamicRule[] = [
   [/^已设置画面：(.+)$/u, 'Visuals set: $1'],
   [/^已加入推理队列：(\d+) 个任务$/u, 'Added $1 jobs to the inference queue'],
   [/^已加入后台下载：(.+)$/u, 'Added to background downloads: $1'],
-  [/^已开始下载：(.+)$/u, 'Download started: $1'],
   [/^已从模型 checkpoint 自动识别为 (.+)$/u, 'Detected from the model checkpoint as $1'],
   [/^插件 GUI 已打开，(\d+) samples 实时播放已连接$/u, 'Plugin GUI opened; realtime playback connected with $1 samples'],
   [/^插件已安装到：(.+)$/u, 'Plugin installed to: $1'],
@@ -1858,6 +1860,9 @@ const enDynamicRules: readonly DynamicRule[] = [
 ]
 
 const jaDynamicRules: readonly DynamicRule[] = [
+  [/^正在下载 (\d+)%（(.+)）$/u, 'ダウンロード中 $1%（$2）'],
+  [/^正在下载$/u, 'ダウンロード中'],
+  [/^已开始下载：(.+)$/u, 'ダウンロードを開始しました：$1'],
   // 汎用ルールより先に評価される必要がある具体ルール。
   [/^已下载原始歌曲：(.+)$/u, '原曲をダウンロードしました：$1'],
   [/^已导入 (\d+) 个声部，记得点「保存编曲」$/u, '$1 個のパートをインポートしました。「作曲を保存」を押してください'],
@@ -2099,7 +2104,6 @@ const jaDynamicRules: readonly DynamicRule[] = [
   [/^已设置画面：(.+)$/u, '映像を設定しました：$1'],
   [/^已加入推理队列：(\d+) 个任务$/u, '推論キューに $1 件追加しました'],
   [/^已加入后台下载：(.+)$/u, 'バックグラウンドダウンロードに追加しました：$1'],
-  [/^已开始下载：(.+)$/u, 'ダウンロードを開始しました：$1'],
   [/^已从模型 checkpoint 自动识别为 (.+)$/u, 'モデルのcheckpointから $1 と自動判定しました'],
   [/^插件 GUI 已打开，(\d+) samples 实时播放已连接$/u, 'プラグインGUIを開きました。$1 samples でリアルタイム再生に接続しました'],
   [/^插件已安装到：(.+)$/u, 'プラグインをインストールしました：$1'],
