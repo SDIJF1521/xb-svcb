@@ -988,3 +988,18 @@ def test_run_workflow_applies_effect_and_trim(wtmp: Path, monkeypatch) -> None: 
     assert saved["status"] == "done", saved.get("error")
     # 效果（fx:eq:…）先应用，随后裁剪（trim:4.0:…）叠加。
     assert Path(saved["output_path"]).read_bytes() == b"trim:4.0:fx:eq:song"
+
+def test_workflow_hides_vocals_port_for_instrumental_only_models() -> None:
+    from application.conversion_service import ConversionService
+
+    assert not ConversionService._pymss_model_exposes_vocals(
+        "pymss", ["instrumental"]
+    )
+    assert ConversionService._pymss_model_exposes_vocals(
+        "pymss", ["vocals", "instrumental"]
+    )
+    assert ConversionService._pymss_model_exposes_vocals(
+        "pymss", ["No Reverb", "Reverb"]
+    )
+    assert ConversionService._pymss_model_exposes_vocals("pymss", [])
+    assert ConversionService._pymss_model_exposes_vocals("uvr", ["instrumental"])

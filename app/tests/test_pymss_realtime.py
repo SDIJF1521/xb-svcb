@@ -103,3 +103,54 @@ def test_pymss_server_stem_selection_uses_dry_dereverb_stem() -> None:
 
     assert selected is clean
     assert accompaniment is None
+
+@pytest.mark.parametrize("label", ["background", "bgm", "no vocals", "music", "accompaniment"])
+def test_pymss_server_stem_selection_finds_renamed_accompaniment(label: str) -> None:
+    vocals = np.ones((16, 2), dtype=np.float32)
+    accompaniment = np.zeros((16, 2), dtype=np.float32)
+
+    selected, picked = _pick_server_stems(
+        {"vocals": vocals, label: accompaniment},
+        "vocal_separation",
+        "vocals",
+    )
+
+    assert selected is vocals
+    assert picked is accompaniment
+
+
+def test_pymss_server_stem_selection_handles_single_stem_instrumental_model() -> None:
+    instrumental = np.ones((8, 2), dtype=np.float32)
+
+    selected, accompaniment = _pick_server_stems(
+        {"instrumental": instrumental},
+        "vocal_separation",
+        "instrumental",
+    )
+
+    assert selected is instrumental
+    assert accompaniment is None
+
+
+def test_pymss_accompaniment_picker_recognizes_background_labels(tmp_path: Path) -> None:
+    from infrastructure.pymss_worker import _pick_accompaniment
+
+    vocal = tmp_path / "song_(Vocals).wav"
+    background = tmp_path / "song_(Background).wav"
+    vocal.write_bytes(b"v")
+    background.write_bytes(b"b")
+
+    assert _pick_accompaniment(tmp_path, vocal, "vocal_separation") == background
+
+
+def test_pymss_accompaniment_picker_uses_elision_for_two_stems(tmp_path: Path) -> None:
+    from infrastructure.pymss_worker import _pick_accompaniment
+
+    vocal = tmp_path / "song_(Vocals).wav"
+    remainder = tmp_path / "song_(Remainder).wav"
+    vocal.write_bytes(b"v")
+    remainder.write_bytes(b"r")
+
+    assert _pick_accompaniment(tmp_path, vocal, "vocal_separation") == remainder
+    # Dereverb stems are dry/wet rather than vocal/accompaniment.
+    assert _pick_accompaniment(tmp_path, vocal, "dereverb") is None

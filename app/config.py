@@ -736,18 +736,23 @@ def pymss_model_ready(model: str = "") -> bool:
     name = str(model or "").strip()
     if not name:
         return pymss_any_model_ready()
-    # PyMSS 目录结构由 catalog 决定，先按常见文件名快速检查；worker 会做最终校验。
+    # PyMSS 目录结构由 catalog 决定：权重文件名就是 catalog 名（去掉扩展名）。
+    # 旧实现用子串匹配，`..._vocals_v2` 会被 `..._vocals_v2_gabox` 这类更长
+    # 的模型误判为已下载，进而在工作流里选到没装好的模型。
     stem = Path(name).stem.lower()
     try:
-        return any(
-            p.is_file()
-            and p.suffix.lower() in _PYMSS_MODEL_SUFFIXES
-            and not p.name.lower().endswith(".pymss_state_dict.pt")
-            and stem in p.stem.lower()
-            for p in PYMSS_MODEL_DIR.rglob("*")
-        )
+        for path in PYMSS_MODEL_DIR.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in _PYMSS_MODEL_SUFFIXES:
+                continue
+            if path.name.lower().endswith(".pymss_state_dict.pt"):
+                continue
+            if path.stem.lower() == stem or path.parent.name.lower() == stem:
+                return True
     except OSError:
         return False
+    return False
 
 
 def pymss_any_model_ready() -> bool:

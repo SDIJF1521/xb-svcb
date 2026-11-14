@@ -10,9 +10,10 @@ import json
 import os
 import subprocess
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import config
 from infrastructure.persistent_worker import PersistentInferenceSession
@@ -209,8 +210,20 @@ class PymssTool:
                 continue
         return None
 
-    def download_model(self, model: str, out_dir: Path | None = None, purpose: str = "") -> dict[str, Any]:
-        """Download one catalog model through PyMSS's ModelScope downloader."""
+    def download_model(
+        self,
+        model: str,
+        out_dir: Path | None = None,
+        purpose: str = "",
+        on_progress: Callable[[int, str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Download one catalog model through PyMSS's ModelScope downloader.
+
+        ``on_progress(percent, message)`` receives live progress parsed from the
+        child process. Without it the downloader is silent, which made the UI
+        bar sit at one value for the whole (multi-minute) download and then jump
+        to 100%.
+        """
         if not self.available:
             return {"ok": False, "error": "PyMSS 环境未安装"}
         model_dir = config.PYMSS_MODEL_DIR
@@ -245,6 +258,14 @@ class PymssTool:
             name = candidates[0]
         else:
             return {"ok": False, "error": "该模型不属于受支持的 PyMSS 人声处理类别"}
+        expected_bytes = 0
+        for item in catalog:
+            if str(item.get("name") or "") == name:
+                try:
+                    expected_bytes = max(0, int(item.get("size_bytes") or 0))
+                except (TypeError, ValueError):
+                    expected_bytes = 0
+                break
         cmd = [
             str(config.PYMSS_PYTHON), str(config.PYMSS_WORKER),
             "--download", "--model", name,
@@ -252,35 +273,54 @@ class PymssTool:
         ]
         if out_dir:
             cmd.extend(["--out-dir", str(out_dir)])
+        if expected_bytes > 0:
+            cmd.extend(["--expected-bytes", str(expected_bytes)])
+        lines: list[str] = []
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=7200,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=0,
                 env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
                 **config.subprocess_no_window(),
             )
         except (OSError, subprocess.SubprocessError) as exc:
             return {"ok": False, "error": f"PyMSS 模型下载启动失败: {exc}"}
-        if proc.returncode != 0:
-            return {"ok": False, "error": self._error_tail(proc.stdout, proc.stderr)}
+        timed_out = False
+        try:
+            timed_out = self._pump_download_output(
+                proc, lines, on_progress, timeout=7200.0
+            )
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        returncode = proc.wait()
+        output = "\n".join(lines).strip()
+        if timed_out:
+            return {"ok": False, "error": "PyMSS 模型下载超时"}
+        if returncode != 0:
+            return {"ok": False, "error": self._error_tail(output, "")}
         marker_dir = model_dir / ".xb-downloaded"
         try:
             marker_dir.mkdir(parents=True, exist_ok=True)
             marker = marker_dir / f"{Path(name).stem.lower()}.json"
             downloaded_files: list[str] = []
-            output = (proc.stdout or "").strip()
-            if output:
+            payload: dict[str, Any] = {}
+            for line in reversed(lines):
+                text = line.strip()
+                if not text.startswith("{"):
+                    continue
                 try:
-                    payload = json.loads(output.splitlines()[-1])
+                    candidate = json.loads(text)
                 except json.JSONDecodeError:
-                    payload = {}
-                files = payload.get("files") if isinstance(payload, dict) else None
-                if isinstance(files, list):
-                    downloaded_files = [str(entry) for entry in files if str(entry or "").strip()]
+                    continue
+                if isinstance(candidate, dict):
+                    payload = candidate
+                    break
+            files = payload.get("files") if isinstance(payload, dict) else None
+            if isinstance(files, list):
+                downloaded_files = [str(entry) for entry in files if str(entry or "").strip()]
             marker_data: dict[str, Any] = {"model": name, "source": "modelscope"}
             if downloaded_files:
                 marker_data["files"] = downloaded_files
@@ -290,7 +330,102 @@ class PymssTool:
             )
         except OSError:
             pass
-        return {"ok": True, "model": name, "output": (proc.stdout or "").strip()}
+        return {"ok": True, "model": name, "output": output}
+
+    @staticmethod
+    def _pump_download_output(
+        proc: subprocess.Popen,
+        lines: list[str],
+        on_progress: Callable[[int, str], None] | None,
+        *,
+        timeout: float,
+    ) -> bool:
+        """Stream the downloader's merged output; return True when it timed out.
+
+        PyMSS/tqdm refresh progress bars with carriage returns and no newline,
+        so read raw bytes and split on both ``\\r`` and ``\\n`` instead of using
+        text ``readline()`` (which would block until the download ends).
+        """
+        started = time.monotonic()
+        buffer = b""
+        stream = proc.stdout
+        fd = stream.fileno() if stream is not None else -1
+        while True:
+            if time.monotonic() - started > timeout:
+                return True
+            try:
+                chunk = os.read(fd, 8192) if fd >= 0 else b""
+            except OSError:
+                chunk = b""
+            if not chunk:
+                break
+            buffer += chunk
+            while True:
+                indexes = [index for index in (buffer.find(b"\r"), buffer.find(b"\n")) if index >= 0]
+                if not indexes:
+                    break
+                index = min(indexes)
+                raw, buffer = buffer[:index], buffer[index + 1:]
+                PymssTool._consume_download_line(
+                    raw.decode("utf-8", "replace"), lines, on_progress
+                )
+        if buffer:
+            PymssTool._consume_download_line(
+                buffer.decode("utf-8", "replace"), lines, on_progress
+            )
+        return False
+
+    @staticmethod
+    def _consume_download_line(
+        raw: str,
+        lines: list[str],
+        on_progress: Callable[[int, str], None] | None,
+    ) -> None:
+        line = str(raw or "").strip()
+        if not line:
+            return
+        lines.append(line)
+        if len(lines) > 80:
+            del lines[:-80]
+        if on_progress is None or not line.startswith("PYMSS_PROGRESS\t"):
+            return
+        PymssTool._report_download_progress(line, on_progress)
+
+    @staticmethod
+    def _report_download_progress(
+        line: str, on_progress: Callable[[int, str], None]
+    ) -> None:
+        parts = line.split("\t")
+        if len(parts) < 4:
+            return
+        try:
+            pct = int(parts[1])
+            done = int(parts[2])
+            total = int(parts[3])
+        except (TypeError, ValueError):
+            return
+        detail = parts[4] if len(parts) > 4 else ""
+        try:
+            on_progress(pct, PymssTool._download_message(pct, done, total, detail))
+        except Exception:  # noqa: BLE001 - a UI callback must not fail the download
+            pass
+
+    @staticmethod
+    def _download_message(pct: int, done: int, total: int, detail: str = "") -> str:
+        def human(value: int) -> str:
+            size = float(max(0, int(value)))
+            for unit in ("B", "KB", "MB", "GB"):
+                if size < 1024.0 or unit == "GB":
+                    return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+                size /= 1024.0
+            return f"{size:.1f} GB"
+
+        label = f"正在下载 {pct}%" if pct >= 0 else "正在下载"
+        if done > 0 and total > 0:
+            label += f"（{human(done)} / {human(total)}）"
+        elif done > 0:
+            label += f"（{human(done)}）"
+        return label
 
     def start_download_model(self, model: str, purpose: str = "") -> dict[str, Any]:
         """Start a PyMSS model download without blocking the UI bridge."""
@@ -313,16 +448,31 @@ class PymssTool:
             }
 
         def runner() -> None:
+            def on_progress(pct: int, message: str) -> None:
+                with self._download_lock:
+                    job = self._download_jobs.get(key)
+                    if not job or job.get("status") != "running":
+                        return
+                    if pct >= 0:
+                        # Reserve the last 5% for marker/verification work so the
+                        # bar reaches 100% only when the model is actually usable.
+                        job["pct"] = max(
+                            int(job.get("pct") or 0),
+                            min(95, 5 + int(round(pct * 0.9))),
+                        )
+                    if message:
+                        job["message"] = message
+
             try:
                 with self._download_lock:
-                    self._download_jobs[key]["message"] = "正在从模型站下载…"
-                    self._download_jobs[key]["pct"] = 10
-                result = self.download_model(name, purpose=purpose)
+                    self._download_jobs[key]["message"] = "正在准备模型下载…"
+                    self._download_jobs[key]["pct"] = 5
+                result = self.download_model(name, purpose=purpose, on_progress=on_progress)
                 with self._download_lock:
                     job = self._download_jobs[key]
                     job.update(
                         status="done" if result.get("ok") else "failed",
-                        pct=100 if result.get("ok") else job.get("pct", 10),
+                        pct=100 if result.get("ok") else max(5, int(job.get("pct") or 5)),
                         message="下载完成" if result.get("ok") else "下载失败",
                         result=result,
                         error=result.get("error"),

@@ -4550,7 +4550,11 @@ class ConversionService:
                         }:
                             extra_stems.append((raw_label, stem_path))
                     # 通用别名只在没有同名真实音轨时补齐，避免把「主音轨」错当人声。
-                    for alias in ("vocals", "audio"):
+                    # 纯伴奏提取模型不补 vocals 端口，否则工作流会以为有人声。
+                    aliases = ["audio"]
+                    if self._pymss_model_exposes_vocals(engine, declared_stems):
+                        aliases.insert(0, "vocals")
+                    for alias in aliases:
                         if alias not in mapped:
                             mapped[alias] = primary_path
                     if instrumental_path and "instrumental" not in mapped:
@@ -5055,6 +5059,40 @@ class ConversionService:
         if not isinstance(stems, (list, tuple, set)):
             return []
         return [str(stem) for stem in (stems or []) if str(stem).strip()]
+
+    @staticmethod
+    def _pymss_model_exposes_vocals(engine: str, declared_stems: list[str]) -> bool:
+        """模型是否真的能输出人声音轨（决定工作流是否补 ``vocals`` 端口）。
+
+        UVR 与普通人声模型恒为真；纯伴奏提取模型（如 ``bs_roformer_inst_*``）
+        只声明伴奏音轨，若仍补 vocals 端口，自定义工作流会误以为分离出了
+        人声，连线后拿到的是伴奏。
+        """
+        if str(engine or "").strip().lower() != "pymss" or not declared_stems:
+            return True
+        accompaniment_tokens = (
+            "instrument",
+            "accompan",
+            "karaoke",
+            "music",
+            "background",
+            "bgm",
+            "no vocal",
+            "minus",
+        )
+        normalized = [
+            str(stem or "").casefold().replace("_", " ").replace("-", " ")
+            for stem in declared_stems
+        ]
+        for name in normalized:
+            if any(token in name for token in accompaniment_tokens):
+                continue
+            if any(token in name for token in ("vocal", "voice", "singing", "lead")):
+                return True
+        # 没有明确人声、但全部音轨都是伴奏类时，该模型确实没有人声输出。
+        return not all(
+            any(token in name for token in accompaniment_tokens) for name in normalized
+        )
 
     @staticmethod
     def _format_duration(seconds: float) -> str:

@@ -84,9 +84,11 @@ def _resolve_weight(model: str, index: dict[str, Path]) -> Path | None:
         return None
     if key in index:
         return index[key]
-    # catalog 名称可能带模型子目录前缀，退化为包含匹配
-    for stem, path in index.items():
-        if key in stem:
+    # 只有权重文件名与 catalog 名完全一致，或权重放在以模型名命名的子目录里，
+    # 才算同一个模型。以前用子串匹配，`..._vocals_v2` 会命中
+    # `..._vocals_v2_gabox` 的 yaml，界面就会显示另一个模型的音轨。
+    for path in index.values():
+        if path.parent.name.casefold() == key:
             return path
     return None
 
@@ -110,33 +112,147 @@ def _config_for(weight: Path) -> Path | None:
     return candidates[0] if candidates else None
 
 
-def stems_for_weight(weight: Path | None) -> list[str]:
-    """读取某个权重对应模型声明的输出音轨。"""
+def _looks_vocal(name: str) -> bool:
+    norm = str(name or "").casefold().replace("_", " ").replace("-", " ")
+    if any(token in norm for token in ("no vocal", "instrument", "accompan", "karaoke")):
+        return False
+    return any(token in norm for token in ("vocal", "voice", "singing", "lead"))
+
+
+def _looks_instrumental(name: str) -> bool:
+    norm = str(name or "").casefold().replace("_", " ").replace("-", " ")
+    return any(
+        token in norm
+        for token in (
+            "instrument",
+            "accompan",
+            "karaoke",
+            "music",
+            "background",
+            "bgm",
+            "minus",
+        )
+    )
+
+
+def parse_training_meta(text: str) -> dict[str, Any]:
+    """解析模型 yaml 的训练段：音轨列表、目标音轨与 stem 数量。"""
+    instruments = parse_instruments(text)
+    target = ""
+    # 只匹配同一行；用 [ \t] 而不是 \s，否则空值会把下一行当成值。
+    match = re.search(
+        r"(?m)^[ \t]*target_instrument[ \t]*:[ \t]*(.*?)[ \t]*$", str(text or "")
+    )
+    if match:
+        value = match.group(1).strip().strip("'\"")
+        if value.casefold() not in {"", "null", "none", "~"}:
+            target = value
+    num_stems = 0
+    match = re.search(
+        r"(?m)^[ \t]*num_stems[ \t]*:[ \t]*(\d+)[ \t]*$", str(text or "")
+    )
+    if match:
+        try:
+            num_stems = int(match.group(1))
+        except ValueError:
+            num_stems = 0
+    return {
+        "instruments": instruments,
+        "target_instrument": target,
+        "num_stems": num_stems,
+    }
+
+
+def resolve_output_stems(
+    instruments: list[str] | tuple[str, ...],
+    target_instrument: str,
+) -> tuple[list[str], str]:
+    """按 PyMSS 的真实输出语义解析端口名。
+
+    ``target_instrument`` 模型只训练一个目标音轨；PyMSS 还会返回
+    ``mix - target`` 作为残差，残差名来自 ``instruments`` 里的另一项。
+    因此：
+      - 目标是人声 → 输出 ``vocals`` + ``instrumental``（残差就是伴奏）；
+      - 目标是伴奏 → 输出 ``instrumental`` + ``other``（残差不是人声分离结果）。
+    这样伴奏/无人声模型就不会再显示一个并不存在的「人声」端口。
+    """
+    cleaned = _clean_items(instruments or [])
+    if not cleaned:
+        return [], ""
+    target = str(target_instrument or "").strip()
+    if not target:
+        return cleaned, ""
+    target_entry = next(
+        (stem for stem in cleaned if stem.casefold() == target.casefold()), target
+    )
+    if _looks_vocal(target_entry):
+        primary = "vocals"
+    elif _looks_instrumental(target_entry):
+        primary = "instrumental"
+    else:
+        primary = target_entry
+    stems = [primary]
+    if any(stem.casefold() != target.casefold() for stem in cleaned):
+        residual = "instrumental" if primary == "vocals" else "other"
+        if residual not in stems:
+            stems.append(residual)
+    return stems, primary
+
+
+def descriptor_for_weight(weight: Path | None) -> dict[str, Any]:
+    """读取模型的输出音轨描述；无配置时返回空描述。"""
+    empty: dict[str, Any] = {
+        "stems": [],
+        "primary_stem": "",
+        "instruments": [],
+        "target_instrument": "",
+        "num_stems": 0,
+    }
     if not weight or not Path(weight).is_file():
-        return []
-    config = _config_for(Path(weight))
-    if not config:
-        return []
+        return empty
+    config_path = _config_for(Path(weight))
+    if not config_path:
+        return empty
     try:
-        stat = config.stat()
+        stat = config_path.stat()
     except OSError:
-        return []
-    key = (str(config), float(stat.st_mtime))
+        return empty
+    key = (str(config_path), float(stat.st_mtime))
     cached = _cache.get(key)
     if cached is not None:
         return cached
     try:
-        text = config.read_text(encoding="utf-8", errors="replace")
+        text = config_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return []
-    stems = parse_instruments(text)
-    _cache[key] = stems
-    return stems
+        return empty
+    meta = parse_training_meta(text)
+    stems, primary = resolve_output_stems(
+        meta["instruments"], meta["target_instrument"]
+    )
+    descriptor = {
+        "stems": stems,
+        "primary_stem": primary or (meta["instruments"][0] if meta["instruments"] else ""),
+        "instruments": meta["instruments"],
+        "target_instrument": meta["target_instrument"],
+        "num_stems": meta["num_stems"],
+    }
+    _cache[key] = descriptor
+    return descriptor
+
+
+def stems_for_weight(weight: Path | None) -> list[str]:
+    """某个权重对应模型的输出端口名（target 模型已按 PyMSS 语义归一）。"""
+    return list(descriptor_for_weight(weight).get("stems") or [])
 
 
 def model_stems(model: str, model_dir: Path | None) -> list[str]:
-    """按 catalog 名称直接读取模型声明的输出音轨。"""
+    """按 catalog 名称读取模型的输出端口名。"""
     return stems_for_weight(_resolve_weight(str(model or ""), _weight_index(model_dir)))
+
+
+def model_descriptor(model: str, model_dir: Path | None) -> dict[str, Any]:
+    """按 catalog 名称读取完整输出描述。"""
+    return descriptor_for_weight(_resolve_weight(str(model or ""), _weight_index(model_dir)))
 
 
 def attach_model_stems(rows: list[dict[str, Any]], model_dir: Path | None) -> list[dict[str, Any]]:
@@ -150,13 +266,19 @@ def attach_model_stems(rows: list[dict[str, Any]], model_dir: Path | None) -> li
         existing = row.get("stems")
         if isinstance(existing, list) and existing:
             stems = _clean_items(existing)
+            primary = ""
         else:
-            stems = stems_for_weight(_resolve_weight(str(row.get("name") or ""), index))
+            descriptor = descriptor_for_weight(
+                _resolve_weight(str(row.get("name") or ""), index)
+            )
+            stems = list(descriptor.get("stems") or [])
+            primary = str(descriptor.get("primary_stem") or "")
         row["stems"] = stems
         target = str(row.get("target_stem") or "").strip()
-        primary = ""
-        if target:
-            primary = next((stem for stem in stems if stem.casefold() == target.casefold()), "")
+        if not primary and target:
+            primary = next(
+                (stem for stem in stems if stem.casefold() == target.casefold()), ""
+            )
         if not primary:
             primary = stems[0] if stems else target
         row["primary_stem"] = primary

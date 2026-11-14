@@ -162,6 +162,20 @@ function portLabel(port: string): string {
   return key
 }
 
+/**
+ * 端口显示名：分离/去混响节点直接显示模型音轨的原始名称，不做中文转义；
+ * 其它节点（通用音频端口）保留原有中文标签。
+ */
+function portDisplayName(port: string, node?: WorkflowNode): string {
+  const key = String(port || '')
+  if (node && (node.type === 'separate' || node.type === 'dereverb')) {
+    const stem = declaredStems(node).find((item) => stemPort(item) === key)
+    if (stem) return stem
+    return key.startsWith('stem:') ? key.slice(5) : key
+  }
+  return translateUiText(portLabel(key))
+}
+
 const NODE_W = 268
 const portKey = (nodeId: string, side: 'in' | 'out', port: string) => `${nodeId}:${side}:${port}`
 
@@ -212,8 +226,23 @@ function defaultSeparatePorts(node: WorkflowNode): string[] {
   const stems = declaredStems(node)
   if (!stems.length) {
     const model = findPymssModel(String(node.params?.model || ''))
-    // 没有模型元数据时退回按用途推断
-    if (model && pymssPurposeKey(model) === 'dereverb') return ['audio']
+    // 没有模型元数据（yaml 未下载）时按用途与目标音轨推断，避免给
+    // 伴奏提取模型（如 bs_roformer_inst_*）显示并不存在的「人声」端口。
+    if (model) {
+      if (pymssPurposeKey(model) === 'dereverb') return ['audio']
+      const target = String(model.target_stem || '').trim()
+      if (target) {
+        const normalized = target.toLowerCase()
+        if (/instrument|accompan|karaoke|music|background|bgm|no.vocal/.test(normalized)) {
+          // 目标音轨是伴奏：模型只产出伴奏 + 残差，没有人声端口。
+          return ['instrumental', 'other']
+        }
+        if (/vocal|voice|singing|lead/.test(normalized)) return [...SEPARATE_BASE_OUTPUTS]
+        return [stemPort(target), 'other']
+      }
+      const category = `${model.primary_category || ''} ${model.category || ''}`.toLowerCase()
+      if (category.includes('instrumental')) return ['instrumental']
+    }
     return [...SEPARATE_BASE_OUTPUTS]
   }
   const primary = primaryStemOf(node)
@@ -231,13 +260,15 @@ function separateOutputs(node: WorkflowNode): string[] {
     : []
   if (custom.length) return custom
   const ports = defaultSeparatePorts(node)
-  // 旧工作流可能连在 vocals / audio / instrumental 这些通用别名上，
-  // 后端始终会产出它们，保留下来避免升级后被误删。
+  // 旧工作流可能连在 vocals / audio / instrumental 这些通用别名上，保留下来
+  // 避免升级后被误删；但只保留当前模型仍然产出的端口，伴奏提取模型不会再补回
+  // 一个并不存在的「人声」。
+  const available = new Set([...separateOutputChoices(node), 'audio'])
   for (const edge of edges.value) {
     if (edge.from.node !== node.id) continue
     const port = edge.from.port
-    if (ports.includes(port)) continue
-    if (SEPARATE_BASE_OUTPUTS.includes(port) || SEPARATE_EXTRA_OUTPUTS.includes(port)) ports.push(port)
+    if (ports.includes(port) || !available.has(port)) continue
+    ports.push(port)
   }
   return ports
 }
@@ -263,7 +294,7 @@ function nodeOutputs(node: WorkflowNode): string[] {
 function separateOutputHint(node: WorkflowNode): string {
   const ports = separateOutputs(node)
   const all = declaredStems(node).length
-  const text = ports.map((port) => translateUiText(portLabel(port))).join(' + ')
+  const text = ports.map((port) => portDisplayName(port, node)).join(' + ')
   if (all > ports.length) return `${text} +${all - ports.length}`
   return text
 }
@@ -422,7 +453,7 @@ function edgeUpstreamLabel(edge: WorkflowEdge): string {
   const from = nodeById(edge.from.node)
   if (!from) return '—'
   const label = translateUiText(NODE_META[from.type].label)
-  const port = translateUiText(portLabel(edge.from.port))
+  const port = portDisplayName(edge.from.port, from)
   return `${label} · ${port}`
 }
 
@@ -959,7 +990,7 @@ function inputSourceLabel(node: WorkflowNode): string {
   if (!from) return translateUiText('未连接')
   return from.type === 'input'
     ? translateUiText('原始输入')
-    : `${translateUiText(NODE_META[from.type].label)} · ${translateUiText(portLabel(edge.from.port))}`
+    : `${translateUiText(NODE_META[from.type].label)} · ${portDisplayName(edge.from.port, from)}`
 }
 
 /** 该输出端口是否已连接到某个「保存」节点。 */
@@ -1897,7 +1928,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                   data-port-side="in"
                   :data-port-key="portKey(node.id, 'in', port)"
                 ></span>
-                <span class="wf-row-label">{{ translateUiText(portLabel(port)) }}</span>
+                <span class="wf-row-label">{{ portDisplayName(port, node) }}</span>
                 <span class="wf-row-status" :class="{ on: hasInEdge(node.id, port) }">
                   {{ hasInEdge(node.id, port) ? '已连接' : '待连接' }}
                 </span>
@@ -2193,7 +2224,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
               <!-- 输出端口行 -->
               <div v-for="port in nodeOutputs(node)" :key="'out-' + port" class="wf-row wf-row--out">
                 <span class="wf-row-label">
-                  {{ translateUiText(portLabel(port)) }}
+                  {{ portDisplayName(port, node) }}
                   <span v-if="isPrimaryPort(node, port)" class="wf-port-flag">主</span>
                 </span>
                 <button
@@ -2305,7 +2336,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                     :class="{ on: isSeparateOutputOn(selectedNode, port) }"
                     @click="toggleSeparateOutput(selectedNode, port)"
                   >
-                    {{ translateUiText(portLabel(port)) }}
+                    {{ portDisplayName(port, selectedNode) }}
                     <i v-if="isPrimaryPort(selectedNode, port)">主</i>
                   </button>
                 </div>
@@ -2447,7 +2478,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
 
         <!-- 选中连线时只显示轻量删除条，不弹设置面板 -->
         <div v-if="selectedEdge" class="wf-edge-chip">
-          <span class="wf-edge-chip-text">{{ translateUiText(portLabel(selectedEdge.from.port)) }} → {{ translateUiText(portLabel(selectedEdge.to.port)) }}</span>
+          <span class="wf-edge-chip-text">{{ portDisplayName(selectedEdge.from.port, nodeById(selectedEdge.from.node)) }} → {{ portDisplayName(selectedEdge.to.port, nodeById(selectedEdge.to.node)) }}</span>
           <button class="wf-file-btn" @click="deleteSelectedEdge">
             <el-icon><Delete /></el-icon>删除连线
           </button>
