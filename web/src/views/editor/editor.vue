@@ -3517,7 +3517,7 @@ async function openPluginNativeEditor() {
     } else if (res.realtime_reason) {
       ElMessage.warning(res.realtime_reason)
     } else if (res.monitor_ready) ElMessage.success('插件 GUI 已打开，实时监听已连接')
-    else ElMessage.warning('插件 GUI 已打开，但监听音频准备失败')
+    else ElMessage.warning(res.monitor_reason || '插件 GUI 已打开，但监听音频准备失败')
   } finally {
     pluginHostLoading.value = false
   }

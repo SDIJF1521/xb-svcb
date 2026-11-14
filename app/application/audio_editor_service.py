@@ -1862,7 +1862,13 @@ class AudioEditorService:
                     **self._plugin_host.status(),
                 }
             monitor = self._prepare_plugin_monitor(project, track, clip, effect_id)
+        elif scope == "track":
+            monitor = self._prepare_track_plugin_monitor(project, track, effect_id)
         else:
+            monitor = self._prepare_role_plugin_monitor(project, target, effect_id)
+        monitor_reason = ""
+        if isinstance(monitor, dict) and monitor.get("error"):
+            monitor_reason = str(monitor.get("error") or "")
             monitor = {}
         result = self._plugin_host.show_editor(
             effect,
@@ -1872,6 +1878,10 @@ class AudioEditorService:
             parent_window=parent_window,
             monitor=monitor,
         )
+        # The GUI can outlive a failed monitor render; tell the user why the
+        # native audio stays on the HTML player instead of silently guessing.
+        if result.get("ok") and not result.get("monitor_ready"):
+            result["monitor_reason"] = monitor_reason
         session_id = str(result.get("session_id") or "")
         if result.get("ok") and session_id:
             self._plugin_sessions[session_id] = {
@@ -1939,22 +1949,24 @@ class AudioEditorService:
         effect_id: str,
     ) -> dict[str, Any]:
         src = Path(str(clip.get("file") or ""))
-        if not src.is_file() or not self._audio.available:
-            return {}
+        if not src.is_file():
+            return {"error": "片段音频文件不存在，无法准备监听音频"}
+        if not self._audio.available:
+            return {"error": "音频引擎不可用（缺少 FFmpeg），无法准备监听音频"}
         try:
             start = max(0.0, float(clip.get("start") or 0.0))
             end = max(start, float(clip.get("end") or start))
         except (TypeError, ValueError):
-            return {}
+            return {"error": "片段的时间范围无效，无法准备监听音频"}
         if end - start < 0.01:
-            return {}
+            return {"error": "片段没有可监听的长度"}
         effects = [item for item in (clip.get("effects") or []) if isinstance(item, dict)]
         target_index = next(
             (idx for idx, item in enumerate(effects) if str(item.get("id") or "") == effect_id),
             -1,
         )
         if target_index < 0:
-            return {}
+            return {"error": "效果器不在该片段的效果链中"}
         prefix = copy.deepcopy(effects[:target_index])
         sample_rate = int(project.get("sample_rate") or 44100)
         try:
@@ -1983,7 +1995,7 @@ class AudioEditorService:
             self._cache_root(),
             sample_rate,
         ):
-            return {}
+            return {"error": "监听音频渲染失败（FFmpeg 处理片段音频出错）"}
 
         # Bake timeline-level gain, envelope and fades into the target signal. The
         # selected VST3 itself remains unrendered and is processed by JUCE on the
@@ -2068,6 +2080,261 @@ class AudioEditorService:
             "sample_rate": sample_rate,
             "block_size": 128,
         }
+
+    def _prepare_track_plugin_monitor(
+        self,
+        project: dict[str, Any],
+        track: Any,
+        effect_id: str,
+    ) -> dict[str, Any]:
+        """监听整轨效果器：目标信号是该音轨在效果器之前的音频。
+
+        轨道效果位于片段/角色总线之后，因此监听信号 = 片段效果 + 角色总线 +
+        目标效果器之前的轨道效果；其余音轨作为完整处理的 bed 一起播放。
+        """
+        if not self._audio.available:
+            return {"error": "音频引擎不可用（缺少 FFmpeg），无法准备监听音频"}
+        if not isinstance(track, dict):
+            return {"error": "音轨不存在"}
+        if track.get("mute"):
+            return {"error": "音轨已静音，无法监听该音轨的插件"}
+        clips = self._monitor_clips(track.get("clips") or [])
+        if not clips:
+            return {"error": "音轨没有可监听的人声片段"}
+        effects = [item for item in (track.get("effects") or []) if isinstance(item, dict)]
+        target_index = next(
+            (idx for idx, item in enumerate(effects) if str(item.get("id") or "") == effect_id),
+            -1,
+        )
+        if target_index < 0:
+            return {"error": "效果器不在该音轨的效果链中"}
+        start, end = self._monitor_window(clips)
+        if end - start < 0.01:
+            return {"error": "音轨没有可监听的长度"}
+        sample_rate = int(project.get("sample_rate") or 44100)
+        monitor_project = {
+            "sample_rate": sample_rate,
+            "duration": end - start,
+            # 角色总线（含变调）在轨道效果之前，必须保留。
+            "roles": copy.deepcopy(project.get("roles") or []),
+            "tracks": [
+                {
+                    **copy.deepcopy(track),
+                    "mute": False,
+                    "effects": copy.deepcopy(effects[:target_index]),
+                    "clips": self._shift_monitor_clips(clips, start),
+                }
+            ],
+        }
+        bed_project = copy.deepcopy(project)
+        track_id = str(track.get("id") or "")
+        bed_project["tracks"] = [
+            item
+            for item in (bed_project.get("tracks") or [])
+            if not isinstance(item, dict) or str(item.get("id") or "") != track_id
+        ]
+        return self._render_plugin_monitor_pair(
+            project=project,
+            monitor_project=monitor_project,
+            bed_project=bed_project,
+            start=start,
+            end=end,
+            sample_rate=sample_rate,
+            version="plugin-monitor-track-v1",
+        )
+
+    def _prepare_role_plugin_monitor(
+        self,
+        project: dict[str, Any],
+        role: Any,
+        effect_id: str,
+    ) -> dict[str, Any]:
+        """监听角色效果器：目标信号是该角色所有片段在效果器之前的音频。
+
+        角色总线位于轨道效果之前，因此监听轨道不套用轨道效果，并把这些角色
+        片段从 bed 中移除，避免监听时重复播放。
+        """
+        if not self._audio.available:
+            return {"error": "音频引擎不可用（缺少 FFmpeg），无法准备监听音频"}
+        if not isinstance(role, dict) or not str(role.get("id") or ""):
+            return {"error": "角色不存在"}
+        role_id = str(role.get("id") or "")
+        effects = [item for item in (role.get("effects") or []) if isinstance(item, dict)]
+        target_index = next(
+            (idx for idx, item in enumerate(effects) if str(item.get("id") or "") == effect_id),
+            -1,
+        )
+        if target_index < 0:
+            return {"error": "效果器不在该角色的效果链中"}
+        sample_rate = int(project.get("sample_rate") or 44100)
+        source_tracks = project.get("tracks") or []
+        bed_project = copy.deepcopy(project)
+        bed_tracks = bed_project.get("tracks") or []
+        monitor_tracks: list[dict[str, Any]] = []
+        role_clips: list[dict[str, Any]] = []
+        for track_index, track in enumerate(source_tracks):
+            if not isinstance(track, dict) or track.get("mute"):
+                continue
+            track_metadata = track.get("metadata")
+            track_metadata = track_metadata if isinstance(track_metadata, dict) else {}
+            track_role = str(track_metadata.get("role_id") or "")
+            selected: list[dict[str, Any]] = []
+            selected_indices: set[int] = set()
+            for clip_index, clip in enumerate(track.get("clips") or []):
+                if not isinstance(clip, dict):
+                    continue
+                raw_metadata = clip.get("metadata")
+                metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+                if str(metadata.get("role_id") or track_role) != role_id:
+                    continue
+                selected_indices.add(clip_index)
+                if clip.get("mute") or not Path(str(clip.get("file") or "")).is_file():
+                    continue
+                selected.append(clip)
+            # bed 必须移除同一批角色片段（包括静音/文件缺失的片段），
+            # 否则监听角色插件时这些片段会被重复播放。
+            if selected_indices and track_index < len(bed_tracks):
+                bed_track = bed_tracks[track_index]
+                if isinstance(bed_track, dict):
+                    bed_track["clips"] = [
+                        clip
+                        for clip_index, clip in enumerate(bed_track.get("clips") or [])
+                        if clip_index not in selected_indices
+                    ]
+            if not selected:
+                continue
+            role_clips.extend(selected)
+            monitor_tracks.append(
+                {
+                    **copy.deepcopy(track),
+                    "mute": False,
+                    "effects": [],
+                    "clips": selected,
+                }
+            )
+        if not monitor_tracks:
+            return {"error": "该角色没有可监听的人声片段"}
+        start, end = self._monitor_window(role_clips)
+        if end - start < 0.01:
+            return {"error": "角色没有可监听的长度"}
+        for monitor_track in monitor_tracks:
+            monitor_track["clips"] = self._shift_monitor_clips(monitor_track["clips"], start)
+        monitor_project = {
+            "sample_rate": sample_rate,
+            "duration": end - start,
+            "roles": [
+                {
+                    **copy.deepcopy(role),
+                    "effects": copy.deepcopy(effects[:target_index]),
+                    # 变调在角色效果之后，把监听信号变调会让插件输入偏离实际渲染。
+                    "pitch": 0,
+                }
+            ],
+            "tracks": monitor_tracks,
+        }
+        return self._render_plugin_monitor_pair(
+            project=project,
+            monitor_project=monitor_project,
+            bed_project=bed_project,
+            start=start,
+            end=end,
+            sample_rate=sample_rate,
+            version="plugin-monitor-role-v1",
+        )
+
+    def _render_plugin_monitor_pair(
+        self,
+        *,
+        project: dict[str, Any],
+        monitor_project: dict[str, Any],
+        bed_project: dict[str, Any],
+        start: float,
+        end: float,
+        sample_rate: int,
+        version: str,
+    ) -> dict[str, Any]:
+        """Render the pre-plugin signal plus the rest of the timeline mix."""
+        render_timeline = getattr(self._audio, "render_timeline", None)
+        if not callable(render_timeline):
+            return {"error": "当前音频引擎不支持实时监听渲染"}
+        length = max(0.01, end - start)
+        monitor_project["duration"] = max(
+            float(monitor_project.get("duration") or 0.0), length
+        )
+        monitor_key = ffmpeg_cache_key({"version": version, "monitor": monitor_project})
+        monitor_dst = self._store.cache_path(f"plugin_monitor_bus_{monitor_key}.wav")
+        try:
+            if not monitor_dst.exists():
+                render_timeline(monitor_project, monitor_dst, self._cache_root(), "wav")
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+            return {"error": f"监听音频渲染失败：{exc}"}
+        if not monitor_dst.exists():
+            return {"error": "监听音频渲染失败（未生成监听音频文件）"}
+        bed_project["duration"] = max(
+            float(bed_project.get("duration") or 0.0),
+            end,
+        )
+        bed_key = ffmpeg_cache_key({"version": version, "bed": bed_project})
+        bed_dst = self._store.cache_path(f"plugin_bed_bus_{bed_key}.wav")
+        try:
+            if not bed_dst.exists():
+                render_timeline(bed_project, bed_dst, self._cache_root(), "wav")
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+            # 没有 bed 时插件仍可独立监听，只是听不到其它音轨。
+            pass
+        return {
+            "input": str(monitor_dst),
+            "bed_input": str(bed_dst) if bed_dst.exists() else "",
+            "timeline_start": start,
+            "timeline_end": end,
+            "project_duration": max(0.05, float(project.get("duration") or end)),
+            "sample_rate": sample_rate,
+            "block_size": 128,
+        }
+
+    @staticmethod
+    def _monitor_clips(raw: Any) -> list[dict[str, Any]]:
+        clips: list[dict[str, Any]] = []
+        for clip in raw if isinstance(raw, list) else []:
+            if not isinstance(clip, dict) or clip.get("mute"):
+                continue
+            if not Path(str(clip.get("file") or "")).is_file():
+                continue
+            clips.append(clip)
+        return clips
+
+    @staticmethod
+    def _monitor_window(clips: list[dict[str, Any]]) -> tuple[float, float]:
+        starts: list[float] = []
+        ends: list[float] = []
+        for clip in clips:
+            try:
+                start = max(0.0, float(clip.get("start") or 0.0))
+                end = max(start, float(clip.get("end") or start))
+            except (TypeError, ValueError):
+                continue
+            starts.append(start)
+            ends.append(end)
+        if not starts:
+            return 0.0, 0.0
+        return min(starts), max(ends)
+
+    @staticmethod
+    def _shift_monitor_clips(
+        clips: list[dict[str, Any]], offset: float
+    ) -> list[dict[str, Any]]:
+        shifted: list[dict[str, Any]] = []
+        for clip in clips:
+            item = copy.deepcopy(clip)
+            try:
+                start = max(0.0, float(item.get("start") or 0.0) - offset)
+                end = max(start, float(item.get("end") or 0.0) - offset)
+            except (TypeError, ValueError):
+                start, end = 0.0, 0.0
+            item["start"] = start
+            item["end"] = end
+            shifted.append(item)
+        return shifted
 
     def _apply_plugin_state(
         self,

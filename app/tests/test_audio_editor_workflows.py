@@ -46,6 +46,29 @@ class _FakePluginHost:
     def __init__(self) -> None:
         self.closed = False
         self.transport = None
+        self.monitor = None
+        self.calls = []
+
+    def status(self) -> dict:
+        return {
+            "ok": True,
+            "ready": True,
+            "host_path": "host.exe",
+            "protocol": 1,
+            "schema": "xb-svcb.juce-vst3-host.v1",
+        }
+
+    def show_editor(self, effect, **kwargs) -> dict:
+        self.calls.append((effect, kwargs))
+        self.monitor = kwargs.get("monitor")
+        monitor_ready = bool(isinstance(self.monitor, dict) and self.monitor.get("input"))
+        return {
+            "ok": True,
+            "session_id": "session-1",
+            "monitor_ready": monitor_ready,
+            "realtime_ready": False,
+            **self.status(),
+        }
 
     def sync_editor(self, _session_id: str, transport=None) -> dict:
         self.transport = transport
@@ -65,10 +88,12 @@ class _FakeAudio:
 
     def __init__(self) -> None:
         self.rendered_project = None
+        self.rendered_projects = []
         self.monitor_effects = None
 
     def render_timeline(self, project, dst, _cache_dir, _fmt) -> bool:
         self.rendered_project = project
+        self.rendered_projects.append(project)
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
         Path(dst).write_bytes(b"merged")
         return True
@@ -826,6 +851,197 @@ class AudioEditorWorkflowTests(unittest.TestCase):
             self.assertEqual(monitor["block_size"], 128)
             self.assertEqual([effect["id"] for effect in audio.monitor_effects], ["gain-1"])
             self.assertEqual(audio.rendered_project["tracks"][0]["clips"], [])
+
+    def test_track_plugin_monitor_renders_track_bus_before_target(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "voice.wav"
+            other = root / "other.wav"
+            source.write_bytes(b"audio")
+            other.write_bytes(b"other")
+            service, _, _ = self.make_service(root)
+            audio = _FakeAudio()
+            service._audio = audio
+            project = self.project(source)
+            track = project["tracks"][0]
+            track["effects"] = [
+                {"id": "gain-1", "type": "gain", "enabled": True, "params": {"gain_db": 2}},
+                {"id": "plugin-1", "type": "plugin", "enabled": True, "params": {"path": "test.vst3"}},
+                {"id": "limit-1", "type": "limiter", "enabled": True, "params": {}},
+            ]
+            project["tracks"].append(
+                {
+                    "id": "track-2",
+                    "name": "伴奏轨道",
+                    "type": "instrument",
+                    "locked": False,
+                    "mute": False,
+                    "volume": 1.0,
+                    "metadata": {"template_id": "duet", "role_id": "role-b"},
+                    "clips": [
+                        {
+                            "id": "clip-2",
+                            "name": "伴奏",
+                            "start": 0.0,
+                            "end": 4.0,
+                            "offset": 0.0,
+                            "volume": 1.0,
+                            "mute": False,
+                            "file": str(other),
+                            "effects": [],
+                            "locked": False,
+                            "fade_in": 0.0,
+                            "fade_out": 0.0,
+                            "metadata": {"role_id": "role-b"},
+                        }
+                    ],
+                }
+            )
+
+            with patch(
+                "application.audio_editor_service.config.EDITOR_CACHE_DIR",
+                root / "cache",
+            ):
+                monitor = service._prepare_track_plugin_monitor(project, track, "plugin-1")
+
+            self.assertNotIn("error", monitor)
+            self.assertTrue(Path(monitor["input"]).exists())
+            self.assertEqual(monitor["timeline_start"], 5.0)
+            self.assertEqual(monitor["timeline_end"], 14.0)
+            self.assertEqual(monitor["project_duration"], 14.0)
+            monitor_project = audio.rendered_projects[0]
+            self.assertEqual(
+                [effect["id"] for effect in monitor_project["tracks"][0]["effects"]],
+                ["gain-1"],
+            )
+            self.assertEqual(
+                [
+                    (clip["start"], clip["end"])
+                    for clip in monitor_project["tracks"][0]["clips"]
+                ],
+                [(0.0, 9.0)],
+            )
+            bed_project = audio.rendered_projects[1]
+            self.assertEqual([item["id"] for item in bed_project["tracks"]], ["track-2"])
+
+    def test_role_plugin_monitor_keeps_role_bus_and_excludes_it_from_bed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "voice.wav"
+            other = root / "other.wav"
+            source.write_bytes(b"audio")
+            other.write_bytes(b"other")
+            service, _, _ = self.make_service(root)
+            audio = _FakeAudio()
+            service._audio = audio
+            project = self.project(source)
+            project["roles"][0]["effects"] = [
+                {"id": "gain-1", "type": "gain", "enabled": True, "params": {"gain_db": 1}},
+                {"id": "plugin-1", "type": "plugin", "enabled": True, "params": {"path": "test.vst3"}},
+            ]
+            project["roles"][0]["pitch"] = 2
+            project["tracks"].append(
+                {
+                    "id": "track-2",
+                    "name": "角色 B 轨",
+                    "type": "vocal",
+                    "locked": False,
+                    "mute": False,
+                    "volume": 1.0,
+                    "metadata": {"template_id": "duet", "role_id": "role-b"},
+                    "clips": [
+                        {
+                            "id": "clip-2",
+                            "name": "和声",
+                            "start": 0.0,
+                            "end": 4.0,
+                            "offset": 0.0,
+                            "volume": 1.0,
+                            "mute": False,
+                            "file": str(other),
+                            "effects": [],
+                            "locked": False,
+                            "fade_in": 0.0,
+                            "fade_out": 0.0,
+                            "metadata": {"role_id": "role-b"},
+                        }
+                    ],
+                }
+            )
+
+            with patch(
+                "application.audio_editor_service.config.EDITOR_CACHE_DIR",
+                root / "cache",
+            ):
+                monitor = service._prepare_role_plugin_monitor(
+                    project, project["roles"][0], "plugin-1"
+                )
+
+            self.assertNotIn("error", monitor)
+            self.assertTrue(Path(monitor["input"]).exists())
+            self.assertEqual(monitor["timeline_start"], 5.0)
+            self.assertEqual(monitor["timeline_end"], 14.0)
+            monitor_project = audio.rendered_projects[0]
+            self.assertEqual(
+                [effect["id"] for effect in monitor_project["roles"][0]["effects"]],
+                ["gain-1"],
+            )
+            self.assertEqual(monitor_project["roles"][0]["pitch"], 0)
+            self.assertEqual(
+                [track["effects"] for track in monitor_project["tracks"]],
+                [[]],
+            )
+            self.assertEqual(
+                [
+                    (clip["start"], clip["end"])
+                    for clip in monitor_project["tracks"][0]["clips"]
+                ],
+                [(0.0, 9.0)],
+            )
+            bed_project = audio.rendered_projects[1]
+            self.assertEqual(
+                [track["id"] for track in bed_project["tracks"]],
+                ["track-1", "track-2"],
+            )
+            self.assertEqual(
+                [clip["id"] for clip in bed_project["tracks"][0]["clips"]],
+                [],
+            )
+            self.assertEqual(
+                [clip["id"] for clip in bed_project["tracks"][1]["clips"]],
+                ["clip-2"],
+            )
+
+    def test_open_plugin_editor_reports_why_monitor_audio_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "voice.wav"
+            source.write_bytes(b"audio")
+            service, repo, _ = self.make_service(root)
+            service._audio = _FakeAudio()
+            host = _FakePluginHost()
+            service._plugin_host = host
+            service._plugin_sessions = {}
+            project = self.project(source)
+            track = project["tracks"][0]
+            track["mute"] = True
+            track["effects"] = [
+                {"id": "plugin-1", "type": "plugin", "enabled": True, "params": {"path": "test.vst3"}}
+            ]
+            repo.add(project)
+
+            with patch(
+                "application.audio_editor_service.config.EDITOR_CACHE_DIR",
+                root / "cache",
+            ):
+                result = service.open_effect_plugin_editor(
+                    "project-1", "track-1", "", "plugin-1", "", "track", ""
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["monitor_ready"])
+            self.assertEqual(host.monitor, {})
+            self.assertIn("静音", result["monitor_reason"])
 
     def test_merge_clips_renders_timeline_and_replaces_sources(self) -> None:
         with tempfile.TemporaryDirectory() as td:

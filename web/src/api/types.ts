@@ -1351,6 +1351,7 @@ export interface EditorPluginHostStatus {
   monitor_ready?: boolean
   realtime_ready?: boolean
   realtime_reason?: string
+  monitor_reason?: string
   monitor?: EditorPluginMonitorStatus
 }
 

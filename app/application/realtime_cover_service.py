@@ -328,6 +328,12 @@ class RealtimeCoverService:
             "max_lag_blocks": int(profile["max_lag_blocks"]),
             "sample_rate": sample_rate,
             "crossfade_ms": self._bounded_float(payload.get("crossfade_ms"), 10.0, 120.0, 40.0),
+            # Extra captured history handed to the separator. A karaoke VR model
+            # still leaks the original vocal out of a 1.5 s window, so give the
+            # separator ~1 s of look-back context by default.
+            "separation_context_seconds": self._bounded_float(
+                payload.get("separation_context_seconds"), 0.0, 2.0, 1.0
+            ),
             "buffer_seconds": round(chunk_seconds * prebuffer_blocks, 3),
             "vocal_gain_db": self._bounded_float(payload.get("vocal_gain_db"), -12.0, 6.0, 0.0),
             "instrumental_gain_db": self._bounded_float(payload.get("instrumental_gain_db"), -12.0, 6.0, 0.0),
@@ -634,6 +640,24 @@ class RealtimeCoverService:
                         directory / "uvr",
                         directory / "realtime-system.log",
                     )
+                # The UVR UI used to send model "families" (MDX-Net / VR Arch).
+                # Those are not files, so the worker silently substituted the
+                # default model; keep that visible in the session log instead of
+                # letting users believe a stronger model is active.
+                if session.get("separator_engine") != "pymss":
+                    requested_model = str(session.get("separator_model") or "")
+                    model_dir = config.UVR_MODEL_DIR
+                    if (
+                        requested_model
+                        and model_dir is not None
+                        and not (Path(model_dir) / requested_model).exists()
+                    ):
+                        self._append_realtime_log(
+                            directory / "realtime-system.log",
+                            "UVR_MODEL_FALLBACK\t"
+                            f"requested={requested_model}\t"
+                            f"using={config.UVR_MODEL}\n",
+                        )
             engine = self._engines.for_framework(model["framework"])
             opener = getattr(engine, "open_realtime_session", None)
             if not callable(opener):
@@ -654,6 +678,23 @@ class RealtimeCoverService:
             crossfade_frames = min(
                 max(1, frames // 4),
                 max(1, round(session["sample_rate"] * session["crossfade_ms"] / 1000.0)),
+            )
+            # The separator benefits from several blocks of context; only the
+            # live window is kept in the mixed output (see _prepare_system_block).
+            context_seconds = float(session.get("separation_context_seconds") or 0.0)
+            context_frames = (
+                int(round(session["sample_rate"] * context_seconds))
+                if separate_vocals and context_seconds > 0
+                else 0
+            )
+            self._append_realtime_log(
+                directory / "realtime-system.log",
+                "SEPARATION_CONFIG\t"
+                f"engine={session.get('separator_engine')}\t"
+                f"model={session.get('separator_model')}\t"
+                f"context_seconds={context_seconds:.2f}\t"
+                f"chunk_seconds={float(session.get('chunk_seconds') or 0):.2f}\t"
+                f"crossfade_ms={float(session.get('crossfade_ms') or 0):.0f}\n",
             )
             prebuffer_blocks = max(1, int(session.get("prebuffer_blocks") or 1))
             max_lag_blocks = max(1, int(session.get("max_lag_blocks") or 2))
@@ -741,6 +782,7 @@ class RealtimeCoverService:
 
                 def separation_loop() -> None:
                     previous_tail = None
+                    history = np.zeros((0, 2), dtype=np.float32)
                     try:
                         while not pipeline_stop.is_set():
                             try:
@@ -755,6 +797,7 @@ class RealtimeCoverService:
                             processing = current
                             if discontinuity:
                                 previous_tail = None
+                                history = np.zeros((0, 2), dtype=np.float32)
                                 self._append_realtime_log(
                                     log_file,
                                     f"LATENCY_RESET\tblock={index}\n",
@@ -763,16 +806,34 @@ class RealtimeCoverService:
                                 overlap_frames = int(previous_tail.shape[0])
                                 processing = np.concatenate((previous_tail, current), axis=0)
                             previous_tail = current[-crossfade_frames:].copy()
+                            # Separation models need far more context than the
+                            # 40 ms model crossfade. Feeding the last few blocks
+                            # gives the separator a stable window, which is what
+                            # keeps the original vocal out of the instrumental
+                            # and the extracted vocal clean enough to convert.
+                            # ``history`` already ends with the crossfade tail,
+                            # so it replaces the duplicated ``previous_tail``.
+                            separator_input = processing
+                            if separator is not None and context_frames > 0 and history.shape[0]:
+                                separator_input = np.concatenate((history, current), axis=0)
+                            if context_frames > 0:
+                                merged = (
+                                    np.concatenate((history, current), axis=0)
+                                    if history.shape[0]
+                                    else current
+                                )
+                                history = merged[-context_frames:].copy()
                             prepared = self._prepare_system_block(
                                 directory,
                                 separator,
-                                processing,
-                                int(processing.shape[0]),
+                                separator_input,
+                                int(separator_input.shape[0]),
                                 index,
                                 session["sample_rate"],
                                 output_frames=frames,
                                 overlap_frames=overlap_frames,
                                 discontinuity=discontinuity,
+                                keep_frames=int(processing.shape[0]),
                             )
                             prepared["captured_at"] = captured_at
                             while not pipeline_stop.is_set():
@@ -861,6 +922,7 @@ class RealtimeCoverService:
         output_frames: int | None = None,
         overlap_frames: int = 0,
         discontinuity: bool = False,
+        keep_frames: int | None = None,
     ) -> dict[str, Any]:
         import numpy as np
 
@@ -868,10 +930,21 @@ class RealtimeCoverService:
         if captured.size == 0:
             raise RuntimeError("系统音频输入返回空音频块")
         captured = self._fit_audio(captured, frames)
-        overlap_frames = min(max(0, int(overlap_frames)), frames)
-        output_frames = max(0, int(output_frames if output_frames is not None else frames - overlap_frames))
-        current = captured[overlap_frames : overlap_frames + output_frames]
-        length = output_frames / sample_rate
+        block_frames = max(
+            0,
+            int(output_frames if output_frames is not None else frames - overlap_frames),
+        )
+        # The separator may receive extra lookback history, but only the tail of
+        # its input belongs to the live stream: crossfade context plus this
+        # block. Cropping to that window keeps the output sample clock aligned.
+        keep = max(
+            1,
+            min(int(keep_frames) if keep_frames is not None else frames, frames),
+        )
+        aligned = captured[-keep:]
+        overlap_frames = min(max(0, int(overlap_frames)), keep)
+        current = captured[-block_frames:] if block_frames > 0 else captured[-1:]
+        length = block_frames / sample_rate
         # A stopped player still leaves the WASAPI loopback recorder alive and
         # returns zero-filled blocks. UVR cannot produce a vocal stem for a
         # silent block, so bypass the model pipeline and keep the stream clock
@@ -881,8 +954,8 @@ class RealtimeCoverService:
         if peak < 1e-4 or rms < 2e-5:
             return {
                 "index": index,
-                "captured": captured,
-                "frames": frames,
+                "captured": aligned,
+                "frames": keep,
                 "overlap_frames": overlap_frames,
                 "length": length,
                 "silent": True,
@@ -896,8 +969,8 @@ class RealtimeCoverService:
             # segment cost and is what makes sub-second live latency possible.
             return {
                 "index": index,
-                "captured": captured,
-                "frames": frames,
+                "captured": aligned,
+                "frames": keep,
                 "overlap_frames": overlap_frames,
                 "length": length,
                 "raw": raw,
@@ -914,10 +987,14 @@ class RealtimeCoverService:
             timeout=max(30.0, length * 30.0),
             instrumental=str(accompaniment),
         )
+        # Lookback history is context for the separator only: crop the stems
+        # back to the live window so the mix and the model input stay aligned.
+        self._crop_wav_tail(separated, keep)
+        self._crop_wav_tail(accompaniment, keep)
         return {
             "index": index,
-            "captured": captured,
-            "frames": frames,
+            "captured": aligned,
+            "frames": keep,
             "overlap_frames": overlap_frames,
             "length": length,
             "raw": raw,
@@ -927,6 +1004,33 @@ class RealtimeCoverService:
             "direct": False,
             "discontinuity": discontinuity,
         }
+
+    @staticmethod
+    def _crop_wav_tail(path: Path, keep_frames: int) -> None:
+        """Keep only the newest ``keep_frames`` samples of a PCM WAV in place."""
+        keep_frames = int(keep_frames)
+        if keep_frames <= 0:
+            return
+        try:
+            with wave.open(str(path), "rb") as handle:
+                total = int(handle.getnframes())
+                if total <= keep_frames:
+                    return
+                channels = int(handle.getnchannels())
+                width = int(handle.getsampwidth())
+                rate = int(handle.getframerate())
+                handle.setpos(total - keep_frames)
+                payload = handle.readframes(keep_frames)
+        except (OSError, EOFError, ValueError, wave.Error):
+            return
+        try:
+            with wave.open(str(path), "wb") as handle:
+                handle.setnchannels(channels)
+                handle.setsampwidth(width)
+                handle.setframerate(rate)
+                handle.writeframes(payload)
+        except (OSError, EOFError, ValueError, wave.Error):
+            return
 
     def _infer_with_dropout_recovery(
         self,
@@ -1288,19 +1392,27 @@ class RealtimeCoverService:
             recovery_history
             and recovery_history[-1].get("issue")
         )
+        silence_fallback = False
         if (
             (model_params.auto_high_pitch_guard and unresolved_dropout)
             or not model_params.auto_high_pitch_guard
         ) and self._is_nearly_silent(rendered, separated):
+            # The dry separated vocal must never reach the live output: doing so
+            # plays the original singer unchanged, which sounds like "the
+            # original vocal leaked into the result". A short silent block is
+            # far less confusing than an unconverted voice swap.
             self._append_realtime_log(
                 log_file,
-                "MODEL_SILENCE_FALLBACK\t整块接近静音，回退原始人声\n",
+                "MODEL_SILENCE_FALLBACK\t整块接近静音，输出静音而不是原唱人声\n",
             )
-            rendered = separated
-        output_audio = self._fit_audio(
-            self._read_pcm16(rendered, session["sample_rate"], frame_count),
-            frame_count,
-        )
+            silence_fallback = True
+        if silence_fallback:
+            output_audio = np.zeros((frame_count, 2), dtype=np.float32)
+        else:
+            output_audio = self._fit_audio(
+                self._read_pcm16(rendered, session["sample_rate"], frame_count),
+                frame_count,
+            )
         if direct:
             # Dry-vocal profile: the converted voice is the whole output.
             accompaniment = np.zeros_like(output_audio)
@@ -1578,20 +1690,77 @@ class RealtimeCoverService:
 
     @staticmethod
     def _read_pcm16(path: Path, sample_rate: int, frames: int):
+        """Read exactly ``frames`` stereo samples, resampling when the rates differ.
+
+        Model renders do not necessarily use the session rate (RVC writes at the
+        model's ``tgt_sr``, commonly 40 kHz or 48 kHz). The previous version read
+        only ``frames`` *source* frames, so a 48 kHz render into a 44.1 kHz
+        session covered just 92% of the block and every block ended with a
+        padded silence gap; at 40 kHz it read past the file and dropped content
+        instead. Read enough source audio for the requested duration and keep a
+        cubic kernel, whose passband is far flatter than linear interpolation
+        (the linear version audibly dulled the converted voice).
+        """
         import numpy as np
 
+        frames = max(0, int(frames))
+        if frames == 0:
+            return np.zeros((0, 2), dtype=np.float32)
+        target_rate = max(1, int(sample_rate))
         with wave.open(str(path), "rb") as handle:
-            channels = handle.getnchannels()
-            source_rate = handle.getframerate()
-            data = np.frombuffer(handle.readframes(frames), dtype=np.int16).astype(np.float32) / 32768.0
-        data = data.reshape(-1, channels) if channels else data.reshape(-1, 1)
-        if source_rate != sample_rate and len(data):
-            positions = np.linspace(0, len(data) - 1, max(1, round(len(data) * sample_rate / source_rate)))
-            base = np.arange(len(data))
-            data = np.column_stack([np.interp(positions, base, data[:, channel]) for channel in range(data.shape[1])])
+            source_rate = int(handle.getframerate() or 0) or target_rate
+            channels = max(1, int(handle.getnchannels() or 1))
+            # Enough source frames to cover the requested output duration, plus
+            # the two neighbours the cubic kernel samples on each side.
+            needed = int(np.ceil(frames * source_rate / float(target_rate))) + 4
+            data = (
+                np.frombuffer(handle.readframes(needed), dtype=np.int16).astype(np.float32)
+                / 32768.0
+            )
+        data = data.reshape(-1, channels)
         if data.shape[1] == 1:
             data = np.repeat(data, 2, axis=1)
+        elif data.shape[1] > 2:
+            data = data[:, :2]
+        if data.shape[0] == 0:
+            return np.zeros((frames, 2), dtype=np.float32)
+        if source_rate != target_rate:
+            data = RealtimeCoverService._resample_cubic(
+                data, source_rate, target_rate, frames
+            )
+        if data.shape[0] < frames:
+            data = np.pad(data, ((0, frames - data.shape[0]), (0, 0)))
         return data[:frames]
+
+    @staticmethod
+    def _resample_cubic(data, source_rate: int, target_rate: int, frames: int):
+        """Catmull-Rom resampling: keep the high end that linear interpolation smears."""
+        import numpy as np
+
+        total = int(data.shape[0])
+        if total == 0 or frames <= 0:
+            return np.zeros((max(0, frames), 2), dtype=np.float32)
+        ratio = float(target_rate) / float(source_rate)
+        positions = np.arange(frames, dtype=np.float64) / ratio
+        np.clip(positions, 0.0, float(total - 1), out=positions)
+        base = np.floor(positions).astype(np.int64)
+        frac = (positions - base).astype(np.float32)
+        i0 = np.clip(base - 1, 0, total - 1)
+        i1 = np.clip(base, 0, total - 1)
+        i2 = np.clip(base + 1, 0, total - 1)
+        i3 = np.clip(base + 2, 0, total - 1)
+        y0 = data[i0]
+        y1 = data[i1]
+        y2 = data[i2]
+        y3 = data[i3]
+        t = frac[:, None]
+        result = 0.5 * (
+            (2.0 * y1)
+            + (-y0 + y2) * t
+            + (2.0 * y0 - 5.0 * y1 + 4.0 * y2 - y3) * t * t
+            + (-y0 + 3.0 * y1 - 3.0 * y2 + y3) * t * t * t
+        )
+        return np.clip(result, -1.0, 1.0).astype(np.float32)
 
     def _resolve_models(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         entries = list(payload.get("models") or [])
