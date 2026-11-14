@@ -493,6 +493,8 @@ export interface PymssModel {
   purpose?: PymssPurpose | ''
   purpose_label?: string
   target_stem?: string
+  /** catalog 目标音轨拆分结果（如 instrumental/vocals → [instrumental, vocals]）。 */
+  target_stems?: string[]
   /** 模型 yaml 声明的输出音轨（如 vocals / instrumental / male / female）。 */
   stems?: string[]
   /** 主输出音轨（catalog target_stem 或声明顺序第一路）。 */

@@ -255,8 +255,27 @@ def model_descriptor(model: str, model_dir: Path | None) -> dict[str, Any]:
     return descriptor_for_weight(_resolve_weight(str(model or ""), _weight_index(model_dir)))
 
 
+def split_target_stems(value: str) -> list[str]:
+    """把 catalog 的 ``target_stem`` 拆成音轨名列表。
+
+    很多模型的 target_stem 是多音轨写法（``instrumental/vocals``、
+    ``drums/bass/other/vocals/guitar/piano``）。未下载模型只能靠它推断端口，
+    不拆分就会把 ``vocals`` 丢掉。
+    """
+    tokens = [
+        part.strip().strip("'\"")
+        for part in re.split(r"[/+,;|]", str(value or ""))
+        if part.strip()
+    ]
+    result: list[str] = []
+    for token in tokens:
+        if token.casefold() not in {item.casefold() for item in result}:
+            result.append(token)
+    return result
+
+
 def attach_model_stems(rows: list[dict[str, Any]], model_dir: Path | None) -> list[dict[str, Any]]:
-    """给 catalog 行补充 ``stems`` / ``primary_stem`` 字段。"""
+    """给 catalog 行补充 ``stems`` / ``primary_stem`` / ``target_stems`` 字段。"""
     if not rows:
         return rows
     index = _weight_index(model_dir)
@@ -275,11 +294,13 @@ def attach_model_stems(rows: list[dict[str, Any]], model_dir: Path | None) -> li
             primary = str(descriptor.get("primary_stem") or "")
         row["stems"] = stems
         target = str(row.get("target_stem") or "").strip()
+        target_tokens = split_target_stems(target)
+        row["target_stems"] = target_tokens
         if not primary and target:
             primary = next(
                 (stem for stem in stems if stem.casefold() == target.casefold()), ""
             )
         if not primary:
-            primary = stems[0] if stems else target
+            primary = stems[0] if stems else (target_tokens[0] if target_tokens else target)
         row["primary_stem"] = primary
     return rows

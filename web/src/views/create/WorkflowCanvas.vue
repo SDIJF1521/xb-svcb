@@ -225,25 +225,12 @@ function looksLikeAccompaniment(stem: string): boolean {
 function defaultSeparatePorts(node: WorkflowNode): string[] {
   const stems = declaredStems(node)
   if (!stems.length) {
-    const model = findPymssModel(String(node.params?.model || ''))
-    // 没有模型元数据（yaml 未下载）时按用途与目标音轨推断，避免给
-    // 伴奏提取模型（如 bs_roformer_inst_*）显示并不存在的「人声」端口。
-    if (model) {
-      if (pymssPurposeKey(model) === 'dereverb') return ['audio']
-      const target = String(model.target_stem || '').trim()
-      if (target) {
-        const normalized = target.toLowerCase()
-        if (/instrument|accompan|karaoke|music|background|bgm|no.vocal/.test(normalized)) {
-          // 目标音轨是伴奏：模型只产出伴奏 + 残差，没有人声端口。
-          return ['instrumental', 'other']
-        }
-        if (/vocal|voice|singing|lead/.test(normalized)) return [...SEPARATE_BASE_OUTPUTS]
-        return [stemPort(target), 'other']
-      }
-      const category = `${model.primary_category || ''} ${model.category || ''}`.toLowerCase()
-      if (category.includes('instrumental')) return ['instrumental']
+    // UVR 节点输出固定；PyMSS 未下载模型没有 yaml，输出音轨无法确定：
+    // 先只给通用 audio 端口，下载完成后按模型配置动态适配。
+    if (String(node.params?.engine || 'uvr').toLowerCase() !== 'pymss') {
+      return [...SEPARATE_BASE_OUTPUTS]
     }
-    return [...SEPARATE_BASE_OUTPUTS]
+    return ['audio']
   }
   const primary = primaryStemOf(node)
   if (stems.length <= DEFAULT_STEM_LIMIT) return stems.map(stemPort)
@@ -281,7 +268,11 @@ function separateOutputChoices(node: WorkflowNode): string[] {
     const extra = ['other'].filter((port) => !stemPorts.includes(port))
     return [...stemPorts, ...extra]
   }
-  return [...SEPARATE_BASE_OUTPUTS, ...SEPARATE_EXTRA_OUTPUTS]
+  // 未下载：只给通用 audio 端口，下载后按模型配置自动适配。
+  if (String(node.params?.engine || 'uvr').toLowerCase() !== 'pymss') {
+    return [...SEPARATE_BASE_OUTPUTS, ...SEPARATE_EXTRA_OUTPUTS]
+  }
+  return ['audio']
 }
 
 /** 节点实际可用的输出端口。 */
@@ -295,6 +286,8 @@ function separateOutputHint(node: WorkflowNode): string {
   const ports = separateOutputs(node)
   const all = declaredStems(node).length
   const text = ports.map((port) => portDisplayName(port, node)).join(' + ')
+  const isPymss = String(node.params?.engine || 'uvr').toLowerCase() === 'pymss'
+  if (!all) return isPymss ? `${text}（下载后按模型配置自动适配）` : text
   if (all > ports.length) return `${text} +${all - ports.length}`
   return text
 }
@@ -1534,11 +1527,14 @@ function normalizeNodes() {
 }
 
 // 模型目录异步加载后，补同步已保存工作流中的 PyMSS 节点类型。
+// 模型下载完成后 yaml 音轨会补齐（未下载时只有 catalog 推断），端口可能变化，
+// 这里顺手清理指向已消失端口的旧连线，避免运行时才报「缺少音轨」。
 watch(
   () => props.pymssAllModels,
   () => {
     for (const node of nodes.value) {
       if (node.type === 'separate' || node.type === 'dereverb') syncPymssNodeType(node, false)
+      if (node.type === 'separate') pruneStalePortEdges(node, true)
     }
   },
   { deep: true },
@@ -2315,7 +2311,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                   该模型声明 {{ declaredStems(selectedNode).length }} 路音轨（读取模型配置）
                 </div>
                 <div v-else-if="separateStemsUnknown(selectedNode)" class="wf-stack-sub">
-                  未读取到模型配置（可能尚未下载），暂按用途推断输出音轨
+                  模型尚未下载：先提供通用 audio 端口，下载后按模型配置自动适配输出音轨
                 </div>
                 <div v-if="declaredStems(selectedNode).length > 1" class="wf-stack">
                   <div class="wf-stack-sublabel">主音轨</div>

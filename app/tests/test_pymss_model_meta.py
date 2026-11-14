@@ -156,3 +156,27 @@ def test_write_result_keeps_file_and_stdout_payload_consistent(tmp_path: Path, c
     assert printed["vocals"] == payload["vocals"]
     assert printed["removed_harmony"] is None
     assert printed["stems"] == payload["stems"]
+
+def test_split_target_stems_handles_multi_stem_catalog_values() -> None:
+    assert pymss_catalog_meta.split_target_stems("instrumental/vocals") == [
+        "instrumental",
+        "vocals",
+    ]
+    assert pymss_catalog_meta.split_target_stems(
+        "drums/bass/other/vocals/guitar/piano"
+    ) == ["drums", "bass", "other", "vocals", "guitar", "piano"]
+    assert pymss_catalog_meta.split_target_stems("speech") == ["speech"]
+    assert pymss_catalog_meta.split_target_stems("") == []
+
+
+def test_attach_model_stems_exposes_target_tokens_for_missing_models(
+    tmp_path: Path, monkeypatch
+) -> None:  # noqa: ANN001
+    monkeypatch.setattr(config, "PYMSS_MODEL_DIR", tmp_path / "empty")
+
+    rows = [{"name": "5_HP-Karaoke-UVR.pth", "target_stem": "instrumental/vocals"}]
+    pymss_catalog_meta.attach_model_stems(rows, tmp_path / "empty")
+
+    assert rows[0]["stems"] == []
+    assert rows[0]["target_stems"] == ["instrumental", "vocals"]
+    assert rows[0]["primary_stem"] == "instrumental"

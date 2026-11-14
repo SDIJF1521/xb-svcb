@@ -1494,8 +1494,22 @@ async function onWorkflowDownloadPymss(name: string) {
       return
     }
     ElMessage.success(result.already ? '该模型正在下载中' : `已开始下载：${model}`)
-    // 下载是后台任务；稍后刷新目录，下载完成后节点里的“下载该模型”按钮会自动消失。
-    setTimeout(() => void refreshAllPymssModels(), 6000)
+    // 下载是后台任务，几百 MB 到 1 GB 不等：按任务进度轮询，完成后刷新目录，
+    // 节点里的「下载该模型」按钮、以及未下载时推断的音轨端口都会随之更新。
+    const key = String(result.key || '')
+    const deadline = Date.now() + 30 * 60 * 1000
+    while (key && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 2500))
+      let job: { status?: string } | null = null
+      try {
+        job = await api.pymssDownloadProgress(key)
+      } catch {
+        job = null
+      }
+      const status = String(job?.status || '')
+      if (status === 'done' || status === 'failed') break
+    }
+    await refreshAllPymssModels()
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : 'PyMSS 模型下载失败')
   }
