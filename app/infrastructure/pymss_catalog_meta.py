@@ -231,7 +231,9 @@ def descriptor_for_weight(weight: Path | None) -> dict[str, Any]:
     )
     descriptor = {
         "stems": stems,
-        "primary_stem": primary or (meta["instruments"][0] if meta["instruments"] else ""),
+        # 只有 yaml 的 target_instrument 才能确定训练目标；多轨模型保持为空，
+        # 由 catalog 的 target_stem 或声明顺序决定主音轨。
+        "primary_stem": primary,
         "instruments": meta["instruments"],
         "target_instrument": meta["target_instrument"],
         "num_stems": meta["num_stems"],
@@ -297,8 +299,15 @@ def attach_model_stems(rows: list[dict[str, Any]], model_dir: Path | None) -> li
         target_tokens = split_target_stems(target)
         row["target_stems"] = target_tokens
         if not primary and target:
+            # catalog 的 target_stem 可能是多音轨写法，逐个匹配。
             primary = next(
-                (stem for stem in stems if stem.casefold() == target.casefold()), ""
+                (
+                    stem
+                    for token in target_tokens or [target]
+                    for stem in stems
+                    if stem.casefold() == token.casefold()
+                ),
+                "",
             )
         if not primary:
             primary = stems[0] if stems else (target_tokens[0] if target_tokens else target)
