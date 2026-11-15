@@ -27,7 +27,7 @@ export interface MidiNote {
 /** 单个音符最多保留的控制点数量：够画滑音和几秒颤音，又不会让请求体失控。 */
 export const MAX_CURVE_POINTS = 256
 /** 音高曲线相对音符中心的最大偏移（半音），避免画出听不出也没法重绘的极端值。 */
-export const CURVE_SEMITONE_LIMIT = 12
+export const CURVE_SEMITONE_LIMIT = 36
 
 /** 任何「有时间、有音高」的音符（音高重绘音符与编曲音符共用的几何接口）。 */
 export interface NoteLike {

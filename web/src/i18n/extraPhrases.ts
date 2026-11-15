@@ -974,6 +974,27 @@ Object.assign(enExtraPhrases, {
   '中间片段': 'Intermediate clips', '翻唱作品': 'Cover', '编辑': 'Edit',
 })
 
+Object.assign(enExtraPhrases, {
+  '搜索工程名称': 'Search project name',
+  '批量管理': 'Batch manage',
+  '退出批量': 'Exit batch',
+  '全选当前': 'Select all shown',
+  '取消全选': 'Clear selection',
+  '删除选中': 'Delete selected',
+  '清除搜索': 'Clear search',
+  '没有匹配的工程': 'No matching projects',
+  '平滑曲线': 'Smooth curve',
+  '套用原唱音高': 'Apply source pitch',
+  '为所有音符套用原唱 F0（曲线会很密，谨慎使用）': 'Apply the source F0 to every note (the view gets very dense; use with care)',
+  '勾选后按住拖动，自己画音高线': 'Tick, then drag on notes to draw the pitch line yourself',
+  '画笔：拖动绘制音高曲线': 'Pen: drag to draw the pitch curve',
+  '橡皮：拖动擦除音高曲线（右键拖动同效）': 'Eraser: drag to erase the pitch curve (right-drag works too)',
+  '对选中音符的音高曲线做轻微平滑，去掉手绘抖动':
+    'Smooth the pitch curve of selected notes to remove hand-drawn jitter',
+  '音高曲线：在音符上按住拖动，像画笔一样画线（单击只选中）· Alt 擦除 · Ctrl 吸附半音':
+    'Pitch curve: press and drag on notes to draw like a pen (click only selects) · Alt erase · Ctrl snap to semitone',
+  '批量删除编辑工程？': 'Delete selected editing projects?',
+})
 export const jaExtraPhrases: Record<string, string> = {
   '名称不能为空': '名前を入力してください', '保存失败': '保存に失敗しました', '删除失败': '削除に失敗しました',
   '加载失败': '読み込みに失敗しました', '操作完成': '操作が完了しました', '操作失败': '操作に失敗しました',
@@ -1589,8 +1610,33 @@ Object.assign(jaExtraPhrases, {
 
 type DynamicRule = readonly [RegExp, string]
 
+Object.assign(jaExtraPhrases, {
+  '搜索工程名称': 'プロジェクト名を検索',
+  '批量管理': '一括管理',
+  '退出批量': '一括管理を終了',
+  '全选当前': '表示中をすべて選択',
+  '取消全选': '選択を解除',
+  '删除选中': '選択を削除',
+  '清除搜索': '検索をクリア',
+  '没有匹配的工程': '一致するプロジェクトはありません',
+  '平滑曲线': 'カーブを平滑化',
+  '套用原唱音高': '元の音高を適用',
+  '为所有音符套用原唱 F0（曲线会很密，谨慎使用）': 'すべての音符に元のF0を適用します（表示が非常に密になります。注意して使用）',
+  '勾选后按住拖动，自己画音高线': 'チェックして音符上をドラッグし、音高ラインを自分で描きます',
+  '画笔：拖动绘制音高曲线': 'ペン：ドラッグで音高カーブを描画',
+  '橡皮：拖动擦除音高曲线（右键拖动同效）': '消しゴム：ドラッグで音高カーブを消去（右ドラッグも可）',
+  '对选中音符的音高曲线做轻微平滑，去掉手绘抖动':
+    '選択した音符の音高カーブを軽く平滑化し、手描きの揺れを抑えます',
+  '音高曲线：在音符上按住拖动，像画笔一样画线（单击只选中）· Alt 擦除 · Ctrl 吸附半音':
+    '音高カーブ：音符上を押してドラッグするとペンのように描けます（クリックは選択のみ）· Alt 消去 · Ctrl 半音スナップ',
+  '批量删除编辑工程？': '選択した編集プロジェクトを削除しますか？',
+})
 const enDynamicRules: readonly DynamicRule[] = [
-  [/^正在下载 (\d+)%（(.+)）$/u, 'Downloading $1% ($2)'],
+  [/^已选择 (\d+) 个工程$/u, 'Selected $1 projects'],
+  [/^确定删除选中的 (\d+) 个工程吗？删除后无法从工程列表恢复。原始歌曲和翻唱作品不会删除。$/u,
+    'Delete $1 selected projects? They cannot be restored from the project list. Original songs and generated works are kept.'],
+  [/^已删除 (\d+) 个工程，(\d+) 个失败$/u, 'Deleted $1 projects, $2 failed'],
+  [/^已删除 (\d+) 个工程$/u, 'Deleted $1 projects'],  [/^正在下载 (\d+)%（(.+)）$/u, 'Downloading $1% ($2)'],
   [/^正在下载$/u, 'Downloading'],
   [/^已开始下载：(.+)$/u, 'Download started: $1'],
   // 优先级最高：更具体的规则必须排在通用规则（如 ``^已导入 (.+)$``）前面，
@@ -1860,7 +1906,11 @@ const enDynamicRules: readonly DynamicRule[] = [
 ]
 
 const jaDynamicRules: readonly DynamicRule[] = [
-  [/^正在下载 (\d+)%（(.+)）$/u, 'ダウンロード中 $1%（$2）'],
+  [/^已选择 (\d+) 个工程$/u, '$1 件のプロジェクトを選択'],
+  [/^确定删除选中的 (\d+) 个工程吗？删除后无法从工程列表恢复。原始歌曲和翻唱作品不会删除。$/u,
+    '選択した $1 件のプロジェクトを削除しますか？プロジェクト一覧から復元できません。元の曲と生成作品は削除されません。'],
+  [/^已删除 (\d+) 个工程，(\d+) 个失败$/u, '$1 件削除、$2 件失敗'],
+  [/^已删除 (\d+) 个工程$/u, '$1 件のプロジェクトを削除しました'],  [/^正在下载 (\d+)%（(.+)）$/u, 'ダウンロード中 $1%（$2）'],
   [/^正在下载$/u, 'ダウンロード中'],
   [/^已开始下载：(.+)$/u, 'ダウンロードを開始しました：$1'],
   // 汎用ルールより先に評価される必要がある具体ルール。

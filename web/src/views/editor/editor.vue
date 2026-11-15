@@ -1546,6 +1546,11 @@ const PLAY_TOGGLE_DEBOUNCE_MS = 350
 const LIVE_MIX_REFRESH_DEBOUNCE_MS = 90
 const LIVE_CONTROL_SAVE_DEBOUNCE_MS = 120
 const MIX_CROSSFADE_MS = 90
+// 预览渲染/实时切换的看门狗：后端卡住或页面被挂起（requestAnimationFrame
+// 暂停）时，必须让 previewing 复位，否则播放按钮会一直处于禁用状态。
+const PREVIEW_RENDER_TIMEOUT_MS = 30_000
+const CROSSFADE_WATCHDOG_MS = MIX_CROSSFADE_MS + 1_200
+const PLAY_START_TIMEOUT_MS = 15_000
 const PLUGIN_STATE_SYNC_INTERVAL_MS = 200
 const TRACK_LABEL_WIDTH = 160
 const ZOOM_MIN = 24
@@ -4329,12 +4334,37 @@ function pauseHtmlAudioOutputs() {
   audioSecondaryEl.value?.pause()
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      reject(new Error(`${label}超时（${Math.round(ms / 1000)} 秒）`))
+    }, ms)
+    promise.then(
+      (value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+}
+
 async function getMixPreviewData(projectId: string, signature: string): Promise<string> {
   if (cachedMixSignature === signature && cachedMixData) return cachedMixData
   if (mixPreloadSignature === signature && mixPreloadPromise) return mixPreloadPromise
 
   mixPreloadSignature = signature
-  const task = api.renderEditorPreview(projectId)
+  const task = withTimeout(api.renderEditorPreview(projectId), PREVIEW_RENDER_TIMEOUT_MS, '预览渲染')
     .then((data) => {
       if (!data) throw new Error('后端没有返回预览音频')
       if (project.value?.id === projectId && mixRenderSignature(project.value) === signature) {
@@ -4380,11 +4410,26 @@ function crossfadeAudioPlayers(
 ) {
   return new Promise<boolean>((resolve) => {
     const started = performance.now()
+    let settled = false
+    const finish = (value: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(watchdog)
+      resolve(value)
+    }
+    // 页面切到后台时 requestAnimationFrame 会被暂停，跨淡 Promise 永远不
+    // resolve，会把 previewing 卡在 true；加一个看门狗强制收尾。
+    const watchdog = setTimeout(() => {
+      from.volume = 1
+      resetAudioPlayer(to)
+      finish(false)
+    }, CROSSFADE_WATCHDOG_MS)
     const step = (now: number) => {
+      if (settled) return
       if (requestId !== mixPreviewRequestId || !isMixPlaybackActive()) {
         from.volume = 1
         resetAudioPlayer(to)
-        resolve(false)
+        finish(false)
         return
       }
       const ratio = clamp((now - started) / MIX_CROSSFADE_MS, 0, 1)
@@ -4397,7 +4442,7 @@ function crossfadeAudioPlayers(
       activeAudioSlot.value = to === audioPrimaryEl.value ? 0 : 1
       to.volume = 1
       resetAudioPlayer(from)
-      resolve(true)
+      finish(true)
     }
     requestAnimationFrame(step)
   })
@@ -4414,7 +4459,7 @@ async function refreshLiveMixPreview() {
   liveMixRenderInFlight = true
   previewing.value = true
   try {
-    const data = await api.renderEditorPreview(currentProject.id)
+    const data = await withTimeout(api.renderEditorPreview(currentProject.id), PREVIEW_RENDER_TIMEOUT_MS, '实时预览渲染')
     if (requestId !== mixPreviewRequestId || !isMixPlaybackActive()) return
     if (!data) throw new Error('后端没有返回预览音频')
 
@@ -4426,7 +4471,7 @@ async function refreshLiveMixPreview() {
       to.volume = 0
       to.src = data
       to.currentTime = resumeAt
-      await to.play()
+      await withTimeout(to.play(), PLAY_START_TIMEOUT_MS, '播放启动')
       if (await crossfadeAudioPlayers(from, to, requestId)) activeMixSignature = mixSignature
     } catch (err) {
       from.volume = 1
@@ -4472,6 +4517,8 @@ function stopPlayback() {
 
 function pauseMixPlayback() {
   cancelScheduledLiveMixRefresh()
+  mixPreviewRequestId += 1
+  previewing.value = false
   playing.value = false
   playbackBuffering.value = false
   if (nativeRealtimeReady.value) {
@@ -4489,7 +4536,13 @@ async function playMix() {
     else stopPlayback()
     return
   }
-  if (previewing.value) return
+  if (previewing.value) {
+    // 上一次预览渲染/跨淡没有收尾（后端超时、页面挂起等）时不能把播放按钮
+    // 永久锁死：取消在途请求后继续播放。
+    mixPreviewRequestId += 1
+    previewing.value = false
+    playbackBuffering.value = false
+  }
   timelineSeeking.value = false
   followPlayheadIntoView(true)
   if (nativeRealtimeReady.value) {
@@ -4520,7 +4573,7 @@ async function playMix() {
     playbackBuffering.value = true
     try {
       el.currentTime = clamp(playhead.value, 0, project.value.duration)
-      await el.play()
+      await withTimeout(el.play(), PLAY_START_TIMEOUT_MS, '播放启动')
       playing.value = true
     } catch (err) {
       playbackBuffering.value = false
@@ -4550,7 +4603,7 @@ async function playMix() {
     el.src = data
     el.currentTime = Math.max(0, playhead.value)
     playbackBuffering.value = true
-    await el.play()
+    await withTimeout(el.play(), PLAY_START_TIMEOUT_MS, '播放启动')
     playing.value = true
     activeMixSignature = signature
   } catch (err) {
@@ -4588,7 +4641,7 @@ async function playClip(trackId: string, clipId: string) {
     await saveProject()
     if (requestId !== clipPreviewRequestId || project.value?.id !== currentProject.id) return
 
-    const data = await api.getEditorClipAudio(currentProject.id, clip.id)
+    const data = await withTimeout(api.getEditorClipAudio(currentProject.id, clip.id), PREVIEW_RENDER_TIMEOUT_MS, '片段音频加载')
     if (requestId !== clipPreviewRequestId || project.value?.id !== currentProject.id) return
     if (!data) throw new Error('后端没有返回片段音频')
 
@@ -4596,7 +4649,7 @@ async function playClip(trackId: string, clipId: string) {
     if (!el) throw new Error('音频播放器未就绪')
     el.src = data
     el.currentTime = 0
-    await el.play()
+    await withTimeout(el.play(), PLAY_START_TIMEOUT_MS, '播放启动')
     if (requestId !== clipPreviewRequestId) {
       el.pause()
       return

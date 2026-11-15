@@ -212,6 +212,23 @@
             <input v-model="pitchCurveMode" type="checkbox" />
             <span>{{ t('音高曲线') }}</span>
           </label>
+          <span v-if="pitchCurveMode" class="midi-pitch-tool">
+            <button
+              class="ghost mini"
+              :class="{ active: pitchTool === 'draw' }"
+              :title="t('画笔：拖动绘制音高曲线')"
+              @click="pitchTool = 'draw'"
+            >✎</button>
+            <button
+              class="ghost mini"
+              :class="{ active: pitchTool === 'erase' }"
+              :title="t('橡皮：拖动擦除音高曲线（右键拖动同效）')"
+              @click="pitchTool = 'erase'"
+            >⌫</button>
+          </span>
+          <em v-if="!pitchCurveMode && !hasAnyCurve" class="midi-hint-inline">
+            {{ t('勾选后按住拖动，自己画音高线') }}
+          </em>
           <label class="midi-field midi-toggle" :title="t('显示音频片段原本的基频曲线（F0），用来对照实际唱的音高')">
             <input v-model="showOriginalPitch" type="checkbox" />
             <span>{{ t('原始音高') }}</span>
@@ -219,11 +236,15 @@
           <button class="ghost" :disabled="!selection.length" :title="t('用音频原本的 F0 重建曲线，作为进一步编辑的起点')" @click="resetCurveFromOriginal">
             {{ t('取原始音高') }}
           </button>
+
           <button class="ghost" :disabled="!selection.length" :title="t('给选中音符生成 5.5Hz 颤音')" @click="applyCurvePreset('vibrato')">
             {{ t('颤音') }}
           </button>
           <button class="ghost" :disabled="!selection.length" :title="t('从上一个音滑到本音（OpenUtau 式滑音）')" @click="applyCurvePreset('portamento')">
             {{ t('滑音') }}
+          </button>
+          <button class="ghost" :disabled="!selection.length" :title="t('对选中音符的音高曲线做轻微平滑，去掉手绘抖动')" @click="smoothSelectedCurves">
+            {{ t('平滑曲线') }}
           </button>
           <button class="ghost" :disabled="!selection.length" @click="clearSelectedCurve">
             {{ t('清除曲线') }}
@@ -360,11 +381,13 @@
                 <canvas
                   ref="gridCanvasRef"
                   class="midi-grid"
+                  tabindex="0"
                   :width="viewWidth * dpr"
                   :height="viewHeight * dpr"
                   :style="{ width: `${viewWidth}px`, height: `${viewHeight}px` }"
                   @pointerdown="onPointerDown"
                   @pointermove="onPointerMove"
+                  @pointerrawupdate="onPointerMove"
                   @pointerup="onPointerUp"
                   @pointercancel="onPointerUp"
                   @pointerleave="onPointerLeave"
@@ -572,6 +595,8 @@ import {
   COMPOSE_MIN_TEMPO,
   MIDI_GRID_OPTIONS,
   MIDI_MIN_NOTE_PX,
+  MIDI_PITCH_MIN,
+  MIDI_PITCH_MAX,
   type MidiComposeNote,
   type MidiCurvePoint,
   type MidiNote,
@@ -581,7 +606,9 @@ import {
   GM_INSTRUMENTS,
   CURVE_SEMITONE_LIMIT,
   MAX_CURVE_POINTS,
+  clampCurve,
   setCurvePoint,
+  smoothCurve,
   tidyCurve,
   DRUM_PITCH_MAX,
   DRUM_PITCH_MIN,
@@ -808,8 +835,9 @@ const hoveredNoteId = ref<string | null>(null)
 // 演唱音准模式的草稿与历史
 const draft = ref<MidiNote[]>([])
 const pitchClipboard = ref<MidiNote[]>([])
-const pitchUndo: MidiNote[][] = []
-const pitchRedo: MidiNote[][] = []
+type PitchSnapshot = { notes: MidiNote[]; curve: Array<{ t: number; midi: number }> }
+const pitchUndo: PitchSnapshot[] = []
+const pitchRedo: PitchSnapshot[] = []
 const pitchUndoVersion = ref(0)
 
 // 编曲模式的会话与历史
@@ -837,12 +865,51 @@ const drag = ref<{
   marqueeEnd?: { x: number; y: number }
   /** 画音高曲线时正在编辑的音符（一次拖动只改一个音）。 */
   curveNoteId?: string
+  /** 笔画起点的绝对时间/音高（半音），用于跨音符绘制和 Shift 直线。 */
+  curveAbsStartT?: number
+  curveAbsStartMidi?: number
+  /** 上一次写入的绝对位置，用于把两次指针事件之间补成连续线。 */
+  curveLastT?: number
+  curveLastMidi?: number
+  /** 本次笔画是擦除（右键 / 橡皮工具）。 */
+  curveErase?: boolean
+  /** 这一笔是否是直线（Shift 在落笔时锁定，中途按 Shift 不会把曲线掰直）。 */
+  curveLine?: boolean
+  /** 笔试点到的音符，收笔时做一次轻微平滑。 */
+  curveTouched?: string[]
+  /** 这一笔已经重画过的音符：旧曲线（含旧版本生成的平线）会被丢弃。 */
+  curveCleared?: Set<string>
 } | null>(null)
 
 /** 音高曲线模式：打开后拖过音符即可画滑音/颤音（OpenUtau 的 pitch bend）。 */
 const pitchCurveMode = ref(false)
-/** 打开曲线编辑时，音符超过这个数量就只给选中的生成，避免一次生成上千条曲线。 */
-const AUTO_CURVE_LIMIT = 400
+/** 曲线工具：画笔绘制 / 橡皮擦除（对齐 OpenUtau 的工具切换）。 */
+const pitchTool = ref<'draw' | 'erase'>('draw')
+/** 整轨音高曲线（绝对时间秒 / 绝对音高 MIDI），独立于音符，用户自由绘制。 */
+const globalCurve = ref<Array<{ t: number; midi: number }>>([])
+/** 本次拖动尚未合并进整轨曲线的采样点：每个动画帧只合并一次，避免逐点全量排序。 */
+const pendingStroke = ref<Array<{ t: number; midi: number }>>([])
+const pendingStrokeErase = ref(false)
+/** 原唱 F0 的轻平滑缓存：只在 F0 变化时重算，避免每个动画帧都做窗口平均。 */
+const smoothedPitchCurve = computed<Array<[number, number]>>(() => {
+  const raw = props.pitchCurve
+  if (!raw || raw.length < 2) return []
+  const radius = 2
+  const out: Array<[number, number]> = []
+  for (let index = 0; index < raw.length; index += 1) {
+    let total = 0
+    let count = 0
+    for (let offset = -radius; offset <= radius; offset += 1) {
+      const neighbour = raw[index + offset]
+      if (!neighbour) continue
+      total += neighbour[1]
+      count += 1
+    }
+    out.push([raw[index]![0], count ? total / count : raw[index]![1]])
+  }
+  return out
+})
+
 /** 用户显式「清除曲线」过的音符：自动补曲线时要跳过，否则会立刻又长回来。 */
 const clearedCurveIds = new Set<string>()
 /** 显示音频片段原本的音高曲线（F0 轮廓），可和编辑后的音符对比。 */
@@ -890,7 +957,33 @@ const hasContent = computed(() =>
   isCompose.value ? totalNotes.value > 0 : draft.value.length > 0,
 )
 const pitchRange = computed(() => {
-  if (!isCompose.value) return pitchBounds(draft.value)
+  if (!isCompose.value) {
+    // 音域以音符为主，适当纳入「原唱 F0 / 用户画过的曲线」，但只在音符上下
+    // 各 12 半音内扩展：离群 F0（八度误判/噪声）不会把整个卷帘撑爆，
+    // 否则音符会被顶到画面外，出现“画了却看不见”的情况。
+    const base = pitchBounds(draft.value)
+    let low = base.min
+    let high = base.max
+    const windowLow = base.min - 12
+    const windowHigh = base.max + 12
+    const include = (midi: number) => {
+      if (!Number.isFinite(midi) || midi <= 0) return
+      if (midi < windowLow || midi > windowHigh) return
+      if (midi < low) low = midi
+      if (midi > high) high = midi
+    }
+    for (const point of props.pitchCurve) include(point[1])
+    for (const point of globalCurve.value) include(point.midi)
+    low = Math.max(MIDI_PITCH_MIN, Math.floor(low) - 2)
+    high = Math.min(MIDI_PITCH_MAX, Math.ceil(high) + 2)
+    if (high - low < 24) {
+      const centre = (low + high) / 2
+      low = Math.max(MIDI_PITCH_MIN, Math.floor(centre - 12))
+      high = Math.min(MIDI_PITCH_MAX, low + 24)
+      if (high - low < 24) low = Math.max(MIDI_PITCH_MIN, high - 24)
+    }
+    return { min: low, max: high }
+  }
   // 鼓组声部只显示整套鼓件（GM 35~81），别的音高在鼓组里没有意义。
   if (drumMode.value) return { min: DRUM_PITCH_MIN - 2, max: DRUM_PITCH_MAX + 2 }
   return sessionPitchRange(parts.value, 36, 96)
@@ -1045,7 +1138,9 @@ const hintText = computed(() =>
   isCompose.value
     ? t('D 画笔 / V 选择 / E 橡皮 · 双击新建 · 拖音符移动 · 拖边缘改长度 · [ ] 伸缩 · 下方拖力度条 · 空格试听 · Del 删除')
     : pitchCurveMode.value
-      ? t('音高曲线已开启：曲线按原唱基频自动生成，在音符上拖动即可在此基础上调整（向上音更高）')
+      ? (props.pitchCurve && props.pitchCurve.length >= 2
+        ? t('音高曲线：在音符上按住拖动，像画笔一样画线（单击只选中）· Alt 擦除 · Ctrl 吸附半音')
+        : t('还没有可用的原始基频（F0），无法自动生成曲线：请先分析片段基频，或手动在音符上拖动绘制'))
       : t('双击空白新建 · 拖动移动 · 拖边缘改长度 · 框选多选 · 右键菜单 · Del 删除 · 空格试听'),
 )
 const canUndo = computed(() =>
@@ -1090,17 +1185,27 @@ watch(
 watch(
   () => props.notes,
   (notes) => {
-    draft.value = (notes || []).map((note) => ({ ...note }))
+    // 旧版本会自动生成「贴音符音高的平线」占位曲线；这里在载入时清掉，
+    // 否则它们会和新手绘的线混在一起，看起来像突然冒出的直线段。
+    draft.value = (notes || []).map((note) => {
+      const curve = note.curve
+      if (curve && curve.length <= 2 && curve.every((point) => Math.abs(point.v) <= 0.001)) {
+        const next = { ...note }
+        delete next.curve
+        return next
+      }
+      return { ...note }
+    })
     selection.value = []
     pitchUndo.length = 0
     pitchRedo.length = 0
     pitchUndoVersion.value += 1
     // 重新分析/重新加载后音符是新的，允许再次自动补曲线。
     clearedCurveIds.clear()
+    rebuildGlobalCurve()
     fitZoomToWidth()
     nextTick(() => {
       draw()
-      ensureCurves()
     })
   },
   { immediate: true, deep: true },
@@ -1539,7 +1644,10 @@ function pushUndo() {
     dirty.value = true
     return
   }
-  pitchUndo.push(snapshotNotes())
+  pitchUndo.push({
+    notes: snapshotNotes(),
+    curve: globalCurve.value.map((point) => ({ ...point })),
+  })
   if (pitchUndo.length > 100) pitchUndo.shift()
   pitchRedo.length = 0
   pitchUndoVersion.value += 1
@@ -1559,9 +1667,13 @@ function undo() {
   }
   const previous = pitchUndo.pop()
   if (!previous) return
-  pitchRedo.push(snapshotNotes())
-  draft.value = previous
-  selection.value = selection.value.filter((id) => previous.some((note) => note.id === id))
+  pitchRedo.push({
+    notes: snapshotNotes(),
+    curve: globalCurve.value.map((point) => ({ ...point })),
+  })
+  draft.value = previous.notes
+  globalCurve.value = previous.curve.map((point) => ({ ...point }))
+  selection.value = selection.value.filter((id) => previous.notes.some((note) => note.id === id))
   pitchUndoVersion.value += 1
   scheduleDraw()
 }
@@ -1579,9 +1691,13 @@ function redo() {
   }
   const next = pitchRedo.pop()
   if (!next) return
-  pitchUndo.push(snapshotNotes())
-  draft.value = next
-  selection.value = selection.value.filter((id) => next.some((note) => note.id === id))
+  pitchUndo.push({
+    notes: snapshotNotes(),
+    curve: globalCurve.value.map((point) => ({ ...point })),
+  })
+  draft.value = next.notes
+  globalCurve.value = next.curve.map((point) => ({ ...point }))
+  selection.value = selection.value.filter((id) => next.notes.some((note) => note.id === id))
   pitchUndoVersion.value += 1
   scheduleDraw()
 }
@@ -1599,7 +1715,16 @@ function resetDraft() {
   }
   pitchUndo.length = 0
   pitchRedo.length = 0
-  draft.value = (props.notes || []).map((note) => ({ ...note }))
+  draft.value = (props.notes || []).map((note) => {
+    const curve = note.curve
+    if (curve && curve.length <= 2 && curve.every((point) => Math.abs(point.v) <= 0.001)) {
+      const next = { ...note }
+      delete next.curve
+      return next
+    }
+    return { ...note }
+  })
+  rebuildGlobalCurve()
   selection.value = []
   pitchUndoVersion.value += 1
 }
@@ -1855,6 +1980,28 @@ function setSelectionDetune(event: Event) {
 }
 
 /** 清掉选中音符的音高曲线，回到整段恒定音高。 */
+/** 对选中音符的音高曲线做一次轻微平滑（3 点加权），去掉手绘抖动。 */
+function smoothSelectedCurves() {
+  const ids = new Set(selection.value)
+  if (!ids.size) return
+  pushUndo()
+  draft.value = draft.value.map((note) => {
+    if (!ids.has(note.id) || !note.curve || note.curve.length < 3) return note
+    const span = Math.max(1e-3, note.end - note.start)
+    const smoothed: MidiCurvePoint[] = note.curve.map((point, index, all) => {
+      const previous = all[index - 1] ?? point
+      const next = all[index + 1] ?? point
+      return {
+        t: point.t,
+        v: Math.round(((previous.v + point.v * 2 + next.v) / 4) * 1000) / 1000,
+      }
+    })
+    return { ...note, curve: tidyCurve(smoothed, span, 0.02) ?? smoothed }
+  })
+  mergeNoteCurvesIntoGlobal(ids)
+  markPreviewStale()
+  scheduleDraw()
+}
 function clearSelectedCurve() {
   if (isCompose.value || !selection.value.length) return
   const ids = selectionSet()
@@ -1867,6 +2014,7 @@ function clearSelectedCurve() {
     delete next.curve
     return next
   })
+  mergeNoteCurvesIntoGlobal(ids)
   markPreviewStale()
   scheduleDraw()
 }
@@ -1926,6 +2074,7 @@ function resetCurveFromOriginal() {
   draft.value = draft.value.map((note) =>
     ids.has(note.id) ? { ...note, curve: curveFromOriginal(note) } : note,
   )
+  mergeNoteCurvesIntoGlobal(ids)
   markPreviewStale()
   scheduleDraw()
 }
@@ -1944,6 +2093,7 @@ function applyCurvePreset(kind: 'vibrato' | 'portamento') {
     const curve = tidyCurve(raw, span, 0.03)
     return curve ? { ...note, curve } : note
   })
+  mergeNoteCurvesIntoGlobal(ids)
   markPreviewStale()
   scheduleDraw()
 }
@@ -2259,11 +2409,11 @@ function pasteClipboard(at: number) {
 }
 
 function emitSave() {
-  emit('save', normalizeNotes(draft.value, duration.value))
+  emit('save', notesWithGlobalCurve(normalizeNotes(draft.value, duration.value)))
 }
 
 function emitApply() {
-  emit('apply', normalizeNotes(draft.value, duration.value))
+  emit('apply', notesWithGlobalCurve(normalizeNotes(draft.value, duration.value)))
 }
 
 function emitSaveSession() {
@@ -2293,7 +2443,7 @@ function requestPreview() {
     emit('preview-session', normalizeSession(session.value, duration.value))
     return
   }
-  emit('preview', draft.value.slice())
+  emit('preview', notesWithGlobalCurve(draft.value.slice()))
 }
 
 const previewStale = ref(true)
@@ -2317,37 +2467,8 @@ watch([showOriginalPitch, () => props.pitchCurve], () => scheduleDraw())
 
 // 打开曲线编辑（或原始音高数据到位）时，给所有「还没有曲线」的音符按原唱 F0 +
 // 当前音符自动生成可编辑曲线。已有曲线不动（保护手工编辑），显式清除过的也不再补。
-// 音符特别多时只处理选中的，避免一次性生成上千条曲线拖慢界面。
-/** 自动补齐缺失的可编辑曲线；已被用户清除过的音符不补。 */
-function ensureCurves() {
-  if (!pitchCurveMode.value || isCompose.value) return
-  // 原始 F0 还没到位时先别补：否则会把一条「平直」占位曲线写进音符，
-  // 等 F0 到了也不会再更新，导致孤立音符永远没有贴合原唱的曲线。
-  if (!props.pitchCurve || props.pitchCurve.length < 2) return
-  const total = draft.value.length
-  if (!total) return
-  const ids = selectionSet()
-  const onlySelected = total > AUTO_CURVE_LIMIT
-  // 平直曲线是「F0 还没到位时」误写进去的占位，F0 到位后要重新生成。
-  const isFlat = (note: MidiNote) =>
-    !!note.curve && note.curve.length >= 2 && note.curve.every((point) => Math.abs(point.v) <= 0.001)
-  const targets = draft.value.filter(
-    (note) =>
-      !clearedCurveIds.has(note.id) &&
-      (!onlySelected || ids.has(note.id)) &&
-      (!note.curve || isFlat(note)),
-  )
-  if (!targets.length) return
-  const targetIds = new Set(targets.map((note) => note.id))
-  pushUndo()
-  draft.value = draft.value.map((note) =>
-    targetIds.has(note.id) ? { ...note, curve: curveFromOriginal(note) } : note,
-  )
-  markPreviewStale()
-  scheduleDraw()
-}
-
-watch([pitchCurveMode, () => props.pitchCurve], () => ensureCurves())
+// 音符多时分批生成，避免一次性生成上千条曲线时卡住界面。
+const hasAnyCurve = computed(() => globalCurve.value.length > 0 || draft.value.some((note) => !!note.curve && note.curve.length > 0))
 
 watch(
   () => props.previewUrl,
@@ -2450,7 +2571,24 @@ function onAudioEnded() {
 function isTypingTarget(target: EventTarget | null) {
   const element = target instanceof HTMLElement ? target : null
   if (!element) return false
-  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName) || element.isContentEditable
+  if (element.isContentEditable) return true
+  if (element.tagName === 'TEXTAREA') return true
+  if (element.tagName === 'INPUT') {
+    // 复选框/滑块不是文本输入：点过「音高曲线」开关后焦点还停在它上面，
+    // 之前这里会把 Ctrl+Z 一起吞掉，导致曲线看起来「不支持撤销」。
+    const type = (element as HTMLInputElement).type
+    return ![
+      'checkbox',
+      'radio',
+      'range',
+      'button',
+      'submit',
+      'reset',
+      'color',
+      'file',
+    ].includes(type)
+  }
+  return false
 }
 
 function onKeyDown(event: KeyboardEvent) {
@@ -2647,6 +2785,7 @@ function contextOf(canvas: HTMLCanvasElement | null) {
 }
 
 function draw() {
+  flushCurveStroke()
   drawKeys()
   drawGrid()
   if (showVelocity.value) drawVelocity()
@@ -2878,19 +3017,16 @@ function drawGrid() {
         context.font = '9px ui-sans-serif, system-ui'
         context.fillText(noteName(note.pitch), x + 3, y + rect.height / 2)
       }
-      if (note.curve && note.curve.length) {
-        // 曲线统一在音符循环之后按绝对时间连成一条画（drawAllCurves），
-        // 这里只在编辑曲线模式且选中/悬停时补一层高亮圆点，避免每条音符各画一节。
-        if (pitchCurveMode.value && (active || hoveredNoteId.value === note.id)) {
-          drawNoteCurve(context, note, offsetX, offsetY, true)
-        }
-      } else if (pitchCurveMode.value && (active || hoveredNoteId.value === note.id)) {
-        drawCurveGhost(context, note, offsetX, offsetY)
-      }
+
       if (active || hoveredNoteId.value === note.id) {
         drawNoteEdgeHandles(context, x, y, rect.width, rect.height, active)
       }
     }
+  }
+
+  // OpenUtau 风格：先画音符本身的目标音高虚线（手动曲线的「默认值」参考线）。
+  if (!isCompose.value && pitchCurveMode.value) {
+    drawPitchBaselines(context, offsetX, offsetY)
   }
 
   // 原始音高曲线画在音符之上，方便直接对照「唱的是哪里」和「音符写的是哪里」。
@@ -2900,7 +3036,7 @@ function drawGrid() {
 
   // 可编辑音高曲线：合并所有音符成一条连续黄线，覆盖整条时间轴。
   if (!isCompose.value) {
-    drawAllCurves(context, offsetX, offsetY, pitchCurveMode.value)
+    drawGlobalCurve(context, offsetX, offsetY)
   }
 
   if (drag.value?.mode === 'marquee' && drag.value.marqueeStart && drag.value.marqueeEnd) {
@@ -3125,19 +3261,23 @@ function drawNoteCurve(
 ) {
   const raw = note.curve
   if (!raw || !raw.length) return
-  const span = Math.max(1e-3, note.end - note.start)
-  // 容错：只剩一个点时按平直曲线画，避免「数据在但看不见」。
-  const curve: MidiCurvePoint[] =
-    raw.length >= 2
-      ? raw
-      : [
-          { t: 0, v: raw[0]!.v },
-          { t: span, v: raw[0]!.v },
-        ]
   const pps = pxPerSecond.value
   const top = pitchRange.value.max
   const row = rowHeight.value
-  const points = curve.map((point) => ({
+  if (raw.length < 2) {
+    // 刚下笔只有一个点：只画这个点，不要拉成一条横线。
+    const point = raw[0]!
+    const x = timeToX(note.start + point.t, pps) - offsetX
+    const y = pitchToY(note.pitch + point.v, top, row) + RULER_HEIGHT - offsetY + row / 2
+    context.save()
+    context.fillStyle = '#ffd166'
+    context.beginPath()
+    context.arc(x, y, 2.4, 0, Math.PI * 2)
+    context.fill()
+    context.restore()
+    return
+  }
+  const points = raw.map((point) => ({
     x: timeToX(note.start + point.t, pps) - offsetX,
     y: pitchToY(note.pitch + point.v, top, row) + RULER_HEIGHT - offsetY + row / 2,
   }))
@@ -3217,54 +3357,73 @@ function drawCurveGhost(
  * 只在时间间隔超过 0.35s（明显是空白）时断开，音符之间不再一节一节断开。
  * ``showPoints`` 控制是否画控制点圆点：编辑时开，退出后关（平滑无点）。
  */
-function drawAllCurves(
+/** 音符的目标音高参考线（虚线），对应 OpenUtau 曲线面板里的默认值虚线。 */
+function drawPitchBaselines(
   context: CanvasRenderingContext2D,
   offsetX: number,
   offsetY: number,
-  showPoints: boolean,
+) {
+  if (!draft.value.length) return
+  const pps = pxPerSecond.value
+  const top = pitchRange.value.max
+  const row = rowHeight.value
+  context.save()
+  context.setLineDash([4, 4])
+  context.lineWidth = 1
+  context.strokeStyle = 'rgba(255, 255, 255, 0.22)'
+  context.beginPath()
+  for (const note of draft.value) {
+    const y = pitchToY(note.pitch + note.detune / 100, top, row) + RULER_HEIGHT - offsetY + row / 2
+    const left = timeToX(note.start, pps) - offsetX
+    const right = timeToX(note.end, pps) - offsetX
+    context.moveTo(left, y)
+    context.lineTo(right, y)
+  }
+  context.stroke()
+  context.restore()
+}
+
+function drawGlobalCurve(
+  context: CanvasRenderingContext2D,
+  offsetX: number,
+  offsetY: number,
 ) {
   const pps = pxPerSecond.value
   const top = pitchRange.value.max
   const row = rowHeight.value
-  const points: Array<{ x: number; y: number; t: number; midi: number }> = []
-  for (const note of draft.value) {
-    if (!note.curve || !note.curve.length) continue
-    const span = Math.max(1e-3, note.end - note.start)
-    const curve: MidiCurvePoint[] =
-      note.curve.length >= 2
-        ? note.curve
-        : [
-            { t: 0, v: note.curve[0]!.v },
-            { t: span, v: note.curve[0]!.v },
-          ]
-    for (const point of curve) {
-      const time = note.start + point.t
-      points.push({
-        t: time,
-        midi: note.pitch + point.v,
-        x: timeToX(time, pps) - offsetX,
-        y: pitchToY(note.pitch + point.v, top, row) + RULER_HEIGHT - offsetY + row / 2,
-      })
-    }
-  }
+  const points = globalCurve.value.map((point) => ({
+    t: point.t,
+    midi: point.midi,
+    x: timeToX(point.t, pps) - offsetX,
+    y: pitchToY(point.midi, top, row) + RULER_HEIGHT - offsetY + row / 2,
+  }))
   if (points.length < 2) return
-  points.sort((a, b) => a.t - b.t)
   context.save()
   context.lineJoin = 'round'
   context.lineCap = 'round'
   const trace = () => {
     context.beginPath()
-    let previous = points[0]!
-    context.moveTo(previous.x, previous.y)
-    for (let index = 1; index < points.length; index += 1) {
-      const point = points[index]!
-      const gap = point.t - previous.t
-      const slope = gap > 1e-6 ? Math.abs(point.midi - previous.midi) / gap : Number.POSITIVE_INFINITY
-      // 只在「真的断开」的地方断开：明显空白（>0.18s）或近乎垂直的跳音（>40 半音/秒）。
-      // 这样不会把两个音之间的音高差画成一条原本不存在的滑音。
-      if (gap > 0.18 || slope > 40) context.moveTo(point.x, point.y)
-      else context.lineTo(point.x, point.y)
-      previous = point
+    let started = false
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const current = points[index]!
+      const next = points[index + 1]!
+      if (next.t - current.t > 0.5) continue
+      if (!started) {
+        context.moveTo(current.x, current.y)
+        started = true
+      }
+      // Catmull-Rom 转三次贝塞尔：曲线严格穿过鼠标采样点，
+      // 不会像折线那样把两点之间画成直线。
+      const previous = points[index - 1] ?? current
+      const after = points[index + 2] ?? next
+      const c1x = current.x + (next.x - previous.x) / 6
+      const c1y = current.y + (next.y - previous.y) / 6
+      const c2x = next.x - (after.x - current.x) / 6
+      const c2y = next.y - (after.y - current.y) / 6
+      context.bezierCurveTo(c1x, c1y, c2x, c2y, next.x, next.y)
+    }
+    if (!started) {
+      context.moveTo(points[0]!.x, points[0]!.y)
     }
   }
   context.strokeStyle = 'rgba(6,12,20,0.75)'
@@ -3275,41 +3434,16 @@ function drawAllCurves(
   context.lineWidth = 2
   trace()
   context.stroke()
-  if (showPoints) {
-    context.fillStyle = '#ffd166'
-    context.strokeStyle = 'rgba(6,12,20,0.85)'
-    context.lineWidth = 1
-    for (const point of points) {
-      context.beginPath()
-      context.arc(point.x, point.y, 2.2, 0, Math.PI * 2)
-      context.fill()
-      context.stroke()
-    }
-  }
+
   context.restore()
 }
-
-/** 画音频片段原本的音高曲线（F0 轮廓）：断续处断开，避免连成假滑音。 */
 function drawOriginalPitch(
   context: CanvasRenderingContext2D,
   offsetX: number,
   offsetY: number,
 ) {
-  const raw = props.pitchCurve
-  if (!raw || raw.length < 2) return
-  // 轻微滑动平均：抹掉 RMVPE 的帧间抖动，线条更平滑，拐点仍然保留。
-  const radius = 2
-  const smoothed: Array<[number, number]> = raw.map((point, index) => {
-    let total = 0
-    let count = 0
-    for (let offset = -radius; offset <= radius; offset += 1) {
-      const neighbour = raw[index + offset]
-      if (!neighbour) continue
-      total += neighbour[1]
-      count += 1
-    }
-    return [point[0], count ? total / count : point[1]]
-  })
+  const smoothed = smoothedPitchCurve.value
+  if (smoothed.length < 2) return
   const pps = pxPerSecond.value
   const top = pitchRange.value.max
   const row = rowHeight.value
@@ -3394,6 +3528,20 @@ function pitchCurveTarget(point: CanvasPoint): MidiNote | undefined {
   return best
 }
 
+/** 在时间有序的 F0 序列里二分定位第一个 time >= target 的下标。 */
+function f0IndexAt(target: number): number {
+  const source = props.pitchCurve
+  if (!source || !source.length) return 0
+  let low = 0
+  let high = source.length - 1
+  while (low < high) {
+    const mid = (low + high) >> 1
+    if ((source[mid]?.[0] ?? 0) < target) low = mid + 1
+    else high = mid
+  }
+  return low
+}
+
 /** 在原始 F0 序列上按时间线性插值取 MIDI 音高；两端超出时用最近点，取不到返回 null。 */
 function f0MidiAt(time: number): number | null {
   const source = props.pitchCurve
@@ -3414,6 +3562,29 @@ function f0MidiAt(time: number): number | null {
   return last[1]
 }
 
+/** 把曲线按时间均匀重采样到 limit 个点，避免 F0 抖动生成几百个控制点。 */
+function downsampleCurve(points: MidiCurvePoint[], limit: number): MidiCurvePoint[] {
+  if (points.length <= limit || limit < 2) return points
+  const first = points[0]!
+  const last = points[points.length - 1]!
+  const span = Math.max(1e-3, last.t - first.t)
+  const out: MidiCurvePoint[] = []
+  let cursor = 0
+  for (let index = 0; index < limit; index += 1) {
+    const target = first.t + (span * index) / (limit - 1)
+    while (cursor + 1 < points.length && points[cursor + 1]!.t < target) cursor += 1
+    const left = points[cursor]!
+    const right = points[Math.min(points.length - 1, cursor + 1)]!
+    const gap = right.t - left.t
+    const ratio = gap > 1e-6 ? (target - left.t) / gap : 0
+    out.push({
+      t: Math.round(target * 1000) / 1000,
+      v: Math.round((left.v + (right.v - left.v) * Math.max(0, Math.min(1, ratio))) * 1000) / 1000,
+    })
+  }
+  return out
+}
+
 /**
  * 用「音频原本的 F0」+「当前 MIDI 音符」生成适配的曲线。
  *
@@ -3432,23 +3603,45 @@ function curveFromOriginal(note: MidiNote): MidiCurvePoint[] {
   const anchor = note.pitch + note.detune / 100
   const clampV = (value: number) =>
     Math.round(Math.max(-CURVE_SEMITONE_LIMIT, Math.min(CURVE_SEMITONE_LIMIT, value)) * 1000) / 1000
+  // 把 F0 校正到音符附近的一个八度内：避免 RK 模型八度误判时生成 ±12 半音的竖线。
+  const octaveCorrect = (midi: number) => midi - 12 * Math.round((midi - anchor) / 12)
   const inside: Array<{ t: number; midi: number }> = []
-  for (const [time, midi] of source) {
+  // 只扫描音符覆盖的时间段：整首歌可能有几万个 F0 点，逐音符全量扫描会拖慢生成。
+  const firstIndex = Math.max(0, f0IndexAt(note.start - 0.01) - 1)
+  const lastIndex = Math.min(source.length - 1, f0IndexAt(note.end + 0.01) + 1)
+  for (let index = firstIndex; index <= lastIndex; index += 1) {
+    const entry = source[index]
+    if (!entry) continue
+    const [time, midi] = entry
     if (time < note.start - 0.01 || time > note.end + 0.01) continue
     inside.push({ t: Math.max(0, Math.min(span, time - note.start)), midi })
   }
   let points: MidiCurvePoint[]
   if (inside.length >= 2) {
-    points = inside.map((item) => ({
+    // 5 点加权平滑：压掉 F0 的帧间抖动，短音符不至于生成锯齿状曲线。
+    const smoothed = inside.map((item, index, all) => {
+      let total = item.midi * 2
+      let count = 2
+      for (let offset = -2; offset <= 2; offset += 1) {
+        if (offset === 0) continue
+        const neighbour = all[index + offset]
+        if (!neighbour) continue
+        total += neighbour.midi
+        count += 1
+      }
+      return { t: item.t, midi: octaveCorrect(total / count) }
+    })
+    points = smoothed.map((item) => ({
       t: Math.round(item.t * 1000) / 1000,
       v: clampV(item.midi - anchor),
     }))
   } else {
-    // 区间内没有足够 F0 点：用一个「恒定偏移」铺平的曲线，**不要**用两端插值，
-    // 否则会把两端的音高差渲染成一条原本并不存在的滑音。
-    const nearest = f0MidiAt((note.start + note.end) / 2) ?? f0MidiAt(note.start)
-    if (nearest == null) return flat
-    const value = clampV(nearest - anchor)
+    // 区间内几乎没有 F0（长音的前后是静音）：不要生成一条平直假曲线，
+    // 否则会横跨整屏，看起来像一条错误的手动曲线。
+    const nearestIndex = f0IndexAt((note.start + note.end) / 2)
+    const near = source[nearestIndex] ?? source[source.length - 1]
+    if (!near || Math.abs(near[0] - (note.start + note.end) / 2) > 0.4) return []
+    const value = clampV(octaveCorrect(near[1]) - anchor)
     points = [
       { t: 0, v: value },
       { t: span, v: value },
@@ -3456,15 +3649,15 @@ function curveFromOriginal(note: MidiNote): MidiCurvePoint[] {
   }
   // 只做简化、不做平滑：F0 已经清理过，再平滑会把真实的跳音抹成滑音。
   // 点数超过上限时逐步放宽容差，保证曲线仍然覆盖整条音符（不会被截断）。
-  let tolerance = 0.02
+  let tolerance = 0.05
   let tidy = tidyCurve(points, span, tolerance, 2)
-  while (tidy && tidy.length > MAX_CURVE_POINTS && tolerance < 0.6) {
+  while (tidy && tidy.length > MAX_CURVE_POINTS && tolerance < 0.8) {
     tolerance *= 1.6
     tidy = tidyCurve(points, span, tolerance, 2)
   }
   if (!tidy || tidy.length < 2) return flat
-  const reduced = [...tidy]
-  if (reduced.length > MAX_CURVE_POINTS) reduced.length = MAX_CURVE_POINTS
+  // F0 抖动会产生上百个控制点：均匀重采样到最多 28 个，曲线更干净也更好拖。
+  const reduced = [...downsampleCurve(tidy, 28)]
   if (reduced[0]!.t > 0.001) reduced.unshift({ t: 0, v: reduced[0]!.v })
   const last = reduced[reduced.length - 1]!
   if (last.t < span - 0.001) reduced.push({ t: span, v: last.v })
@@ -3475,21 +3668,44 @@ function curveFromOriginal(note: MidiNote): MidiCurvePoint[] {
  * 把一次指针位置写进正在绘制的音高曲线：
  * ``t`` 是相对音符起点的秒数，``v`` 是以半音为单位的音高偏移（向上为正）。
  */
-function applyCurvePoint(point: CanvasPoint) {
+/** 把一串指针位置转成采样点，追加到待合并缓冲（不逐点提交）。 */
+function applyCurvePoints(points: CanvasPoint[], event?: PointerEvent) {
   const current = drag.value
-  if (!current || current.mode !== 'curve' || !current.curveNoteId) return
-  const note = draft.value.find((item) => item.id === current.curveNoteId)
-  if (!note) return
-  const span = Math.max(1e-3, note.end - note.start)
-  const localY = point.y - RULER_HEIGHT
-  const t = timeOf(point.x) - note.start
-  const v = pitchRange.value.max + 0.5 - localY / rowHeight.value - note.pitch
-  const curve = setCurvePoint(note.curve, t, v, span, 0.006)
-  draft.value = draft.value.map((item) => (item.id === note.id ? { ...item, curve } : item))
+  if (!current || current.mode !== 'curve') return
+  const erasing = !!current.curveErase || !!event?.altKey
+  const snap = !erasing && (event?.ctrlKey || event?.metaKey)
+  const samples: Array<{ t: number; midi: number }> = []
+  let lastT = current.curveLastT
+  let lastMidi = current.curveLastMidi
+  for (const point of points) {
+    const absolute = curvePointAt(point)
+    let target = absolute.midi
+    if (snap) target = Math.round(target * 2) / 2
+    const fromT = lastT ?? absolute.t
+    const fromMidi = lastMidi ?? target
+    const span = Math.abs(absolute.t - fromT)
+    const steps = Math.max(1, Math.min(600, Math.ceil(span / 0.006)))
+    for (let index = 0; index <= steps; index += 1) {
+      const ratio = index / steps
+      samples.push({
+        t: fromT + (absolute.t - fromT) * ratio,
+        midi: fromMidi + (target - fromMidi) * ratio,
+      })
+    }
+    lastT = absolute.t
+    lastMidi = target
+  }
+  current.curveLastT = lastT
+  current.curveLastMidi = lastMidi
+  pendingStroke.value.push(...samples)
+  pendingStrokeErase.value = erasing
   markPreviewStale()
   scheduleDraw()
 }
 
+function applyCurvePoint(point: CanvasPoint, event?: PointerEvent) {
+  applyCurvePoints([point], event)
+}
 function composeNoteAt(point: CanvasPoint) {
   return composeNoteAtPoint(
     parts.value.filter((part) => isPartAudible(parts.value, part) || part.id === activePartId.value),
@@ -3502,7 +3718,12 @@ function composeNoteAt(point: CanvasPoint) {
 }
 
 function onPointerDown(event: PointerEvent) {
-  if (event.button === 2) return
+  const rightButton = event.button === 2
+  // 右键在音高曲线模式里用于擦除（OpenUtau 习惯），其他模式下保留右键菜单。
+  if (rightButton && !pitchCurveMode.value) return
+  // 让画布拿到焦点：否则点过工具栏的复选框后，Ctrl+Z 之类快捷键仍指向那个 input。
+  const canvasEl = event.currentTarget
+  if (canvasEl instanceof HTMLElement) canvasEl.focus()
   hideContextMenu()
   const point = canvasPoint(event)
   if (point.vy < RULER_HEIGHT) {
@@ -3613,6 +3834,35 @@ function onPointerDown(event: PointerEvent) {
   // 演唱音准模式
   // 曲线模式用「宽容命中」：细长音符条不必像素级点中也能画。
   const note = pitchCurveMode.value ? pitchCurveTarget(point) : pitchNoteAt(point)
+  // 音高曲线模式：这是整轨曲线，与音符无关，空白处也能起笔；单击只选中音符。
+  if (pitchCurveMode.value) {
+    const absolute = curvePointAt(point)
+    drag.value = {
+      mode: 'curve',
+      originX: point.x,
+      originY: point.y,
+      baseAll: [],
+      baseSession: null,
+      partId: '',
+      ids: note ? [note.id] : [],
+      // 真正的修改推迟到指针移动超过阈值后，单击不产生任何曲线改动。
+      pushed: false,
+      curveNoteId: note?.id,
+      curveAbsStartT: absolute.t,
+      curveAbsStartMidi: absolute.midi,
+      curveLastT: absolute.t,
+      curveLastMidi: absolute.midi,
+      curveErase: rightButton || pitchTool.value === 'erase',
+      curveLine: false,
+      curveTouched: [],
+      curveCleared: new Set<string>(),
+    }
+    const curveCanvas = event.target as HTMLCanvasElement
+    curveCanvas.style.cursor = 'crosshair'
+    curveCanvas.setPointerCapture?.(event.pointerId)
+    event.preventDefault()
+    return
+  }
   if (!note) {
     if (!(event.shiftKey || event.ctrlKey || event.metaKey)) clearSelection()
     drag.value = {
@@ -3631,38 +3881,6 @@ function onPointerDown(event: PointerEvent) {
   }
   if (event.shiftKey || event.ctrlKey || event.metaKey) toggleSelect(note.id)
   else if (!selection.value.includes(note.id)) selectOnly(note.id)
-  // 音高曲线模式：按住拖过音符即可画滑音/颤音。
-  if (pitchCurveMode.value) {
-    pushUndo()
-    clearedCurveIds.delete(note.id)
-    // 只在「还没有曲线 / 只有平直占位曲线」时才用 F0 初始化；
-    // 已有真实曲线则保留，让同一条曲线能多次、增量地编辑（不会一按就重置）。
-    const current = draft.value.find((item) => item.id === note.id)
-    const placeholder =
-      !current?.curve ||
-      (current.curve.length >= 2 &&
-        current.curve.every((point) => Math.abs(point.v) <= 0.001))
-    if (placeholder) {
-      draft.value = draft.value.map((item) =>
-        item.id === note.id ? { ...item, curve: curveFromOriginal(item) } : item,
-      )
-    }
-    drag.value = {
-      mode: 'curve',
-      originX: point.x,
-      originY: point.y,
-      baseAll: [],
-      baseSession: null,
-      partId: '',
-      ids: [note.id],
-      pushed: true,
-      curveNoteId: note.id,
-    }
-    applyCurvePoint(point)
-    ;(event.target as HTMLCanvasElement).setPointerCapture?.(event.pointerId)
-    event.preventDefault()
-    return
-  }
   const edge = noteEdgeAt(note, point.x, pitchRange.value.max, rowHeight.value, pxPerSecond.value, EDGE_GRAB_PX)
   drag.value = {
     mode: edge,
@@ -3689,6 +3907,196 @@ function seek(seconds: number) {
   if (!isCompose.value) emit('seek', target)
 }
 
+/** 指针拖动超过阈值后才真正开始一笔曲线（单击不修改曲线）。 */
+function beginCurveStroke(
+  current: { pushed?: boolean; curveLastT?: number; curveLastMidi?: number },
+  point: CanvasPoint,
+) {
+  // 真正的改写发生在 applyCurvePoint 里；这里只记录一次撤销点。
+  pushUndo()
+  // 关键：笔迹从「越过阈值的位置」开始，而不是从按下鼠标的位置开始，
+  // 否则小笔画会先被一段从落笔点拉过来的直线带偏。
+  const absolute = curvePointAt(point)
+  current.curveLastT = absolute.t
+  current.curveLastMidi = absolute.midi
+  current.pushed = true
+}
+
+/** 指针位置的绝对时间与绝对音高（半音）。 */
+function curvePointAt(point: CanvasPoint) {
+  return {
+    t: Math.max(0, timeOf(point.x)),
+    midi: pitchRange.value.max + 0.5 - (point.y - RULER_HEIGHT) / rowHeight.value,
+  }
+}
+
+/** 整轨曲线排序/合并相近时间点。 */
+function normalizeGlobalPoints(points: Array<{ t: number; midi: number }>) {
+  const sorted = [...points].sort((a, b) => a.t - b.t)
+  const merged: Array<{ t: number; midi: number }> = []
+  for (const point of sorted) {
+    const last = merged[merged.length - 1]
+    if (last && Math.abs(last.t - point.t) < 0.0015) last.midi = point.midi
+    else merged.push({ t: point.t, midi: point.midi })
+  }
+  return merged
+}
+
+/** 手动曲线在某一绝对时间的音高；该时间没有画过（或超出首尾）时返回 null。 */
+function manualCurveMidiAt(time: number): number | null {
+  const points = globalCurve.value
+  if (points.length < 2) return null
+  const first = points[0]!
+  const last = points[points.length - 1]!
+  if (time < first.t || time > last.t) return null
+  if (time <= first.t) return first.midi
+  if (time >= last.t) return last.midi
+  for (let index = 1; index < points.length; index += 1) {
+    const right = points[index]!
+    if (time <= right.t) {
+      const left = points[index - 1]!
+      const gap = right.t - left.t
+      return gap > 1e-6 ? left.midi + ((right.midi - left.midi) * (time - left.t)) / gap : right.midi
+    }
+  }
+  return last.midi
+}
+
+/**
+ * 渲染前把整条音高线落到音符上：
+ * 画过曲线的地方用手动曲线，没画过的地方用原唱 F0（原始音高），
+ * 连 F0 都没有的音符才退回音符自身音高。
+ */
+function notesWithGlobalCurve(notes: MidiNote[]): MidiNote[] {
+  const f0 = props.pitchCurve ?? []
+  return notes.map((note) => {
+    const span = Math.max(1e-3, note.end - note.start)
+    const anchor = note.pitch + note.detune / 100
+    const times: number[] = [note.start]
+    for (const point of globalCurve.value) {
+      if (point.t > note.start + 1e-3 && point.t < note.end - 1e-3) times.push(point.t)
+    }
+    const inside = f0.filter(([time]) => time > note.start + 1e-3 && time < note.end - 1e-3)
+    // 每个音符最多取 48 个 F0 采样点，控制数据量。
+    const stride = Math.max(1, Math.ceil(inside.length / 48))
+    for (let index = 0; index < inside.length; index += stride) times.push(inside[index]![0])
+    times.push(note.end)
+    times.sort((a, b) => a - b)
+    const points: MidiCurvePoint[] = []
+    let lastTime = Number.NEGATIVE_INFINITY
+    for (const time of times) {
+      if (time - lastTime < 1e-3) continue
+      lastTime = time
+      let midi = manualCurveMidiAt(time)
+      if (midi == null) {
+        const raw = f0MidiAt(time)
+        // F0 可能八度误判：先校正到音符附近的一个八度内。
+        midi = raw == null ? anchor : raw - 12 * Math.round((raw - anchor) / 12)
+      }
+      points.push({
+        t: time - note.start,
+        v: Math.max(-CURVE_SEMITONE_LIMIT, Math.min(CURVE_SEMITONE_LIMIT, midi - anchor)),
+      })
+    }
+    const curve = clampCurve(points, span)
+    const next = { ...note }
+    if (curve) next.curve = curve
+    else delete next.curve
+    return next
+  })
+}
+/** 把一批音符的局部曲线合并回整轨曲线（替换这些音符时间范围内的旧点）。 */
+function mergeNoteCurvesIntoGlobal(ids: Set<string>) {
+  const notes = draft.value.filter((note) => ids.has(note.id))
+  if (!notes.length) return
+  const inRange = (time: number) =>
+    notes.some((note) => time >= note.start - 1e-6 && time <= note.end + 1e-6)
+  const kept = globalCurve.value.filter((point) => !inRange(point.t))
+  const added: Array<{ t: number; midi: number }> = []
+  for (const note of notes) {
+    if (!note.curve) continue
+    for (const point of note.curve) {
+      added.push({ t: note.start + point.t, midi: note.pitch + note.detune / 100 + point.v })
+    }
+  }
+  globalCurve.value = normalizeGlobalPoints([...kept, ...added])
+}
+
+/** 从音符自带的曲线重建整轨曲线（打开工程/撤销后调用）。 */
+function rebuildGlobalCurve() {
+  const points: Array<{ t: number; midi: number }> = []
+  for (const note of draft.value) {
+    if (!note.curve) continue
+    for (const point of note.curve) {
+      points.push({ t: note.start + point.t, midi: note.pitch + note.detune / 100 + point.v })
+    }
+  }
+  globalCurve.value = normalizeGlobalPoints(points)
+}
+
+/** 两个按时间升序的点列归并，重合时间取后者（采样更靠后，更新）。 */
+function mergeSortedPoints(
+  left: Array<{ t: number; midi: number }>,
+  right: Array<{ t: number; midi: number }>,
+) {
+  const out: Array<{ t: number; midi: number }> = []
+  let i = 0
+  let j = 0
+  while (i < left.length && j < right.length) {
+    const a = left[i]!
+    const b = right[j]!
+    if (Math.abs(a.t - b.t) < 0.0015) {
+      out.push(b)
+      i += 1
+      j += 1
+    } else if (a.t < b.t) {
+      out.push(a)
+      i += 1
+    } else {
+      out.push(b)
+      j += 1
+    }
+  }
+  while (i < left.length) out.push(left[i++]!)
+  while (j < right.length) out.push(right[j++]!)
+  return out
+}
+
+/** 每个动画帧最多调用一次：把本次拖动的采样合并进整轨曲线。 */
+function flushCurveStroke() {
+  const samples = pendingStroke.value
+  if (!samples.length) return
+  const erasing = pendingStrokeErase.value
+  pendingStroke.value = []
+  pendingStrokeErase.value = false
+  const tolerance = erasing ? 0.02 : 0.003
+  const times = samples.map((sample) => sample.t).sort((a, b) => a - b)
+  const covered = (time: number) => {
+    let low = 0
+    let high = times.length - 1
+    while (low <= high) {
+      const mid = (low + high) >> 1
+      const value = times[mid]!
+      if (Math.abs(value - time) <= tolerance) return true
+      if (value < time) low = mid + 1
+      else high = mid - 1
+    }
+    return false
+  }
+  const kept = globalCurve.value.filter((point) => !covered(point.t))
+  if (erasing) {
+    globalCurve.value = kept
+    return
+  }
+  const rounded = samples
+    .map((sample) => ({
+      t: Math.round(sample.t * 1000) / 1000,
+      midi: Math.round(sample.midi * 1000) / 1000,
+    }))
+    .sort((a, b) => a.t - b.t)
+  // 归并替代全量排序：kept 本身有序，samples 先排好序，整体 O(n+m)。
+  globalCurve.value = mergeSortedPoints(kept, rounded)
+}
 function onPointerMove(event: PointerEvent) {
   const current = drag.value
   const point = canvasPoint(event)
@@ -3697,7 +4105,12 @@ function onPointerMove(event: PointerEvent) {
     if (!canvas) return
     const hovered = isCompose.value ? composeNoteAt(point) : pitchNoteAt(point)
     const hoveredNote = hovered ? ('note' in hovered ? hovered.note : hovered) : null
-    hoveredNoteId.value = hoveredNote?.id || null
+    hoveredNoteId.value = hoveredNote?.id ?? null
+    // 音高曲线模式下鼠标是"画笔"，不要因为悬停在音符上就变成移动/拉伸光标。
+    if (!isCompose.value && pitchCurveMode.value) {
+      canvas.style.cursor = point.vy < RULER_HEIGHT ? 'pointer' : 'crosshair'
+      return
+    }
     if (hoveredNote) {
       const edge = noteEdgeAt(
         hoveredNote,
@@ -3721,7 +4134,23 @@ function onPointerMove(event: PointerEvent) {
     return
   }
   if (current.mode === 'curve') {
-    applyCurvePoint(point)
+    if (!current.pushed) {
+      // 阈值内算单击（选择音符），不触碰曲线。
+      if (Math.hypot(point.x - current.originX, point.y - current.originY) < 1.5) return
+      beginCurveStroke(current, point)
+      // 跳过这一帧的合并事件：它们还夹着「落笔→阈值」之间的一小段，
+      // 否则笔迹又会被刚落笔的位置拉回一条直线。
+      applyCurvePoint(point, event)
+      return
+    }
+    // 已开始后，把浏览器合并掉的高频采样逐个落点，快速画曲线才不会被压成直线。
+    const coalesced =
+      typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : []
+    if (coalesced.length > 1) {
+      applyCurvePoints(coalesced.map((sample) => canvasPoint(sample)), event)
+    } else {
+      applyCurvePoint(point, event)
+    }
     return
   }
   if (current.mode === 'erase') {
@@ -3906,18 +4335,18 @@ function onPointerUp(event: PointerEvent) {
           .map((note) => note.id)
     selection.value = Array.from(new Set([...selection.value, ...hits]))
   }
-  // 曲线拖动结束：平滑 + 简化一下，让手绘结果干净、点不多。
-  if (current.mode === 'curve' && current.curveNoteId) {
-    const note = draft.value.find((item) => item.id === current.curveNoteId)
-    if (note && note.curve) {
-      const tidy = tidyCurve(note.curve, Math.max(1e-3, note.end - note.start), 0.03)
-      if (tidy) {
-        draft.value = draft.value.map((item) =>
-          item.id === note.id ? { ...item, curve: tidy } : item,
-        )
-      }
+  // 曲线模式下单击（没有拖动）：只选中音符，不改曲线。
+  if (current.mode === 'curve' && current.curveNoteId && !current.pushed) {
+    if (event.button !== 2) {
+      const noteId = current.curveNoteId
+      if (event.shiftKey || event.ctrlKey || event.metaKey) toggleSelect(noteId)
+      else if (!selection.value.includes(noteId)) selectOnly(noteId)
     }
+    drag.value = null
+    scheduleDraw()
+    return
   }
+
   drag.value = null
   if (
     isCompose.value &&
@@ -4027,6 +4456,12 @@ function onVelocityUp(event: PointerEvent) {
 /* ---------------------------------------------------------------- 右键菜单 */
 
 function onContextMenu(event: MouseEvent) {
+  // 音高曲线模式下右键用于擦除，不再弹菜单。
+  if (!isCompose.value && pitchCurveMode.value) {
+    hideContextMenu()
+    event.preventDefault()
+    return
+  }
   const point = canvasPoint(event)
   const hit = isCompose.value ? composeNoteAt(point) : pitchNoteAt(point)
   if (hit) {
@@ -4107,6 +4542,7 @@ function menuAddCurve() {
     if (!ids.has(note.id)) return note
     return { ...note, curve: curveFromOriginal(note) }
   })
+  mergeNoteCurvesIntoGlobal(ids)
   markPreviewStale()
   scheduleDraw()
 }
@@ -4406,6 +4842,21 @@ function menuRedo() {
   color: #6d7f9c;
 }
 
+.midi-pitch-tool {
+  display: inline-flex;
+  gap: 2px;
+}
+.midi-pitch-tool .ghost.mini {
+  min-width: 22px;
+  padding: 1px 5px;
+}
+.midi-hint-inline {
+  color: #ffd166;
+  font-size: 11px;
+  font-style: normal;
+  opacity: 0.9;
+}
+
 .midi-error,
 .midi-tip {
   margin: 0;
@@ -4624,6 +5075,10 @@ function menuRedo() {
   flex: none;
   touch-action: none;
   background: #0b0f18;
+}
+
+.midi-grid:focus {
+  outline: none;
 }
 
 .midi-velocity {

@@ -71,7 +71,7 @@ def clamp_detune(value: Any) -> float:
 # 控制点 ``{"t": 相对音符起点秒, "v": 相对音符音高的半音偏移}``；
 # 少于两个点视为「没有曲线」，避免把用户没画过的音符也塞一堆点。
 MAX_CURVE_POINTS = 256
-CURVE_SEMITONE_LIMIT = 12.0
+CURVE_SEMITONE_LIMIT = 36.0
 
 
 def clamp_curve(value: Any, span: float) -> list[dict[str, float]] | None:
