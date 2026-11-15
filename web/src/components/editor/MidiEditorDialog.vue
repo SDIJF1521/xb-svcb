@@ -956,6 +956,47 @@ const totalNotes = computed(() => sessionNoteCount(session.value))
 const hasContent = computed(() =>
   isCompose.value ? totalNotes.value > 0 : draft.value.length > 0,
 )
+// F0 的纵向范围只随 props.pitchCurve 变化，缓存起来，避免音域 computed 每帧
+// 都遍历几千个 F0 点。
+const f0PitchBounds = computed(() => {
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (const point of props.pitchCurve) {
+    const midi = point[1]
+    if (!Number.isFinite(midi) || midi <= 0) continue
+    if (midi < min) min = midi
+    if (midi > max) max = midi
+  }
+  return min <= max ? { min, max } : null
+})
+
+// 整轨曲线的纵向范围用增量维护（绘制时逐点扩展），避免每帧遍历整条曲线。
+const curveBounds = ref<{ min: number; max: number } | null>(null)
+
+function extendCurveBounds(samples: Array<{ t: number; midi: number }>) {
+  let bounds = curveBounds.value
+  if (!bounds) bounds = { min: Number.POSITIVE_INFINITY, max: Number.NEGATIVE_INFINITY }
+  for (const sample of samples) {
+    if (sample.midi < bounds.min) bounds.min = sample.midi
+    if (sample.midi > bounds.max) bounds.max = sample.midi
+  }
+  curveBounds.value = bounds
+}
+
+function recomputeCurveBounds(points: Array<{ t: number; midi: number }>) {
+  if (!points.length) {
+    curveBounds.value = null
+    return
+  }
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (const point of points) {
+    if (point.midi < min) min = point.midi
+    if (point.midi > max) max = point.midi
+  }
+  curveBounds.value = { min, max }
+}
+
 const pitchRange = computed(() => {
   if (!isCompose.value) {
     // 音域以音符为主，适当纳入「原唱 F0 / 用户画过的曲线」，但只在音符上下
@@ -972,8 +1013,16 @@ const pitchRange = computed(() => {
       if (midi < low) low = midi
       if (midi > high) high = midi
     }
-    for (const point of props.pitchCurve) include(point[1])
-    for (const point of globalCurve.value) include(point.midi)
+    const f0 = f0PitchBounds.value
+    if (f0) {
+      include(f0.min)
+      include(f0.max)
+    }
+    const cb = curveBounds.value
+    if (cb) {
+      include(cb.min)
+      include(cb.max)
+    }
     low = Math.max(MIDI_PITCH_MIN, Math.floor(low) - 2)
     high = Math.min(MIDI_PITCH_MAX, Math.ceil(high) + 2)
     if (high - low < 24) {
@@ -1627,12 +1676,12 @@ function cloneSession(source: MidiSession): MidiSession {
   }
 }
 
-/** 深拷贝一份音符（含曲线控制点），撤销/重做共用，避免快照和实时数据共享数组。 */
+/**
+ * 音符快照：音符本身是不可变更新的（改动都是替换对象、从不原地改 curve 数组），
+ * 所以浅拷贝即可，不必再深拷贝每条曲线——长歌曲、长曲线时这省掉大量对象和 GC。
+ */
 function snapshotNotes(): MidiNote[] {
-  return draft.value.map((note) => ({
-    ...note,
-    ...(note.curve ? { curve: note.curve.map((point) => ({ ...point })) } : {}),
-  }))
+  return draft.value.map((note) => ({ ...note }))
 }
 
 function pushUndo() {
@@ -1644,11 +1693,12 @@ function pushUndo() {
     dirty.value = true
     return
   }
+  // globalCurve 每次都是整体替换成新数组（从不原地改），快照直接持有旧数组引用即可。
   pitchUndo.push({
     notes: snapshotNotes(),
-    curve: globalCurve.value.map((point) => ({ ...point })),
+    curve: globalCurve.value,
   })
-  if (pitchUndo.length > 100) pitchUndo.shift()
+  if (pitchUndo.length > 60) pitchUndo.shift()
   pitchRedo.length = 0
   pitchUndoVersion.value += 1
 }
@@ -1669,10 +1719,11 @@ function undo() {
   if (!previous) return
   pitchRedo.push({
     notes: snapshotNotes(),
-    curve: globalCurve.value.map((point) => ({ ...point })),
+    curve: globalCurve.value,
   })
   draft.value = previous.notes
-  globalCurve.value = previous.curve.map((point) => ({ ...point }))
+  globalCurve.value = previous.curve
+  recomputeCurveBounds(globalCurve.value)
   selection.value = selection.value.filter((id) => previous.notes.some((note) => note.id === id))
   pitchUndoVersion.value += 1
   scheduleDraw()
@@ -1693,10 +1744,11 @@ function redo() {
   if (!next) return
   pitchUndo.push({
     notes: snapshotNotes(),
-    curve: globalCurve.value.map((point) => ({ ...point })),
+    curve: globalCurve.value,
   })
   draft.value = next.notes
-  globalCurve.value = next.curve.map((point) => ({ ...point }))
+  globalCurve.value = next.curve
+  recomputeCurveBounds(globalCurve.value)
   selection.value = selection.value.filter((id) => next.notes.some((note) => note.id === id))
   pitchUndoVersion.value += 1
   scheduleDraw()
@@ -3391,12 +3443,24 @@ function drawGlobalCurve(
   const pps = pxPerSecond.value
   const top = pitchRange.value.max
   const row = rowHeight.value
-  const points = globalCurve.value.map((point) => ({
-    t: point.t,
-    midi: point.midi,
-    x: timeToX(point.t, pps) - offsetX,
-    y: pitchToY(point.midi, top, row) + RULER_HEIGHT - offsetY + row / 2,
-  }))
+  const raw = globalCurve.value
+  if (raw.length < 2) return
+  // 显示抽稀：横向缩小时，相距不足 1.2px 的点视觉上不可区分，
+  // 抽掉它们能大幅降低每帧的贝塞尔段数（长曲线/缩小时尤其明显）。
+  const points: Array<{ t: number; midi: number; x: number; y: number }> = []
+  let lastX = Number.NEGATIVE_INFINITY
+  for (let index = 0; index < raw.length; index += 1) {
+    const point = raw[index]!
+    const x = timeToX(point.t, pps) - offsetX
+    if (index !== 0 && index !== raw.length - 1 && Math.abs(x - lastX) < 1.2) continue
+    points.push({
+      t: point.t,
+      midi: point.midi,
+      x,
+      y: pitchToY(point.midi, top, row) + RULER_HEIGHT - offsetY + row / 2,
+    })
+    lastX = x
+  }
   if (points.length < 2) return
   context.save()
   context.lineJoin = 'round'
@@ -3454,13 +3518,21 @@ function drawOriginalPitch(
   context.lineCap = 'round'
   context.beginPath()
   let previousTime = Number.NEGATIVE_INFINITY
+  let lastX = Number.NEGATIVE_INFINITY
   for (const [time, midi] of smoothed) {
     const x = timeToX(time, pps) - offsetX
     const y = pitchToY(midi, top, row) + RULER_HEIGHT - offsetY + row / 2
     // 时间跳变超过 0.18s 认为是新的乐句，断开折线。
-    if (time - previousTime > 0.18) context.moveTo(x, y)
+    const broken = time - previousTime > 0.18
+    // 显示抽稀：相邻点横向不足 0.8px 时直接跳过，降低每帧的 lineTo 次数。
+    if (!broken && Math.abs(x - lastX) < 0.8) {
+      previousTime = time
+      continue
+    }
+    if (broken) context.moveTo(x, y)
     else context.lineTo(x, y)
     previousTime = time
+    lastX = x
   }
   context.stroke()
   context.restore()
@@ -4020,6 +4092,7 @@ function mergeNoteCurvesIntoGlobal(ids: Set<string>) {
     }
   }
   globalCurve.value = normalizeGlobalPoints([...kept, ...added])
+  recomputeCurveBounds(globalCurve.value)
 }
 
 /** 从音符自带的曲线重建整轨曲线（打开工程/撤销后调用）。 */
@@ -4032,6 +4105,7 @@ function rebuildGlobalCurve() {
     }
   }
   globalCurve.value = normalizeGlobalPoints(points)
+  recomputeCurveBounds(globalCurve.value)
 }
 
 /** 两个按时间升序的点列归并，重合时间取后者（采样更靠后，更新）。 */
@@ -4086,6 +4160,8 @@ function flushCurveStroke() {
   const kept = globalCurve.value.filter((point) => !covered(point.t))
   if (erasing) {
     globalCurve.value = kept
+    // 擦除后上下界可能缩小，重新算一次（擦除不频繁，可接受）。
+    recomputeCurveBounds(kept)
     return
   }
   const rounded = samples
@@ -4096,6 +4172,8 @@ function flushCurveStroke() {
     .sort((a, b) => a.t - b.t)
   // 归并替代全量排序：kept 本身有序，samples 先排好序，整体 O(n+m)。
   globalCurve.value = mergeSortedPoints(kept, rounded)
+  // 增量维护纵向范围，避免音域 computed 每帧遍历整条曲线。
+  extendCurveBounds(rounded)
 }
 function onPointerMove(event: PointerEvent) {
   const current = drag.value
