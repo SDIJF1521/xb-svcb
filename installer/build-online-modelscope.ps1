@@ -10,7 +10,8 @@ param(
   [string]$Python,
   [switch]$ManifestOnly,
   [switch]$ReuseManifest,
-  [switch]$ValidateOnly
+  [switch]$ValidateOnly,
+  [switch]$RequireAdmin
 )
 
 if ($Help -or $args -contains '--help') {
@@ -56,6 +57,7 @@ if ($Python) { $forward.Python = $Python }
 if ($ManifestOnly) { $forward.ManifestOnly = $true }
 if ($ReuseManifest) { $forward.ReuseManifest = $true }
 if ($ValidateOnly) { $forward.ValidateOnly = $true }
+if ($RequireAdmin) { $forward.RequireAdmin = $true }
 
 & $buildScript @forward
 exit $LASTEXITCODE

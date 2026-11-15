@@ -69,6 +69,25 @@ CUDA 共享布局：
 & .\installer\build.ps1 -Stacks directml
 ```
 
+### 受限环境：启动即提权（`-RequireAdmin`）
+
+安装器默认按当前用户安装（`PrivilegesRequired=lowest`）。Inno Setup 会在显示任何界面之前
+先把自身解压到 `%TEMP%\is-XXXX.tmp`；如果运行安装器的非提权进程不能写 `%TEMP%`
+（常见于被终端安全软件、企业策略或沙箱接管的会话），就会在启动阶段报
+“安装程序无法创建目录 … 错误 5: 拒绝访问”，此时安装器自身的代码还没开始执行。
+
+遇到这种情况，用 `-RequireAdmin` 构建“启动即提权”的版本：UAC 在解压之前弹出，提权后再解压，
+可以彻底绕开该限制。
+
+```powershell
+& .\installer\build.ps1 -Stacks cu126 -RequireAdmin
+& .\installer\build-all-packages.ps1 -ReuseBuildOutputs -RequireAdmin
+& .\installer\build-online-modelscope.ps1 -Repo lkpp233/xb-svcb -Revision v0.1.1 -RequireAdmin
+```
+
+提权版本的安装目录仍是 `{localappdata}\Programs\XB-SVCB`（同一账户提权时路径不变），
+但卸载信息写入 HKLM，且要求用户具备管理员权限；普通按用户分发的版本保持默认构建即可。
+
 单独运行 `build.ps1` 且不传 `-SkipWheelhouse` 时，只为目标栈重新准备 wheelhouse；该路径会使用
 `--clean` 清空现有全部 wheel 缓存。已经准备多栈缓存时不要使用该默认行为，应先增量准备缺失栈，
 再通过 `-SkipWheelhouse` 打包，例如：

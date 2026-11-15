@@ -44,8 +44,14 @@ LicenseFile=..\LICENSE
 ; 默认装到用户可写目录，避免在 Program Files 内建 venv / 下模型需要管理员权限
 DefaultDirName={localappdata}\Programs\{#MyAppShort}
 DefaultGroupName={#MyAppShort}
+#ifdef XB_REQUIRE_ADMIN
+; 受限环境（部分机器的非提权令牌不能写 %TEMP%）下，Inno 在显示界面前
+; 就要把自身解压到 %TEMP%\is-XXXX.tmp；启动即提权可以避开该失败。
+PrivilegesRequired=admin
+#else
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
+#endif
 ; 显式展示「选择安装位置」页，允许用户自定义安装路径（exe 与全部依赖都装到此目录）
 DisableDirPage=no
 UsePreviousAppDir=yes
@@ -1990,6 +1996,7 @@ function RunSetupBatch(const BatchName, Args, Status: String; ProgressStart, Pro
 var
   ResultCode, ProcessId: Integer;
   PollTicks, StepSize: Integer;
+  ElapsedSec, SpanWidth, TargetPos: Integer;
   CmdLine, LogDir, LogPath, MarkerPath, StepName: String;
   SeenText, PendingLine, MarkerText: String;
   FinalLogText: AnsiString;
@@ -2044,20 +2051,27 @@ begin
 
     if Result then
     begin
+      ElapsedSec := 0;
       repeat
         ReadInstallLogDelta(LogPath, SeenText, PendingLine);
         Inc(PollTicks);
         if PollTicks >= 8 then
         begin
           PollTicks := 0;
-          { 兜底推进：真实进度标记到达前缓慢前进，越接近区间末端越慢，
-            避免长时间停在 99%。进度标记仍然优先（只会向前跳）。 }
+          { 兜底推进：环境搭建阶段（uv 安装、模型下载）可能几分钟没有可解析的
+            输出。按“已用时间”做渐近推进：越接近区间末尾越慢，永远到不了末尾，
+            因此进度条不会停住；真实 [XB-PROGRESS] 标记到达时照常向前跳。 }
           if EnvProgressCurrent < EnvProgressEnd - 1 then
           begin
-            StepSize := (EnvProgressEnd - EnvProgressCurrent) div 32;
-            if StepSize < 1 then
-              StepSize := 1;
-            SetEnvProgress(EnvProgressCurrent + StepSize, M('RunningInstallStep'));
+            { 每 2 秒累加一次，等价于已用秒数；不依赖计时 API }
+            ElapsedSec := ElapsedSec + 2;
+            SpanWidth := EnvProgressEnd - EnvProgressStart - 1;
+            if SpanWidth < 1 then
+              SpanWidth := 1;
+            { ratio = t / (t + 300s)，5 分钟约走完一半区间 }
+            TargetPos := EnvProgressStart + (SpanWidth * ((ElapsedSec * 1000) div (ElapsedSec + 300))) div 1000;
+            if TargetPos > EnvProgressCurrent then
+              SetEnvProgress(TargetPos, M('RunningInstallStep'));
           end;
         end;
         WizardForm.Update;

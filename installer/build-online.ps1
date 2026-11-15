@@ -19,7 +19,8 @@ param(
   [string]$Python,
   [switch]$ManifestOnly,
   [switch]$ReuseManifest,
-  [switch]$ValidateOnly
+  [switch]$ValidateOnly,
+  [switch]$RequireAdmin
 )
 
 if ($Help -or $args -contains '--help') {
@@ -282,6 +283,7 @@ if (-not $iscc) {
 }
 
 $compileArgs = @("/DXB_ONLINE_MANIFEST_SHA256=$manifestHash")
+if ($RequireAdmin) { $compileArgs += '/DXB_REQUIRE_ADMIN=1' }
 if ($Source -eq 'modelscope') {
   $compileArgs += @(
     '/DXB_ONLINE_MODELSCOPE=1',

@@ -43,7 +43,8 @@ param(
   [string]$Python,
   [string]$RuntimeAssets,
   [switch]$BootstrapperOnly,
-  [switch]$ValidateOnly
+  [switch]$ValidateOnly,
+  [switch]$RequireAdmin
 )
 
 if ($Help -or $args -contains '--help') {
@@ -77,6 +78,8 @@ Examples:
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot   # repo root
+$isccPrivilegeArgs = @()
+if ($RequireAdmin) { $isccPrivilegeArgs += '/DXB_REQUIRE_ADMIN=1' }
 Set-Location -Path $Root
 
 $selectedStacks = @(
@@ -876,7 +879,7 @@ if ($ValidateOnly) {
     $validateStacks = if ($packageStack) { @($packageStack) } else { @('cpu', 'rocm10', 'directml', 'cu126', 'cu128') }
     foreach ($validateStack in $validateStacks) {
       $validateOutput = [string]($outputBaseNames[$validateStack])
-      & $iscc "/DXB_VALIDATE_ONLY=1" "/DXB_PACKAGE_STACK=$validateStack" "/DXB_OUTPUT_BASENAME=$validateOutput" `
+      & $iscc @isccPrivilegeArgs "/DXB_VALIDATE_ONLY=1" "/DXB_PACKAGE_STACK=$validateStack" "/DXB_OUTPUT_BASENAME=$validateOutput" `
         "/O$validateDir" "/F$validateOutput-Validation" (Join-Path $Root "installer\xb-svcb.iss")
       if ($LASTEXITCODE -ne 0) {
         throw "Inno Setup validation failed for $validateStack (exit code $LASTEXITCODE)"
@@ -1103,7 +1106,7 @@ if ($BootstrapperOnly) {
   }
   New-Item -ItemType Directory -Force -Path $compileDir | Out-Null
   try {
-    & $iscc "/DXB_PACKAGE_STACK=$packageStack" "/DXB_OUTPUT_BASENAME=$outputBaseName" "/O$compileDir" (Join-Path $Root "installer\xb-svcb.iss")
+    & $iscc @isccPrivilegeArgs "/DXB_PACKAGE_STACK=$packageStack" "/DXB_OUTPUT_BASENAME=$outputBaseName" "/O$compileDir" (Join-Path $Root "installer\xb-svcb.iss")
     if ($LASTEXITCODE -ne 0) { throw "ISCC compile failed (exit code $LASTEXITCODE)" }
 
     $tempExe = Join-Path $compileDir "$outputBaseName.exe"
@@ -1131,7 +1134,7 @@ if ($BootstrapperOnly) {
   # Replace only this hardware package; keep the other package families.
   Get-ChildItem -LiteralPath $distDir -Filter "$outputBaseName*" -File -ErrorAction SilentlyContinue |
     Remove-Item -Force
-  & $iscc "/DXB_PACKAGE_STACK=$packageStack" "/DXB_OUTPUT_BASENAME=$outputBaseName" (Join-Path $Root "installer\xb-svcb.iss")
+  & $iscc @isccPrivilegeArgs "/DXB_PACKAGE_STACK=$packageStack" "/DXB_OUTPUT_BASENAME=$outputBaseName" (Join-Path $Root "installer\xb-svcb.iss")
   if ($LASTEXITCODE -ne 0) { throw "ISCC compile failed (exit code $LASTEXITCODE)" }
 
   $out = Join-Path $distDir "$outputBaseName.exe"
