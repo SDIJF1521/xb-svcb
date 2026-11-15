@@ -1989,7 +1989,7 @@ end;
 function RunSetupBatch(const BatchName, Args, Status: String; ProgressStart, ProgressEnd: Integer): Boolean;
 var
   ResultCode, ProcessId: Integer;
-  PollTicks: Integer;
+  PollTicks, StepSize: Integer;
   CmdLine, LogDir, LogPath, MarkerPath, StepName: String;
   SeenText, PendingLine, MarkerText: String;
   FinalLogText: AnsiString;
@@ -2050,8 +2050,15 @@ begin
         if PollTicks >= 8 then
         begin
           PollTicks := 0;
+          { 兜底推进：真实进度标记到达前缓慢前进，越接近区间末端越慢，
+            避免长时间停在 99%。进度标记仍然优先（只会向前跳）。 }
           if EnvProgressCurrent < EnvProgressEnd - 1 then
-            SetEnvProgress(EnvProgressCurrent + 1, M('RunningInstallStep'));
+          begin
+            StepSize := (EnvProgressEnd - EnvProgressCurrent) div 32;
+            if StepSize < 1 then
+              StepSize := 1;
+            SetEnvProgress(EnvProgressCurrent + StepSize, M('RunningInstallStep'));
+          end;
         end;
         WizardForm.Update;
         Sleep(250);

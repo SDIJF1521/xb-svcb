@@ -57,6 +57,7 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import threading
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -1837,6 +1838,12 @@ def _progress(blocks: int, bs: int, total: int) -> None:
     pct = done * 100 // total
     bar = "#" * (pct // 4)
     print(f"\r    [{bar:<25}] {pct:3d}%  {done // 1048576}/{total // 1048576} MB", end="")
+    # \r 进度不会产生新行，安装器读不到；额外上报一行进度标记。
+    _download_progress(
+        done,
+        total,
+        f"Downloading {done // 1048576}/{total // 1048576} MB ({pct}%)",
+    )
 
 
 def hf_urls(path: str) -> list[str]:
@@ -3826,12 +3833,52 @@ STEPS = {
 ORDER = ["app", "plugins", "web", "uvr", "pymss", "svc", "rvc", "seedvc", "ddsp", "vocal", "hub", "models"]
 
 
+_PROGRESS_LOCK = threading.Lock()
+_PROGRESS_VALUE = 0
+_PROGRESS_SPAN = (0, 100)
+_PROGRESS_DOWNLOAD_LAST = -1
+
+
+def _current_progress() -> int:
+    with _PROGRESS_LOCK:
+        return _PROGRESS_VALUE
+
+
+def set_progress_span(start: int, end: int) -> None:
+    """当前步骤占用的进度区间（0-100），供下载/安装期间细粒度上报。"""
+    global _PROGRESS_SPAN
+    start = max(0, min(100, int(start)))
+    end = max(start, min(100, int(end)))
+    _PROGRESS_SPAN = (start, end)
+
+
 def installer_progress(percent: int, message: str) -> None:
     """Emit progress markers consumed by the Inno installer."""
+    global _PROGRESS_VALUE
     if os.environ.get("XB_FROM_INSTALLER") != "1":
         return
     percent = max(0, min(100, int(percent)))
+    with _PROGRESS_LOCK:
+        if percent <= _PROGRESS_VALUE:
+            return
+        _PROGRESS_VALUE = percent
     print(f"[XB-PROGRESS] {percent} {message}", flush=True)
+
+
+def _download_progress(done: int, total: int, message: str) -> None:
+    """把单个文件的下载进度映射进当前步骤区间，避免长下载期间进度条停住。"""
+    global _PROGRESS_DOWNLOAD_LAST
+    if total <= 0:
+        return
+    span_start, span_end = _PROGRESS_SPAN
+    current = _current_progress()
+    low = max(span_start, current)
+    high = max(low + 1, span_end - 1)
+    percent = low + int((high - low) * min(1.0, done / total))
+    if percent == _PROGRESS_DOWNLOAD_LAST:
+        return
+    _PROGRESS_DOWNLOAD_LAST = percent
+    installer_progress(min(high, percent), message)
 
 
 def main() -> int:
@@ -4017,7 +4064,10 @@ def main() -> int:
             print(c("y", f"[{s}] 跳过：ROCm 共享环境前一步已失败，避免重复覆盖损坏环境"))
             results.append((s, "skip"))
             continue
-        installer_progress(18 + (completed_count * 76) // selected_count, f"Running runtime step: {s}")
+        step_start = 18 + (completed_count * 76) // selected_count
+        step_end = 18 + ((completed_count + 1) * 76) // selected_count
+        set_progress_span(step_start, step_end)
+        installer_progress(step_start, f"Running runtime step: {s}")
         try:
             STEPS[s](uv, detected_stack)
             results.append((s, "ok"))
@@ -4030,6 +4080,7 @@ def main() -> int:
                 # One failure can affect every component sharing this venv.
                 break
         completed_count += 1
+        set_progress_span(step_start, step_end)
         installer_progress(18 + (completed_count * 76) // selected_count, f"Finished runtime step: {s}")
 
     hr("安装结果汇总")
