@@ -450,6 +450,8 @@ function translateExact(source: string, targetLocale = currentLocale.value): str
 }
 
 export function translateUiText(source: string, targetLocale = currentLocale.value): string {
+  // 中文界面本就是源文本，直接返回，省掉每个文本节点都跑一遍正则和词表查找。
+  if (!source || targetLocale === 'zh-CN') return source
   const match = source.match(/^(\s*)(.*?)(\s*)$/s)
   if (!match) return source
   return `${match[1] ?? ''}${translateExact(match[2] ?? '', targetLocale)}${match[3] ?? ''}`
@@ -610,14 +612,45 @@ function localizeTree(root: Node) {
 
 let observer: MutationObserver | null = null
 
+/**
+ * DOM 本地化缓冲：Vue 批量渲染/高频更新时，MutationObserver 会一次抛来成百上千
+ * 条 mutation。这里把它们合并，在同一个宏任务里只做一轮树遍历，避免每一条
+ * mutation 都同步整树重扫（之前列表/日志/进度条高频更新时会造成卡顿）。
+ */
+const pendingLocalizeRoots = new Set<Node>()
+let localizationScheduled = false
+
+function scheduleLocalization(root: Node) {
+  pendingLocalizeRoots.add(root)
+  if (localizationScheduled) return
+  localizationScheduled = true
+  setTimeout(() => {
+    localizationScheduled = false
+    const roots = Array.from(pendingLocalizeRoots)
+    pendingLocalizeRoots.clear()
+    // 父节点已覆盖其子树，跳过会被重复遍历的后代，减少重复工作。
+    for (const node of roots) {
+      let covered = false
+      for (const other of roots) {
+        if (other === node) continue
+        if (other instanceof Element && other.contains(node)) {
+          covered = true
+          break
+        }
+      }
+      if (!covered) localizeTree(node)
+    }
+  }, 0)
+}
+
 export function startDomLocalization() {
   if (typeof document === 'undefined' || observer) return
   localizeTree(document.body)
   observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
-      if (mutation.type === 'characterData') localizeTree(mutation.target)
+      if (mutation.type === 'characterData') scheduleLocalization(mutation.target)
       if (mutation.type === 'attributes' && mutation.target instanceof Element) localizeElement(mutation.target)
-      for (const node of mutation.addedNodes) localizeTree(node)
+      for (const node of mutation.addedNodes) scheduleLocalization(node)
     }
   })
   observer.observe(document.body, {
