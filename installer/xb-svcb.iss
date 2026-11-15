@@ -516,7 +516,10 @@ Source: "..\docs\api.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Name: "{group}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\xb-svcb.ico"
 Name: "{group}\{cm:RepairEnvironment}"; Filename: "{app}\setup_env.bat"; WorkingDir: "{app}"; IconFilename: "{app}\xb-svcb.ico"
 Name: "{group}\{cm:UninstallApp,{#MyAppShort}}"; Filename: "{uninstallexe}"
-Name: "{commondesktop}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\xb-svcb.ico"
+; 桌面快捷方式：按用户安装写用户桌面，全用户（管理员）安装才写公共桌面。
+; 非提权时写 {commondesktop} 会因 C:\Users\Public\Desktop 不可写而报 0x80070005。
+Name: "{userdesktop}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\xb-svcb.ico"; Check: not IsAdminInstallMode
+Name: "{commondesktop}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\xb-svcb.ico"; Check: IsAdminInstallMode
 
 [Run]
 ; 提供安装完成后直接启动选项（默认不勾）

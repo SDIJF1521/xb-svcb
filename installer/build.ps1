@@ -686,7 +686,7 @@ function Assert-InnoConstants([string]$Path) {
   Require-File $Path "Inno Setup script"
   $allowed = @(
     'app', 'autopf', 'cmd', 'commondesktop', 'group', 'localappdata',
-    'pf32', 'tmp', 'uninstallexe', 'userappdata', 'win'
+    'pf32', 'tmp', 'uninstallexe', 'userappdata', 'userdesktop', 'win'
   )
   $text = Get-Content -LiteralPath $Path -Raw
   $used = [regex]::Matches($text, '\{([A-Za-z][A-Za-z0-9]*)\}') |
@@ -734,6 +734,7 @@ $workerFiles = @(
   "midi_pitch_worker.py",
   "uvr_worker.py",
   "pymss_worker.py",
+  "pymss_catalog_meta.py",
   "hub_worker.py",
   "rvc_worker.py",
   "seedvc_worker.py",
