@@ -25,6 +25,44 @@ Use the following range when generating commit lists or auditing changes:
 
 ---
 
+## 🔧 Post-release fixes & polish (v0.1.1 · 2026-11-14 → 11-16)
+
+Additional fixes after the initial release, focused on pitch curves, the installer and overall performance:
+
+### 🎨 Pitch curve rework
+
+- **One continuous curve**: the curve is no longer bound to a single MIDI note — it is a continuous, track-wide line you can draw anywhere (including rests); undrawn regions fall back to the original pitch (F0), drawn regions follow your stroke.
+- **Pen-style drawing**: freehand drawing with Catmull-Rom smoothing, high-frequency sampling (`pointerrawupdate` + `getCoalescedEvents`) and a start threshold; a click only selects, dragging draws — no more "one click messes up the line".
+- **Cross-note editing**: one stroke can span multiple notes; right-drag / eraser erases, Ctrl snaps to semitones.
+- **Undo / redo**: each stroke is its own undo step (Ctrl+Z); fixed Ctrl+Z being swallowed by checkbox focus.
+- **Adaptive range + F0 octave correction**: the vertical range covers notes, the original F0 and your curve (no more being pinned to the top edge); F0 is octave-corrected to avoid ±12-semitone spikes.
+
+### 🎚️ Audio editor
+
+- Fixed the **play button becoming disabled** after frequent operations: preview / playback now have timeouts and a watchdog that recovers automatically.
+- Project list gained **search** and **batch management** (multi-select / select current view / batch delete with confirmation and result summary).
+
+### 📦 Installer
+
+- Fixed `%TEMP%` temp-directory creation (error 5): non-admin installs now grant the Users group write access via `icacls`.
+- Fixed the **frozen / stuck progress bar**: now a time-based progressive fill, no longer relying on `GetTickCount`.
+- Added a `-RequireAdmin` build switch; the default stays non-admin (lowest + elevation dialog), and desktop icons choose user / common desktop by install mode.
+
+### 🚀 PyMSS
+
+- **Stem / port alignment** for multi-stem models: only real stems are returned, with normalized port names (`vocals` / `instrumental` / `other`).
+- Stems are now read from the model yaml.
+- Added a **download progress bar** that maps per-file bytes onto the overall progress.
+
+### ⚡ Performance
+
+- The global i18n DOM localizer now **batches** mutations (one tree walk per macrotask) and short-circuits the Chinese UI.
+- Pitch-curve drawing: display decimation, cached pitch range, shallow-copy / reference-shared undo snapshots — long songs no longer stutter while drawing.
+
+### 🌏 Localization
+
+- Added English / Japanese strings for the new buttons and hints (batch management, smooth curve, pitch-curve tips, etc.).
+
 ## 🎼 MIDI sub-editor
 
 - **Note-level pitch redraw**: notes are extracted from clip audio and pitch is redrawn back onto the audio note by note. Redraw runs in the isolated vocal runtime through Praat PSOLA, preserving formants and timbre, touching only the notes you drag — unmodified notes keep their original intonation.
