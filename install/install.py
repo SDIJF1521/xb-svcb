@@ -16,7 +16,9 @@
   engines/so-vits-svc/          —— 安装分卷自带的 so-vits-svc 4.1 仓库
   engines/seed-vc/              —— 安装分卷自带的 Seed-VC 仓库
   engines/ddsp-svc/             —— 安装分卷自带的 DDSP-SVC 仓库
+  engines/rvc/                  —— 内置官方 RVC 推理栈（RVC-Project 2.2.231006 推理子集）
   engines/so-vits-svc/pretrain —— 底模（contentvec / nsf_hifigan / rmvpe）
+  engines/rvc/pretrain          —— RVC 底模（hubert_base / rmvpe）
   models/uvr/    —— UVR 分离模型（5_HP-Karaoke / DeEcho-DeReverb）
   web/dist/      —— 前端构建产物
 
@@ -47,6 +49,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import locale
 import os
 import re
 import shutil
@@ -54,6 +57,7 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import threading
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -86,11 +90,37 @@ os.environ.setdefault("PIP_INDEX_URL", PYPI_MIRROR)
 os.environ.setdefault("UV_DEFAULT_INDEX", PYPI_MIRROR)
 os.environ.setdefault("UV_LINK_MODE", "copy")
 os.environ.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+# Child interpreters (uv's pip bootstrap, engine probes, audit scripts) must
+# write UTF-8: the launchers run at chcp 65001 and the graphical installer
+# decodes their output as UTF-8, while Python defaults to the ANSI code page
+# whenever stdout is redirected. A profile path such as
+# ``C:\Users\端木雪堂\...`` would otherwise be mangled or kill a reader thread.
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+os.environ.setdefault("PYTHONUTF8", "1")
 
-for _stream in (sys.stdout, sys.stderr):
-    _reconfigure = getattr(_stream, "reconfigure", None)
-    if callable(_reconfigure):
-        _reconfigure(errors="replace")
+
+def _force_utf8_output() -> None:
+    """Write UTF-8 even when stdout is redirected into the installer log.
+
+    ``errors="replace"`` alone keeps printing Chinese on a console whose ANSI
+    code page cannot encode it, but that code page is then also what lands in
+    the log file (or ``?`` on cp1252).  Inno Setup decodes the step log as
+    UTF-8, so pin the encoding and keep the replace fallback.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            try:
+                reconfigure(errors="replace")
+            except (OSError, ValueError):
+                continue
+
+
+_force_utf8_output()
 
 # 所有产物（引擎/虚拟环境/模型）都落在 ROOT 下。默认取本脚本上级目录；
 # 安装器会用 --root 显式指定为用户选择的安装目录，确保依赖装进该目录。
@@ -101,6 +131,7 @@ ENGINES_DIR = ROOT / "engines"
 SOVITS_DIR = ENGINES_DIR / "so-vits-svc"
 SEEDVC_DIR = ENGINES_DIR / "seed-vc"
 DDSP_DIR = ENGINES_DIR / "ddsp-svc"
+RVC_DIR = ENGINES_DIR / "rvc"
 PRETRAIN_DIR = SOVITS_DIR / "pretrain"
 UVR_VENV = ROOT / ".venv-uvr"
 PLUGIN_VENV = ROOT / ".venv-plugins"
@@ -108,6 +139,9 @@ PYMSS_VENV = ROOT / ".venv-pymss"
 SVC_VENV = ROOT / ".venv-svc"
 HUB_VENV = ROOT / ".venv-hub"
 RVC_VENV = ROOT / ".venv-rvc"
+# 官方推理栈的底模目录（hubert_base.pt / rmvpe.pt）：与 so-vits-svc 一致，
+# 放在 engines/rvc/pretrain，由安装器从 assets/models 预置
+RVC_BASE_MODEL_DIR = RVC_DIR / "pretrain"
 SEEDVC_VENV = ROOT / ".venv-seedvc"
 DDSP_VENV = ROOT / ".venv-ddsp"
 VOCAL_VENV = ROOT / ".venv-vocal"
@@ -129,20 +163,42 @@ ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 ASSETS_MODELS_DIR = ASSETS_DIR / "models"
 ASSETS_WHEELS_DIR = ASSETS_DIR / "wheels"
 
+# 记录已经解析过的安装根目录。install_shared.py 会在调用组件实现前显式
+# 解析路径；main() 只在尚未解析时补做，避免把测试/调用方选择的目录覆盖回
+# 脚本所在目录。
+_DERIVED_ROOT: Path | None = None
+
+# uv 缓存在安装 CUDA 依赖栈时会增长到 10-20 GB。低于该阈值时只告警，
+# 由用户改用 XB_UV_CACHE_DIR 指定空间更大的磁盘。
+STORAGE_MIN_FREE_BYTES = 12 * 1024 ** 3
+
+# 存储目录可用环境变量覆盖：默认全部落在安装盘，不使用系统盘的 %LOCALAPPDATA%。
+STORAGE_ENV = {
+    "uv_cache": "XB_UV_CACHE_DIR",
+    "pip_cache": "XB_PIP_CACHE_DIR",
+    "uv_python": "XB_UV_PYTHON_DIR",
+    "runtime_temp": "XB_RUNTIME_TEMP",
+}
+
 
 def _derive_paths(root: Path) -> None:
     """以 root 为基准重新计算所有产物路径（供 --root 覆盖）。"""
+    global _DERIVED_ROOT
     global ROOT, APP_DIR, WEB_DIR, ENGINES_DIR, SOVITS_DIR, SEEDVC_DIR, DDSP_DIR, PRETRAIN_DIR
+    global RVC_DIR, RVC_BASE_MODEL_DIR
     global UVR_VENV, PLUGIN_VENV, PYMSS_VENV, SVC_VENV, HUB_VENV, RVC_VENV, SEEDVC_VENV, DDSP_VENV, VOCAL_VENV
     global RUNTIMES_DIR, CORE_VENV, RUNTIME_MANIFEST
     global UVR_MODELS_DIR, VOCAL_MODELS_DIR
     ROOT = root
+    _DERIVED_ROOT = root
     APP_DIR = root / "app"
     WEB_DIR = root / "web"
     ENGINES_DIR = root / "engines"
     SOVITS_DIR = ENGINES_DIR / "so-vits-svc"
     SEEDVC_DIR = ENGINES_DIR / "seed-vc"
     DDSP_DIR = ENGINES_DIR / "ddsp-svc"
+    RVC_DIR = ENGINES_DIR / "rvc"
+    RVC_BASE_MODEL_DIR = RVC_DIR / "pretrain"
     PRETRAIN_DIR = SOVITS_DIR / "pretrain"
     UVR_VENV = root / ".venv-uvr"
     PLUGIN_VENV = root / ".venv-plugins"
@@ -161,19 +217,75 @@ def _derive_paths(root: Path) -> None:
     # Keep extraction and generic temporary traffic on the user-selected
     # installation drive. Global caches can be read-only, locked by security
     # software, or unexpectedly consume the system drive during large installs.
-    runtime_temp = Path(
-        os.environ.get("XB_RUNTIME_TEMP") or root / ".tmp" / "runtime-temp"
-    ).resolve()
-    runtime_temp.mkdir(parents=True, exist_ok=True)
-    os.environ["TEMP"] = str(runtime_temp)
-    os.environ["TMP"] = str(runtime_temp)
-    uv_cache = Path(
-        os.environ.get("XB_UV_CACHE_DIR") or root / ".tmp" / "uv-cache"
-    ).resolve()
-    os.environ["UV_CACHE_DIR"] = str(uv_cache)
+    storage = storage_paths(root)
+    try:
+        for directory in storage.values():
+            directory.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            "无法创建安装缓存/临时目录，请确认安装目录可写；也可以先把缓存指向其他磁盘后重试：\n"
+            '    set "XB_UV_CACHE_DIR=D:\\xb-cache\\uv"\n'
+            f"    详细错误：{exc}"
+        ) from exc
+    os.environ["TEMP"] = str(storage["runtime_temp"])
+    os.environ["TMP"] = str(storage["runtime_temp"])
+    os.environ["UV_CACHE_DIR"] = str(storage["uv_cache"])
+    # pip 仍用于引导 uv（以及少数兜底安装），它的缓存同样不能落在系统盘。
+    os.environ["PIP_CACHE_DIR"] = str(storage["pip_cache"])
+    # uv 托管的 Python（例如 legacy 3.9 环境）默认下载到 %LOCALAPPDATA%，
+    # 固定到安装盘后系统盘不会被额外占用。
+    os.environ["UV_PYTHON_INSTALL_DIR"] = str(storage["uv_python"])
     # tempfile caches its first selected directory. Reset it for repairs and
     # test processes that call _derive_paths more than once.
-    tempfile.tempdir = str(runtime_temp)
+    tempfile.tempdir = str(storage["runtime_temp"])
+
+
+def storage_paths(root: Path | None = None) -> dict[str, Path]:
+    """Return cache/temp locations, honouring the XB_* overrides."""
+    base = root or ROOT
+    defaults = {
+        "uv_cache": base / ".tmp" / "uv-cache",
+        "pip_cache": base / ".tmp" / "pip-cache",
+        "uv_python": base / ".tmp" / "uv-python",
+        "runtime_temp": base / ".tmp" / "runtime-temp",
+    }
+    resolved: dict[str, Path] = {}
+    for key, default in defaults.items():
+        raw = os.environ.get(STORAGE_ENV[key])
+        resolved[key] = Path(raw).expanduser().resolve() if raw else default.resolve()
+    return resolved
+
+
+def _free_space_bytes(path: Path) -> int | None:
+    try:
+        return shutil.disk_usage(path).free
+    except OSError:
+        return None
+
+
+def storage_warning(free_bytes: int | None, path: Path) -> str | None:
+    """Return an actionable warning when the cache drive is nearly full."""
+    if free_bytes is None or free_bytes >= STORAGE_MIN_FREE_BYTES:
+        return None
+    return (
+        f"磁盘剩余空间不足：{path} 所在磁盘仅剩 {free_bytes / 1024 ** 3:.1f} GB，"
+        "而 CUDA 依赖缓存通常需要 10-20 GB，安装可能中途失败。\n"
+        "    请先清理磁盘，或在运行安装器前把缓存指向空间更大的磁盘，例如：\n"
+        '    set "XB_UV_CACHE_DIR=D:\\xb-cache\\uv"\n'
+        '    set "XB_PIP_CACHE_DIR=D:\\xb-cache\\pip"'
+    )
+
+
+def report_storage_layout() -> None:
+    """Print where caches land so failures are diagnosable before uv runs."""
+    storage = storage_paths()
+    print(c("b", f"uv 缓存目录: {storage['uv_cache']}"))
+    print(c("b", f"pip 缓存目录: {storage['pip_cache']}"))
+    print(c("b", f"临时目录: {storage['runtime_temp']}"))
+    warning = storage_warning(_free_space_bytes(storage["uv_cache"]), storage["uv_cache"])
+    if warning:
+        print(c("y", warning))
+
 
 SOVITS_REPO_URL = "https://github.com/svc-develop-team/so-vits-svc.git"
 SOVITS_BRANCH = "4.1-Stable"
@@ -316,6 +428,22 @@ PYTHON_FOR_RVC = "3.12"
 # CUDA126/CUDA128 同样使用 3.12；现代 torch 有完整 cp312 wheels。
 PYTHON_FOR_SVC_BLACKWELL = "3.12"
 PYTHON_FOR_RVC_BLACKWELL = "3.12"
+
+# 官方 RVC 推理栈（内置 engines/rvc）在独立环境里只缺这些运行时依赖。
+# 不再安装第三方 rvc-python：模型代码已随程序分发，这里只装 fairseq HuBERT、
+# RMVPE、FAISS 检索和 F0 提取所需的库。
+RVC_INFERENCE_DEPS = (
+    "fairseq-fixed==0.12.3.1",
+    "faiss-cpu>=1.8.0,<2",
+    "pyworld>=0.3.4,<0.4",
+    "torchcrepe>=0.0.20,<0.1",
+    "praat-parselmouth>=0.4.2",
+    "av>=12,<20",
+    "librosa>=0.10.2,<0.11",
+    "soundfile>=0.12.1",
+    "numpy>=1.26.4,<2",
+    "scipy>=1.13,<2",
+)
 
 # The core UVR/SeedVC/DDSP consolidation remains opt-in because their pinned
 # NumPy/protobuf sets can conflict.  ROCm SVC/RVC/Vocal use one compatible
@@ -1102,20 +1230,59 @@ def venv_python(venv_dir: Path) -> Path:
     )
 
 
+def _decode_console_output(raw: bytes | None) -> str:
+    """Decode a console tool's output without trusting the process locale.
+
+    The launchers switch the console to UTF-8 (``chcp 65001``), so tools such as
+    ``where``/``py``/``nvidia-smi`` emit UTF-8 bytes while ``text=True`` would
+    decode them with the ANSI code page.  On Chinese Windows that code page is
+    GBK, and a profile path like ``C:\\Users\\端木雪堂\\...`` cannot be decoded:
+    subprocess' reader thread dies, ``stdout`` silently becomes ``None`` and the
+    caller then crashes on ``None.splitlines()``.  Prefer UTF-8, keep the locale
+    and ``mbcs`` as fallbacks, and never raise on undecodable bytes.
+    """
+    if not raw:
+        return ""
+    if isinstance(raw, str):
+        # Some callers (and tests) run subprocess in text mode.
+        return raw
+    candidates = ("utf-8", locale.getpreferredencoding(False), "mbcs")
+    for encoding in dict.fromkeys(candidates):
+        try:
+            return raw.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _run_capture(
+    cmd: list[str],
+    *,
+    timeout: float | None,
+    env: dict | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a helper and decode its output with :func:`_decode_console_output`."""
+    completed = subprocess.run(cmd, capture_output=True, timeout=timeout, env=env)
+    return subprocess.CompletedProcess(
+        completed.args,
+        completed.returncode,
+        _decode_console_output(completed.stdout),
+        _decode_console_output(completed.stderr),
+    )
+
+
 def _python_minor_version(py: Path) -> str | None:
     """Return a Python executable's major.minor version, or None if unusable."""
     try:
-        out = subprocess.run(
+        out = _run_capture(
             [str(py), "-c", "import sys;print('%d.%d'%sys.version_info[:2])"],
-            capture_output=True,
-            text=True,
             timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
         return None
     if out.returncode != 0:
         return None
-    ver = out.stdout.strip()
+    ver = (out.stdout or "").strip()
     return ver if re.match(r"^\d+\.\d+$", ver) else None
 
 
@@ -1146,36 +1313,36 @@ def _python_launcher_path(python_version: str) -> str | None:
     if os.name != "nt":
         return None
     try:
-        out = subprocess.run(
+        out = _run_capture(
             [
                 "py",
                 f"-{python_version}",
                 "-c",
                 "import sys;print(sys.executable)",
             ],
-            capture_output=True,
-            text=True,
             timeout=20,
         )
     except (OSError, subprocess.SubprocessError):
         return None
     if out.returncode != 0:
         return None
-    return out.stdout.strip() or None
+    return (out.stdout or "").strip() or None
 
 
 def _where_python_paths() -> list[str]:
+    found = shutil.which("python")
     try:
-        found = shutil.which("python")
-        out = subprocess.run(
+        out = _run_capture(
             ["where", "python"] if os.name == "nt" else ["which", "-a", "python"],
-            capture_output=True,
-            text=True,
             timeout=20,
         )
     except (OSError, subprocess.SubprocessError):
         return [found] if found else []
-    values = out.stdout.splitlines() if out.returncode == 0 else []
+    values = [
+        line.strip()
+        for line in (out.stdout or "").splitlines()
+        if out.returncode == 0 and line.strip()
+    ]
     if found:
         values.insert(0, found)
     return values
@@ -1283,6 +1450,20 @@ def have(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
 
+def _npm_executable() -> str:
+    """Resolve npm to an image CreateProcess can launch.
+
+    Windows npm is a ``.cmd`` shim. ``shutil.which("npm")`` finds it, but
+    ``subprocess.run(["npm", ...])`` makes CreateProcess append only ``.exe``
+    and fails with WinError 2, so always pass the resolved shim path.
+    """
+    for name in ("npm.cmd", "npm.exe", "npm"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return "npm"
+
+
 def find_nvidia_smi() -> str | None:
     """Locate nvidia-smi even when it is not exposed through PATH."""
     found = shutil.which("nvidia-smi")
@@ -1315,13 +1496,11 @@ def detect_gpu_stack() -> str:
     if smi:
         try:
             subprocess.run([smi], capture_output=True, check=True, timeout=15)
-            out = subprocess.run(
+            out = _run_capture(
                 [smi, "--query-gpu=compute_cap", "--format=csv,noheader"],
-                capture_output=True,
-                text=True,
                 timeout=15,
             )
-            for line in out.stdout.splitlines():
+            for line in (out.stdout or "").splitlines():
                 try:
                     caps.append(float(line.strip()))
                 except ValueError:
@@ -1335,13 +1514,11 @@ def detect_gpu_stack() -> str:
         # for Blackwell.  Always query the adapter name as a second signal so
         # an RTX 50xx card cannot accidentally enter the cu126 stack.
         try:
-            out = subprocess.run(
+            out = _run_capture(
                 [smi, "--query-gpu=name", "--format=csv,noheader"],
-                capture_output=True,
-                text=True,
                 timeout=15,
             )
-            names = out.stdout.strip()
+            names = (out.stdout or "").strip()
             if re.search(r"RTX\s*50\d0", names, flags=re.IGNORECASE):
                 return "cu128"
             if names and any(cap >= 5.0 for cap in caps):
@@ -1661,6 +1838,12 @@ def _progress(blocks: int, bs: int, total: int) -> None:
     pct = done * 100 // total
     bar = "#" * (pct // 4)
     print(f"\r    [{bar:<25}] {pct:3d}%  {done // 1048576}/{total // 1048576} MB", end="")
+    # \r 进度不会产生新行，安装器读不到；额外上报一行进度标记。
+    _download_progress(
+        done,
+        total,
+        f"Downloading {done // 1048576}/{total // 1048576} MB ({pct}%)",
+    )
 
 
 def hf_urls(path: str) -> list[str]:
@@ -1881,10 +2064,8 @@ torch.save(obj, tmp)
 tmp.replace(dest)
 """
     try:
-        out = subprocess.run(
+        out = _run_capture(
             [str(py), "-c", script, str(src), str(dest)],
-            capture_output=True,
-            text=True,
             timeout=180,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -1898,7 +2079,7 @@ tmp.replace(dest)
 
 
 def _find_rvc_base_source(*rels: str) -> Path | None:
-    roots = [ASSETS_MODELS_DIR, PRETRAIN_DIR]
+    roots = [ASSETS_MODELS_DIR, RVC_BASE_MODEL_DIR, PRETRAIN_DIR]
     for root in roots:
         for rel in rels:
             rel_path = Path(rel)
@@ -1909,27 +2090,8 @@ def _find_rvc_base_source(*rels: str) -> Path | None:
 
 
 def seed_rvc_base_models(py: Path) -> None:
-    """把自带底模预置到 rvc-python 包内，避免首次推理再连 HuggingFace。"""
-    try:
-        out = subprocess.run(
-            [
-                str(py),
-                "-c",
-                "import pathlib,rvc_python;print(pathlib.Path(rvc_python.__file__).resolve().parent)",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        print(c("y", f"    定位 rvc-python 失败，跳过 RVC 底模预置：{exc}"))
-        return
-    if out.returncode != 0 or not out.stdout.strip():
-        tail = (out.stderr or out.stdout or "").strip().splitlines()[-1:]
-        print(c("y", f"    rvc-python 尚不可导入，跳过 RVC 底模预置：{' '.join(tail)}"))
-        return
-
-    base_dir = Path(out.stdout.strip()) / "base_model"
+    """把官方推理栈需要的底模预置到 engines/rvc/pretrain，避免首次推理再连 HuggingFace。"""
+    base_dir = RVC_BASE_MODEL_DIR
     base_dir.mkdir(parents=True, exist_ok=True)
     mapping = {
         "hubert_base.pt": (
@@ -1942,11 +2104,6 @@ def seed_rvc_base_models(py: Path) -> None:
             "rvc/rmvpe.pt",
             "pretrain/rmvpe.pt",
             "rmvpe.pt",
-        ),
-        "rmvpe.onnx": (
-            "rvc/rmvpe.onnx",
-            "pretrain/rmvpe.onnx",
-            "rmvpe.onnx",
         ),
     }
     for name, rels in mapping.items():
@@ -1970,11 +2127,11 @@ def seed_rvc_base_models(py: Path) -> None:
             except OSError:
                 pass
         if src is None:
-            if name != "rmvpe.onnx":
-                print(c("y", f"    未找到自带 RVC 底模 {name}，运行时将尝试镜像下载"))
+            print(c("y", f"    未找到自带 RVC 底模 {name}，运行时将尝试镜像下载"))
             continue
         _link_or_copy_model(src, dest)
         print(c("g", f"    RVC 底模已预置：{name}"))
+
 
 
 # ---------- 各安装步骤 ----------
@@ -2001,14 +2158,15 @@ def step_plugins(uv: str) -> None:
 
 def step_web() -> None:
     hr("3/12 前端构建 web/dist")
+    npm = _npm_executable()
     if not have("npm"):
         raise RuntimeError("未检测到 npm，请先安装 Node.js LTS 后重试（或 --skip-web）")
     # 优先 npm ci（依赖 lock）；无 lock 时回退 npm install
     if (WEB_DIR / "package-lock.json").exists():
-        run(["npm", "ci"], cwd=WEB_DIR)
+        run([npm, "ci"], cwd=WEB_DIR)
     else:
-        run(["npm", "install"], cwd=WEB_DIR)
-    run(["npm", "run", "build"], cwd=WEB_DIR)
+        run([npm, "install"], cwd=WEB_DIR)
+    run([npm, "run", "build"], cwd=WEB_DIR)
     print(c("g", "前端构建完成"))
 
 
@@ -2811,7 +2969,7 @@ def _reaffirm_torch_wheels(
 ) -> None:
     """保留可导入且匹配的 PyTorch；仅修复损坏或错误构建。
 
-    audio-separator / fairseq / rvc-python 等依赖在解析时可能把 CUDA torch 换成
+    audio-separator / fairseq 等依赖在解析时可能把 CUDA torch 换成
     PyPI 默认的「同版本号 CPU 版」，导致 torch.cuda.is_available()=False，
     推理时报 "Attempting to deserialize object on a CUDA device but
     torch.cuda.is_available() is False"。普通 install 因版本号相同会判定已满足而不覆盖，
@@ -3019,14 +3177,14 @@ def _patch_fairseq_weights_only(py: Path) -> None:
     幂等：无损坏时不改动。
     """
     try:
-        out = subprocess.run(
+        out = _run_capture(
             [str(py), "-c", "import os,fairseq;print(os.path.dirname(fairseq.__file__))"],
-            capture_output=True, text=True, timeout=60,
+            timeout=60,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         print(c("y", f"    定位 fairseq 失败，跳过修复：{exc}"))
         return
-    base = out.stdout.strip()
+    base = (out.stdout or "").strip()
     if not base:
         print(c("y", "    未找到 fairseq 安装路径，跳过修复"))
         return
@@ -3048,15 +3206,28 @@ def _patch_fairseq_weights_only(py: Path) -> None:
         print(c("g", "    fairseq checkpoint_utils 无需修复（weights_only 由 worker 运行时处理）"))
 
 
+def _require_rvc_engine_source() -> None:
+    """Ensure the bundled official RVC engine is present (like so-vits-svc)."""
+    pipeline = RVC_DIR / "infer" / "modules" / "vc" / "pipeline.py"
+    session = RVC_DIR / "rvc_session.py"
+    if pipeline.is_file() and session.is_file():
+        return
+    raise RuntimeError(
+        "engines/rvc 官方推理代码缺失。请用完整安装包安装，"
+        "或从仓库/分卷补齐 engines/rvc 后重试。"
+    )
+
+
 def step_rvc(uv: str, gpu_stack: str) -> None:
-    hr(f"7/12 RVC 推理环境 {RVC_VENV.name}（rvc-python）")
+    hr(f"7/12 RVC 推理环境 {RVC_VENV.name}（官方 infer 栈）")
+    _require_rvc_engine_source()
     use_blackwell = gpu_stack == "cu128"
     use_modern_cuda = gpu_stack in {"cu126", "cu128", ROCM_STACK}
     use_gpu = gpu_stack in {"cu126", "cu128"}
     use_directml = gpu_stack == "directml"
-    # RVC 推理在独立环境运行（rvc-python），与 so-vits 栈隔离。
-    # rvc-python 默认会在首次推理时下载 hubert / rmvpe；这里安装后立即预置，
-    # 避免新用户运行 RVC 时因为 HuggingFace 连接失败而报 HTTPSConnectionPool。
+    # RVC 推理在独立环境运行（内置官方 infer 栈），与 so-vits 栈隔离。
+    # 官方代码随程序分发，这里只装 fairseq/faiss/pyworld 等推理依赖，并在安装后
+    # 立即预置 hubert / rmvpe 底模，避免首次推理因 HuggingFace 连接失败而报错。
     target_py = _rvc_python_for_stack(gpu_stack)
     venv = runtime_venv("rvc", RVC_VENV)
     ensure_venv(uv, venv, target_py)
@@ -3069,12 +3240,11 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
         python_version=target_py,
     )
 
-    # uv venv 默认不含 setuptools；fairseq/rvc 运行时可能用到 pkg_resources，先补齐
+    # uv venv 默认不含 setuptools；fairseq 运行时可能用到 pkg_resources，先补齐
     pip("setuptools<81", "wheel")
-    rvc_wheel = _prepare_rvc_compat(gpu_stack)
     if use_directml:
         _install_directml_runtime(pip)
-        pip(str(rvc_wheel))
+        pip(*RVC_INFERENCE_DEPS)
         _reaffirm_directml_runtime(
             uv,
             py,
@@ -3095,12 +3265,12 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
         return
     if use_modern_cuda:
         # CUDA and ROCm use Python 3.12 with modern Torch.
-        # rvc-python 会带回 fairseq，装完再就地打 weights_only 补丁，
+        # fairseq 会带回 hydra/omegaconf，装完再就地打 weights_only 补丁，
         # 否则新 torch 加载 hubert/字典会报 "Weights only load failed"。
         pip(*_modern_torch_specs(gpu_stack), index=_modern_torch_index(gpu_stack))
-        pip(str(rvc_wheel))
+        pip(*RVC_INFERENCE_DEPS)
         seed_rvc_base_models(venv_python(RVC_VENV))
-        # 兜底：rvc-python/fairseq 可能把 CUDA torch 换成同号 CPU 版 → 强制校正回当前栈
+        # 兜底：fairseq 可能把 CUDA torch 换成同号 CPU 版 → 强制校正回当前栈
         _reaffirm_modern_torch(
             uv,
             py,
@@ -3113,7 +3283,7 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
             uv,
             component="rvc",
             venv=venv,
-            imports=("rvc_python.infer",),
+            imports=("faiss", "fairseq", "pyworld", "torchcrepe"),
             gpu_stack=gpu_stack,
         )
         print(c("g", f"RVC 推理环境就绪（共享 {gpu_stack}）"))
@@ -3123,8 +3293,8 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
     torch_specs = ["torch==2.5.1", "torchaudio==2.5.1"]
     torch_index = TORCH_RVC_CUDA_INDEX if use_gpu else TORCH_CPU_INDEX
     pip(*torch_specs, index=torch_index)
-    # rvc-python（含 fairseq / faiss 等推理依赖）
-    pip(str(rvc_wheel))
+    # 官方 RVC 推理栈依赖（fairseq / faiss / F0 提取等）
+    pip(*RVC_INFERENCE_DEPS)
     if use_gpu:
         _reaffirm_torch_wheels(
             uv,
@@ -3138,19 +3308,6 @@ def step_rvc(uv: str, gpu_stack: str) -> None:
         )
     seed_rvc_base_models(venv_python(RVC_VENV))
     print(c("g", "RVC 推理环境就绪"))
-
-
-def _prepare_rvc_compat(gpu_stack: str) -> Path:
-    spec = importlib.util.spec_from_file_location("xb_rvc_compat", Path(__file__).with_name("build_rvc_compat.py"))
-    if spec is None or spec.loader is None:
-        raise RuntimeError("无法加载 RVC 兼容构建模块")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.prepare(
-        ROOT / ".tmp" / "rvc-compat",
-        _wheelhouse_dirs(component="rvc", gpu_stack=gpu_stack, python_version=PYTHON_FOR_ENGINES),
-        offline=bool(_wheelhouse_root() and _wheelhouse_strict()),
-    )
 
 
 SEEDVC_REQ_DENY = {
@@ -3449,9 +3606,9 @@ init_df(sys.argv[1], log_file=None)
         # or missing DLL details from the installer log.
         print(c("r", f"DeepFilterNet3 模型初始化失败（exit {exc.returncode}）："))
         try:
-            probe = subprocess.run(
+            probe = _run_capture(
                 [py, "-c", check, str(model_dir)],
-                check=False, text=True, capture_output=True,
+                timeout=None,
                 env={**os.environ, **compatibility_env},
             )
             if probe.stdout:
@@ -3676,12 +3833,52 @@ STEPS = {
 ORDER = ["app", "plugins", "web", "uvr", "pymss", "svc", "rvc", "seedvc", "ddsp", "vocal", "hub", "models"]
 
 
+_PROGRESS_LOCK = threading.Lock()
+_PROGRESS_VALUE = 0
+_PROGRESS_SPAN = (0, 100)
+_PROGRESS_DOWNLOAD_LAST = -1
+
+
+def _current_progress() -> int:
+    with _PROGRESS_LOCK:
+        return _PROGRESS_VALUE
+
+
+def set_progress_span(start: int, end: int) -> None:
+    """当前步骤占用的进度区间（0-100），供下载/安装期间细粒度上报。"""
+    global _PROGRESS_SPAN
+    start = max(0, min(100, int(start)))
+    end = max(start, min(100, int(end)))
+    _PROGRESS_SPAN = (start, end)
+
+
 def installer_progress(percent: int, message: str) -> None:
     """Emit progress markers consumed by the Inno installer."""
+    global _PROGRESS_VALUE
     if os.environ.get("XB_FROM_INSTALLER") != "1":
         return
     percent = max(0, min(100, int(percent)))
+    with _PROGRESS_LOCK:
+        if percent <= _PROGRESS_VALUE:
+            return
+        _PROGRESS_VALUE = percent
     print(f"[XB-PROGRESS] {percent} {message}", flush=True)
+
+
+def _download_progress(done: int, total: int, message: str) -> None:
+    """把单个文件的下载进度映射进当前步骤区间，避免长下载期间进度条停住。"""
+    global _PROGRESS_DOWNLOAD_LAST
+    if total <= 0:
+        return
+    span_start, span_end = _PROGRESS_SPAN
+    current = _current_progress()
+    low = max(span_start, current)
+    high = max(low + 1, span_end - 1)
+    percent = low + int((high - low) * min(1.0, done / total))
+    if percent == _PROGRESS_DOWNLOAD_LAST:
+        return
+    _PROGRESS_DOWNLOAD_LAST = percent
+    installer_progress(min(high, percent), message)
 
 
 def main() -> int:
@@ -3740,8 +3937,17 @@ def main() -> int:
     selected = args.only if args.only else [s for s in ORDER if not getattr(args, f"skip_{s}")]
 
     installer_progress(2, "Resolving runtime root")
-    if args.root:
-        _derive_paths(Path(args.root).expanduser().resolve())
+    try:
+        if args.root:
+            _derive_paths(Path(args.root).expanduser().resolve())
+        elif _DERIVED_ROOT is None:
+            # 直接运行 python install/install.py（install.ps1 与 README 的用
+            # 法）时也必须把 uv/pip 缓存固定到安装目录；否则 uv 默认把几 GB
+            # 缓存写进系统盘的 %LOCALAPPDATA%，小容量 C: 会中途装失败。
+            _derive_paths(ROOT)
+    except (OSError, RuntimeError) as exc:
+        print(c("r", str(exc)))
+        return 1
     try:
         _configure_core_profile(args.core_profile)
     except (OSError, ValueError, KeyError) as exc:
@@ -3750,6 +3956,7 @@ def main() -> int:
 
     hr("XB-SVCB 安装器")
     print(f"安装根目录: {ROOT}")
+    report_storage_layout()
 
     if args.rocm10 and (args.cpu or args.directml or args.cu126 or args.cu128 or args.no_cu128):
         p.error("--rocm10 不能与 CPU/DirectML/CUDA 栈参数同时使用")
@@ -3857,7 +4064,10 @@ def main() -> int:
             print(c("y", f"[{s}] 跳过：ROCm 共享环境前一步已失败，避免重复覆盖损坏环境"))
             results.append((s, "skip"))
             continue
-        installer_progress(18 + (completed_count * 76) // selected_count, f"Running runtime step: {s}")
+        step_start = 18 + (completed_count * 76) // selected_count
+        step_end = 18 + ((completed_count + 1) * 76) // selected_count
+        set_progress_span(step_start, step_end)
+        installer_progress(step_start, f"Running runtime step: {s}")
         try:
             STEPS[s](uv, detected_stack)
             results.append((s, "ok"))
@@ -3870,6 +4080,7 @@ def main() -> int:
                 # One failure can affect every component sharing this venv.
                 break
         completed_count += 1
+        set_progress_span(step_start, step_end)
         installer_progress(18 + (completed_count * 76) // selected_count, f"Finished runtime step: {s}")
 
     hr("安装结果汇总")

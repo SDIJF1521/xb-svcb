@@ -1,7 +1,7 @@
 """模型站服务：基于 ModelScope（魔搭社区）的翻唱模型上传 / 搜索 / 下载。
 
 方案要点（与用户确认的「每人自有令牌 + 标记防污染」一致）：
-- 用户在「模型站」填写自己的 ModelScope 访问令牌（个人中心->访问令牌），持久化于 SettingsStore。
+- 用户在「模型站」填写自己的 ModelScope 访问令牌（个人中心->访问令牌），持久化于 SettingsRepository。
 - 上传：把本地模型目录（G_*.pth + config.json + 可选扩散）打包，写入清单文件
   ``xb-svcb-model.json``（含 magic / schema / 文件角色），创建到「<用户名>/xb-svcb-<slug>-<id>」
   公开仓库。上传需要 modelscope SDK，放在独立 .venv-hub，经子进程 hub_worker 完成。
@@ -29,8 +29,8 @@ from pathlib import Path
 from typing import Any
 
 import config
-from infrastructure import paths
-from infrastructure.storage import SettingsStore
+from .adapters import ensure_data_dirs
+from .ports import SettingsRepository
 
 MODELHUB_ASSET_MIMES = {
     ".jpg": "image/jpeg",
@@ -210,7 +210,7 @@ def _is_remote_newer(
 class ModelHubService:
     """ModelScope 模型站：上传 / 搜索 / 下载本软件生态内的翻唱模型。"""
 
-    def __init__(self, settings: SettingsStore, models: Any) -> None:
+    def __init__(self, settings: SettingsRepository, models: Any) -> None:
         self._settings = settings
         self._models = models  # ModelService：下载后复用其 import_model
         self._limiter = _AsyncRateLimiter(config.MODELSCOPE_QPS)
@@ -1158,7 +1158,7 @@ class ModelHubService:
             "index_file": files.get("index_file"),
         }
         to_dl = [(role, str(fn)) for role, fn in roles.items() if fn]
-        paths.ensure_dirs()
+        ensure_data_dirs()
         stage = config.MODELHUB_DIR / "download" / repo_id.replace("/", "__")
         stage.mkdir(parents=True, exist_ok=True)
 
@@ -1278,7 +1278,7 @@ class ModelHubService:
         repo_id = f"{username}/{repo_name}"
 
         # 暂存目录：复制模型文件 + 写清单 + README（含标记，利于全局搜索发现）
-        paths.ensure_dirs()
+        ensure_data_dirs()
         stage = config.MODELHUB_DIR / "upload" / str(model_id)
         if stage.exists():
             shutil.rmtree(stage, ignore_errors=True)

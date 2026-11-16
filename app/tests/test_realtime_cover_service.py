@@ -97,6 +97,18 @@ class FakeUvr:
         return SeparationResult(vocals=vocals, instrumental=music)
 
 
+class FakePymss(FakeUvr):
+    available = True
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def separate(self, source: Path, out_dir: Path, *args, **kwargs) -> SeparationResult:
+        self.calls.append((source, out_dir, args, kwargs))
+        return super().separate(source, out_dir)
+
+
+
 def _record(tmp_path: Path, model_id: str, framework: str = "rvc") -> dict:
     model = tmp_path / f"{model_id}.pth"
     model.write_bytes(b"model")
@@ -156,6 +168,52 @@ def test_realtime_cover_produces_fixed_timeline_chunks(tmp_path: Path, monkeypat
     assert last["end"] == 18.0
     assert last["audio"].startswith("data:audio/wav;base64,")
     assert service._engines.engine.open_count == 1  # type: ignore[attr-defined]  # noqa: SLF001
+
+
+def test_file_realtime_can_use_pymss_separation(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr("application.realtime_cover_service.config.TEMP_DIR", tmp_path / "temp")
+    monkeypatch.setattr(
+        "application.realtime_cover_service.config.pymss_model_ready",
+        lambda _model: True,
+    )
+    source = tmp_path / "song.wav"
+    source.write_bytes(b"song")
+    pymss = FakePymss()
+    service = RealtimeCoverService(
+        FakeModels({
+            "rvc-a": _record(tmp_path, "rvc-a"),
+            "seed-b": _record(tmp_path, "seed-b", "seed-vc"),
+        }),  # type: ignore[arg-type]
+        FakeFfmpeg(),  # type: ignore[arg-type]
+        FakeUvr(),  # type: ignore[arg-type]
+        FakeRegistry(),  # type: ignore[arg-type]
+        pymss,  # type: ignore[arg-type]
+    )
+
+    status = service.start(
+        {
+            "source_path": str(source),
+            "mode": "single",
+            "model_id": "rvc-a",
+            "params": {
+                "device": "auto",
+                "preprocess_engine": "pymss",
+                "pymss_model": "demo.ckpt",
+            },
+            "chunk_seconds": 8,
+            "buffer_seconds": 8,
+        }
+    )
+    for _ in range(100):
+        status = service.status(status["id"])
+        if status["status"] in {"done", "failed"}:
+            break
+        time.sleep(0.01)
+
+    assert status["status"] == "done"
+    assert status["separator_engine"] == "pymss"
+    assert status["separator_model"] == "demo.ckpt"
+    assert pymss.calls
 
 
 def test_realtime_cover_rejects_multiple_models(tmp_path: Path) -> None:
@@ -230,6 +288,50 @@ def test_system_silent_block_ignores_non_silent_overlap(tmp_path: Path) -> None:
     assert prepared["overlap_frames"] == 2
     assert prepared["length"] == 1.0
     assert not (tmp_path / "system_input_000001.wav").exists()
+
+
+def test_system_timing_profiles_default_to_live_latency() -> None:
+    separated = RealtimeCoverService._system_timing_profile(  # type: ignore[attr-defined]  # noqa: SLF001
+        {}, "rvc", True
+    )
+    assert separated["chunk_seconds"] == 1.5
+    assert separated["prebuffer_blocks"] == 1
+    assert separated["max_lag_blocks"] == 2
+    assert separated["low_latency"] is True
+
+    direct = RealtimeCoverService._system_timing_profile(  # type: ignore[attr-defined]  # noqa: SLF001
+        {}, "rvc", False
+    )
+    assert direct["chunk_seconds"] == 0.5
+    assert direct["low_latency"] is True
+
+    legacy = RealtimeCoverService._system_timing_profile(  # type: ignore[attr-defined]  # noqa: SLF001
+        {"chunk_seconds": 8, "prebuffer_blocks": 4, "latency_mode": "quality"},
+        "rvc",
+        True,
+    )
+    assert legacy["chunk_seconds"] == 4.0
+    assert legacy["prebuffer_blocks"] == 4
+    assert legacy["low_latency"] is False
+
+
+def test_direct_vocal_block_skips_uvr_and_reuses_captured_audio(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    captured = np.full((16, 2), 0.08, dtype=np.float32)
+
+    prepared = service._prepare_system_block(  # type: ignore[attr-defined]  # noqa: SLF001
+        tmp_path,
+        None,
+        captured,
+        16,
+        0,
+        8000,
+    )
+
+    assert prepared["direct"] is True
+    assert prepared["separated"] == prepared["raw"]
+    assert Path(prepared["raw"]).is_file()
+    assert "accompaniment" not in prepared
 
 
 def test_realtime_dropout_recovery_uses_model_render_for_loudness_and_adaptive_shift(
@@ -468,6 +570,7 @@ def test_system_non_silent_block_finishes_cleanup_without_guard_variable_error(
         "frames": frames,
         "overlap_frames": 0,
         "length": frames / sample_rate,
+        "captured_at": time.monotonic() - 0.2,
     }
 
     service._render_system_block(
@@ -482,6 +585,168 @@ def test_system_non_silent_block_finishes_cleanup_without_guard_variable_error(
     assert len(writer.blocks) == 1
     assert writer.blocks[0].shape == (frames, 2)
     assert session["ready_chunks"] == 1
+    assert session["latency_ms"] >= 150
+    assert session["block_ms"] is not None
+    assert session["realtime_factor"] is not None
     assert not raw.exists()
     assert not separated.exists()
     assert not accompaniment.exists()
+
+@pytest.mark.parametrize("render_rate", [40000, 44100, 48000])
+def test_read_pcm16_fills_the_whole_block_at_every_render_rate(
+    tmp_path: Path, render_rate: int
+) -> None:
+    sample_rate = 44100
+    frames = int(sample_rate * 0.5)
+    seconds = 0.5
+    t = np.arange(int(round(render_rate * seconds))) / render_rate
+    values = np.column_stack([0.5 * np.sin(2 * np.pi * 440.0 * t)] * 2)
+    source = tmp_path / f"render_{render_rate}.wav"
+    _write_test_wav(source, values, render_rate)
+
+    data = RealtimeCoverService._read_pcm16(source, sample_rate, frames)
+
+    assert data.shape == (frames, 2)
+    # A 48 kHz render into a 44.1 kHz session used to read only 92% of the
+    # block, so the tail became zero padding inside every live block.
+    assert float(np.max(np.abs(data[-64:]))) > 0.1
+    crossings = np.count_nonzero(np.diff(np.signbit(data[:, 0])))
+    assert abs((crossings / 2.0) / seconds - 440.0) < 12.0
+
+
+def test_system_block_outputs_silence_instead_of_dry_vocal_when_model_collapses(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    sample_rate = 8000
+    frames = 160
+    loud = np.full((frames, 2), 0.2, dtype=np.float32)
+    silent = np.zeros((frames, 2), dtype=np.float32)
+    raw = tmp_path / "raw.wav"
+    separated = tmp_path / "separated.wav"
+    rendered = tmp_path / "rendered.wav"
+    for path in (raw, separated):
+        _write_test_wav(path, loud, sample_rate)
+    _write_test_wav(rendered, silent, sample_rate)
+
+    class Worker:
+        def infer(self, _source: Path, destination: Path, **_kwargs) -> None:
+            _write_test_wav(destination, silent, sample_rate)
+
+    class Writer:
+        def __init__(self) -> None:
+            self.blocks = []
+
+        def write(self, block, **_kwargs) -> None:  # noqa: ANN001
+            self.blocks.append(np.asarray(block))
+
+    writer = Writer()
+    session = {
+        "models": [{"params": {"auto_high_pitch_guard": False}}],
+        "sample_rate": sample_rate,
+        "vocal_gain_db": 0.0,
+        "instrumental_gain_db": 0.0,
+        "directory": str(tmp_path),
+        "status": "live",
+        "ready_chunks": 0,
+        "processed_seconds": 0.0,
+        "ready_seconds": 0.0,
+        "realtime_factor": None,
+        "message": "",
+    }
+    prepared = {
+        "raw": raw,
+        "separated": separated,
+        "rendered": rendered,
+        "direct": True,
+        "captured": loud,
+        "frames": frames,
+        "overlap_frames": 0,
+        "length": frames / sample_rate,
+        "captured_at": time.monotonic() - 0.2,
+    }
+
+    service._render_system_block(
+        session,
+        Worker(),
+        writer,
+        prepared,
+        time.monotonic(),
+        np,
+    )
+
+    assert len(writer.blocks) == 1
+    # A collapsed render must not fall back to the dry separated vocal; that
+    # would play the untouched original singer through the live output.
+    assert float(np.max(np.abs(writer.blocks[0]))) == 0.0
+    log_text = (tmp_path / "realtime-system.log").read_text(encoding="utf-8")
+    assert "输出静音而不是原唱人声" in log_text
+
+def test_crop_wav_tail_keeps_only_the_newest_samples(tmp_path: Path) -> None:
+    source = tmp_path / "block.wav"
+    values = np.column_stack([np.arange(1000, dtype=np.float32) / 2000.0] * 2)
+    _write_test_wav(source, values, 8000)
+
+    RealtimeCoverService._crop_wav_tail(source, 400)  # noqa: SLF001
+
+    with wave.open(str(source), "rb") as handle:
+        assert handle.getnframes() == 400
+        data = np.frombuffer(handle.readframes(400), dtype="<i2").astype(np.float32) / 32768.0
+    assert abs(float(data.reshape(-1, 2)[0, 0]) - 600 / 2000.0) < 0.001
+
+
+class _EchoSeparator:
+    """Copies its input to both stems so the live-window alignment can be asserted."""
+
+    def __init__(self) -> None:
+        self.seen_frames = 0
+
+    def infer(
+        self,
+        source: Path,
+        vocals: Path,
+        timeout: float = 0.0,  # noqa: ARG002
+        instrumental: str = "",
+    ) -> None:
+        with wave.open(str(source), "rb") as handle:
+            params = handle.getparams()
+            payload = handle.readframes(handle.getnframes())
+            self.seen_frames = int(handle.getnframes())
+        for target in (vocals, Path(instrumental)):
+            with wave.open(str(target), "wb") as handle:
+                handle.setparams(params)
+                handle.writeframes(payload)
+
+
+def test_prepare_system_block_crops_separator_lookback_to_the_live_window(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    sample_rate = 8000
+    block, overlap, context = 400, 40, 800
+    keep = overlap + block
+    total = context + keep
+    captured = np.full((total, 2), 0.1, dtype=np.float32)
+    captured[-1, :] = 0.9
+    separator = _EchoSeparator()
+
+    prepared = service._prepare_system_block(  # noqa: SLF001
+        tmp_path,
+        separator,
+        captured,
+        total,
+        0,
+        sample_rate,
+        output_frames=block,
+        overlap_frames=overlap,
+        keep_frames=keep,
+    )
+
+    assert separator.seen_frames == total
+    assert prepared["frames"] == keep
+    assert prepared["overlap_frames"] == overlap
+    assert prepared["captured"].shape[0] == keep
+    assert abs(float(prepared["captured"][-1, 0]) - 0.9) < 1e-6
+    for key in ("separated", "accompaniment"):
+        with wave.open(str(prepared[key]), "rb") as handle:
+            assert handle.getnframes() == keep

@@ -1,5 +1,6 @@
 // 前端统一 API 入口：桌面环境调用 pywebview 后端，浏览器回退 mock。
 
+import { useI18n } from '@/i18n'
 import { hasDesktopApiMethod, invoke, isDesktop, whenReady } from './bridge'
 import { mock } from './mock'
 import type {
@@ -48,11 +49,21 @@ import type {
   EditorAudioCopyResult,
   EditorPluginHostStatus,
   EditorPluginInspectResult,
+  EditorPluginPathOption,
   EditorPluginWindowResult,
   EditorPluginCloseResult,
   EditorPluginSyncResult,
   EditorPluginTransport,
   EditorClipMergeResult,
+  EditorClipMidi,
+  EditorClipMidiApplyResult,
+  EditorClipMidiSaveResult,
+  EditorMidiNote,
+  EditorMidiImportResult,
+  EditorMidiRenderJob,
+  EditorMidiRenderOptions,
+  EditorMidiSession,
+  EditorMidiSessionResult,
   EditorRerunResult,
   EditorSeparationOptions,
   EditorSilenceSplitOptions,
@@ -81,10 +92,22 @@ import type {
   PymssModel,
   PymssStatus,
   PymssDownloadJob,
+  CoverWorkflow,
+  WorkflowGraph,
+  WorkflowFileExportResult,
+  WorkflowFileImportResult,
 } from './types'
 
 export * from './types'
 export { isDesktop, whenReady } from './bridge'
+
+/**
+ * 把当前界面语言带进任务负载：后端据此翻译写入磁盘的运行日志，
+ * 用户直接打开 run.log 也能读懂。
+ */
+function withUiLocale<T extends object>(payload: T): T & { ui_locale: string } {
+  return { ...payload, ui_locale: useI18n().locale.value }
+}
 
 function migrationResultToProgress(
   res: DataMigrationResult,
@@ -109,6 +132,10 @@ function migrationResultToProgress(
 }
 
 export const api = {
+  // 原生打开 / 保存对话框由后端弹出，先把当前界面语言同步过去
+  setUiLocale: (locale: string) =>
+    invoke<boolean>('set_ui_locale', [locale], () => true),
+
   getSystemStatus: () =>
     invoke<SystemStatus>('get_system_status', [], () => mock.getSystemStatus()),
 
@@ -305,16 +332,27 @@ export const api = {
   pickEffectPluginFile: () =>
     invoke<string | null>('pick_effect_plugin_file', [], () => mock.pickEffectPluginFile()),
 
+  pickEffectPluginDirectory: () =>
+    invoke<string | null>('pick_effect_plugin_directory', [], () => mock.pickEffectPluginDirectory()),
+
+  scanEffectPluginDirectory: (directory: string) =>
+    invoke<EditorPluginPathOption[]>('scan_effect_plugin_directory', [directory], () =>
+      mock.scanEffectPluginDirectory(directory),
+    ),
+
+  autoScanEffectPlugins: () =>
+    invoke<EditorPluginPathOption[]>('auto_scan_effect_plugins', [], () => mock.autoScanEffectPlugins()),
+
   listWorks: () => invoke<WorkDTO[]>('list_works', [], () => mock.listWorks()),
 
   getWork: (id: string) =>
     invoke<WorkDTO | null>('get_work', [id], () => mock.getWork(id)),
 
   createWork: (payload: CreateWorkPayload) =>
-    invoke<WorkDTO>('create_work', [payload], () => mock.createWork(payload)),
+    invoke<WorkDTO>('create_work', [withUiLocale(payload)], () => mock.createWork(withUiLocale(payload))),
 
   createBatchWork: (payload: CreateBatchWorkPayload) =>
-    invoke<WorkDTO[]>('create_batch_work', [payload], () => mock.createBatchWork(payload)),
+    invoke<WorkDTO[]>('create_batch_work', [withUiLocale(payload)], () => mock.createBatchWork(withUiLocale(payload))),
 
   startRealtimeCover: (payload: RealtimeCoverPayload) =>
     invoke<RealtimeCoverStatus>('start_realtime_cover', [payload], () => mock.startRealtimeCover(payload)),
@@ -359,6 +397,33 @@ export const api = {
   deleteInferencePreset: (id: string) =>
     invoke<boolean>('delete_inference_preset', [id], () => mock.deleteInferencePreset(id)),
 
+  listCoverWorkflows: () =>
+    invoke<CoverWorkflow[]>('list_cover_workflows', [], () => mock.listCoverWorkflows()),
+
+  saveCoverWorkflow: (name: string, graph: WorkflowGraph) =>
+    invoke<CoverWorkflow>('save_cover_workflow', [name, graph], () =>
+      mock.saveCoverWorkflow(name, graph),
+    ),
+
+  deleteCoverWorkflow: (id: string) =>
+    invoke<boolean>('delete_cover_workflow', [id], () => mock.deleteCoverWorkflow(id)),
+
+  /** 把工作流导出成可分享的 JSON 文件（对话框文案用当前语言）。 */
+  exportCoverWorkflowFile: (graph: WorkflowGraph, dialogTitle = '') =>
+    invoke<WorkflowFileExportResult>('export_cover_workflow_file', [graph, dialogTitle], () =>
+      mock.exportCoverWorkflowFile(graph),
+    ),
+
+  /** 从 JSON 文件导入工作流（载入画布，不直接写入已保存列表）。 */
+  importCoverWorkflowFile: (
+    labels: { title?: string; file?: string; allFiles?: string } = {},
+  ) =>
+    invoke<WorkflowFileImportResult>(
+      'import_cover_workflow_file',
+      [labels.title || '', labels.file || '', labels.allFiles || ''],
+      () => mock.importCoverWorkflowFile(),
+    ),
+
   retryWork: (id: string) =>
     invoke<boolean>('retry_work', [id], () => mock.retryWork(id)),
 
@@ -370,6 +435,9 @@ export const api = {
 
   openWorkLog: (id: string) =>
     invoke<boolean>('open_work_log', [id], () => mock.openWorkLog(id)),
+
+  getWorkLog: (id: string, tail = 300) =>
+    invoke<string>('get_work_log', [id, tail], () => mock.getWorkLog(id, tail)),
 
   openPath: (path: string) =>
     invoke<boolean>('open_path', [path], () => mock.openPath(path)),
@@ -460,8 +528,8 @@ export const api = {
   pymssStatus: (model?: string) =>
     invoke<PymssStatus>('pymss_status', [model], () => mock.pymssStatus(model)),
 
-  pymssModels: (purpose?: 'vocal_separation' | 'dereverb' | 'harmony_removal') =>
-    invoke<PymssModel[]>('pymss_models', [purpose], () => mock.pymssModels(purpose)),
+  pymssModels: (purpose?: 'vocal_separation' | 'dereverb' | 'harmony_removal', includeAll = false) =>
+    invoke<PymssModel[]>('pymss_models', [purpose, includeAll], () => mock.pymssModels(purpose, includeAll)),
 
   pymssDownloadModel: (model: string) =>
     invoke<{ ok: boolean; error?: string; model?: string; key?: string; already?: boolean }>('pymss_download_model', [model], () =>
@@ -568,6 +636,11 @@ export const api = {
   createEditorProjectFromWork: (workId: string) =>
     invoke<EditorProject | null>('create_editor_project_from_work', [workId], () =>
       mock.createEditorProjectFromWork(workId),
+    ),
+
+  createEditorProjectBlank: (title?: string) =>
+    invoke<EditorProject | null>('create_editor_project_blank', [title], () =>
+      mock.createEditorProjectBlank(title),
     ),
 
   exportEditorProjectBundle: (projectId: string) =>
@@ -696,6 +769,12 @@ export const api = {
       mock.exportEditorProject(projectId, fmt),
     ),
 
+  /** 导出单条音轨的音频文件（只渲染该轨的片段与效果）。 */
+  exportEditorTrack: (projectId: string, trackId: string, fmt = 'wav') =>
+    invoke<string>('export_editor_track', [projectId, trackId, fmt], () =>
+      mock.exportEditorTrack(projectId, trackId, fmt),
+    ),
+
   getEditorWaveform: (projectId: string, clipId: string, bins = 160) =>
     invoke<EditorWaveform>('get_editor_waveform', [projectId, clipId, bins], () =>
       mock.getEditorWaveform(projectId, clipId, bins),
@@ -763,8 +842,19 @@ export const api = {
       loudness_envelope?: number
     },
   ) =>
-    invoke<EditorRerunResult>('rerun_editor_clip', [projectId, trackId, clipId, modelId, params, enhance], () =>
-      mock.rerunEditorClip(projectId, trackId, clipId, modelId, params, enhance),
+    invoke<EditorRerunResult>(
+      'rerun_editor_clip',
+      [projectId, trackId, clipId, modelId, params, enhance, useI18n().locale.value],
+      () =>
+        mock.rerunEditorClip(
+          projectId,
+          trackId,
+          clipId,
+          modelId,
+          params,
+          enhance,
+          useI18n().locale.value,
+        ),
     ),
 
   getEditorRerunStatus: (jobId: string) =>
@@ -782,6 +872,110 @@ export const api = {
   ) =>
     invoke<EditorRerunResult>('enhance_editor_clip', [projectId, trackId, clipId, referencePath, options], () =>
       mock.enhanceEditorClip(projectId, trackId, clipId, referencePath, options),
+    ),
+
+  getEditorClipMidi: (projectId: string, clipId: string, refresh = false) =>
+    invoke<EditorClipMidi>('get_editor_clip_midi', [projectId, clipId, refresh], () =>
+      mock.getEditorClipMidi(projectId, clipId, refresh),
+    ),
+
+  saveEditorClipMidi: (projectId: string, clipId: string, notes: EditorMidiNote[]) =>
+    invoke<EditorClipMidiSaveResult>('save_editor_clip_midi', [projectId, clipId, notes], () =>
+      mock.saveEditorClipMidi(projectId, clipId, notes),
+    ),
+
+  applyEditorClipMidi: (projectId: string, clipId: string, notes?: EditorMidiNote[]) =>
+    invoke<EditorClipMidiApplyResult>('apply_editor_clip_midi', [projectId, clipId, notes], () =>
+      mock.applyEditorClipMidi(projectId, clipId, notes),
+    ),
+
+  previewEditorClipMidi: (projectId: string, clipId: string, notes?: EditorMidiNote[]) =>
+    invoke<EditorClipMidiApplyResult>('preview_editor_clip_midi', [projectId, clipId, notes], () =>
+      mock.previewEditorClipMidi(projectId, clipId, notes),
+    ),
+
+  getEditorTrackMidi: (projectId: string, trackId: string, refresh = false) =>
+    invoke<EditorClipMidi>('get_editor_track_midi', [projectId, trackId, refresh], () =>
+      mock.getEditorTrackMidi(projectId, trackId, refresh),
+    ),
+
+  saveEditorTrackMidi: (projectId: string, trackId: string, notes: EditorMidiNote[]) =>
+    invoke<EditorClipMidiSaveResult>('save_editor_track_midi', [projectId, trackId, notes], () =>
+      mock.saveEditorTrackMidi(projectId, trackId, notes),
+    ),
+
+  applyEditorTrackMidi: (projectId: string, trackId: string, notes?: EditorMidiNote[]) =>
+    invoke<EditorClipMidiApplyResult>('apply_editor_track_midi', [projectId, trackId, notes], () =>
+      mock.applyEditorTrackMidi(projectId, trackId, notes),
+    ),
+
+  // ---- MIDI 编曲（多乐器音序器） ----
+
+  getEditorMidiSession: (projectId: string, trackId: string) =>
+    invoke<EditorMidiSessionResult>('get_editor_midi_session', [projectId, trackId], () =>
+      mock.getEditorMidiSession(projectId, trackId),
+    ),
+
+  saveEditorMidiSession: (
+    projectId: string,
+    trackId: string,
+    session: EditorMidiSession,
+  ) =>
+    invoke<EditorMidiSessionResult>('save_editor_midi_session', [projectId, trackId, session], () =>
+      mock.saveEditorMidiSession(projectId, trackId, session),
+    ),
+
+  renderEditorMidiSession: (
+    projectId: string,
+    trackId: string,
+    session: EditorMidiSession,
+    options: EditorMidiRenderOptions = {},
+  ) =>
+    invoke<EditorMidiSessionResult>(
+      'render_editor_midi_session',
+      [projectId, trackId, session, options],
+      () => mock.renderEditorMidiSession(projectId, trackId, session, options),
+    ),
+
+  startEditorMidiRender: (
+    projectId: string,
+    trackId: string,
+    session: EditorMidiSession,
+    options: EditorMidiRenderOptions = {},
+  ) =>
+    invoke<EditorMidiRenderJob>(
+      'start_editor_midi_render',
+      [projectId, trackId, session, options],
+      () => mock.startEditorMidiRender(projectId, trackId, session, options),
+    ),
+
+  editorMidiRenderStatus: (jobId: string) =>
+    invoke<EditorMidiRenderJob>(
+      'editor_midi_render_status',
+      [jobId],
+      () => mock.editorMidiRenderStatus(jobId),
+    ),
+
+  previewEditorMidiSession: (projectId: string, trackId: string, session: EditorMidiSession) =>
+    invoke<EditorMidiSessionResult>(
+      'preview_editor_midi_session',
+      [projectId, trackId, session],
+      () => mock.previewEditorMidiSession(projectId, trackId, session),
+    ),
+
+  exportEditorMidiFile: (projectId: string, trackId: string, session: EditorMidiSession) =>
+    invoke<EditorMidiSessionResult>('export_editor_midi_file', [projectId, trackId, session], () =>
+      mock.exportEditorMidiFile(projectId, trackId, session),
+    ),
+
+  importEditorMidiFile: (projectId: string, trackId: string) =>
+    invoke<EditorMidiSessionResult>('import_editor_midi_file', [projectId, trackId], () =>
+      mock.importEditorMidiFile(projectId, trackId),
+    ),
+
+  importEditorMidiTracks: () =>
+    invoke<EditorMidiImportResult>('import_midi_tracks', [], () =>
+      mock.importEditorMidiTracks(),
     ),
 }
 

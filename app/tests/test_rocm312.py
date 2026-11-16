@@ -259,15 +259,8 @@ def test_rocm_non_torch_batch_uses_normal_package_indexes(tmp_path, monkeypatch)
 
     assert len(captured) == 1
     assert captured[0].index is None
-    assert any(b.dest == tmp_path / "assets/wheels/pymss/py312/rocm10" for b in batches)
-    assert not any("torch-directml" in p for b in batches for p in b.packages)
-    assert all(not Requirement(c).extras for b in batches for c in b.constraints)
-    assert len([b for b in batches if b.label == "pymss rocm10 torch"]) == 1
-    legacy = next(b for b in batches if b.label == "ddsp legacy requirements")
-    assert legacy.dest == tmp_path / "assets/wheels/ddsp-legacy/py312/rocm10"
-    assert "fairseq-fixed==0.12.3.1" in legacy.packages
-    assert "local-attention" in legacy.packages
-    assert "numba==0.60.0" in legacy.requirements.read_text()
+    assert captured[0].build_source
+    assert "torch-directml" not in " ".join(captured[0].packages)
 
 
 def test_rocm_defaults_match_amd_official_release(monkeypatch):
@@ -314,65 +307,3 @@ def test_rocm_dependency_installs_keep_vendor_versions(tmp_path, monkeypatch):
     assert installer.TORCH_ROCM_INDEX in command
 
 
-def test_rvc_wheel_keeps_code_and_validates_record(tmp_path):
-    builder = load("install/build_rvc_compat.py")
-    original = "rvc_python-0.1.5.dist-info"
-    metadata = "Metadata-Version: 2.1\nName: rvc-python\nVersion: 0.1.5\nRequires-Python: >=3.9\n"
-    metadata += "".join(f"Requires-Dist: {req}\n" for req in builder.REPLACEMENTS)
-    payload = {original + "/METADATA": metadata.encode(), "rvc_python/infer.py": b"# upstream code\n"}
-    rows = io.StringIO()
-    writer = csv.writer(rows, lineterminator="\n")
-    for name, data in payload.items():
-        writer.writerow((name, "sha256=" + builder.digest(data), len(data)))
-    writer.writerow((original + "/RECORD", "", ""))
-    payload[original + "/RECORD"] = rows.getvalue().encode()
-    source = tmp_path / "source.whl"
-    with zipfile.ZipFile(source, "w") as wheel:
-        for name, data in payload.items():
-            wheel.writestr(name, data)
-    result = builder.build(source, tmp_path / "out")
-    with zipfile.ZipFile(result) as wheel:
-        assert wheel.read("rvc_python/infer.py") == payload["rvc_python/infer.py"]
-        metadata = wheel.read(f"rvc_python-{builder.VERSION}.dist-info/METADATA").decode()
-        assert "fairseq-fixed==0.12.3.1" in metadata
-        assert "Requires-Python: >=3.12,<3.13" in metadata
-        assert "numpy<=1.23.5" not in metadata
-    payload["rvc_python/infer.py"] = b"changed"
-    with zipfile.ZipFile(source, "w") as wheel:
-        for name, data in payload.items():
-            wheel.writestr(name, data)
-    with pytest.raises(ValueError, match="RECORD mismatch"):
-        builder.build(source, tmp_path / "bad")
-
-
-def test_rvc_source_download_uses_resilient_pip_indexes(tmp_path, monkeypatch):
-    builder = load("install/build_rvc_compat.py")
-    calls = []
-
-    def fake_run(command, check):
-        calls.append((command, check))
-        destination = Path(command[command.index("--dest") + 1])
-        destination.mkdir(parents=True, exist_ok=True)
-        (destination / "rvc_python-0.1.5-py3-none-any.whl").write_bytes(b"wheel")
-
-    monkeypatch.setattr(builder.subprocess, "run", fake_run)
-    result = builder._download_source_wheel(
-        tmp_path,
-        python="tool-python.exe",
-        index_urls=[
-            "https://mirror.example/simple/",
-            "https://fallback.example/simple",
-        ],
-    )
-
-    assert result == tmp_path / "rvc_python-0.1.5-py3-none-any.whl"
-    assert calls and calls[0][1] is True
-    command = calls[0][0]
-    assert command[:4] == ["tool-python.exe", "-m", "pip", "download"]
-    assert command[command.index("--index-url") + 1] == "https://mirror.example/simple"
-    assert command[command.index("--extra-index-url") + 1] == "https://fallback.example/simple"
-    assert command[command.index("--retries") + 1] == "5"
-    assert command[command.index("--timeout") + 1] == "60"
-    assert "--no-deps" in command
-    assert "--only-binary=:all:" in command
-    assert command[-1] == "rvc-python==0.1.5"

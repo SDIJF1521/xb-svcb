@@ -10,6 +10,26 @@ uv run --project app --with pytest --with scipy==1.13.1 pytest app/tests -q -rs
 
 缓存齐备后可加 `--offline`。`-rs` 显示每个跳过原因；测试退出成功不等于真实推理或发布验收通过。
 
+## 分层与领域规则专项测试
+
+架构改动、规则下沉或新增端口时必须同时跑这一组（它们把分层依赖方向、端口契约、
+领域规则钉成断言）：
+
+```powershell
+uv run --project app --with pytest pytest app/tests/test_architecture.py app/tests/test_composition.py \
+    app/tests/test_domain_entities.py app/tests/test_domain_editor_rules.py \
+    app/tests/test_work_request.py app/tests/test_data_maintenance.py -q
+```
+
+- `test_architecture.py`：AST 检查各层 import 方向、唯一组合根、端口与适配器契约、
+  表现层不访问门面私有成员；
+- `test_composition.py`：在隔离数据目录里跑一次 `composition.build_api()`，确认装配完整；
+- `test_domain_entities.py` / `test_domain_editor_rules.py`：实体映射、流水线步骤、
+  编辑器归一化与歌词时序规则；
+- `test_work_request.py` / `test_data_maintenance.py`：任务请求校验规则、数据目录切换与迁移。
+
+规则说明见[分层架构约束（DDD）](ddd-architecture.md)。
+
 ## 分组
 
 | 标记 | 内容 | 选择方式 |

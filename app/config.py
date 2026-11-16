@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import json
+import locale
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+from domain.entities import guess_framework as _domain_guess_framework
+from domain.entities import normalize_framework as _domain_normalize_framework
+
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 APP_BG = "#05060d"
 
 
@@ -294,8 +298,8 @@ def svc_engine_ready() -> bool:
     )
 
 
-# ---- RVC 推理引擎（rvc-python）----
-# 在独立运行时中运行 rvc-python（依赖与 so-vits-svc 环境隔离，避免 torch/numpy 冲突）。
+# ---- RVC 推理引擎（内置官方 infer 栈）----
+# 推理代码随应用分发（engines/rvc），运行时仍放在独立环境中执行，避免 torch/numpy 冲突。
 # 缺失时 RvcEngine 自动降级为占位音频，整条链路仍可跑通。
 RVC_VENV_DIR = ROOT_DIR / ".venv-rvc"
 RVC_DIRECTML_VENV_DIR = ROOT_DIR / ".venv-rvc-directml"
@@ -330,18 +334,29 @@ def _detect_rvc_directml_python() -> Path | None:
     return _first_file(candidates)
 
 
-# 运行 RVC 推理的 Python 解释器（需装有 rvc-python + torch）
+# 运行 RVC 推理的 Python 解释器（需装有 torch / fairseq / faiss 等推理依赖）
 RVC_PYTHON = _detect_rvc_python()
 # Optional independent DirectML interpreter. It is selected only when the
 # request explicitly uses ``device=directml``.
 RVC_DIRECTML_PYTHON = _detect_rvc_directml_python()
 # RVC 推理子进程脚本（由隔离环境的 Python 读取，需为磁盘真实文件）
 RVC_WORKER = BUNDLE_DIR / "infrastructure" / "rvc_worker.py"
+# 内置的官方 RVC 推理代码（RVC-Project infer 栈，与 so-vits/DDSP 一样放在 engines/）
+RVC_ENGINE_DIR = ROOT_DIR / "engines" / "rvc"
+# hubert_base.pt / rmvpe.pt 所在目录（engines/rvc/pretrain），安装器会预置
+RVC_BASE_DIR = Path(
+    os.environ.get("XB_RVC_BASE_DIR", str(RVC_ENGINE_DIR / "pretrain"))
+).expanduser()
 
 
 def rvc_engine_ready() -> bool:
-    """RVC 推理环境是否齐备：worker 存在、解释器存在。"""
-    return bool(RVC_WORKER.is_file() and RVC_PYTHON and RVC_PYTHON.is_file())
+    """RVC 推理环境是否齐备：worker、内置官方推理代码与解释器都存在。"""
+    return bool(
+        RVC_WORKER.is_file()
+        and (RVC_ENGINE_DIR / "rvc_session.py").is_file()
+        and RVC_PYTHON
+        and RVC_PYTHON.is_file()
+    )
 
 
 # ---- SeedVC 推理引擎（Seed-VC）----
@@ -452,6 +467,135 @@ def vocal_enhancement_ready() -> bool:
         and VOCAL_ENHANCEMENT_PYTHON.is_file()
         and VOCAL_ENHANCEMENT_WORKER.is_file()
         and VOCAL_ENHANCEMENT_MARKER.is_file()
+    )
+
+
+# ---- 高音声码器补偿（Snake-HiFiGAN / NSF-HiFiGAN）----
+# 高音保护「降调 → 模型推理 → 升回原调」里的升调由 Praat PSOLA 完成，极高音上
+# 会把谐波糊成气声或窄带哨音。这里在已确认的高音区里用 F0 条件化声码器只重建
+# 交叉频点以上的频带：优先 Snake-HiFiGAN（Snake 激活的高频谐波更完整），没有
+# 对应权重时退回随包的 NSF-HiFiGAN，因此功能在标准安装下即可用。
+HIGH_NOTE_VOCODER_WORKER = BUNDLE_DIR / "infrastructure" / "high_note_vocoder_worker.py"
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+HIGH_NOTE_VOCODER_BAND_HZ = max(1000.0, _env_float("XB_HIGH_NOTE_VOCODER_BAND_HZ", 6000.0))
+HIGH_NOTE_VOCODER_WET = min(1.0, max(0.0, _env_float("XB_HIGH_NOTE_VOCODER_WET", 0.75)))
+# Snake-HiFiGAN 权重目录名（按优先级），其次才是随包 NSF-HiFiGAN。
+_HIGH_NOTE_VOCODER_SNAKE_DIRS = (
+    "nsf_snake_hifigan",
+    "snake_hifigan",
+    "nsf-snake-hifigan",
+    "hifiganwithsnake",
+)
+_HIGH_NOTE_VOCODER_FALLBACK_DIRS = ("nsf_hifigan",)
+
+
+def high_note_vocoder_repos() -> list[Path]:
+    """可提供声码器架构实现的引擎仓库（so-vits-svc → DDSP-SVC）。"""
+    repos: list[Path] = []
+    for repo in (SOVITS_REPO, DDSP_REPO_DIR):
+        if repo and Path(repo).is_dir():
+            repos.append(Path(repo))
+    return repos
+
+
+def _pretrain_roots() -> list[Path]:
+    roots: list[Path] = []
+    data_dir = globals().get("DATA_DIR")
+    if data_dir:
+        roots.append(Path(data_dir) / "models" / "pretrain")
+    roots.append(ROOT_DIR / "assets" / "models" / "pretrain")
+    for repo in (SOVITS_REPO, DDSP_REPO_DIR):
+        if repo:
+            roots.append(Path(repo) / "pretrain")
+    return roots
+
+
+def high_note_vocoder_weight_dirs() -> list[Path]:
+    """候选权重目录，按「Snake-HiFiGAN → NSF-HiFiGAN」优先级排列。"""
+    candidates: list[Path] = []
+    explicit = os.environ.get("XB_HIGH_NOTE_VOCODER_DIR")
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+    roots = _pretrain_roots()
+    for name in _HIGH_NOTE_VOCODER_SNAKE_DIRS:
+        candidates.extend(root / name for root in roots)
+    for name in _HIGH_NOTE_VOCODER_FALLBACK_DIRS:
+        candidates.extend(root / name for root in roots)
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        try:
+            key = str(path.resolve()).lower()
+        except OSError:
+            key = str(path).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def high_note_vocoder_weight_dir() -> Path | None:
+    """返回首个同时具备 config.json 与权重文件的目录。"""
+    for candidate in high_note_vocoder_weight_dirs():
+        try:
+            if not candidate.is_dir() or not (candidate / "config.json").is_file():
+                continue
+            has_weights = (candidate / "model").is_file()
+            if not has_weights:
+                for pattern in ("*.pth", "*.pt", "*.ckpt"):
+                    if any(candidate.glob(pattern)):
+                        has_weights = True
+                        break
+            if has_weights:
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def high_note_vocoder_ready() -> bool:
+    return bool(
+        VOCAL_ENHANCEMENT_PYTHON
+        and VOCAL_ENHANCEMENT_PYTHON.is_file()
+        and HIGH_NOTE_VOCODER_WORKER.is_file()
+        and high_note_vocoder_weight_dir() is not None
+    )
+
+
+# ---- 编辑器 MIDI 子编辑器（音符级音高重绘）----
+# MIDI 子编辑器把音符落到音频上：Praat PSOLA 逐音符移调（保共振峰）；
+# 分析阶段复用 so-vits-svc 的 F0 worker 生成基频曲线。
+MIDI_PITCH_WORKER = BUNDLE_DIR / "infrastructure" / "midi_pitch_worker.py"
+
+
+def midi_pitch_ready() -> bool:
+    return bool(
+        VOCAL_ENHANCEMENT_PYTHON
+        and VOCAL_ENHANCEMENT_PYTHON.is_file()
+        and MIDI_PITCH_WORKER.is_file()
+    )
+
+
+def midi_analysis_ready() -> bool:
+    """MIDI 音符分析需要 F0 worker + so-vits-svc 仓库，并在 SVC 运行时里执行。"""
+    return bool(
+        SVC_PYTHON
+        and SVC_PYTHON.is_file()
+        and F0_WORKER.is_file()
+        and SOVITS_REPO
+        and Path(SOVITS_REPO).is_dir()
     )
 
 
@@ -592,18 +736,23 @@ def pymss_model_ready(model: str = "") -> bool:
     name = str(model or "").strip()
     if not name:
         return pymss_any_model_ready()
-    # PyMSS 目录结构由 catalog 决定，先按常见文件名快速检查；worker 会做最终校验。
+    # PyMSS 目录结构由 catalog 决定：权重文件名就是 catalog 名（去掉扩展名）。
+    # 旧实现用子串匹配，`..._vocals_v2` 会被 `..._vocals_v2_gabox` 这类更长
+    # 的模型误判为已下载，进而在工作流里选到没装好的模型。
     stem = Path(name).stem.lower()
     try:
-        return any(
-            p.is_file()
-            and p.suffix.lower() in _PYMSS_MODEL_SUFFIXES
-            and not p.name.lower().endswith(".pymss_state_dict.pt")
-            and stem in p.stem.lower()
-            for p in PYMSS_MODEL_DIR.rglob("*")
-        )
+        for path in PYMSS_MODEL_DIR.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in _PYMSS_MODEL_SUFFIXES:
+                continue
+            if path.name.lower().endswith(".pymss_state_dict.pt"):
+                continue
+            if path.stem.lower() == stem or path.parent.name.lower() == stem:
+                return True
     except OSError:
         return False
+    return False
 
 
 def pymss_any_model_ready() -> bool:
@@ -750,21 +899,85 @@ def data_dir_env_override() -> str | None:
     )
 
 
-def _read_data_home_file(path: Path) -> tuple[Path, dict[str, str], float] | None:
+def _data_home_text_candidates(raw: bytes) -> list[str]:
+    """Decode ``data_home.json`` bytes in preference order.
+
+    Current installers write UTF-8; older builds wrote the file with the ANSI
+    code page of the machine that ran the installer, which may be GBK (Chinese),
+    CP932 (Japanese) or a single-byte code page.  A single-byte code page such
+    as CP1252 can "successfully" decode CJK bytes into mojibake, so every
+    candidate is returned instead of stopping at the first one that decodes;
+    the caller validates them against the real data directory.
+    """
+    candidates = (
+        "utf-8-sig",
+        "utf-8",
+        "mbcs",
+        "gbk",
+        "cp932",
+        "cp950",
+        "cp949",
+        locale.getpreferredencoding(False),
+    )
+    texts: list[str] = []
+    for encoding in dict.fromkeys(candidates):
+        try:
+            texts.append(raw.decode(encoding))
+        except (LookupError, UnicodeDecodeError):
+            continue
+    if not texts:
+        texts.append(raw.decode("utf-8", errors="replace"))
+    return texts
+
+
+def _parse_data_home_text(
+    text: str, mtime: float
+) -> tuple[Path, dict[str, str], float] | None:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(text)
+    except json.JSONDecodeError:
         return None
-    raw = data.get("data_dir") if isinstance(data, dict) else None
-    if not raw:
+    if not isinstance(data, dict):
+        return None
+    raw_dir = data.get("data_dir")
+    if not raw_dir:
         return None
     try:
-        target = Path(str(raw)).expanduser().resolve()
-        mtime = path.stat().st_mtime
-    except OSError:
+        target = Path(str(raw_dir)).expanduser().resolve()
+    except (OSError, ValueError):
         return None
     payload = {str(k): str(v) for k, v in data.items() if isinstance(k, str)}
     return target, payload, mtime
+
+
+def _select_data_home_row(
+    candidates: list[str], mtime: float
+) -> tuple[Path, dict[str, str], float] | None:
+    """Pick the decoding that resolves to an existing data directory.
+
+    单字节 ANSI 代码页（英文 Windows 上是 CP1252）能把 GBK 字节"成功"解码成
+    乱码，因此不能停在第一个可解码的候选；旧编码写出的数据目录通常真实存在，
+    用它作为判据。目录尚未创建时退回第一个可解析的候选。
+    """
+    fallback: tuple[Path, dict[str, str], float] | None = None
+    for text in candidates:
+        row = _parse_data_home_text(text, mtime)
+        if row is None:
+            continue
+        if row[0].exists():
+            return row
+        if fallback is None:
+            fallback = row
+    return fallback
+
+
+def _read_data_home_file(path: Path) -> tuple[Path, dict[str, str], float] | None:
+    try:
+        raw = path.read_bytes()
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    return _select_data_home_row(_data_home_text_candidates(raw), mtime)
 
 
 def _read_data_home_rows() -> list[tuple[Path, Path, dict[str, str], float]]:
@@ -1088,24 +1301,16 @@ MODELHUB_FRAMEWORKS: dict[str, str] = {
 MODELHUB_DEFAULT_FRAMEWORK = "so-vits-svc"
 
 
+# 架构 id 的判定规则属于领域层（见 domain.entities.normalize_framework），
+# 这里只保留面向 UI 的显示名映射。
 def modelhub_normalize_framework(framework: str | None) -> str:
     """把任意输入规整为合法的架构 id（非法回退默认）。"""
-    fw = (framework or "").strip().lower()
-    return fw if fw in MODELHUB_FRAMEWORKS else MODELHUB_DEFAULT_FRAMEWORK
+    return _domain_normalize_framework(framework)
 
 
 def modelhub_guess_framework(model_type: str | None) -> str:
     """根据本地模型的 type（ModelType 值）推断默认架构 id。"""
-    t = (model_type or "").strip().lower()
-    if "seed" in t:
-        return "seed-vc"
-    if "rvc" in t:
-        return "rvc"
-    if "ddsp" in t:
-        return "ddsp-svc"
-    if "so-vits" in t or "sovits" in t or t == "svc":
-        return "so-vits-svc"
-    return MODELHUB_DEFAULT_FRAMEWORK
+    return _domain_guess_framework(model_type)
 
 
 # 上传 / 下载暂存目录

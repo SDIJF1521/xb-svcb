@@ -34,6 +34,14 @@ Open the [annotated system architecture diagram](../archify/xb-svcb-system.archi
 | Application services -> Vocal enhancement | Optionally repair, align, tune, and master vocals according to task settings. |
 | Model worker -> FFmpeg | Indicates that inference output enters post-processing and final mixing; application services make the actual FFmpeg calls. |
 
+## Layering Contract
+
+`app/api` (presentation) → `app/application` (use cases) → `app/domain` (domain rules), with
+`app/infrastructure` (adapters) implementing the ports the use-case layer declares. The only
+assembly point is `app/composition.py`. Dependency rules, port conventions, placement guidance
+and the migration ledger live in [Layering Constraints (DDD)](../ddd-architecture.md), and
+`app/tests/test_architecture.py` enforces them automatically.
+
 ## Main Modules
 
 ### `app/main.py`
@@ -44,8 +52,12 @@ Desktop entry point. It enforces a single instance, resolves development or prod
 
 Presentation layer:
 
-- `bridge.py` defines the API exposed to Vue and the `build_api()` composition root.
+- `bridge.py` defines the API exposed to Vue. The composition root is `build_api()` in `app/composition.py`, which wires infrastructure and application services.
 - `http_server.py` creates the FastAPI/Uvicorn service that users start and stop manually.
+
+### `app/composition.py`
+
+The composition root: creates the infrastructure adapters and repositories, injects the use-case services and assembles the presentation-layer `Api`; `main.py` only calls its `build_api()`.
 
 ### `app/application/`
 
@@ -57,7 +69,7 @@ Contains domain objects and enums for editor projects, tasks, and models, with m
 
 ### `app/infrastructure/`
 
-Implements file storage, paths, FFmpeg, system audio, UVR, F0, engine adapters, and workers. `svc_engine.py`, `rvc_engine.py`, `seedvc_engine.py`, and `ddsp_engine.py` are the framework adapter entry points.
+Implements file storage, paths, FFmpeg, system audio, UVR, F0, engine adapters, and workers. `svc_engine.py`, `rvc_engine.py`, `seedvc_engine.py`, and `ddsp_engine.py` are the framework adapter entry points. The RVC adapter loads the vendored official inference stack in `engines/rvc` instead of the third-party `rvc-python` package.
 
 ### `web/`
 

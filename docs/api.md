@@ -2,7 +2,7 @@
 
 # XB-SVCB FastAPI 接入文档
 
-适用版本：XB-SVCB 0.1.0
+适用版本：XB-SVCB 0.1.1
 
 ## 启动与安全
 
@@ -47,13 +47,15 @@ Content-Type: application/json
 {"name": "新的模型显示名称"}
 ```
 
-## PyMSS 人声处理
+## PyMSS 音源分离与人声处理
 
-PyMSS 模型接口只开放两个用途：`vocal_separation`（人声分离）和
-`dereverb`（去混响/人声净化）。先调用模型列表接口查看 catalog，再下载需要的模型：
+模型站可列出 PyMSS catalog 中的全部受支持模型，并返回一级、二级分类和中文分类名。
+`purpose` 仍用于筛选翻唱前处理兼容的 `vocal_separation`（人声分离）与
+`dereverb`（去混响/人声净化）模型：
 
 ```http
 GET /api/v1/preprocess/pymss/models?purpose=vocal_separation
+GET /api/v1/preprocess/pymss/models?all_models=true
 POST /api/v1/preprocess/pymss/models/UVR-DeEcho-DeReverb.pth/download
 DELETE /api/v1/preprocess/pymss/models/UVR-DeEcho-DeReverb.pth
 GET /api/v1/preprocess/pymss/downloads
@@ -73,7 +75,7 @@ GET /api/v1/preprocess/pymss/downloads
 }
 ```
 
-`harmony_removal_enabled` 默认为 `false`。模型下载会立即进入统一传输任务中心，可通过 `GET /api/v1/preprocess/pymss/downloads` 查询进度。模型未下载、PyMSS 环境不可用或模型不属于上述两类用途时，任务会明确失败并提示先到模型站处理。
+`harmony_removal_enabled` 默认为 `false`。模型下载会立即进入统一传输任务中心，可通过 `GET /api/v1/preprocess/pymss/downloads` 查询进度。模型未下载或 PyMSS 环境不可用时，任务会明确失败并提示先到模型站处理。
 
 编辑器选中片段后也可调用同一套前处理能力：
 
@@ -83,6 +85,19 @@ GET /api/v1/preprocess/pymss/downloads
   "pymss_model": "bs_roformer_voc_hyperacev2.ckpt",
   "harmony_removal_enabled": true,
   "harmony_model": "UVR-DeEcho-DeReverb.pth",
+  "mute_source": true,
+  "device": "auto"
+}
+```
+
+编辑器使用其它分类或多音轨模型时设置 `pymss_purpose` 为 `generic`。模型生成的每个
+stem 都会作为独立音轨加入时间线：
+
+```json
+{
+  "engine": "pymss",
+  "pymss_model": "HTDemucs4_6stems.th",
+  "pymss_purpose": "generic",
   "mute_source": true,
   "device": "auto"
 }
@@ -196,7 +211,7 @@ SeedVC 需要额外的目标音色参考音频。先通过上传接口分别上�
 
 多模型工作流可使用 `auto_mix`、`auto_vocal_merge`、`manual_vocal_merge`、`auto_then_editor` 和 `full_manual_editor`。`auto_vocal_merge`、`manual_vocal_merge` 不适用于单模型模式。
 
-`models[].params.auto_high_pitch_guard` 控制该模型的高音保护，默认开启。检测到超过可靠音域的高音时，服务会只对对应高音区域先降调推理，完成后恢复原调；因此合唱片段中的每个模型都可以独立设置保护开关。旧请求也可以在顶层 `params.auto_high_pitch_guard` 提供回退值。
+`models[].params.auto_high_pitch_guard` 控制该模型的高音保护，默认开启。检测到超过可靠音域的高音时，服务会只对对应高音区域先降调推理，完成后恢复原调；因此合唱片段中的每个模型都可以独立设置保护开关。旧请求也可以在顶层 `params.auto_high_pitch_guard` 提供回退值。恢复原调后，服务还会在上述已确认的高音区用 Snake-HiFiGAN（缺失权重时退回随包 NSF-HiFiGAN）声码器重建交叉频点以上的频带，只采纳通过电平、气声与窄带峰验收的区段，因此不需要额外参数。
 
 ### 完整 Python 示例
 
@@ -325,6 +340,21 @@ print("成品已保存：", OUTPUT_AUDIO.resolve())
 
 片段的 `time_stretch` 为 `0.25 - 4.0` 的时间拉伸倍率，缺省为 `1.0`；编辑器会据此同步调整片段时长，并让波形区间、试听、插件监听和工程渲染保持一致。局部重推理请求可以传 `auto_high_pitch_guard: true`（默认开启），检测到高音时会选择性降调推理并恢复原调；若同时传入 AI 美声配置，服务端会自动降低高频染色强度。
 
+### MIDI 子编辑器
+
+编辑器内置 MIDI 子编辑器（钢琴卷帘），对音频做**音符级音高编辑**，播放始终使用片段音频本身，不会用 MIDI 音源直接出声。它有两种范围：
+
+| 范围 | 入口 | 时间轴 | 应用目标 |
+| --- | --- | --- | --- |
+| 片段 | 片段右键「MIDI 音高编辑（片段）」或片段工具栏 | 片段内 0 起 | 该片段音频 |
+| 轨道 | 音轨右键「MIDI 音高编辑（整轨）」；空白轨道也可直接编排 | 工程绝对时间 | 按片段切分后逐个重绘 |
+
+1. `GET /api/v1/editor/projects/{project_id}/clips/{clip_id}/midi` 或 `GET .../tracks/{track_id}/midi` 分析并返回可编辑音符：`start`/`end` 为时间（片段范围是片段内秒数，轨道范围是绝对秒数），`pitch` 为 MIDI 编号，`detune` 为原始音准（音分）。加 `?refresh=1` 强制重新分析；轨道接口额外返回 `clip_spans` 用于显示片段分段。
+2. `PUT` 同一路径保存音符（只改音符数据）。空白轨道的音符会作为草稿保存。
+3. `POST .../midi/apply` 把音符落到音频：逐音符保共振峰 PSOLA 移调，只改写被编辑过的音符区间，生成新片段音频并推入撤销历史；轨道范围会按片段切分后逐个应用，只替换真正有改动的片段。`notes` 省略时使用已保存的音符；没有音符需要修改或空白轨道没有片段时返回 409 与原因。
+
+未编辑的音符保留 `detune`，应用时偏移为 0，因此“提取 → 应用”不会把歌手的自然音准洗成电音；只有被拖动/改动的音符才会压到目标音高。编辑器支持多选（框选 / Shift 点选）、量化、半音移调、复制粘贴，以及 Ctrl+Z / Ctrl+Shift+Z / Ctrl+A / Ctrl+C / Ctrl+V / Ctrl+Q / Delete / 方向键等快捷键。
+
 ## 接口清单
 
 | 方法               | 路径                                                                                     | 说明                                                 |
@@ -368,6 +398,12 @@ print("成品已保存：", OUTPUT_AUDIO.resolve())
 | `POST`           | `/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/separate`      | UVR / PyMSS 人声分离，可选去除和声                   |
 | `POST`           | `/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/{clip_id}/rerun`         | 用声音模型局部重推理                                 |
 | `POST`           | `/api/v1/editor/projects/{project_id}/tracks/{track_id}/clips/merge`                   | 渲染合并多个片段                                     |
+| `GET`            | `/api/v1/editor/projects/{project_id}/clips/{clip_id}/midi`                            | 读取片段 MIDI 音符（可选 `refresh=1`）             |
+| `PUT`            | `/api/v1/editor/projects/{project_id}/clips/{clip_id}/midi`                            | 保存片段 MIDI 音符                                   |
+| `POST`           | `/api/v1/editor/projects/{project_id}/clips/{clip_id}/midi/apply`                      | 把 MIDI 音符应用到片段音频                           |
+| `GET`            | `/api/v1/editor/projects/{project_id}/tracks/{track_id}/midi`                          | 读取整轨 MIDI 音符（空白轨道返回空音符）           |
+| `PUT`            | `/api/v1/editor/projects/{project_id}/tracks/{track_id}/midi`                          | 保存整轨 MIDI 音符                                   |
+| `POST`           | `/api/v1/editor/projects/{project_id}/tracks/{track_id}/midi/apply`                    | 按片段切分后应用 MIDI 到音频                         |
 
 ## 常见状态码
 

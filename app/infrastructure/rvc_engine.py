@@ -1,4 +1,4 @@
-"""RVC 推理引擎封装：在独立运行时中通过 ``rvc_worker`` 调用 rvc-python 转换歌声。
+"""RVC 推理引擎封装：在独立运行时中通过 ``rvc_worker`` 调用内置官方推理栈转换歌声。
 
 与 So-VITS 引擎同构：环境就绪时子进程跑真实推理，条件缺失时明确失败。
 由 ``EngineRegistry`` 按模型 ``framework`` 选择。
@@ -23,9 +23,14 @@ class RvcEngine:
 
     @property
     def available(self) -> bool:
-        """是否具备真实 RVC 推理能力（隔离解释器 + worker 齐备）。"""
+        """是否具备真实 RVC 推理能力（worker + 内置官方推理代码 + 隔离解释器）。"""
+        engine_dir = getattr(config, "RVC_ENGINE_DIR", None)
+        engine_ready = bool(
+            engine_dir and (Path(engine_dir) / "rvc_session.py").is_file()
+        )
         return bool(
             config.RVC_WORKER.is_file()
+            and engine_ready
             and (config.RVC_PYTHON and config.RVC_PYTHON.is_file()
                  or config.RVC_DIRECTML_PYTHON and config.RVC_DIRECTML_PYTHON.is_file())
         )
@@ -56,7 +61,7 @@ class RvcEngine:
         )
 
     def version(self) -> Optional[str]:
-        return "rvc-python" if self.available else None
+        return "RVC (official infer)" if self.available else None
 
     def infer(
         self,
@@ -219,6 +224,14 @@ class RvcEngine:
         env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
+        # 内置官方 RVC 推理代码与底模目录：worker 是独立进程，显式传入避免它
+        # 依赖当前工作目录猜测路径。
+        engine_dir = getattr(config, "RVC_ENGINE_DIR", None)
+        if engine_dir:
+            env["XB_RVC_ENGINE_DIR"] = str(engine_dir)
+        base_dir = getattr(config, "RVC_BASE_DIR", None)
+        if base_dir:
+            env["XB_RVC_BASE_DIR"] = str(base_dir)
         # FAISS is OpenMP-parallel. Let BLAS use one inner thread so an RVC
         # .index lookup does not create an OpenBLAS pool in every FAISS worker.
         # rvc_worker applies the same defaults when invoked directly.

@@ -2,9 +2,9 @@
 ; complete hardware-specific offline installer set from a public HTTPS directory.
 
 #define MyAppName "XB-SVCB"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.1.1"
 #ifndef XB_ONLINE_BASE_URL
-  #define XB_ONLINE_BASE_URL "https://invalid.example/xb-svcb/0.1.0"
+  #define XB_ONLINE_BASE_URL "https://invalid.example/xb-svcb/0.1.1"
 #endif
 #ifndef XB_ONLINE_MANIFEST_SHA256
   #define XB_ONLINE_MANIFEST_SHA256 "0000000000000000000000000000000000000000000000000000000000000000"
@@ -23,7 +23,11 @@ VersionInfoProductName=XB-SVCB Online Setup
 AppPublisher=XB-SVCB
 CreateAppDir=no
 Uninstallable=no
+#ifdef XB_REQUIRE_ADMIN
+PrivilegesRequired=admin
+#else
 PrivilegesRequired=lowest
+#endif
 OutputDir=..\dist
 OutputBaseFilename={#XB_ONLINE_OUTPUT_FILENAME}
 Compression=lzma2/max
@@ -782,6 +786,22 @@ begin
     ArtifactsReady := True;
 end;
 
+function GrantTempDirWrite(const Dir: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := False;
+  if not DirExists(Dir) then
+    Exit;
+  { 本启动器的临时目录默认只允许当前用户“读取+执行”，而安装器启动的子进程
+    会继承 TMP/TEMP=本目录；子安装器还要在里面创建自己的 is-*.tmp，权限不足
+    就会报“安装程序无法创建目录 … 错误 5: 拒绝访问”。这里补上 Users 组的
+    写权限（目录位于用户 %TEMP% 下，其他用户无法访问）。 }
+  Result := Exec(ExpandConstant('{sys}\icacls.exe'),
+    '"' + Dir + '" /grant *S-1-5-32-545:(OI)(CI)M /T /C /Q',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
 function LaunchOfflineSetup(): Boolean;
 var
   ResultCode: Integer;
@@ -790,6 +810,8 @@ begin
   WizardForm.StatusLabel.Caption := M('OnlineInstalling');
   WizardForm.FilenameLabel.Caption := DownloadedSetup;
   WizardForm.Update;
+  { 让下载下来的离线安装器能在本启动器的临时目录里创建自己的临时目录。 }
+  GrantTempDirWrite(ExpandConstant('{tmp}'));
   { The downloaded installer owns the complete installation workflow. Do not
     synchronously wait for it here: that blocks this bootstrapper's UI and can
     leave its buttons disabled after the child wizard appears to have closed. }

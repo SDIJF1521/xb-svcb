@@ -9,6 +9,11 @@ rem ============================================================
 setlocal EnableExtensions
 cd /d "%~dp0"
 chcp 65001 >nul
+rem The console runs at UTF-8. Keep child Python processes on UTF-8 as well:
+rem cmd decodes piped output (detect_python.bat, uv discovery) with the console
+rem code page, so an ANSI-encoded child would mangle Chinese install paths.
+if not defined PYTHONUTF8 set "PYTHONUTF8=1"
+if not defined PYTHONIOENCODING set "PYTHONIOENCODING=utf-8"
 
 if exist "%~dp0installer_env.cmd" call "%~dp0installer_env.cmd"
 if not defined XB_HF_MIRROR set "XB_HF_MIRROR=https://hf-mirror.com"
@@ -27,6 +32,11 @@ if defined XB_WHEELHOUSE if not defined XB_WHEELHOUSE_STRICT set "XB_WHEELHOUSE_
 if not defined UV_LINK_MODE set "UV_LINK_MODE=copy"
 if not defined XB_UV_CACHE_DIR set "XB_UV_CACHE_DIR=%~dp0.tmp\uv-cache"
 set "UV_CACHE_DIR=%XB_UV_CACHE_DIR%"
+rem Bootstrap pip also caches downloads; keep it off the system drive too.
+if not defined XB_PIP_CACHE_DIR set "XB_PIP_CACHE_DIR=%~dp0.tmp\pip-cache"
+set "PIP_CACHE_DIR=%XB_PIP_CACHE_DIR%"
+if not exist "%XB_UV_CACHE_DIR%" mkdir "%XB_UV_CACHE_DIR%" >nul 2>&1
+if not exist "%XB_PIP_CACHE_DIR%" mkdir "%XB_PIP_CACHE_DIR%" >nul 2>&1
 if not defined XB_RUNTIME_TEMP set "XB_RUNTIME_TEMP=%~dp0.tmp\runtime-temp"
 if not exist "%XB_RUNTIME_TEMP%" mkdir "%XB_RUNTIME_TEMP%" >nul 2>&1
 if not exist "%XB_RUNTIME_TEMP%" (

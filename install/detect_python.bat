@@ -1,6 +1,12 @@
 @echo off
 rem Locate a real CPython 3.12.x interpreter and export its absolute path.
 rem This file intentionally does not use setlocal: callers consume XB_PYTHON_*.
+rem The piped probes below are decoded by cmd with the console code page, so pin
+rem UTF-8 for the child interpreter; otherwise a Chinese profile path becomes
+rem mojibake and the interpreter is rejected.
+chcp 65001 >nul
+if not defined PYTHONUTF8 set "PYTHONUTF8=1"
+if not defined PYTHONIOENCODING set "PYTHONIOENCODING=utf-8"
 
 set "XB_PYTHON_DETECTED="
 rem Values left by an earlier installer run are candidates only. They must
@@ -23,7 +29,7 @@ if defined XB_PYTHON_DETECTED goto PYTHON_FOUND
 
 rem Python's launcher resolves Store installs and installations outside PATH.
 where py >nul 2>&1 && (
-  for /f "delims=" %%P in ('py -3.12 -c "import sys; print(sys.executable)" 2^>nul') do if not defined XB_PYTHON_DETECTED call :TRY_PYTHON "%%P"
+  for /f "delims=" %%P in ('py -3.12 -c "import sys; sys.stdout.buffer.write(sys.executable.encode('utf-8'))" 2^>nul') do if not defined XB_PYTHON_DETECTED call :TRY_PYTHON "%%P"
 )
 if defined XB_PYTHON_DETECTED goto PYTHON_FOUND
 

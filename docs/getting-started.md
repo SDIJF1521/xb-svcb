@@ -6,9 +6,9 @@
 
 ## 在线安装
 
-从 GitHub Releases 下载并运行魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`，选择“自动检测（推荐）”或手动指定硬件版本。在线安装器从 ModelScope 的 `v0.1.0` 版本只下载所选硬件的完整 EXE/BIN 文件，逐个校验 SHA-256 后启动三语离线安装向导。下载期间需要保持网络连接，并确保防火墙允许访问 `www.modelscope.cn`。
+从 GitHub Releases 下载并运行魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`，选择“自动检测（推荐）”或手动指定硬件版本。在线安装器从 ModelScope 的 `v0.1.1` 版本只下载所选硬件的完整 EXE/BIN 文件，逐个校验 SHA-256 后启动三语离线安装向导。下载期间需要保持网络连接，并确保防火墙允许访问 `www.modelscope.cn`。
 
-GitHub 不公开提供备用版 `XB-SVCB-Online-Setup.exe`；确有需要时请联系开发者单独获取。在线安装器不会在电脑上保存仓库或 OSS 密钥。校验通过的 EXE/BIN 会保存在在线安装器旁边的 `XB-SVCB-Downloads\0.1.0\<硬件栈>\` 目录中，并从该目录启动；该目录不会随在线安装器退出而删除。在线安装器所在文件夹必须具有写入权限。若下载中断或校验失败，请重新运行安装器。需要完全离线安装时，也可以保留该目录中的 EXE 和全部同名前缀 BIN。
+GitHub 不公开提供备用版 `XB-SVCB-Online-Setup.exe`；确有需要时请联系开发者单独获取。在线安装器不会在电脑上保存仓库或 OSS 密钥。校验通过的 EXE/BIN 会保存在在线安装器旁边的 `XB-SVCB-Downloads\0.1.1\<硬件栈>\` 目录中，并从该目录启动；该目录不会随在线安装器退出而删除。在线安装器所在文件夹必须具有写入权限。若下载中断或校验失败，请重新运行安装器。需要完全离线安装时，也可以保留该目录中的 EXE 和全部同名前缀 BIN。
 
 ## 选择安装包
 
@@ -34,6 +34,8 @@ CUDA126/CUDA128 默认共享：
 | `runtimes/svc-cu126` / `svc-cu128`   | So-VITS-SVC、RVC、Vocal/DeepFilterNet3 |
 
 CPU 使用 `.venv-uvr`、`.venv-svc`、`.venv-rvc`、`.venv-seedvc`、`.venv-ddsp` 和 `.venv-vocal` 等隔离目录。DirectML 也隔离，但 RVC 使用 `.venv-rvc-directml`。ROCm 10 的 SVC/RVC/Vocal 共用 `runtimes/svc-rocm10`，其余组件隔离。应用通过 `runtime.json` 识别实际解释器，不应只根据目录名判断安装是否完成。
+
+RVC 的推理代码内置在 `engines/rvc`（官方 RVC-Project 2.2.231006 的 MIT 推理子集），底模 `hubert_base.pt` / `rmvpe.pt` 位于 `engines/rvc/pretrain`，由安装器从 `assets/models` 预置；不再安装第三方 `rvc-python`。
 
 完整布局和旧安装兼容规则见 [共享运行时与兼容布局](runtime-consolidation.md)。
 

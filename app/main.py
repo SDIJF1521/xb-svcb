@@ -20,7 +20,7 @@ import sys
 import webview
 
 import config
-from api import build_api
+from composition import build_api
 from infrastructure import paths
 from infrastructure.single_instance import SingleInstance, focus_window
 

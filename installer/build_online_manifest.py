@@ -20,6 +20,13 @@ SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
 SAFE_NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
 
 
+class CaseSensitiveConfigParser(configparser.ConfigParser):
+    """保留键名大小写的 ConfigParser（在线清单依赖原始键名）。"""
+
+    def optionxform(self, optionstr: str) -> str:
+        return optionstr
+
+
 @dataclass(frozen=True)
 class Artifact:
     path: Path
@@ -72,8 +79,7 @@ def build_manifest(dist: Path, output: Path, version: str) -> configparser.Confi
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         raise ValueError(f"Version must be SemVer-like X.Y.Z, got: {version}")
 
-    manifest = configparser.ConfigParser(interpolation=None)
-    manifest.optionxform = str
+    manifest = CaseSensitiveConfigParser(interpolation=None)
     manifest["release"] = {
         "version": version,
         "stacks": ",".join(STACK_BASE_NAMES),
@@ -99,8 +105,7 @@ def build_manifest(dist: Path, output: Path, version: str) -> configparser.Confi
 def validate_existing_manifest(path: Path, version: str) -> configparser.ConfigParser:
     if not path.is_file():
         raise FileNotFoundError(path)
-    manifest = configparser.ConfigParser(interpolation=None)
-    manifest.optionxform = str
+    manifest = CaseSensitiveConfigParser(interpolation=None)
     with path.open("r", encoding="utf-8") as handle:
         manifest.read_file(handle)
 

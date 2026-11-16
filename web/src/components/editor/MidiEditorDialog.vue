@@ -1,0 +1,5278 @@
+<template>
+  <!-- teleport 到 body：页面主体本身有 z-index 堆叠上下文，留在里面会被顶栏压住 -->
+  <Teleport to="body">
+    <div
+      v-if="modelValue"
+      class="midi-mask"
+      :class="{ fullscreen: maximized }"
+      @click.self="close"
+    >
+      <div
+        class="midi-dialog"
+        :class="{ 'is-compose': isCompose, fullscreen: maximized }"
+        role="dialog"
+        aria-label="MIDI 编辑器"
+      >
+      <header class="midi-head">
+        <div class="midi-title">
+          <p class="eyebrow">// MIDI {{ isCompose ? 'Composer' : 'Pitch Editor' }}</p>
+          <h2>
+            {{ isCompose ? t('MIDI 编曲') : t('MIDI 音高编辑器') }}
+            <span class="midi-scope" :class="isCompose ? 'compose' : scope">
+              {{ isCompose ? `${partCount} ${t('声部')}` : scope === 'track' ? t('轨道') : t('片段') }}
+            </span>
+          </h2>
+          <p class="midi-sub">
+            <template v-if="isCompose">
+              {{ trackName || t('未命名音轨') }} · {{ formatClock(duration) }} · {{ totalNotes }} {{ t('个音符') }}
+              <template v-if="!hasAudio"> · {{ t('空白轨道也可以直接写') }}</template>
+            </template>
+            <template v-else>
+              {{ scope === 'track' ? trackName || t('未命名音轨') : clipName || t('未命名片段') }} ·
+              {{ duration.toFixed(2) }}s · {{ draft.length }} {{ t('个音符') }}
+              <template v-if="scope === 'track' && clipSpans.length">
+                · {{ clipSpans.length }} {{ t('个片段分段') }}
+              </template>
+              <template v-if="analysisText"> · {{ analysisText }}</template>
+            </template>
+          </p>
+        </div>
+
+        <div class="midi-modes">
+          <button
+            type="button"
+            :class="{ active: isCompose }"
+            :title="t('多乐器编曲：从零写谱，可直接生成音频与 .mid')"
+            @click="setMode('compose')"
+          >
+            {{ t('MIDI 编曲') }}
+          </button>
+          <button
+            type="button"
+            :class="{ active: !isCompose }"
+            :disabled="!hasAudio"
+            :title="hasAudio ? t('修正这段演唱的音高（保存到音频）') : t('这条轨道还没有音频')"
+            @click="setMode('pitch')"
+          >
+            {{ t('演唱音准') }}
+          </button>
+        </div>
+
+        <div class="midi-head-actions">
+          <button v-if="!isCompose" class="ghost" :disabled="loading || applying" @click="refresh">
+            {{ t('重新分析') }}
+          </button>
+          <button class="ghost" :disabled="!canUndo" title="Ctrl+Z" @click="undo">{{ t('撤销') }}</button>
+          <button class="ghost" :disabled="!canRedo" title="Ctrl+Shift+Z" @click="redo">{{ t('重做') }}</button>
+          <button
+            class="ghost"
+            :class="{ active: maximized }"
+            :title="maximized ? t('退出全屏（Esc）') : t('铺满整个窗口')"
+            @click="toggleMaximized"
+          >
+            {{ maximized ? t('退出全屏') : t('全屏') }}
+          </button>
+          <button class="ghost" @click="close">{{ t('关闭') }}</button>
+        </div>
+      </header>
+
+      <div class="midi-toolbar">
+        <div class="midi-group midi-transport">
+          <button
+            class="ghost midi-play"
+            :disabled="transportDisabled"
+            :title="transportHint"
+            @click="togglePlay"
+          >
+            {{ transportLabel }}
+          </button>
+          <button class="ghost" :disabled="transportDisabled" :title="t('停止')" @click="stopPlay">■</button>
+          <button
+            class="ghost"
+            :class="{ active: loopEnabled }"
+            :disabled="transportDisabled"
+            :title="t('循环播放')"
+            @click="toggleLoop"
+          >
+            {{ t('循环') }}
+          </button>
+          <span class="midi-clock" :title="isCompose ? t('小节:拍 + 时间') : t('播放头时间')">
+            {{ clockLabel }}
+          </span>
+        </div>
+
+        <template v-if="isCompose">
+          <label class="midi-field">
+            <span>BPM</span>
+            <input
+              :value="Math.round(session.tempo)"
+              type="number"
+              :min="COMPOSE_MIN_TEMPO"
+              :max="COMPOSE_MAX_TEMPO"
+              step="1"
+              @change="applyTempo"
+            />
+          </label>
+          <label class="midi-field">
+            <span>{{ t('拍号') }}</span>
+            <select :value="timeSignatureLabel(session.time_signature)" @change="applySignature">
+              <option v-for="option in signatureOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label class="midi-field">
+            <span>{{ t('时长') }}</span>
+            <input
+              :value="durationSeconds > 0 ? durationSeconds : Math.round(duration)"
+              type="number"
+              min="1"
+              max="86400"
+              step="1"
+              :title="t('时间轴长度（秒），留空或 0 为自动')"
+              @change="applyDuration"
+            />
+            <em>{{ t('秒') }}</em>
+          </label>
+        </template>
+
+        <label class="midi-field">
+          <span>{{ t('网格') }}</span>
+          <select v-if="isCompose" v-model="gridDivisionId">
+            <option v-for="option in GRID_DIVISIONS" :key="option.id" :value="option.id">
+              {{ option.label }}
+            </option>
+          </select>
+          <select v-else v-model.number="pitchGrid">
+            <option v-for="option in gridOptions" :key="option" :value="option">
+              {{ formatGrid(option) }}
+            </option>
+          </select>
+        </label>
+
+        <label v-if="isCompose" class="midi-field">
+          <span>{{ t('量化强度') }}</span>
+          <input v-model.number="quantizeStrength" type="range" min="0" max="1" step="0.05" />
+          <b>{{ Math.round(quantizeStrength * 100) }}%</b>
+        </label>
+
+        <div class="midi-group midi-zoom" :title="t('Ctrl+滚轮：横向缩放；Ctrl+Shift+滚轮：音域缩放')">
+          <button class="ghost mini" :title="t('横向缩小 (-)')" @click="zoomTime(0.8)">－</button>
+          <label class="midi-field">
+            <span>{{ t('缩放') }}</span>
+            <input v-model.number="pxPerSecond" type="range" min="12" max="800" step="2" />
+            <b>{{ Math.round(pxPerSecond) }}px/s</b>
+          </label>
+          <button class="ghost mini" :title="t('横向放大 (+)')" @click="zoomTime(1.25)">＋</button>
+          <label class="midi-field">
+            <span>{{ t('音域') }}</span>
+            <input v-model.number="rowHeight" type="range" min="8" max="40" step="1" />
+            <b>{{ rowHeight }}px</b>
+          </label>
+        </div>
+
+        <div class="midi-group">
+          <button class="ghost" :title="t('放大到选区')" @click="zoomToSelection">{{ t('放大到选区') }}</button>
+          <button class="ghost" @click="zoomToFit">{{ t('适应宽度') }}</button>
+        </div>
+
+        <div v-if="isCompose" class="midi-group midi-tools">
+          <button
+            v-for="tool in tools"
+            :key="tool.id"
+            class="ghost"
+            :class="{ active: currentTool === tool.id }"
+            :title="tool.hint"
+            @click="currentTool = tool.id"
+          >
+            {{ tool.label }}
+          </button>
+          <label class="midi-field midi-toggle" :title="t('新建/选中音符时用振荡器发一个提示音')">
+            <input v-model="notePreview" type="checkbox" />
+            <span>{{ t('点击试听') }}</span>
+          </label>
+        </div>
+
+        <label v-if="!isCompose" class="midi-field">
+          <span>{{ t('音准偏移') }}</span>
+          <input
+            :value="primaryPitchNote?.detune ?? 0"
+            type="number"
+            min="-99"
+            max="99"
+            step="1"
+            :disabled="!selection.length"
+            @change="setSelectionDetune($event)"
+          />
+          <em>{{ t('音分') }}</em>
+        </label>
+
+        <div v-if="!isCompose" class="midi-group">
+          <label class="midi-field midi-toggle" :title="t('打开后按住拖过音符即可画音高曲线（滑音 / 颤音）')">
+            <input v-model="pitchCurveMode" type="checkbox" />
+            <span>{{ t('音高曲线') }}</span>
+          </label>
+          <span v-if="pitchCurveMode" class="midi-pitch-tool">
+            <button
+              class="ghost mini"
+              :class="{ active: pitchTool === 'draw' }"
+              :title="t('画笔：拖动绘制音高曲线')"
+              @click="pitchTool = 'draw'"
+            >✎</button>
+            <button
+              class="ghost mini"
+              :class="{ active: pitchTool === 'erase' }"
+              :title="t('橡皮：拖动擦除音高曲线（右键拖动同效）')"
+              @click="pitchTool = 'erase'"
+            >⌫</button>
+          </span>
+          <em v-if="!pitchCurveMode && !hasAnyCurve" class="midi-hint-inline">
+            {{ t('勾选后按住拖动，自己画音高线') }}
+          </em>
+          <label class="midi-field midi-toggle" :title="t('显示音频片段原本的基频曲线（F0），用来对照实际唱的音高')">
+            <input v-model="showOriginalPitch" type="checkbox" />
+            <span>{{ t('原始音高') }}</span>
+          </label>
+          <button class="ghost" :disabled="!selection.length" :title="t('用音频原本的 F0 重建曲线，作为进一步编辑的起点')" @click="resetCurveFromOriginal">
+            {{ t('取原始音高') }}
+          </button>
+
+          <button class="ghost" :disabled="!selection.length" :title="t('给选中音符生成 5.5Hz 颤音')" @click="applyCurvePreset('vibrato')">
+            {{ t('颤音') }}
+          </button>
+          <button class="ghost" :disabled="!selection.length" :title="t('从上一个音滑到本音（OpenUtau 式滑音）')" @click="applyCurvePreset('portamento')">
+            {{ t('滑音') }}
+          </button>
+          <button class="ghost" :disabled="!selection.length" :title="t('对选中音符的音高曲线做轻微平滑，去掉手绘抖动')" @click="smoothSelectedCurves">
+            {{ t('平滑曲线') }}
+          </button>
+          <button class="ghost" :disabled="!selection.length" @click="clearSelectedCurve">
+            {{ t('清除曲线') }}
+          </button>
+          <button class="ghost" :disabled="!selection.length" title="Ctrl+Q" @click="quantizeSelection">
+            {{ t('量化') }}
+          </button>
+          <button class="ghost" :disabled="!selection.length" title="Alt+↑" @click="transposeSelection(1)">
+            +1
+          </button>
+          <button class="ghost" :disabled="!selection.length" title="Alt+↓" @click="transposeSelection(-1)">
+            -1
+          </button>
+          <button class="ghost" :disabled="!selection.length" @click="transposeSelection(12)">+12</button>
+          <button class="ghost" :disabled="!selection.length" @click="transposeSelection(-12)">-12</button>
+        </div>
+
+        <span class="midi-hint">{{ hintText }}</span>
+      </div>
+
+      <p v-if="errorText" class="midi-error">{{ errorText }}</p>
+      <p v-else-if="!isCompose && scope === 'track' && !clipSpans.length" class="midi-tip">
+        {{ t('这条音轨还是空的：切到「MIDI 编曲」直接写谱，渲染后会自动生成音频。') }}
+      </p>
+      <p v-else-if="isCompose && !hasAudio" class="midi-tip">
+        {{ t('空白轨道：直接在下方钢琴卷帘上写音符，点「渲染为分乐器音轨」就会生成可播放的音频。') }}
+      </p>
+
+      <div class="midi-workspace">
+        <aside v-if="isCompose" class="midi-parts">
+          <header class="midi-parts-head">
+            <span>{{ t('声部 · 乐器') }}</span>
+            <button class="ghost mini" :title="t('新增声部')" @click="addPart">＋</button>
+          </header>
+          <div class="midi-part-list">
+            <div
+              v-for="part in parts"
+              :key="part.id"
+              class="midi-part"
+              :class="{ active: part.id === activePartId, muted: part.mute }"
+              @click="selectPart(part.id)"
+            >
+              <span class="midi-part-color" :style="{ background: part.color }"></span>
+              <input
+                v-model="part.name"
+                class="midi-part-name"
+                maxlength="24"
+                @change="touchDirty"
+                @keydown.stop
+                @click.stop
+              />
+              <button
+                class="mini"
+                :class="{ active: part.mute }"
+                :title="t('静音')"
+                @click.stop="toggleMute(part)"
+              >
+                M
+              </button>
+              <button
+                class="mini"
+                :class="{ active: part.solo }"
+                :title="t('独奏')"
+                @click.stop="toggleSolo(part)"
+              >
+                S
+              </button>
+              <button class="mini danger" :title="t('删除声部')" @click.stop="removePart(part)">×</button>
+              <select
+                class="midi-part-inst"
+                :value="part.drum ? 'drum' : String(part.instrument)"
+                :title="part.drum ? t('架子鼓 · GM 鼓组') : instrumentLabel(part.instrument)"
+                @change="onInstrumentChange(part, $event)"
+                @click.stop
+                @keydown.stop
+              >
+                <option value="drum">{{ t('架子鼓 · GM 鼓组') }}</option>
+                <optgroup v-for="group in instrumentGroups" :key="group.id" :label="group.label">
+                  <option v-for="item in group.options" :key="item.program" :value="String(item.program)">
+                    {{ item.name }}
+                  </option>
+                </optgroup>
+              </select>
+              <button
+                v-if="part.drum"
+                class="mini"
+                :title="t('填充 4/4 基本节奏（底鼓/军鼓/八分踩镲）')"
+                @click.stop="fillDrumBeat(part)"
+              >
+                {{ t('填充节奏') }}
+              </button>
+              <button class="mini" :title="t('导入 .mid 到这个声部')" @click.stop="importMidiToPart(part)">
+                ⇩ MIDI
+              </button>
+              <span class="midi-part-count">
+                <template v-if="part.drum">{{ part.notes.length }} {{ t('件') }}</template>
+                <template v-else>{{ part.notes.length }} {{ t('个音') }}</template>
+              </span>
+            </div>
+          </div>
+          <footer class="midi-parts-foot">
+            <button class="ghost mini" @click="addPart">＋ {{ t('新声部') }}</button>
+            <button class="ghost mini" @click="addDrumPart">＋ {{ t('鼓组') }}</button>
+            <button class="ghost mini" @click="emit('import-session')">{{ t('导入 .mid') }}</button>
+          </footer>
+        </aside>
+
+        <div ref="bodyRef" class="midi-roll-wrap">
+          <div v-if="busy" class="midi-busy">{{ busyText }}</div>
+          <div v-else-if="!hasContent" class="midi-empty">
+            <template v-if="isCompose">
+              {{ t('还没有音符。用「画笔」在网格上拖出新音符，或双击空白处；空白轨道也能直接开始编曲。') }}
+            </template>
+            <template v-else>{{ t('还没有音符。双击网格新建，或点“重新分析”从音频里提取。') }}</template>
+          </div>
+          <div
+            ref="scrollRef"
+            class="midi-scroll"
+            :class="{ 'with-velocity': showVelocity }"
+            @scroll="onScroll"
+          >
+            <div class="midi-filler" :style="{ width: `${totalWidth}px`, height: `${totalHeight}px` }">
+              <div
+                class="midi-view"
+                :style="{ width: `${keyWidth + viewWidth}px`, height: `${viewHeight}px` }"
+              >
+                <canvas
+                  ref="keyCanvasRef"
+                  class="midi-keys"
+                  :width="keyWidth * dpr"
+                  :height="viewHeight * dpr"
+                  :style="{ width: `${keyWidth}px`, height: `${viewHeight}px` }"
+                />
+                <canvas
+                  ref="gridCanvasRef"
+                  class="midi-grid"
+                  tabindex="0"
+                  :width="viewWidth * dpr"
+                  :height="viewHeight * dpr"
+                  :style="{ width: `${viewWidth}px`, height: `${viewHeight}px` }"
+                  @pointerdown="onPointerDown"
+                  @pointermove="onPointerMove"
+                  @pointerrawupdate="onPointerMove"
+                  @pointerup="onPointerUp"
+                  @pointercancel="onPointerUp"
+                  @pointerleave="onPointerLeave"
+                  @dblclick="onDoubleClick"
+                  @contextmenu.prevent="onContextMenu"
+                  @wheel="onWheel"
+                />
+              </div>
+            </div>
+          </div>
+
+          <canvas
+            v-if="showVelocity"
+            ref="velocityCanvasRef"
+            class="midi-velocity"
+            :width="viewWidth * dpr"
+            :height="velocityHeight * dpr"
+            :style="{ left: `${keyWidth}px`, width: `${viewWidth}px`, height: `${velocityHeight}px` }"
+            @pointerdown="onVelocityDown"
+            @pointermove="onVelocityMove"
+            @pointerup="onVelocityUp"
+            @pointercancel="onVelocityUp"
+          />
+
+          <div
+            v-if="contextMenu.visible"
+            ref="menuRef"
+            class="midi-menu"
+            :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
+            role="menu"
+            @pointerdown.stop
+            @contextmenu.prevent
+          >
+            <button type="button" role="menuitem" @click="menuAddNote">{{ t('在此添加音符') }}</button>
+            <button type="button" role="menuitem" :disabled="!selection.length" @click="menuDelete">
+              {{ t('删除选中') }} ({{ selection.length }})
+            </button>
+            <button type="button" role="menuitem" :disabled="!selection.length" @click="menuCopy">
+              {{ t('复制') }} (Ctrl+C)
+            </button>
+            <button type="button" role="menuitem" :disabled="!hasClipboard" @click="menuPaste">
+              {{ t('在指针处粘贴') }} (Ctrl+V)
+            </button>
+            <i class="midi-menu-sep" aria-hidden="true"></i>
+            <button type="button" role="menuitem" :disabled="!selection.length" @click="menuQuantize">
+              {{ t('量化到网格') }} (Ctrl+Q)
+            </button>
+            <button type="button" role="menuitem" :disabled="!selection.length" @click="menuTranspose(1)">
+              {{ t('升高半音') }} (Alt+↑)
+            </button>
+            <button type="button" role="menuitem" :disabled="!selection.length" @click="menuTranspose(-1)">
+              {{ t('降低半音') }} (Alt+↓)
+            </button>
+            <button type="button" role="menuitem" :disabled="!selection.length" @click="menuTranspose(12)">
+              {{ t('升高八度') }} (Shift+↑)
+            </button>
+            <button type="button" role="menuitem" :disabled="!selection.length" @click="menuTranspose(-12)">
+              {{ t('降低八度') }} (Shift+↓)
+            </button>
+            <template v-if="isCompose">
+              <i class="midi-menu-sep" aria-hidden="true"></i>
+              <button type="button" role="menuitem" :disabled="!selection.length" @click="menuVelocity(1.1)">
+                {{ t('力度') }} +10%
+              </button>
+              <button type="button" role="menuitem" :disabled="!selection.length" @click="menuVelocity(0.9)">
+                {{ t('力度') }} -10%
+              </button>
+              <button type="button" role="menuitem" :disabled="!selection.length" @click="menuLegato">
+                {{ t('连奏（接上后一个音）') }}
+              </button>
+              <button type="button" role="menuitem" :disabled="!selection.length" @click="menuSplitAtPlayhead">
+                {{ t('在播放头切开') }}
+              </button>
+              <button type="button" role="menuitem" :disabled="!selection.length" @click="menuDuplicate">
+                {{ t('复制到后面') }} (Ctrl+D)
+              </button>
+            </template>
+            <template v-else>
+              <i class="midi-menu-sep" aria-hidden="true"></i>
+              <button type="button" role="menuitem" :disabled="!selection.length" @click="menuSplitHere">
+                {{ t('在此拆分音符（断开音高曲线）') }}
+              </button>
+              <button type="button" role="menuitem" :disabled="!selection.length" @click="menuAddCurve">
+                {{ t('添加音高曲线') }}
+              </button>
+              <button type="button" role="menuitem" :disabled="!selection.length" @click="menuClearCurve">
+                {{ t('清除音高曲线') }}
+              </button>
+            </template>
+            <i class="midi-menu-sep" aria-hidden="true"></i>
+            <button type="button" role="menuitem" @click="menuSelectAll">{{ t('全选') }} (Ctrl+A)</button>
+            <button type="button" role="menuitem" :disabled="!canUndo" @click="menuUndo">{{ t('撤销') }} (Ctrl+Z)</button>
+            <button type="button" role="menuitem" :disabled="!canRedo" @click="menuRedo">{{ t('重做') }} (Ctrl+Shift+Z)</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="renderProgress" class="midi-render-progress">
+        <div class="midi-render-bar">
+          <i :style="{ width: `${renderPercent}%` }"></i>
+        </div>
+        <span>{{ renderProgress.message || t('渲染中…') }} · {{ renderPercent }}%</span>
+      </div>
+
+      <footer class="midi-foot">
+        <div class="midi-selected">
+          <template v-if="selection.length > 1">
+            {{ t('已选') }} {{ selection.length }} {{ t('个音符') }}
+            <template v-if="isCompose">
+              · {{ t('力度') }} {{ selectionVelocityRange }}
+            </template>
+            <template v-else> · {{ noteName(primaryNote?.pitch ?? 60) }} {{ t('等') }}</template>
+          </template>
+          <template v-else-if="primaryNote">
+            <b>{{ noteLabel(primaryNote.pitch) }}</b>
+            <span>{{ primaryNote.start.toFixed(3) }}s → {{ primaryNote.end.toFixed(3) }}s</span>
+            <span>{{ t('长度') }} {{ (primaryNote.end - primaryNote.start).toFixed(3) }}s</span>
+            <span v-if="isCompose">{{ t('力度') }} {{ primaryNote.velocity }}</span>
+            <span v-else-if="primaryPitchNote?.detune">
+              {{ t('原始音准') }} {{ primaryPitchNote.detune > 0 ? '+' : '' }}{{ primaryPitchNote.detune.toFixed(1) }} {{ t('音分') }}
+            </span>
+            <span v-if="!isCompose && curveRangeLabel" class="midi-curve-range">{{ curveRangeLabel }}</span>
+          </template>
+          <span v-else>{{ t('未选中音符') }}</span>
+          <span v-if="isCompose" class="midi-dirty">{{ dirty ? t('· 未保存') : t('· 已同步') }}</span>
+        </div>
+
+        <div class="midi-actions">
+          <template v-if="isCompose">
+            <button class="ghost" :disabled="!hasContent" @click="resetDraft">{{ t('还原本次编辑') }}</button>
+            <button class="ghost" :disabled="busy || !hasContent" @click="emitSaveSession">
+              {{ t('保存编曲') }}
+            </button>
+            <button class="ghost" :disabled="busy || !hasContent" :title="previewTitle" @click="requestPreview">
+              {{ t('试听编曲') }}
+            </button>
+            <button class="ghost" :disabled="busy || !hasContent" @click="emitRender('mix')">
+              {{ busyAction === 'mix' ? t('渲染中…') : t('渲染到本轨') }}
+            </button>
+            <button class="ghost" @click="emitExport">{{ t('导出 .mid') }}</button>
+            <button class="primary" :disabled="busy || !hasContent" @click="emitRender('tracks')">
+              {{ busyAction === 'tracks' ? t('渲染中…') : t('渲染为分乐器音轨') }}
+            </button>
+          </template>
+          <template v-else>
+            <button class="ghost" :disabled="!draft.length" @click="resetDraft">{{ t('还原本次编辑') }}</button>
+            <button class="ghost" :disabled="loading || applying || !draft.length" @click="emitSave">
+              {{ t('保存音符') }}
+            </button>
+            <button
+              class="ghost"
+              :disabled="loading || previewLoading || !canPreview"
+              :title="previewHint"
+              @click="requestPreview"
+            >
+              {{ previewLoading ? t('渲染试听…') : t('试听音频') }}
+            </button>
+            <button
+              class="primary"
+              :disabled="loading || applying || !draft.length || !ready || !canApply"
+              :title="applyHint"
+              @click="emitApply"
+            >
+              {{ applying ? t('应用音频中…') : scope === 'track' ? t('应用到轨道片段') : t('应用音频') }}
+            </button>
+          </template>
+        </div>
+      </footer>
+
+      <p class="midi-note">
+        <template v-if="isCompose">
+          {{ t('渲染使用内置多乐器合成器：每个声部一件 GM 乐器，可「分乐器各生成一条音轨」（可单独调音量/加效果），也可混成一条片段落回当前轨。导出 .mid 可在其他 DAW 里继续编辑；试听播放的是合成结果。') }}
+        </template>
+        <template v-else>
+          {{ t('试听播放的是片段音频本身（应用后为编辑结果），不会用 MIDI 音源直接出声；应用会生成新音频并可撤销。未改动的音符保留原始音准，只有被拖动/改过分度的音符才会移动。') }}
+        </template>
+      </p>
+
+      <audio
+        ref="audioEl"
+        class="midi-audio"
+        :src="previewUrl || undefined"
+        preload="auto"
+        @pause="onAudioPause"
+        @play="onAudioPlay"
+        @ended="onAudioEnded"
+      ></audio>
+      </div>
+    </div>
+  </Teleport>
+</template>
+
+<script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
+
+import { api } from '@/api'
+import { translateUiText, useI18n } from '@/i18n'
+import type {
+  EditorMidiInstrument,
+  EditorMidiInstrumentFamily,
+} from '@/api/types'
+import {
+  COMPOSE_MAX_TEMPO,
+  COMPOSE_MIN_TEMPO,
+  MIDI_GRID_OPTIONS,
+  MIDI_MIN_NOTE_PX,
+  MIDI_PITCH_MIN,
+  MIDI_PITCH_MAX,
+  type MidiComposeNote,
+  type MidiCurvePoint,
+  type MidiNote,
+  type MidiPart,
+  type MidiSession,
+  GM_FAMILIES,
+  GM_INSTRUMENTS,
+  CURVE_SEMITONE_LIMIT,
+  MAX_CURVE_POINTS,
+  clampCurve,
+  setCurvePoint,
+  smoothCurve,
+  tidyCurve,
+  DRUM_PITCH_MAX,
+  DRUM_PITCH_MIN,
+  DRUM_DEFAULT_PITCH,
+  basicDrumBeat,
+  drumName,
+  drumPiece,
+  isDrumPitch,
+  nearestDrumPitch,
+  GRID_DIVISIONS,
+  TIME_SIGNATURE_CHOICES,
+  barBeatLabel,
+  barSeconds,
+  clampNoteSpan,
+  clampTime,
+  clampComposePitch,
+  clampDetune,
+  clampPitch,
+  clampTempo,
+  clampVelocity,
+  composeNoteAtPoint,
+  copyNotes,
+  createComposeNote,
+  createNote,
+  createPart,
+  duplicateNotes,
+  clampProgram,
+  instrumentName,
+  fitZoom,
+  gridStepSeconds,
+  humanizeNotes,
+  isBlackKey,
+  isPartAudible,
+  legatoNotes,
+  moveComposeNotes,
+  moveNotes,
+  normalizeNotes,
+  normalizeSession,
+  MIN_RESIZE_PX,
+  noteAtPoint,
+  noteEdgeAt,
+  noteName,
+  noteRect,
+  pasteNotes,
+  pitchBounds,
+  pitchToY,
+  quantizeComposeNotes,
+  quantizeNotes,
+  resizeComposeNote,
+  resizeNote,
+  scaleNoteVelocity,
+  secondsPerBeat,
+  sessionNoteCount,
+  sessionPitchRange,
+  snapTime,
+  sortNotes,
+  splitNoteAt,
+  splitPitchNote,
+  timeSignatureLabel,
+  timeToX,
+  transposeNotes,
+  velocityAlpha,
+  xToTime,
+  yToPitch,
+} from '@/utils/midi'
+
+const t = translateUiText
+const { locale } = useI18n()
+
+/** 乐器/音色族名称：中文用中文名，英文/日文优先用英文名（数据里已有 name_en）。 */
+function localizeName(zh: string, en: string): string {
+  return locale.value === 'zh-CN' ? zh || en : en || zh
+}
+
+/** 声部名是不是默认名（空 / 「旋律」/「架子鼓」/「声部 N」等，含本地化后的写法）。 */
+function isDefaultPartName(name: string): boolean {
+  const value = String(name || '').trim()
+  if (!value) return true
+  if (value === t('旋律') || value === t('架子鼓')) return true
+  return new RegExp(`^${t('声部')}\\s*\\d+$`).test(value)
+}
+
+interface ClipSpan {
+  id: string
+  name: string
+  start: number
+  end: number
+}
+
+type EditorMode = 'compose' | 'pitch'
+type ToolId = 'draw' | 'select' | 'erase'
+
+const props = withDefaults(
+  defineProps<{
+    modelValue: boolean
+    mode?: EditorMode
+    scope?: 'clip' | 'track'
+    clipName?: string
+    trackName?: string
+    duration?: number
+    hasAudio?: boolean
+    clipSpans?: ClipSpan[]
+    // 演唱音准模式
+    notes?: MidiNote[]
+    loading?: boolean
+    applying?: boolean
+    ready?: boolean
+    error?: string
+    analysis?: Record<string, unknown>
+    /** 音频片段原本的音高曲线：[[秒, MIDI], ...]，画成灰色参考线。 */
+    pitchCurve?: Array<[number, number]>
+    playhead?: number
+    playing?: boolean
+    // MIDI 编曲模式
+    composeSession?: MidiSession | null
+    composeDuration?: number
+    instruments?: EditorMidiInstrument[]
+    families?: EditorMidiInstrumentFamily[]
+    composeLoading?: boolean
+    composeBusy?: boolean
+    composeBusyAction?: string
+    composeError?: string
+    previewUrl?: string
+    previewLoading?: boolean
+    renderProgress?: { percent: number; message: string } | null
+  }>(),
+  {
+    mode: 'compose',
+    scope: 'clip',
+    clipName: '',
+    trackName: '',
+    duration: 0,
+    hasAudio: false,
+    clipSpans: () => [],
+    notes: () => [],
+    loading: false,
+    applying: false,
+    ready: true,
+    error: '',
+    analysis: () => ({}),
+    pitchCurve: () => [],
+    playhead: -1,
+    playing: false,
+    composeSession: null,
+    composeDuration: 0,
+    instruments: () => [],
+    families: () => [],
+    composeLoading: false,
+    composeBusy: false,
+    composeBusyAction: '',
+    composeError: '',
+    previewUrl: '',
+    previewLoading: false,
+    renderProgress: null,
+  },
+)
+
+const emit = defineEmits<{
+  'update:modelValue': [value: boolean]
+  'update:mode': [mode: EditorMode]
+  save: [notes: MidiNote[]]
+  apply: [notes: MidiNote[]]
+  refresh: []
+  preview: [notes: MidiNote[]]
+  seek: [seconds: number]
+  'save-session': [session: MidiSession]
+  'render-session': [session: MidiSession, mode: 'tracks' | 'mix']
+  'export-session': [session: MidiSession]
+  'preview-session': [session: MidiSession]
+  'import-session': []
+}>()
+
+const ROW_HEIGHT = 16
+const KEY_WIDTH = 62
+const RULER_HEIGHT = 34
+const MIN_NOTE_LENGTH = 0.12
+const VELOCITY_HEIGHT = 88
+const gridOptions = MIDI_GRID_OPTIONS
+const tools: Array<{ id: ToolId; label: string; hint: string }> = [
+  { id: 'draw', label: t('画笔'), hint: t('空白处写音符 · 拖动移动 · 拖边缘改长度（D）') },
+  { id: 'select', label: t('选择'), hint: t('框选/拖动/拖边缘改长度（V）') },
+  { id: 'erase', label: t('橡皮'), hint: t('点掉音符（E）') },
+]
+
+const keyWidth = KEY_WIDTH
+const rowHeight = ref<number>(ROW_HEIGHT)
+const velocityHeight = VELOCITY_HEIGHT
+const scrollRef = ref<HTMLDivElement | null>(null)
+const bodyRef = ref<HTMLDivElement | null>(null)
+const menuRef = ref<HTMLDivElement | null>(null)
+const keyCanvasRef = ref<HTMLCanvasElement | null>(null)
+const gridCanvasRef = ref<HTMLCanvasElement | null>(null)
+const velocityCanvasRef = ref<HTMLCanvasElement | null>(null)
+const audioEl = ref<HTMLAudioElement | null>(null)
+
+const activeMode = ref<EditorMode>(props.mode)
+const currentTool = ref<ToolId>('draw')
+const selection = ref<string[]>([])
+const pxPerSecond = ref(120)
+const dpr = Math.max(1, Math.min(3, Math.round(window.devicePixelRatio || 1)))
+const contextMenu = reactive({ visible: false, x: 0, y: 0, time: 0, pitch: 60 })
+const cursorTime = ref(0)
+const viewWidth = ref(760)
+const viewHeight = ref(360)
+const scrollLeft = ref(0)
+const scrollTop = ref(0)
+const gridDivisionId = ref('1/16')
+const quantizeStrength = ref(1)
+const loopEnabled = ref(false)
+const dirty = ref(false)
+const busyAction = ref('')
+const previewPending = ref(false)
+const previewTime = ref(0)
+const pitchGrid = ref(0.1)
+const playingState = ref(false)
+const activePartId = ref('')
+const notePreview = ref(true)
+const maximized = ref(false)
+/** 音符左右边缘的可抓取宽度（像素），与 utils/midi noteEdgeAt 默认值保持一致。 */
+const EDGE_GRAB_PX = 8
+/** 当前悬停的音符 id：用于画出「可拉伸」的边缘把手与抓取光标。 */
+const hoveredNoteId = ref<string | null>(null)
+
+// 演唱音准模式的草稿与历史
+const draft = ref<MidiNote[]>([])
+const pitchClipboard = ref<MidiNote[]>([])
+type PitchSnapshot = { notes: MidiNote[]; curve: Array<{ t: number; midi: number }> }
+const pitchUndo: PitchSnapshot[] = []
+const pitchRedo: PitchSnapshot[] = []
+const pitchUndoVersion = ref(0)
+
+// 编曲模式的会话与历史
+const session = ref<MidiSession>(normalizeSession(null, 60))
+const composeClipboard = ref<Array<{ partId: string; note: MidiComposeNote }>>([])
+const composeUndo: MidiSession[] = []
+const composeRedo: MidiSession[] = []
+const composeUndoVersion = ref(0)
+
+let resizeObserver: ResizeObserver | null = null
+let drawHandle = 0
+let rafPlayhead = 0
+const drag = ref<{
+  mode: 'move' | 'start' | 'end' | 'marquee' | 'create' | 'velocity' | 'erase' | 'seek' | 'curve'
+  originX: number
+  originY: number
+  baseAll: MidiNote[]
+  baseSession: MidiSession | null
+  partId: string
+  ids: string[]
+  pushed?: boolean
+  createStart?: number
+  createPitch?: number
+  marqueeStart?: { x: number; y: number }
+  marqueeEnd?: { x: number; y: number }
+  /** 画音高曲线时正在编辑的音符（一次拖动只改一个音）。 */
+  curveNoteId?: string
+  /** 笔画起点的绝对时间/音高（半音），用于跨音符绘制和 Shift 直线。 */
+  curveAbsStartT?: number
+  curveAbsStartMidi?: number
+  /** 上一次写入的绝对位置，用于把两次指针事件之间补成连续线。 */
+  curveLastT?: number
+  curveLastMidi?: number
+  /** 本次笔画是擦除（右键 / 橡皮工具）。 */
+  curveErase?: boolean
+  /** 这一笔是否是直线（Shift 在落笔时锁定，中途按 Shift 不会把曲线掰直）。 */
+  curveLine?: boolean
+  /** 笔试点到的音符，收笔时做一次轻微平滑。 */
+  curveTouched?: string[]
+  /** 这一笔已经重画过的音符：旧曲线（含旧版本生成的平线）会被丢弃。 */
+  curveCleared?: Set<string>
+} | null>(null)
+
+/** 音高曲线模式：打开后拖过音符即可画滑音/颤音（OpenUtau 的 pitch bend）。 */
+const pitchCurveMode = ref(false)
+/** 曲线工具：画笔绘制 / 橡皮擦除（对齐 OpenUtau 的工具切换）。 */
+const pitchTool = ref<'draw' | 'erase'>('draw')
+/** 整轨音高曲线（绝对时间秒 / 绝对音高 MIDI），独立于音符，用户自由绘制。 */
+const globalCurve = ref<Array<{ t: number; midi: number }>>([])
+/** 本次拖动尚未合并进整轨曲线的采样点：每个动画帧只合并一次，避免逐点全量排序。 */
+const pendingStroke = ref<Array<{ t: number; midi: number }>>([])
+const pendingStrokeErase = ref(false)
+/** 原唱 F0 的轻平滑缓存：只在 F0 变化时重算，避免每个动画帧都做窗口平均。 */
+const smoothedPitchCurve = computed<Array<[number, number]>>(() => {
+  const raw = props.pitchCurve
+  if (!raw || raw.length < 2) return []
+  const radius = 2
+  const out: Array<[number, number]> = []
+  for (let index = 0; index < raw.length; index += 1) {
+    let total = 0
+    let count = 0
+    for (let offset = -radius; offset <= radius; offset += 1) {
+      const neighbour = raw[index + offset]
+      if (!neighbour) continue
+      total += neighbour[1]
+      count += 1
+    }
+    out.push([raw[index]![0], count ? total / count : raw[index]![1]])
+  }
+  return out
+})
+
+/** 用户显式「清除曲线」过的音符：自动补曲线时要跳过，否则会立刻又长回来。 */
+const clearedCurveIds = new Set<string>()
+/** 显示音频片段原本的音高曲线（F0 轮廓），可和编辑后的音符对比。 */
+const showOriginalPitch = ref(true)
+
+const isCompose = computed(() => activeMode.value === 'compose')
+const showVelocity = computed(() => isCompose.value)
+const busy = computed(() =>
+  isCompose.value ? !!props.composeBusy || !!props.composeLoading : !!props.loading || !!props.applying,
+)
+const busyText = computed(() => {
+  if (!isCompose.value) return props.loading ? t('正在分析片段基频…') : t('正在处理…')
+  if (props.composeLoading) return t('正在读取 MIDI 编曲…')
+  const action = props.composeBusyAction || busyAction.value
+  if (action === 'tracks') return t('正在按乐器渲染音频…')
+  if (action === 'mix') return t('正在渲染混合音频…')
+  if (action === 'preview') return t('正在渲染试听…')
+  if (action === 'save') return t('正在保存编曲…')
+  return t('正在处理…')
+})
+const errorText = computed(() => (isCompose.value ? props.composeError : props.error))
+const renderPercent = computed(() => {
+  const value = Number(props.renderProgress?.percent ?? 0)
+  return Math.max(1, Math.min(100, Math.round(Number.isFinite(value) ? value : 0)))
+})
+// 用户手动填写的时间轴长度（秒）；0 表示自动（按工程/内容）。
+const durationSeconds = ref(0)
+const duration = computed(() => {
+  const autoBase = isCompose.value
+    ? Number(props.composeDuration) || Number(props.duration) || 600
+    : Number(props.duration) || 0.05
+  const base = durationSeconds.value > 0 ? durationSeconds.value : autoBase
+  // 自动延伸：音符写到哪儿，时间轴就至少长到哪儿（末尾再留 8 秒余量）。
+  let end = 0
+  for (const part of session.value.parts || []) {
+    for (const note of part.notes || []) end = Math.max(end, Number(note.end) || 0)
+  }
+  for (const note of draft.value) end = Math.max(end, Number(note.end) || 0)
+  return Math.max(0.05, base, end > 0 ? end + 8 : 0)
+})
+const parts = computed<MidiPart[]>(() => session.value.parts || [])
+const partCount = computed(() => parts.value.length)
+const totalNotes = computed(() => sessionNoteCount(session.value))
+const hasContent = computed(() =>
+  isCompose.value ? totalNotes.value > 0 : draft.value.length > 0,
+)
+// F0 的纵向范围只随 props.pitchCurve 变化，缓存起来，避免音域 computed 每帧
+// 都遍历几千个 F0 点。
+const f0PitchBounds = computed(() => {
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (const point of props.pitchCurve) {
+    const midi = point[1]
+    if (!Number.isFinite(midi) || midi <= 0) continue
+    if (midi < min) min = midi
+    if (midi > max) max = midi
+  }
+  return min <= max ? { min, max } : null
+})
+
+// 整轨曲线的纵向范围用增量维护（绘制时逐点扩展），避免每帧遍历整条曲线。
+const curveBounds = ref<{ min: number; max: number } | null>(null)
+
+function extendCurveBounds(samples: Array<{ t: number; midi: number }>) {
+  let bounds = curveBounds.value
+  if (!bounds) bounds = { min: Number.POSITIVE_INFINITY, max: Number.NEGATIVE_INFINITY }
+  for (const sample of samples) {
+    if (sample.midi < bounds.min) bounds.min = sample.midi
+    if (sample.midi > bounds.max) bounds.max = sample.midi
+  }
+  curveBounds.value = bounds
+}
+
+function recomputeCurveBounds(points: Array<{ t: number; midi: number }>) {
+  if (!points.length) {
+    curveBounds.value = null
+    return
+  }
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (const point of points) {
+    if (point.midi < min) min = point.midi
+    if (point.midi > max) max = point.midi
+  }
+  curveBounds.value = { min, max }
+}
+
+const pitchRange = computed(() => {
+  if (!isCompose.value) {
+    // 音域以音符为主，适当纳入「原唱 F0 / 用户画过的曲线」，但只在音符上下
+    // 各 12 半音内扩展：离群 F0（八度误判/噪声）不会把整个卷帘撑爆，
+    // 否则音符会被顶到画面外，出现“画了却看不见”的情况。
+    const base = pitchBounds(draft.value)
+    let low = base.min
+    let high = base.max
+    const windowLow = base.min - 12
+    const windowHigh = base.max + 12
+    const include = (midi: number) => {
+      if (!Number.isFinite(midi) || midi <= 0) return
+      if (midi < windowLow || midi > windowHigh) return
+      if (midi < low) low = midi
+      if (midi > high) high = midi
+    }
+    const f0 = f0PitchBounds.value
+    if (f0) {
+      include(f0.min)
+      include(f0.max)
+    }
+    const cb = curveBounds.value
+    if (cb) {
+      include(cb.min)
+      include(cb.max)
+    }
+    low = Math.max(MIDI_PITCH_MIN, Math.floor(low) - 2)
+    high = Math.min(MIDI_PITCH_MAX, Math.ceil(high) + 2)
+    if (high - low < 24) {
+      const centre = (low + high) / 2
+      low = Math.max(MIDI_PITCH_MIN, Math.floor(centre - 12))
+      high = Math.min(MIDI_PITCH_MAX, low + 24)
+      if (high - low < 24) low = Math.max(MIDI_PITCH_MIN, high - 24)
+    }
+    return { min: low, max: high }
+  }
+  // 鼓组声部只显示整套鼓件（GM 35~81），别的音高在鼓组里没有意义。
+  if (drumMode.value) return { min: DRUM_PITCH_MIN - 2, max: DRUM_PITCH_MAX + 2 }
+  return sessionPitchRange(parts.value, 36, 96)
+})
+const rows = computed(() => pitchRange.value.max - pitchRange.value.min + 1)
+const contentHeight = computed(() => rows.value * rowHeight.value + RULER_HEIGHT)
+const totalWidth = computed(() =>
+  Math.max(viewWidth.value, Math.round(duration.value * pxPerSecond.value)),
+)
+const totalHeight = computed(() => Math.max(viewHeight.value, contentHeight.value))
+const snapStep = computed(() =>
+  isCompose.value ? gridStepSeconds(session.value.tempo, gridDivisionId.value) : pitchGrid.value,
+)
+const activePart = computed(
+  () => parts.value.find((part) => part.id === activePartId.value) || parts.value[0] || null,
+)
+/** 当前声部是不是架子鼓：鼓组模式下键列显示鼓件名、新音符吸附到真实鼓件。 */
+const drumMode = computed(() => isCompose.value && !!activePart.value?.drum)
+const drumPartIds = computed(
+  () => new Set(parts.value.filter((part) => part.drum).map((part) => part.id)),
+)
+const signatureOptions = TIME_SIGNATURE_CHOICES.map((item) => ({
+  value: `${item[0]}/${item[1]}`,
+  label: `${item[0]}/${item[1]}`,
+}))
+/**
+ * 乐器选择器：后端目录优先，缺失时用内嵌的 128 GM 表兜底。
+ * 无论走哪条路径，显示的都是具体乐器名（不会出现「钢琴 1」这种编号占位）。
+ */
+const instrumentGroups = computed(() => {
+  const names = new Map<number, { zh: string; en: string }>()
+  for (const item of GM_INSTRUMENTS) {
+    names.set(item.program, { zh: item.name_zh, en: item.name_en })
+  }
+  for (const item of props.instruments || []) {
+    if (Number.isFinite(item.program)) {
+      names.set(item.program, {
+        zh: item.name_zh || item.name_en,
+        en: item.name_en || item.name_zh,
+      })
+    }
+  }
+  const families = props.families?.length
+    ? props.families.map((family) => ({
+        id: family.id,
+        zh: family.name_zh || family.name_en,
+        en: family.name_en || family.name_zh,
+        programs: family.programs || [],
+      }))
+    : GM_FAMILIES.map((family) => ({
+        id: family.id,
+        zh: family.name,
+        en: family.name_en,
+        programs: family.programs,
+      }))
+  return families
+    .map((family) => ({
+      id: family.id,
+      label: localizeName(family.zh, family.en),
+      options: family.programs
+        .map((program) => {
+          const entry = names.get(program)
+          return {
+            program,
+            name: entry ? localizeName(entry.zh, entry.en) : instrumentName(program),
+          }
+        })
+        .filter((item) => Number.isFinite(item.program)),
+    }))
+    .filter((family) => family.options.length > 0)
+})
+const velocitySelection = computed(() => {
+  const ids = new Set(selection.value)
+  const values: number[] = []
+  for (const part of parts.value) {
+    for (const note of part.notes) if (ids.has(note.id)) values.push(note.velocity)
+  }
+  return values
+})
+const selectionVelocityRange = computed(() => {
+  const values = velocitySelection.value
+  if (!values.length) return '-'
+  const low = Math.min(...values)
+  const high = Math.max(...values)
+  return low === high ? `${low}` : `${low}~${high}`
+})
+
+const pitchNoteMap = computed(() => new Map(draft.value.map((note) => [note.id, note])))
+const primaryPitchNote = computed(() => {
+  for (let index = selection.value.length - 1; index >= 0; index -= 1) {
+    const found = pitchNoteMap.value.get(selection.value[index]!)
+    if (found) return found
+  }
+  return null
+})
+const primaryComposeNote = computed(() => {
+  for (let index = selection.value.length - 1; index >= 0; index -= 1) {
+    const found = locateNote(selection.value[index]!)
+    if (found) return found.note
+  }
+  return null
+})
+const primaryNote = computed(() =>
+  isCompose.value
+    ? primaryComposeNote.value
+    : (primaryPitchNote.value as unknown as MidiComposeNote | null),
+)
+
+/** 选中音符的音高曲线范围（半音），让人一眼确认曲线到底改了多少音高。 */
+const curveRangeLabel = computed(() => {
+  const curve = (primaryPitchNote.value as MidiNote | null)?.curve
+  if (!curve || !curve.length) return ''
+  let low = Number.POSITIVE_INFINITY
+  let high = Number.NEGATIVE_INFINITY
+  for (const point of curve) {
+    low = Math.min(low, point.v)
+    high = Math.max(high, point.v)
+  }
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return ''
+  const format = (value: number) => `${value > 0 ? '+' : ''}${value.toFixed(2)}`
+  return low === high ? `${t('曲线')} ${format(low)} ${t('半音')}` : `${t('曲线')} ${format(low)} ~ ${format(high)} ${t('半音')}`
+})
+
+const transportDisabled = computed(() => (isCompose.value ? !hasContent.value : !canPreview.value))
+const transportHint = computed(() => {
+  if (isCompose.value) return hasContent.value ? t('用内置乐器渲染并播放') : t('还没有音符')
+  return canPreview.value ? t('播放片段音频（不是 MIDI 音源）') : t('空白轨道没有音频可试听')
+})
+const previewTitle = computed(() => {
+  if (props.previewLoading) return t('正在渲染试听…')
+  return hasContent.value ? t('用内置乐器渲染并播放') : t('还没有音符')
+})
+const playing = computed(() => (isCompose.value ? playingState.value : props.playing || playingState.value))
+const transportLabel = computed(() => {
+  if (props.previewLoading) return t('渲染试听…')
+  return playing.value ? t('⏸ 暂停') : t('▶ 试听')
+})
+const playheadSeconds = computed(() => {
+  if (isCompose.value) return previewTime.value
+  // 演唱音准模式：一旦有本地试听音频，就显示它自己的播放位置。
+  if (props.previewUrl) return previewTime.value
+  return props.playhead
+})
+const clockLabel = computed(() => {
+  const seconds = Math.max(0, playheadSeconds.value)
+  if (isCompose.value) {
+    return `${barBeatLabel(seconds, session.value.tempo, session.value.time_signature)} · ${formatClock(seconds)}`
+  }
+  return formatClock(seconds)
+})
+const hintText = computed(() =>
+  isCompose.value
+    ? t('D 画笔 / V 选择 / E 橡皮 · 双击新建 · 拖音符移动 · 拖边缘改长度 · [ ] 伸缩 · 下方拖力度条 · 空格试听 · Del 删除')
+    : pitchCurveMode.value
+      ? (props.pitchCurve && props.pitchCurve.length >= 2
+        ? t('音高曲线：在音符上按住拖动，像画笔一样画线（单击只选中）· Alt 擦除 · Ctrl 吸附半音')
+        : t('还没有可用的原始基频（F0），无法自动生成曲线：请先分析片段基频，或手动在音符上拖动绘制'))
+      : t('双击空白新建 · 拖动移动 · 拖边缘改长度 · 框选多选 · 右键菜单 · Del 删除 · 空格试听'),
+)
+const canUndo = computed(() =>
+  isCompose.value ? composeUndo.length > 0 : pitchUndoVersion.value >= 0 && pitchUndo.length > 0,
+)
+const canRedo = computed(() =>
+  isCompose.value ? composeRedo.length > 0 : pitchUndoVersion.value >= 0 && pitchRedo.length > 0,
+)
+const hasClipboard = computed(() =>
+  isCompose.value ? composeClipboard.value.length > 0 : pitchClipboard.value.length > 0,
+)
+const canPreview = computed(() => (props.scope === 'track' ? props.clipSpans.length > 0 : true))
+const canApply = computed(() => (props.scope === 'track' ? props.clipSpans.length > 0 : true))
+const applyHint = computed(() => {
+  if (!props.ready) return t('MIDI 音高重绘环境未就绪')
+  if (!canApply.value) return t('音轨上还没有片段：先切到「MIDI 编曲」写谱并渲染')
+  return props.scope === 'track' ? t('把音符按片段切分后落到音频') : t('把音符应用到音频（保共振峰移调）')
+})
+const previewHint = computed(() =>
+  canPreview.value ? t('播放片段音频（不是 MIDI 音源）') : t('空白轨道没有音频可试听'),
+)
+const analysisText = computed(() => {
+  const data = props.analysis || {}
+  const chunks: string[] = []
+  const median = Number(data.median_hz ?? 0)
+  if (median > 0) chunks.push(`${t('中位基频')} ${median.toFixed(1)}Hz`)
+  const voiced = Number(data.voiced_ratio ?? 0)
+  if (voiced > 0) chunks.push(`${t('浊音')} ${Math.round(voiced * 100)}%`)
+  if (data.empty_track) chunks.push(t('空白轨道'))
+  return chunks.join(' · ')
+})
+
+/* ---------------------------------------------------------------- 初始化与同步 */
+
+watch(
+  () => props.mode,
+  (mode) => {
+    if (mode !== activeMode.value) setMode(mode)
+  },
+)
+
+watch(
+  () => props.notes,
+  (notes) => {
+    // 旧版本会自动生成「贴音符音高的平线」占位曲线；这里在载入时清掉，
+    // 否则它们会和新手绘的线混在一起，看起来像突然冒出的直线段。
+    draft.value = (notes || []).map((note) => {
+      const curve = note.curve
+      if (curve && curve.length <= 2 && curve.every((point) => Math.abs(point.v) <= 0.001)) {
+        const next = { ...note }
+        delete next.curve
+        return next
+      }
+      return { ...note }
+    })
+    selection.value = []
+    pitchUndo.length = 0
+    pitchRedo.length = 0
+    pitchUndoVersion.value += 1
+    // 重新分析/重新加载后音符是新的，允许再次自动补曲线。
+    clearedCurveIds.clear()
+    rebuildGlobalCurve()
+    fitZoomToWidth()
+    nextTick(() => {
+      draw()
+    })
+  },
+  { immediate: true, deep: true },
+)
+
+watch(
+  () => props.composeSession,
+  (value) => {
+    if (!value) return
+    durationSeconds.value = 0
+    session.value = normalizeSession(value, duration.value)
+    if (!session.value.parts.some((part) => part.id === activePartId.value)) {
+      activePartId.value = session.value.parts[0]?.id || ''
+    }
+    selection.value = []
+    composeUndo.length = 0
+    composeRedo.length = 0
+    composeUndoVersion.value += 1
+    dirty.value = false
+    fitZoomToWidth()
+    nextTick(draw)
+  },
+  { immediate: true, deep: false },
+)
+
+watch(
+  () => props.modelValue,
+  (open) => {
+    lockPageScroll(open)
+    if (!open) {
+      maximized.value = false
+      drag.value = null
+      hoveredNoteId.value = null
+      contextMenu.visible = false
+      stopPlay()
+      return
+    }
+    nextTick(() => {
+      if (resizeObserver) {
+        resizeObserver.disconnect()
+        if (scrollRef.value) resizeObserver.observe(scrollRef.value)
+      }
+      measureViewport()
+      fitZoomToWidth()
+      draw()
+    })
+  },
+)
+
+/** 打开时锁住页面滚动：全屏编辑器里滚轮只应该滚钢琴卷帘。 */
+function lockPageScroll(lock: boolean) {
+  if (typeof document === 'undefined') return
+  document.body.style.overflow = lock ? 'hidden' : ''
+}
+
+watch(
+  [() => session.value, selection, () => pxPerSecond.value, () => rowHeight.value, showVelocity],
+  () => scheduleDraw(),
+  { deep: true },
+)
+watch(
+  [draft, () => pxPerSecond.value, () => rowHeight.value, () => props.playhead, () => props.playing],
+  () => scheduleDraw(),
+  { deep: true },
+)
+watch(previewTime, () => scheduleDraw())
+watch(hoveredNoteId, () => scheduleDraw())
+
+onMounted(() => {
+  window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('pointerdown', onWindowPointerDown, true)
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => {
+      measureViewport()
+      scheduleDraw()
+    })
+    if (scrollRef.value) resizeObserver.observe(scrollRef.value)
+  }
+  nextTick(() => {
+    measureViewport()
+    fitZoomToWidth()
+    draw()
+  })
+})
+
+onBeforeUnmount(() => {
+  lockPageScroll(false)
+  window.removeEventListener('keydown', onKeyDown)
+  window.removeEventListener('pointerdown', onWindowPointerDown, true)
+  resizeObserver?.disconnect()
+  resizeObserver = null
+  if (drawHandle) window.cancelAnimationFrame(drawHandle)
+  if (rafPlayhead) window.cancelAnimationFrame(rafPlayhead)
+  drawHandle = 0
+  rafPlayhead = 0
+  if (audioContext) {
+    void audioContext.close().catch(() => undefined)
+    audioContext = null
+  }
+})
+
+function setMode(mode: EditorMode) {
+  if (mode === 'pitch' && !props.hasAudio) return
+  activeMode.value = mode
+  selection.value = []
+  hoveredNoteId.value = null
+  emit('update:mode', mode)
+  nextTick(() => {
+    measureViewport()
+    fitZoomToWidth()
+    draw()
+  })
+}
+
+function formatClock(seconds: number) {
+  const total = Math.max(0, seconds)
+  const minutes = Math.floor(total / 60)
+  const rest = total - minutes * 60
+  return `${minutes}:${rest.toFixed(2).padStart(5, '0')}`
+}
+
+function formatGrid(value: number) {
+  return `${Math.round(value * 1000)}ms`
+}
+
+function noteLabel(pitch: number) {
+  return drumMode.value ? t(drumName(pitch)) : noteName(pitch)
+}
+
+/* ---------------------------------------------------------------- 点击试听（WebAudio 提示音） */
+
+let audioContext: AudioContext | null = null
+
+function ensureAudioContext(): AudioContext | null {
+  try {
+    const Ctor =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!Ctor) return null
+    audioContext = audioContext || new Ctor()
+    if (audioContext.state === 'suspended') void audioContext.resume()
+    return audioContext
+  } catch {
+    return null
+  }
+}
+
+/** 新建/选中音符时发一个短提示音：旋律用三角波，鼓组按鼓件类型发真实鼓声。 */
+function playBlip(pitch: number, velocity = 100) {
+  if (!notePreview.value || !isCompose.value) return
+  if (drumMode.value) {
+    playDrumBlip(pitch, velocity)
+    return
+  }
+  const context = ensureAudioContext()
+  if (!context) return
+  try {
+    const now = context.currentTime
+    const oscillator = context.createOscillator()
+    const gain = context.createGain()
+    oscillator.type = 'triangle'
+    oscillator.frequency.value = 440 * 2 ** ((clampComposePitch(pitch) - 69) / 12)
+    const peak = Math.max(0.02, Math.min(0.22, (velocity / 127) * 0.2))
+    gain.gain.setValueAtTime(0.0001, now)
+    gain.gain.exponentialRampToValueAtTime(peak, now + 0.012)
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.2)
+    oscillator.connect(gain)
+    gain.connect(context.destination)
+    oscillator.start(now)
+    oscillator.stop(now + 0.24)
+  } catch {
+    // 没有音频输出设备时静默失败即可，不影响编辑。
+  }
+}
+
+/** 鼓组点按试听：底鼓用正弦下扫、军鼓/小打用噪声、踩镲/镲片用高频噪声。 */
+function playDrumBlip(pitch: number, velocity = 110) {
+  const context = ensureAudioContext()
+  if (!context) return
+  const piece = drumPiece(pitch) || drumPiece(nearestDrumPitch(pitch))
+  const group = piece?.group || 'snare'
+  const level = Math.max(0.05, Math.min(0.5, (velocity / 127) * 0.45))
+  try {
+    const now = context.currentTime
+    const gain = context.createGain()
+    gain.connect(context.destination)
+    const stop = (duration: number) => {
+      gain.gain.setValueAtTime(0.0001, now)
+      gain.gain.exponentialRampToValueAtTime(level, now + 0.004)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration)
+    }
+
+    if (group === 'kick') {
+      const oscillator = context.createOscillator()
+      oscillator.type = 'sine'
+      oscillator.frequency.setValueAtTime(150, now)
+      oscillator.frequency.exponentialRampToValueAtTime(46, now + 0.12)
+      oscillator.connect(gain)
+      stop(0.26)
+      oscillator.start(now)
+      oscillator.stop(now + 0.28)
+      return
+    }
+
+    if (group === 'tom') {
+      const oscillator = context.createOscillator()
+      oscillator.type = 'sine'
+      const base = 90 + (nearestDrumPitch(pitch) - 41) * 12
+      oscillator.frequency.setValueAtTime(base * 1.4, now)
+      oscillator.frequency.exponentialRampToValueAtTime(base, now + 0.1)
+      oscillator.connect(gain)
+      stop(0.3)
+      oscillator.start(now)
+      oscillator.stop(now + 0.32)
+      return
+    }
+
+    // 军鼓 / 踩镲 / 镲片 / 小打：短噪声
+    const duration =
+      group === 'crash' || group === 'ride' ? 0.5 : group === 'hat_open' ? 0.26 : group === 'hat' ? 0.06 : 0.16
+    const frames = Math.max(1, Math.floor(context.sampleRate * duration))
+    const buffer = context.createBuffer(1, frames, context.sampleRate)
+    const data = buffer.getChannelData(0)
+    for (let index = 0; index < frames; index += 1) {
+      data[index] = (Math.random() * 2 - 1) * (1 - index / frames)
+    }
+    const source = context.createBufferSource()
+    source.buffer = buffer
+    const filter = context.createBiquadFilter()
+    filter.type = group === 'hat' || group === 'hat_open' || group === 'crash' || group === 'ride'
+      ? 'highpass'
+      : 'bandpass'
+    filter.frequency.value = group === 'snare' || group === 'clap' || group === 'rim' ? 1800 : 6500
+    source.connect(filter)
+    filter.connect(gain)
+    stop(duration)
+    source.start(now)
+  } catch {
+    // 忽略音频错误：编辑不受影响。
+  }
+}
+
+function instrumentLabel(program: number) {
+  const found = (props.instruments || []).find((item) => item.program === program)
+  if (found) return localizeName(found.name_zh, found.name_en)
+  const item = GM_INSTRUMENTS[clampProgram(program)]
+  return item ? localizeName(item.name_zh, item.name_en) : instrumentName(program)
+}
+
+/* ---------------------------------------------------------------- 视口与缩放 */
+
+function measureViewport() {
+  const el = scrollRef.value
+  if (!el) return
+  viewWidth.value = Math.max(200, el.clientWidth - KEY_WIDTH)
+  viewHeight.value = Math.max(140, el.clientHeight)
+  scrollLeft.value = el.scrollLeft
+  scrollTop.value = el.scrollTop
+  const canvas = velocityCanvasRef.value
+  if (canvas && showVelocity.value) {
+    canvas.width = viewWidth.value * dpr
+    canvas.height = velocityHeight * dpr
+  }
+}
+
+function onScroll() {
+  const el = scrollRef.value
+  if (!el) return
+  scrollLeft.value = el.scrollLeft
+  scrollTop.value = el.scrollTop
+  scheduleDraw()
+}
+
+/** Ctrl/⌘ + 滚轮：以指针为锚点横向缩放；再加 Shift 则缩放音域（行高）。 */
+function onWheel(event: WheelEvent) {
+  if (!(event.ctrlKey || event.metaKey)) return
+  const canvas = gridCanvasRef.value
+  if (!canvas) return
+  event.preventDefault()
+  const factor = event.deltaY < 0 ? 1.25 : 0.8
+  if (event.shiftKey) {
+    zoomPitch(factor)
+    return
+  }
+  const rect = canvas.getBoundingClientRect()
+  const pointerX = (event.clientX - rect.left) * (viewWidth.value / Math.max(1, rect.width))
+  const anchorTime = (scrollLeft.value + pointerX) / Math.max(1, pxPerSecond.value)
+  const next = Math.min(800, Math.max(12, Math.round(pxPerSecond.value * factor)))
+  pxPerSecond.value = next
+  nextTick(() => {
+    const el = scrollRef.value
+    if (el) el.scrollLeft = Math.max(0, anchorTime * next - pointerX)
+    measureViewport()
+    scheduleDraw()
+  })
+}
+
+/** 横向缩放（以视口中心为锚点），给工具栏的 ＋/－ 与键盘 +/- 用。 */
+function zoomTime(factor: number) {
+  const el = scrollRef.value
+  const centre = viewWidth.value / 2
+  const anchorTime = el ? (el.scrollLeft + centre) / Math.max(1, pxPerSecond.value) : 0
+  const next = Math.min(800, Math.max(12, Math.round(pxPerSecond.value * factor)))
+  if (next === pxPerSecond.value) return
+  pxPerSecond.value = next
+  nextTick(() => {
+    if (el) el.scrollLeft = Math.max(0, anchorTime * next - centre)
+    measureViewport()
+    scheduleDraw()
+  })
+}
+
+/** 纵向缩放（音域行高），保持时间轴位置不变。 */
+function zoomPitch(factor: number) {
+  const el = scrollRef.value
+  const anchorRatio =
+    el && contentHeight.value > 0 ? el.scrollTop / Math.max(1, contentHeight.value) : 0
+  const next = Math.min(40, Math.max(8, Math.round(rowHeight.value * factor)))
+  if (next === rowHeight.value) return
+  rowHeight.value = next
+  nextTick(() => {
+    if (el) el.scrollTop = Math.max(0, anchorRatio * contentHeight.value)
+    measureViewport()
+    scheduleDraw()
+  })
+}
+
+function toggleMaximized() {
+  maximized.value = !maximized.value
+  nextTick(() => {
+    measureViewport()
+    scheduleDraw()
+  })
+}
+
+function scheduleDraw() {
+  if (drawHandle) return
+  drawHandle = window.requestAnimationFrame(() => {
+    drawHandle = 0
+    draw()
+  })
+}
+
+function close() {
+  stopPlay()
+  emit('update:modelValue', false)
+}
+
+function refresh() {
+  emit('refresh')
+}
+
+function usableWidth() {
+  return Math.max(200, viewWidth.value - 24)
+}
+
+function fitZoomToWidth() {
+  measureViewport()
+  const hasNotes = isCompose.value
+    ? parts.value.some((part) => (part.notes || []).length > 0)
+    : draft.value.length > 0
+  if (hasNotes) {
+    pxPerSecond.value = fitZoom(duration.value, usableWidth(), 12, 800)
+    return
+  }
+  // 空白会话：不要缩到 12px/s 只剩一小段可视区，用能直接写音符的默认缩放。
+  pxPerSecond.value = Math.max(48, Math.min(160, Math.round(usableWidth() / 8)))
+}
+
+function zoomToFit() {
+  fitZoomToWidth()
+  if (scrollRef.value) {
+    scrollRef.value.scrollLeft = 0
+    scrollRef.value.scrollTop = 0
+  }
+  onScroll()
+}
+
+function focusNotes(notes: Array<{ start: number; end: number }>) {
+  if (!notes.length) {
+    zoomToFit()
+    return
+  }
+  const start = Math.min(...notes.map((note) => note.start))
+  const end = Math.max(...notes.map((note) => note.end))
+  const span = Math.max(0.2, end - start)
+  measureViewport()
+  pxPerSecond.value = fitZoom(span, usableWidth(), 40, 800)
+  nextTick(() => {
+    if (scrollRef.value) scrollRef.value.scrollLeft = Math.max(0, start * pxPerSecond.value - 40)
+    measureViewport()
+    scheduleDraw()
+  })
+}
+
+function zoomToSelection() {
+  const notes = isCompose.value
+    ? parts.value.flatMap((part) => part.notes.filter((note) => selection.value.includes(note.id)))
+    : draft.value.filter((note) => selection.value.includes(note.id))
+  focusNotes(notes.length ? notes : allNoteSpans())
+}
+
+function allNoteSpans() {
+  return isCompose.value
+    ? parts.value.flatMap((part) => part.notes)
+    : draft.value
+}
+
+/* ---------------------------------------------------------------- 撤销 / 选择 */
+
+function cloneSession(source: MidiSession): MidiSession {
+  return {
+    ...source,
+    time_signature: [...(source.time_signature || [4, 4])],
+    parts: (source.parts || []).map((part) => ({
+      ...part,
+      notes: (part.notes || []).map((note) => ({ ...note })),
+    })),
+  }
+}
+
+/**
+ * 音符快照：音符本身是不可变更新的（改动都是替换对象、从不原地改 curve 数组），
+ * 所以浅拷贝即可，不必再深拷贝每条曲线——长歌曲、长曲线时这省掉大量对象和 GC。
+ */
+function snapshotNotes(): MidiNote[] {
+  return draft.value.map((note) => ({ ...note }))
+}
+
+function pushUndo() {
+  if (isCompose.value) {
+    composeUndo.push(cloneSession(session.value))
+    if (composeUndo.length > 100) composeUndo.shift()
+    composeRedo.length = 0
+    composeUndoVersion.value += 1
+    dirty.value = true
+    return
+  }
+  // globalCurve 每次都是整体替换成新数组（从不原地改），快照直接持有旧数组引用即可。
+  pitchUndo.push({
+    notes: snapshotNotes(),
+    curve: globalCurve.value,
+  })
+  if (pitchUndo.length > 60) pitchUndo.shift()
+  pitchRedo.length = 0
+  pitchUndoVersion.value += 1
+}
+
+function undo() {
+  if (isCompose.value) {
+    const previous = composeUndo.pop()
+    if (!previous) return
+    composeRedo.push(cloneSession(session.value))
+    session.value = previous
+    composeUndoVersion.value += 1
+    dirty.value = true
+    selection.value = selection.value.filter((id) => !!locateNote(id))
+    scheduleDraw()
+    return
+  }
+  const previous = pitchUndo.pop()
+  if (!previous) return
+  pitchRedo.push({
+    notes: snapshotNotes(),
+    curve: globalCurve.value,
+  })
+  draft.value = previous.notes
+  globalCurve.value = previous.curve
+  recomputeCurveBounds(globalCurve.value)
+  selection.value = selection.value.filter((id) => previous.notes.some((note) => note.id === id))
+  pitchUndoVersion.value += 1
+  scheduleDraw()
+}
+
+function redo() {
+  if (isCompose.value) {
+    const next = composeRedo.pop()
+    if (!next) return
+    composeUndo.push(cloneSession(session.value))
+    session.value = next
+    composeUndoVersion.value += 1
+    dirty.value = true
+    scheduleDraw()
+    return
+  }
+  const next = pitchRedo.pop()
+  if (!next) return
+  pitchUndo.push({
+    notes: snapshotNotes(),
+    curve: globalCurve.value,
+  })
+  draft.value = next.notes
+  globalCurve.value = next.curve
+  recomputeCurveBounds(globalCurve.value)
+  selection.value = selection.value.filter((id) => next.notes.some((note) => note.id === id))
+  pitchUndoVersion.value += 1
+  scheduleDraw()
+}
+
+function resetDraft() {
+  if (isCompose.value) {
+    if (props.composeSession) session.value = normalizeSession(props.composeSession, duration.value)
+    composeUndo.length = 0
+    composeRedo.length = 0
+    composeUndoVersion.value += 1
+    selection.value = []
+    dirty.value = false
+    scheduleDraw()
+    return
+  }
+  pitchUndo.length = 0
+  pitchRedo.length = 0
+  draft.value = (props.notes || []).map((note) => {
+    const curve = note.curve
+    if (curve && curve.length <= 2 && curve.every((point) => Math.abs(point.v) <= 0.001)) {
+      const next = { ...note }
+      delete next.curve
+      return next
+    }
+    return { ...note }
+  })
+  rebuildGlobalCurve()
+  selection.value = []
+  pitchUndoVersion.value += 1
+}
+
+function touchDirty() {
+  dirty.value = true
+}
+
+function selectOnly(id: string) {
+  selection.value = id ? [id] : []
+}
+
+function toggleSelect(id: string) {
+  selection.value = selection.value.includes(id)
+    ? selection.value.filter((item) => item !== id)
+    : [...selection.value, id]
+}
+
+function selectAll() {
+  selection.value = isCompose.value
+    ? parts.value.flatMap((part) => part.notes.map((note) => note.id))
+    : draft.value.map((note) => note.id)
+}
+
+function clearSelection() {
+  selection.value = []
+}
+
+function selectionSet(): Set<string> {
+  return new Set(selection.value)
+}
+
+function locateNote(id: string): { part: MidiPart; note: MidiComposeNote } | null {
+  for (const part of parts.value) {
+    const note = part.notes.find((item) => item.id === id)
+    if (note) return { part, note }
+  }
+  return null
+}
+
+/** 鼓组声部里的音符永远落在真实鼓件上：拖动/移调后把音高吸附到最近的鼓件。 */
+function snapDrumPitches(nextParts: MidiPart[], ids: Set<string>): MidiPart[] {
+  return nextParts.map((part) => {
+    if (!part.drum) return part
+    let changed = false
+    const notes = part.notes.map((note) => {
+      if (!ids.has(note.id)) return note
+      const snapped = nearestDrumPitch(note.pitch)
+      if (snapped === note.pitch) return note
+      changed = true
+      return { ...note, pitch: snapped }
+    })
+    return changed ? { ...part, notes } : part
+  })
+}
+
+/* ---------------------------------------------------------------- 声部操作 */
+
+function selectPart(partId: string) {
+  activePartId.value = partId
+  scheduleDraw()
+}
+
+function addPart() {
+  pushUndo()
+  const part = createPart(parts.value.length, {
+    instrument: parts.value.length === 0 ? 0 : 48,
+    name: parts.value.length === 0 ? t('旋律') : `${t('声部')} ${parts.value.length + 1}`,
+  })
+  session.value.parts = [...session.value.parts, part]
+  activePartId.value = part.id
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function addDrumPart() {
+  pushUndo()
+  const part = createPart(parts.value.length, { drum: true, name: t('架子鼓') })
+  session.value.parts = [...session.value.parts, part]
+  activePartId.value = part.id
+  markPreviewStale()
+  scheduleDraw()
+}
+
+/** 在鼓组声部里填一段 4/4 基本节奏（可撤销，随后随便改）。 */
+function fillDrumBeat(part: MidiPart) {
+  pushUndo()
+  const beat = secondsPerBeat(session.value.tempo)
+  const start = Math.max(0, Math.min(previewTime.value || 0, duration.value - 0.1))
+  const generated = basicDrumBeat(beat, { bars: 2, start, velocity: 112 }).map((note) => ({
+    ...note,
+    start: clampTime(note.start, duration.value),
+    end: clampTime(note.end, duration.value),
+  }))
+  part.notes = sortNotes([...part.notes, ...generated])
+  activePartId.value = part.id
+  selection.value = generated.map((note) => note.id)
+  markPreviewStale()
+  scheduleDraw()
+}
+
+/** 把 .mid 文件的音符导入到指定声部（鼓组轨会把声部切到鼓组）。 */
+async function importMidiToPart(part: MidiPart) {
+  const result = await api.importEditorMidiTracks()
+  if (!result?.ok) {
+    if (result?.error) ElMessage.error(t(result.error))
+    return
+  }
+  const tracks = (result.tracks || []).filter((track) => track.notes.length)
+  if (!tracks.length) {
+    ElMessage.error(t('MIDI 文件里没有音符'))
+    return
+  }
+  pushUndo()
+  const stamp = Date.now().toString(36)
+  let counter = 0
+  const imported: MidiComposeNote[] = []
+  for (const track of tracks) {
+    for (const note of track.notes) {
+      const span = clampNoteSpan(note.start, note.end, duration.value)
+      imported.push({
+        id: `im_${stamp}_${counter++}`,
+        start: span.start,
+        end: span.end,
+        pitch: clampComposePitch(note.pitch),
+        velocity: clampVelocity(note.velocity),
+      })
+    }
+  }
+  part.notes = sortNotes(imported)
+  const first = tracks[0]!
+  const autoName = isDefaultPartName(part.name)
+  if (first.drum) {
+    part.drum = true
+    part.instrument = 0
+    if (autoName) part.name = t('架子鼓')
+  } else {
+    part.drum = false
+    part.instrument = clampProgram(first.program)
+    if (autoName) part.name = instrumentLabel(part.instrument)
+  }
+  activePartId.value = part.id
+  selection.value = imported.map((note) => note.id)
+  dirty.value = true
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function removePart(part: MidiPart) {
+  if (parts.value.length <= 1) return
+  pushUndo()
+  session.value.parts = parts.value.filter((item) => item.id !== part.id)
+  if (activePartId.value === part.id) activePartId.value = session.value.parts[0]?.id || ''
+  selection.value = selection.value.filter((id) => !!locateNote(id))
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function toggleMute(part: MidiPart) {
+  part.mute = !part.mute
+  dirty.value = true
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function toggleSolo(part: MidiPart) {
+  part.solo = !part.solo
+  dirty.value = true
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function onInstrumentChange(part: MidiPart, event: Event) {
+  const target = event.target as HTMLSelectElement
+  const value = target.value
+  if (value === 'drum') {
+    // 切到鼓组：把已有音符吸附到真实鼓件。
+    if (!part.drum) {
+      const autoName = isDefaultPartName(part.name)
+      part.drum = true
+      part.instrument = 0
+      if (autoName) part.name = t('架子鼓')
+      part.notes = part.notes.map((note) => ({ ...note, pitch: nearestDrumPitch(note.pitch) }))
+    }
+    dirty.value = true
+    markPreviewStale()
+    scheduleDraw()
+    return
+  }
+  const program = Number(value)
+  if (!Number.isFinite(program)) return
+  const autoName = isDefaultPartName(part.name)
+  part.drum = false
+  part.instrument = clampProgram(program)
+  if (autoName) part.name = instrumentLabel(part.instrument)
+  dirty.value = true
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function applyTempo(event: Event) {
+  const target = event.target as HTMLInputElement
+  const previous = session.value.tempo
+  const next = clampTempo(Number(target.value) || previous)
+  target.value = String(Math.round(next))
+  if (next === previous) return
+  pushUndo()
+  // 速度变化时同步缩放已有音符，让「音乐位置」保持不变（和主流 DAW 一致）。
+  const factor = previous / next
+  session.value.parts = session.value.parts.map((part) => ({
+    ...part,
+    notes: part.notes.map((note) => ({
+      ...note,
+      start: Math.round(note.start * factor * 1000) / 1000,
+      end: Math.round(note.end * factor * 1000) / 1000,
+    })),
+  }))
+  session.value.tempo = next
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function applySignature(event: Event) {
+  const target = event.target as HTMLSelectElement
+  const [numerator, denominator] = target.value.split('/').map((item) => Number(item) || 4)
+  session.value.time_signature = [numerator || 4, denominator || 4]
+  dirty.value = true
+  scheduleDraw()
+}
+
+function applyDuration(event: Event) {
+  const target = event.target as HTMLInputElement
+  const raw = Number(target.value)
+  const next = Number.isFinite(raw) ? Math.max(0, Math.min(86400, Math.round(raw))) : 0
+  durationSeconds.value = next
+  target.value = String(next || Math.round(duration.value))
+  dirty.value = true
+  markPreviewStale()
+  scheduleDraw()
+}
+
+/* ---------------------------------------------------------------- 编辑操作 */
+
+function setSelectionDetune(event: Event) {
+  if (!selection.value.length || isCompose.value) return
+  const target = event.target as HTMLInputElement
+  const detune = clampDetune(Number(target.value) || 0)
+  const ids = selectionSet()
+  pushUndo()
+  draft.value = draft.value.map((note) => (ids.has(note.id) ? { ...note, detune } : note))
+  markPreviewStale()
+  scheduleDraw()
+}
+
+/** 清掉选中音符的音高曲线，回到整段恒定音高。 */
+/** 对选中音符的音高曲线做一次轻微平滑（3 点加权），去掉手绘抖动。 */
+function smoothSelectedCurves() {
+  const ids = new Set(selection.value)
+  if (!ids.size) return
+  pushUndo()
+  draft.value = draft.value.map((note) => {
+    if (!ids.has(note.id) || !note.curve || note.curve.length < 3) return note
+    const span = Math.max(1e-3, note.end - note.start)
+    const smoothed: MidiCurvePoint[] = note.curve.map((point, index, all) => {
+      const previous = all[index - 1] ?? point
+      const next = all[index + 1] ?? point
+      return {
+        t: point.t,
+        v: Math.round(((previous.v + point.v * 2 + next.v) / 4) * 1000) / 1000,
+      }
+    })
+    return { ...note, curve: tidyCurve(smoothed, span, 0.02) ?? smoothed }
+  })
+  mergeNoteCurvesIntoGlobal(ids)
+  markPreviewStale()
+  scheduleDraw()
+}
+function clearSelectedCurve() {
+  if (isCompose.value || !selection.value.length) return
+  const ids = selectionSet()
+  pushUndo()
+  // 记下来，避免「自动补曲线」立刻又给它加回去。
+  ids.forEach((id) => clearedCurveIds.add(id))
+  draft.value = draft.value.map((note) => {
+    if (!ids.has(note.id) || !note.curve) return note
+    const next = { ...note }
+    delete next.curve
+    return next
+  })
+  mergeNoteCurvesIntoGlobal(ids)
+  markPreviewStale()
+  scheduleDraw()
+}
+
+/** 5.5Hz 颤音曲线：前 120ms 渐入，避免开头突然抖。
+ *  音符很长时自动降频（保证每个周期至少 3 个采样点），并受控制点上限约束。 */
+function vibratoCurve(note: MidiNote): MidiCurvePoint[] {
+  const span = Math.max(0.05, note.end - note.start)
+  const depth = 0.35
+  const count = Math.max(6, Math.min(MAX_CURVE_POINTS - 1, Math.ceil(span / 0.04)))
+  const rate = Math.min(5.5, Math.max(1.2, count / (span * 3)))
+  const points: MidiCurvePoint[] = []
+  for (let index = 0; index <= count; index += 1) {
+    const t = (span * index) / count
+    const fade = Math.min(1, t / 0.12)
+    points.push({
+      t: Math.round(t * 1000) / 1000,
+      v: Math.round(depth * fade * Math.sin(2 * Math.PI * rate * t) * 1000) / 1000,
+    })
+  }
+  return points
+}
+
+/** 找同一音轨里紧挨在这个音之前的音符（滑音的起点）。 */
+function previousNoteOf(note: MidiNote): MidiNote | undefined {
+  let best: MidiNote | undefined
+  for (const item of draft.value) {
+    if (item.id === note.id) continue
+    if (item.end > note.start + 0.04) continue
+    if (!best || item.end > best.end) best = item
+  }
+  return best
+}
+
+/** 从上一个音滑到本音（没有上一个音就做一个 1 半音的上滑）。 */
+function portamentoCurve(note: MidiNote): MidiCurvePoint[] {
+  const span = Math.max(0.05, note.end - note.start)
+  const glide = Math.min(0.16, span / 3)
+  const previous = previousNoteOf(note)
+  const from = previous
+    ? previous.pitch + previous.detune / 100 - (note.pitch + note.detune / 100)
+    : 1
+  const delta = Math.max(-6, Math.min(6, from))
+  return [
+    { t: 0, v: Math.round(delta * 1000) / 1000 },
+    { t: Math.round(glide * 1000) / 1000, v: 0 },
+    { t: Math.round(span * 1000) / 1000, v: 0 },
+  ]
+}
+
+/** 用原始 F0 重建选中音符的曲线（撤销可回退）。 */
+function resetCurveFromOriginal() {
+  if (isCompose.value || !selection.value.length) return
+  const ids = selectionSet()
+  pushUndo()
+  ids.forEach((id) => clearedCurveIds.delete(id))
+  draft.value = draft.value.map((note) =>
+    ids.has(note.id) ? { ...note, curve: curveFromOriginal(note) } : note,
+  )
+  mergeNoteCurvesIntoGlobal(ids)
+  markPreviewStale()
+  scheduleDraw()
+}
+
+/** 一键生成颤音 / 滑音曲线：先给用户一个「听得出」的效果，再自己细化。 */
+function applyCurvePreset(kind: 'vibrato' | 'portamento') {
+  if (isCompose.value || !selection.value.length) return
+  const ids = selectionSet()
+  pushUndo()
+  ids.forEach((id) => clearedCurveIds.delete(id))
+  draft.value = draft.value.map((note) => {
+    if (!ids.has(note.id)) return note
+    const span = Math.max(1e-3, note.end - note.start)
+    const raw = kind === 'vibrato' ? vibratoCurve(note) : portamentoCurve(note)
+    // 生成后统一平滑/简化，保证线条连贯、点不过多。
+    const curve = tidyCurve(raw, span, 0.03)
+    return curve ? { ...note, curve } : note
+  })
+  mergeNoteCurvesIntoGlobal(ids)
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function quantizeSelection() {
+  if (!selection.value.length) return
+  pushUndo()
+  if (isCompose.value) {
+    const ids = selectionSet()
+    const step = snapStep.value
+    if (!(step > 0)) {
+      undo()
+      return
+    }
+    session.value.parts = parts.value.map((part) => ({
+      ...part,
+      notes: part.notes.map((note) => {
+        if (!ids.has(note.id)) return note
+        return quantizeComposeNotes([note], step, duration.value, quantizeStrength.value)[0] || note
+      }),
+    }))
+    markPreviewStale()
+    scheduleDraw()
+    return
+  }
+  draft.value = quantizeNotes(draft.value, selection.value, pitchGrid.value, duration.value)
+}
+
+function transposeSelection(semitones: number) {
+  if (!selection.value.length) return
+  pushUndo()
+  if (isCompose.value) {
+    const ids = selectionSet()
+    session.value.parts = snapDrumPitches(
+      parts.value.map((part) => ({
+        ...part,
+        notes: part.notes.map((note) =>
+          ids.has(note.id) ? { ...note, pitch: clampComposePitch(note.pitch + semitones) } : note,
+        ),
+      })),
+      ids,
+    )
+    markPreviewStale()
+    scheduleDraw()
+    return
+  }
+  draft.value = transposeNotes(draft.value, selection.value, semitones)
+}
+
+function scaleVelocitySelection(factor: number) {
+  const ids = selectionSet()
+  if (!ids.size) return
+  pushUndo()
+  session.value.parts = parts.value.map((part) => ({
+    ...part,
+    notes: part.notes.map((note) =>
+      ids.has(note.id) ? scaleNoteVelocity([note], factor)[0]! : note,
+    ),
+  }))
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function legatoSelection() {
+  const ids = selectionSet()
+  if (!ids.size) return
+  pushUndo()
+  session.value.parts = parts.value.map((part) => {
+    const chosen = part.notes.filter((note) => ids.has(note.id))
+    if (!chosen.length) return part
+    const updated = new Map(legatoNotes(chosen, snapStep.value || 0.25).map((note) => [note.id, note]))
+    return {
+      ...part,
+      notes: part.notes.map((note) => updated.get(note.id) || note),
+    }
+  })
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function duplicateSelection() {
+  const ids = selectionSet()
+  if (!ids.size) return
+  pushUndo()
+  const offset = Math.max(snapStep.value || 0.25, 0.1)
+  if (isCompose.value) {
+    const created: string[] = []
+    session.value.parts = parts.value.map((part) => {
+      const copies = duplicateNotes(part.notes, ids, offset, duration.value)
+      created.push(...copies.map((note) => note.id))
+      return copies.length ? { ...part, notes: sortNotes([...part.notes, ...copies]) } : part
+    })
+    selection.value = created
+    markPreviewStale()
+    scheduleDraw()
+    return
+  }
+  const copies = pasteNotes(
+    copyNotes(draft.value, selection.value),
+    (primaryPitchNote.value?.start ?? 0) + offset,
+    duration.value,
+  )
+  draft.value = [...draft.value, ...copies]
+  selection.value = copies.map((note) => note.id)
+}
+
+function splitSelectionAtPlayhead() {
+  splitSelectionAt(previewTime.value)
+}
+
+/** 把选中音符在 ``at`` 处切开；音准模式下音高曲线也会一起断开。 */
+function splitSelectionAt(at: number) {
+  const ids = selectionSet()
+  if (!ids.size) return
+  if (isCompose.value) {
+    let changed = false
+    pushUndo()
+    session.value.parts = parts.value.map((part) => {
+      const notes: MidiComposeNote[] = []
+      for (const note of part.notes) {
+        if (!ids.has(note.id)) {
+          notes.push(note)
+          continue
+        }
+        const split = splitNoteAt(note, at)
+        if (!split) {
+          notes.push(note)
+          continue
+        }
+        changed = true
+        notes.push(split[0], split[1])
+      }
+      return { ...part, notes: sortNotes(notes) }
+    })
+    if (!changed) {
+      composeUndo.pop()
+      composeUndoVersion.value += 1
+      return
+    }
+    markPreviewStale()
+    scheduleDraw()
+    return
+  }
+  // 音准模式：切开音符，并把它相对音符起点的音高曲线在切点断开。
+  let changed = false
+  pushUndo()
+  const next: MidiNote[] = []
+  for (const note of draft.value) {
+    if (!ids.has(note.id)) {
+      next.push(note)
+      continue
+    }
+    const split = splitPitchNote(note, at)
+    if (!split) {
+      next.push(note)
+      continue
+    }
+    changed = true
+    next.push(split[0], split[1])
+  }
+  if (!changed) {
+    pitchUndo.pop()
+    pitchUndoVersion.value += 1
+    return
+  }
+  draft.value = sortNotes(next)
+  selection.value = selection.value.filter((id) => next.some((note) => note.id === id))
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function humanizeSelection() {
+  if (!isCompose.value) return
+  const ids = selectionSet()
+  if (!ids.size) return
+  pushUndo()
+  const step = snapStep.value || 0.25
+  session.value.parts = parts.value.map((part) => {
+    const chosen = part.notes.filter((note) => ids.has(note.id))
+    if (!chosen.length) return part
+    const updated = new Map(
+      humanizeNotes(chosen, step * 0.06, 8, duration.value).map((note) => [note.id, note]),
+    )
+    return { ...part, notes: part.notes.map((note) => updated.get(note.id) || note) }
+  })
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function addComposeNote(time: number, pitch: number, length?: number) {
+  const part = activePart.value
+  if (!part) return null
+  const step = snapStep.value
+  const start = step > 0 ? snapTime(clampTime(time, duration.value), step) : clampTime(time, duration.value)
+  const drum = !!part.drum
+  // 鼓组音符不需要「拉长」：默认就是短促一击，长度取网格但不超过 1/4 拍。
+  const defaultLength = drum
+    ? Math.min(step || 0.25, 0.25)
+    : Math.max(step || 0.25, 0.1)
+  const note = createComposeNote(
+    start,
+    drum ? nearestDrumPitch(pitch || DRUM_DEFAULT_PITCH) : pitch,
+    duration.value,
+    length ?? defaultLength,
+    drum ? 112 : 100,
+  )
+  pushUndo()
+  part.notes = sortNotes([...part.notes, note])
+  selectOnly(note.id)
+  markPreviewStale()
+  playBlip(note.pitch, note.velocity)
+  scheduleDraw()
+  return note
+}
+
+function addPitchNote(time: number, pitch: number, length = MIN_NOTE_LENGTH) {
+  const note = createNote(
+    snapTime(clampTime(time, duration.value), pitchGrid.value),
+    pitch,
+    duration.value,
+    pitchGrid.value,
+    Math.max(pitchGrid.value, length),
+  )
+  pushUndo()
+  draft.value = [...draft.value, note]
+  selectOnly(note.id)
+  return note
+}
+
+function deleteSelected() {
+  if (!selection.value.length) return
+  const ids = selectionSet()
+  pushUndo()
+  if (isCompose.value) {
+    session.value.parts = parts.value.map((part) => ({
+      ...part,
+      notes: part.notes.filter((note) => !ids.has(note.id)),
+    }))
+    markPreviewStale()
+    scheduleDraw()
+  } else {
+    draft.value = draft.value.filter((note) => !ids.has(note.id))
+  }
+  selection.value = []
+}
+
+function copySelected() {
+  if (!selection.value.length) return
+  const ids = selectionSet()
+  if (isCompose.value) {
+    composeClipboard.value = parts.value.flatMap((part) =>
+      part.notes.filter((note) => ids.has(note.id)).map((note) => ({ partId: part.id, note: { ...note } })),
+    )
+    return
+  }
+  pitchClipboard.value = copyNotes(draft.value, selection.value)
+}
+
+function pasteClipboard(at: number) {
+  if (isCompose.value) {
+    if (!composeClipboard.value.length) return
+    const anchor = Math.min(...composeClipboard.value.map((entry) => entry.note.start))
+    const shift = Math.max(0, at - anchor)
+    pushUndo()
+    const created: string[] = []
+    const stamp = Date.now().toString(36)
+    session.value.parts = parts.value.map((part) => {
+      const additions = composeClipboard.value
+        .filter((entry) => entry.partId === part.id)
+        .map((entry, index) => {
+          const length = entry.note.end - entry.note.start
+          const start = Math.min(entry.note.start + shift, Math.max(0, duration.value - length))
+          return {
+            ...entry.note,
+            id: `${entry.note.id}_p${stamp}${index}`,
+            start: Math.round(start * 1000) / 1000,
+            end: Math.round(Math.min(duration.value, start + length) * 1000) / 1000,
+          }
+        })
+      if (!additions.length) return part
+      created.push(...additions.map((note) => note.id))
+      return { ...part, notes: sortNotes([...part.notes, ...additions]) }
+    })
+    // 粘贴到别的声部（来源声部不存在时落到当前声部）
+    if (!created.length && composeClipboard.value.length) {
+      const part = activePart.value
+      if (part) {
+        const additions = composeClipboard.value.map((entry, index) => {
+          const length = entry.note.end - entry.note.start
+          const start = Math.min(entry.note.start + shift, Math.max(0, duration.value - length))
+          return {
+            ...entry.note,
+            id: `${entry.note.id}_p${stamp}${index}`,
+            start: Math.round(start * 1000) / 1000,
+            end: Math.round(Math.min(duration.value, start + length) * 1000) / 1000,
+          }
+        })
+        part.notes = sortNotes([...part.notes, ...additions])
+        created.push(...additions.map((note) => note.id))
+      }
+    }
+    selection.value = created
+    markPreviewStale()
+    scheduleDraw()
+    return
+  }
+  if (!pitchClipboard.value.length) return
+  const pasted = pasteNotes(pitchClipboard.value, at, duration.value)
+  if (!pasted.length) return
+  pushUndo()
+  draft.value = [...draft.value, ...pasted]
+  selection.value = pasted.map((note) => note.id)
+}
+
+function emitSave() {
+  emit('save', notesWithGlobalCurve(normalizeNotes(draft.value, duration.value)))
+}
+
+function emitApply() {
+  emit('apply', notesWithGlobalCurve(normalizeNotes(draft.value, duration.value)))
+}
+
+function emitSaveSession() {
+  busyAction.value = 'save'
+  emit('save-session', normalizeSession(session.value, duration.value))
+}
+
+function emitRender(mode: 'tracks' | 'mix') {
+  busyAction.value = mode
+  emit('render-session', normalizeSession(session.value, duration.value), mode)
+}
+
+function emitExport() {
+  emit('export-session', normalizeSession(session.value, duration.value))
+}
+
+function requestPreview() {
+  if (props.previewLoading) return
+  busyAction.value = 'preview'
+  previewPending.value = true
+  if (props.previewUrl && !previewStale.value) {
+    busyAction.value = ''
+    void playPreview()
+    return
+  }
+  if (isCompose.value) {
+    emit('preview-session', normalizeSession(session.value, duration.value))
+    return
+  }
+  emit('preview', notesWithGlobalCurve(draft.value.slice()))
+}
+
+const previewStale = ref(true)
+
+function markPreviewStale() {
+  previewStale.value = true
+}
+
+// 演唱音准模式的草稿一改，试听就必须重渲染：之前拖动/移调/量化只改了 draft，
+// 没标记过期，点「试听」会直接播上一次缓存的旧音频（应用却是新的）。
+watch(
+  draft,
+  () => {
+    if (!isCompose.value) markPreviewStale()
+  },
+  { deep: true },
+)
+
+// 原始音高曲线或显示开关变化时重画（数组是整体替换的，浅监听即可）。
+watch([showOriginalPitch, () => props.pitchCurve], () => scheduleDraw())
+
+// 打开曲线编辑（或原始音高数据到位）时，给所有「还没有曲线」的音符按原唱 F0 +
+// 当前音符自动生成可编辑曲线。已有曲线不动（保护手工编辑），显式清除过的也不再补。
+// 音符多时分批生成，避免一次性生成上千条曲线时卡住界面。
+const hasAnyCurve = computed(() => globalCurve.value.length > 0 || draft.value.some((note) => !!note.curve && note.curve.length > 0))
+
+watch(
+  () => props.previewUrl,
+  (url) => {
+    if (!url) return
+    previewStale.value = false
+    previewTime.value = 0
+    nextTick(() => {
+      const el = audioEl.value
+      if (!el) return
+      el.currentTime = 0
+      if (previewPending.value) {
+        previewPending.value = false
+        void playPreview()
+      }
+    })
+  },
+)
+
+watch(
+  () => props.previewLoading,
+  (loading) => {
+    if (loading) previewPending.value = true
+  },
+)
+
+async function playPreview() {
+  const el = audioEl.value
+  if (!el) return
+  try {
+    await el.play()
+  } catch {
+    playingState.value = false
+  }
+}
+
+function togglePlay() {
+  if (playingState.value) {
+    audioEl.value?.pause()
+    return
+  }
+  if (!props.previewUrl || previewStale.value) {
+    requestPreview()
+    return
+  }
+  void playPreview()
+}
+
+function stopPlay() {
+  const el = audioEl.value
+  if (el) {
+    el.pause()
+    el.currentTime = 0
+  }
+  playingState.value = false
+  previewTime.value = 0
+  previewPending.value = false
+  if (rafPlayhead) window.cancelAnimationFrame(rafPlayhead)
+  rafPlayhead = 0
+}
+
+function toggleLoop() {
+  loopEnabled.value = !loopEnabled.value
+}
+
+function onAudioPlay() {
+  playingState.value = true
+  busyAction.value = ''
+  if (rafPlayhead) window.cancelAnimationFrame(rafPlayhead)
+  const tick = () => {
+    const el = audioEl.value
+    if (!el) return
+    previewTime.value = el.currentTime
+    if (!el.paused) rafPlayhead = window.requestAnimationFrame(tick)
+  }
+  rafPlayhead = window.requestAnimationFrame(tick)
+}
+
+function onAudioPause() {
+  playingState.value = false
+  if (rafPlayhead) window.cancelAnimationFrame(rafPlayhead)
+  rafPlayhead = 0
+}
+
+function onAudioEnded() {
+  playingState.value = false
+  if (loopEnabled.value) {
+    const el = audioEl.value
+    if (el) {
+      el.currentTime = 0
+      void el.play()
+    }
+    return
+  }
+  previewTime.value = 0
+}
+
+/* ---------------------------------------------------------------- 快捷键 */
+
+function isTypingTarget(target: EventTarget | null) {
+  const element = target instanceof HTMLElement ? target : null
+  if (!element) return false
+  if (element.isContentEditable) return true
+  if (element.tagName === 'TEXTAREA') return true
+  if (element.tagName === 'INPUT') {
+    // 复选框/滑块不是文本输入：点过「音高曲线」开关后焦点还停在它上面，
+    // 之前这里会把 Ctrl+Z 一起吞掉，导致曲线看起来「不支持撤销」。
+    const type = (element as HTMLInputElement).type
+    return ![
+      'checkbox',
+      'radio',
+      'range',
+      'button',
+      'submit',
+      'reset',
+      'color',
+      'file',
+    ].includes(type)
+  }
+  return false
+}
+
+function onKeyDown(event: KeyboardEvent) {
+  if (!props.modelValue || isTypingTarget(event.target)) return
+  const mod = event.ctrlKey || event.metaKey
+  const key = event.key
+  if (key === 'Escape') {
+    if (contextMenu.visible) {
+      contextMenu.visible = false
+      return
+    }
+    if (selection.value.length) {
+      clearSelection()
+      return
+    }
+    if (maximized.value) {
+      toggleMaximized()
+      return
+    }
+    close()
+    return
+  }
+  if (key === ' ' || key === 'Spacebar') {
+    event.preventDefault()
+    togglePlay()
+    return
+  }
+  // 缩放：+ / - 横向，Shift + + / - 纵向音域
+  if (key === '+' || key === '=') {
+    event.preventDefault()
+    if (event.shiftKey) zoomPitch(1.25)
+    else zoomTime(1.25)
+    return
+  }
+  if (key === '-' || key === '_') {
+    event.preventDefault()
+    if (event.shiftKey) zoomPitch(0.8)
+    else zoomTime(0.8)
+    return
+  }
+  if (key === 'F11' || (mod && event.shiftKey && key.toLowerCase() === 'f')) {
+    event.preventDefault()
+    toggleMaximized()
+    return
+  }
+  if (mod && key.toLowerCase() === 'z') {
+    event.preventDefault()
+    if (event.shiftKey) redo()
+    else undo()
+    return
+  }
+  if (mod && key.toLowerCase() === 'y') {
+    event.preventDefault()
+    redo()
+    return
+  }
+  if (mod && key.toLowerCase() === 'a') {
+    event.preventDefault()
+    selectAll()
+    return
+  }
+  if (mod && key.toLowerCase() === 'c') {
+    event.preventDefault()
+    copySelected()
+    return
+  }
+  if (mod && key.toLowerCase() === 'v') {
+    event.preventDefault()
+    pasteClipboard(cursorTime.value || (primaryNote.value?.start ?? 0))
+    return
+  }
+  if (mod && key.toLowerCase() === 'd') {
+    event.preventDefault()
+    duplicateSelection()
+    return
+  }
+  if (mod && key.toLowerCase() === 'q') {
+    event.preventDefault()
+    quantizeSelection()
+    return
+  }
+  if (!mod && !event.altKey && isCompose.value) {
+    const lower = key.toLowerCase()
+    if (lower === 'd') {
+      currentTool.value = 'draw'
+      return
+    }
+    if (lower === 'v') {
+      currentTool.value = 'select'
+      return
+    }
+    if (lower === 'e') {
+      currentTool.value = 'erase'
+      return
+    }
+    if (lower === 'h') {
+      humanizeSelection()
+      return
+    }
+    if (lower === 'l') {
+      legatoSelection()
+      return
+    }
+    if (lower === 's') {
+      splitSelectionAtPlayhead()
+      return
+    }
+  }
+  if (key === 'Delete' || key === 'Backspace') {
+    if (selection.value.length) {
+      event.preventDefault()
+      deleteSelected()
+    }
+    return
+  }
+  if (!selection.value.length) return
+  // 选中音符伸缩：] 加长、[ 缩短（以网格步长为步长，网格关闭时用 0.05s）。
+  if (key === ']' || key === '[') {
+    event.preventDefault()
+    const step = snapStep.value > 0 ? snapStep.value : 0.05
+    stretchSelection(key === ']' ? step : -step)
+    return
+  }
+  if (key === 'ArrowUp' || key === 'ArrowDown') {
+    event.preventDefault()
+    const step = event.shiftKey ? 12 : 1
+    transposeSelection(key === 'ArrowUp' ? step : -step)
+    return
+  }
+  if (key === 'ArrowLeft' || key === 'ArrowRight') {
+    event.preventDefault()
+    const step = (event.shiftKey ? 4 : 1) * (snapStep.value || 0.1)
+    const delta = key === 'ArrowLeft' ? -step : step
+    nudgeSelection(delta)
+  }
+}
+
+function nudgeSelection(deltaSeconds: number) {
+  if (isCompose.value) {
+    pushUndo()
+    const ids = selectionSet()
+    session.value.parts = parts.value.map((part) => ({
+      ...part,
+      notes: part.notes.map((note) => {
+        if (!ids.has(note.id)) return note
+        const span = clampNoteSpan(note.start + deltaSeconds, note.end + deltaSeconds, duration.value)
+        return { ...note, start: span.start, end: span.end }
+      }),
+    }))
+    markPreviewStale()
+    scheduleDraw()
+    return
+  }
+  const ids = selectionSet()
+  pushUndo()
+  draft.value = draft.value.map((note) => {
+    if (!ids.has(note.id)) return note
+    const span = clampNoteSpan(note.start + deltaSeconds, note.end + deltaSeconds, duration.value)
+    return { ...note, start: span.start, end: span.end }
+  })
+}
+
+/** 单个/多个选中音符伸缩：只改结束时间（右手边），带最小长度与时间轴边界。 */
+function stretchSelection(deltaSeconds: number) {
+  if (!selection.value.length) return
+  const ids = selectionSet()
+  pushUndo()
+  if (isCompose.value) {
+    session.value.parts = parts.value.map((part) => ({
+      ...part,
+      notes: part.notes.map((note) =>
+        ids.has(note.id)
+          ? resizeComposeNote(note, 'end', note.end + deltaSeconds, duration.value, 0)
+          : note,
+      ),
+    }))
+    markPreviewStale()
+    scheduleDraw()
+    return
+  }
+  draft.value = draft.value.map((note) =>
+    ids.has(note.id) ? resizeNote(note, 'end', note.end + deltaSeconds, duration.value, 0) : note,
+  )
+}
+
+/* ---------------------------------------------------------------- 画布绘制 */
+
+function contextOf(canvas: HTMLCanvasElement | null) {
+  if (!canvas) return null
+  const context = canvas.getContext('2d')
+  if (!context) return null
+  context.setTransform(dpr, 0, 0, dpr, 0, 0)
+  return context
+}
+
+function draw() {
+  flushCurveStroke()
+  drawKeys()
+  drawGrid()
+  if (showVelocity.value) drawVelocity()
+}
+
+function drawKeys() {
+  const context = contextOf(keyCanvasRef.value)
+  if (!context) return
+  const height = viewHeight.value
+  const top = pitchRange.value.max
+  const offsetY = scrollTop.value
+  context.clearRect(0, 0, KEY_WIDTH, height)
+  context.fillStyle = '#0b0f18'
+  context.fillRect(0, 0, KEY_WIDTH, height)
+  context.save()
+  context.beginPath()
+  context.rect(0, RULER_HEIGHT, KEY_WIDTH, Math.max(0, height - RULER_HEIGHT))
+  context.clip()
+  for (let pitch = top; pitch >= pitchRange.value.min; pitch -= 1) {
+    const y = pitchToY(pitch, top, rowHeight.value) + RULER_HEIGHT - offsetY
+    if (y + rowHeight.value < RULER_HEIGHT || y > height) continue
+    if (drumMode.value) {
+      // 鼓组：只有真实鼓件那一行像「键」，其它行弱化成空白，避免误点。
+      const piece = drumPiece(pitch)
+      context.fillStyle = piece ? '#e8ecf5' : '#0d121b'
+      context.fillRect(0, y, KEY_WIDTH - 6, rowHeight.value - 1)
+      if (piece) {
+        context.fillStyle = piece.group === 'kick' ? '#1c2a3a' : '#3a4356'
+        context.font = '10px ui-sans-serif, system-ui'
+        context.textBaseline = 'middle'
+        context.fillText(t(piece.name_zh), 6, y + rowHeight.value / 2)
+      } else {
+        context.fillStyle = '#243044'
+        context.fillRect(KEY_WIDTH - 8, y + rowHeight.value / 2, 2, 1)
+      }
+      continue
+    }
+    const black = isBlackKey(pitch)
+    context.fillStyle = black ? '#141a26' : '#e8ecf5'
+    context.fillRect(0, y, KEY_WIDTH - 6, rowHeight.value - 1)
+    context.fillStyle = black ? '#8e9bb3' : '#3a4356'
+    context.font = '10px ui-sans-serif, system-ui'
+    context.textBaseline = 'middle'
+    context.fillText(noteName(pitch), 8, y + rowHeight.value / 2)
+  }
+  context.restore()
+  context.fillStyle = '#0b0f18'
+  context.fillRect(0, 0, KEY_WIDTH, RULER_HEIGHT)
+  context.strokeStyle = 'rgba(120,180,255,0.22)'
+  context.beginPath()
+  context.moveTo(0, RULER_HEIGHT - 0.5)
+  context.lineTo(KEY_WIDTH, RULER_HEIGHT - 0.5)
+  context.stroke()
+}
+
+function drawGrid() {
+  const canvas = gridCanvasRef.value
+  const context = contextOf(canvas)
+  if (!context) return
+  const width = viewWidth.value
+  const height = viewHeight.value
+  const top = pitchRange.value.max
+  const offsetX = scrollLeft.value
+  const offsetY = scrollTop.value
+  const pps = pxPerSecond.value
+  context.clearRect(0, 0, width, height)
+  context.fillStyle = '#0b0f18'
+  context.fillRect(0, 0, width, height)
+
+  context.save()
+  context.beginPath()
+  context.rect(0, RULER_HEIGHT, width, Math.max(0, height - RULER_HEIGHT))
+  context.clip()
+
+  for (let pitch = top; pitch >= pitchRange.value.min; pitch -= 1) {
+    const y = pitchToY(pitch, top, rowHeight.value) + RULER_HEIGHT - offsetY
+    if (y + rowHeight.value < RULER_HEIGHT || y > height) continue
+    if (drumMode.value && !isDrumPitch(pitch)) {
+      context.fillStyle = '#090d14'
+      context.fillRect(0, y, width, rowHeight.value - 1)
+      continue
+    }
+    context.fillStyle = isBlackKey(pitch) ? '#0f1520' : '#121926'
+    context.fillRect(0, y, width, rowHeight.value - 1)
+    if (drumMode.value) {
+      // 鼓件行按组着色，扫一眼就知道哪一行是鼓、哪一行是镲。
+      const piece = drumPiece(pitch)
+      if (piece && (piece.group === 'kick' || piece.group === 'snare')) {
+        context.fillStyle = 'rgba(255, 209, 102, 0.05)'
+        context.fillRect(0, y, width, rowHeight.value - 1)
+      }
+    }
+    if (pitch % 12 === 0) {
+      context.fillStyle = 'rgba(120,180,255,0.18)'
+      context.fillRect(0, y, width, 1)
+    }
+  }
+
+  // 竖向网格：编曲模式按小节/拍，音准模式按秒
+  if (isCompose.value) {
+    const beat = secondsPerBeat(session.value.tempo)
+    const bar = barSeconds(session.value.tempo, session.value.time_signature)
+    const subStep = snapStep.value
+    const firstTime = Math.max(0, xToTime(offsetX, pps))
+    const lastTime = Math.min(duration.value, xToTime(offsetX + width, pps))
+    if (subStep > 0 && timeToX(subStep, pps) >= 5) {
+      context.strokeStyle = 'rgba(255,255,255,0.05)'
+      context.lineWidth = 1
+      context.beginPath()
+      for (let time = Math.floor(firstTime / subStep) * subStep; time <= lastTime; time += subStep) {
+        const x = Math.round(timeToX(time, pps) - offsetX) + 0.5
+        context.moveTo(x, RULER_HEIGHT)
+        context.lineTo(x, height)
+      }
+      context.stroke()
+    }
+    if (beat > 0 && timeToX(beat, pps) >= 12) {
+      context.strokeStyle = 'rgba(140,190,255,0.16)'
+      context.beginPath()
+      for (let time = Math.floor(firstTime / beat) * beat; time <= lastTime; time += beat) {
+        const x = Math.round(timeToX(time, pps) - offsetX) + 0.5
+        context.moveTo(x, RULER_HEIGHT)
+        context.lineTo(x, height)
+      }
+      context.stroke()
+    }
+    if (bar > 0) {
+      context.strokeStyle = 'rgba(160,210,255,0.32)'
+      context.beginPath()
+      for (let time = Math.floor(firstTime / bar) * bar; time <= lastTime; time += bar) {
+        const x = Math.round(timeToX(time, pps) - offsetX) + 0.5
+        context.moveTo(x, RULER_HEIGHT)
+        context.lineTo(x, height)
+      }
+      context.stroke()
+    }
+  } else {
+    const step = pitchGrid.value > 0 ? pitchGrid.value : 0.1
+    const pxPerStep = timeToX(step, pps)
+    const firstTime = Math.max(0, xToTime(offsetX, pps))
+    const lastTime = Math.min(duration.value, xToTime(offsetX + width, pps))
+    if (pxPerStep >= 4) {
+      context.strokeStyle = 'rgba(255,255,255,0.06)'
+      context.lineWidth = 1
+      context.beginPath()
+      for (let time = Math.floor(firstTime / step) * step; time <= lastTime; time += step) {
+        const x = Math.round(timeToX(time, pps) - offsetX) + 0.5
+        context.moveTo(x, RULER_HEIGHT)
+        context.lineTo(x, height)
+      }
+      context.stroke()
+    }
+    if (props.scope === 'track' && props.clipSpans.length) {
+      props.clipSpans.forEach((span, index) => {
+        const left = timeToX(Math.max(0, span.start), pps) - offsetX
+        const right = timeToX(span.end, pps) - offsetX
+        if (right < 0 || left > width) return
+        context.fillStyle = index % 2 === 0 ? 'rgba(94,194,255,0.05)' : 'rgba(94,194,255,0.09)'
+        context.fillRect(left, RULER_HEIGHT, Math.max(1, right - left), height - RULER_HEIGHT)
+        context.strokeStyle = 'rgba(94,194,255,0.45)'
+        context.lineWidth = 1
+        context.beginPath()
+        context.moveTo(Math.round(left) + 0.5, RULER_HEIGHT)
+        context.lineTo(Math.round(left) + 0.5, height)
+        context.stroke()
+        context.fillStyle = 'rgba(160,210,255,0.7)'
+        context.font = '9px ui-sans-serif, system-ui'
+        if (right - left > 24) context.fillText(span.name || span.id, left + 3, RULER_HEIGHT + 9)
+      })
+    }
+  }
+
+  const selected = selectionSet()
+  if (isCompose.value) {
+    const soloed = parts.value.some((part) => part.solo)
+    for (const part of parts.value) {
+      const dim = part.mute || (soloed && !part.solo) || (activePartId.value && part.id !== activePartId.value)
+      for (const note of part.notes) {
+        const rect = noteRect(note, top, rowHeight.value, pps, MIDI_MIN_NOTE_PX)
+        const x = rect.x - offsetX
+        if (x + rect.width < -4 || x > width + 4) continue
+        const y = rect.y + RULER_HEIGHT - offsetY
+        if (y + rect.height < RULER_HEIGHT - 4 || y > height + 4) continue
+        const active = selected.has(note.id)
+        context.globalAlpha = active ? 1 : dim ? velocityAlpha(note.velocity) * 0.55 : velocityAlpha(note.velocity)
+        context.fillStyle = part.color
+        roundRect(context, x, y, rect.width, rect.height, 3)
+        context.fill()
+        context.globalAlpha = 1
+        if (active) {
+          context.strokeStyle = '#f2fbff'
+          context.lineWidth = 1.5
+          roundRect(context, x, y, rect.width, rect.height, 3)
+          context.stroke()
+        }
+        if (rect.width > 26) {
+          context.fillStyle = 'rgba(4,10,18,0.82)'
+          context.font = '9px ui-sans-serif, system-ui'
+          context.fillText(
+            part.drum ? t(drumName(note.pitch)) : noteName(note.pitch),
+            x + 3,
+            y + rect.height / 2,
+          )
+        }
+        if (active || hoveredNoteId.value === note.id) {
+          drawNoteEdgeHandles(context, x, y, rect.width, rect.height, active)
+        }
+      }
+    }
+  } else {
+    for (const note of draft.value) {
+      const rect = noteRect(note, top, rowHeight.value, pps, MIDI_MIN_NOTE_PX)
+      const x = rect.x - offsetX
+      if (x + rect.width < -4 || x > width + 4) continue
+      const y = rect.y + RULER_HEIGHT - offsetY
+      if (y + rect.height < RULER_HEIGHT - 4 || y > height + 4) continue
+      const active = selected.has(note.id)
+      context.fillStyle = active ? 'rgba(94,206,255,0.95)' : 'rgba(94,206,255,0.5)'
+      roundRect(context, x, y, rect.width, rect.height, 3)
+      context.fill()
+      if (active) {
+        context.strokeStyle = '#dff6ff'
+        context.lineWidth = 1.5
+        roundRect(context, x, y, rect.width, rect.height, 3)
+        context.stroke()
+      }
+      if (rect.width > 24) {
+        context.fillStyle = active ? '#04121c' : '#08222e'
+        context.font = '9px ui-sans-serif, system-ui'
+        context.fillText(noteName(note.pitch), x + 3, y + rect.height / 2)
+      }
+
+      if (active || hoveredNoteId.value === note.id) {
+        drawNoteEdgeHandles(context, x, y, rect.width, rect.height, active)
+      }
+    }
+  }
+
+  // OpenUtau 风格：先画音符本身的目标音高虚线（手动曲线的「默认值」参考线）。
+  if (!isCompose.value && pitchCurveMode.value) {
+    drawPitchBaselines(context, offsetX, offsetY)
+  }
+
+  // 原始音高曲线画在音符之上，方便直接对照「唱的是哪里」和「音符写的是哪里」。
+  if (!isCompose.value && showOriginalPitch.value) {
+    drawOriginalPitch(context, offsetX, offsetY)
+  }
+
+  // 可编辑音高曲线：合并所有音符成一条连续黄线，覆盖整条时间轴。
+  if (!isCompose.value) {
+    drawGlobalCurve(context, offsetX, offsetY)
+  }
+
+  if (drag.value?.mode === 'marquee' && drag.value.marqueeStart && drag.value.marqueeEnd) {
+    const { marqueeStart, marqueeEnd } = drag.value
+    const left = Math.min(marqueeStart.x, marqueeEnd.x) - offsetX
+    const right = Math.max(marqueeStart.x, marqueeEnd.x) - offsetX
+    const topY = Math.min(marqueeStart.y, marqueeEnd.y) + RULER_HEIGHT - offsetY
+    const bottomY = Math.max(marqueeStart.y, marqueeEnd.y) + RULER_HEIGHT - offsetY
+    context.fillStyle = 'rgba(94,206,255,0.12)'
+    context.fillRect(left, topY, right - left, bottomY - topY)
+    context.strokeStyle = 'rgba(94,206,255,0.6)'
+    context.lineWidth = 1
+    context.strokeRect(left + 0.5, topY + 0.5, right - left, bottomY - topY)
+  }
+  context.restore()
+
+  drawRuler(context, width, pps, offsetX)
+
+  const headSeconds = playheadSeconds.value
+  const headX = headSeconds >= 0 && headSeconds <= duration.value ? timeToX(headSeconds, pps) : null
+  if (headX !== null) {
+    const x = headX - offsetX
+    if (x >= -2 && x <= width + 2) {
+      context.strokeStyle = playing.value ? '#ffd166' : 'rgba(255,209,102,0.55)'
+      context.lineWidth = 1.5
+      context.beginPath()
+      context.moveTo(x, 0)
+      context.lineTo(x, height)
+      context.stroke()
+      context.fillStyle = playing.value ? '#ffd166' : 'rgba(255,209,102,0.7)'
+      context.beginPath()
+      context.moveTo(x - 4, 0)
+      context.lineTo(x + 4, 0)
+      context.lineTo(x, 5)
+      context.closePath()
+      context.fill()
+    }
+  }
+}
+
+function drawRuler(
+  context: CanvasRenderingContext2D,
+  width: number,
+  pps: number,
+  offsetX: number,
+) {
+  const height = viewHeight.value
+  const dividerY = RULER_HEIGHT - 16 // 上面是小节/拍，下面是秒刻度
+  context.fillStyle = '#0b0f18'
+  context.fillRect(0, 0, width, RULER_HEIGHT)
+  context.font = '10px ui-sans-serif, system-ui'
+  context.textBaseline = 'middle'
+  context.strokeStyle = 'rgba(255,255,255,0.16)'
+
+  // 上排：编曲模式画小节/拍，音高模式画秒刻度。
+  if (isCompose.value) {
+    const tempo = session.value.tempo
+    const signature = session.value.time_signature
+    const beat = secondsPerBeat(tempo)
+    const bar = barSeconds(tempo, signature)
+    const beatsPerBar = Math.max(1, Math.round(bar / Math.max(1e-6, beat)))
+    const firstBar = Math.max(0, Math.floor(xToTime(offsetX, pps) / bar))
+    const lastTime = xToTime(offsetX + width, pps)
+    for (let index = firstBar; index * bar <= lastTime + 1e-6; index += 1) {
+      const barTime = index * bar
+      const x = Math.round(timeToX(barTime, pps) - offsetX) + 0.5
+      if (x >= -60 && x <= width + 60) {
+        context.strokeStyle = 'rgba(160,210,255,0.4)'
+        context.beginPath()
+        context.moveTo(x, dividerY - 7)
+        context.lineTo(x, dividerY)
+        context.stroke()
+        context.fillStyle = '#9db8dd'
+        context.fillText(`${index + 1}`, x + 3, 7)
+        for (let offset = 1; offset < beatsPerBar; offset += 1) {
+          const beatTime = barTime + offset * beat
+          const bx = Math.round(timeToX(beatTime, pps) - offsetX) + 0.5
+          if (bx < -4 || bx > width + 4) continue
+          context.strokeStyle = 'rgba(255,255,255,0.14)'
+          context.beginPath()
+          context.moveTo(bx, dividerY - 3)
+          context.lineTo(bx, dividerY)
+          context.stroke()
+        }
+      }
+    }
+  }
+
+  // 下排：秒刻度，两种模式都显示，方便和主编辑器的秒级时间轴对齐。
+  const secondPx = timeToX(1, pps)
+  const labelEvery = secondPx >= 64 ? 1 : secondPx >= 28 ? 2 : secondPx >= 10 ? 5 : 10
+  const firstLabel = Math.max(
+    0,
+    Math.floor(xToTime(offsetX, pps) / labelEvery) * labelEvery,
+  )
+  for (
+    let second = firstLabel;
+    second <= duration.value + 1e-6 && timeToX(second, pps) - offsetX <= width;
+    second += labelEvery
+  ) {
+    const x = Math.round(timeToX(second, pps) - offsetX) + 0.5
+    if (x < -20) continue
+    context.strokeStyle = 'rgba(255,255,255,0.10)'
+    context.beginPath()
+    context.moveTo(x, dividerY + 5)
+    context.lineTo(x, RULER_HEIGHT)
+    context.stroke()
+    context.fillStyle = '#75839c'
+    context.fillText(`${second}s`, x + 3, dividerY + 11)
+  }
+
+  context.strokeStyle = 'rgba(120,180,255,0.22)'
+  context.beginPath()
+  context.moveTo(0, dividerY + 0.5)
+  context.lineTo(width, dividerY + 0.5)
+  context.stroke()
+  context.beginPath()
+  context.moveTo(0, RULER_HEIGHT - 0.5)
+  context.lineTo(width, RULER_HEIGHT - 0.5)
+  context.stroke()
+  void height
+}
+
+function drawVelocity() {
+  const canvas = velocityCanvasRef.value
+  const context = contextOf(canvas)
+  if (!context) return
+  const width = viewWidth.value
+  const pps = pxPerSecond.value
+  const offsetX = scrollLeft.value
+  context.clearRect(0, 0, width, velocityHeight)
+  context.fillStyle = '#0a0e16'
+  context.fillRect(0, 0, width, velocityHeight)
+  context.strokeStyle = 'rgba(255,255,255,0.06)'
+  for (let index = 1; index < 4; index += 1) {
+    const y = Math.round((velocityHeight / 4) * index) + 0.5
+    context.beginPath()
+    context.moveTo(0, y)
+    context.lineTo(width, y)
+    context.stroke()
+  }
+  context.fillStyle = '#6d7f9c'
+  context.font = '9px ui-sans-serif, system-ui'
+  context.textBaseline = 'middle'
+  context.fillText(t('力度'), 6, 10)
+  const selected = selectionSet()
+  for (const part of parts.value) {
+    if (part.mute) continue
+    for (const note of part.notes) {
+      const x = timeToX(note.start, pps) - offsetX
+      if (x < -3 || x > width + 3) continue
+      const height = (note.velocity / 127) * (velocityHeight - 14)
+      const active = selected.has(note.id)
+      context.fillStyle = part.color
+      context.globalAlpha = active ? 1 : 0.55
+      context.fillRect(x, velocityHeight - 10 - height, active ? 5 : 3, height)
+      context.globalAlpha = 1
+      if (active) {
+        context.strokeStyle = '#f2fbff'
+        context.lineWidth = 1
+        context.strokeRect(x + 0.5, velocityHeight - 10 - height + 0.5, 4, height - 1)
+      }
+    }
+  }
+  context.strokeStyle = 'rgba(120,180,255,0.18)'
+  context.beginPath()
+  context.moveTo(0, 0.5)
+  context.lineTo(width, 0.5)
+  context.stroke()
+}
+
+function roundRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const r = Math.min(radius, width / 2, height / 2)
+  context.beginPath()
+  context.moveTo(x + r, y)
+  context.arcTo(x + width, y, x + width, y + height, r)
+  context.arcTo(x + width, y + height, x, y + height, r)
+  context.arcTo(x, y + height, x, y, r)
+  context.arcTo(x, y, x + width, y, r)
+  context.closePath()
+}
+
+/** 在音符左右边缘画「可拉伸」把手：选中或悬停时提示拖这里改长度。 */
+function drawNoteEdgeHandles(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  active: boolean,
+) {
+  // 太窄的音符按 noteEdgeAt 的逻辑不开放边缘拉伸，也就不画把手。
+  if (width < MIN_RESIZE_PX) return
+  const handleW = Math.min(EDGE_GRAB_PX, Math.max(3, width / 3))
+  context.fillStyle = active ? 'rgba(255,255,255,0.96)' : 'rgba(222,238,255,0.9)'
+  context.fillRect(x + 0.5, y + 1, handleW - 1, height - 2)
+  context.fillRect(x + width - handleW + 0.5, y + 1, handleW - 1, height - 2)
+  context.fillStyle = 'rgba(4,10,18,0.55)'
+  context.fillRect(x + handleW - 0.5, y + 1, 1, height - 2)
+  context.fillRect(x + width - handleW + 0.5, y + 1, 1, height - 2)
+}
+
+/**
+ * 画音符的音高曲线（滑音/颤音）。
+ *
+ * 连线用二次贝塞尔过中点，视觉上是平滑曲线而不是一节一节的折线；
+ * 控制点圆点只在「正在编辑曲线」或该音符被选中/悬停时画，平时保持干净。
+ */
+function drawNoteCurve(
+  context: CanvasRenderingContext2D,
+  note: MidiNote,
+  offsetX: number,
+  offsetY: number,
+  showPoints: boolean,
+) {
+  const raw = note.curve
+  if (!raw || !raw.length) return
+  const pps = pxPerSecond.value
+  const top = pitchRange.value.max
+  const row = rowHeight.value
+  if (raw.length < 2) {
+    // 刚下笔只有一个点：只画这个点，不要拉成一条横线。
+    const point = raw[0]!
+    const x = timeToX(note.start + point.t, pps) - offsetX
+    const y = pitchToY(note.pitch + point.v, top, row) + RULER_HEIGHT - offsetY + row / 2
+    context.save()
+    context.fillStyle = '#ffd166'
+    context.beginPath()
+    context.arc(x, y, 2.4, 0, Math.PI * 2)
+    context.fill()
+    context.restore()
+    return
+  }
+  const points = raw.map((point) => ({
+    x: timeToX(note.start + point.t, pps) - offsetX,
+    y: pitchToY(note.pitch + point.v, top, row) + RULER_HEIGHT - offsetY + row / 2,
+  }))
+  const trace = () => {
+    context.beginPath()
+    context.moveTo(points[0]!.x, points[0]!.y)
+    if (points.length === 2) {
+      context.lineTo(points[1]!.x, points[1]!.y)
+      return
+    }
+    for (let index = 1; index < points.length - 1; index += 1) {
+      const current = points[index]!
+      const next = points[index + 1]!
+      context.quadraticCurveTo(
+        current.x,
+        current.y,
+        (current.x + next.x) / 2,
+        (current.y + next.y) / 2,
+      )
+    }
+    const last = points[points.length - 1]!
+    context.lineTo(last.x, last.y)
+  }
+  context.save()
+  // 先描一层深色底，保证在浅蓝音符上也看得清。
+  context.strokeStyle = 'rgba(6,12,20,0.75)'
+  context.lineWidth = 4
+  context.lineJoin = 'round'
+  context.lineCap = 'round'
+  trace()
+  context.stroke()
+  context.strokeStyle = '#ffd166'
+  context.lineWidth = 2
+  trace()
+  context.stroke()
+  if (!showPoints) {
+    context.restore()
+    return
+  }
+  context.fillStyle = '#ffd166'
+  context.strokeStyle = 'rgba(6,12,20,0.85)'
+  context.lineWidth = 1
+  for (const point of points) {
+    context.beginPath()
+    context.arc(point.x, point.y, 2.6, 0, Math.PI * 2)
+    context.fill()
+    context.stroke()
+  }
+  context.restore()
+}
+
+/** 曲线模式下的提示：还没画曲线的音符上铺一条虚线，告诉用户「拖这里就能画」。 */
+function drawCurveGhost(
+  context: CanvasRenderingContext2D,
+  note: MidiNote,
+  offsetX: number,
+  offsetY: number,
+) {
+  const pps = pxPerSecond.value
+  const row = rowHeight.value
+  const left = timeToX(note.start, pps) - offsetX
+  const right = timeToX(note.end, pps) - offsetX
+  const y = pitchToY(note.pitch, pitchRange.value.max, row) + RULER_HEIGHT - offsetY + row / 2
+  context.save()
+  context.setLineDash([5, 4])
+  context.strokeStyle = 'rgba(255, 209, 102, 0.65)'
+  context.lineWidth = 1.5
+  context.beginPath()
+  context.moveTo(left, y)
+  context.lineTo(right, y)
+  context.stroke()
+  context.restore()
+}
+
+/**
+ * 把所有音符的可编辑曲线合并画成**一整条连续的黄色线**（按绝对时间排序）。
+ * 只在时间间隔超过 0.35s（明显是空白）时断开，音符之间不再一节一节断开。
+ * ``showPoints`` 控制是否画控制点圆点：编辑时开，退出后关（平滑无点）。
+ */
+/** 音符的目标音高参考线（虚线），对应 OpenUtau 曲线面板里的默认值虚线。 */
+function drawPitchBaselines(
+  context: CanvasRenderingContext2D,
+  offsetX: number,
+  offsetY: number,
+) {
+  if (!draft.value.length) return
+  const pps = pxPerSecond.value
+  const top = pitchRange.value.max
+  const row = rowHeight.value
+  context.save()
+  context.setLineDash([4, 4])
+  context.lineWidth = 1
+  context.strokeStyle = 'rgba(255, 255, 255, 0.22)'
+  context.beginPath()
+  for (const note of draft.value) {
+    const y = pitchToY(note.pitch + note.detune / 100, top, row) + RULER_HEIGHT - offsetY + row / 2
+    const left = timeToX(note.start, pps) - offsetX
+    const right = timeToX(note.end, pps) - offsetX
+    context.moveTo(left, y)
+    context.lineTo(right, y)
+  }
+  context.stroke()
+  context.restore()
+}
+
+function drawGlobalCurve(
+  context: CanvasRenderingContext2D,
+  offsetX: number,
+  offsetY: number,
+) {
+  const pps = pxPerSecond.value
+  const top = pitchRange.value.max
+  const row = rowHeight.value
+  const raw = globalCurve.value
+  if (raw.length < 2) return
+  // 显示抽稀：横向缩小时，相距不足 1.2px 的点视觉上不可区分，
+  // 抽掉它们能大幅降低每帧的贝塞尔段数（长曲线/缩小时尤其明显）。
+  const points: Array<{ t: number; midi: number; x: number; y: number }> = []
+  let lastX = Number.NEGATIVE_INFINITY
+  for (let index = 0; index < raw.length; index += 1) {
+    const point = raw[index]!
+    const x = timeToX(point.t, pps) - offsetX
+    if (index !== 0 && index !== raw.length - 1 && Math.abs(x - lastX) < 1.2) continue
+    points.push({
+      t: point.t,
+      midi: point.midi,
+      x,
+      y: pitchToY(point.midi, top, row) + RULER_HEIGHT - offsetY + row / 2,
+    })
+    lastX = x
+  }
+  if (points.length < 2) return
+  context.save()
+  context.lineJoin = 'round'
+  context.lineCap = 'round'
+  const trace = () => {
+    context.beginPath()
+    let started = false
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const current = points[index]!
+      const next = points[index + 1]!
+      if (next.t - current.t > 0.5) continue
+      if (!started) {
+        context.moveTo(current.x, current.y)
+        started = true
+      }
+      // Catmull-Rom 转三次贝塞尔：曲线严格穿过鼠标采样点，
+      // 不会像折线那样把两点之间画成直线。
+      const previous = points[index - 1] ?? current
+      const after = points[index + 2] ?? next
+      const c1x = current.x + (next.x - previous.x) / 6
+      const c1y = current.y + (next.y - previous.y) / 6
+      const c2x = next.x - (after.x - current.x) / 6
+      const c2y = next.y - (after.y - current.y) / 6
+      context.bezierCurveTo(c1x, c1y, c2x, c2y, next.x, next.y)
+    }
+    if (!started) {
+      context.moveTo(points[0]!.x, points[0]!.y)
+    }
+  }
+  context.strokeStyle = 'rgba(6,12,20,0.75)'
+  context.lineWidth = 4
+  trace()
+  context.stroke()
+  context.strokeStyle = '#ffd166'
+  context.lineWidth = 2
+  trace()
+  context.stroke()
+
+  context.restore()
+}
+function drawOriginalPitch(
+  context: CanvasRenderingContext2D,
+  offsetX: number,
+  offsetY: number,
+) {
+  const smoothed = smoothedPitchCurve.value
+  if (smoothed.length < 2) return
+  const pps = pxPerSecond.value
+  const top = pitchRange.value.max
+  const row = rowHeight.value
+  context.save()
+  context.strokeStyle = 'rgba(109, 242, 194, 0.9)'
+  context.lineWidth = 1.6
+  context.lineJoin = 'round'
+  context.lineCap = 'round'
+  context.beginPath()
+  let previousTime = Number.NEGATIVE_INFINITY
+  let lastX = Number.NEGATIVE_INFINITY
+  for (const [time, midi] of smoothed) {
+    const x = timeToX(time, pps) - offsetX
+    const y = pitchToY(midi, top, row) + RULER_HEIGHT - offsetY + row / 2
+    // 时间跳变超过 0.18s 认为是新的乐句，断开折线。
+    const broken = time - previousTime > 0.18
+    // 显示抽稀：相邻点横向不足 0.8px 时直接跳过，降低每帧的 lineTo 次数。
+    if (!broken && Math.abs(x - lastX) < 0.8) {
+      previousTime = time
+      continue
+    }
+    if (broken) context.moveTo(x, y)
+    else context.lineTo(x, y)
+    previousTime = time
+    lastX = x
+  }
+  context.stroke()
+  context.restore()
+}
+
+/* ---------------------------------------------------------------- 指针交互 */
+
+interface CanvasPoint {
+  vx: number
+  vy: number
+  x: number
+  y: number
+}
+
+function canvasPoint(event: PointerEvent | MouseEvent): CanvasPoint {
+  const canvas = gridCanvasRef.value
+  if (!canvas) return { vx: 0, vy: 0, x: 0, y: 0 }
+  const rect = canvas.getBoundingClientRect()
+  const vx = (event.clientX - rect.left) * (viewWidth.value / Math.max(1, rect.width))
+  const vy = (event.clientY - rect.top) * (viewHeight.value / Math.max(1, rect.height))
+  return { vx, vy, x: vx + scrollLeft.value, y: vy + scrollTop.value }
+}
+
+function timeOf(x: number) {
+  return clampTime(xToTime(x, pxPerSecond.value), duration.value)
+}
+
+function pitchOf(y: number) {
+  const raw = yToPitch(Math.max(0, y - RULER_HEIGHT), pitchRange.value.max, rowHeight.value)
+  // 鼓组没有音高，只有鼓件：吸附到最近的鼓件上；旋律声部覆盖 GM 全音域。
+  if (drumMode.value) return nearestDrumPitch(raw)
+  return isCompose.value ? clampComposePitch(raw) : clampPitch(raw)
+}
+
+function pitchNoteAt(point: CanvasPoint) {
+  return noteAtPoint(
+    draft.value,
+    point.x,
+    point.y - RULER_HEIGHT,
+    pitchRange.value.max,
+    rowHeight.value,
+    pxPerSecond.value,
+  )
+}
+
+/**
+ * 曲线模式下找「要画曲线的音符」：先按精确命中，找不到就退回
+ * 「时间区间覆盖按下位置、音高最接近」的音符。这样不必像素级点中细长的音符条。
+ */
+function pitchCurveTarget(point: CanvasPoint): MidiNote | undefined {
+  const hit = pitchNoteAt(point)
+  if (hit) return hit
+  const time = timeOf(point.x)
+  const pitch = pitchOf(point.y)
+  let best: MidiNote | undefined
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (const note of draft.value) {
+    if (time < note.start - 0.02 || time > note.end + 0.02) continue
+    const distance = Math.abs(note.pitch - pitch)
+    if (distance < bestDistance) {
+      best = note
+      bestDistance = distance
+    }
+  }
+  return best
+}
+
+/** 在时间有序的 F0 序列里二分定位第一个 time >= target 的下标。 */
+function f0IndexAt(target: number): number {
+  const source = props.pitchCurve
+  if (!source || !source.length) return 0
+  let low = 0
+  let high = source.length - 1
+  while (low < high) {
+    const mid = (low + high) >> 1
+    if ((source[mid]?.[0] ?? 0) < target) low = mid + 1
+    else high = mid
+  }
+  return low
+}
+
+/** 在原始 F0 序列上按时间线性插值取 MIDI 音高；两端超出时用最近点，取不到返回 null。 */
+function f0MidiAt(time: number): number | null {
+  const source = props.pitchCurve
+  if (!source || source.length < 2) return null
+  const first = source[0]!
+  if (time <= first[0]) return first[1]
+  const last = source[source.length - 1]!
+  if (time >= last[0]) return last[1]
+  for (let index = 1; index < source.length; index += 1) {
+    const prev = source[index - 1]!
+    const curr = source[index]!
+    if (time <= curr[0]) {
+      const span = curr[0] - prev[0]
+      if (span <= 1e-6) return curr[1]
+      return prev[1] + ((curr[1] - prev[1]) * (time - prev[0])) / span
+    }
+  }
+  return last[1]
+}
+
+/** 把曲线按时间均匀重采样到 limit 个点，避免 F0 抖动生成几百个控制点。 */
+function downsampleCurve(points: MidiCurvePoint[], limit: number): MidiCurvePoint[] {
+  if (points.length <= limit || limit < 2) return points
+  const first = points[0]!
+  const last = points[points.length - 1]!
+  const span = Math.max(1e-3, last.t - first.t)
+  const out: MidiCurvePoint[] = []
+  let cursor = 0
+  for (let index = 0; index < limit; index += 1) {
+    const target = first.t + (span * index) / (limit - 1)
+    while (cursor + 1 < points.length && points[cursor + 1]!.t < target) cursor += 1
+    const left = points[cursor]!
+    const right = points[Math.min(points.length - 1, cursor + 1)]!
+    const gap = right.t - left.t
+    const ratio = gap > 1e-6 ? (target - left.t) / gap : 0
+    out.push({
+      t: Math.round(target * 1000) / 1000,
+      v: Math.round((left.v + (right.v - left.v) * Math.max(0, Math.min(1, ratio))) * 1000) / 1000,
+    })
+  }
+  return out
+}
+
+/**
+ * 用「音频原本的 F0」+「当前 MIDI 音符」生成适配的曲线。
+ *
+ * 锚点用**音符自己的目标音高**（pitch + detune），所以：
+ *  - 黄色曲线正好压在原唱绿色 F0 线上（准）；
+ *  - 相邻音符在交界处 `pitch + v` 都等于同一条 F0，连起来是连续的一条线（连贯）；
+ *  - `v` 是相对音符的偏移，音符上下移调时曲线形状不变、自动跟着走（适配 MIDI 变化）。
+ * 音符区间内 F0 点不够时，用区间两端的 F0 线性插值出一条贴合局部的曲线，
+ * 而不是退化成平直线——这样孤立音符也会被曲线「盖住」。
+ */
+function curveFromOriginal(note: MidiNote): MidiCurvePoint[] {
+  const span = Math.round(Math.max(1e-3, note.end - note.start) * 1000) / 1000
+  const flat: MidiCurvePoint[] = [{ t: 0, v: 0 }, { t: span, v: 0 }]
+  const source = props.pitchCurve
+  if (!source || source.length < 2) return flat
+  const anchor = note.pitch + note.detune / 100
+  const clampV = (value: number) =>
+    Math.round(Math.max(-CURVE_SEMITONE_LIMIT, Math.min(CURVE_SEMITONE_LIMIT, value)) * 1000) / 1000
+  // 把 F0 校正到音符附近的一个八度内：避免 RK 模型八度误判时生成 ±12 半音的竖线。
+  const octaveCorrect = (midi: number) => midi - 12 * Math.round((midi - anchor) / 12)
+  const inside: Array<{ t: number; midi: number }> = []
+  // 只扫描音符覆盖的时间段：整首歌可能有几万个 F0 点，逐音符全量扫描会拖慢生成。
+  const firstIndex = Math.max(0, f0IndexAt(note.start - 0.01) - 1)
+  const lastIndex = Math.min(source.length - 1, f0IndexAt(note.end + 0.01) + 1)
+  for (let index = firstIndex; index <= lastIndex; index += 1) {
+    const entry = source[index]
+    if (!entry) continue
+    const [time, midi] = entry
+    if (time < note.start - 0.01 || time > note.end + 0.01) continue
+    inside.push({ t: Math.max(0, Math.min(span, time - note.start)), midi })
+  }
+  let points: MidiCurvePoint[]
+  if (inside.length >= 2) {
+    // 5 点加权平滑：压掉 F0 的帧间抖动，短音符不至于生成锯齿状曲线。
+    const smoothed = inside.map((item, index, all) => {
+      let total = item.midi * 2
+      let count = 2
+      for (let offset = -2; offset <= 2; offset += 1) {
+        if (offset === 0) continue
+        const neighbour = all[index + offset]
+        if (!neighbour) continue
+        total += neighbour.midi
+        count += 1
+      }
+      return { t: item.t, midi: octaveCorrect(total / count) }
+    })
+    points = smoothed.map((item) => ({
+      t: Math.round(item.t * 1000) / 1000,
+      v: clampV(item.midi - anchor),
+    }))
+  } else {
+    // 区间内几乎没有 F0（长音的前后是静音）：不要生成一条平直假曲线，
+    // 否则会横跨整屏，看起来像一条错误的手动曲线。
+    const nearestIndex = f0IndexAt((note.start + note.end) / 2)
+    const near = source[nearestIndex] ?? source[source.length - 1]
+    if (!near || Math.abs(near[0] - (note.start + note.end) / 2) > 0.4) return []
+    const value = clampV(octaveCorrect(near[1]) - anchor)
+    points = [
+      { t: 0, v: value },
+      { t: span, v: value },
+    ]
+  }
+  // 只做简化、不做平滑：F0 已经清理过，再平滑会把真实的跳音抹成滑音。
+  // 点数超过上限时逐步放宽容差，保证曲线仍然覆盖整条音符（不会被截断）。
+  let tolerance = 0.05
+  let tidy = tidyCurve(points, span, tolerance, 2)
+  while (tidy && tidy.length > MAX_CURVE_POINTS && tolerance < 0.8) {
+    tolerance *= 1.6
+    tidy = tidyCurve(points, span, tolerance, 2)
+  }
+  if (!tidy || tidy.length < 2) return flat
+  // F0 抖动会产生上百个控制点：均匀重采样到最多 28 个，曲线更干净也更好拖。
+  const reduced = [...downsampleCurve(tidy, 28)]
+  if (reduced[0]!.t > 0.001) reduced.unshift({ t: 0, v: reduced[0]!.v })
+  const last = reduced[reduced.length - 1]!
+  if (last.t < span - 0.001) reduced.push({ t: span, v: last.v })
+  return reduced
+}
+
+/**
+ * 把一次指针位置写进正在绘制的音高曲线：
+ * ``t`` 是相对音符起点的秒数，``v`` 是以半音为单位的音高偏移（向上为正）。
+ */
+/** 把一串指针位置转成采样点，追加到待合并缓冲（不逐点提交）。 */
+function applyCurvePoints(points: CanvasPoint[], event?: PointerEvent) {
+  const current = drag.value
+  if (!current || current.mode !== 'curve') return
+  const erasing = !!current.curveErase || !!event?.altKey
+  const snap = !erasing && (event?.ctrlKey || event?.metaKey)
+  const samples: Array<{ t: number; midi: number }> = []
+  let lastT = current.curveLastT
+  let lastMidi = current.curveLastMidi
+  for (const point of points) {
+    const absolute = curvePointAt(point)
+    let target = absolute.midi
+    if (snap) target = Math.round(target * 2) / 2
+    const fromT = lastT ?? absolute.t
+    const fromMidi = lastMidi ?? target
+    const span = Math.abs(absolute.t - fromT)
+    const steps = Math.max(1, Math.min(600, Math.ceil(span / 0.006)))
+    for (let index = 0; index <= steps; index += 1) {
+      const ratio = index / steps
+      samples.push({
+        t: fromT + (absolute.t - fromT) * ratio,
+        midi: fromMidi + (target - fromMidi) * ratio,
+      })
+    }
+    lastT = absolute.t
+    lastMidi = target
+  }
+  current.curveLastT = lastT
+  current.curveLastMidi = lastMidi
+  pendingStroke.value.push(...samples)
+  pendingStrokeErase.value = erasing
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function applyCurvePoint(point: CanvasPoint, event?: PointerEvent) {
+  applyCurvePoints([point], event)
+}
+function composeNoteAt(point: CanvasPoint) {
+  return composeNoteAtPoint(
+    parts.value.filter((part) => isPartAudible(parts.value, part) || part.id === activePartId.value),
+    point.x,
+    point.y - RULER_HEIGHT,
+    pitchRange.value.max,
+    rowHeight.value,
+    pxPerSecond.value,
+  )
+}
+
+function onPointerDown(event: PointerEvent) {
+  const rightButton = event.button === 2
+  // 右键在音高曲线模式里用于擦除（OpenUtau 习惯），其他模式下保留右键菜单。
+  if (rightButton && !pitchCurveMode.value) return
+  // 让画布拿到焦点：否则点过工具栏的复选框后，Ctrl+Z 之类快捷键仍指向那个 input。
+  const canvasEl = event.currentTarget
+  if (canvasEl instanceof HTMLElement) canvasEl.focus()
+  hideContextMenu()
+  const point = canvasPoint(event)
+  if (point.vy < RULER_HEIGHT) {
+    // 刻度尺：按下并拖动可以连续移动播放头。
+    const target = timeOf(point.x)
+    cursorTime.value = target
+    seek(target)
+    drag.value = {
+      mode: 'seek',
+      originX: point.x,
+      originY: point.y,
+      baseAll: [],
+      baseSession: null,
+      partId: '',
+      ids: [],
+    }
+    ;(event.target as HTMLCanvasElement).setPointerCapture?.(event.pointerId)
+    event.preventDefault()
+    return
+  }
+  cursorTime.value = timeOf(point.x)
+  const step = snapStep.value
+
+  if (isCompose.value) {
+    const hit = composeNoteAt(point)
+    if (currentTool.value === 'erase') {
+      if (hit) {
+        pushUndo()
+        hit.part.notes = hit.part.notes.filter((note) => note.id !== hit.note.id)
+        selection.value = selection.value.filter((id) => id !== hit.note.id)
+        markPreviewStale()
+        drag.value = {
+          mode: 'erase',
+          originX: point.x,
+          originY: point.y,
+          baseAll: [],
+          baseSession: null,
+          partId: hit.part.id,
+          ids: [],
+        }
+        scheduleDraw()
+      }
+      return
+    }
+    if (currentTool.value === 'draw' && !hit) {
+      const note = addComposeNote(timeOf(point.x), pitchOf(point.y), Math.max(step || 0.25, 0.1))
+      if (note) {
+        drag.value = {
+          mode: 'create',
+          originX: point.x,
+          originY: point.y,
+          baseAll: [],
+          baseSession: cloneSession(session.value),
+          partId: activePart.value?.id || '',
+          ids: [note.id],
+          createStart: note.start,
+          createPitch: note.pitch,
+        }
+        ;(event.target as HTMLCanvasElement).setPointerCapture?.(event.pointerId)
+      }
+      return
+    }
+    if (!hit) {
+      if (!(event.shiftKey || event.ctrlKey || event.metaKey)) clearSelection()
+      drag.value = {
+        mode: 'marquee',
+        originX: point.x,
+        originY: point.y,
+        baseAll: [],
+        baseSession: null,
+        partId: '',
+        ids: [],
+        marqueeStart: { x: point.x, y: point.y - RULER_HEIGHT },
+        marqueeEnd: { x: point.x, y: point.y - RULER_HEIGHT },
+      }
+      ;(event.target as HTMLCanvasElement).setPointerCapture?.(event.pointerId)
+      return
+    }
+    if (event.shiftKey || event.ctrlKey || event.metaKey) toggleSelect(hit.note.id)
+    else if (!selection.value.includes(hit.note.id)) selectOnly(hit.note.id)
+    activePartId.value = hit.part.id
+    if (currentTool.value === 'select') playBlip(hit.note.pitch, hit.note.velocity)
+    const edge = noteEdgeAt(
+      hit.note,
+      point.x,
+      pitchRange.value.max,
+      rowHeight.value,
+      pxPerSecond.value,
+      EDGE_GRAB_PX,
+    )
+    drag.value = {
+      mode: edge,
+      originX: point.x,
+      originY: point.y,
+      baseAll: [],
+      baseSession: cloneSession(session.value),
+      partId: hit.part.id,
+      ids:
+        edge === 'move' && currentTool.value === 'select'
+          ? selection.value.slice()
+          : [hit.note.id],
+    }
+    ;(event.target as HTMLCanvasElement).setPointerCapture?.(event.pointerId)
+    event.preventDefault()
+    return
+  }
+
+  // 演唱音准模式
+  // 曲线模式用「宽容命中」：细长音符条不必像素级点中也能画。
+  const note = pitchCurveMode.value ? pitchCurveTarget(point) : pitchNoteAt(point)
+  // 音高曲线模式：这是整轨曲线，与音符无关，空白处也能起笔；单击只选中音符。
+  if (pitchCurveMode.value) {
+    const absolute = curvePointAt(point)
+    drag.value = {
+      mode: 'curve',
+      originX: point.x,
+      originY: point.y,
+      baseAll: [],
+      baseSession: null,
+      partId: '',
+      ids: note ? [note.id] : [],
+      // 真正的修改推迟到指针移动超过阈值后，单击不产生任何曲线改动。
+      pushed: false,
+      curveNoteId: note?.id,
+      curveAbsStartT: absolute.t,
+      curveAbsStartMidi: absolute.midi,
+      curveLastT: absolute.t,
+      curveLastMidi: absolute.midi,
+      curveErase: rightButton || pitchTool.value === 'erase',
+      curveLine: false,
+      curveTouched: [],
+      curveCleared: new Set<string>(),
+    }
+    const curveCanvas = event.target as HTMLCanvasElement
+    curveCanvas.style.cursor = 'crosshair'
+    curveCanvas.setPointerCapture?.(event.pointerId)
+    event.preventDefault()
+    return
+  }
+  if (!note) {
+    if (!(event.shiftKey || event.ctrlKey || event.metaKey)) clearSelection()
+    drag.value = {
+      mode: 'marquee',
+      originX: point.x,
+      originY: point.y,
+      baseAll: draft.value.map((item) => ({ ...item })),
+      baseSession: null,
+      partId: '',
+      ids: [],
+      marqueeStart: { x: point.x, y: point.y - RULER_HEIGHT },
+      marqueeEnd: { x: point.x, y: point.y - RULER_HEIGHT },
+    }
+    ;(event.target as HTMLCanvasElement).setPointerCapture?.(event.pointerId)
+    return
+  }
+  if (event.shiftKey || event.ctrlKey || event.metaKey) toggleSelect(note.id)
+  else if (!selection.value.includes(note.id)) selectOnly(note.id)
+  const edge = noteEdgeAt(note, point.x, pitchRange.value.max, rowHeight.value, pxPerSecond.value, EDGE_GRAB_PX)
+  drag.value = {
+    mode: edge,
+    originX: point.x,
+    originY: point.y,
+    baseAll: draft.value.map((item) => ({ ...item })),
+    baseSession: null,
+    partId: '',
+    ids: edge === 'move' ? selection.value.slice() : [note.id],
+  }
+  ;(event.target as HTMLCanvasElement).setPointerCapture?.(event.pointerId)
+  event.preventDefault()
+}
+
+function seek(seconds: number) {
+  const target = Math.min(Math.max(0, seconds), duration.value)
+  previewTime.value = target
+  const el = audioEl.value
+  if (el && el.src) {
+    el.currentTime = Math.min(target, Math.max(0, (el.duration || target) - 0.001))
+    return
+  }
+  // 还没有本地试听音频时，拖播放头同步到主编辑器播放器。
+  if (!isCompose.value) emit('seek', target)
+}
+
+/** 指针拖动超过阈值后才真正开始一笔曲线（单击不修改曲线）。 */
+function beginCurveStroke(
+  current: { pushed?: boolean; curveLastT?: number; curveLastMidi?: number },
+  point: CanvasPoint,
+) {
+  // 真正的改写发生在 applyCurvePoint 里；这里只记录一次撤销点。
+  pushUndo()
+  // 关键：笔迹从「越过阈值的位置」开始，而不是从按下鼠标的位置开始，
+  // 否则小笔画会先被一段从落笔点拉过来的直线带偏。
+  const absolute = curvePointAt(point)
+  current.curveLastT = absolute.t
+  current.curveLastMidi = absolute.midi
+  current.pushed = true
+}
+
+/** 指针位置的绝对时间与绝对音高（半音）。 */
+function curvePointAt(point: CanvasPoint) {
+  return {
+    t: Math.max(0, timeOf(point.x)),
+    midi: pitchRange.value.max + 0.5 - (point.y - RULER_HEIGHT) / rowHeight.value,
+  }
+}
+
+/** 整轨曲线排序/合并相近时间点。 */
+function normalizeGlobalPoints(points: Array<{ t: number; midi: number }>) {
+  const sorted = [...points].sort((a, b) => a.t - b.t)
+  const merged: Array<{ t: number; midi: number }> = []
+  for (const point of sorted) {
+    const last = merged[merged.length - 1]
+    if (last && Math.abs(last.t - point.t) < 0.0015) last.midi = point.midi
+    else merged.push({ t: point.t, midi: point.midi })
+  }
+  return merged
+}
+
+/** 手动曲线在某一绝对时间的音高；该时间没有画过（或超出首尾）时返回 null。 */
+function manualCurveMidiAt(time: number): number | null {
+  const points = globalCurve.value
+  if (points.length < 2) return null
+  const first = points[0]!
+  const last = points[points.length - 1]!
+  if (time < first.t || time > last.t) return null
+  if (time <= first.t) return first.midi
+  if (time >= last.t) return last.midi
+  for (let index = 1; index < points.length; index += 1) {
+    const right = points[index]!
+    if (time <= right.t) {
+      const left = points[index - 1]!
+      const gap = right.t - left.t
+      return gap > 1e-6 ? left.midi + ((right.midi - left.midi) * (time - left.t)) / gap : right.midi
+    }
+  }
+  return last.midi
+}
+
+/**
+ * 渲染前把整条音高线落到音符上：
+ * 画过曲线的地方用手动曲线，没画过的地方用原唱 F0（原始音高），
+ * 连 F0 都没有的音符才退回音符自身音高。
+ */
+function notesWithGlobalCurve(notes: MidiNote[]): MidiNote[] {
+  const f0 = props.pitchCurve ?? []
+  return notes.map((note) => {
+    const span = Math.max(1e-3, note.end - note.start)
+    const anchor = note.pitch + note.detune / 100
+    const times: number[] = [note.start]
+    for (const point of globalCurve.value) {
+      if (point.t > note.start + 1e-3 && point.t < note.end - 1e-3) times.push(point.t)
+    }
+    const inside = f0.filter(([time]) => time > note.start + 1e-3 && time < note.end - 1e-3)
+    // 每个音符最多取 48 个 F0 采样点，控制数据量。
+    const stride = Math.max(1, Math.ceil(inside.length / 48))
+    for (let index = 0; index < inside.length; index += stride) times.push(inside[index]![0])
+    times.push(note.end)
+    times.sort((a, b) => a - b)
+    const points: MidiCurvePoint[] = []
+    let lastTime = Number.NEGATIVE_INFINITY
+    for (const time of times) {
+      if (time - lastTime < 1e-3) continue
+      lastTime = time
+      let midi = manualCurveMidiAt(time)
+      if (midi == null) {
+        const raw = f0MidiAt(time)
+        // F0 可能八度误判：先校正到音符附近的一个八度内。
+        midi = raw == null ? anchor : raw - 12 * Math.round((raw - anchor) / 12)
+      }
+      points.push({
+        t: time - note.start,
+        v: Math.max(-CURVE_SEMITONE_LIMIT, Math.min(CURVE_SEMITONE_LIMIT, midi - anchor)),
+      })
+    }
+    const curve = clampCurve(points, span)
+    const next = { ...note }
+    if (curve) next.curve = curve
+    else delete next.curve
+    return next
+  })
+}
+/** 把一批音符的局部曲线合并回整轨曲线（替换这些音符时间范围内的旧点）。 */
+function mergeNoteCurvesIntoGlobal(ids: Set<string>) {
+  const notes = draft.value.filter((note) => ids.has(note.id))
+  if (!notes.length) return
+  const inRange = (time: number) =>
+    notes.some((note) => time >= note.start - 1e-6 && time <= note.end + 1e-6)
+  const kept = globalCurve.value.filter((point) => !inRange(point.t))
+  const added: Array<{ t: number; midi: number }> = []
+  for (const note of notes) {
+    if (!note.curve) continue
+    for (const point of note.curve) {
+      added.push({ t: note.start + point.t, midi: note.pitch + note.detune / 100 + point.v })
+    }
+  }
+  globalCurve.value = normalizeGlobalPoints([...kept, ...added])
+  recomputeCurveBounds(globalCurve.value)
+}
+
+/** 从音符自带的曲线重建整轨曲线（打开工程/撤销后调用）。 */
+function rebuildGlobalCurve() {
+  const points: Array<{ t: number; midi: number }> = []
+  for (const note of draft.value) {
+    if (!note.curve) continue
+    for (const point of note.curve) {
+      points.push({ t: note.start + point.t, midi: note.pitch + note.detune / 100 + point.v })
+    }
+  }
+  globalCurve.value = normalizeGlobalPoints(points)
+  recomputeCurveBounds(globalCurve.value)
+}
+
+/** 两个按时间升序的点列归并，重合时间取后者（采样更靠后，更新）。 */
+function mergeSortedPoints(
+  left: Array<{ t: number; midi: number }>,
+  right: Array<{ t: number; midi: number }>,
+) {
+  const out: Array<{ t: number; midi: number }> = []
+  let i = 0
+  let j = 0
+  while (i < left.length && j < right.length) {
+    const a = left[i]!
+    const b = right[j]!
+    if (Math.abs(a.t - b.t) < 0.0015) {
+      out.push(b)
+      i += 1
+      j += 1
+    } else if (a.t < b.t) {
+      out.push(a)
+      i += 1
+    } else {
+      out.push(b)
+      j += 1
+    }
+  }
+  while (i < left.length) out.push(left[i++]!)
+  while (j < right.length) out.push(right[j++]!)
+  return out
+}
+
+/** 每个动画帧最多调用一次：把本次拖动的采样合并进整轨曲线。 */
+function flushCurveStroke() {
+  const samples = pendingStroke.value
+  if (!samples.length) return
+  const erasing = pendingStrokeErase.value
+  pendingStroke.value = []
+  pendingStrokeErase.value = false
+  const tolerance = erasing ? 0.02 : 0.003
+  const times = samples.map((sample) => sample.t).sort((a, b) => a - b)
+  const covered = (time: number) => {
+    let low = 0
+    let high = times.length - 1
+    while (low <= high) {
+      const mid = (low + high) >> 1
+      const value = times[mid]!
+      if (Math.abs(value - time) <= tolerance) return true
+      if (value < time) low = mid + 1
+      else high = mid - 1
+    }
+    return false
+  }
+  const kept = globalCurve.value.filter((point) => !covered(point.t))
+  if (erasing) {
+    globalCurve.value = kept
+    // 擦除后上下界可能缩小，重新算一次（擦除不频繁，可接受）。
+    recomputeCurveBounds(kept)
+    return
+  }
+  const rounded = samples
+    .map((sample) => ({
+      t: Math.round(sample.t * 1000) / 1000,
+      midi: Math.round(sample.midi * 1000) / 1000,
+    }))
+    .sort((a, b) => a.t - b.t)
+  // 归并替代全量排序：kept 本身有序，samples 先排好序，整体 O(n+m)。
+  globalCurve.value = mergeSortedPoints(kept, rounded)
+  // 增量维护纵向范围，避免音域 computed 每帧遍历整条曲线。
+  extendCurveBounds(rounded)
+}
+function onPointerMove(event: PointerEvent) {
+  const current = drag.value
+  const point = canvasPoint(event)
+  if (!current) {
+    const canvas = gridCanvasRef.value
+    if (!canvas) return
+    const hovered = isCompose.value ? composeNoteAt(point) : pitchNoteAt(point)
+    const hoveredNote = hovered ? ('note' in hovered ? hovered.note : hovered) : null
+    hoveredNoteId.value = hoveredNote?.id ?? null
+    // 音高曲线模式下鼠标是"画笔"，不要因为悬停在音符上就变成移动/拉伸光标。
+    if (!isCompose.value && pitchCurveMode.value) {
+      canvas.style.cursor = point.vy < RULER_HEIGHT ? 'pointer' : 'crosshair'
+      return
+    }
+    if (hoveredNote) {
+      const edge = noteEdgeAt(
+        hoveredNote,
+        point.x,
+        pitchRange.value.max,
+        rowHeight.value,
+        pxPerSecond.value,
+        EDGE_GRAB_PX,
+      )
+      canvas.style.cursor = edge === 'move' ? 'grab' : 'ew-resize'
+    } else {
+      canvas.style.cursor =
+        currentTool.value === 'erase' ? 'not-allowed' : point.vy < RULER_HEIGHT ? 'pointer' : 'crosshair'
+    }
+    return
+  }
+  if (current.mode === 'seek') {
+    const target = timeOf(point.x)
+    cursorTime.value = target
+    seek(target)
+    return
+  }
+  if (current.mode === 'curve') {
+    if (!current.pushed) {
+      // 阈值内算单击（选择音符），不触碰曲线。
+      if (Math.hypot(point.x - current.originX, point.y - current.originY) < 1.5) return
+      beginCurveStroke(current, point)
+      // 跳过这一帧的合并事件：它们还夹着「落笔→阈值」之间的一小段，
+      // 否则笔迹又会被刚落笔的位置拉回一条直线。
+      applyCurvePoint(point, event)
+      return
+    }
+    // 已开始后，把浏览器合并掉的高频采样逐个落点，快速画曲线才不会被压成直线。
+    const coalesced =
+      typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : []
+    if (coalesced.length > 1) {
+      applyCurvePoints(coalesced.map((sample) => canvasPoint(sample)), event)
+    } else {
+      applyCurvePoint(point, event)
+    }
+    return
+  }
+  if (current.mode === 'erase') {
+    const hit = isCompose.value ? composeNoteAt(point) : null
+    if (hit) {
+      hit.part.notes = hit.part.notes.filter((note) => note.id !== hit.note.id)
+      selection.value = selection.value.filter((id) => id !== hit.note.id)
+      markPreviewStale()
+      scheduleDraw()
+    }
+    return
+  }
+  if (current.mode === 'marquee') {
+    current.marqueeEnd = { x: point.x, y: point.y - RULER_HEIGHT }
+    scheduleDraw()
+    return
+  }
+  const deltaSeconds = xToTime(point.x - current.originX, pxPerSecond.value)
+  const deltaPitch = Math.round((current.originY - point.y) / rowHeight.value)
+  const step = snapStep.value
+
+  if (isCompose.value) {
+    if (current.mode === 'create' && current.baseSession) {
+      const partId = current.partId
+      const ids = new Set(current.ids)
+      const start = current.createStart ?? 0
+      const target = step > 0 ? snapTime(timeOf(point.x), step) : timeOf(point.x)
+      const end = Math.max(start + (step || 0.05), target)
+      session.value.parts = parts.value.map((part) =>
+        part.id === partId
+          ? {
+              ...part,
+              notes: part.notes.map((note) =>
+                ids.has(note.id)
+                  ? { ...note, start, end: Math.min(duration.value, end) }
+                  : note,
+              ),
+            }
+          : part,
+      )
+      markPreviewStale()
+      scheduleDraw()
+      return
+    }
+    if (!current.pushed) {
+      if (current.baseSession) session.value = current.baseSession
+      pushUndo()
+      current.pushed = true
+    }
+    const ids = new Set(current.ids)
+    if (current.mode === 'move') {
+      const base = current.baseSession
+      if (!base) return
+      // 拖动移动跟随鼠标 1:1，不做网格吸附（吸附交给「量化」按钮 / Ctrl+Q）。
+      // 之前按网格把「位移量」吸附，拖一小段就会跳一整格，手感很差。
+      session.value.parts = snapDrumPitches(
+        moveComposeNotes(
+          base.parts,
+          ids,
+          deltaSeconds,
+          deltaPitch,
+          duration.value,
+          0,
+        ),
+        ids,
+      )
+      markPreviewStale()
+      scheduleDraw()
+      return
+    }
+    const base = current.baseSession
+    if (!base) return
+    const located = base.parts.flatMap((part) => part.notes.map((note) => ({ part, note })))
+    const targetItem = located.find((item) => ids.has(item.note.id))
+    if (!targetItem) return
+    const anchor = current.mode === 'start' ? targetItem.note.start : targetItem.note.end
+    // 拉缩边缘同样跟随鼠标 1:1，不吸附网格（网格对齐交给「量化」）。
+    const updated = resizeComposeNote(
+      targetItem.note,
+      current.mode === 'start' ? 'start' : 'end',
+      anchor + deltaSeconds,
+      duration.value,
+      0,
+    )
+    session.value.parts = base.parts.map((part) => ({
+      ...part,
+      notes: part.notes.map((note) => (note.id === targetItem.note.id ? updated : note)),
+    }))
+    markPreviewStale()
+    scheduleDraw()
+    return
+  }
+
+  // 演唱音准模式
+  if (!current.pushed) {
+    pushUndo()
+    current.pushed = true
+  }
+  if (current.mode === 'move') {
+    if (!current.baseAll.some((note) => current.ids.includes(note.id))) return
+    // 拖动移动同样跟随鼠标 1:1，不吸附网格。
+    draft.value = moveNotes(
+      current.baseAll,
+      current.ids,
+      deltaSeconds,
+      deltaPitch,
+      duration.value,
+      0,
+    )
+    return
+  }
+  const base = current.baseAll.find((note) => note.id === current.ids[0])
+  if (!base) return
+  // 拉缩边缘跟随鼠标 1:1：以被抓取的边缘为锚点（start / end），不吸附网格。
+  const anchor = current.mode === 'start' ? base.start : base.end
+  const target = anchor + deltaSeconds
+  draft.value = current.baseAll.map((note) =>
+    note.id === base.id
+      ? resizeNote(
+          base,
+          current.mode === 'start' ? 'start' : 'end',
+          current.mode === 'start'
+            ? Math.min(target, base.end - MIN_NOTE_LENGTH / 2)
+            : Math.max(target, base.start + MIN_NOTE_LENGTH / 2),
+          duration.value,
+          0,
+        )
+      : note,
+  )
+}
+
+function onPointerUp(event: PointerEvent) {
+  const current = drag.value
+  if (!current) return
+  ;(event.target as HTMLCanvasElement).releasePointerCapture?.(event.pointerId)
+  if (current.mode === 'seek') {
+    drag.value = null
+    scheduleDraw()
+    return
+  }
+  if (current.mode === 'marquee' && current.marqueeStart && current.marqueeEnd) {
+    const left = Math.min(current.marqueeStart.x, current.marqueeEnd.x)
+    const right = Math.max(current.marqueeStart.x, current.marqueeEnd.x)
+    const topY = Math.min(current.marqueeStart.y, current.marqueeEnd.y)
+    const bottomY = Math.max(current.marqueeStart.y, current.marqueeEnd.y)
+    const hits = isCompose.value
+      ? parts.value.flatMap((part) =>
+          part.notes
+            .filter((note) => {
+              const rect = noteRect(
+                note,
+                pitchRange.value.max,
+                rowHeight.value,
+                pxPerSecond.value,
+                MIDI_MIN_NOTE_PX,
+              )
+              return (
+                rect.x + rect.width >= left &&
+                rect.x <= right &&
+                rect.y + rect.height >= topY &&
+                rect.y <= bottomY
+              )
+            })
+            .map((note) => note.id),
+        )
+      : draft.value
+          .filter((note) => {
+            const rect = noteRect(
+              note,
+              pitchRange.value.max,
+              rowHeight.value,
+              pxPerSecond.value,
+              MIDI_MIN_NOTE_PX,
+            )
+            return (
+              rect.x + rect.width >= left &&
+              rect.x <= right &&
+              rect.y + rect.height >= topY &&
+              rect.y <= bottomY
+            )
+          })
+          .map((note) => note.id)
+    selection.value = Array.from(new Set([...selection.value, ...hits]))
+  }
+  // 曲线模式下单击（没有拖动）：只选中音符，不改曲线。
+  if (current.mode === 'curve' && current.curveNoteId && !current.pushed) {
+    if (event.button !== 2) {
+      const noteId = current.curveNoteId
+      if (event.shiftKey || event.ctrlKey || event.metaKey) toggleSelect(noteId)
+      else if (!selection.value.includes(noteId)) selectOnly(noteId)
+    }
+    drag.value = null
+    scheduleDraw()
+    return
+  }
+
+  drag.value = null
+  if (
+    isCompose.value &&
+    current.mode !== 'marquee' &&
+    current.mode !== 'erase' &&
+    current.mode !== 'create' &&
+    current.ids.length
+  ) {
+    const landed = locateNote(current.ids[0]!)
+    if (landed) playBlip(landed.note.pitch, landed.note.velocity)
+  }
+  scheduleDraw()
+}
+
+function onPointerLeave() {
+  // 指针移出画布时保留正在进行的拖动，由 pointerup/pointercancel 收尾。
+  hoveredNoteId.value = null
+  if (gridCanvasRef.value) gridCanvasRef.value.style.cursor = ''
+}
+
+function onDoubleClick(event: MouseEvent) {
+  const point = canvasPoint(event)
+  if (point.vy < RULER_HEIGHT) {
+    zoomToFit()
+    return
+  }
+  if (isCompose.value) {
+    if (composeNoteAt(point)) return
+    addComposeNote(timeOf(point.x), pitchOf(point.y), Math.max(snapStep.value || 0.25, 0.25))
+    return
+  }
+  if (pitchNoteAt(point)) return
+  addPitchNote(timeOf(point.x), pitchOf(point.y), Math.max(pitchGrid.value, 0.25))
+}
+
+/* ---------------------------------------------------------------- 力度条 */
+
+function velocityPoint(event: PointerEvent) {
+  const canvas = velocityCanvasRef.value
+  if (!canvas) return null
+  const rect = canvas.getBoundingClientRect()
+  const vx = (event.clientX - rect.left) * (viewWidth.value / Math.max(1, rect.width))
+  const vy = (event.clientY - rect.top) * (velocityHeight / Math.max(1, rect.height))
+  return { x: vx + scrollLeft.value, y: vy }
+}
+
+function velocityTarget(x: number): { part: MidiPart; note: MidiComposeNote } | null {
+  const seconds = xToTime(x, pxPerSecond.value)
+  let best: { part: MidiPart; note: MidiComposeNote; distance: number } | null = null
+  for (const part of parts.value) {
+    if (part.mute) continue
+    for (const note of part.notes) {
+      const distance = Math.abs(note.start - seconds)
+      if (distance <= 0.12 && (!best || distance < best.distance)) {
+        best = { part, note, distance }
+      }
+    }
+  }
+  return best ? { part: best.part, note: best.note } : null
+}
+
+function applyVelocityAt(x: number, y: number) {
+  const target = velocityTarget(x)
+  if (!target) return
+  const value = Math.round(((velocityHeight - 10 - y) / (velocityHeight - 14)) * 127)
+  const velocity = Math.min(127, Math.max(1, value))
+  if (target.note.velocity === velocity) return
+  target.note.velocity = velocity
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function onVelocityDown(event: PointerEvent) {
+  const point = velocityPoint(event)
+  if (!point) return
+  const target = velocityTarget(point.x)
+  if (!target) return
+  pushUndo()
+  if (!selection.value.includes(target.note.id)) selectOnly(target.note.id)
+  drag.value = {
+    mode: 'velocity',
+    originX: point.x,
+    originY: point.y,
+    baseAll: [],
+    baseSession: null,
+    partId: target.part.id,
+    ids: [target.note.id],
+  }
+  applyVelocityAt(point.x, point.y)
+  ;(event.target as HTMLCanvasElement).setPointerCapture?.(event.pointerId)
+}
+
+function onVelocityMove(event: PointerEvent) {
+  if (drag.value?.mode !== 'velocity') return
+  const point = velocityPoint(event)
+  if (!point) return
+  applyVelocityAt(point.x, point.y)
+}
+
+function onVelocityUp(event: PointerEvent) {
+  if (drag.value?.mode === 'velocity') {
+    drag.value = null
+    ;(event.target as HTMLCanvasElement).releasePointerCapture?.(event.pointerId)
+  }
+}
+
+/* ---------------------------------------------------------------- 右键菜单 */
+
+function onContextMenu(event: MouseEvent) {
+  // 音高曲线模式下右键用于擦除，不再弹菜单。
+  if (!isCompose.value && pitchCurveMode.value) {
+    hideContextMenu()
+    event.preventDefault()
+    return
+  }
+  const point = canvasPoint(event)
+  const hit = isCompose.value ? composeNoteAt(point) : pitchNoteAt(point)
+  if (hit) {
+    const noteId = 'note' in hit ? hit.note.id : hit.id
+    if (!selection.value.includes(noteId)) selectOnly(noteId)
+  }
+  cursorTime.value = timeOf(point.x)
+  const host = bodyRef.value?.getBoundingClientRect()
+  contextMenu.visible = true
+  contextMenu.x = event.clientX - (host?.left ?? 0) + 4
+  contextMenu.y = event.clientY - (host?.top ?? 0) + 4
+  contextMenu.time = timeOf(point.x)
+  contextMenu.pitch = pitchOf(point.y)
+  event.preventDefault()
+  nextTick(clampContextMenu)
+}
+
+/** 菜单贴边时往回夹，避免超出钢琴卷帘可视区导致显示不全。 */
+function clampContextMenu() {
+  const menu = menuRef.value
+  const host = bodyRef.value
+  if (!menu || !host) return
+  const margin = 6
+  const maxX = Math.max(margin, host.clientWidth - menu.offsetWidth - margin)
+  const maxY = Math.max(margin, host.clientHeight - menu.offsetHeight - margin)
+  contextMenu.x = Math.max(margin, Math.min(contextMenu.x, maxX))
+  contextMenu.y = Math.max(margin, Math.min(contextMenu.y, maxY))
+}
+
+function hideContextMenu() {
+  contextMenu.visible = false
+}
+
+function onWindowPointerDown(event: PointerEvent) {
+  if (!contextMenu.visible) return
+  const target = event.target instanceof Element ? event.target : null
+  if (target?.closest('.midi-menu')) return
+  hideContextMenu()
+}
+
+function menuAddNote() {
+  hideContextMenu()
+  if (isCompose.value) {
+    addComposeNote(contextMenu.time, contextMenu.pitch, Math.max(snapStep.value || 0.25, 0.25))
+    return
+  }
+  addPitchNote(contextMenu.time, contextMenu.pitch, Math.max(pitchGrid.value, 0.25))
+}
+
+function menuDelete() {
+  hideContextMenu()
+  deleteSelected()
+}
+
+function menuCopy() {
+  hideContextMenu()
+  copySelected()
+}
+
+function menuPaste() {
+  hideContextMenu()
+  pasteClipboard(contextMenu.time)
+}
+
+function menuQuantize() {
+  hideContextMenu()
+  quantizeSelection()
+}
+
+/** 右键「添加音高曲线」：用音频原本的 F0 初始化曲线，之后可以直接在上面拖。 */
+function menuAddCurve() {
+  hideContextMenu()
+  if (isCompose.value || !selection.value.length) return
+  const ids = selectionSet()
+  pushUndo()
+  ids.forEach((id) => clearedCurveIds.delete(id))
+  draft.value = draft.value.map((note) => {
+    if (!ids.has(note.id)) return note
+    return { ...note, curve: curveFromOriginal(note) }
+  })
+  mergeNoteCurvesIntoGlobal(ids)
+  markPreviewStale()
+  scheduleDraw()
+}
+
+function menuClearCurve() {
+  hideContextMenu()
+  clearSelectedCurve()
+}
+
+function menuTranspose(semitones: number) {
+  hideContextMenu()
+  transposeSelection(semitones)
+}
+
+function menuVelocity(factor: number) {
+  hideContextMenu()
+  scaleVelocitySelection(factor)
+}
+
+function menuLegato() {
+  hideContextMenu()
+  legatoSelection()
+}
+
+function menuSplitAtPlayhead() {
+  hideContextMenu()
+  splitSelectionAtPlayhead()
+}
+
+/** 右键「在此拆分音符」：在右键处切开音符并断开音高曲线。 */
+function menuSplitHere() {
+  hideContextMenu()
+  splitSelectionAt(contextMenu.time)
+}
+
+function menuDuplicate() {
+  hideContextMenu()
+  duplicateSelection()
+}
+
+function menuSelectAll() {
+  hideContextMenu()
+  selectAll()
+}
+
+function menuUndo() {
+  hideContextMenu()
+  undo()
+}
+
+function menuRedo() {
+  hideContextMenu()
+  redo()
+}
+</script>
+
+<style scoped>
+.midi-mask {
+  position: fixed;
+  inset: 0;
+  /* 高于页面主体（.layout-main z-index:1）、顶栏（z-index:50）、
+     编辑器右键菜单（4000）与 Element Plus 弹层，避免被导航栏压住。 */
+  z-index: 6000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(2, 5, 12, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.midi-mask.fullscreen {
+  padding: 0;
+  background: rgba(2, 5, 12, 0.96);
+}
+
+.midi-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(1360px, 97vw);
+  height: min(92vh, 940px);
+  padding: 14px 16px 10px;
+  border: 1px solid rgba(120, 180, 255, 0.18);
+  border-radius: 18px;
+  background: linear-gradient(160deg, rgba(14, 20, 32, 0.98), rgba(9, 13, 22, 0.98));
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+  color: #e8eefb;
+  font-size: 12px;
+}
+
+.midi-dialog.fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  padding: 10px 12px 8px;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.midi-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.midi-title {
+  flex: 1 1 auto;
+  min-width: 220px;
+}
+
+.midi-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 4px;
+  font-size: 18px;
+}
+
+.midi-scope {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(94, 194, 255, 0.4);
+  color: #8fd6ff;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.midi-scope.compose {
+  border-color: rgba(142, 227, 107, 0.5);
+  color: #8ee36b;
+}
+
+.midi-sub {
+  margin: 0;
+  color: #8ea0bd;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #5ec2ff;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.midi-modes {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid rgba(120, 180, 255, 0.16);
+  border-radius: 11px;
+  background: rgba(9, 14, 23, 0.85);
+  height: fit-content;
+}
+
+.midi-modes button {
+  padding: 5px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #9db0cc;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.midi-modes button.active {
+  background: rgba(94, 194, 255, 0.18);
+  color: #d8efff;
+  font-weight: 600;
+}
+
+.midi-modes button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.midi-head-actions,
+.midi-actions,
+.midi-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.ghost,
+.primary,
+.mini {
+  padding: 5px 11px;
+  border: 1px solid rgba(120, 180, 255, 0.22);
+  border-radius: 9px;
+  background: rgba(18, 26, 40, 0.9);
+  color: #cfe4ff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mini {
+  padding: 2px 7px;
+  border-radius: 7px;
+  font-size: 11px;
+}
+
+.ghost.active,
+.mini.active {
+  border-color: rgba(94, 194, 255, 0.7);
+  background: rgba(94, 194, 255, 0.22);
+  color: #eaf8ff;
+}
+
+.mini.danger {
+  border-color: rgba(255, 120, 150, 0.35);
+  color: #ffb4c4;
+}
+
+.ghost:disabled,
+.primary:disabled,
+.mini:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.primary {
+  border-color: rgba(94, 194, 255, 0.65);
+  background: linear-gradient(140deg, rgba(60, 168, 255, 0.9), rgba(43, 122, 210, 0.9));
+  color: #041320;
+  font-weight: 600;
+}
+
+.midi-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid rgba(120, 180, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(10, 16, 26, 0.8);
+}
+
+.midi-transport {
+  padding-right: 8px;
+  border-right: 1px solid rgba(120, 180, 255, 0.14);
+}
+
+.midi-play {
+  min-width: 76px;
+}
+
+.midi-clock {
+  min-width: 108px;
+  font-variant-numeric: tabular-nums;
+  color: #ffd166;
+  font-size: 12px;
+}
+
+.midi-field {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #9db0cc;
+}
+
+.midi-field select,
+.midi-field input[type='number'] {
+  width: 74px;
+  padding: 3px 6px;
+  border: 1px solid rgba(120, 180, 255, 0.2);
+  border-radius: 7px;
+  background: rgba(8, 13, 22, 0.9);
+  color: #e8eefb;
+}
+
+.midi-field input[type='range'] {
+  width: 110px;
+  accent-color: #5ec2ff;
+}
+
+.midi-field b {
+  color: #8fd6ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.midi-toggle {
+  padding-left: 4px;
+  cursor: pointer;
+}
+
+.midi-toggle input {
+  accent-color: #5ec2ff;
+}
+
+.midi-hint {
+  margin-left: auto;
+  color: #6d7f9c;
+}
+
+.midi-pitch-tool {
+  display: inline-flex;
+  gap: 2px;
+}
+.midi-pitch-tool .ghost.mini {
+  min-width: 22px;
+  padding: 1px 5px;
+}
+.midi-hint-inline {
+  color: #ffd166;
+  font-size: 11px;
+  font-style: normal;
+  opacity: 0.9;
+}
+
+.midi-error,
+.midi-tip {
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: 10px;
+}
+
+.midi-error {
+  border: 1px solid rgba(255, 120, 120, 0.35);
+  background: rgba(255, 90, 90, 0.12);
+  color: #ffb4b4;
+}
+
+.midi-tip {
+  border: 1px solid rgba(255, 209, 102, 0.3);
+  background: rgba(255, 209, 102, 0.08);
+  color: #ffd79a;
+}
+
+.midi-workspace {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 10px;
+  min-height: 0;
+}
+
+.midi-parts {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 242px;
+  min-height: 0;
+  border: 1px solid rgba(120, 180, 255, 0.14);
+  border-radius: 12px;
+  background: rgba(9, 14, 23, 0.85);
+  overflow: hidden;
+}
+
+.midi-parts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 9px;
+  border-bottom: 1px solid rgba(120, 180, 255, 0.12);
+  color: #8ea0bd;
+  font-size: 11px;
+}
+
+.midi-part-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.midi-part {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  padding: 6px 7px;
+  border: 1px solid rgba(120, 180, 255, 0.14);
+  border-radius: 9px;
+  background: rgba(14, 21, 33, 0.9);
+  cursor: pointer;
+}
+
+.midi-part.active {
+  border-color: rgba(94, 194, 255, 0.6);
+  background: rgba(30, 48, 72, 0.9);
+}
+
+.midi-part.muted {
+  opacity: 0.55;
+}
+
+.midi-part-color {
+  flex: none;
+  width: 8px;
+  height: 26px;
+  border-radius: 4px;
+}
+
+.midi-part-name {
+  flex: 1 1 84px;
+  min-width: 66px;
+  padding: 2px 5px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #e8eefb;
+  font-size: 12px;
+}
+
+.midi-part-name:hover,
+.midi-part-name:focus {
+  border-color: rgba(120, 180, 255, 0.3);
+  background: rgba(8, 13, 22, 0.8);
+}
+
+.midi-part-count {
+  flex: none;
+  color: #6d7f9c;
+  font-size: 10px;
+}
+
+.midi-part-inst {
+  flex: 1 1 100%;
+  width: 100%;
+  padding: 2px 5px;
+  border: 1px solid rgba(120, 180, 255, 0.18);
+  border-radius: 6px;
+  background: rgba(8, 13, 22, 0.9);
+  color: #cfe4ff;
+  font-size: 11px;
+}
+
+.midi-part-drum {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 5px;
+  border: 1px dashed rgba(255, 209, 102, 0.32);
+  border-radius: 6px;
+  background: rgba(28, 22, 10, 0.55);
+}
+
+.midi-part-drum-tag {
+  color: #ffd166;
+  font-size: 11px;
+}
+
+.midi-parts-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 7px;
+  border-top: 1px solid rgba(120, 180, 255, 0.12);
+}
+
+.midi-roll-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 200px;
+  border: 1px solid rgba(120, 180, 255, 0.14);
+  border-radius: 12px;
+  background: #0b0f18;
+  overflow: hidden;
+}
+
+.midi-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: #7d8fae;
+  text-align: center;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(8, 12, 20, 0.25), rgba(8, 12, 20, 0.55));
+  z-index: 2;
+}
+
+.midi-busy {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 5;
+  padding: 4px 10px;
+  border: 1px solid rgba(94, 194, 255, 0.4);
+  border-radius: 999px;
+  background: rgba(10, 20, 34, 0.94);
+  color: #9fd8ff;
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.midi-scroll {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.midi-scroll.with-velocity {
+  bottom: 88px;
+}
+
+.midi-filler {
+  position: relative;
+}
+
+.midi-view {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+}
+
+.midi-keys {
+  display: block;
+  flex: none;
+  border-right: 1px solid rgba(120, 180, 255, 0.16);
+  background: #0b0f18;
+}
+
+.midi-grid {
+  display: block;
+  flex: none;
+  touch-action: none;
+  background: #0b0f18;
+}
+
+.midi-grid:focus {
+  outline: none;
+}
+
+.midi-velocity {
+  position: absolute;
+  bottom: 0;
+  display: block;
+  touch-action: none;
+  border-top: 1px solid rgba(120, 180, 255, 0.18);
+  background: #0a0e16;
+  z-index: 3;
+}
+
+.midi-menu {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  min-width: 196px;
+  padding: 5px;
+  border: 1px solid rgba(120, 180, 255, 0.24);
+  border-radius: 10px;
+  background: rgba(12, 18, 29, 0.98);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+}
+
+.midi-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 9px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: #d7e6ff;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.midi-menu button:hover:not(:disabled) {
+  background: rgba(94, 194, 255, 0.16);
+}
+
+.midi-menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.midi-menu-sep {
+  display: block;
+  height: 1px;
+  margin: 4px 6px;
+  background: rgba(120, 180, 255, 0.18);
+}
+
+.midi-render-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 2px;
+  font-size: 12px;
+  color: var(--muted, #8b93a7);
+}
+
+.midi-render-bar {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.midi-render-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6ee7b7, #38bdf8);
+  transition: width 0.18s ease-out;
+}
+
+.midi-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.midi-selected {
+  display: flex;
+  gap: 10px;
+  color: #9db0cc;
+  flex-wrap: wrap;
+}
+
+.midi-selected b {
+  color: #5ec2ff;
+}
+
+.midi-dirty {
+  color: #ffd166;
+}
+
+.midi-curve-range {
+  color: #ffd166;
+}
+
+.midi-note {
+  margin: 0;
+  color: #6d7f9c;
+  line-height: 1.5;
+}
+
+.midi-audio {
+  display: none;
+}
+</style>

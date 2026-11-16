@@ -16,7 +16,11 @@
 
 ## 后端开发
 
-主程序依赖定义在 app/pyproject.toml，运行时入口是 app/main.py。建议从 app/api/bridge.py 和 app/application/ 开始阅读业务调用，再进入 app/infrastructure/ 查看具体引擎和 Worker。
+主程序依赖定义在 app/pyproject.toml，运行时入口是 app/main.py。建议的阅读顺序：先看 app/composition.py（唯一装配点，一眼能看出有哪些适配器和用例服务），
+再看 app/application/ 的用例服务与 app/application/ports.py 的端口契约，最后进入 app/infrastructure/ 查看引擎和 Worker 的具体实现；
+app/domain/ 存放不依赖框架的规则（参数归一化、工作流图、歌词、编辑器不变量），app/api/ 只做参数转换与协议适配。
+
+分层依赖方向是硬约束，违反会被 `app/tests/test_architecture.py` 拒绝，规则见[分层架构约束（DDD）](ddd-architecture.md)。
 
 运行测试：
 
@@ -24,6 +28,12 @@
     uv run pytest
 
 重点测试范围包括模型服务、推理回归、设备探测、HTTP API、实时翻唱、编辑器、插件和安装器运行时。
+
+分层与领域规则的专项测试（改动架构或下沉规则时必须一起跑）：
+
+    uv run pytest app/tests/test_architecture.py app/tests/test_composition.py \
+        app/tests/test_domain_entities.py app/tests/test_domain_editor_rules.py \
+        app/tests/test_work_request.py app/tests/test_data_maintenance.py -q
 
 ## 前端开发
 
@@ -49,11 +59,11 @@
 
 构建脚本可用 `-Help` 或 `--help` 查看参数，不启动预检或打包。
 
-v0.1.0 的版本起点是提交 `fc8d214e068457a273929e80c108b33f55b4e9e8`，且该提交属于 v0.1.0。生成本版提交列表时使用：
+v0.1.1 的版本起点是提交 `12f6db36754f5e86c9997449752367804e2da76a`，且该提交属于 v0.1.1。生成本版提交列表时使用：
 
-    git log --reverse fc8d214e068457a273929e80c108b33f55b4e9e8^..HEAD
+    git log --reverse 12f6db36754f5e86c9997449752367804e2da76a^..HEAD
 
-审计完整差异时使用同一包含起点的范围，不要写成 `fc8d214e068457a273929e80c108b33f55b4e9e8..HEAD`，否则会漏掉起点提交。
+审计完整差异时使用同一包含起点的范围，不要写成 `12f6db36754f5e86c9997449752367804e2da76a..HEAD`，否则会漏掉起点提交。
 
 轻量校验：
 

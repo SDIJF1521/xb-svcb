@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import shutil
 import time
-import uuid
 from pathlib import Path
 
 import config
+from domain.formatting import file_size_label as _domain_file_size_label
+from domain.formatting import human_size as _domain_human_size
+from domain.identity import new_id as _domain_new_id
 
 
 def ensure_dirs() -> None:
@@ -76,24 +78,15 @@ def clear_temp_directory(*, retries: int = 3, retry_delay: float = 0.15) -> bool
 
 
 def new_id(prefix: str = "") -> str:
-    """生成短随机 ID。"""
-    return f"{prefix}{uuid.uuid4().hex[:12]}"
+    """生成短随机 ID（实现位于领域层，这里保留转发以兼容既有调用方）。"""
+    return _domain_new_id(prefix)
 
 
 def human_size(num_bytes: int) -> str:
-    """字节数转可读字符串。"""
-    size = float(num_bytes)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if size < 1024 or unit == "TB":
-            if unit == "B":
-                return f"{int(size)} {unit}"
-            return f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} TB"
+    """字节数转可读字符串（实现位于领域层）。"""
+    return _domain_human_size(num_bytes)
 
 
 def file_size_label(path: Path) -> str:
-    try:
-        return human_size(path.stat().st_size)
-    except OSError:
-        return "—"
+    """文件体积可读字符串（实现位于领域层）。"""
+    return _domain_file_size_label(Path(path))

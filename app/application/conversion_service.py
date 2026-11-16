@@ -12,26 +12,61 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import config
-from domain import InferenceParams, JobStatus, StepStatus
-from infrastructure import paths
-from infrastructure.engine import EngineRegistry
-from infrastructure.ffmpeg_tool import FfmpegTool
-from infrastructure.storage import ListRepository
-from infrastructure.uvr_tool import UvrTool
-from infrastructure.pymss_tool import PymssTool
-from infrastructure.vocal_enhancement import (
-    VocalEnhancementControls,
-    VocalEnhancementProcessor,
+from domain import InferenceParams, JobStatus, PipelineStep, StepStatus, apply_step_status
+from domain import log_text
+from domain.formatting import file_size_label
+from domain.vocal_enhancement import VocalEnhancementControls, enhancement_settings
+from domain.workflow_graph import (
+    NODE_LABELS,
+    port_label,
+    stem_port_id,
+    topological_order,
 )
 
+from .adapters import pymss_tool as create_pymss_tool
+from .adapters import high_note_vocoder as create_high_note_vocoder
+from .adapters import vocal_enhancement as create_vocal_enhancement
+from .high_note_band import read_guard_regions, refine_high_note_band
+from .ports import (
+    EngineRegistryPort,
+    FfmpegGateway,
+    HighNoteVocoderPort,
+    ItemRepository,
+    PymssGateway,
+    SeparationGateway,
+    VocalEnhancementPort,
+)
 if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
 _VOCAL_OUTPUT_WORKFLOWS = {"auto_vocal_merge", "manual_vocal_merge"}
+
+_TimeRegion = tuple[float, float]
+
+
+class _HighNoteQuality(TypedDict, total=False):
+    available: bool
+    passed: bool
+    regions: list[dict[str, Any]]
+    accepted_regions: list[_TimeRegion]
+    failed_regions: list[_TimeRegion]
+
+
+def _with_failed_regions(
+    quality: _HighNoteQuality, regions: list[_TimeRegion]
+) -> _HighNoteQuality:
+    """复制质量报告并替换失败区间（TypedDict 不能直接用 dict 解包重新赋值）。"""
+    return _HighNoteQuality(
+        available=bool(quality.get("available")),
+        passed=bool(quality.get("passed")),
+        regions=list(quality.get("regions") or []),
+        accepted_regions=list(quality.get("accepted_regions") or []),
+        failed_regions=list(regions),
+    )
 
 
 def _wants_vocal_output(work: dict[str, Any]) -> bool:
@@ -41,31 +76,33 @@ def _wants_vocal_output(work: dict[str, Any]) -> bool:
     )
 
 
+def _steps(*blueprints: tuple[str, str]) -> list[dict[str, Any]]:
+    """按 (key, label) 蓝图生成流水线步骤，状态由领域实体统一初始化。"""
+    return [PipelineStep(key=key, label=label).to_dict() for key, label in blueprints]
+
+
 def default_steps(
     enhancement: bool = False,
     preprocess: bool = True,
     harmony_removal: bool = False,
 ) -> list[dict[str, Any]]:
-    steps = []
+    blueprints: list[tuple[str, str]] = []
     if preprocess:
-        steps.extend([
-            {"key": "separate", "label": "前期人声分离", "status": StepStatus.WAIT.value},
-            *([{"key": "harmony", "label": "可选去混响净化", "status": StepStatus.WAIT.value}] if harmony_removal else []),
-            {"key": "repair_input", "label": "分离人声修复", "status": StepStatus.WAIT.value},
-        ])
-    steps.extend([
-        {"key": "f0", "label": "F0 提取", "status": StepStatus.WAIT.value},
-        {"key": "infer", "label": "模型推理", "status": StepStatus.WAIT.value},
-        {"key": "repair_output", "label": "输出人声修复", "status": StepStatus.WAIT.value},
-    ])
-    if enhancement:
-        steps.append(
-            {"key": "enhance", "label": "AI 歌声增强", "status": StepStatus.WAIT.value}
-        )
-    steps.append(
-        {"key": "mix", "label": "混音合成", "status": StepStatus.WAIT.value}
+        blueprints.append(("separate", "前期人声分离"))
+        if harmony_removal:
+            blueprints.append(("harmony", "可选去混响净化"))
+        blueprints.append(("repair_input", "分离人声修复"))
+    blueprints.extend(
+        [
+            ("f0", "F0 提取"),
+            ("infer", "模型推理"),
+            ("repair_output", "输出人声修复"),
+        ]
     )
-    return steps
+    if enhancement:
+        blueprints.append(("enhance", "AI 歌声增强"))
+    blueprints.append(("mix", "混音合成"))
+    return _steps(*blueprints)
 
 
 def default_steps_multi(
@@ -74,37 +111,46 @@ def default_steps_multi(
     harmony_removal: bool = False,
 ) -> list[dict[str, Any]]:
     """多模型混合翻唱的流水线步骤。"""
-    steps = []
+    blueprints: list[tuple[str, str]] = []
     if preprocess:
-        steps.extend([
-            {"key": "separate", "label": "前期人声分离", "status": StepStatus.WAIT.value},
-            *([{"key": "harmony", "label": "可选去混响净化", "status": StepStatus.WAIT.value}] if harmony_removal else []),
-            {"key": "repair_input", "label": "分离人声修复", "status": StepStatus.WAIT.value},
-        ])
-    steps.extend([
-        {"key": "split", "label": "歌词分割", "status": StepStatus.WAIT.value},
-        {"key": "infer", "label": "逐段推理", "status": StepStatus.WAIT.value},
-        {"key": "merge", "label": "人声合并", "status": StepStatus.WAIT.value},
-        {"key": "repair_output", "label": "输出人声修复", "status": StepStatus.WAIT.value},
-    ])
-    if enhancement:
-        steps.append(
-            {"key": "enhance", "label": "AI 歌声增强", "status": StepStatus.WAIT.value}
-        )
-    steps.append(
-        {"key": "mix", "label": "混音合成", "status": StepStatus.WAIT.value}
+        blueprints.append(("separate", "前期人声分离"))
+        if harmony_removal:
+            blueprints.append(("harmony", "可选去混响净化"))
+        blueprints.append(("repair_input", "分离人声修复"))
+    blueprints.extend(
+        [
+            ("split", "歌词分割"),
+            ("infer", "逐段推理"),
+            ("merge", "人声合并"),
+            ("repair_output", "输出人声修复"),
+        ]
     )
-    return steps
+    if enhancement:
+        blueprints.append(("enhance", "AI 歌声增强"))
+    blueprints.append(("mix", "混音合成"))
+    return _steps(*blueprints)
 
 
 def default_steps_ai_enhancement() -> list[dict[str, Any]]:
     """独立 AI 增强任务：原曲分析、翻唱人声准备、增强和重新混音。"""
-    return [
-        {"key": "reference", "label": "原曲人声与伴奏分析", "status": StepStatus.WAIT.value},
-        {"key": "cover_vocal", "label": "翻唱人声准备", "status": StepStatus.WAIT.value},
-        {"key": "enhance", "label": "AI 歌声增强", "status": StepStatus.WAIT.value},
-        {"key": "mix", "label": "增强成品混音", "status": StepStatus.WAIT.value},
-    ]
+    return _steps(
+        ("reference", "原曲人声与伴奏分析"),
+        ("cover_vocal", "翻唱人声准备"),
+        ("enhance", "AI 歌声增强"),
+        ("mix", "增强成品混音"),
+    )
+
+
+# 每个 run.log 对应的界面语言：日志由后端写盘，用户排查问题时直接看文件，
+# 所以写入前按这里的语言翻译。键是日志文件路径，不同任务的日志互不影响。
+_LOG_LOCALES: dict[str, str] = {}
+
+
+def _register_log_locale(log_file: Path, work: dict[str, Any]) -> str:
+    """记录本次运行日志的语言，并返回它。"""
+    locale = log_text.normalize_locale(work.get("ui_locale"))
+    _LOG_LOCALES[str(log_file)] = locale
+    return locale
 
 
 class ConversionService:
@@ -129,8 +175,7 @@ class ConversionService:
     _DROPOUT_RESIDUAL_MAX_SECONDS = 4.0
 
     @classmethod
-    def _high_pitch_guard_rounds(
-        cls, params: InferenceParams, *, realtime: bool = False
+    def _high_pitch_guard_rounds(        cls, params: InferenceParams, *, realtime: bool = False
     ) -> int:
         """Return the user-selected guarded retry count.
 
@@ -375,19 +420,23 @@ class ConversionService:
 
     def __init__(
         self,
-        repo: ListRepository,
-        ffmpeg: FfmpegTool,
-        uvr: UvrTool,
-        engines: EngineRegistry,
-        vocal_enhancement: VocalEnhancementProcessor | None = None,
-        pymss: PymssTool | None = None,
+        repo: ItemRepository,
+        ffmpeg: FfmpegGateway,
+        uvr: SeparationGateway,
+        engines: EngineRegistryPort,
+        vocal_enhancement: VocalEnhancementPort | None = None,
+        pymss: PymssGateway | None = None,
+        high_note_vocoder: HighNoteVocoderPort | None = None,
     ) -> None:
         self._repo = repo
         self._ffmpeg = ffmpeg
         self._uvr = uvr
-        self._pymss = pymss or PymssTool()
+        self._pymss = pymss or create_pymss_tool()
         self._engines = engines
-        self._vocal_enhancement = vocal_enhancement or VocalEnhancementProcessor()
+        self._vocal_enhancement = vocal_enhancement or create_vocal_enhancement()
+        # 高音声码器：只在已确认的高音区重建超高频带，用于弥补 PSOLA 在高音上的
+        # 气声/谐波缺失。实现不可用时保持关闭，保护路径完全不变。
+        self._high_note_vocoder = high_note_vocoder or create_high_note_vocoder()
         # so-vits 引擎引用：供 F0 探针（仅 so-vits 有意义）使用
         self._svc = engines.sovits
         # 串行任务队列：单 GPU 上一次只跑一个任务，避免并发推理叠加导致显存 OOM
@@ -423,57 +472,14 @@ class ConversionService:
         self._repo.update(work["id"], work)
 
     def _set_step(self, work: dict[str, Any], key: str, status: str) -> None:
-        for step in work["steps"]:
-            if step["key"] == key:
-                step["status"] = status
-                break
+        # 状态值必须是 StepStatus 的合法取值，规则由领域层统一维护。
+        apply_step_status(work["steps"], key, status)
 
     @staticmethod
     def _enhancement_settings(
         work: dict[str, Any],
     ) -> tuple[bool, str, VocalEnhancementControls]:
-        raw = work.get("vocal_enhancement") or {}
-        if not isinstance(raw, dict):
-            return False, "basic", {
-                "pitch_correction": 0.45,
-                "timing_alignment": 0.45,
-                "timbre_focus": 0.60,
-                "ai_eq": 0.55,
-                "ai_compressor": 0.45,
-                "ai_exciter": 0.25,
-                "stereo_width": 0.30,
-                "loudness_envelope": 0.58,
-            }
-        level = str(raw.get("level") or "basic").strip().lower()
-        if level not in VocalEnhancementProcessor.LEVELS:
-            level = VocalEnhancementProcessor.LEVEL_BASIC
-
-        def strength(key: str, default: float) -> float:
-            try:
-                value = float(raw.get(key, default))
-            except (TypeError, ValueError):
-                value = default
-            if value != value:
-                value = default
-            return max(0.0, min(1.0, value))
-
-        controls: VocalEnhancementControls = {
-            "pitch_correction": strength("pitch_correction", 0.45),
-            "timing_alignment": strength("timing_alignment", 0.45),
-            "timbre_focus": strength("timbre_focus", 0.60),
-            "ai_eq": strength("ai_eq", 0.55),
-            "ai_compressor": strength("ai_compressor", 0.45),
-            "ai_exciter": strength("ai_exciter", 0.25),
-            "stereo_width": strength("stereo_width", 0.30),
-            "loudness_envelope": strength("loudness_envelope", 0.58),
-        }
-        if work.get("high_pitch_guard_applied"):
-            # 防护装置已恢复高谐波。音色塑造控制部分被有意调至更轻，以保持受保护的辅音自然清晰。
-            controls["timbre_focus"] *= 0.68
-            controls["ai_eq"] *= 0.78
-            controls["ai_compressor"] *= 0.82
-            controls["ai_exciter"] *= 0.45
-        return bool(raw.get("enabled")), level, controls
+        return enhancement_settings(work)
 
     @staticmethod
     def _preprocess_settings(work: dict[str, Any]) -> tuple[bool, str, str, bool, str]:
@@ -696,6 +702,26 @@ class ConversionService:
             return max(300.0, min(2000.0, float(fallback_threshold)))
         return defaults.get(config.modelhub_normalize_framework(framework), 1000.0)
 
+    @staticmethod
+    def _guard_f0_curve(source: Path) -> Path | None:
+        """推理前算好的 F0 曲线（.npy）优先用于挑选高音区间。
+
+        Praat 的音高层在长高音/强气声上会掉八度或丢点，正好漏掉最需要保护的整段
+        高音；rmvpe/FCPE 刚算出的曲线在高音区稳定得多。降调与升调两阶段必须用同一
+        份曲线，否则会出现只降不升的片段。
+        """
+        try:
+            sidecar = source.with_name("f0.npy")
+            if (
+                sidecar.is_file()
+                and sidecar.stat().st_size > 64
+                and sidecar.stat().st_mtime >= source.stat().st_mtime - 120.0
+            ):
+                return sidecar
+        except OSError:
+            pass
+        return None
+
     def _prepare_high_pitch_guard(
         self,
         source: Path,
@@ -715,6 +741,7 @@ class ConversionService:
             return source, False
         report_path = destination.with_suffix(".regions.json")
         shift_semitones = int(semitones or self._HIGH_PITCH_GUARD_SEMITONES)
+        f0_curve = self._guard_f0_curve(source)
         try:
             guard_ok = self._ffmpeg.pitch_shift(
                 source,
@@ -725,6 +752,7 @@ class ConversionService:
                 high_threshold=high_threshold,
                 report_path=report_path,
                 regions=only_regions,
+                f0_curve=f0_curve,
             )
         except TypeError:
             if only_regions:
@@ -800,6 +828,8 @@ class ConversionService:
                 high_threshold=float(threshold or getattr(params, "high_pitch_threshold", 0.0) or self._HIGH_PITCH_THRESHOLD),
                 report_path=destination.with_suffix(".regions.json"),
                 regions=only_regions,
+                # 与降调阶段使用同一份 F0 曲线，保证两次选中的区间完全一致。
+                f0_curve=self._guard_f0_curve(original),
             )
         except TypeError:
             if only_regions:
@@ -815,9 +845,51 @@ class ConversionService:
             )
         if restore_ok:
             self._log(log_file, "  高音保护完成：仅对记录的高音区域升回原调并补偿响度")
-            return restored
+            return self._refine_high_note_band(
+                restored,
+                original,
+                log_file,
+                destination.with_suffix(".regions.json"),
+                only_regions,
+                float(
+                    threshold
+                    or getattr(params, "high_pitch_threshold", 0.0)
+                    or self._HIGH_PITCH_THRESHOLD
+                ),
+            )
         self._log(log_file, "  高音保护升调失败，沿用模型输出")
         return source
+
+    @staticmethod
+    def _read_guard_regions(report_path: Path | None) -> list[_TimeRegion] | None:
+        """读取高音保护报告里实际处理过的区间（转发到共享用例）。"""
+        return read_guard_regions(report_path)
+
+    def _refine_high_note_band(
+        self,
+        restored: Path,
+        dry: Path | None,
+        log_file: Path,
+        report_path: Path | None,
+        only_regions: list[_TimeRegion] | None,
+        threshold: float,
+    ) -> Path:
+        """用 F0 条件化声码器重建已确认高音区的超高频带。
+
+        升调后的高音听起来「薄」有两个来源：PSOLA 把谐波糊成了气声，以及模型
+        的声码器在超出训练音域时不产生自然谐波。这里用干声的频谱包络 + 成品的
+        音高重新合成交叉频点以上的频带，按 ``wet`` 比例混回去；只处理报告里记录
+        的区间，未通过验收时原样返回升调结果。
+        """
+        return refine_high_note_band(
+            self._high_note_vocoder,
+            restored=restored,
+            dry=dry,
+            report_path=report_path,
+            only_regions=only_regions,
+            threshold=threshold,
+            log=lambda message: self._log(log_file, message),
+        )
 
     @staticmethod
     def _merge_guarded_regions(
@@ -1568,7 +1640,8 @@ class ConversionService:
                         air = np.maximum(spectrum[air_bins], 1e-14)
                         air_power = float(np.sum(air))
                         flatness = float(
-                            np.exp(np.mean(np.log(air))) / max(np.mean(air), 1e-14)
+                            np.exp(np.mean(np.log(air)))
+                            / max(float(np.mean(air)), 1e-14)
                         )
                         peak_share = float(np.max(air) / max(air_power, 1e-14))
                         return air_power / total, flatness, peak_share
@@ -1610,7 +1683,7 @@ class ConversionService:
         candidate: Path,
         regions: list[tuple[float, float]] | None,
         note_report_path: Path | None = None,
-    ) -> dict[str, Any]:
+    ) -> _HighNoteQuality:
         """Measure every original dropout independently.
 
         A track-wide median can hide one fully breathy syllable among many
@@ -1624,7 +1697,7 @@ class ConversionService:
             for start, end in (regions or [])
             if float(end) > max(0.0, float(start))
         ]
-        result: dict[str, Any] = {
+        result: _HighNoteQuality = {
             "available": False,
             "passed": False,
             "regions": [],
@@ -1676,7 +1749,7 @@ class ConversionService:
                 air = float(np.sum(air_values))
                 air_flatness = float(
                     np.exp(np.mean(np.log(air_values)))
-                    / max(np.mean(air_values), 1e-14)
+                    / max(float(np.mean(air_values)), 1e-14)
                 )
                 autocorrelation = np.fft.irfft(power, n=fft_size)[:frame]
                 base = max(float(autocorrelation[0]), 1e-12)
@@ -1731,7 +1804,7 @@ class ConversionService:
                             trial_air,
                             trial_periodicity,
                             trial_flatness,
-                            trial_pitch,
+                            trial_pitch_value,
                             trial_rms,
                         ) = metrics(candidate_audio[offset : offset + frame])
                         floor = max(source_body * 1e-7, 1e-12)
@@ -1745,7 +1818,7 @@ class ConversionService:
                         baseline_periodicity.append(base_periodicity)
                         candidate_periodicity.append(trial_periodicity)
                         source_f0.append(source_pitch)
-                        candidate_f0.append(trial_pitch)
+                        candidate_f0.append(trial_pitch_value)
                         source_air_share.append(
                             source_air / max(source_body + source_air, floor)
                         )
@@ -1775,7 +1848,7 @@ class ConversionService:
                     )
                     periodicity = np.asarray(candidate_periodicity, dtype=np.float64)
                     dry_pitch = np.asarray(source_f0, dtype=np.float64)
-                    trial_pitch = np.asarray(candidate_f0, dtype=np.float64)
+                    trial_pitch_values = np.asarray(candidate_f0, dtype=np.float64)
                     base_air = np.asarray(baseline_air_share, dtype=np.float64)
                     trial_air = np.asarray(candidate_air_share, dtype=np.float64)
                     dry_air = np.asarray(source_air_share, dtype=np.float64)
@@ -1803,9 +1876,9 @@ class ConversionService:
                     )
                     pitch_comparable = (
                         (dry_pitch > 0.0)
-                        & (trial_pitch > 0.0)
-                        & (trial_pitch >= dry_pitch * 0.68)
-                        & (trial_pitch <= dry_pitch * 1.45)
+                        & (trial_pitch_values > 0.0)
+                        & (trial_pitch_values >= dry_pitch * 0.68)
+                        & (trial_pitch_values <= dry_pitch * 1.45)
                     )
                     pitch_match_fraction = float(np.mean(pitch_comparable))
                     median_body_support = float(np.median(source_support))
@@ -1876,8 +1949,12 @@ class ConversionService:
                             ),
                             "source_f0_hz": round(float(np.median(dry_pitch)), 1),
                             "candidate_f0_hz": round(
-                                float(np.median(trial_pitch[trial_pitch > 0.0]))
-                                if bool(np.any(trial_pitch > 0.0))
+                                float(
+                                    np.median(
+                                        trial_pitch_values[trial_pitch_values > 0.0]
+                                    )
+                                )
+                                if bool(np.any(trial_pitch_values > 0.0))
                                 else 0.0,
                                 1,
                             ),
@@ -1971,7 +2048,7 @@ class ConversionService:
 
     @staticmethod
     def _quality_failure_issue(
-        quality: dict[str, Any],
+        quality: _HighNoteQuality,
         fallback: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
         """Build retry evidence from immutable quality-gate failures."""
@@ -2203,6 +2280,7 @@ class ConversionService:
         仅在确认高音部分已正确处理后，再支付防护/重试的代价。
         '''
         baseline_first = bool(allow_recovery and params.auto_high_pitch_guard)
+        baseline_issue: dict[str, Any] | None = None
         if baseline_first:
             run_inference(source, output)
             rendered = output
@@ -2233,13 +2311,33 @@ class ConversionService:
             # The first confirmed failing note is already enough to lower the
             # next guard boundary.  Starting the first guarded retry at the
             # old boundary can leave a 700-800 Hz syllable unprotected.
+            previous_threshold = threshold
             threshold = self._next_dropout_threshold(threshold, issue)
             params.high_pitch_threshold = threshold
-            guard_regions = self._confirmed_guard_regions(issue)
-            merge_regions = self._dropout_core_regions(issue)
+            # The guard runs at the *lowered* boundary, so the scope has to be
+            # the detector's failure set at that boundary too. Reusing the
+            # failure set from the previous (higher) boundary left whole
+            # phrase tails out of both the guard scope and the merge cores:
+            # e.g. an 800 Hz -> 640 Hz lowering saw only 177.6-178.3 s, while
+            # the same phrase continues at ~587 Hz until 180.5 s. That tail
+            # kept the model's collapsed render and sounded "没唱上去".
+            baseline_issue = issue
+            if threshold < previous_threshold - 1e-6:
+                refreshed = self._detect_model_dropout(
+                    source,
+                    rendered,
+                    threshold,
+                    int(getattr(params, "pitch", 0) or 0),
+                )
+                if refreshed:
+                    refreshed["detected_at_hz"] = round(float(threshold), 1)
+                    history[0]["issue_at_threshold"] = refreshed
+                    baseline_issue = refreshed
+            guard_regions = self._confirmed_guard_regions(baseline_issue)
+            merge_regions = self._dropout_core_regions(baseline_issue)
             guard_semitones = self._guard_semitones_for_retry(
                 threshold,
-                issue,
+                baseline_issue,
                 source,
                 guard_regions,
             )
@@ -2256,16 +2354,20 @@ class ConversionService:
         # Keep the first detector spans immutable for candidate selection. The
         # retry ladder may discover fewer spans, but it must not gradually
         # widen the replacement scope and then score that broader render as
-        # the new baseline.
+        # the new baseline. ``baseline_issue`` is the failure set measured at
+        # the guarded boundary (see above), which is the scope actually used.
         initial_failure_regions = (
-            self._dropout_core_regions(history[0].get("issue"))
-            if baseline_first and history and history[0].get("issue")
+            self._dropout_core_regions(baseline_issue)
+            if baseline_first and baseline_issue
             else None
         )
         unresolved_failure_regions = list(initial_failure_regions or [])
-        if baseline_first and history and history[0].get("issue"):
-            best_issue = history[0]["issue"]
-            best_bad_frames = float(history[0]["issue"].get("bad_frames") or float("inf"))
+        if baseline_first and baseline_issue:
+            # Compare candidates against the baseline measured at the same
+            # boundary the guard uses; a higher-boundary frame count is not
+            # comparable and would make the ladder mis-score good retries.
+            best_issue = baseline_issue
+            best_bad_frames = float(baseline_issue.get("bad_frames") or float("inf"))
         for guard_attempt in range(guard_attempts):
             attempt = guard_attempt + 1 if baseline_first else guard_attempt
             raw_target = (
@@ -2348,17 +2450,17 @@ class ConversionService:
                 "input": "high_guarded" if guard_applied else "original",
             }
             history.append(entry)
-            quality = (
-                self._guard_candidate_high_note_quality(
+            quality: _HighNoteQuality
+            if baseline_first and rendered != fallback:
+                quality = self._guard_candidate_high_note_quality(
                     source,
                     fallback,
                     rendered,
                     initial_failure_regions,
                     guard_report,
                 )
-                if baseline_first and rendered != fallback
-                else {"available": False}
-            )
+            else:
+                quality = {"available": False}
             if quality.get("available"):
                 entry["quality"] = quality
                 accepted_keys = {
@@ -2395,11 +2497,10 @@ class ConversionService:
                         f"{len(newly_accepted)} 个初始失配区，已累计保留完整音符；"
                         f"仍需重试 {len(unresolved_failure_regions)} 个区",
                     )
+                unresolved_quality = quality.copy()
+                unresolved_quality["failed_regions"] = unresolved_failure_regions
                 quality_issue = self._quality_failure_issue(
-                    {
-                        **quality,
-                        "failed_regions": unresolved_failure_regions,
-                    },
+                    unresolved_quality,
                     issue or best_issue,
                 )
                 entry["issue"] = quality_issue
@@ -2840,9 +2941,8 @@ class ConversionService:
         enhanced: bool,
         log_file: Path,
     ) -> bool:
-        if not enhanced:
-            return self._ffmpeg.mix(vocals, instrumental, output)
-
+        # 无论是否做了 AI 增强，成品混音都按测量到的响度平衡人声与伴奏：
+        # 等增益相加时，窄带且已压缩的人声会明显盖过全频段伴奏。
         profile = self._ffmpeg.adaptive_mix_profile(vocals, instrumental)
         raw_vocal_gain = profile.get("vocal_gain_db")
         raw_music_gain = profile.get("instrumental_gain_db")
@@ -2861,9 +2961,10 @@ class ConversionService:
             measured = "响度测量不可用，使用保守回退"
         self._log(
             log_file,
-            "  AI 动态混音平衡："
+            "  成品混音平衡（"
+            f"{'增强后人声' if enhanced else '转换人声'}）："
             f"人声 {vocal_gain:+.2f} dB / 伴奏 {music_gain:+.2f} dB；"
-            f"{measured}；轻量并行总线融合",
+            f"{measured}；人声总线收敛（切次低频 + 收敛 3 kHz）",
         )
         return self._ffmpeg.mix(
             vocals,
@@ -2890,11 +2991,16 @@ class ConversionService:
 
     @staticmethod
     def _log(log_file: Path, msg: str) -> None:
-        """向作品日志追加一行带时间戳的记录（失败不抛出）。"""
+        """向作品日志追加一行带时间戳的记录（失败不抛出）。
+
+        写入前按任务的界面语言翻译，保证用户直接打开 ``run.log`` 也能读懂。
+        """
         try:
+            locale = _LOG_LOCALES.get(str(log_file), "zh-CN")
             stamp = datetime.now().strftime("%H:%M:%S")
+            text = log_text.translate_log_text(msg, locale)
             with log_file.open("a", encoding="utf-8") as f:
-                f.write(f"[{stamp}] {msg}\n")
+                f.write(f"[{stamp}] {text}\n")
         except OSError:
             pass
 
@@ -2902,6 +3008,8 @@ class ConversionService:
         work = self._repo.get(work_id)
         if work and work.get("workflow") == "ai_enhancement":
             self._run_ai_enhancement(work_id)
+        elif work and work.get("mode") == "workflow":
+            self._run_workflow(work_id)
         elif work and work.get("mode") == "multi":
             self._run_multi(work_id)
         else:
@@ -2915,11 +3023,15 @@ class ConversionService:
         work_dir.mkdir(parents=True, exist_ok=True)
         log_file = work_dir / "run.log"
         try:
+            locale = _register_log_locale(log_file, work)
             log_file.write_text(
-                f"=== {work.get('title', work_id)} ===\n"
-                f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n"
-                f"原始歌曲: {work.get('original_audio_path', '')}\n"
-                f"待增强作品: {work.get('parent_work_id', '')}\n",
+                log_text.translate_log_text(
+                    f"=== {work.get('title', work_id)} ===\n"
+                    f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n"
+                    f"原始歌曲: {work.get('original_audio_path', '')}\n"
+                    f"待增强作品: {work.get('parent_work_id', '')}\n",
+                    locale,
+                ),
                 encoding="utf-8",
             )
         except OSError:
@@ -3059,7 +3171,7 @@ class ConversionService:
             work["status"] = JobStatus.DONE.value
             work["output_path"] = str(output)
             work["format"] = output.suffix.lstrip(".").upper() or "WAV"
-            work["size"] = paths.file_size_label(output)
+            work["size"] = file_size_label(output)
             work["duration"] = self._format_duration(duration)
             self._record_history(work)
             self._save(work)
@@ -3104,10 +3216,14 @@ class ConversionService:
         log_file = work_dir / "run.log"
         # 每次运行重写日志头，记录路径供前端展示与打开
         try:
+            locale = _register_log_locale(log_file, work)
             log_file.write_text(
-                f"=== {work.get('title', work_id)} ===\n"
-                f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n"
-                f"参数: {work.get('params', {})}\n",
+                log_text.translate_log_text(
+                    f"=== {work.get('title', work_id)} ===\n"
+                    f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n"
+                    f"参数: {work.get('params', {})}\n",
+                    locale,
+                ),
                 encoding="utf-8",
             )
         except OSError:
@@ -3419,7 +3535,7 @@ class ConversionService:
             work["converted_path"] = str(converted)
             work["ai_vocal_paths"] = [str(converted)]
             work["format"] = output.suffix.lstrip(".").upper() or "WAV"
-            work["size"] = paths.file_size_label(output)
+            work["size"] = file_size_label(output)
             work["duration"] = self._format_duration(duration)
             self._record_history(work)
             self._save(work)
@@ -3676,9 +3792,13 @@ class ConversionService:
         work_dir.mkdir(parents=True, exist_ok=True)
         log_file = work_dir / "run.log"
         try:
+            locale = _register_log_locale(log_file, work)
             log_file.write_text(
-                f"=== {work.get('title', work_id)} (多模型混合) ===\n"
-                f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n",
+                log_text.translate_log_text(
+                    f"=== {work.get('title', work_id)} (多模型混合) ===\n"
+                    f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n",
+                    locale,
+                ),
                 encoding="utf-8",
             )
         except OSError:
@@ -4060,12 +4180,16 @@ class ConversionService:
 
             runs: list[dict[str, Any]] = []
             for seg in timeline:
-                key = _src_key(seg)
-                if runs and runs[-1]["key"] == key:
+                source_key = _src_key(seg)
+                if runs and runs[-1]["key"] == source_key:
                     runs[-1]["end"] = seg["end"]
                 else:
                     runs.append(
-                        {"key": key, "start": seg["start"], "end": seg["end"]}
+                        {
+                            "key": source_key,
+                            "start": seg["start"],
+                            "end": seg["end"],
+                        }
                     )
 
             xf = 0.03
@@ -4215,7 +4339,7 @@ class ConversionService:
             work["status"] = JobStatus.DONE.value
             work["output_path"] = str(output)
             work["format"] = output.suffix.lstrip(".").upper() or "WAV"
-            work["size"] = paths.file_size_label(output)
+            work["size"] = file_size_label(output)
             work["duration"] = self._format_duration(duration)
             self._record_history(work)
             self._save(work)
@@ -4231,6 +4355,744 @@ class ConversionService:
                     step["status"] = StepStatus.FAILED.value
             self._record_history(work)
             self._save(work)
+
+    # ---- 自定义工作流（节点图） ----
+    def _run_workflow(self, work_id: str) -> None:
+        """按前端画布产出的节点图顺序执行翻唱工作流。"""
+        work = self._repo.get(work_id)
+        if not work:
+            return
+
+        work_dir = config.WORKS_DIR / work_id
+        work_dir.mkdir(parents=True, exist_ok=True)
+        log_file = work_dir / "run.log"
+        try:
+            graph = work.get("workflow_graph") or {}
+            locale = _register_log_locale(log_file, work)
+            log_file.write_text(
+                log_text.translate_log_text(
+                    f"=== {work.get('title', work_id)} (自定义工作流) ===\n"
+                    f"开始时间: {datetime.now().isoformat(timespec='seconds')}\n"
+                    f"工作流: {graph.get('name', '未命名')}\n",
+                    locale,
+                ),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+
+        work["status"] = JobStatus.RUNNING.value
+        work["progress"] = 0
+        work["log_path"] = str(log_file)
+        self._save(work)
+
+        try:
+            graph = work.get("workflow_graph") or {}
+            nodes = list(graph.get("nodes") or [])
+            edges = list(graph.get("edges") or [])
+            order = topological_order(nodes, edges)
+            if order is None:
+                raise RuntimeError("工作流存在循环连线，请断开成环的连线")
+
+            node_by_id: dict[str, dict[str, Any]] = {}
+            for node in nodes:
+                node_by_id[str(node.get("id") or "")] = node
+
+            # 每条连线的目标端口 → 上游（node, port）列表，保持前端连线顺序。
+            incoming: dict[tuple[str, str], list[dict[str, str]]] = {}
+            for edge in edges:
+                to = edge.get("to") or {}
+                key = (str(to.get("node") or ""), str(to.get("port") or ""))
+                incoming.setdefault(key, []).append(edge.get("from") or {})
+
+            source = Path(str(work.get("source_path") or "")) if work.get("source_path") else None
+            duration = (
+                self._ffmpeg.probe_duration(source)
+                if source and source.exists()
+                else None
+            ) or 180.0
+
+            results: dict[str, dict[str, Path]] = {}
+
+            def inputs_of(node_id: str, port: str) -> list[Path]:
+                files: list[Path] = []
+                for frm in incoming.get((node_id, port), []):
+                    upstream = results.get(str(frm.get("node") or "")) or {}
+                    path = upstream.get(str(frm.get("port") or ""))
+                    if path and Path(path).exists():
+                        files.append(Path(path))
+                return files
+
+            def first_input(node_id: str, port: str) -> Path | None:
+                files = inputs_of(node_id, port)
+                return files[0] if files else None
+
+            def missing_hint(node_id: str, port: str) -> str:
+                """上游端口没有产出音频时给出原因，避免只报「缺少输入」。"""
+                for frm in incoming.get((node_id, port), []):
+                    upstream_id = str(frm.get("node") or "")
+                    upstream_port = str(frm.get("port") or "")
+                    if (results.get(upstream_id) or {}).get(upstream_port):
+                        continue
+                    upstream_type = str((node_by_id.get(upstream_id) or {}).get("type") or "")
+                    return (
+                        f"（上游{NODE_LABELS.get(upstream_type, upstream_type)}节点未产出"
+                        f"「{port_label(upstream_port)}」音轨，请检查所选模型的实际输出）"
+                    )
+                return ""
+
+            total = len(order)
+            for idx, node_id in enumerate(order):
+                node = node_by_id[node_id]
+                ntype = str(node.get("type") or "")
+                params = dict(node.get("params") or {})
+                label = NODE_LABELS.get(ntype, ntype)
+                self._set_step(work, node_id, StepStatus.ACTIVE.value)
+                work["progress"] = int(8 + 86 * idx / max(total, 1))
+                self._save(work)
+                self._log(log_file, f"[{idx + 1}/{total}] {label} 开始")
+
+                outs: dict[str, Path] = {}
+                if ntype == "input":
+                    if not source or not source.exists():
+                        raise RuntimeError("源音频文件不存在，请重新选择歌曲")
+                    normalized = self._normalize_source(source, work_dir, log_file)
+                    self._log(log_file, f"  源音频: {source} → {normalized}")
+                    outs["audio"] = normalized
+
+                elif ntype == "separate":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"人声分离节点缺少输入音频{missing_hint(node_id, 'audio')}")
+                    engine = str(params.get("engine") or "uvr").strip().lower()
+                    device = str(params.get("device") or "auto")
+                    model = str(params.get("model") or "")
+                    out_dir = work_dir / f"wf_sep_{node_id}"
+                    declared_stems: list[str] = []
+                    if engine == "pymss":
+                        if not self._pymss.available:
+                            raise RuntimeError("人声分离节点使用 PyMSS，但 PyMSS 环境未就绪")
+                        pymss_model = model or config.PYMSS_DEFAULT_MODEL
+                        if not config.pymss_model_ready(pymss_model):
+                            raise RuntimeError(f"PyMSS 模型未下载: {pymss_model}")
+                        # 模型声明的输出音轨（yaml 的 training.instruments），
+                        # 用于按真实音轨生成端口、并确定主输出。
+                        declared_stems = self._declared_pymss_stems(pymss_model)
+                        primary_stem = str(params.get("primary_stem") or "").strip()
+                        if not primary_stem:
+                            primary_stem = declared_stems[0] if declared_stems else ""
+                        if declared_stems:
+                            self._log(
+                                log_file,
+                                "  模型输出音轨: "
+                                + "、".join(declared_stems)
+                                + (f"（主音轨: {primary_stem}）" if primary_stem else ""),
+                            )
+                        # generic 允许使用 PyMSS 全部模型（任意目录/目标音轨），
+                        # 目标音轨由 primary_stem 决定。
+                        sep = self._pymss.separate(
+                            in_audio,
+                            out_dir,
+                            pymss_model,
+                            device,
+                            purpose="generic",
+                            primary_stem=primary_stem,
+                        )
+                    else:
+                        sep = self._uvr.separate(
+                            in_audio, out_dir, model or config.UVR_SEP_MODEL, device
+                        )
+                    if sep.simulated:
+                        self._log(log_file, "  分离降级：直接使用输入音频作为人声")
+                    # 不同模型输出音轨不一致：人声模型输出人声+伴奏，去混响模型输出
+                    # 干声+湿声，多轨模型（HTDemucs 等）输出鼓/贝斯/人声/其他。
+                    # 端口按模型声明的音轨生成：名字正好是 vocals/instrumental/
+                    # other/audio 时直接占用该通用端口，否则用 stem:<name>。
+                    primary_path = Path(sep.vocals)
+                    instrumental_path = (
+                        Path(sep.instrumental)
+                        if sep.instrumental and Path(sep.instrumental).exists()
+                        else None
+                    )
+                    produced = [
+                        item
+                        for item in (getattr(sep, "stems", None) or [])
+                        if isinstance(item, dict)
+                    ]
+                    mapped: dict[str, Path] = {}
+                    extra_stems: list[tuple[str, Path]] = []
+                    for index, item in enumerate(produced):
+                        try:
+                            stem_path = Path(str(item.get("path") or ""))
+                        except (TypeError, ValueError):
+                            continue
+                        if not stem_path.is_file():
+                            continue
+                        raw_label = str(item.get("name") or "").strip()
+                        if declared_stems:
+                            matched = next(
+                                (stem for stem in declared_stems if stem.casefold() == raw_label.casefold()),
+                                "",
+                            )
+                            if matched:
+                                raw_label = matched
+                            elif len(declared_stems) == len(produced):
+                                # 输出文件名没带音轨名时按声明顺序对齐
+                                raw_label = declared_stems[index]
+                        raw_label = raw_label or stem_path.stem
+                        port = stem_port_id(raw_label, len(extra_stems))
+                        while port in mapped:
+                            port = f"{port}_2"
+                        mapped[port] = stem_path
+                        if str(stem_path) not in {
+                            str(primary_path),
+                            str(instrumental_path or ""),
+                        }:
+                            extra_stems.append((raw_label, stem_path))
+                    # 通用别名只在没有同名真实音轨时补齐，避免把「主音轨」错当人声。
+                    # 纯伴奏提取模型不补 vocals 端口，否则工作流会以为有人声。
+                    aliases = ["audio"]
+                    if self._pymss_model_exposes_vocals(engine, declared_stems):
+                        aliases.insert(0, "vocals")
+                    for alias in aliases:
+                        if alias not in mapped:
+                            mapped[alias] = primary_path
+                    if instrumental_path and "instrumental" not in mapped:
+                        mapped["instrumental"] = instrumental_path
+                    if extra_stems and "other" not in mapped:
+                        mapped["other"] = extra_stems[0][1]
+                    outs = mapped
+                    self._log(
+                        log_file,
+                        f"  分离引擎/模型: {engine} / {model or config.UVR_SEP_MODEL}",
+                    )
+                    self._log(
+                        log_file,
+                        "  可用输出端口: "
+                        + "、".join(f"{port_label(k)}({k})" for k in outs),
+                    )
+
+                elif ntype == "dereverb":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"去混响净化节点缺少输入音频{missing_hint(node_id, 'audio')}")
+                    model = str(params.get("model") or config.UVR_DEREVERB_MODEL)
+                    device = str(params.get("device") or "auto")
+                    engine = str(params.get("engine") or "uvr").strip().lower()
+                    if engine == "pymss":
+                        if not self._pymss.available:
+                            outs["audio"] = in_audio
+                            self._log(log_file, "  去混响跳过：PyMSS 环境未就绪")
+                        elif not config.pymss_model_ready(model):
+                            raise RuntimeError(f"PyMSS 去混响模型未下载: {model}")
+                        else:
+                            try:
+                                dr = self._pymss.separate(
+                                    in_audio,
+                                    work_dir / f"wf_dereverb_{node_id}",
+                                    model,
+                                    device,
+                                    purpose="generic",
+                                )
+                                if dr.vocals.exists():
+                                    outs["audio"] = Path(dr.vocals)
+                                    self._log(log_file, f"  PyMSS 去混响模型: {model}")
+                                else:
+                                    outs["audio"] = in_audio
+                                    self._log(log_file, "  去混响降级：沿用输入人声")
+                            except (OSError, RuntimeError, ValueError) as exc:
+                                outs["audio"] = in_audio
+                                self._log(log_file, f"  去混响失败，沿用输入: {exc}")
+                    elif self._uvr.available and config.uvr_dereverb_ready():
+                        dr = self._uvr.separate(
+                            in_audio,
+                            work_dir / f"wf_dereverb_{node_id}",
+                            model,
+                            device,
+                        )
+                        if not dr.simulated and dr.vocals.exists():
+                            outs["audio"] = Path(dr.vocals)
+                            self._log(log_file, f"  去混响模型: {model}")
+                        else:
+                            outs["audio"] = in_audio
+                            self._log(log_file, "  去混响降级：沿用输入人声")
+                    else:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  去混响跳过：未找到去混响模型")
+
+                elif ntype == "repair":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"人声修复节点缺少输入音频{missing_hint(node_id, 'audio')}")
+                    device = str(params.get("device") or "auto")
+                    if not self._vocal_enhancement.available:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  人声修复跳过：DeepFilterNet3 环境未就绪")
+                    else:
+                        try:
+                            profile = self._vocal_enhancement.analyze(
+                                in_audio, log_file=log_file
+                            )
+                            repaired = self._vocal_enhancement.repair(
+                                in_audio,
+                                work_dir / f"wf_repair_{node_id}.wav",
+                                stage="separated",
+                                device=device,
+                                log_file=log_file,
+                                profile=profile,
+                                reference=in_audio,
+                            )
+                            outs["audio"] = repaired
+                        except (OSError, RuntimeError, ValueError) as exc:
+                            outs["audio"] = in_audio
+                            self._log(log_file, f"  人声修复失败，沿用输入: {exc}")
+
+                elif ntype == "convert":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"歌声转换节点缺少输入音频{missing_hint(node_id, 'audio')}")
+                    model_info = dict((work.get("workflow_models") or {}).get(node_id) or {})
+                    if not model_info:
+                        raise RuntimeError("歌声转换节点未关联可用模型")
+                    framework = config.modelhub_normalize_framework(model_info.get("framework"))
+                    seg_params = InferenceParams.from_dict(model_info.get("params") or {})
+                    seg_params.high_pitch_threshold = self._model_high_pitch_threshold(
+                        seg_params, model_info, framework
+                    )
+                    self._adapt_high_range(seg_params, {}, log_file, framework)
+                    engine = self._engines.for_framework(framework)
+                    if framework == "so-vits-svc" and self._svc is not None:
+                        try:
+                            self._svc.extract_f0(
+                                in_audio,
+                                work_dir / f"wf_f0_{node_id}.npy",
+                                str(model_info.get("main_config_path") or ""),
+                                seg_params,
+                                log_file,
+                            )
+                        except (OSError, RuntimeError, ValueError):
+                            pass
+                    fw_label = config.MODELHUB_FRAMEWORKS.get(framework, framework)
+                    self._log(
+                        log_file,
+                        f"  模型 {model_info.get('name', '')} [{fw_label}] 推理"
+                        f"（引擎 {'可用' if getattr(engine, 'available', False) else '降级模式'}）",
+                    )
+                    converted, _, _ = self._infer_with_dropout_recovery(
+                        engine=engine,
+                        model={
+                            "framework": framework,
+                            "main_model_path": model_info.get("main_model_path", ""),
+                            "main_config_path": model_info.get("main_config_path", ""),
+                            "diffusion_model_path": model_info.get("diffusion_model_path", ""),
+                            "diffusion_config_path": model_info.get("diffusion_config_path", ""),
+                            "index_path": model_info.get("index_path", ""),
+                        },
+                        source=in_audio,
+                        output=work_dir / f"wf_convert_{node_id}.wav",
+                        params=seg_params,
+                        duration=duration,
+                        log_file=log_file,
+                        allow_recovery=True,
+                    )
+                    outs["audio"] = converted
+
+                elif ntype == "blend":
+                    in_files = inputs_of(node_id, "audio")
+                    if not in_files:
+                        raise RuntimeError(f"人声合唱叠加节点缺少输入{missing_hint(node_id, 'audio')}")
+                    if len(in_files) == 1:
+                        outs["audio"] = in_files[0]
+                    else:
+                        blended = work_dir / f"wf_blend_{node_id}.wav"
+                        if self._ffmpeg.available and self._ffmpeg.mix_vocals(
+                            in_files, blended
+                        ):
+                            outs["audio"] = blended
+                            self._log(log_file, f"  合唱叠加 {len(in_files)} 路转换人声")
+                        else:
+                            outs["audio"] = in_files[0]
+                            self._log(log_file, "  合唱叠加失败，沿用第一路输入")
+
+                elif ntype == "enhance":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"AI 歌声增强节点缺少输入音频{missing_hint(node_id, 'audio')}")
+                    level = str(params.get("level") or "basic").strip().lower()
+                    if level not in {"basic", "advanced"}:
+                        level = "basic"
+
+                    def strength(key: str, default: float) -> float:
+                        try:
+                            value = float(params.get(key, default))
+                        except (TypeError, ValueError):
+                            value = default
+                        if value != value:
+                            value = default
+                        return max(0.0, min(1.0, value))
+
+                    controls: VocalEnhancementControls = {
+                        "pitch_correction": strength("pitch_correction", 0.45),
+                        "timing_alignment": strength("timing_alignment", 0.45),
+                        "timbre_focus": strength("timbre_focus", 0.60),
+                        "ai_eq": strength("ai_eq", 0.55),
+                        "ai_compressor": strength("ai_compressor", 0.45),
+                        "ai_exciter": strength("ai_exciter", 0.25),
+                        "stereo_width": strength("stereo_width", 0.30),
+                        "loudness_envelope": strength("loudness_envelope", 0.58),
+                    }
+                    if not self._vocal_enhancement.available:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  AI 歌声增强跳过：环境未就绪")
+                    else:
+                        enhanced = self._vocal_enhancement.enhance(
+                            in_audio,
+                            work_dir / f"wf_enhance_{node_id}.wav",
+                            level=level,
+                            device=str(params.get("device") or "auto"),
+                            log_file=log_file,
+                            skip_repair=True,
+                            **controls,
+                        )
+                        outs["audio"] = enhanced
+
+                elif ntype == "mix":
+                    vocals = first_input(node_id, "vocals")
+                    instrumental = first_input(node_id, "instrumental")
+                    if vocals is None:
+                        raise RuntimeError(f"混音合成节点缺少人声输入{missing_hint(node_id, 'vocals')}")
+                    enhanced = bool(params.get("enhanced"))
+                    out = work_dir / f"wf_mix_{node_id}.wav"
+                    mixed = False
+                    if instrumental and instrumental.exists():
+                        mixed = self._mix_vocal_with_music(
+                            vocals,
+                            instrumental,
+                            out,
+                            enhanced=enhanced,
+                            log_file=log_file,
+                        )
+                    if mixed and out.exists():
+                        outs["audio"] = out
+                    elif self._ffmpeg.available and self._ffmpeg.convert(vocals, out):
+                        outs["audio"] = out
+                        self._log(log_file, "  无可用伴奏，输出仅人声")
+                    else:
+                        outs["audio"] = vocals
+                        self._log(log_file, "  混音失败，输出原始人声")
+
+                elif ntype == "merge":
+                    in_files = inputs_of(node_id, "audio")
+                    if not in_files:
+                        raise RuntimeError(f"多轨混合节点缺少输入{missing_hint(node_id, 'audio')}")
+                    if len(in_files) == 1:
+                        outs["audio"] = in_files[0]
+                    else:
+                        merged = work_dir / f"wf_merge_{node_id}.wav"
+                        if self._ffmpeg.available and self._ffmpeg.merge_tracks(in_files, merged):
+                            outs["audio"] = merged
+                            self._log(log_file, f"  多轨混合 {len(in_files)} 路音频")
+                        else:
+                            outs["audio"] = in_files[0]
+                            self._log(log_file, "  多轨混合失败，沿用第一路输入")
+
+                elif ntype == "concat":
+                    in_files = inputs_of(node_id, "audio")
+                    if not in_files:
+                        raise RuntimeError(f"顺序拼接节点缺少输入{missing_hint(node_id, 'audio')}")
+                    if len(in_files) == 1:
+                        outs["audio"] = in_files[0]
+                    else:
+                        joined = work_dir / f"wf_concat_{node_id}.wav"
+                        if self._ffmpeg.available and self._ffmpeg.concat(in_files, joined):
+                            outs["audio"] = joined
+                            self._log(log_file, f"  顺序拼接 {len(in_files)} 段音频")
+                        else:
+                            outs["audio"] = in_files[0]
+                            self._log(log_file, "  顺序拼接失败，沿用第一段输入")
+
+                elif ntype == "effect":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"音频效果节点缺少输入{missing_hint(node_id, 'audio')}")
+                    effect_type = str(params.get("effect") or "").strip().lower()
+                    if not effect_type or not self._ffmpeg.available:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  音频效果跳过：未选择效果或 ffmpeg 不可用")
+                    else:
+                        effect_params = dict(params.get("effect_params") or {})
+                        reserved = {"effect", "effect_params", "device"}
+                        effect_params.update(
+                            {k: v for k, v in params.items() if k not in reserved}
+                        )
+                        out = work_dir / f"wf_effect_{node_id}.wav"
+                        if self._ffmpeg.apply_effect(in_audio, out, effect_type, effect_params):
+                            outs["audio"] = out
+                            self._log(log_file, f"  音频效果: {effect_type}")
+                        else:
+                            outs["audio"] = in_audio
+                            self._log(log_file, f"  音频效果失败，沿用输入: {effect_type}")
+
+                elif ntype == "trim":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"裁剪片段节点缺少输入{missing_hint(node_id, 'audio')}")
+                    try:
+                        start = max(0.0, float(params.get("start") or 0.0))
+                        end = float(params.get("end") or 0.0)
+                        fade = max(0.0, float(params.get("fade") or 0.0))
+                    except (TypeError, ValueError):
+                        start = 0.0
+                        end = 0.0
+                        fade = 0.0
+                    if end <= start and self._ffmpeg.available:
+                        end = float(self._ffmpeg.probe_duration(in_audio) or 0.0)
+                    if end <= start:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  裁剪跳过：未提供有效结束时间")
+                    else:
+                        out = work_dir / f"wf_trim_{node_id}.wav"
+                        if self._ffmpeg.available and self._ffmpeg.slice(
+                            in_audio, start, end, out, fade=fade
+                        ):
+                            outs["audio"] = out
+                            self._log(
+                                log_file,
+                                f"  裁剪 [{start:.2f}s, {end:.2f}s]"
+                                + (f"（淡变 {fade:.2f}s）" if fade > 0 else ""),
+                            )
+                        else:
+                            outs["audio"] = in_audio
+                            self._log(log_file, "  裁剪失败，沿用输入")
+
+                elif ntype == "fade":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"淡入淡出节点缺少输入{missing_hint(node_id, 'audio')}")
+                    try:
+                        fade_in = max(0.0, float(params.get("fade_in") or 0.0))
+                        fade_out = max(0.0, float(params.get("fade_out") or 0.0))
+                    except (TypeError, ValueError):
+                        fade_in = 0.0
+                        fade_out = 0.0
+                    out = work_dir / f"wf_fade_{node_id}.wav"
+                    if self._ffmpeg.available and self._ffmpeg.fade(in_audio, out, fade_in, fade_out):
+                        outs["audio"] = out
+                        self._log(log_file, f"  淡入 {fade_in:.2f}s / 淡出 {fade_out:.2f}s")
+                    else:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  淡入淡出失败，沿用输入")
+
+                elif ntype == "pitch":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"变调节点缺少输入{missing_hint(node_id, 'audio')}")
+                    try:
+                        semitones = int(round(float(params.get("semitones") or 0.0)))
+                    except (TypeError, ValueError):
+                        semitones = 0
+                    semitones = max(-24, min(24, semitones))
+                    out = work_dir / f"wf_pitch_{node_id}.wav"
+                    if self._ffmpeg.available and self._ffmpeg.pitch(in_audio, out, semitones):
+                        outs["audio"] = out
+                        self._log(log_file, f"  变调 {semitones:+d} 半音")
+                    else:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  变调失败，沿用输入")
+
+                elif ntype == "stretch":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"变速节点缺少输入{missing_hint(node_id, 'audio')}")
+                    try:
+                        speed = max(0.25, min(4.0, float(params.get("speed") or 1.0)))
+                    except (TypeError, ValueError):
+                        speed = 1.0
+                    out = work_dir / f"wf_stretch_{node_id}.wav"
+                    if self._ffmpeg.available and self._ffmpeg.tempo(in_audio, out, speed):
+                        outs["audio"] = out
+                        self._log(log_file, f"  变速 {speed:.2f}x")
+                    else:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  变速失败，沿用输入")
+
+                elif ntype == "normalize":
+                    in_audio = first_input(node_id, "audio")
+                    if in_audio is None:
+                        raise RuntimeError(f"响度归一化节点缺少输入{missing_hint(node_id, 'audio')}")
+                    try:
+                        target = float(params.get("target_lufs") or -14.0)
+                    except (TypeError, ValueError):
+                        target = -14.0
+                    out = work_dir / f"wf_normalize_{node_id}.wav"
+                    if self._ffmpeg.available and self._ffmpeg.loudnorm(in_audio, out, target):
+                        outs["audio"] = out
+                        self._log(log_file, f"  响度归一化到 {target:.1f} LUFS")
+                    else:
+                        outs["audio"] = in_audio
+                        self._log(log_file, "  响度归一化失败，沿用输入")
+
+                elif ntype == "output":
+                    tracks = inputs_of(node_id, "audio")
+                    if not tracks:
+                        raise RuntimeError(f"保存节点缺少输入音频{missing_hint(node_id, 'audio')}")
+                    outs["audio"] = tracks[0]
+                    self._log(log_file, f"  保存节点接入 {len(tracks)} 路音轨")
+
+                else:
+                    raise RuntimeError(f"未知节点类型: {ntype}")
+
+                results[node_id] = outs
+                self._set_step(work, node_id, StepStatus.DONE.value)
+                self._save(work)
+
+            # 汇总所有「保存」节点接入的音轨：每个保存节点可收集多路，
+            # 任一音轨都可以继续处理、被直接保存，或被丢弃（不连线）。
+            # 第一路作为「翻唱成品」（output.wav，进入作品库）；其余只落在本次任务
+            # 目录的 outputs/ 下，作为音频编辑器的素材。
+            saved_tracks: list[tuple[Path, str, str]] = []
+            seen_tracks: set[tuple[str, str]] = set()
+            for onode in nodes:
+                if str(onode.get("type") or "") != "output":
+                    continue
+                oid = str(onode.get("id") or "")
+                for frm in incoming.get((oid, "audio"), []):
+                    upstream = results.get(str(frm.get("node") or "")) or {}
+                    port = str(frm.get("port") or "")
+                    track = upstream.get(port)
+                    if not track or not Path(track).exists():
+                        continue
+                    # 完全相同的连线（同一上游节点 + 端口重复连到保存节点）只保存一次；
+                    # 不同端口（如 other 与 stem:drums）即使指向同一音频也各自保留。
+                    track_key = (str(frm.get("node") or ""), port)
+                    if track_key in seen_tracks:
+                        continue
+                    seen_tracks.add(track_key)
+                    source_node = node_by_id.get(str(frm.get("node") or "")) or {}
+                    label = NODE_LABELS.get(str(source_node.get("type") or ""), "音频")
+                    # 不同模型可能同时保存人声/伴奏/附加音轨，标题要带上端口名才分得清。
+                    if port and port != "audio":
+                        label = f"{label} · {port_label(port)}"
+                    saved_tracks.append((Path(track), label, port))
+            if not saved_tracks:
+                raise RuntimeError("工作流缺少可用的保存音轨")
+
+            # 标签去重：多个节点用同一模型/端口名时 label 会重复，编辑器里分不清。
+            label_counts: dict[str, int] = {}
+            unique_tracks: list[tuple[Path, str, str]] = []
+            for track, label, port in saved_tracks:
+                count = label_counts.get(label, 0) + 1
+                label_counts[label] = count
+                unique_tracks.append((track, f"{label} ({count})" if count > 1 else label, port))
+            saved_tracks = unique_tracks
+
+            primary_label, primary_port = saved_tracks[0][1], saved_tracks[0][2]
+            primary = saved_tracks[0][0]
+            # 清理上一次运行残留的附加音轨，避免重跑后目录里留下过期 track_XX.wav。
+            outputs_dir = work_dir / "outputs"
+            if outputs_dir.is_dir():
+                for stale in outputs_dir.glob("track_*.wav"):
+                    try:
+                        stale.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            output = work_dir / "output.wav"
+            if self._ffmpeg.available and self._ffmpeg.convert(primary, output):
+                primary = output
+            saved_outputs: list[dict[str, Any]] = [
+                {
+                    "index": 0,
+                    "primary": True,
+                    "path": str(primary),
+                    "label": primary_label,
+                    "port": primary_port,
+                }
+            ]
+            for index, (track, label, port) in enumerate(saved_tracks[1:], start=1):
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                dest = outputs_dir / f"track_{index:02d}.wav"
+                saved = track
+                if self._ffmpeg.available and self._ffmpeg.convert(track, dest):
+                    saved = dest
+                saved_outputs.append(
+                    {
+                        "index": index,
+                        "primary": False,
+                        "path": str(saved),
+                        "label": label,
+                        "port": port,
+                    }
+                )
+
+            work["progress"] = 100
+            work["status"] = JobStatus.DONE.value
+            work["output_path"] = str(primary)
+            work["converted_path"] = str(primary)
+            work["workflow_outputs"] = saved_outputs
+            work["format"] = primary.suffix.lstrip(".").upper() or "WAV"
+            work["size"] = file_size_label(primary)
+            work["duration"] = self._format_duration(duration)
+            self._record_history(work)
+            self._save(work)
+            self._cleanup_finished_work_cache(work_dir, work, log_file)
+            self._log(log_file, f"工作流任务完成 ✅（共保存 {len(saved_outputs)} 路音轨）")
+        except Exception as exc:  # noqa: BLE001 - 任务失败需记录而非崩溃
+            work["status"] = JobStatus.FAILED.value
+            work["error"] = str(exc)
+            self._log(log_file, f"工作流任务失败 ❌: {exc}")
+            self._log(log_file, traceback.format_exc())
+            for step in work.get("steps") or []:
+                if step.get("status") == StepStatus.ACTIVE.value:
+                    step["status"] = StepStatus.FAILED.value
+            self._record_history(work)
+            self._save(work)
+
+    def _declared_pymss_stems(self, model: str) -> list[str]:
+        """读取 PyMSS 模型声明的输出音轨；无配置或旧适配器时返回空列表。"""
+        getter = getattr(self._pymss, "declared_stems", None)
+        if not callable(getter):
+            return []
+        try:
+            stems: object = getter(model)
+        except (OSError, RuntimeError, ValueError):
+            return []
+        if not isinstance(stems, (list, tuple, set)):
+            return []
+        return [str(stem) for stem in (stems or []) if str(stem).strip()]
+
+    @staticmethod
+    def _pymss_model_exposes_vocals(engine: str, declared_stems: list[str]) -> bool:
+        """模型是否真的能输出人声音轨（决定工作流是否补 ``vocals`` 端口）。
+
+        UVR 与普通人声模型恒为真；纯伴奏提取模型（如 ``bs_roformer_inst_*``）
+        只声明伴奏音轨，若仍补 vocals 端口，自定义工作流会误以为分离出了
+        人声，连线后拿到的是伴奏。
+        """
+        if str(engine or "").strip().lower() != "pymss" or not declared_stems:
+            return True
+        accompaniment_tokens = (
+            "instrument",
+            "accompan",
+            "karaoke",
+            "music",
+            "background",
+            "bgm",
+            "no vocal",
+            "minus",
+        )
+        normalized = [
+            str(stem or "").casefold().replace("_", " ").replace("-", " ")
+            for stem in declared_stems
+        ]
+        for name in normalized:
+            if any(token in name for token in accompaniment_tokens):
+                continue
+            if any(token in name for token in ("vocal", "voice", "singing", "lead")):
+                return True
+        # 没有明确人声、但全部音轨都是伴奏类时，该模型确实没有人声输出。
+        return not all(
+            any(token in name for token in accompaniment_tokens) for name in normalized
+        )
 
     @staticmethod
     def _format_duration(seconds: float) -> str:

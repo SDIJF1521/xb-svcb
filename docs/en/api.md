@@ -2,7 +2,7 @@
 
 # XB-SVCB FastAPI Integration
 
-Applies to XB-SVCB 0.1.0.
+Applies to XB-SVCB 0.1.1.
 
 ## Startup and Security
 
@@ -191,7 +191,7 @@ Set `mode` to `multi`, specify independent parameters in `models`, and assign si
 
 Supported workflows are `auto_mix`, `auto_vocal_merge`, `manual_vocal_merge`, `auto_then_editor`, and `full_manual_editor`. The two vocal-merge workflows do not apply to single-model mode.
 
-`models[].params.auto_high_pitch_guard` controls high-note protection per model and defaults to true. Regions above a reliable range are inferred at a lower pitch and restored afterward. A legacy request may provide the fallback at top-level `params.auto_high_pitch_guard`.
+`models[].params.auto_high_pitch_guard` controls high-note protection per model and defaults to true. Regions above a reliable range are inferred at a lower pitch and restored afterward. After the restore, those confirmed high-note regions also get their upper band rebuilt by a Snake-HiFiGAN vocoder (bundled NSF-HiFiGAN when Snake weights are absent); only regions that pass the level, air-noise, and narrow-peak checks are kept, so no extra parameter is required. A legacy request may provide the fallback at top-level `params.auto_high_pitch_guard`.
 
 ### Complete Python Example
 
@@ -323,6 +323,12 @@ Clients may modify and resubmit a fetched project. `audio_url`, `waveform_url`, 
 | `POST` | Clip `/separate` | UVR/PyMSS separation and optional dereverb |
 | `POST` | Clip `/rerun` | Regional voice-model re-inference |
 | `POST` | Track `/clips/merge` | Render and merge clips |
+| `GET` | Clip `/midi` | Read the clip MIDI notes (`refresh=1` re-analyzes pitch) |
+| `PUT` | Clip `/midi` | Save the clip MIDI notes |
+| `POST` | Clip `/midi/apply` | Apply MIDI notes to the clip audio (formant-preserving PSOLA) |
+| `GET` | Track `/midi` | Read track-level MIDI notes (empty tracks return an empty grid) |
+| `PUT` | Track `/midi` | Save track-level MIDI notes (absolute project time) |
+| `POST` | Track `/midi/apply` | Split track notes per clip and apply them to audio |
 
 ## Common Status Codes
 

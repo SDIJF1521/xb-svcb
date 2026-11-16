@@ -156,9 +156,18 @@ class UvrStatusTests(unittest.TestCase):
     def test_pymss_download_accepts_unique_dereverb_prefix(self) -> None:
         tool = PymssTool()
         full_name = "dereverb_mel_band_roformer_anvuew_sdr_19.1729.ckpt"
+        fake_process = SimpleNamespace(
+            stdout=None,
+            poll=lambda: 0,
+            wait=lambda: 0,
+            kill=lambda: None,
+        )
         with patch.object(type(tool), "available", new=property(lambda self: True)), patch.object(
             tool, "list_models", return_value=[{"name": full_name}]
-        ), patch("infrastructure.pymss_tool.subprocess.run", return_value=SimpleNamespace(returncode=0, stdout="", stderr="")):
+        ), patch(
+            "infrastructure.pymss_tool.subprocess.Popen",
+            return_value=fake_process,
+        ):
             result = tool.download_model("dereverb_mel_band_roformer_anvuew")
         self.assertTrue(result["ok"])
         self.assertEqual(result["model"], full_name)

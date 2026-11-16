@@ -18,6 +18,8 @@ NVIDIA CUDA126 and CUDA128 use two shared environments by default. SVC/RVC/Vocal
 
 “Shared” describes dependency layout, not one Python process for every component. The two layers separate modern NumPy/protobuf/AudioTools dependencies from older SVC/RVC constraints.
 
+RVC inference code ships in `engines/rvc` (MIT-licensed subset of RVC-Project 2.2.231006), with base models under `engines/rvc/pretrain`; the installer only adds inference dependencies such as `fairseq-fixed`, `faiss-cpu`, `pyworld`, `torchcrepe`, `parselmouth`, `av`, `librosa`, and `soundfile` — the third-party `rvc-python` package is no longer installed.
+
 ROCm 10 setup validates the ROCm major version, HIP, and an actual GPU operation, so CPU Torch cannot be reported as a successful AMD setup. DirectML RVC must remain in `.venv-rvc-directml` and is selected by the `rvc-directml` route in `runtime.json`; it cannot share an environment with ROCm Torch. Only an explicit `device=directml` starts that interpreter. `device=rocm` and `auto` continue to use the ROCm route.
 
 ## Component Routing
@@ -54,7 +56,7 @@ Install only the separate DirectML RVC environment:
 python install/install.py --directml --only rvc
 ```
 
-ROCm RVC retains rvc-python's fp16 GPU path by default. If a driver or model is unstable in fp16, temporarily set `XB_RVC_ROCM_FP32=1`. Worker log entries `RVC_COMPONENT_DEVICES` and `RVC_TIMING` show component devices and model/post-processing time.
+ROCm RVC retains the official inference stack's fp16 GPU path by default. If a driver or model is unstable in fp16, temporarily set `XB_RVC_ROCM_FP32=1`. Worker log entries `RVC_COMPONENT_DEVICES` and `RVC_TIMING` show component devices and model/post-processing time.
 
 SVC, RVC, SeedVC, DDSP-SVC, UVR, PyMSS, F0, and Vocal workers share a quality-first PyTorch policy: disable gradient recording, pin the active CUDA/ROCm device, use highest-precision FP32 matrix operations, and disable TF32 on NVIDIA CUDA. CPU inference uses at most eight Torch threads by default; override with `XB_INFERENCE_CPU_THREADS`. Each worker still chooses FP16/FP32 and DirectML fallback according to its own stability requirements and logs a `*_RUNTIME` line with the backend, device, and precision policy.
 

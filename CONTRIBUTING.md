@@ -99,6 +99,13 @@ app\.venv\Scripts\python.exe app\main.py --dev
 
 保持依赖方向清晰：表现层调用应用层，应用层组织领域逻辑，基础设施实现外部系统能力。桌面 Bridge 与 HTTP API 应复用同一业务服务，不要复制业务规则。前端对桌面能力的调用应继续通过 `web/src/api/` 的统一入口，并保留浏览器 mock 行为。
 
+具体分层红线、端口与适配器约定、组合根位置见 [分层架构约束（DDD）](docs/ddd-architecture.md)。
+这些规则由 `app/tests/test_architecture.py` 强制校验，提交前至少运行：
+
+```powershell
+app\.venv\Scripts\python.exe -m pytest app\tests\test_architecture.py -q
+```
+
 ## 编码约定
 
 - 遵循相邻代码已有的命名、类型标注和组织方式，保持改动聚焦；

@@ -25,7 +25,8 @@ param(
   [switch]$ReuseBuildOutputs,
   [switch]$KeepExistingInstallers,
   [string]$Python,
-  [string]$RuntimeAssets
+  [string]$RuntimeAssets,
+  [switch]$RequireAdmin
 )
 
 if ($Help -or $args -contains '--help') {
@@ -126,7 +127,7 @@ New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 Set-Location -LiteralPath $Root
 
 Write-Host '==== Validating all five installer configurations ====' -ForegroundColor Cyan
-$validationArgs = @{ ValidateOnly = $true }
+$validationArgs = @{ ValidateOnly = $true; RequireAdmin = [bool]$RequireAdmin }
 if ($RuntimeAssets) {
   $validationArgs.RuntimeAssets = $RuntimeAssets
 }
@@ -206,6 +207,7 @@ for ($index = 0; $index -lt $Stacks.Count; $index++) {
     SkipWebBuild = ($index -gt 0) -or (-not $refreshWeb)
     SkipAppBuild = ($index -gt 0) -or (-not $refreshApp)
     SkipJuceHostBuild = ($index -gt 0) -or (-not $refreshJuceHost)
+    RequireAdmin = [bool]$RequireAdmin
   }
   & $BuildScript -Python $BuildPython @buildArgs
 }

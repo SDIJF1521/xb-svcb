@@ -7,6 +7,10 @@ rem ============================================================
 setlocal EnableExtensions
 cd /d "%~dp0"
 chcp 65001 >nul
+rem The console runs at UTF-8; child Python processes must match it because cmd
+rem decodes piped output with the console code page.
+if not defined PYTHONUTF8 set "PYTHONUTF8=1"
+if not defined PYTHONIOENCODING set "PYTHONIOENCODING=utf-8"
 
 if exist "%~dp0installer_env.cmd" call "%~dp0installer_env.cmd"
 if not defined XB_HF_MIRROR set "XB_HF_MIRROR=https://hf-mirror.com"
@@ -24,6 +28,18 @@ if not defined XB_WHEELHOUSE if exist "%~dp0assets\wheels\wheelhouse.json" set "
 if defined XB_WHEELHOUSE if not defined XB_WHEELHOUSE_STRICT set "XB_WHEELHOUSE_STRICT=1"
 if not defined UV_LINK_MODE set "UV_LINK_MODE=copy"
 if not defined PIP_DISABLE_PIP_VERSION_CHECK set "PIP_DISABLE_PIP_VERSION_CHECK=1"
+rem uv/pip 缓存与临时目录必须落在安装盘：uv 默认写入 %LOCALAPPDATA%\uv\cache，
+rem CUDA 依赖栈会占用 10-20 GB，系统盘空间不足时安装会中途失败。
+if not defined XB_UV_CACHE_DIR set "XB_UV_CACHE_DIR=%~dp0.tmp\uv-cache"
+set "UV_CACHE_DIR=%XB_UV_CACHE_DIR%"
+if not defined XB_PIP_CACHE_DIR set "XB_PIP_CACHE_DIR=%~dp0.tmp\pip-cache"
+set "PIP_CACHE_DIR=%XB_PIP_CACHE_DIR%"
+if not defined XB_RUNTIME_TEMP set "XB_RUNTIME_TEMP=%~dp0.tmp\runtime-temp"
+set "TEMP=%XB_RUNTIME_TEMP%"
+set "TMP=%XB_RUNTIME_TEMP%"
+if not exist "%XB_UV_CACHE_DIR%" mkdir "%XB_UV_CACHE_DIR%" >nul 2>&1
+if not exist "%XB_PIP_CACHE_DIR%" mkdir "%XB_PIP_CACHE_DIR%" >nul 2>&1
+if not exist "%XB_RUNTIME_TEMP%" mkdir "%XB_RUNTIME_TEMP%" >nul 2>&1
 
 set "PYTHON_DETECTOR=%~dp0install\detect_python.bat"
 if not exist "%PYTHON_DETECTOR%" (

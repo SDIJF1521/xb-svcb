@@ -279,7 +279,7 @@ export interface InferenceParams {
   protect?: number
   /** RVC：F0 中值滤波半径 (0~7)。 */
   filter_radius?: number
-  /** RVC：模型版本 v1 / v2。 */
+  /** RVC：模型版本 v1 / v2 / v3（v3 沿用 v2 网络结构）。 */
   rvc_version?: string
   /** SeedVC：本次推理的目标音色参考音频。 */
   reference_audio?: string
@@ -320,7 +320,7 @@ export interface WorkDTO {
   log_path?: string | null
   params?: InferenceParams
   steps: PipelineStep[]
-  mode?: 'single' | 'multi'
+  mode?: 'single' | 'multi' | 'workflow'
   workflow?: CreateWorkflow
   vocal_enhancement?: VocalEnhancementOptions
   preprocess?: PreprocessOptions
@@ -372,6 +372,78 @@ export interface BlendModel {
   params: InferenceParams
 }
 
+/** 自定义工作流：画布节点类型。 */
+export type WorkflowNodeType =
+  | 'input'
+  | 'separate'
+  | 'dereverb'
+  | 'repair'
+  | 'convert'
+  | 'blend'
+  | 'enhance'
+  | 'mix'
+  | 'merge'
+  | 'concat'
+  | 'effect'
+  | 'trim'
+  | 'fade'
+  | 'pitch'
+  | 'stretch'
+  | 'normalize'
+  | 'output'
+
+/** 自定义工作流：画布节点。 */
+export interface WorkflowNode {
+  id: string
+  type: WorkflowNodeType
+  x: number
+  y: number
+  /** 节点参数（按类型不同，见后端 workflow_graph.NODE_TYPES）。 */
+  params: Record<string, any>
+}
+
+/** 自定义工作流：画布连线。 */
+export interface WorkflowEdge {
+  id: string
+  from: { node: string; port: string }
+  to: { node: string; port: string }
+}
+
+/** 自定义工作流：完整节点图。 */
+export interface WorkflowGraph {
+  id: string
+  name: string
+  updated_at: string
+  nodes: WorkflowNode[]
+  edges: WorkflowEdge[]
+}
+
+/** 已保存的自定义工作流（后端持久化记录）。 */
+export interface CoverWorkflow {
+  id: string
+  name: string
+  updated_at: string
+  nodes: WorkflowNode[]
+  edges: WorkflowEdge[]
+}
+
+/** 工作流文件导出结果。 */
+export interface WorkflowFileExportResult {
+  ok: boolean
+  path?: string
+  cancelled?: boolean
+  error?: string
+}
+
+/** 工作流文件导入结果（成功时带可载入画布的 graph）。 */
+export interface WorkflowFileImportResult {
+  ok: boolean
+  path?: string
+  cancelled?: boolean
+  error?: string
+  graph?: WorkflowGraph
+}
+
 export interface CreateWorkPayload {
   title?: string
   model_id?: string
@@ -382,12 +454,14 @@ export interface CreateWorkPayload {
   workflow?: CreateWorkflow
   /** 模型推理后的可选 AI 美声/歌声增强流程。 */
   vocal_enhancement?: VocalEnhancementOptions
-  /** 翻唱模式：single=单模型（默认）；multi=多模型混合。 */
-  mode?: 'single' | 'multi'
+  /** 翻唱模式：single=单模型（默认）；multi=多模型混合；workflow=自定义工作流。 */
+  mode?: 'single' | 'multi' | 'workflow'
   /** 多模型混合时参与的模型与参数。 */
   models?: BlendModel[]
   /** 多模型混合时每句歌词的模型指派。 */
   segments?: BlendSegment[]
+  /** 自定义工作流：画布节点图。 */
+  workflow_graph?: WorkflowGraph
   /** 独立 AI 增强：待处理的已完成翻唱作品 ID。 */
   target_work_id?: string
   /** 独立 AI 增强：与翻唱作品对应的原始歌曲路径。 */
@@ -411,9 +485,20 @@ export interface PymssModel {
   architecture?: string
   supported?: boolean
   category?: string
-  purpose?: PymssPurpose
+  primary_category?: string
+  primary_category_label?: string
+  secondary_category?: string
+  secondary_category_label?: string
+  category_label?: string
+  purpose?: PymssPurpose | ''
   purpose_label?: string
   target_stem?: string
+  /** catalog 目标音轨拆分结果（如 instrumental/vocals → [instrumental, vocals]）。 */
+  target_stems?: string[]
+  /** 模型 yaml 声明的输出音轨（如 vocals / instrumental / male / female）。 */
+  stems?: string[]
+  /** 主输出音轨（catalog target_stem 或声明顺序第一路）。 */
+  primary_stem?: string
   size_bytes?: number
   downloaded?: boolean
 }
@@ -465,6 +550,12 @@ export interface RealtimeCoverPayload {
   accompaniment_device?: string
   output_device?: string
   sample_rate?: number
+  vocal_mode?: 'separate' | 'direct'
+  separator_engine?: 'uvr' | 'pymss'
+  pymss_model?: string
+  uvr_model?: string
+  prebuffer_blocks?: number
+  latency_mode?: 'live' | 'quality'
 }
 
 export interface SystemAudioDevice {
@@ -473,6 +564,7 @@ export interface SystemAudioDevice {
   kind: 'input' | 'output'
   loopback?: boolean
   system_mix?: boolean
+  virtual_capture?: boolean
 }
 
 export interface RealtimeCoverStatus {
@@ -483,6 +575,16 @@ export interface RealtimeCoverStatus {
   duration?: number
   chunk_seconds?: number
   buffer_seconds?: number
+  prebuffer_blocks?: number
+  vocal_mode?: 'separate' | 'direct'
+  separator_engine?: 'uvr' | 'pymss' | 'none'
+  separator_model?: string
+  separator_device?: string
+  latency_mode?: 'live' | 'quality'
+  latency_ms?: number
+  block_ms?: number | null
+  infer_ms?: number | null
+  dropped_seconds?: number
   ready_seconds?: number
   processed_seconds?: number
   realtime_factor?: number | null
@@ -1052,6 +1154,194 @@ export interface EditorClipMergeResult {
   path?: string
 }
 
+/** MIDI 子编辑器的音符（片段内时间，秒；pitch 为 MIDI 编号，detune 为音分）。 */
+export interface EditorMidiNote {
+  id: string
+  start: number
+  end: number
+  pitch: number
+  detune: number
+  /** 音高曲线（OpenUtau 风格滑音/颤音）：t 相对音符起点秒，v 相对音高半音。 */
+  curve?: Array<{ t: number; v: number }>
+}
+
+export interface EditorMidiClipSpan {
+  id: string
+  name: string
+  start: number
+  end: number
+}
+
+export interface EditorClipMidi {
+  ok: boolean
+  error?: string | null
+  scope?: 'clip' | 'track'
+  clip_id?: string
+  track_id?: string
+  duration?: number
+  notes?: EditorMidiNote[]
+  analysis?: Record<string, unknown>
+  /** 音频片段原本的音高曲线：[[秒, MIDI 音高], ...]，只含浊音帧。 */
+  pitch_curve?: Array<[number, number]>
+  meta?: Record<string, unknown>
+  cached?: boolean
+  midi_ready?: boolean
+  clip_spans?: EditorMidiClipSpan[]
+}
+
+export interface EditorClipMidiSaveResult {
+  ok: boolean
+  error?: string | null
+  scope?: 'clip' | 'track'
+  clip_id?: string
+  track_id?: string
+  duration?: number
+  notes?: EditorMidiNote[]
+  meta?: Record<string, unknown>
+  project?: EditorProject | null
+}
+
+export interface EditorClipMidiApplyResult {
+  ok: boolean
+  error?: string | null
+  scope?: 'clip' | 'track'
+  clip_id?: string
+  track_id?: string
+  report?: {
+    applied_notes?: number
+    applied_seconds?: number
+    skipped?: unknown[]
+    clips?: unknown[]
+  }
+  audio_path?: string
+  audio?: string
+  project?: EditorProject | null
+  clip?: EditorClip | null
+  clips?: EditorClip[]
+}
+
+/** MIDI 编曲：一个音符（绝对时间，秒；pitch 为 MIDI 编号；velocity 为力度）。 */
+export interface EditorMidiComposeNote {
+  id: string
+  start: number
+  end: number
+  pitch: number
+  velocity: number
+}
+
+/** MIDI 编曲：一个声部 = 一件乐器。 */
+export interface EditorMidiPart {
+  id: string
+  name: string
+  /** GM program（0~127） */
+  instrument: number
+  drum: boolean
+  channel: number
+  volume: number
+  pan: number
+  mute: boolean
+  solo: boolean
+  color: string
+  notes: EditorMidiComposeNote[]
+}
+
+/** MIDI 编曲会话：速度、拍号与多个声部。 */
+export interface EditorMidiSession {
+  version: number
+  tempo: number
+  time_signature: number[]
+  parts: EditorMidiPart[]
+  name?: string
+  loop?: boolean
+  metronome?: boolean
+}
+
+/** 按声部导入 .mid：解析后的一轨音符。 */
+export interface EditorMidiImportTrack {
+  name: string
+  program: number
+  drum: boolean
+  notes: Array<{ start: number; end: number; pitch: number; velocity: number }>
+}
+
+export interface EditorMidiImportResult {
+  ok: boolean
+  cancelled?: boolean
+  error?: string
+  tempo?: number
+  tracks?: EditorMidiImportTrack[]
+}
+
+export interface EditorMidiInstrument {
+  program: number
+  name_en: string
+  name_zh: string
+  family: string
+  family_zh: string
+  family_en: string
+}
+
+export interface EditorMidiInstrumentFamily {
+  id: string
+  name_zh: string
+  name_en: string
+  programs: number[]
+  default_program: number
+}
+
+/** 架子鼓鼓件：GM 打击乐里一个音高 = 一件鼓。 */
+export interface EditorMidiDrumPiece {
+  pitch: number
+  name_zh: string
+  name_en: string
+  group: string
+  group_zh: string
+  tone?: number
+  decay?: number
+  noise?: number
+  metallic?: number
+  choke?: number
+}
+
+export interface EditorMidiSessionResult {
+  ok: boolean
+  error?: string | null
+  cancelled?: boolean
+  track_id?: string
+  track_name?: string
+  duration?: number
+  session?: EditorMidiSession
+  summary?: Record<string, unknown>
+  instruments?: EditorMidiInstrument[]
+  families?: EditorMidiInstrumentFamily[]
+  drums?: EditorMidiDrumPiece[]
+  clip_spans?: EditorMidiClipSpan[]
+  has_audio?: boolean
+  midi_ready?: boolean
+  mode?: 'tracks' | 'mix' | string
+  audio?: string
+  path?: string
+  bytes?: number
+  report?: Record<string, unknown>
+  project?: EditorProject | null
+  clips?: EditorClip[]
+  tracks?: EditorTrack[]
+}
+
+export interface EditorMidiRenderOptions {
+  mode?: 'tracks' | 'mix'
+}
+
+export interface EditorMidiRenderJob {
+  ok: boolean
+  job_id?: string
+  status?: 'queued' | 'running' | 'done' | 'error'
+  progress?: number
+  message?: string
+  error?: string | null
+  result?: EditorMidiSessionResult | null
+}
+
 export interface EditorPluginHostStatus {
   ok: boolean
   ready: boolean
@@ -1063,6 +1353,7 @@ export interface EditorPluginHostStatus {
   monitor_ready?: boolean
   realtime_ready?: boolean
   realtime_reason?: string
+  monitor_reason?: string
   monitor?: EditorPluginMonitorStatus
 }
 
@@ -1103,6 +1394,12 @@ export interface EditorPluginInspectResult extends EditorPluginHostStatus {
   plugin?: Record<string, unknown>
 }
 
+export interface EditorPluginPathOption {
+  name: string
+  path: string
+  collection: string
+}
+
 export interface EditorPluginWindowResult extends EditorPluginHostStatus {
   session_id?: string
   state_path?: string
@@ -1133,6 +1430,7 @@ export interface EditorSeparationOptions {
   engine?: 'uvr' | 'pymss'
   model?: string
   pymss_model?: string
+  pymss_purpose?: PymssPurpose | 'generic'
   harmony_removal_enabled?: boolean
   harmony_model?: string
   mute_source?: boolean

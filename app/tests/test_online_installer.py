@@ -3,6 +3,7 @@ from __future__ import annotations
 import configparser
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -15,8 +16,21 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_BUILDER = ROOT / "installer" / "build_online_manifest.py"
 ONLINE_SCRIPT = ROOT / "installer" / "xb-svcb-online.iss"
+OFFLINE_SCRIPT = ROOT / "installer" / "xb-svcb.iss"
+APP_EXE_VERSION = ROOT / "installer" / "xb-svcb-version.txt"
 ONLINE_BUILD = ROOT / "installer" / "build-online.ps1"
 MODELSCOPE_BUILD = ROOT / "installer" / "build-online-modelscope.ps1"
+
+
+def _read_version(path: Path, pattern: str) -> str:
+    match = re.search(pattern, path.read_text(encoding="utf-8"))
+    assert match, f"version not found in {path}"
+    return match.group(1)
+
+
+RELEASE_VERSION = _read_version(
+    ROOT / "app" / "config.py", r'APP_VERSION\s*=\s*["\']([^"\']+)["\']'
+)
 
 
 def _load_manifest_builder():
@@ -45,9 +59,9 @@ def test_online_manifest_pins_every_release_artifact(tmp_path: Path) -> None:
     output = dist / "online-manifest.ini"
     _write_release_files(dist, builder)
 
-    manifest = builder.build_manifest(dist, output, "0.1.0")
+    manifest = builder.build_manifest(dist, output, RELEASE_VERSION)
 
-    assert manifest["release"]["version"] == "0.1.0"
+    assert manifest["release"]["version"] == RELEASE_VERSION
     assert manifest["release"]["stacks"].split(",") == list(
         builder.STACK_BASE_NAMES
     )
@@ -79,7 +93,7 @@ def test_online_manifest_requires_all_five_packages(tmp_path: Path) -> None:
     (dist / f"{missing_base}.exe").unlink()
 
     with pytest.raises(FileNotFoundError):
-        builder.build_manifest(dist, dist / "online-manifest.ini", "0.1.0")
+        builder.build_manifest(dist, dist / "online-manifest.ini", RELEASE_VERSION)
 
 
 def test_existing_online_manifest_can_be_validated_without_release_files(
@@ -89,14 +103,14 @@ def test_existing_online_manifest_can_be_validated_without_release_files(
     dist = tmp_path / "dist"
     output = dist / "online-manifest.ini"
     _write_release_files(dist, builder)
-    builder.build_manifest(dist, output, "0.1.0")
+    builder.build_manifest(dist, output, RELEASE_VERSION)
     for artifact in dist.iterdir():
         if artifact != output:
             artifact.unlink()
 
-    manifest = builder.validate_existing_manifest(output, "0.1.0")
+    manifest = builder.validate_existing_manifest(output, RELEASE_VERSION)
 
-    assert manifest["release"]["version"] == "0.1.0"
+    assert manifest["release"]["version"] == RELEASE_VERSION
     assert manifest["stack.cu128"]["setup"] == "XB-SVCB-Setup-CUDA128.exe"
 
 
@@ -105,12 +119,12 @@ def test_existing_online_manifest_rejects_invalid_hash(tmp_path: Path) -> None:
     dist = tmp_path / "dist"
     output = dist / "online-manifest.ini"
     _write_release_files(dist, builder)
-    builder.build_manifest(dist, output, "0.1.0")
+    builder.build_manifest(dist, output, RELEASE_VERSION)
     text = output.read_text(encoding="utf-8")
     output.write_text(re.sub(r"sha256_0=[0-9a-f]{64}", "sha256_0=bad", text, count=1), encoding="utf-8")
 
     with pytest.raises(ValueError, match="Invalid SHA-256"):
-        builder.validate_existing_manifest(output, "0.1.0")
+        builder.validate_existing_manifest(output, RELEASE_VERSION)
 
 
 def test_online_manifest_rejects_noncontiguous_split_volumes(tmp_path: Path) -> None:
@@ -129,7 +143,7 @@ def test_online_manifest_rejects_noncontiguous_split_volumes(tmp_path: Path) -> 
 def test_online_inno_script_localizes_and_verifies_downloads() -> None:
     script = ONLINE_SCRIPT.read_text(encoding="utf-8")
 
-    assert '#define MyAppVersion "0.1.0"' in script
+    assert f'#define MyAppVersion "{RELEASE_VERSION}"' in script
     assert 'Name: "zhcn"; MessagesFile: "languages\\ChineseSimplified.isl"' in script
     assert 'Name: "en"; MessagesFile: "compiler:Default.isl"' in script
     assert 'Name: "ja"; MessagesFile: "languages\\Japanese.isl"' in script
@@ -234,8 +248,13 @@ def test_online_installer_supports_a_separate_modelscope_edition() -> None:
     assert "OutputBaseFilename={#XB_ONLINE_OUTPUT_FILENAME}" in script
     assert "XB-SVCB 在线安装器（魔搭社区版）" in script
     assert "[string]$Repo = 'lkpp233/xb-svcb'" in wrapper
-    assert "[string]$Revision = 'v0.1.0'" in wrapper
-    assert "https://www.modelscope.cn/models/lkpp233/xb-svcb/files?version=v0.1.0" in wrapper
+    assert "[string]$Revision," in wrapper
+    assert "if ($Revision) { $forward.ModelScopeRevision = $Revision }" in wrapper
+    source_files_url = (
+        "https://www.modelscope.cn/models/lkpp233/xb-svcb/files"
+        f"?version=v{RELEASE_VERSION}"
+    )
+    assert source_files_url in wrapper
     assert "ModelScopeRoot = $true" in wrapper
     assert 'else { "v$appVersion" }' in build
 
@@ -284,3 +303,36 @@ def test_online_installer_build_help_exits_before_release_checks(
     assert "Usage: .\\installer\\build-online.ps1" in result.stdout
     assert "-BaseUrl" in result.stdout
     assert "Online installer validation passed" not in result.stdout
+
+
+def test_release_version_is_aligned_across_app_frontend_and_installers() -> None:
+    """Mirror the build.ps1 gate so a partial version bump fails in unit tests."""
+
+    version = RELEASE_VERSION
+    escaped = re.escape(version)
+    pyproject = (ROOT / "app" / "pyproject.toml").read_text(encoding="utf-8")
+    uv_lock = (ROOT / "app" / "uv.lock").read_text(encoding="utf-8")
+    exe_version = APP_EXE_VERSION.read_text(encoding="utf-8")
+    offline = OFFLINE_SCRIPT.read_text(encoding="utf-8")
+    online = ONLINE_SCRIPT.read_text(encoding="utf-8")
+    web_package = json.loads(
+        (ROOT / "web" / "package.json").read_text(encoding="utf-8")
+    )
+    web_lock = (ROOT / "web" / "package-lock.json").read_text(encoding="utf-8")
+
+    assert re.search(rf'(?m)^version\s*=\s*"{escaped}"', pyproject)
+    assert re.search(
+        rf'\[\[package\]\]\s*name\s*=\s*"app"\s*version\s*=\s*"{escaped}"',
+        uv_lock,
+    )
+    assert f"ProductVersion', u'{version}'" in exe_version
+    assert f"#define MyAppVersion \"{version}\"" in offline
+    assert f"#define MyAppVersion \"{version}\"" in online
+    assert web_package["version"] == version
+    assert len(re.findall(rf'"name": "web",\s*"version": "{escaped}"', web_lock)) == 2
+
+    notes_stem = f"release_notes_v{version.replace('.', '_')}"
+    for suffix in ("", ".en", ".ja"):
+        notes = ROOT / "docs" / "release-notes" / f"{notes_stem}{suffix}.md"
+        assert notes.is_file(), notes
+        assert f"{notes_stem}{suffix}.md" in offline

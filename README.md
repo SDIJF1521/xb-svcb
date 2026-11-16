@@ -23,6 +23,7 @@
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](#)
 [![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
 [![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
+[![main](https://github.com/SDIJF1521/xb-svcb/actions/workflows/main.yml/badge.svg?branch=dev)](https://github.com/SDIJF1521/xb-svcb/actions/workflows/main.yml)
 
 <br/>
 
@@ -45,7 +46,7 @@
 <div align="center">
   <img src="docs/images/xb-svcb-app.png" width="100%" alt="XB-SVCB AI 翻唱工作台真实运行界面" />
   <br/>
-  <sub>XB-SVCB 0.1.0 · AI 翻唱工作台实际运行界面</sub>
+  <sub>XB-SVCB 0.1.1 · AI 翻唱工作台实际运行界面</sub>
 </div>
 
 ## 项目简介
@@ -58,9 +59,9 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 
 - 一键完成「人声分离 → 去混响 → F0 分析 → 歌声转换 → 增强 → 混音」。
 - 统一管理 So-VITS-SVC、RVC、SeedVC、DDSP-SVC 模型，并按模型框架选择推理参数。
-- 按模型音域自动进行高音保护，对掉音或错误音高区域局部降调重试并恢复原调。
+- 按模型音域自动进行高音保护，对掉音或错误音高区域局部降调重试并恢复原调；升回原调后再由 Snake-HiFiGAN / NSF-HiFiGAN 高音声码器重建已确认高音区的超高频带，弥补 PSOLA 在高音上的气声与谐波缺失。
 - 通过歌词或静音检测切分歌曲，在可视化时间轴中分配模型，支持多人混唱和一句多模型合唱。
-- 使用 Audio Editor Lite 进行多轨编辑、剪切、淡化、声道分配、效果处理和 WAV / MP3 / FLAC 导出。
+- 使用 Audio Editor Lite 进行多轨编辑、剪切、淡化、声道分配、效果处理和 WAV / MP3 / FLAC 导出；内置 MIDI 子编辑器（钢琴卷帘）可对片段做音符级音高编辑，播放与试听始终使用片段音频而非 MIDI 音源。
 - 支持 TXT / LRC 歌词导入、角色管理和独唱、对唱、和声等时间轴模板。
 - 通过 WASAPI 回环或 VB-CABLE 对播放器音频进行实时人声转换，伴奏保持原样。
 - 通过 ModelScope 搜索、上传和下载模型，支持后台传输、断点续传和模型清单校验。
@@ -73,7 +74,7 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 
 ### 使用安装包
 
-普通用户建议直接使用 GitHub Releases 中的魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`。该安装器从 ModelScope 的 `v0.1.0` 版本下载经过校验的离线安装包。备用版 `XB-SVCB-Online-Setup.exe` 不在 GitHub 公开发布，如有需要请联系开发者单独获取。
+普通用户建议直接使用 GitHub Releases 中的魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`。该安装器从 ModelScope 的 `v0.1.1` 版本下载经过校验的离线安装包。备用版 `XB-SVCB-Online-Setup.exe` 不在 GitHub 公开发布，如有需要请联系开发者单独获取。
 
 1. 运行在线安装器，使用自动检测或手动选择 CPU、ROCm 10、DirectML、CUDA126、CUDA128。
 2. 等待对应的完整安装包下载并通过 SHA-256 校验，然后选择应用安装目录和用户数据目录。
@@ -149,7 +150,14 @@ app\.venv\Scripts\python.exe app\main.py --dev
 5. 等待推理、增强和混音完成，在作品库试听或导出成品。
 6. 需要进一步处理时，将作品送入 Audio Editor Lite，进行局部重推理、效果处理或多轨编辑。
 
-系统音频实时模式只支持一个 RVC 或 SeedVC 模型。它会采集播放器输出的混合音频，用 UVR 提取人声，再将转换后的人声与原伴奏重新混音并输出。
+系统音频实时模式只支持一个 RVC 或 SeedVC 模型，并提供两种直播配置：
+
+- **混合音频（保留伴奏）**：采集播放器输出的混合音频，用 UVR 或 PyMSS 常驻分离人声，再将转换后的人声与原伴奏重新混音；默认 1.5 秒块，延迟约 2.5–4 秒。
+- **纯人声（直播低延迟）**：跳过人声分离，直接对麦克风或虚拟音频线中的人声做 RVC；默认 0.5 秒块与单块缓冲，延迟约 0.6–1.2 秒，降到 0.25 秒块可进一步接近 0.5 秒。
+
+处理速度不足时，实时管线会丢弃过期音频而不是让延迟无限累积；界面显示端到端延迟、处理负载和已丢弃时长。
+
+输出设备支持直接选择 VB-CABLE 的 **CABLE Output**：应用会自动写入同一条虚拟线的 **CABLE Input**，OBS、游戏或语音软件仍选择 **CABLE Output** 作为麦克风接收变声结果。
 
 ## 系统架构
 
@@ -245,7 +253,7 @@ xb-svcb/
 │  ├─ domain/                   任务、模型、工程等领域对象
 │  └─ infrastructure/           Worker、FFmpeg、仓储和引擎实现
 ├─ web/                         Vue 3 + Vite 前端
-├─ engines/                     So-VITS-SVC、SeedVC、DDSP-SVC 等引擎源码
+├─ engines/                     So-VITS-SVC、RVC（官方 infer 栈）、SeedVC、DDSP-SVC 等引擎源码
 ├─ assets/                      随包模型、工具和离线 wheelhouse
 ├─ install/                     环境搭建和模型部署脚本
 ├─ installer/                   PyInstaller / Inno Setup 安装器
@@ -336,13 +344,14 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 
 ## Roadmap
 
-当前版本：**v0.1.0**
+当前版本：**v0.1.1**
 
-完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.1.0 更新说明](docs/release-notes/release_notes_v0_1_0.md)。
+完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.1.1 更新说明](docs/release-notes/release_notes_v0_1_1.md)。
 
 ## 🤝 贡献者
 
 感谢每一位参与 XB-SVCB 开发和维护的贡献者。
+> <a href="https://github.com/SDIJF1521" title="SDIJF1521 · YGXB"><img src="https://images.weserv.nl/?url=github.com/SDIJF1521.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="SDIJF1521" /></a>&nbsp;&nbsp;<a href="https://github.com/emptyelse" title="emptyelse"><img src="https://images.weserv.nl/?url=github.com/emptyelse.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="emptyelse" /></a>&nbsp;&nbsp;<a href="https://github.com/GFMAA" title="GFMAA"><img src="https://images.weserv.nl/?url=github.com/GFMAA.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="GFMAA" /></a>&nbsp;&nbsp;<a href="https://github.com/SugarCatCat" title="SugarCatCat · 糖猫猫"><img src="https://images.weserv.nl/?url=github.com/SugarCatCat.png&amp;mask=circle&amp;w=96&amp;h=96&amp;fit=cover&amp;output=png" width="96" height="96" alt="SugarCatCat" /></a>
 
 贡献者：**SDIJF1521（YGXB） · emptyelse · GFMAA · SugarCatCat（糖猫猫）**。点击头像可查看个人主页；完整记录见[贡献者页面](https://github.com/SDIJF1521/xb-svcb/graphs/contributors)。欢迎阅读 [贡献指南](CONTRIBUTING.md) 并参与项目。
 
@@ -364,7 +373,7 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 
 - 🧁 **模型来源** —— 目前软件内可用 / 演示的**绝大部分声音模型，均由「白菜工厂1145号员工」提供**。在此特别致谢 🙏，正是这些模型让本工具能开箱即用地体验完整翻唱流程。
 - 📌 模型版权归原作者所有，请在其授权范围内使用；如有侵权或需要下架，请联系作者处理。
-- 🛠️ 同时感谢上游开源项目：[so-vits-svc](https://github.com/svc-develop-team/so-vits-svc)、[rvc-python](https://github.com/daswer123/rvc-python) / RVC、[Seed-VC](https://github.com/Plachtaa/seed-vc)、[DDSP-SVC](https://github.com/yxlllc/DDSP-SVC)、[Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)、[DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)、[Pedalboard](https://github.com/spotify/pedalboard)、[ModelScope 魔搭社区](https://www.modelscope.cn/) 等。
+- 🛠️ 同时感谢上游开源项目：[so-vits-svc](https://github.com/svc-develop-team/so-vits-svc)、[RVC / Retrieval-based-Voice-Conversion-WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)、[Seed-VC](https://github.com/Plachtaa/seed-vc)、[DDSP-SVC](https://github.com/yxlllc/DDSP-SVC)、[Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)、[DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)、[Pedalboard](https://github.com/spotify/pedalboard)、[ModelScope 魔搭社区](https://www.modelscope.cn/)、[pymss](https://github.com/pymss-project/pymss)等。
 - 🚀 后续会把更多模型逐一上传到「模型站」，方便在软件内直接搜索下载。
 
 ---
@@ -377,6 +386,7 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 >
 > - **so-vits-svc 4.1**（`svc-develop-team/so-vits-svc`）：源码随安装分卷携带，遵循上游 **AGPL-3.0**。
 > - **DDSP-SVC 6.3**（`yxlllc/DDSP-SVC`）：源码随安装分卷携带，遵循上游 **MIT License**。
+> - **RVC 推理栈**（`RVC-Project/Retrieval-based-Voice-Conversion-WebUI` 2.2.231006）：内置在 `engines/rvc`，遵循上游 **MIT License**。
 > - **底模**：ContentVec、NSF-HiFiGAN、RMVPE、FCPE 等各有其许可。
 > - **UVR 模型**：`5_HP-Karaoke-UVR`、`UVR-DeEcho-DeReverb` 等遵循 Ultimate Vocal Remover 项目相应许可。
 >

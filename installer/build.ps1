@@ -43,7 +43,8 @@ param(
   [string]$Python,
   [string]$RuntimeAssets,
   [switch]$BootstrapperOnly,
-  [switch]$ValidateOnly
+  [switch]$ValidateOnly,
+  [switch]$RequireAdmin
 )
 
 if ($Help -or $args -contains '--help') {
@@ -77,6 +78,8 @@ Examples:
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot   # repo root
+$isccPrivilegeArgs = @()
+if ($RequireAdmin) { $isccPrivilegeArgs += '/DXB_REQUIRE_ADMIN=1' }
 Set-Location -Path $Root
 
 $selectedStacks = @(
@@ -621,6 +624,8 @@ function Stage-EngineTree([string]$SourceDir, [string]$DestinationDir, [string]$
       $skip = $skip -or ($lowerParts -contains 'exp') -or ($lowerParts -contains 'pretrain')
     } elseif ($Engine -eq 'ddsp') {
       $skip = $skip -or ($lowerParts -contains 'pretrain')
+    } elseif ($Engine -eq 'rvc') {
+      $skip = $skip -or ($lowerParts -contains 'pretrain')
     } elseif ($Engine -eq 'seedvc') {
       $skip = $skip -or ($lowerParts -contains 'checkpoints') -or ($lowerParts -contains 'assets')
       $skip = $skip -or ($file.Name -ieq 'campplus_cn_common.bin')
@@ -641,6 +646,7 @@ function Prepare-BundledEnginePayloads([string]$PayloadRoot) {
   Stage-EngineTree (Join-Path $Root 'engines\so-vits-svc') (Join-Path $PayloadRoot 'so-vits-svc') 'sovits'
   Stage-EngineTree (Join-Path $Root 'engines\ddsp-svc') (Join-Path $PayloadRoot 'ddsp-svc') 'ddsp'
   Stage-EngineTree (Join-Path $Root 'engines\seed-vc') (Join-Path $PayloadRoot 'seed-vc') 'seedvc'
+  Stage-EngineTree (Join-Path $Root 'engines\rvc') (Join-Path $PayloadRoot 'rvc') 'rvc'
   $contentvec = Join-Path $PayloadRoot 'ddsp-svc\pretrain\contentvec\pytorch_model.bin'
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $contentvec) | Out-Null
   Copy-Item -LiteralPath (Join-Path $Root 'engines\ddsp-svc\pretrain\contentvec\pytorch_model.bin') -Destination $contentvec -Force
@@ -652,6 +658,8 @@ function Prepare-BundledEnginePayloads([string]$PayloadRoot) {
     (Join-Path $PayloadRoot 'ddsp-svc\6.2\main_reflow.py'),
     (Join-Path $PayloadRoot 'seed-vc\inference.py'),
     (Join-Path $PayloadRoot 'seed-vc\inference_v2.py'),
+    (Join-Path $PayloadRoot 'rvc\rvc_session.py'),
+    (Join-Path $PayloadRoot 'rvc\infer\modules\vc\pipeline.py'),
     $contentvec
   )) { Require-File $marker 'Staged bundled engine payload' }
 }
@@ -681,7 +689,7 @@ function Assert-InnoConstants([string]$Path) {
   Require-File $Path "Inno Setup script"
   $allowed = @(
     'app', 'autopf', 'cmd', 'commondesktop', 'group', 'localappdata',
-    'pf32', 'tmp', 'uninstallexe', 'userappdata', 'win'
+    'pf32', 'tmp', 'uninstallexe', 'userappdata', 'userdesktop', 'win'
   )
   $text = Get-Content -LiteralPath $Path -Raw
   $used = [regex]::Matches($text, '\{([A-Za-z][A-Za-z0-9]*)\}') |
@@ -725,8 +733,11 @@ $workerFiles = @(
   "f0_worker.py",
   "vocal_tuning_worker.py",
   "formant_pitch_worker.py",
+  "high_note_vocoder_worker.py",
+  "midi_pitch_worker.py",
   "uvr_worker.py",
   "pymss_worker.py",
+  "pymss_catalog_meta.py",
   "hub_worker.py",
   "rvc_worker.py",
   "seedvc_worker.py",
@@ -746,9 +757,9 @@ Require-WorkerContract `
   "Formant pitch worker source" `
   @("--high-threshold", "FORMANT_PITCH_OK") `
   @("--out-npy", "F0_OK")
-Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_0.md") "v0.1.0 Simplified Chinese release notes"
-Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_0.en.md") "v0.1.0 English release notes"
-Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_0.ja.md") "v0.1.0 Japanese release notes"
+Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_1.md") "v0.1.1 Simplified Chinese release notes"
+Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_1.en.md") "v0.1.1 English release notes"
+Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_1.ja.md") "v0.1.1 Japanese release notes"
 Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
 Require-File (Join-Path $Root "install\detect_python.bat") "Python runtime detector"
@@ -868,7 +879,7 @@ if ($ValidateOnly) {
     $validateStacks = if ($packageStack) { @($packageStack) } else { @('cpu', 'rocm10', 'directml', 'cu126', 'cu128') }
     foreach ($validateStack in $validateStacks) {
       $validateOutput = [string]($outputBaseNames[$validateStack])
-      & $iscc "/DXB_VALIDATE_ONLY=1" "/DXB_PACKAGE_STACK=$validateStack" "/DXB_OUTPUT_BASENAME=$validateOutput" `
+      & $iscc @isccPrivilegeArgs "/DXB_VALIDATE_ONLY=1" "/DXB_PACKAGE_STACK=$validateStack" "/DXB_OUTPUT_BASENAME=$validateOutput" `
         "/O$validateDir" "/F$validateOutput-Validation" (Join-Path $Root "installer\xb-svcb.iss")
       if ($LASTEXITCODE -ne 0) {
         throw "Inno Setup validation failed for $validateStack (exit code $LASTEXITCODE)"
@@ -1095,7 +1106,7 @@ if ($BootstrapperOnly) {
   }
   New-Item -ItemType Directory -Force -Path $compileDir | Out-Null
   try {
-    & $iscc "/DXB_PACKAGE_STACK=$packageStack" "/DXB_OUTPUT_BASENAME=$outputBaseName" "/O$compileDir" (Join-Path $Root "installer\xb-svcb.iss")
+    & $iscc @isccPrivilegeArgs "/DXB_PACKAGE_STACK=$packageStack" "/DXB_OUTPUT_BASENAME=$outputBaseName" "/O$compileDir" (Join-Path $Root "installer\xb-svcb.iss")
     if ($LASTEXITCODE -ne 0) { throw "ISCC compile failed (exit code $LASTEXITCODE)" }
 
     $tempExe = Join-Path $compileDir "$outputBaseName.exe"
@@ -1123,7 +1134,7 @@ if ($BootstrapperOnly) {
   # Replace only this hardware package; keep the other package families.
   Get-ChildItem -LiteralPath $distDir -Filter "$outputBaseName*" -File -ErrorAction SilentlyContinue |
     Remove-Item -Force
-  & $iscc "/DXB_PACKAGE_STACK=$packageStack" "/DXB_OUTPUT_BASENAME=$outputBaseName" (Join-Path $Root "installer\xb-svcb.iss")
+  & $iscc @isccPrivilegeArgs "/DXB_PACKAGE_STACK=$packageStack" "/DXB_OUTPUT_BASENAME=$outputBaseName" (Join-Path $Root "installer\xb-svcb.iss")
   if ($LASTEXITCODE -ne 0) { throw "ISCC compile failed (exit code $LASTEXITCODE)" }
 
   $out = Join-Path $distDir "$outputBaseName.exe"

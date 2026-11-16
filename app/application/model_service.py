@@ -15,14 +15,23 @@ import yaml
 
 import config
 from domain import ModelFile, ModelInfo, ModelType
-from infrastructure import paths
-from infrastructure.storage import ListRepository, SettingsStore
+from domain.formatting import human_size
+from domain.identity import new_id
+from .adapters import ensure_data_dirs
+from .ports import ItemRepository, SettingsRepository
 
 
 class ModelService:
     _RVC_INSPECT_MARKER = "RVC_INSPECT\t"
+    # Inspector diagnostics that deserve a user-facing explanation. A v3 label on
+    # a layout that is not the v2 graph cannot be mapped to any known RVC loader.
+    _RVC_VERSION_DETAILS = {
+        "v3_architecture_unsupported": "RVC v3 网络结构与 v2 不一致，暂无法自动选择推理图",
+        "unknown_layout": "未能从 checkpoint 识别 RVC 网络结构",
+        "unsupported_checkpoint": "checkpoint 不是可识别的 RVC 权重文件",
+    }
 
-    def __init__(self, repo: ListRepository, settings: SettingsStore) -> None:
+    def __init__(self, repo: ItemRepository, settings: SettingsRepository) -> None:
         self._repo = repo
         self._settings = settings
 
@@ -106,13 +115,13 @@ class ModelService:
 
         rows = []
         for entry in summaries.values():
-            entry["size"] = paths.human_size(int(entry.get("size_bytes") or 0))
+            entry["size"] = human_size(int(entry.get("size_bytes") or 0))
             rows.append(entry)
         rows.sort(key=lambda x: (0 if x.get("count") else 1, str(x.get("name") or "")))
         return {
             "total": sum(int(x.get("count") or 0) for x in rows),
             "total_size_bytes": total_size,
-            "total_size": paths.human_size(total_size),
+            "total_size": human_size(total_size),
             "default_model_id": default_id,
             "frameworks": rows,
         }
@@ -146,7 +155,7 @@ class ModelService:
             - ddsp-svc：main_model(.pt) + main_config(config.yaml) 必填。
         必填文件缺失则返回 None。
         """
-        paths.ensure_dirs()
+        ensure_data_dirs()
         framework = config.modelhub_normalize_framework(payload.get("framework"))
         is_rvc = framework == "rvc"
         is_seedvc = framework == "seed-vc"
@@ -160,7 +169,7 @@ class ModelService:
         if not is_rvc and not main_config_src:
             return None
 
-        model_id = paths.new_id("mdl_")
+        model_id = new_id("mdl_")
         dst_dir = config.MODELS_DIR / model_id
         dst_dir.mkdir(parents=True, exist_ok=True)
 
@@ -240,7 +249,7 @@ class ModelService:
             name=name,
             type=model_type,
             sample_rate=str(payload.get("sample_rate", "44.1kHz")),
-            size=paths.human_size(total),
+            size=human_size(total),
             imported_at=datetime.now().strftime("%Y-%m-%d"),
             main_model=main_model,
             main_config=main_config or ModelFile("", ""),
@@ -432,7 +441,7 @@ class ModelService:
                     }
                     if repair and detected_version != previous_version:
                         fixed.append("rvc_version")
-                elif previous_version not in {"v1", "v2"}:
+                elif previous_version not in {"v1", "v2", "v3"}:
                     normalized["metadata"] = {
                         **(normalized.get("metadata") or {}),
                         **detected,
@@ -441,7 +450,7 @@ class ModelService:
                         {
                             "key": "rvc_version",
                             "level": "warn",
-                            "message": "无法自动识别 RVC v1/v2，将保留兼容版本设置",
+                            "message": "无法自动识别 RVC v1/v2/v3，将保留兼容版本设置",
                         }
                     )
 
@@ -459,7 +468,7 @@ class ModelService:
                     issues.append({"key": "main_config", "level": "warn", "message": "配置文件无法解析"})
 
         size = self._model_size_bytes(normalized)
-        normalized["size"] = paths.human_size(size)
+        normalized["size"] = human_size(size)
         metadata = dict(normalized.get("metadata") or {})
         metadata.update(
             {
@@ -493,7 +502,7 @@ class ModelService:
         )
         metadata = model.get("metadata") or model.get("model_metadata") or {}
         version = str(metadata.get("rvc_version") or "").strip().lower() if isinstance(metadata, dict) else ""
-        if framework == "rvc" and version in {"v1", "v2"}:
+        if framework == "rvc" and version in {"v1", "v2", "v3"}:
             resolved["rvc_version"] = version
         return resolved
 
@@ -507,7 +516,7 @@ class ModelService:
             model.get("framework") or config.modelhub_guess_framework(model.get("type"))
         )
         metadata = dict(model.get("metadata") or {})
-        if framework != "rvc" or str(metadata.get("rvc_version") or "").lower() in {"v1", "v2"}:
+        if framework != "rvc" or str(metadata.get("rvc_version") or "").lower() in {"v1", "v2", "v3"}:
             return model
         # Unknown/broken custom layouts are retried only through the explicit
         # model inspection action. An unavailable runtime is cheap to recheck
@@ -565,15 +574,16 @@ class ModelService:
             except (TypeError, ValueError):
                 break
             version = str(result.get("version") or "").strip().lower()
-            if version in {"v1", "v2"}:
+            if version in {"v1", "v2", "v3"}:
                 return {
                     "rvc_version": version,
                     "rvc_version_detection": "detected",
                     "rvc_version_source": str(result.get("source") or "checkpoint"),
                 }
+            detail = str(result.get("source") or "unknown_layout")
             return {
                 "rvc_version_detection": "unknown",
-                "rvc_version_detail": str(result.get("source") or "unknown_layout"),
+                "rvc_version_detail": cls._RVC_VERSION_DETAILS.get(detail, detail),
             }
         detail = (completed.stderr or completed.stdout or "RVC 检查进程未返回结果").strip()
         return {
@@ -639,7 +649,7 @@ class ModelService:
         if not normalized.get("sample_rate"):
             normalized["sample_rate"] = "44.1kHz"
         if refresh_size or not normalized.get("size"):
-            normalized["size"] = paths.human_size(self._model_size_bytes(normalized))
+            normalized["size"] = human_size(self._model_size_bytes(normalized))
         for key in ("main_model", "main_config"):
             normalized.setdefault(key, {"name": "", "path": ""})
         return normalized

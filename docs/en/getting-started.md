@@ -6,9 +6,9 @@ Most users should use the online installer, which selects the hardware package a
 
 ## Online Installation
 
-Download and run the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`, from GitHub Releases. Choose **Auto detect (recommended)** or select a hardware build manually. The bootstrapper downloads only that complete EXE/BIN set from the ModelScope `v0.1.0` revision, verifies every file with SHA-256, and then starts the localized offline setup. Keep the network connection available and allow access to `www.modelscope.cn`.
+Download and run the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`, from GitHub Releases. Choose **Auto detect (recommended)** or select a hardware build manually. The bootstrapper downloads only that complete EXE/BIN set from the ModelScope `v0.1.1` revision, verifies every file with SHA-256, and then starts the localized offline setup. Keep the network connection available and allow access to `www.modelscope.cn`.
 
-GitHub does not publicly provide the fallback `XB-SVCB-Online-Setup.exe`; contact the developer if you need it separately. The bootstrapper does not store repository or OSS credentials on the computer. Verified EXE/BIN files are retained in `XB-SVCB-Downloads\0.1.0\<hardware-stack>\` next to the online installer and launched from there; this directory is not removed when the bootstrapper exits. The folder containing the online installer must be writable. If a download is interrupted or verification fails, run it again. The retained EXE and all same-prefix BIN files can also be kept as a complete offline package.
+GitHub does not publicly provide the fallback `XB-SVCB-Online-Setup.exe`; contact the developer if you need it separately. The bootstrapper does not store repository or OSS credentials on the computer. Verified EXE/BIN files are retained in `XB-SVCB-Downloads\0.1.1\<hardware-stack>\` next to the online installer and launched from there; this directory is not removed when the bootstrapper exits. The folder containing the online installer must be writable. If a download is interrupted or verification fails, run it again. The retained EXE and all same-prefix BIN files can also be kept as a complete offline package.
 
 ## Choose an Installer
 
@@ -34,6 +34,8 @@ CUDA126 and CUDA128 share runtimes by default:
 | `runtimes/svc-cu126` / `svc-cu128` | So-VITS-SVC, RVC, Vocal / DeepFilterNet3 |
 
 CPU uses isolated directories such as `.venv-uvr`, `.venv-svc`, `.venv-rvc`, `.venv-seedvc`, `.venv-ddsp`, and `.venv-vocal`. DirectML is also isolated, but RVC uses `.venv-rvc-directml`. On ROCm 10, SVC / RVC / Vocal share `runtimes/svc-rocm10`, while the other components remain isolated. The application identifies the actual interpreter through `runtime.json`; do not determine whether installation is complete from directory names alone.
+
+RVC inference code ships in `engines/rvc` (an MIT-licensed subset of RVC-Project 2.2.231006); `hubert_base.pt` and `rmvpe.pt` live in `engines/rvc/pretrain` and are seeded by the installer from `assets/models`. The third-party `rvc-python` package is no longer installed.
 
 For the complete layout and compatibility rules for older installations, see [Shared Runtime and Compatibility Layout](runtime-consolidation.md).
 

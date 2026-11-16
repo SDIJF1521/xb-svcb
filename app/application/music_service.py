@@ -4,9 +4,9 @@
 - 使用 httpx 的 **异步** 客户端发起请求；所有协程都在本服务持有的独立事件循环
   线程中执行，桥接层只需同步调用。
 - 严格遵守接口 10 QPS 限制：用一个异步「最小间隔」限流器串行化所有出站请求。
-- API Key 由用户在前端「资源获取」页填写，持久化于 SettingsStore。
+- API Key 由用户在前端「资源获取」页填写，持久化于 SettingsRepository。
 - 支持多个曲库（source）：wy=网易云、qq=QQ音乐、kuwo=酷我音乐；QQ音乐可额外配置会员 Cookie
-  以获取高品质音频。曲库随每次调用传入，Cookie 持久化于 SettingsStore。
+  以获取高品质音频。曲库随每次调用传入，Cookie 持久化于 SettingsRepository。
 - 下载的歌曲落地到 ``config.MUSIC_DIR``，可在「AI 翻唱」页直接选用。
 
 所有对外方法都返回带 ``ok`` 字段的字典，便于前端统一处理成功/失败与错误提示。
@@ -24,8 +24,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 import config
-from infrastructure import paths
-from infrastructure.storage import SettingsStore
+from domain.formatting import file_size_label
+from .adapters import ensure_data_dirs
+from .ports import SettingsRepository
 
 # settings.json 中保存用户 API Key 的键名
 _API_KEY_SETTING = "music_api_key"
@@ -244,7 +245,7 @@ def _song_mid(data: dict[str, Any]) -> str:
 class MusicService:
     """封装妖狐音乐 API 的搜索、单曲详情与下载。"""
 
-    def __init__(self, settings: SettingsStore) -> None:
+    def __init__(self, settings: SettingsRepository) -> None:
         self._settings = settings
         self._limiter = _AsyncRateLimiter(config.MUSIC_API_QPS)
         self._downloaded_cache_lock = threading.Lock()
@@ -404,7 +405,7 @@ class MusicService:
     def list_downloaded(self) -> list[dict[str, Any]]:
         music_dir = config.MUSIC_DIR
         if not music_dir.exists():
-            paths.ensure_dirs()
+            ensure_data_dirs()
         with self._downloaded_cache_lock:
             cached = self._downloaded_cache
             try:
@@ -415,7 +416,7 @@ class MusicService:
                 return [dict(item) for item in cached[1]]
 
         if not music_dir.exists():
-            paths.ensure_dirs()
+            ensure_data_dirs()
         try:
             dir_mtime = music_dir.stat().st_mtime_ns
         except OSError:
@@ -433,7 +434,7 @@ class MusicService:
                     path = Path(entry.path)
                     rows.append((
                         stat.st_mtime,
-                        {"name": path.stem, "path": str(path), "size": paths.file_size_label(path)},
+                        {"name": path.stem, "path": str(path), "size": file_size_label(path)},
                     ))
         except OSError:
             rows = []
@@ -792,7 +793,7 @@ class MusicService:
         except ImportError:
             return {"ok": False, "error": "缺少 httpx 依赖，请重新安装运行环境"}
 
-        paths.ensure_dirs()
+        ensure_data_dirs()
         base = song.get("name", "") or "music"
         if song.get("singer"):
             base = f"{base} - {song['singer']}"
@@ -877,7 +878,7 @@ class MusicService:
             "ok": True,
             "path": str(dest),
             "name": dest.stem,
-            "size": paths.file_size_label(dest),
+            "size": file_size_label(dest),
         }
 
     async def _preview(

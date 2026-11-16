@@ -10,12 +10,26 @@
         <el-button round class="ghost-btn" :loading="loading" @click="loadProjects">
           <el-icon class="el-icon--left"><Refresh /></el-icon>刷新
         </el-button>
+        <el-button round class="ghost-btn" @click="createBlank">
+          <el-icon class="el-icon--left"><Plus /></el-icon>新建空白工程
+        </el-button>
         <el-button round class="ghost-btn" @click="importProject">
           <el-icon class="el-icon--left"><FolderOpened /></el-icon>导入工程
         </el-button>
         <el-button round class="cta-btn" data-guide="editor-import" @click="importAudio">
           <el-icon class="el-icon--left"><FolderAdd /></el-icon>导入音频
         </el-button>
+        <el-button round class="ghost-btn" :class="{ active: batchMode }" @click="toggleBatchMode">
+          <el-icon class="el-icon--left"><Select /></el-icon>{{ batchMode ? '退出批量' : '批量管理' }}
+        </el-button>
+        <el-input
+          v-model="search"
+          clearable
+          class="project-search"
+          placeholder="搜索工程名称"
+        >
+          <template #prefix><el-icon><Search /></el-icon></template>
+        </el-input>
       </div>
     </div>
 
@@ -24,60 +38,99 @@
       <p>正在加载工程</p>
     </section>
 
-    <section v-else-if="projects.length" class="project-grid" data-guide="editor-project-list">
-      <article v-for="item in projects" :key="item.id" class="project-card glass">
-        <button class="project-main" @click="openProject(item.id)">
-          <span class="project-mark"><el-icon><Scissor /></el-icon></span>
-          <span class="project-copy">
-            <span class="project-title">{{ item.title }}</span>
-            <span class="project-meta">
-              <i>{{ fmtTime(item.duration) }}</i>
-              <i>{{ item.tracks }} 轨</i>
-              <i>{{ fmtDate(item.updated_at) }}</i>
-            </span>
-          </span>
-          <el-icon class="project-go"><Right /></el-icon>
-        </button>
-        <button
-          type="button"
-          class="project-export"
-          :disabled="isExporting(item.id)"
-          :aria-label="`导出工程 ${item.title}`"
-          title="导出工程文件"
-          @pointerdown.stop
-          @click.stop.prevent="exportProject(item)"
-        >
-          <el-icon v-if="isExporting(item.id)" class="spin"><Refresh /></el-icon>
-          <el-icon v-else><Download /></el-icon>
-        </button>
-        <button
-          type="button"
-          class="project-delete"
-          :class="{ deleting: isDeleting(item.id) }"
-          :disabled="isDeleting(item.id)"
-          :aria-label="`删除工程 ${item.title}`"
-          title="删除工程"
-          @pointerdown.stop
-          @click.stop.prevent="deleteProject(item)"
-        >
-          <el-icon v-if="isDeleting(item.id)" class="spin"><Refresh /></el-icon>
-          <el-icon v-else><Delete /></el-icon>
-        </button>
-      </article>
-    </section>
+    <template v-else>
+      <section v-if="!projects.length" class="empty-panel glass" data-guide="editor-project-empty">
+        <el-icon><Headset /></el-icon>
+        <p>暂无编辑工程</p>
+        <el-button round class="cta-btn" @click="importAudio">
+          <el-icon class="el-icon--left"><FolderAdd /></el-icon>导入音频
+        </el-button>
+      </section>
 
-    <section v-else class="empty-panel glass" data-guide="editor-project-empty">
-      <el-icon><Headset /></el-icon>
-      <p>暂无编辑工程</p>
-      <el-button round class="cta-btn" @click="importAudio">
-        <el-icon class="el-icon--left"><FolderAdd /></el-icon>导入音频
-      </el-button>
-    </section>
+      <template v-else>
+        <section v-if="batchMode" class="batch-bar glass">
+          <span class="batch-count">已选择 {{ selectedIds.size }} 个工程</span>
+          <el-button round class="ghost-btn" @click="toggleSelectAll">{{ allFilteredSelected ? '取消全选' : '全选当前' }}</el-button>
+          <el-button
+            round
+            class="danger-btn"
+            :disabled="!selectedIds.size || batchDeleting"
+            :loading="batchDeleting"
+            @click="deleteSelected"
+          >
+            <el-icon v-if="!batchDeleting" class="el-icon--left"><Delete /></el-icon>删除选中
+          </el-button>
+        </section>
+
+        <section v-if="!filteredProjects.length" class="empty-panel glass">
+          <el-icon><Search /></el-icon>
+          <p>没有匹配的工程</p>
+          <el-button round class="ghost-btn" @click="search = ''">清除搜索</el-button>
+        </section>
+
+        <section v-else class="project-grid" data-guide="editor-project-list">
+          <article
+            v-for="item in filteredProjects"
+            :key="item.id"
+            class="project-card glass"
+            :class="{ batch: batchMode, selected: selectedIds.has(item.id) }"
+          >
+            <el-checkbox
+              v-if="batchMode"
+              class="project-check"
+              :model-value="selectedIds.has(item.id)"
+              @click.stop
+              @change="toggleSelect(item.id)"
+            />
+            <button class="project-main" @click="onCardClick(item)">
+              <span class="project-mark"><el-icon><Scissor /></el-icon></span>
+              <span class="project-copy">
+                <span class="project-title">{{ item.title }}</span>
+                <span class="project-meta">
+                  <i>{{ fmtTime(item.duration) }}</i>
+                  <i>{{ item.tracks }} 轨</i>
+                  <i>{{ fmtDate(item.updated_at) }}</i>
+                </span>
+              </span>
+              <el-icon class="project-go"><Right /></el-icon>
+            </button>
+            <button
+              v-if="!batchMode"
+              type="button"
+              class="project-export"
+              :disabled="isExporting(item.id)"
+              :aria-label="`导出工程 ${item.title}`"
+              title="导出工程文件"
+              @pointerdown.stop
+              @click.stop.prevent="exportProject(item)"
+            >
+              <el-icon v-if="isExporting(item.id)" class="spin"><Refresh /></el-icon>
+              <el-icon v-else><Download /></el-icon>
+            </button>
+            <button
+              v-if="!batchMode"
+              type="button"
+              class="project-delete"
+              :class="{ deleting: isDeleting(item.id) }"
+              :disabled="isDeleting(item.id)"
+              :aria-label="`删除工程 ${item.title}`"
+              title="删除工程"
+              @pointerdown.stop
+              @click.stop.prevent="deleteProject(item)"
+            >
+              <el-icon v-if="isDeleting(item.id)" class="spin"><Refresh /></el-icon>
+              <el-icon v-else><Delete /></el-icon>
+            </button>
+          </article>
+        </section>
+      </template>
+    </template>
+
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Delete,
@@ -85,9 +138,12 @@ import {
   FolderAdd,
   FolderOpened,
   Headset,
+  Plus,
   Refresh,
   Right,
   Scissor,
+  Search,
+  Select,
 } from '@element-plus/icons-vue'
 import 'element-plus/es/components/message-box/style/css'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -100,6 +156,47 @@ const loading = ref(false)
 const projects = ref<EditorProjectSummary[]>([])
 const deletingIds = ref<Set<string>>(new Set())
 const exportingIds = ref<Set<string>>(new Set())
+const search = ref('')
+const batchMode = ref(false)
+const batchDeleting = ref(false)
+const selectedIds = ref<Set<string>>(new Set())
+
+const filteredProjects = computed(() => {
+  const keyword = search.value.trim().toLowerCase()
+  if (!keyword) return projects.value
+  return projects.value.filter((item) => item.title.toLowerCase().includes(keyword))
+})
+
+const allFilteredSelected = computed(
+  () => filteredProjects.value.length > 0
+    && filteredProjects.value.every((item) => selectedIds.value.has(item.id)),
+)
+
+function toggleBatchMode() {
+  batchMode.value = !batchMode.value
+  if (!batchMode.value) selectedIds.value = new Set()
+}
+
+function toggleSelect(id: string) {
+  const next = new Set(selectedIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedIds.value = next
+}
+
+function toggleSelectAll() {
+  selectedIds.value = allFilteredSelected.value
+    ? new Set()
+    : new Set(filteredProjects.value.map((item) => item.id))
+}
+
+function onCardClick(item: EditorProjectSummary) {
+  if (batchMode.value) {
+    toggleSelect(item.id)
+    return
+  }
+  void openProject(item.id)
+}
 
 function isDeleting(id: string) {
   return deletingIds.value.has(id)
@@ -130,6 +227,8 @@ async function loadProjects() {
   loading.value = true
   try {
     projects.value = await api.listEditorProjects()
+    const alive = new Set(projects.value.map((item) => item.id))
+    selectedIds.value = new Set([...selectedIds.value].filter((id) => alive.has(id)))
   } finally {
     loading.value = false
   }
@@ -141,6 +240,15 @@ async function importAudio() {
   const project = await api.createEditorProjectFromAudio(path)
   if (!project) {
     ElMessage.error('导入音频失败')
+    return
+  }
+  await router.push({ path: '/editor', query: { project: project.id } })
+}
+
+async function createBlank() {
+  const project = await api.createEditorProjectBlank()
+  if (!project) {
+    ElMessage.error('创建空白工程失败')
     return
   }
   await router.push({ path: '/editor', query: { project: project.id } })
@@ -183,6 +291,49 @@ async function openProject(id: string) {
   await router.push({ path: '/editor', query: { project: id } })
 }
 
+async function deleteSelected() {
+  const ids = [...selectedIds.value]
+  if (!ids.length || batchDeleting.value) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除选中的 ${ids.length} 个工程吗？删除后无法从工程列表恢复。原始歌曲和翻唱作品不会删除。`,
+      '批量删除编辑工程？',
+      {
+        confirmButtonText: '删除选中',
+        cancelButtonText: '取消',
+        type: 'warning',
+        customClass: 'editor-delete-confirm',
+      },
+    )
+  } catch {
+    return
+  }
+  batchDeleting.value = true
+  let removed = 0
+  let failed = 0
+  try {
+    for (const id of ids) {
+      try {
+        const ok = await api.deleteEditorProject(id)
+        if (ok) {
+          removed += 1
+          projects.value = projects.value.filter((item) => item.id !== id)
+        } else {
+          failed += 1
+        }
+      } catch {
+        failed += 1
+      }
+    }
+    selectedIds.value = new Set()
+    if (failed === 0) ElMessage.success(`已删除 ${removed} 个工程`)
+    else if (removed === 0) ElMessage.error('删除工程失败，请稍后重试')
+    else ElMessage.warning(`已删除 ${removed} 个工程，${failed} 个失败`)
+    if (failed > 0) await loadProjects()
+  } finally {
+    batchDeleting.value = false
+  }
+}
 async function deleteProject(item: EditorProjectSummary) {
   if (isDeleting(item.id)) return
   try {
@@ -208,6 +359,7 @@ async function deleteProject(item: EditorProjectSummary) {
       return
     }
     projects.value = projects.value.filter((p) => p.id !== item.id)
+    if (selectedIds.value.has(item.id)) toggleSelect(item.id)
     ElMessage.success('已删除编辑工程')
   } catch {
     ElMessage.error('删除工程失败')
@@ -388,6 +540,55 @@ onMounted(loadProjects)
 .project-delete.deleting {
   background: rgba(var(--xb-accent-rgb), 0.14);
 }
+.project-search {
+  width: 220px;
+}
+.project-search :deep(.el-input__wrapper) {
+  border-radius: 999px;
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  box-shadow: none;
+  border: 1px solid var(--xb-border);
+}
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border-radius: 8px;
+}
+.batch-count {
+  margin-right: auto;
+  color: var(--xb-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+.danger-btn {
+  background: rgba(var(--xb-accent-rgb), 0.12) !important;
+  border: 1px solid rgba(var(--xb-accent-rgb), 0.4) !important;
+  color: var(--xb-accent) !important;
+  font-weight: 700;
+}
+.ghost-btn.active {
+  border-color: var(--xb-primary) !important;
+  color: var(--xb-primary) !important;
+}
+.project-card.batch .project-main {
+  padding-left: 52px;
+}
+.project-card.selected {
+  border-color: rgba(var(--xb-primary-rgb), 0.55);
+  box-shadow: 0 0 0 1px rgba(var(--xb-primary-rgb), 0.28) inset;
+}
+.project-card.selected .project-main {
+  background: rgba(var(--xb-primary-rgb), 0.08);
+}
+.project-check {
+  position: absolute;
+  z-index: 3;
+  top: 10px;
+  left: 12px;
+}
 .empty-panel {
   min-height: 360px;
   display: grid;
@@ -495,6 +696,9 @@ onMounted(loadProjects)
   }
   .project-grid {
     grid-template-columns: 1fr;
+  }
+  .project-search {
+    width: 100%;
   }
 }
 </style>

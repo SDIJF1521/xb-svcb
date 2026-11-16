@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 import threading
 import time
 from datetime import datetime
@@ -10,10 +9,22 @@ from pathlib import Path
 from typing import Any
 
 import config
-from domain import JobStatus, Work
-from infrastructure import paths
-from infrastructure.storage import ListRepository, SettingsStore
+from domain import FRAMEWORK_DEFAULT, JobStatus, ModelInfo, Work
+from domain import log_text
+from domain.formatting import file_size_label
+from domain.identity import new_id
+from domain.work_request import (
+    WorkRequestError,
+    check_duplicate_model_ids,
+    check_workflow_mode,
+    default_title,
+    normalize_segments,
+    require_multi_selection,
+    require_seedvc_reference,
+)
+from domain.workflow_graph import NODE_LABELS, topological_order, validate_graph
 
+from .adapters import ensure_data_dirs, work_files
 from .conversion_service import (
     ConversionService,
     default_steps,
@@ -21,6 +32,11 @@ from .conversion_service import (
     default_steps_multi,
 )
 from .model_service import ModelService
+from .ports import ItemRepository, SettingsRepository, WorkFilesPort
+
+# 工作流文件格式标记（导入时据此识别本软件导出的文件）。
+WORKFLOW_FILE_KIND = "xb-cover-workflow"
+WORKFLOW_FILE_VERSION = 1
 
 
 class WorkService:
@@ -31,20 +47,23 @@ class WorkService:
         "auto_then_editor",
         "full_manual_editor",
         "ai_enhancement",
+        "workflow",
     }
     _VOCAL_MERGE_WORKFLOWS = {"auto_vocal_merge", "manual_vocal_merge"}
 
     def __init__(
         self,
-        repo: ListRepository,
+        repo: ItemRepository,
         conversion: ConversionService,
         models: ModelService,
-        settings: SettingsStore,
+        settings: SettingsRepository,
+        files: WorkFilesPort | None = None,
     ) -> None:
         self._repo = repo
         self._conversion = conversion
         self._models = models
         self._settings = settings
+        self._files = files or work_files()
         self._realtime_lock = threading.Lock()
 
     def list(self) -> list[dict[str, Any]]:
@@ -85,19 +104,21 @@ class WorkService:
                 existing = self._repo.get(existing_id)
                 if existing:
                     return self._view(existing)
-            work_id = paths.new_id("wrk_")
-            work_dir = config.WORKS_DIR / work_id
+            work_id = new_id("wrk_")
+            work_dir = self._files.work_dir(work_id)
             artifact_dir = work_dir / "realtime"
             try:
                 work_dir.mkdir(parents=True, exist_ok=False)
-                shutil.copytree(session_dir, artifact_dir)
+                copied = self._files.copy_tree(session_dir, artifact_dir)
             except OSError:
-                shutil.rmtree(work_dir, ignore_errors=True)
+                copied = False
+            if not copied:
+                self._files.remove_tree(work_dir)
                 return None
 
             archived_output = artifact_dir / output.name
             if not archived_output.is_file():
-                shutil.rmtree(work_dir, ignore_errors=True)
+                self._files.remove_tree(work_dir)
                 return None
             names = [str(item).strip() for item in (status.get("model_names") or []) if str(item).strip()]
             model_label = "、".join(names) if names else "实时翻唱"
@@ -111,7 +132,7 @@ class WorkService:
                 "progress": 100,
                 "duration": self._format_duration(seconds),
                 "format": archived_output.suffix.lstrip(".").upper() or "WAV",
-                "size": paths.file_size_label(archived_output),
+                "size": file_size_label(archived_output),
                 "created_at": datetime.now().isoformat(timespec="seconds"),
                 "source_path": status.get("source_path"),
                 "output_path": str(archived_output),
@@ -154,9 +175,9 @@ class WorkService:
             known = {str(item.get("id") or "") for item in self._repo.all()}
             if not base.exists():
                 return
-            for child in base.iterdir():
+            for child in self._files.list_entries(base):
                 if child.is_dir() and child.name.startswith("wrk_") and child.name not in known:
-                    shutil.rmtree(child, ignore_errors=True)
+                    self._files.remove_tree(child)
         except OSError:
             return
 
@@ -174,7 +195,7 @@ class WorkService:
                 if item.get("realtime_session_id")
             }
             cache_suffixes = ("_output.mp3", "_instrumental.mp3", "_vocals.mp3")
-            for candidate in temp_root.iterdir():
+            for candidate in self._files.list_entries(temp_root):
                 if not candidate.is_file():
                     continue
                 suffix = next((item for item in cache_suffixes if candidate.name.endswith(item)), "")
@@ -188,7 +209,7 @@ class WorkService:
             if not realtime_root.is_dir():
                 return
             stale_before = time.time() - 6 * 60 * 60
-            for session_dir in realtime_root.iterdir():
+            for session_dir in self._files.list_entries(realtime_root):
                 if (
                     not session_dir.is_dir()
                     or not session_dir.name.startswith("live_")
@@ -197,7 +218,7 @@ class WorkService:
                     continue
                 # 未归档的实时任务没有作品记录；只清理长期未更新的目录，保护活跃会话。
                 if session_dir.stat().st_mtime < stale_before:
-                    shutil.rmtree(session_dir, ignore_errors=True)
+                    self._files.remove_tree(session_dir)
         except (OSError, RuntimeError):
             return
 
@@ -209,9 +230,61 @@ class WorkService:
         """根据前端配置创建翻唱任务并启动后台处理。"""
         if str((payload or {}).get("workflow") or "") == "ai_enhancement":
             return self._create_ai_enhancement(payload or {})
+        if (payload or {}).get("mode") == "workflow":
+            return self._create_workflow(payload or {})
         if (payload or {}).get("mode") == "multi":
             return self._create_multi(payload or {})
         return self._create_single(payload or {})
+
+    def validate_request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """严格校验并归一化任务创建请求（桌面桥与 HTTP 共用同一套规则）。
+
+        ``create`` 保持宽容摄取（跳过失效模型/分句，兼容旧客户端数据），
+        本方法则把非法请求挡在用例边界之外，规则本身位于 ``domain.work_request``。
+        """
+        data = dict(payload or {})
+        mode = str(data.get("mode") or "single")
+        workflow = str(data.get("workflow") or "auto_mix")
+        data["title"] = default_title(data.get("title"), data.get("source_path"))
+
+        if mode == "multi":
+            entries = [dict(entry or {}) for entry in data.get("models") or []]
+            segments = list(data.get("segments") or [])
+            require_multi_selection(entries, segments)
+            check_duplicate_model_ids(
+                [str(entry.get("model_id") or "") for entry in entries]
+            )
+            resolved: dict[str, dict[str, Any]] = {}
+            normalized_entries: list[dict[str, Any]] = []
+            for entry in entries:
+                model_id = str(entry.get("model_id") or "")
+                model = self._models.get(model_id) if model_id else None
+                if not model:
+                    raise WorkRequestError(f"模型不存在：{model_id}", not_found=True)
+                params = dict(entry.get("params") or {})
+                require_seedvc_reference(
+                    model,
+                    params,
+                    f"SeedVC 模型 {model_id} 需要 reference_upload_id",
+                )
+                resolved[model_id] = model
+                normalized_entries.append({"model_id": model_id, "params": params})
+            data["models"] = normalized_entries
+            data["segments"] = normalize_segments(segments, resolved)
+            return data
+
+        check_workflow_mode(workflow, mode)
+        model_id = str(data.get("model_id") or self._models.default_id() or "")
+        model = self._models.get(model_id) if model_id else None
+        if not model:
+            raise WorkRequestError("未找到可用模型，请提供有效 model_id", not_found=True)
+        data["model_id"] = model_id
+        require_seedvc_reference(
+            model,
+            data.get("params") or {},
+            "SeedVC 任务需要 reference_upload_id 或 params.reference_audio",
+        )
+        return data
 
     def create_batch(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         """批量创建单模型翻唱任务，任务会进入串行推理队列。"""
@@ -247,13 +320,31 @@ class WorkService:
         rows.sort(key=lambda x: str(x.get("finished_at") or ""), reverse=True)
         return rows[: max(1, int(limit or 50))]
 
+    def log_path(self, work_id: str) -> Path | None:
+        """解析作品的日志路径：优先使用记录中的 ``log_path``，否则回落到工作目录。"""
+        if not work_id:
+            return None
+        work = self._repo.get(work_id)
+        recorded = str((work or {}).get("log_path") or "").strip()
+        if recorded:
+            return self._files.log_path(work_id, recorded)
+        return self._files.work_dir(work_id)
+
+    def read_log(self, work_id: str, tail: int = 300) -> str:
+        """读取作品运行日志的末尾若干行，供前端实时显示执行流程。"""
+        work = self._repo.get(work_id)
+        recorded = str((work or {}).get("log_path") or "").strip()
+        target = self._files.log_path(work_id, recorded or None)
+        limit = max(1, min(2000, int(tail or 300)))
+        return self._files.read_text_tail(target, limit)
+
     def list_presets(self) -> list[dict[str, Any]]:
         return list(self._settings.get("inference_presets", []) or [])
 
     def save_preset(self, name: str, params: dict[str, Any]) -> dict[str, Any]:
         presets = self.list_presets()
         preset = {
-            "id": paths.new_id("pre_"),
+            "id": new_id("pre_"),
             "name": (name or "未命名预设").strip() or "未命名预设",
             "params": params or {},
             "updated_at": datetime.now().isoformat(timespec="seconds"),
@@ -269,6 +360,85 @@ class WorkService:
         self._settings.set("inference_presets", next_presets)
         return len(next_presets) != len(presets)
 
+    # ---- 自定义翻唱工作流 ----
+    def list_workflows(self) -> list[dict[str, Any]]:
+        return list(self._settings.get("cover_workflows", []) or [])
+
+    def save_workflow(self, name: str, graph: dict[str, Any]) -> dict[str, Any]:
+        """保存（新建或按 id 覆盖）一个自定义翻唱工作流。"""
+        error = validate_graph(graph or {})
+        if error:
+            raise ValueError(error)
+        workflows = self.list_workflows()
+        existing_id = str((graph or {}).get("id") or "").strip()
+        display_name = (name or "未命名工作流").strip() or "未命名工作流"
+        # 重名会让列表里出现两条同名工作流、导出时也分不清；自动加序号保证唯一。
+        others = [w for w in workflows if str(w.get("id") or "") != existing_id]
+        display_name = self._unique_workflow_name(display_name, others)
+        workflow = {
+            "id": existing_id or new_id("wf_"),
+            "name": display_name,
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "nodes": (graph or {}).get("nodes") or [],
+            "edges": (graph or {}).get("edges") or [],
+        }
+        workflows = [w for w in workflows if w.get("id") != workflow["id"]]
+        workflows.insert(0, workflow)
+        self._settings.set("cover_workflows", workflows[:50])
+        return workflow
+
+    @staticmethod
+    def _unique_workflow_name(name: str, workflows: list[dict[str, Any]]) -> str:
+        """同名时追加 (2)、(3)… 直到唯一。"""
+        names = {str(w.get("name") or "").strip() for w in workflows}
+        if name not in names:
+            return name
+        index = 2
+        while f"{name} ({index})" in names:
+            index += 1
+        return f"{name} ({index})"
+
+    def delete_workflow(self, workflow_id: str) -> bool:
+        workflows = self.list_workflows()
+        next_workflows = [w for w in workflows if w.get("id") != workflow_id]
+        self._settings.set("cover_workflows", next_workflows)
+        return len(next_workflows) != len(workflows)
+
+    @staticmethod
+    def workflow_file_payload(graph: dict[str, Any]) -> dict[str, Any]:
+        """导出工作流文件的内容（带格式标记，方便将来兼容升级）。"""
+        graph = graph or {}
+        return {
+            "kind": WORKFLOW_FILE_KIND,
+            "version": WORKFLOW_FILE_VERSION,
+            "app": "XB-SVCB",
+            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "name": str(graph.get("name") or "未命名工作流").strip() or "未命名工作流",
+            "nodes": list(graph.get("nodes") or []),
+            "edges": list(graph.get("edges") or []),
+        }
+
+    @staticmethod
+    def parse_workflow_file(data: Any) -> dict[str, Any]:
+        """解析工作流文件，返回可直接载入画布的 graph；非法时抛 ValueError。"""
+        if not isinstance(data, dict):
+            raise ValueError("工作流文件格式不正确")
+        nodes = data.get("nodes")
+        edges = data.get("edges")
+        if not isinstance(nodes, list) or not isinstance(edges, list):
+            raise ValueError("工作流文件缺少节点或连线数据")
+        graph = {
+            "id": "",
+            "name": str(data.get("name") or "导入的工作流").strip() or "导入的工作流",
+            "updated_at": "",
+            "nodes": nodes,
+            "edges": edges,
+        }
+        problem = validate_graph(graph)
+        if problem:
+            raise ValueError(f"工作流文件无效：{problem}")
+        return graph
+
     def _create_single(self, payload: dict[str, Any]) -> dict[str, Any]:
         model_id = payload.get("model_id") or self._models.default_id()
         model = self._models.get(model_id) if model_id else None
@@ -277,15 +447,10 @@ class WorkService:
         vocal_enhancement = self._vocal_enhancement(payload, workflow)
         preprocess = self._preprocess(payload)
 
-        title = payload.get("title")
-        if not title:
-            if source_path:
-                title = Path(source_path).stem
-            else:
-                title = "未命名翻唱"
+        title = default_title(payload.get("title"), source_path)
 
         work = Work(
-            id=paths.new_id("wrk_"),
+            id=new_id("wrk_"),
             title=f"{title} (AI 翻唱)",
             model=model["name"] if model else "默认模型",
             model_id=model_id or "",
@@ -310,6 +475,7 @@ class WorkService:
         )
         record = work.to_dict()
         record.update(self._resolve_model_paths(model))
+        record["ui_locale"] = self._ui_locale(payload)
         self._repo.add(record)
         self._conversion.start(work.id)
         return self._view(record)
@@ -336,7 +502,7 @@ class WorkService:
         settings["enabled"] = True
         title = str(payload.get("title") or (parent or {}).get("title") or target_output.stem).strip()
         work = Work(
-            id=paths.new_id("wrk_"),
+            id=new_id("wrk_"),
             title=f"{title} (AI 增强)",
             model=f"{(parent or {}).get('model') or '导入音频'} · AI 增强",
             model_id=str((parent or {}).get("model_id") or ""),
@@ -367,6 +533,7 @@ class WorkService:
                 "target_instrumental_path": str((parent or {}).get("instrumental_path") or ""),
             }
         )
+        record["ui_locale"] = self._ui_locale(payload)
         self._repo.add(record)
         self._conversion.start(work.id)
         return self._view(record)
@@ -374,9 +541,7 @@ class WorkService:
     def _create_multi(self, payload: dict[str, Any]) -> dict[str, Any]:
         """创建多模型混合翻唱任务：每句歌词指派给不同模型。"""
         source_path = payload.get("source_path")
-        title = payload.get("title") or (
-            Path(source_path).stem if source_path else "未命名翻唱"
-        )
+        title = default_title(payload.get("title"), source_path)
 
         # 收集本次用到的模型及其各自参数（解析为可推理的本地路径）
         workflow = self._workflow(payload, mode="multi")
@@ -475,7 +640,7 @@ class WorkService:
         )
 
         work = Work(
-            id=paths.new_id("wrk_"),
+            id=new_id("wrk_"),
             title=f"{title} (混合翻唱)",
             model=model_label,
             model_id=next(iter(seg_models), ""),
@@ -500,9 +665,89 @@ class WorkService:
         )
         record = work.to_dict()
         record["seg_models"] = seg_models
+        record["ui_locale"] = self._ui_locale(payload)
         self._repo.add(record)
         self._conversion.start(work.id)
         return self._view(record)
+
+    def _create_workflow(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """创建自定义工作流翻唱任务：解析节点图并把每个歌声转换节点解析为可推理模型。"""
+        graph = payload.get("workflow_graph") or {}
+        error = validate_graph(graph)
+        if error:
+            raise ValueError(error)
+
+        source_path = payload.get("source_path")
+        title = default_title(payload.get("title"), source_path)
+        workflow_name = str(graph.get("name") or "自定义工作流").strip() or "自定义工作流"
+
+        # 为每个「歌声转换」节点解析出可推理的模型路径与框架。
+        workflow_models: dict[str, Any] = {}
+        for node in graph.get("nodes") or []:
+            if str(node.get("type") or "") != "convert":
+                continue
+            raw_params = dict(node.get("params") or {})
+            model_id = str(raw_params.get("model_id") or "").strip()
+            if not model_id:
+                continue
+            model = self._models.get(model_id)
+            if not model:
+                continue
+            model_params = {k: v for k, v in raw_params.items() if k != "model_id"}
+            model_params = ModelService.apply_detected_rvc_version(model, model_params)
+            workflow_models[str(node.get("id") or "")] = {
+                "name": model.get("name", model_id),
+                "model_id": model_id,
+                "params": model_params,
+                **self._resolve_model_paths(model),
+            }
+
+        nodes = graph.get("nodes") or []
+        node_by_id = {str(node.get("id") or ""): node for node in nodes}
+        order = topological_order(nodes, graph.get("edges") or []) or [
+            str(node.get("id") or "") for node in nodes
+        ]
+        steps = [
+            {
+                "key": node_id,
+                "label": NODE_LABELS.get(
+                    str((node_by_id.get(node_id) or {}).get("type") or ""),
+                    "节点",
+                ),
+                "status": "wait",
+            }
+            for node_id in order
+        ]
+
+        work = Work(
+            id=new_id("wrk_"),
+            title=title,
+            model=f"自定义工作流 · {workflow_name}",
+            model_id="",
+            status=JobStatus.QUEUE.value,
+            progress=0,
+            duration="—",
+            format="—",
+            size="—",
+            created_at=datetime.now().isoformat(timespec="seconds"),
+            source_path=source_path,
+            params=payload.get("params", {}) or {},
+            steps=steps,
+            workflow="workflow",
+            mode="workflow",
+        )
+        record = work.to_dict()
+        record["workflow_graph"] = graph
+        record["workflow_models"] = workflow_models
+        record["ui_locale"] = self._ui_locale(payload)
+        self._repo.add(record)
+        self._conversion.start(work.id)
+        return self._view(record)
+
+    @staticmethod
+    def _ui_locale(payload: dict[str, Any]) -> str:
+        """记录创建任务时的界面语言，运行日志按它翻译。"""
+        return log_text.normalize_locale((payload or {}).get("ui_locale"))
 
     @classmethod
     def _workflow(cls, payload: dict[str, Any], mode: str = "single") -> str:
@@ -574,12 +819,12 @@ class WorkService:
     def _resolve_model_paths(model: dict[str, Any] | None) -> dict[str, Any]:
         """从模型记录提取推理所需的文件路径与框架标识。
 
-        返回含 ``framework``（路由引擎用）、so-vits / SeedVC 的 main/config 路径、
-        RVC 的 ``index_path``；推理引擎按 ``framework`` 各取所需。
+        映射规则由领域实体 ``ModelInfo.engine_paths`` 统一提供；这里只补充
+        作品记录需要的附加字段 ``model_metadata``。
         """
         if not model:
             return {
-                "framework": config.MODELHUB_DEFAULT_FRAMEWORK,
+                "framework": FRAMEWORK_DEFAULT,
                 "main_model_path": "",
                 "main_config_path": "",
                 "diffusion_model_path": "",
@@ -587,18 +832,8 @@ class WorkService:
                 "index_path": "",
                 "model_metadata": {},
             }
-        framework = config.modelhub_normalize_framework(
-            model.get("framework") or config.modelhub_guess_framework(model.get("type"))
-        )
-        return {
-            "framework": framework,
-            "main_model_path": (model.get("main_model") or {}).get("path", ""),
-            "main_config_path": (model.get("main_config") or {}).get("path", ""),
-            "diffusion_model_path": (model.get("diffusion_model") or {}).get("path", ""),
-            "diffusion_config_path": (model.get("diffusion_config") or {}).get("path", ""),
-            "index_path": (model.get("index_file") or {}).get("path", ""),
-            "model_metadata": model.get("metadata") or {},
-        }
+        info = ModelInfo.from_dict(model)
+        return {**info.engine_paths(), "model_metadata": model.get("metadata") or {}}
 
     def retry(self, work_id: str) -> bool:
         work = self._repo.get(work_id)
@@ -607,7 +842,17 @@ class WorkService:
         # 实时翻唱的归档记录没有普通转换任务所需的推理参数，不能按常规任务重跑。
         if work.get("workflow") == "realtime_cover":
             return False
-        if work.get("mode") == "multi":
+        if work.get("mode") == "workflow":
+            for node_id, entry in (work.get("workflow_models") or {}).items():
+                model_id = str(entry.get("model_id") or "")
+                model = self._models.get(model_id) if model_id else None
+                if not model or not isinstance(entry, dict):
+                    continue
+                entry.update(self._resolve_model_paths(model))
+                entry["params"] = ModelService.apply_detected_rvc_version(
+                    model, entry.get("params") or {}
+                )
+        elif work.get("mode") == "multi":
             for model_id, entry in (work.get("seg_models") or {}).items():
                 model = self._models.get(str(model_id))
                 if not model or not isinstance(entry, dict):
@@ -637,6 +882,24 @@ class WorkService:
         )
         if work.get("workflow") == "ai_enhancement":
             work["steps"] = default_steps_ai_enhancement()
+        elif work.get("mode") == "workflow":
+            wf_graph = work.get("workflow_graph") or {}
+            wf_nodes = wf_graph.get("nodes") or []
+            wf_by_id = {str(node.get("id") or ""): node for node in wf_nodes}
+            wf_order = topological_order(wf_nodes, wf_graph.get("edges") or []) or [
+                str(node.get("id") or "") for node in wf_nodes
+            ]
+            work["steps"] = [
+                {
+                    "key": node_id,
+                    "label": NODE_LABELS.get(
+                        str((wf_by_id.get(node_id) or {}).get("type") or ""),
+                        "节点",
+                    ),
+                    "status": "wait",
+                }
+                for node_id in wf_order
+            ]
         else:
             work["steps"] = (
                 default_steps_multi(enhancement_enabled, preprocess_enabled, harmony_enabled)
@@ -688,23 +951,21 @@ class WorkService:
         self._purge_work_cache(work_id, work)
         return True
 
-    @staticmethod
-    def _purge_work_dir(work_id: str) -> None:
+    def _purge_work_dir(self, work_id: str) -> None:
         """删除作品目录（校验其确实位于 WORKS_DIR 内，避免误删任意路径）。"""
         if not work_id:
             return
         try:
             base = config.WORKS_DIR.resolve()
-            target = (config.WORKS_DIR / work_id).resolve()
+            target = self._files.work_dir(work_id).resolve()
         except OSError:
             return
         # 仅允许删除 WORKS_DIR 下的子目录，防止 work_id 含 .. 等导致越界
         if target.parent != base or not target.exists():
             return
-        shutil.rmtree(target, ignore_errors=True)
+        self._files.remove_tree(target)
 
-    @staticmethod
-    def _purge_work_cache(work_id: str, work: dict[str, Any] | None = None) -> None:
+    def _purge_work_cache(self, work_id: str, work: dict[str, Any] | None = None) -> None:
         """删除作品关联的试听缓存和实时会话目录，不触碰用户导出的文件。"""
         if not work_id:
             return
@@ -726,7 +987,7 @@ class WorkService:
         session_dir = realtime_base / session_id
         try:
             if session_dir.parent == realtime_base and session_dir.is_dir():
-                shutil.rmtree(session_dir, ignore_errors=True)
+                self._files.remove_tree(session_dir)
         except OSError:
             return
 

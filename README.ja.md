@@ -21,6 +21,7 @@ AIカバー制作の全工程を一つのワークフローで実行できます
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](#)
 [![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
 [![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
+[![main](https://github.com/SDIJF1521/xb-svcb/actions/workflows/main.yml/badge.svg?branch=dev)](https://github.com/SDIJF1521/xb-svcb/actions/workflows/main.yml)
 
 ### [ModelScope版オンラインインストーラー: CPU / AMD / NVIDIA を自動選択](https://github.com/SDIJF1521/xb-svcb/releases/latest)
 
@@ -40,7 +41,7 @@ AIカバー制作の全工程を一つのワークフローで実行できます
 <div align="center">
   <img src="docs/images/xb-svcb-app-ja.png" width="100%" alt="XB-SVCB AIカバー制作画面の日本語表示" />
   <br/>
-  <sub>XB-SVCB 0.1.0 · 日本語で表示した実際のAIカバー制作画面</sub>
+  <sub>XB-SVCB 0.1.1 · 日本語で表示した実際のAIカバー制作画面</sub>
 </div>
 
 ## 概要
@@ -53,9 +54,9 @@ So-VITS-SVC、RVC、SeedVC、DDSP-SVCをサポートしています。また、U
 
 - ボーカル分離、残響除去、F0解析、歌声変換、強化、ミックスを一つのワークフローで実行。
 - So-VITS-SVC、RVC、SeedVC、DDSP-SVCモデルを統合管理し、フレームワーク別の推論パラメーターを設定。
-- モデルの音域を外れた箇所を自動検出し、部分的なピッチ調整と再推論によって高音を保護。
+- モデルの音域を外れた箇所を自動検出し、部分的なピッチ調整と再推論によって高音を保護。原音程へ戻した後、確定した高音区間の超高域はSnake-HiFiGAN / NSF-HiFiGAN高音ボコーダーで再合成し、PSOLA由来の息混じり感と倍音欠落を補います。
 - 歌詞または無音検出で楽曲を分割し、タイムライン上でモデルを割り当てて複数歌手や合唱のカバーを制作。
-- Audio Editor Liteでマルチトラック編集、カット、フェード、チャンネル設定、エフェクト処理、WAV / MP3 / FLAC書き出し。
+- Audio Editor Liteでマルチトラック編集、カット、フェード、チャンネル設定、エフェクト処理、WAV / MP3 / FLAC書き出し。内蔵のMIDIサブエディター（ピアノロール）でクリップの音程を音符単位で編集でき、試聴は常にMIDI音源ではなくクリップ音声を再生します。
 - TXT / LRC歌詞の読み込み、役割管理、ソロ・デュエット・ハーモニー用テンプレート。
 - WASAPIループバックまたはVB-CABLEを利用し、伴奏を保ったままプレイヤー音声をリアルタイム変換。
 - ModelScopeでのモデル検索、アップロード、ダウンロード、バックグラウンド転送、再開、マニフェスト検証。
@@ -68,7 +69,7 @@ So-VITS-SVC、RVC、SeedVC、DDSP-SVCをサポートしています。また、U
 
 ### インストーラーを使う
 
-通常の利用では、GitHub Releasesの最新版からModelScope版`XB-SVCB-Online-Setup-ModelScope.exe`をダウンロードしてください。このインストーラーはModelScopeの`v0.1.0`リビジョンから検証済みオフラインパッケージを取得します。予備版`XB-SVCB-Online-Setup.exe`はGitHubで公開しないため、必要な場合は開発者から個別に入手してください。
+通常の利用では、GitHub Releasesの最新版からModelScope版`XB-SVCB-Online-Setup-ModelScope.exe`をダウンロードしてください。このインストーラーはModelScopeの`v0.1.1`リビジョンから検証済みオフラインパッケージを取得します。予備版`XB-SVCB-Online-Setup.exe`はGitHubで公開しないため、必要な場合は開発者から個別に入手してください。
 
 1. オンラインインストーラーを実行し、自動検出を使用するか、CPU、ROCm 10、DirectML、CUDA126、CUDA128を手動で選択します。
 2. 対応する完全パッケージのダウンロードとSHA-256検証が完了したら、アプリケーションのインストール先とユーザーデータの保存先を選択します。
@@ -180,7 +181,7 @@ FastAPIは既定で無効です。アプリの「資料庫 → API接入」を�
 xb-svcb/
 ├─ app/               Pythonバックエンド、サービス、アダプター、テスト
 ├─ web/               Vue 3 + Viteフロントエンド
-├─ engines/           So-VITS-SVC、SeedVC、DDSP-SVCなどのエンジン
+├─ engines/           So-VITS-SVC、RVC（公式inferスタック）、SeedVC、DDSP-SVCなどのエンジン
 ├─ assets/            同梱モデル、ツール、オフラインwheelhouse
 ├─ install/           環境構築・モデル配置スクリプト
 ├─ installer/         PyInstaller / Inno Setupパッケージ
@@ -224,11 +225,11 @@ npm run build
 
 ## ロードマップ
 
-現在のバージョン: **v0.1.0**
+現在のバージョン: **v0.1.1**
 
 複数フレームワークでの推論、タイムライン式の複数歌手カバー、Audio Editor Lite、ModelScopeモデルハブ、FastAPI連携、CUDA / ROCm 10 / DirectML / CPU対応、プラグインランタイムは実装済みです。今後は歌詞の自動認識とタイムライン生成、モデルメタデータの標準化、プロジェクトの入出力と自動保存、対応フレームワークの追加、動画・歌詞動画の書き出し、Intel GPU / CPU / マルチGPUの最適化に取り組みます。
 
-全バージョンの履歴は[リリースノート](docs/release-notes/)を参照してください。現行版は[v0.1.0リリースノート](docs/release-notes/release_notes_v0_1_0.ja.md)で確認できます。
+全バージョンの履歴は[リリースノート](docs/release-notes/)を参照してください。現行版は[v0.1.1リリースノート](docs/release-notes/release_notes_v0_1_1.ja.md)で確認できます。
 
 ## コントリビューター
 
@@ -241,10 +242,10 @@ XB-SVCB の開発と保守に参加してくださったすべての皆様に感
 ## 謝辞
 
 - 同梱・デモ用音声モデルの大部分は**白菜工厂1145号员工**氏から提供されました。モデルの著作権は各作者に帰属します。各モデルのライセンスまたは許諾範囲内で使用してください。
-- XB-SVCBは、[so-vits-svc](https://github.com/svc-develop-team/so-vits-svc)、[rvc-python](https://github.com/daswer123/rvc-python)、[Seed-VC](https://github.com/Plachtaa/seed-vc)、[DDSP-SVC](https://github.com/yxlllc/DDSP-SVC)、[Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)、[DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)、[Pedalboard](https://github.com/spotify/pedalboard)、[ModelScope](https://www.modelscope.cn/)などのプロジェクトを利用しています。
+- XB-SVCBは、[so-vits-svc](https://github.com/svc-develop-team/so-vits-svc)、[RVC / Retrieval-based-Voice-Conversion-WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)、[Seed-VC](https://github.com/Plachtaa/seed-vc)、[DDSP-SVC](https://github.com/yxlllc/DDSP-SVC)、[Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui)、[DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)、[Pedalboard](https://github.com/spotify/pedalboard)、[ModelScope](https://www.modelscope.cn/)などのプロジェクトを利用しています。
 
 ## ライセンス
 
 本プロジェクトが独自に作成したソースコードは、**[GNU General Public License v3.0 only](LICENSE)**で提供されます。Copyright © 2026 SDIJF1521。
 
-同梱するサードパーティ製コンポーネント、モデル、リソースには、それぞれ元のライセンスが適用されます。特にso-vits-svc 4.1はAGPL-3.0、DDSP-SVC 6.3はMIT Licenseです。基本モデルとUVRモデルにも各上流プロジェクトの条件が適用され、GPL-3.0-onlyがそれらを置き換えることはありません。
+同梱するサードパーティ製コンポーネント、モデル、リソースには、それぞれ元のライセンスが適用されます。特にso-vits-svc 4.1はAGPL-3.0、DDSP-SVC 6.3はMIT License、同梱のRVC推論スタックもMIT Licenseです。基本モデルとUVRモデルにも各上流プロジェクトの条件が適用され、GPL-3.0-onlyがそれらを置き換えることはありません。

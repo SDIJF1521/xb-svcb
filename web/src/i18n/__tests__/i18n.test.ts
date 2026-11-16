@@ -5,6 +5,7 @@ import {
   applyStoredLocaleBeforeMount,
   setLocale,
   translate,
+  translateLogText,
   translateUiText,
 } from '@/i18n'
 
@@ -135,6 +136,36 @@ describe('application localization', () => {
     expect(translateUiText('昨天 16:00')).toBe('昨日 16:00')
   })
 
+  it('translates realtime voice changer, PyMSS and VB-CABLE copy', () => {
+    const cableNote =
+      'VB-CABLE：输入用麦克风时，输出可直接选“CABLE Output”；应用会自动写入同一条虚拟线的 CABLE Input，OBS/语音软件仍选择 CABLE Output 接收。'
+
+    setLocale('en-US')
+    expect(translateUiText('混合音频 · 保留伴奏')).toBe('Mixed Audio · Keep Instrumental')
+    expect(translateUiText('纯人声 · 直播低延迟')).toBe('Dry Vocal · Live Low Latency')
+    expect(translateUiText('人声分离引擎')).toBe('Vocal Separation Engine')
+    expect(translateUiText('端到端延迟')).toBe('End-to-end Latency')
+    expect(translateUiText('1.50 秒')).toBe('1.50 s')
+    expect(translateUiText('1 块 · 0.50 秒')).toBe('Blocks 1 · 0.50 s')
+    expect(translateUiText('实时播放已停止')).toBe('Realtime playback stopped')
+    expect(translateUiText('实时音频来源')).toBe('Realtime Audio Source')
+    expect(translateUiText('+2 半音')).toBe('+2 semitones')
+    expect(translateUiText('4 步')).toBe('4 steps')
+    expect(translateUiText('自动 · v2')).toBe('Auto · v2')
+    expect(translateUiText(cableNote)).toContain('CABLE Output')
+    expect(translateUiText(cableNote)).not.toBe(cableNote)
+
+    setLocale('ja-JP')
+    expect(translateUiText('纯人声 · 直播低延迟')).toBe('ドライボーカル · 低遅延ライブ')
+    expect(translateUiText('处理负载')).toBe('処理負荷')
+    expect(translateUiText('1.50 秒')).toBe('1.50秒')
+    expect(translateUiText('1 块 · 0.50 秒')).toBe('ブロック 1 · 0.50秒')
+    expect(translateUiText('实时播放已停止')).toBe('リアルタイム再生を停止しました')
+    expect(translateUiText('实时音频来源')).toBe('リアルタイム音声ソース')
+    expect(translateUiText('+2 半音')).toBe('+2半音')
+    expect(translateUiText('4 步')).toBe('4ステップ')
+  })
+
   it('persists the selected locale and updates the document language', async () => {
     setLocale('ja-JP')
     await nextTick()
@@ -143,5 +174,79 @@ describe('application localization', () => {
 
     applyStoredLocaleBeforeMount()
     expect(document.documentElement.dataset.locale).toBe('ja-JP')
+  })
+
+  it('localizes backend run logs line by line and keeps the timestamp', () => {
+    const log = [
+      '[12:00:00] 源文件: C:/music/a.wav | 时长: 12.3s | 设备: cuda:0',
+      '[12:00:01]   模型推理完成',
+      '[12:00:02] 任务完成 ✅',
+      '[12:00:02] 本行没有对应译文',
+    ].join('\n')
+
+    setLocale('en-US')
+    const en = translateLogText(log).split('\n')
+    expect(en[0]).toBe('[12:00:00] Source: C:/music/a.wav | Duration: 12.3s | Device: cuda:0')
+    expect(en[1]).toBe('[12:00:01]   Model inference complete')
+    expect(en[2]).toBe('[12:00:02] Task complete ✅')
+    // 没有词条的行原样保留，不影响可读性
+    expect(en[3]).toBe('[12:00:02] 本行没有对应译文')
+
+    setLocale('ja-JP')
+    const ja = translateLogText(log).split('\n')
+    expect(ja[1]).toBe('[12:00:01]   モデル推論が完了しました')
+    expect(ja[2]).toBe('[12:00:02] タスク完了 ✅')
+  })
+
+  it('leaves simplified Chinese logs untouched', () => {
+    setLocale('zh-CN')
+    const log = '[12:00:01]   模型推理完成'
+    expect(translateLogText(log)).toBe(log)
+  })
+
+  it('localizes the workflow run log header and step lines', () => {
+    const log = [
+      '=== My Mix (自定义工作流) ===',
+      '开始时间: 2026-11-13T21:33:39',
+      '工作流: My Flow',
+      '[21:33:39] [1/11] 输入音频 开始',
+      '[21:33:39]   源音频已统一转码: source.wav',
+      '[21:33:39] [2/11] 人声分离 开始',
+    ].join('\n')
+
+    setLocale('en-US')
+    const en = translateLogText(log).split('\n')
+    expect(en[0]).toBe('=== My Mix (custom workflow) ===')
+    expect(en[1]).toBe('Started at: 2026-11-13T21:33:39')
+    // 工作流名是用户数据，不翻译
+    expect(en[2]).toBe('Workflow: My Flow')
+    expect(en[3]).toBe('[21:33:39] [1/11] Input audio started')
+    expect(en[4]).toBe('[21:33:39]   Source audio transcoded: source.wav')
+    expect(en[5]).toBe('[21:33:39] [2/11] Vocal separation started')
+
+    setLocale('ja-JP')
+    const ja = translateLogText(log).split('\n')
+    expect(ja[0]).toBe('=== My Mix（カスタムワークフロー）===')
+    expect(ja[1]).toBe('開始時間：2026-11-13T21:33:39')
+  })
+
+  it('localizes the workflow canvas hints and toasts', () => {
+    setLocale('en-US')
+    expect(
+      translateUiText(
+        '点击节点右上角 ⚙ 打开设置 · 右键菜单可复制 / 粘贴 / 断开连线 · 点击连线可删除',
+      ),
+    ).toContain('to delete it')
+    expect(translateUiText('已断开 2 条连线')).toBe('Disconnected 2 connections')
+    expect(translateUiText('已按乐器生成 3 条音轨，可直接播放或调整音量/效果')).toBe(
+      'Generated 3 instrument tracks; play them directly or adjust volume and effects',
+    )
+    expect(translateUiText('1.25x 速度')).toBe('1.25x speed')
+    // 作品名 / 模型名属于用户数据，不能被改写
+    expect(translateUiText('确定删除「My Song」吗？')).toBe('Delete “My Song”?')
+
+    setLocale('ja-JP')
+    expect(translateUiText('已保存工作流')).toBe('保存済みワークフロー')
+    expect(translateUiText('打开设置')).toBe('設定を開く')
   })
 })

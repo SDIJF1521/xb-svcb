@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
+import sys
 from pathlib import Path
+from typing import Callable
 
 try:
     from inference_device import ResolvedDevice, configure_torch_inference
@@ -15,8 +18,53 @@ except ImportError:  # package import used by tests/application tooling
         configure_torch_inference,
     )
 
+try:
+    from pymss_catalog_meta import resolve_output_stems as _resolve_output_stems
+except ImportError:  # package import used by tests/application tooling
+    from infrastructure.pymss_catalog_meta import (
+        resolve_output_stems as _resolve_output_stems,
+    )
+
 
 _AUDIO_SUFFIXES = {".wav", ".flac", ".mp3", ".m4a", ".ogg", ".aiff", ".aif"}
+
+
+def _download_progress_emitter(
+    expected_bytes: int,
+    sink: Callable[[str], None] | None = None,
+) -> Callable[[int, int, str], None]:
+    """Build a PyMSS download progress callback that prints machine-readable lines.
+
+    PyMSS reports ``(done, total, message)`` per file, so the overall percentage
+    has to be derived here: accumulate the largest ``done`` per file and compare
+    it with the catalog's declared model size. Without this the downloader is
+    silent and the UI bar only moves when the whole download finishes.
+    """
+    expected = max(0, int(expected_bytes or 0))
+    seen: dict[str, int] = {}
+
+    def emit(line: str) -> None:
+        if sink is not None:
+            sink(line)
+            return
+        print(line, flush=True)
+
+    def callback(done: int, total: int, message: str) -> None:
+        try:
+            key = str(message or "download")
+            seen[key] = max(seen.get(key, 0), max(0, int(done or 0)))
+            overall = sum(seen.values())
+            if expected > 0:
+                pct = int(min(99, round(overall * 100.0 / expected)))
+            elif int(total or 0) > 0:
+                pct = int(min(99, round(max(0, int(done or 0)) * 100.0 / int(total))))
+            else:
+                pct = -1
+            emit(f"PYMSS_PROGRESS\t{pct}\t{overall}\t{expected}\t{key}")
+        except Exception:  # noqa: BLE001 - progress reporting must never fail a download
+            pass
+
+    return callback
 
 
 def _audio_files(root: Path) -> list[Path]:
@@ -46,26 +94,79 @@ def _audio_stats(path: Path) -> tuple[float, float, int]:
     )
 
 
+def _normalized_name(path: Path) -> str:
+    return path.stem.casefold().replace("_", " ").replace("-", " ")
+
+
+def _has_token(name: str, token: str) -> bool:
+    """整词匹配，避免 primary_stem="male" 也命中 "female"。"""
+    token = str(token or "").strip()
+    if not token:
+        return False
+    return re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", name) is not None
+
+
+def _match_configured_stem(filename_stem: str, configured_names: list[str]) -> str | None:
+    """把输出文件名映射到模型声明的音轨名（整词匹配）。
+
+    之前用子串 ``name in output_key`` 匹配，``male`` 会命中 ``female``，
+    导致「男/女声分离」模型两路输出都标成 ``male``（第二路退化成 ``male_2``），
+    前端按声明音轨（male / female）连的线就对不上。这里改成整词匹配。
+    """
+    output_key = str(filename_stem or "").casefold().replace("_", " ").replace("-", " ")
+    for name in configured_names:
+        token = str(name or "").casefold().replace("_", " ").replace("-", " ").strip()
+        if _has_token(output_key, token):
+            return str(name)
+    return None
+
+
 def _name_score(path: Path, purpose: str, preferred_stem: str = "") -> int:
     """Prefer explicit PyMSS stem names over arbitrary filesystem order."""
-    name = path.stem.casefold().replace("_", " ").replace("-", " ")
+    name = _normalized_name(path)
     preferred = str(preferred_stem or "").casefold().replace("_", " ").replace("-", " ").strip()
     if purpose == "dereverb":
         positive = ("no reverb", "noreverb", "no echo", "no noise", "dry", "clean", "dereverb", "deecho")
         negative = ("reverb", "wet", "echo", "noise", "instrument", "accompan")
+    elif purpose == "generic":
+        # Generic PyMSS models may target drums, bass, restoration, or any
+        # other catalog stem. The catalog target is applied through the
+        # preferred name instead of assuming every output is vocal.
+        positive = ()
+        negative = ()
     else:
         positive = ("vocal", "vocals", "voice", "singing", "lead")
         negative = ("instrument", "accompan", "karaoke", "music", "other", "reverb")
-    preferred_clean = purpose != "dereverb" or any(
+    preferred_clean = purpose not in {"dereverb", "generic"} or any(
         token in preferred for token in ("no ", "dry", "clean", "vocals", "vocal")
     )
-    score = (500 if preferred_clean and preferred and preferred in name else 0) + sum(
+    score = (1000 if preferred and preferred in name else 0) + (500 if preferred_clean and preferred and preferred in name else 0) + sum(
         100 for token in positive if token in name
     )
+    if purpose == "generic" and _has_token(name, preferred):
+        # 工作流里明确指定的「主音轨」：整词命中优先，避免 male 命中 female。
+        score += 3000
     # ``no noise``/``no echo`` contain the removed-stem word, so protect the
     # clean label before applying the generic penalty.
     clean_label = any(token in name for token in ("no noise", "no echo", "no reverb"))
     score -= sum(120 for token in negative if token in name and not (clean_label and token in {"noise", "echo", "reverb"}))
+    if purpose == "generic":
+        # 自定义工作流用 generic 跑任意 PyMSS 模型：同一模型若同时输出干声与湿声
+        # （如去混响模型的「(No Reverb)」「(Reverb)」），主输出应取干声。
+        score += sum(
+            80
+            for token in ("no reverb", "noreverb", "no echo", "no noise", "dry", "clean", "dereverb", "deecho")
+            if token in name
+        )
+        score -= sum(
+            60
+            for token in ("reverb", "wet", "echo", "noise")
+            if token in name
+            and not any(
+                clean in name
+                for clean in ("no reverb", "noreverb", "no echo", "no noise", "dry", "clean", "dereverb", "deecho")
+            )
+        )
     return score
 
 
@@ -101,6 +202,53 @@ def _find_stem(root: Path, stem: str) -> Path | None:
     """Backward-compatible filename lookup used by older integrations."""
     matches = [p for p in _audio_files(root) if stem.casefold() in p.stem.casefold()]
     return max(matches, key=lambda p: p.stat().st_mtime_ns) if matches else None
+
+
+def normalized_output_label(
+    raw_label: str,
+    target_instrument: str,
+    normalized_stems: list[str],
+) -> str:
+    """把模型原始音轨名映射到端口名（target 模型的残差按语义命名）。"""
+    label = str(raw_label or "").strip()
+    target = str(target_instrument or "").strip()
+    if not target or not normalized_stems:
+        return label
+    if label.casefold() == target.casefold():
+        return normalized_stems[0]
+    if len(normalized_stems) > 1:
+        return normalized_stems[1]
+    return label
+
+
+def _pick_accompaniment(
+    root: Path,
+    vocal: Path | None,
+    purpose: str = "",
+    declared_stems: int = 0,
+) -> Path | None:
+    """选出与主音轨配对的伴奏。
+
+    模型对第二路的命名不统一（instrumental / background / no vocals …），
+    只按 "instrumental" 查找会让「人声+伴奏」模型只剩人声。已知别名都试一遍，
+    两路输出时按排除法兜底。多轨模型（鼓/贝斯/人声/other…）里的 music/other
+    是独立音轨，不能当成伴奏。
+    """
+    outputs = _audio_files(root)
+    total = int(declared_stems) if int(declared_stems or 0) > 0 else len(outputs)
+    tokens = ["instrument", "accompan", "no vocal", "minus", "karaoke"]
+    if total <= 2:
+        tokens.extend(["background", "bgm", "music", "other"])
+    for token in tokens:
+        candidate = _find_stem(root, token)
+        if candidate is not None and candidate != vocal:
+            return candidate
+    if vocal is None or str(purpose or "").lower() == "dereverb":
+        return None
+    if total != 2:
+        return None
+    others = [path for path in outputs if path != vocal]
+    return others[0] if len(others) == 1 else None
 
 
 def _subtract_audio(source: Path, removed: Path, destination: Path) -> None:
@@ -158,6 +306,236 @@ def _resolve_device(requested: str) -> tuple[str, str]:
     return requested, requested
 
 
+def _pick_server_stems(
+    results: dict[str, object],
+    purpose: str,
+    primary_stem: str,
+) -> tuple[object | None, object | None]:
+    """Select vocal/instrumental arrays from one PyMSS result mapping."""
+    if not results:
+        return None, None
+    keys = list(results)
+
+    def norm(value: object) -> str:
+        return str(value).casefold().replace("_", " ").replace("-", " ")
+
+    instrumental_key = None
+    # Model stems are not standardized: karaoke/extraction models may call the
+    # remainder "background", "bgm", "no vocals" or "minus" instead of
+    # "instrumental". Missing those names left two-stem models with a vocal
+    # output only.
+    accompaniment_tokens = (
+        "instrument",
+        "accompan",
+        "karaoke",
+        "music",
+        "background",
+        "bgm",
+        "no vocal",
+        "no vocals",
+        "minus",
+        "other",
+    )
+    for key in keys:
+        name = norm(key)
+        if any(token in name for token in accompaniment_tokens):
+            instrumental_key = key
+            break
+
+    vocal_key = None
+    preferred = norm(primary_stem).strip()
+    if preferred:
+        for key in keys:
+            name = norm(key)
+            if name == preferred or preferred in name:
+                vocal_key = key
+                break
+    if vocal_key is None:
+        positive = (
+            ("no reverb", "noreverb", "no echo", "dry", "clean", "vocal", "voice")
+            if str(purpose or "").lower() == "dereverb"
+            else ("vocal", "vocals", "voice", "singing", "lead")
+        )
+        for key in keys:
+            if key == instrumental_key:
+                continue
+            if any(token in norm(key) for token in positive):
+                vocal_key = key
+                break
+    if vocal_key is None:
+        for key in keys:
+            if key != instrumental_key:
+                vocal_key = key
+                break
+    if vocal_key is None and len(keys) == 1:
+        vocal_key = keys[0]
+
+    if (
+        instrumental_key is None
+        and str(purpose or "").lower() != "dereverb"
+        and vocal_key is not None
+    ):
+        # A two-stem model exposes the primary output plus exactly one
+        # remainder; that remainder is the accompaniment whatever it is named.
+        remainder = [key for key in keys if key != vocal_key]
+        if len(remainder) == 1:
+            instrumental_key = remainder[0]
+
+    vocal = results.get(vocal_key) if vocal_key is not None else None
+    instrumental = (
+        results.get(instrumental_key)
+        if instrumental_key is not None and instrumental_key != vocal_key
+        else None
+    )
+    return vocal, instrumental
+
+
+def _write_server_stem(path: str, audio: object, sample_rate: int) -> None:
+    import numpy as np
+
+    from pymss import save_audio
+
+    data = np.asarray(audio, dtype=np.float32)
+    # PyMSS results are sample-major, but accept channel-first inputs too.
+    if data.ndim == 2 and data.shape[0] <= 8 and data.shape[1] > data.shape[0]:
+        data = data.T
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    save_audio(
+        str(destination),
+        data,
+        int(sample_rate),
+        "wav",
+        {"wav_bit_depth": "PCM_16"},
+    )
+
+
+def _run_server(args) -> int:  # noqa: ANN001
+    """Keep one PyMSS model resident and separate one block per JSON line."""
+    import traceback
+
+    from pymss import MSSeparator, load_audio
+
+    model_dir = Path(args.model_dir)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(args.out_dir) if args.out_dir else model_dir / ".xb-realtime"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        import torch
+
+        device_name, device_backend = _resolve_device(args.device)
+        if device_backend != "mlx":
+            resolved_device = ResolvedDevice(
+                torch.device(device_name),
+                device_backend,
+                device_backend.upper(),
+            )
+            runtime_profile = configure_torch_inference(torch, resolved_device)
+            print(f"PYMSS_RUNTIME {runtime_profile.summary}", flush=True)
+        separator = MSSeparator.from_model_name(
+            args.model,
+            model_dir=str(model_dir),
+            download=False,
+            device=device_name,
+            device_ids=[0],
+            output_format="wav",
+            store_dirs=str(out_dir),
+            save_as_folder=False,
+            inference_params={"normalize": False},
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"PYMSS_ERR PyMSS 实时分离初始化失败: {exc}", flush=True)
+        traceback.print_exc()
+        return 4
+
+    configured_stems = getattr(getattr(separator, "config", None), "training", {})
+    if hasattr(configured_stems, "get"):
+        configured_stems = configured_stems.get("instruments", ())
+    if isinstance(configured_stems, str):
+        configured_stems = (configured_stems,)
+    elif not isinstance(configured_stems, (list, tuple)):
+        configured_stems = ()
+    primary_stem = str(
+        args.primary_stem
+        or args.target_stem
+        or (configured_stems[0] if configured_stems else "")
+    )
+    try:
+        import numpy as np
+
+        sample_rate = 44100
+        timeline = np.arange(sample_rate, dtype=np.float32) / sample_rate
+        warmup = (0.01 * np.sin(2.0 * np.pi * 220.0 * timeline)).astype(np.float32)
+        separator.separate(np.stack((warmup, warmup), axis=0), pbar=False)
+        print("XB: PyMSS 实时组件预热完成", flush=True)
+    except Exception as exc:  # noqa: BLE001 - first real block may still succeed
+        print(f"XB: PyMSS 实时预热失败（继续启动）: {exc}", flush=True)
+    print("PYMSS_SERVER_READY", flush=True)
+
+    try:
+        for raw in sys.stdin:
+            try:
+                request = json.loads(raw)
+                if request.get("command") == "close":
+                    break
+                source = str(request.get("input") or "")
+                output = str(request.get("output") or "")
+                instrumental_output = str(request.get("instrumental") or "")
+                if not source or not output:
+                    raise ValueError("输入或输出路径为空")
+                # The vocal models used by the app operate at 44.1 kHz; VR
+                # stems are resampled to 44.1 kHz internally as well. Keep one
+                # rate for both outputs so the realtime mixer stays aligned.
+                audio, _ = load_audio(source, sr=44100, mono=False)
+                results = separator.separate(audio, pbar=False)
+                vocal, instrumental = _pick_server_stems(
+                    results,
+                    args.purpose,
+                    primary_stem,
+                )
+                if vocal is None:
+                    raise RuntimeError("PyMSS 未生成有效人声音轨")
+                _write_server_stem(output, vocal, 44100)
+                if instrumental_output and instrumental is not None:
+                    _write_server_stem(instrumental_output, instrumental, 44100)
+                result = {
+                    "ok": True,
+                    "output": output,
+                    "instrumental": (
+                        instrumental_output
+                        if instrumental_output and instrumental is not None
+                        else None
+                    ),
+                }
+            except Exception as exc:  # noqa: BLE001 - keep serving after one bad block
+                result = {"ok": False, "error": str(exc)}
+            print(
+                "PYMSS_SERVER_RESULT\t" + json.dumps(result, ensure_ascii=False),
+                flush=True,
+            )
+    finally:
+        close = getattr(separator, "close", None)
+        if callable(close):
+            close()
+    return 0
+
+
+def _write_result(out_dir: Path, payload: dict[str, object]) -> None:
+    """写出分离结果并回显给父进程（单一来源，避免两处字段不一致）。"""
+    (out_dir / "pymss_result.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+    printed = {
+        "ok": True,
+        **{
+            key: payload[key]
+            for key in ("vocals", "instrumental", "removed_harmony", "stems")
+            if key in payload
+        },
+    }
+    print(json.dumps(printed, ensure_ascii=False), flush=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
@@ -167,19 +545,36 @@ def main() -> int:
     parser.add_argument("--device", default="auto")
     parser.add_argument(
         "--purpose",
-        choices=("vocal_separation", "dereverb", "harmony_removal"),
+        choices=("vocal_separation", "dereverb", "harmony_removal", "generic"),
         default="vocal_separation",
-        help="处理用途：人声分离或去混响/人声净化",
+        help="处理用途：人声分离、去混响或通用 PyMSS 分离",
     )
+    parser.add_argument("--target-stem", default="")
+    parser.add_argument("--primary-stem", default="", help="用户指定的主音轨（覆盖模型默认目标音轨）")
     parser.add_argument("--download", action="store_true")
+    parser.add_argument("--server", action="store_true", help="常驻进程，逐行接收实时分离块")
+    parser.add_argument(
+        "--expected-bytes",
+        type=int,
+        default=0,
+        help="catalog 声明的模型总字节数，用于计算下载总进度",
+    )
     args = parser.parse_args()
+
+    if args.server:
+        return _run_server(args)
 
     from pymss import MSSeparator, download_model
 
     model_dir = Path(args.model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
     if args.download:
-        result = download_model(args.model, model_dir=str(model_dir), source="modelscope")
+        result = download_model(
+            args.model,
+            model_dir=str(model_dir),
+            source="modelscope",
+            progress_callback=_download_progress_emitter(args.expected_bytes),
+        )
         print(json.dumps({"ok": True, "model": args.model, "files": result.get("downloaded", [])}, ensure_ascii=False))
         return 0
 
@@ -227,10 +622,27 @@ def main() -> int:
         save_as_folder=False,
         inference_params={"normalize": False},
     )
-    configured_stems = getattr(getattr(separator, "config", None), "training", {})
-    if hasattr(configured_stems, "get"):
-        configured_stems = configured_stems.get("instruments", ())
-    primary_stem = str(configured_stems[0] if configured_stems else "")
+    training = getattr(getattr(separator, "config", None), "training", {})
+    configured_stems = training.get("instruments", ()) if hasattr(training, "get") else ()
+    if isinstance(configured_stems, str):
+        configured_stems = (configured_stems,)
+    elif not isinstance(configured_stems, (list, tuple)):
+        configured_stems = ()
+    target_instrument = ""
+    if hasattr(training, "get"):
+        target_instrument = str(training.get("target_instrument") or "").strip()
+        if target_instrument.casefold() in {"null", "none", "~"}:
+            target_instrument = ""
+    configured_names = [str(value) for value in configured_stems or () if str(value).strip()]
+    normalized_stems, primary_norm = _resolve_output_stems(
+        configured_names, target_instrument
+    )
+    primary_stem = str(
+        args.primary_stem
+        or primary_norm
+        or args.target_stem
+        or (configured_names[0] if configured_names else "")
+    )
     try:
         separator.process_folder(str(source))
     finally:
@@ -238,40 +650,80 @@ def main() -> int:
         if callable(close):
             close()
 
-    vocal = _select_stem(
-        raw_dir,
-        args.purpose,
-        reference_rms,
-        primary_stem,
+    raw_outputs = _audio_files(raw_dir)
+
+    def _normalized_label(output: Path) -> str:
+        raw_label = _match_configured_stem(output.stem, configured_names) or output.stem
+        # target 模型只输出 target + 残差：端口名按语义归一，避免伴奏模型
+        # 显示出并不存在的人声端口。
+        return normalized_output_label(
+            raw_label, target_instrument, normalized_stems
+        )
+
+    labels = {output: _normalized_label(output) for output in raw_outputs}
+    vocal = next(
+        (output for output in raw_outputs if primary_norm and labels[output] == primary_norm),
+        None,
     )
-    instrumental = _find_stem(raw_dir, "instrumental") or _find_stem(raw_dir, "accompaniment") or _find_stem(raw_dir, "other")
     if vocal is None:
+        vocal = next(
+            (output for output in raw_outputs if labels[output] == "vocals"), None
+        )
+    if vocal is None:
+        vocal = _select_stem(
+            raw_dir,
+            args.purpose,
+            reference_rms,
+            primary_stem,
+        )
+    instrumental = next(
+        (
+            output
+            for output in raw_outputs
+            if labels[output] == "instrumental" and output != vocal
+        ),
+        None,
+    )
+    if instrumental is None and not target_instrument:
+        instrumental = _pick_accompaniment(
+            raw_dir,
+            vocal,
+            args.purpose,
+            len(configured_names),
+        )
+    if vocal is None:
+        if args.purpose == "generic":
+            raise RuntimeError("PyMSS 未生成有效分离音轨（输出为空或近似静音）")
         raise RuntimeError("PyMSS 未生成有效人声音轨（输出为空或近似静音）")
     vocals_dest = out_dir / "pymss_vocals.wav"
-    removed_harmony = None
-    if args.purpose == "harmony_removal":
-        # UVR-BVE marks its isolated backing-vocal stem as "Vocals".  It must
-        # be treated as a clean vocal output for compatibility with old jobs.
-        shutil.copyfile(vocal, vocals_dest)
-    else:
-        shutil.copyfile(vocal, vocals_dest)
+    shutil.copyfile(vocal, vocals_dest)
     instrumental_dest = None
     if instrumental and instrumental != vocal:
         instrumental_dest = out_dir / "pymss_instrumental.wav"
         shutil.copyfile(instrumental, instrumental_dest)
-    (out_dir / "pymss_result.json").write_text(
-        json.dumps(
-            {
-                "vocals": str(vocals_dest),
-                "instrumental": str(instrumental_dest) if instrumental_dest else None,
-                "removed_harmony": str(removed_harmony) if removed_harmony else None,
-                "device": device_backend,
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
+    stem_outputs = []
+    for index, output in enumerate(raw_outputs):
+        if output == vocal:
+            destination = vocals_dest
+        elif instrumental and output == instrumental and instrumental_dest:
+            destination = instrumental_dest
+        else:
+            destination = out_dir / f"pymss_stem_{index + 1:02d}{output.suffix.lower()}"
+            shutil.copyfile(output, destination)
+        stem_outputs.append(
+            {"name": labels.get(output, output.stem), "path": str(destination)}
+        )
+    _write_result(
+        out_dir,
+        {
+            "vocals": str(vocals_dest),
+            "instrumental": str(instrumental_dest) if instrumental_dest else None,
+            "removed_harmony": None,
+            "device": device_backend,
+            "target_stem": primary_stem,
+            "stems": stem_outputs,
+        },
     )
-    print(json.dumps({"ok": True, "vocals": str(vocals_dest), "instrumental": str(instrumental_dest) if instrumental_dest else None, "removed_harmony": str(removed_harmony) if removed_harmony else None}, ensure_ascii=False))
     return 0
 
 

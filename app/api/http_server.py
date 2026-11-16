@@ -34,7 +34,8 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ConfigDict, Field
 
 import config
-from infrastructure.storage import SettingsStore
+from application.ports import SettingsRepository
+from domain.work_request import WorkRequestError
 
 if TYPE_CHECKING:
     from .bridge import Api
@@ -581,7 +582,7 @@ JOB_CREATE_API_DOC = _api_operation_description(
         ("params.rms_mix", "number", "否", "0.25", "仅 RVC；响度包络融合，范围 0~1"),
         ("params.protect", "number", "否", "0.33", "仅 RVC；清辅音保护，范围 0~0.5"),
         ("params.filter_radius", "integer", "否", "3", "仅 RVC；F0 中值滤波半径，范围 0~7"),
-        ("params.rvc_version", "string", "否", "v2", "仅 RVC；必须与模型训练版本一致"),
+        ("params.rvc_version", "string", "否", "v2", "仅 RVC；v1/v2/v3，必须与模型训练版本一致；v3 与 v2 网络结构一致，按 v2 兼容路径推理"),
         ("params.reference_audio", "string", "否", '""', "仅 SeedVC；本机参考音频绝对路径"),
         ("params.ddsp_infer_steps", "integer", "否", "50", "仅 DDSP；采样步数，最小 1，推荐 50~100"),
         ("params.ddsp_formant_shift", "number", "否", "0", "仅 DDSP；共振峰半音偏移，范围 -2~2"),
@@ -830,11 +831,12 @@ class InferenceParamsRequest(BaseModel):
             "等算法产生的呼吸杂音，对部分 F0 算法可能没有明显影响。"
         ),
     )
-    rvc_version: Literal["v1", "v2"] = Field(
+    rvc_version: Literal["v1", "v2", "v3"] = Field(
         default="v2",
         description=(
             "RVC 网络版本，必须与导入的模型训练版本一致。当前大多数新模型使用 v2；"
-            "版本选错可能导致维度不匹配或音质异常。"
+            "v3 微调模型沿用 v2 网络结构，按 v2 兼容路径推理。版本选错可能导致维度"
+            "不匹配或音质异常。"
         ),
     )
     reference_audio: str = Field(
@@ -1213,6 +1215,10 @@ class EditorSeparationRequest(BaseModel):
         default=None,
         description="PyMSS 人声分离模型名；engine=pymss 时使用",
     )
+    pymss_purpose: Literal["vocal_separation", "dereverb", "harmony_removal", "generic"] = Field(
+        default="vocal_separation",
+        description="PyMSS 处理用途；generic 开放完整 catalog 与多音轨结果",
+    )
     harmony_removal_enabled: bool = Field(
         default=False,
         description="engine=pymss 时，分离后是否使用 PyMSS 去混响/人声净化模型",
@@ -1252,10 +1258,77 @@ class EditorMergeRequest(BaseModel):
     clip_ids: list[str] = Field(min_length=2, description="按时间顺序合并的片段 ID")
 
 
+class EditorMidiNotesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    notes: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="音符列表：start/end（片段内秒）、pitch（MIDI 编号）、detune（音分）",
+    )
+
+
+class EditorMidiResponse(BaseModel):
+    ok: bool = Field(description="操作是否成功")
+    error: str | None = Field(default=None, description="失败原因")
+    scope: str | None = Field(default=None, description="clip 或 track")
+    clip_id: str | None = Field(default=None, description="片段 ID")
+    track_id: str | None = Field(default=None, description="音轨 ID")
+    duration: float | None = Field(default=None, description="可编辑时间轴长度（秒）")
+    notes: list[dict[str, Any]] | None = Field(default=None, description="可编辑的 MIDI 音符")
+    analysis: dict[str, Any] | None = Field(default=None, description="F0 分析摘要")
+    meta: dict[str, Any] | None = Field(default=None, description="片段或音轨上的 MIDI 摘要")
+    cached: bool | None = Field(default=None, description="是否直接使用了缓存的分析结果")
+    midi_ready: bool | None = Field(default=None, description="MIDI 音高重绘环境是否就绪")
+    clip_spans: list[dict[str, Any]] | None = Field(
+        default=None, description="轨道范围内的片段位置（轨道 MIDI 用来显示分段）"
+    )
+    report: dict[str, Any] | None = Field(default=None, description="音高重绘报告")
+    project: EditorProjectResponse | None = Field(default=None, description="操作后的工程")
+    clip: dict[str, Any] | None = Field(default=None, description="受影响的片段")
+    clips: list[dict[str, Any]] | None = Field(default=None, description="受影响的片段列表")
+    audio_path: str | None = Field(default=None, description="应用后的音频路径（服务端）")
+
+
+class EditorMidiSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session: dict[str, Any] | None = Field(
+        default=None,
+        description="编曲会话：tempo / time_signature / parts（每个声部含 instrument 与 notes）",
+    )
+    options: dict[str, Any] | None = Field(
+        default=None,
+        description="渲染选项：mode=tracks（分乐器各出一轨）或 mix（混成一条片段）",
+    )
+
+
+class EditorMidiSessionResponse(BaseModel):
+    ok: bool = Field(description="操作是否成功")
+    error: str | None = Field(default=None, description="失败原因")
+    cancelled: bool = Field(default=False, description="用户是否取消了文件选择")
+    track_id: str | None = Field(default=None, description="音轨 ID")
+    track_name: str | None = Field(default=None, description="音轨名称")
+    duration: float | None = Field(default=None, description="编曲时间轴长度（秒）")
+    session: dict[str, Any] | None = Field(default=None, description="编曲会话")
+    summary: dict[str, Any] | None = Field(default=None, description="会话摘要")
+    instruments: list[dict[str, Any]] | None = Field(default=None, description="GM 音色表")
+    families: list[dict[str, Any]] | None = Field(default=None, description="GM 音色族")
+    clip_spans: list[dict[str, Any]] | None = Field(default=None, description="轨道已有片段")
+    has_audio: bool | None = Field(default=None, description="轨道上是否已有音频")
+    midi_ready: bool | None = Field(default=None, description="MIDI 音高重绘环境是否就绪")
+    mode: str | None = Field(default=None, description="渲染模式：tracks 或 mix")
+    audio: str | None = Field(default=None, description="试听音频 data URI")
+    path: str | None = Field(default=None, description="导出的 .mid 文件路径")
+    report: dict[str, Any] | None = Field(default=None, description="渲染报告")
+    project: EditorProjectResponse | None = Field(default=None, description="操作后的工程")
+    clips: list[dict[str, Any]] | None = Field(default=None, description="渲染出的片段")
+    tracks: list[dict[str, Any]] | None = Field(default=None, description="渲染出的音轨")
+    bytes: int | None = Field(default=None, description="导出的文件字节数")
+
+
 class RetryResponse(BaseModel):
     ok: bool = Field(description="是否已成功重新加入推理队列")
     job_id: str = Field(description="被重试的任务 ID")
-
 
 class HealthResponse(BaseModel):
     ok: bool = Field(description="服务是否正常响应")
@@ -1890,10 +1963,13 @@ def create_http_app(
         "/preprocess/pymss/models",
         tags=["模型"],
         summary="列出 PyMSS 前期分离模型",
-        description="method: `GET`\n\n参数:\n\n| 参数名 | 类型 | 必填 | 默认值 | 说明 |\n|---|---|---|---|---|\n| purpose | string | 否 | 空 | vocal_separation 人声分离，或 dereverb 去混响/人声净化；为空返回两类 |\n\n返回: PyMSS 模型列表与运行状态。\n\n响应数据:\n\n| 字段名 | 类型 | 说明 |\n|---|---|---|\n| items | array | PyMSS 模型列表 |\n| status | object | 当前运行状态 |\n\n读取当前 PyMSS 环境中的受支持模型目录，供前期处理选择。",
+        description="method: `GET`\n\n参数:\n\n| 参数名 | 类型 | 必填 | 默认值 | 说明 |\n|---|---|---|---|---|\n| purpose | string | 否 | 空 | vocal_separation 人声分离，或 dereverb 去混响/人声净化 |\n| all_models | boolean | 否 | false | true 返回 PyMSS 全部受支持能力，并带一级/二级分类 |\n\n返回: PyMSS 模型列表与运行状态。\n\n响应数据:\n\n| 字段名 | 类型 | 说明 |\n|---|---|---|\n| items | array | PyMSS 模型列表，包含 category_label 分类显示名 |\n| status | object | 当前运行状态 |",
     )
-    def list_pymss_models(purpose: str = Query(default="", description="vocal_separation 或 dereverb")) -> dict[str, Any]:
-        return {"items": facade.pymss_models(purpose), "status": facade.pymss_status()}
+    def list_pymss_models(
+        purpose: str = Query(default="", description="vocal_separation 或 dereverb"),
+        all_models: bool = Query(default=False, description="是否返回全部 PyMSS 分类"),
+    ) -> dict[str, Any]:
+        return {"items": facade.pymss_models(purpose, all_models), "status": facade.pymss_status()}
 
     @router.post(
         "/preprocess/pymss/models/{model_name:path}/download",
@@ -1977,7 +2053,7 @@ def create_http_app(
             examples=["model_0123456789abcdef"],
         )
     ) -> dict[str, Any]:
-        item = facade._models.get(model_id)
+        item = facade.models.get(model_id)
         if not item:
             raise HTTPException(status_code=404, detail="模型不存在")
         return _public_model(item)
@@ -1994,7 +2070,7 @@ def create_http_app(
         request: ModelRenameRequest,
         model_id: str = ApiPath(..., description="声音模型 ID"),
     ) -> dict[str, Any]:
-        item = facade._models.rename(model_id, request.name)
+        item = facade.models.rename(model_id, request.name)
         if not item:
             raise HTTPException(status_code=404, detail="模型不存在或名称无效")
         return _public_model(item)
@@ -2038,7 +2114,7 @@ def create_http_app(
         model_id: str = ApiPath(..., description="声音模型 ID"),
         repair: bool = Query(default=False, description="是否执行可用的自动修复"),
     ) -> dict[str, Any]:
-        if not facade._models.get(model_id):
+        if not facade.models.get(model_id):
             raise HTTPException(status_code=404, detail="模型不存在")
         result = facade.inspect_model(model_id, repair)
         return {
@@ -2156,6 +2232,12 @@ def create_http_app(
         return {"items": items, "total": len(items)}
 
     def _prepare_job_request(request: JobCreateRequest) -> dict[str, Any]:
+        """把 HTTP 请求转换成用例层载荷。
+
+        传输相关的事（上传件解析、Pydantic → dict）留在表现层；
+        业务规则（模式/工作流/模型/分句/SeedVC 参考音频）由
+        ``facade.validate_work_request`` 在用例层统一校验。
+        """
         if bool(request.source_upload_id) == bool(request.source_path):
             raise HTTPException(
                 status_code=422,
@@ -2171,21 +2253,25 @@ def create_http_app(
             if not source.is_file():
                 raise HTTPException(status_code=404, detail="source_path 指向的文件不存在")
 
+        payload: dict[str, Any] = {
+            "source_path": str(source),
+            "title": request.title or "",
+            "workflow": request.workflow,
+            "vocal_enhancement": request.vocal_enhancement.model_dump(),
+            "preprocess": request.preprocess.model_dump(),
+            # Keep the top-level params for compatibility with older clients;
+            # WorkService uses its high-pitch guard switch as a fallback when a
+            # model entry does not provide one.
+            "params": request.params.model_dump(),
+            "mode": request.mode,
+        }
         if request.mode == "multi":
-            if not request.models or not request.segments:
-                raise HTTPException(status_code=422, detail="multi 模式需要 models 和 segments")
-            models: list[dict[str, Any]] = []
-            selected_ids: set[str] = set()
             shared_guard_explicit = "auto_high_pitch_guard" in request.params.model_fields_set
             shared_guard = request.params.auto_high_pitch_guard
             shared_rounds_explicit = "high_pitch_guard_rounds" in request.params.model_fields_set
             shared_rounds = request.params.high_pitch_guard_rounds
-            for entry in request.models:
-                if entry.model_id in selected_ids:
-                    raise HTTPException(status_code=422, detail=f"models 中模型重复：{entry.model_id}")
-                model = facade._models.get(entry.model_id)
-                if not model:
-                    raise HTTPException(status_code=404, detail=f"模型不存在：{entry.model_id}")
+            models: list[dict[str, Any]] = []
+            for entry in request.models or []:
                 params = entry.params.model_dump()
                 # Pydantic fills omitted model fields with their defaults.  If
                 # the caller supplied the legacy top-level switch, propagate it
@@ -2203,77 +2289,24 @@ def create_http_app(
                     params["high_pitch_guard_rounds"] = shared_rounds
                 if entry.reference_upload_id:
                     params["reference_audio"] = str(_resolve_upload(entry.reference_upload_id))
-                if str(model.get("framework") or "") == "seed-vc" and not params.get(
-                    "reference_audio"
-                ):
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"SeedVC 模型 {entry.model_id} 需要 reference_upload_id",
-                    )
-                selected_ids.add(entry.model_id)
                 models.append({"model_id": entry.model_id, "params": params})
-
-            segments: list[dict[str, Any]] = []
-            for segment in request.segments:
-                if segment.end <= segment.start:
-                    raise HTTPException(status_code=422, detail="segments.end 必须大于 start")
-                raw_ids = segment.model_ids or ([segment.model_id] if segment.model_id else [])
-                model_ids = list(dict.fromkeys(raw_ids))
-                if not model_ids or any(model_id not in selected_ids for model_id in model_ids):
-                    raise HTTPException(
-                        status_code=422,
-                        detail="segments 中的 model_ids 必须来自 models 且不能为空",
-                    )
-                segments.append(
-                    {
-                        "start": segment.start,
-                        "end": segment.end,
-                        "model_id": model_ids[0],
-                        "model_ids": model_ids,
-                    }
+            payload["models"] = models
+            payload["segments"] = [segment.model_dump() for segment in request.segments or []]
+        else:
+            if request.reference_upload_id:
+                payload["params"]["reference_audio"] = str(
+                    _resolve_upload(request.reference_upload_id)
                 )
-            payload = {
-                "source_path": str(source),
-                "title": request.title or source.stem,
-                "workflow": request.workflow,
-                "vocal_enhancement": request.vocal_enhancement.model_dump(),
-                "preprocess": request.preprocess.model_dump(),
-                # Keep the top-level params for compatibility with older
-                # clients; WorkService uses its high-pitch guard switch as a
-                # fallback when a model entry does not provide one.
-                "params": request.params.model_dump(),
-                "mode": "multi",
-                "models": models,
-                "segments": segments,
-            }
-            return payload
+            if request.model_id:
+                payload["model_id"] = request.model_id
 
-        if request.workflow in {"auto_vocal_merge", "manual_vocal_merge"}:
-            raise HTTPException(status_code=422, detail="人声合并工作流只支持 multi 模式")
-        model_id = request.model_id or facade.get_default_model()
-        if not model_id or not facade._models.get(model_id):
-            raise HTTPException(status_code=404, detail="未找到可用模型，请提供有效 model_id")
-
-        params = request.params.model_dump()
-        if request.reference_upload_id:
-            params["reference_audio"] = str(_resolve_upload(request.reference_upload_id))
-        model = facade._models.get(model_id) or {}
-        if str(model.get("framework") or "") == "seed-vc" and not params.get("reference_audio"):
+        try:
+            return facade.validate_work_request(payload)
+        except WorkRequestError as exc:
             raise HTTPException(
-                status_code=422,
-                detail="SeedVC 任务需要 reference_upload_id 或 params.reference_audio",
-            )
-
-        payload = {
-            "source_path": str(source),
-            "model_id": model_id,
-            "title": request.title or source.stem,
-            "workflow": request.workflow,
-            "vocal_enhancement": request.vocal_enhancement.model_dump(),
-            "preprocess": request.preprocess.model_dump(),
-            "params": params,
-        }
-        return payload
+                status_code=404 if exc.not_found else 422,
+                detail=str(exc),
+            ) from exc
 
     def _create_job_from_request(request: JobCreateRequest) -> dict[str, Any]:
         return _public_work(facade.create_work(_prepare_job_request(request)))
@@ -2520,7 +2553,7 @@ def create_http_app(
         work = facade.get_work(job_id)
         if not work:
             raise HTTPException(status_code=404, detail="任务不存在")
-        path = facade._stem_path(job_id, stem)
+        path = facade.work_stem_path(job_id, stem)
         if not path or not path.is_file():
             raise HTTPException(status_code=409, detail="请求的音频尚未生成")
         filename = f"{job_id}_{stem}{path.suffix.lower()}"
@@ -2792,7 +2825,7 @@ def create_http_app(
         project_id: str = ApiPath(..., description="编辑工程 ID"),
         format: Literal["wav", "mp3", "flac"] = Query(default="wav", description="输出格式"),
     ) -> FileResponse:
-        path = facade._editor.render(project_id, format)
+        path = facade.editor.render(project_id, format)
         return _editor_audio_response(path, f"{project_id}.{format}")
 
     @router.get(
@@ -2816,7 +2849,7 @@ def create_http_app(
         track_id: str = ApiPath(..., description="音轨 ID"),
         format: Literal["wav", "mp3", "flac"] = Query(default="wav", description="输出格式"),
     ) -> FileResponse:
-        path = facade._editor._render_track_file(project_id, track_id, format)
+        path = facade.editor.render_track(project_id, track_id, format)
         return _editor_audio_response(path, f"{project_id}_{track_id}.{format}")
 
     @router.get(
@@ -2840,7 +2873,7 @@ def create_http_app(
         clip_id: str = ApiPath(..., description="片段 ID"),
         format: Literal["wav", "mp3", "flac"] = Query(default="flac", description="输出格式"),
     ) -> FileResponse:
-        path = facade._editor._render_clip_file(project_id, clip_id, format, cache=True)
+        path = facade.editor.render_clip(project_id, clip_id, format, cache=True)
         return _editor_audio_response(path, f"{project_id}_{clip_id}.{format}")
 
     @router.get(
@@ -2985,7 +3018,7 @@ def create_http_app(
         track_id: str = ApiPath(..., description="音轨 ID"),
         clip_id: str = ApiPath(..., description="片段 ID"),
     ) -> dict[str, Any]:
-        model = facade._models.get(request.model_id)
+        model = facade.models.get(request.model_id)
         if not model:
             raise HTTPException(status_code=404, detail="声音模型不存在")
         params = request.params.model_dump()
@@ -3056,6 +3089,438 @@ def create_http_app(
             raise HTTPException(status_code=404, detail="重推理任务不存在")
         return PlainTextResponse(log)
 
+    # ---- MIDI 子编辑器 ----
+
+    @router.get(
+        "/editor/projects/{project_id}/clips/{clip_id}/midi",
+        response_model=EditorMidiResponse,
+        tags=["编辑器"],
+        summary="读取片段 MIDI 音符",
+        description=_resource_api_doc(
+            "分析片段人声并返回可编辑的 MIDI 音符；`refresh=1` 时强制重新分析基频。",
+            "GET",
+            "/api/v1/editor/projects/{project_id}/clips/{clip_id}/midi",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("clip_id", "string", "是", "-", "片段 ID"),
+                ("refresh", "boolean", "否", "false", "是否强制重新分析基频"),
+            ],
+        ),
+    )
+    def get_editor_clip_midi(
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        clip_id: str = ApiPath(..., description="片段 ID"),
+        refresh: bool = Query(False, description="是否强制重新分析"),
+    ) -> dict[str, Any]:
+        result = facade.get_editor_clip_midi(project_id, clip_id, bool(refresh))
+        if not result.get("ok"):
+            error = str(result.get("error") or "MIDI 分析失败")
+            code = 503 if "未就绪" in error else 409
+            raise HTTPException(status_code=code, detail=error)
+        analysis = dict(result.get("analysis") or {})
+        analysis.pop("f0_curve", None)
+        return {
+            "ok": True,
+            "scope": "clip",
+            "clip_id": result.get("clip_id") or clip_id,
+            "track_id": result.get("track_id") or "",
+            "duration": result.get("duration"),
+            "notes": result.get("notes") or [],
+            "analysis": analysis,
+            "meta": result.get("meta") or {},
+            "cached": bool(result.get("cached")),
+            "midi_ready": bool(result.get("midi_ready")),
+        }
+
+    @router.put(
+        "/editor/projects/{project_id}/clips/{clip_id}/midi",
+        response_model=EditorMidiResponse,
+        tags=["编辑器"],
+        summary="保存片段 MIDI 音符",
+        description=_resource_api_doc(
+            "保存 MIDI 子编辑器的音符（只改音符数据，不改音频）。",
+            "PUT",
+            "/api/v1/editor/projects/{project_id}/clips/{clip_id}/midi",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("clip_id", "string", "是", "-", "片段 ID"),
+                ("notes", "array", "是", "-", "音符列表：start/end/pitch/detune"),
+            ],
+        ),
+    )
+    def save_editor_clip_midi(
+        request: EditorMidiNotesRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        clip_id: str = ApiPath(..., description="片段 ID"),
+    ) -> dict[str, Any]:
+        result = facade.save_editor_clip_midi(project_id, clip_id, request.notes)
+        if not result.get("ok"):
+            error = str(result.get("error") or "MIDI 保存失败")
+            raise HTTPException(status_code=409, detail=error)
+        project = result.get("project")
+        return {
+            "ok": True,
+            "clip_id": clip_id,
+            "duration": result.get("duration"),
+            "notes": result.get("notes") or [],
+            "meta": result.get("meta") or {},
+            "project": _public_editor_project(project, "/api/v1")
+            if isinstance(project, dict)
+            else None,
+        }
+
+    @router.post(
+        "/editor/projects/{project_id}/clips/{clip_id}/midi/apply",
+        response_model=EditorMidiResponse,
+        tags=["编辑器"],
+        summary="应用 MIDI 音符到音频",
+        description=_resource_api_doc(
+            "把 MIDI 子编辑器的音符落到音频上：逐音符保共振峰移调后替换片段音频（可撤销）。",
+            "POST",
+            "/api/v1/editor/projects/{project_id}/clips/{clip_id}/midi/apply",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("clip_id", "string", "是", "-", "片段 ID"),
+                ("notes", "array", "否", "已保存的音符", "不传时使用已保存的 MIDI 音符"),
+            ],
+        ),
+    )
+    def apply_editor_clip_midi(
+        request: EditorMidiNotesRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        clip_id: str = ApiPath(..., description="片段 ID"),
+    ) -> dict[str, Any]:
+        result = facade.apply_editor_clip_midi(
+            project_id, clip_id, request.notes or None, {}
+        )
+        if not result.get("ok"):
+            error = str(result.get("error") or "应用 MIDI 失败")
+            code = 503 if "未就绪" in error else 409
+            raise HTTPException(status_code=code, detail=error)
+        project = result.get("project")
+        clip = result.get("clip")
+        return {
+            "ok": True,
+            "scope": "clip",
+            "clip_id": clip_id,
+            "report": result.get("report") or {},
+            "audio_path": str(result.get("audio_path") or ""),
+            "project": _public_editor_project(project, "/api/v1")
+            if isinstance(project, dict)
+            else None,
+            "clip": _public_editor_clip(clip, project_id, "/api/v1")
+            if isinstance(clip, dict)
+            else None,
+        }
+
+    @router.get(
+        "/editor/projects/{project_id}/tracks/{track_id}/midi",
+        response_model=EditorMidiResponse,
+        tags=["编辑器"],
+        summary="读取整轨 MIDI 音符",
+        description=_resource_api_doc(
+            "按音轨返回可编辑的 MIDI 音符（绝对时间），空白轨道返回空音符以便直接编排。",
+            "GET",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/midi",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+                ("refresh", "boolean", "否", "false", "是否强制重新分析基频"),
+            ],
+        ),
+    )
+    def get_editor_track_midi(
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+        refresh: bool = Query(False, description="是否强制重新分析"),
+    ) -> dict[str, Any]:
+        result = facade.get_editor_track_midi(project_id, track_id, bool(refresh))
+        if not result.get("ok"):
+            error = str(result.get("error") or "MIDI 分析失败")
+            code = 503 if "未就绪" in error else 409
+            raise HTTPException(status_code=code, detail=error)
+        analysis = dict(result.get("analysis") or {})
+        for item in analysis.get("clips") or []:
+            if isinstance(item, dict):
+                item.pop("f0_curve", None)
+        return {
+            "ok": True,
+            "scope": "track",
+            "track_id": result.get("track_id") or track_id,
+            "duration": result.get("duration"),
+            "notes": result.get("notes") or [],
+            "analysis": analysis,
+            "meta": result.get("meta") or {},
+            "cached": bool(result.get("cached")),
+            "midi_ready": bool(result.get("midi_ready")),
+            "clip_spans": result.get("clip_spans") or [],
+        }
+
+    @router.put(
+        "/editor/projects/{project_id}/tracks/{track_id}/midi",
+        response_model=EditorMidiResponse,
+        tags=["编辑器"],
+        summary="保存整轨 MIDI 音符",
+        description=_resource_api_doc(
+            "保存整轨音符（绝对时间，只改音符数据）。空白轨道也可以保存草稿。",
+            "PUT",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/midi",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+                ("notes", "array", "是", "-", "音符列表：start/end/pitch/detune"),
+            ],
+        ),
+    )
+    def save_editor_track_midi(
+        request: EditorMidiNotesRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+    ) -> dict[str, Any]:
+        result = facade.save_editor_track_midi(project_id, track_id, request.notes)
+        if not result.get("ok"):
+            error = str(result.get("error") or "MIDI 保存失败")
+            raise HTTPException(status_code=409, detail=error)
+        project = result.get("project")
+        return {
+            "ok": True,
+            "scope": "track",
+            "track_id": track_id,
+            "duration": result.get("duration"),
+            "notes": result.get("notes") or [],
+            "meta": result.get("meta") or {},
+            "project": _public_editor_project(project, "/api/v1")
+            if isinstance(project, dict)
+            else None,
+        }
+
+    @router.post(
+        "/editor/projects/{project_id}/tracks/{track_id}/midi/apply",
+        response_model=EditorMidiResponse,
+        tags=["编辑器"],
+        summary="应用整轨 MIDI 到音频",
+        description=_resource_api_doc(
+            "按片段切分整轨音符并逐个保共振峰移调，替换对应片段音频（可撤销）。",
+            "POST",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/midi/apply",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+                ("notes", "array", "否", "已保存的音符", "不传时使用已保存的整轨音符"),
+            ],
+        ),
+    )
+    def apply_editor_track_midi(
+        request: EditorMidiNotesRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+    ) -> dict[str, Any]:
+        result = facade.apply_editor_track_midi(
+            project_id, track_id, request.notes or None, {}
+        )
+        if not result.get("ok"):
+            error = str(result.get("error") or "应用 MIDI 失败")
+            code = 503 if "未就绪" in error else 409
+            raise HTTPException(status_code=code, detail=error)
+        project = result.get("project")
+        raw_clips = result.get("clips")
+        clips: list[Any] = raw_clips if isinstance(raw_clips, list) else []
+        return {
+            "ok": True,
+            "scope": "track",
+            "track_id": track_id,
+            "report": result.get("report") or {},
+            "project": _public_editor_project(project, "/api/v1")
+            if isinstance(project, dict)
+            else None,
+            "clips": [
+                _public_editor_clip(clip, project_id, "/api/v1")
+                for clip in clips
+                if isinstance(clip, dict)
+            ],
+        }
+
+    @router.get(
+        "/editor/projects/{project_id}/tracks/{track_id}/midi-session",
+        response_model=EditorMidiSessionResponse,
+        tags=["编辑器"],
+        summary="读取 MIDI 编曲会话",
+        description=_resource_api_doc(
+            "读取多乐器 MIDI 编曲会话（速度、拍号、各声部乐器与音符）；空轨道也一样可以编辑。",
+            "GET",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/midi-session",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+            ],
+        ),
+    )
+    def get_editor_midi_session(
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+    ) -> dict[str, Any]:
+        result = facade.get_editor_midi_session(project_id, track_id)
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=404, detail=str(result.get("error") or "音轨不存在")
+            )
+        return {**result, "ok": True}
+
+    @router.put(
+        "/editor/projects/{project_id}/tracks/{track_id}/midi-session",
+        response_model=EditorMidiSessionResponse,
+        tags=["编辑器"],
+        summary="保存 MIDI 编曲会话",
+        description=_resource_api_doc(
+            "保存多乐器 MIDI 编曲会话（只改音符与乐器设置，不改音频）。",
+            "PUT",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/midi-session",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+                ("session", "object", "是", "-", "编曲会话"),
+            ],
+        ),
+    )
+    def save_editor_midi_session(
+        request: EditorMidiSessionRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+    ) -> dict[str, Any]:
+        result = facade.save_editor_midi_session(project_id, track_id, request.session or {})
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=409, detail=str(result.get("error") or "MIDI 编曲保存失败")
+            )
+        project = result.get("project")
+        return {
+            "ok": True,
+            "track_id": track_id,
+            "session": result.get("session"),
+            "summary": result.get("summary") or {},
+            "duration": result.get("duration"),
+            "project": _public_editor_project(project, "/api/v1")
+            if isinstance(project, dict)
+            else None,
+        }
+
+    @router.post(
+        "/editor/projects/{project_id}/tracks/{track_id}/midi-session/render",
+        response_model=EditorMidiSessionResponse,
+        tags=["编辑器"],
+        summary="把 MIDI 编曲渲染成音频",
+        description=_resource_api_doc(
+            "用内置多乐器合成器把编曲渲染成音频：mode=tracks 时每个声部生成一条新音轨，"
+            "mode=mix 时混成一条片段落回当前音轨（可撤销）。",
+            "POST",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/midi-session/render",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+                ("session", "object", "否", "已保存的会话", "编曲会话"),
+                ("options", "object", "否", "{\"mode\":\"tracks\"}", "渲染选项"),
+            ],
+        ),
+    )
+    def render_editor_midi_session(
+        request: EditorMidiSessionRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+    ) -> dict[str, Any]:
+        result = facade.render_editor_midi_session(
+            project_id, track_id, request.session, request.options or {}
+        )
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=409, detail=str(result.get("error") or "渲染失败")
+            )
+        project = result.get("project")
+        clips = [clip for clip in result.get("clips") or [] if isinstance(clip, dict)]
+        return {
+            "ok": True,
+            "track_id": track_id,
+            "mode": result.get("mode") or "",
+            "report": result.get("report") or {},
+            "project": _public_editor_project(project, "/api/v1")
+            if isinstance(project, dict)
+            else None,
+            "clips": [
+                _public_editor_clip(clip, project_id, "/api/v1") for clip in clips
+            ],
+            "tracks": result.get("tracks") or [],
+        }
+
+    @router.post(
+        "/editor/projects/{project_id}/tracks/{track_id}/midi-session/export",
+        response_model=EditorMidiSessionResponse,
+        tags=["编辑器"],
+        summary="导出 MIDI 编曲为 .mid 文件",
+        description=_resource_api_doc(
+            "把编曲会话导出成标准 MIDI 文件（一轨一声部），返回服务端文件路径。",
+            "POST",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/midi-session/export",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+                ("session", "object", "否", "已保存的会话", "编曲会话"),
+            ],
+        ),
+    )
+    def export_editor_midi_session(
+        request: EditorMidiSessionRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+    ) -> dict[str, Any]:
+        result = facade.export_editor_midi_session(
+            project_id, track_id, request.session
+        )
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=409, detail=str(result.get("error") or "导出失败")
+            )
+        return {
+            "ok": True,
+            "track_id": track_id,
+            "path": result.get("path") or "",
+            "bytes": int(result.get("bytes") or 0),
+            "summary": result.get("summary") or {},
+        }
+
+    @router.post(
+        "/editor/projects/{project_id}/tracks/{track_id}/midi-session/preview",
+        response_model=EditorMidiSessionResponse,
+        tags=["编辑器"],
+        summary="试听 MIDI 编曲",
+        description=_resource_api_doc(
+            "用内置合成器渲染一段试听音频，返回可直接播放的 data URI。",
+            "POST",
+            "/api/v1/editor/projects/{project_id}/tracks/{track_id}/midi-session/preview",
+            [
+                ("project_id", "string", "是", "-", "编辑工程 ID"),
+                ("track_id", "string", "是", "-", "音轨 ID"),
+                ("session", "object", "否", "已保存的会话", "编曲会话"),
+            ],
+        ),
+    )
+    def preview_editor_midi_session(
+        request: EditorMidiSessionRequest,
+        project_id: str = ApiPath(..., description="编辑工程 ID"),
+        track_id: str = ApiPath(..., description="音轨 ID"),
+    ) -> dict[str, Any]:
+        result = facade.preview_editor_midi_session(
+            project_id, track_id, request.session
+        )
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=409, detail=str(result.get("error") or "试听渲染失败")
+            )
+        return {
+            "ok": True,
+            "track_id": track_id,
+            "audio": result.get("audio") or "",
+            "duration": result.get("duration"),
+        }
+
     @router.post(
         "/editor/projects/{project_id}/tracks/{track_id}/clips/merge",
         response_model=EditorOperationResponse,
@@ -3089,7 +3554,7 @@ class HttpApiServer:
 
     SETTINGS_KEY = "http_api"
 
-    def __init__(self, facade: "Api", settings: SettingsStore) -> None:
+    def __init__(self, facade: "Api", settings: SettingsRepository) -> None:
         self._facade = facade
         self._settings = settings
         self._lock = threading.RLock()
@@ -3422,6 +3887,7 @@ class HttpApiServer:
                 f"http://127.0.0.1:{status['port']}/api/v1/models",
                 headers={"X-API-Key": status["api_key"]},
                 timeout=5.0,
+                trust_env=False,
             )
             response.raise_for_status()
             data = response.json()

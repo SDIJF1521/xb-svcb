@@ -69,6 +69,25 @@ CUDA 共享布局：
 & .\installer\build.ps1 -Stacks directml
 ```
 
+### 受限环境：启动即提权（`-RequireAdmin`）
+
+安装器默认按当前用户安装（`PrivilegesRequired=lowest`）。Inno Setup 会在显示任何界面之前
+先把自身解压到 `%TEMP%\is-XXXX.tmp`；如果运行安装器的非提权进程不能写 `%TEMP%`
+（常见于被终端安全软件、企业策略或沙箱接管的会话），就会在启动阶段报
+“安装程序无法创建目录 … 错误 5: 拒绝访问”，此时安装器自身的代码还没开始执行。
+
+遇到这种情况，用 `-RequireAdmin` 构建“启动即提权”的版本：UAC 在解压之前弹出，提权后再解压，
+可以彻底绕开该限制。
+
+```powershell
+& .\installer\build.ps1 -Stacks cu126 -RequireAdmin
+& .\installer\build-all-packages.ps1 -ReuseBuildOutputs -RequireAdmin
+& .\installer\build-online-modelscope.ps1 -Repo lkpp233/xb-svcb -Revision v0.1.1 -RequireAdmin
+```
+
+提权版本的安装目录仍是 `{localappdata}\Programs\XB-SVCB`（同一账户提权时路径不变），
+但卸载信息写入 HKLM，且要求用户具备管理员权限；普通按用户分发的版本保持默认构建即可。
+
 单独运行 `build.ps1` 且不传 `-SkipWheelhouse` 时，只为目标栈重新准备 wheelhouse；该路径会使用
 `--clean` 清空现有全部 wheel 缓存。已经准备多栈缓存时不要使用该默认行为，应先增量准备缺失栈，
 再通过 `-SkipWheelhouse` 打包，例如：
@@ -174,11 +193,11 @@ CPU、ROCm 已完成而其余三栈尚未准备时，直接补齐剩余栈，避
 
 ## 在线安装器与发布源
 
-v0.1.0 提供两种引导式在线安装器。GitHub Releases 只公开发布魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`；备用下载源版本 `XB-SVCB-Online-Setup.exe` 不上传 GitHub，如有需要请联系开发者单独获取。两种版本都会自动检测或让用户手动选择硬件栈，先读取并校验发布清单，再显示完整安装包大小、缓存复用情况和下载位置。只有缺失或 SHA-256 不匹配的 EXE/BIN 分卷会下载；全部文件校验通过后，在线安装器会以当前语言启动完整离线安装向导。在线安装器支持简体中文、English 和日本語。
+v0.1.1 提供两种引导式在线安装器。GitHub Releases 只公开发布魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`；备用下载源版本 `XB-SVCB-Online-Setup.exe` 不上传 GitHub，如有需要请联系开发者单独获取。两种版本都会自动检测或让用户手动选择硬件栈，先读取并校验发布清单，再显示完整安装包大小、缓存复用情况和下载位置。只有缺失或 SHA-256 不匹配的 EXE/BIN 分卷会下载；全部文件校验通过后，在线安装器会以当前语言启动完整离线安装向导。在线安装器支持简体中文、English 和日本語。
 
 ### 魔搭社区 ModelScope 版本
 
-`XB-SVCB-Online-Setup-ModelScope.exe` 与备用 OSS 版共用同一份带 SHA-256 的发布清单和五套离线包，但从公开的 ModelScope 模型仓库下载。两个引导程序可同时构建，互不覆盖。当前默认发布源是 [`lkpp233/xb-svcb` 的 `v0.1.0` 版本文件页](https://www.modelscope.cn/models/lkpp233/xb-svcb/files?version=v0.1.0)，安装器读取该版本的仓库根目录。把 `online-manifest.ini` 和全部 `XB-SVCB-Setup-*` EXE/BIN 原名上传到该版本根目录，然后运行：
+`XB-SVCB-Online-Setup-ModelScope.exe` 与备用 OSS 版共用同一份带 SHA-256 的发布清单和五套离线包，但从公开的 ModelScope 模型仓库下载。两个引导程序可同时构建，互不覆盖。当前默认发布源是 [`lkpp233/xb-svcb` 的 `v0.1.1` 版本文件页](https://www.modelscope.cn/models/lkpp233/xb-svcb/files?version=v0.1.1)，安装器读取该版本的仓库根目录。把 `online-manifest.ini` 和全部 `XB-SVCB-Setup-*` EXE/BIN 原名上传到该版本根目录，然后运行：
 
 ```powershell
 & .\installer\build-online-modelscope.ps1 `
@@ -190,8 +209,8 @@ v0.1.0 提供两种引导式在线安装器。GitHub Releases 只公开发布魔
 ```powershell
 & .\installer\build-online-modelscope.ps1 `
   -Repo "你的用户名/xb-svcb-releases" `
-  -Revision v0.1.0 `
-  -RepositoryPath "xb-svcb/0.1.0"
+  -Revision v0.1.1 `
+  -RepositoryPath "xb-svcb/0.1.1"
 ```
 
 仓库必须允许匿名下载。构建脚本使用 ModelScope 官方文件接口 `/api/v1/models/<仓库>/repo?Revision=...&FilePath=...`，不会把访问令牌写进安装器。上传后应先验证清单、一个 EXE 和最大的 BIN 都能在未登录状态下下载，并确认 BIN 请求支持断点续传；仓库配额、单文件大小或下行流量不满足时，不能只上传部分分卷。替换任何发布文件后，仍需重新生成清单并重新构建、分发引导程序。
@@ -206,30 +225,30 @@ Region:  oss-cn-hongkong
 Endpoint: https://oss-cn-hongkong.aliyuncs.com
 ```
 
-你已经在 Bucket 内创建了 `xb-svcb/0.1.0/` 对象前缀，因此在线安装器的基础地址为：
+你已经在 Bucket 内创建了 `xb-svcb/0.1.1/` 对象前缀，因此在线安装器的基础地址为：
 
 ```text
-https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1.0
+https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1.1
 ```
 
-注意：截图显示该 Bucket 当前是“私有”。当前在线安装器使用的是不带凭据的 HTTPS 下载，并且会拒绝把 AccessKey、Secret 或带查询参数的长期签名 URL 编译进去，所以私有桶的直接 URL 会返回 `403`，不能直接用于在线安装。推荐保留 Bucket 默认私有，仅通过 OSS Bucket Policy 对 `xb-svcb/0.1.0/*` 授予匿名 `oss:GetObject`；不要授予匿名列目录、上传或删除权限。若控制台无法配置按前缀授权，则使用公开 HTTPS CDN/下载域名作为 `-BaseUrl`，不要把密钥写入安装器。
+注意：截图显示该 Bucket 当前是“私有”。当前在线安装器使用的是不带凭据的 HTTPS 下载，并且会拒绝把 AccessKey、Secret 或带查询参数的长期签名 URL 编译进去，所以私有桶的直接 URL 会返回 `403`，不能直接用于在线安装。推荐保留 Bucket 默认私有，仅通过 OSS Bucket Policy 对 `xb-svcb/0.1.1/*` 授予匿名 `oss:GetObject`；不要授予匿名列目录、上传或删除权限。若控制台无法配置按前缀授权，则使用公开 HTTPS CDN/下载域名作为 `-BaseUrl`，不要把密钥写入安装器。
 
 构建在线安装器时可以直接使用这个地址：
 
 ```powershell
-$env:XB_OSS_BASE_URL = "https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1.0"
+$env:XB_OSS_BASE_URL = "https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1.1"
 & .\installer\build-online.ps1 `
   -Python C:\python3.12.9\python.exe
 ```
 
-构建完成后，把 `dist\online-manifest.ini` 和五套离线安装器的 EXE/BIN 文件原名上传到 `xb-svcb/0.1.0/` 前缀。先上传全部 EXE/BIN，最后上传 `online-manifest.ini`。本地生成的 `dist\XB-SVCB-Online-Setup.exe` 是备用引导程序，不上传 GitHub Releases，也不要求放在 OSS；需要时由开发者单独提供。如果上传到内部下载位置，必须与离线安装分卷分开，避免用户误把它当作某个硬件栈的离线安装器。
+构建完成后，把 `dist\online-manifest.ini` 和五套离线安装器的 EXE/BIN 文件原名上传到 `xb-svcb/0.1.1/` 前缀。先上传全部 EXE/BIN，最后上传 `online-manifest.ini`。本地生成的 `dist\XB-SVCB-Online-Setup.exe` 是备用引导程序，不上传 GitHub Releases，也不要求放在 OSS；需要时由开发者单独提供。如果上传到内部下载位置，必须与离线安装分卷分开，避免用户误把它当作某个硬件栈的离线安装器。
 
 如果 OSS 上的五套离线包和 `online-manifest.ini` 没有变化，只修改了在线安装器代码，本地可以删除大分卷后复用现有清单。此时使用 `-ReuseManifest`，脚本会严格校验现有清单但不会要求本地保留五套 EXE/BIN：
 
 ```powershell
 .\installer\build-online.ps1 `
   -ReuseManifest `
-  -BaseUrl "https://xb-svcb.oss-accelerate.aliyuncs.com/xb-svcb/0.1.0" `
+  -BaseUrl "https://xb-svcb.oss-accelerate.aliyuncs.com/xb-svcb/0.1.1" `
   -Python C:\python3.12.9\python.exe
 ```
 
@@ -238,15 +257,15 @@ $env:XB_OSS_BASE_URL = "https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1
 在线安装器只把几 KB 的 `online-manifest.ini` 临时放入系统临时目录。大体积的 EXE/BIN 分卷优先由 Windows 自带 `curl.exe` 直接下载到在线安装器所在目录下；如果系统没有 curl，则自动回退到 Windows PowerShell 的 `Invoke-WebRequest`。两种方式都不会把大文件写入 C 盘临时目录：
 
 ```text
-<在线安装器所在目录>\XB-SVCB-Downloads\0.1.0\<stack>\
+<在线安装器所在目录>\XB-SVCB-Downloads\0.1.1\<stack>\
 ```
 
-例如在线安装器在 `D:\Downloads` 中并选择 CUDA126，下载中的文件和最终文件都位于 `D:\Downloads\XB-SVCB-Downloads\0.1.0\cu126\`。未完成文件使用 `.part` 后缀；curl 路径支持续传，PowerShell 回退路径会从头重新下载。SHA-256 校验通过后文件在同一目录原地改名。该目录保存用户选择的硬件栈 EXE 和全部 `.bin` 分卷，在线安装器从这里启动离线安装器。它不会在在线安装器退出时自动删除，因此也可作为完整离线包保留。在线安装器所在目录必须可写；若从只读目录、受保护目录或压缩包内运行，需要先把在线安装器移动到普通可写文件夹。
+例如在线安装器在 `D:\Downloads` 中并选择 CUDA126，下载中的文件和最终文件都位于 `D:\Downloads\XB-SVCB-Downloads\0.1.1\cu126\`。未完成文件使用 `.part` 后缀；curl 路径支持续传，PowerShell 回退路径会从头重新下载。SHA-256 校验通过后文件在同一目录原地改名。该目录保存用户选择的硬件栈 EXE 和全部 `.bin` 分卷，在线安装器从这里启动离线安装器。它不会在在线安装器退出时自动删除，因此也可作为完整离线包保留。在线安装器所在目录必须可写；若从只读目录、受保护目录或压缩包内运行，需要先把在线安装器移动到普通可写文件夹。
 
 上传后先验证匿名读取（在 OSS 权限配置完成后执行）：
 
 ```powershell
-$base = "https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1.0"
+$base = "https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1.1"
 Invoke-WebRequest -UseBasicParsing -Method Head "$base/online-manifest.ini"
 Invoke-WebRequest -UseBasicParsing -Method Head "$base/XB-SVCB-Setup-CPU.exe"
 ```
@@ -259,13 +278,13 @@ Invoke-WebRequest -UseBasicParsing -Method Head "$base/XB-SVCB-Setup-CPU.exe"
 & .\installer\build-all-packages.ps1 `
   -Python C:\python3.12.9\python.exe -RebuildWheelhouse
 & .\installer\build-online.ps1 `
-  -BaseUrl "https://你的公开下载域名/xb-svcb/0.1.0"
+  -BaseUrl "https://你的公开下载域名/xb-svcb/0.1.1"
 ```
 
 也可以通过环境变量提供公开目录 URL：
 
 ```powershell
-$env:XB_OSS_BASE_URL = "https://你的公开下载域名/xb-svcb/0.1.0"
+$env:XB_OSS_BASE_URL = "https://你的公开下载域名/xb-svcb/0.1.1"
 & .\installer\build-online.ps1
 ```
 
@@ -287,7 +306,7 @@ XB-SVCB-Setup-CUDA128-*.bin
 
 备用 OSS 版只在需要时由开发者单独分发本地生成的 `dist\XB-SVCB-Online-Setup.exe`，不上传 GitHub Releases；它本身不必放在同一个 OSS 目录。OSS 发布要求：
 
-- 推荐 Bucket 保持私有，只通过 Bucket Policy 给 `xb-svcb/0.1.0/*` 前缀开放匿名只读；不要开放匿名写入、删除或列目录权限。
+- 推荐 Bucket 保持私有，只通过 Bucket Policy 给 `xb-svcb/0.1.1/*` 前缀开放匿名只读；不要开放匿名写入、删除或列目录权限。
 - 绑定公开 HTTPS 域名或使用 OSS 公网 HTTPS Endpoint，不要使用内网 Endpoint，也不要把 AccessKey、Secret 或临时签名 URL 编译进安装器。
 - 文件名和目录层级必须保持不变；开启 Range 请求，EXE/BIN 使用 `application/octet-stream`，INI 使用 `text/plain; charset=utf-8`，不要启用自动压缩或内容改写。
 - 若开启防盗链，必须允许空 Referer，否则 Inno Setup 下载请求会返回 403。安装器直连不需要配置 CORS；只有网页 JavaScript 跨域读取文件时才需要 CORS。
@@ -352,7 +371,7 @@ XB-SVCB-Setup-CUDA128-2.bin
 
 安装器支持简体中文、English 和日本語。启动时会按 Windows UI 语言预选，并始终显示语言选择框。Inno Setup 的简中、日语基础消息固定在 `installer/languages/`，构建不依赖开发机是否安装可选语言包；自定义页面、依赖检测、进度、校验弹窗、完成页和开始菜单名称统一由 `xb-svcb.iss` 的 `[CustomMessages]` 提供。
 
-从 v0.1.0 开始，离线包同时携带简体中文、英文和日文发布说明：`release_notes_v0_1_0.md`、`release_notes_v0_1_0.en.md`、`release_notes_v0_1_0.ja.md`。后续版本构建前也必须准备对应的三份文件。
+从 v0.1.0 开始，离线包同时携带简体中文、英文和日文发布说明。后续版本构建前也必须准备对应的三份文件；当前版本为 `release_notes_v0_1_1.md`、`release_notes_v0_1_1.en.md`、`release_notes_v0_1_1.ja.md`，`build.ps1` 会在打包前校验这三份文件存在。
 
 新增安装器文案时必须同时提供 `zhcn`、`en`、`ja` 三个同名键，并从 Pascal Script 通过 `M` / `M1` 到 `M4` 调用。`app/tests/test_installer_runtime.py` 会检查三套键完全一致、引用键均存在，且 `[Code]` 中没有重新引入面向用户的中文硬编码。
 
@@ -371,7 +390,9 @@ XB-SVCB-Setup-CUDA128-2.bin
 
 安装器执行 `setup_env.bat` 时会异步启动批处理，并轮询真实进程状态；安装窗口会持续刷新，不会因为 `uv`/`pip` 安装大型 wheel 长时间没有输出而显示为无响应。进度条优先使用脚本输出的 `[XB-PROGRESS]` 标记，等待依赖安装期间只做受限心跳推进，绝不会在进程退出前报告完成。每一步的完整输出保存在安装目录的 `install_logs\install_prereqs.log` 或 `install_logs\setup_env.log`；只有批处理返回 0 后才会继续进行各模型运行时校验。
 
-运行环境安装始终优先使用 `assets\wheels\bootstrap` 中固定版本的 `uv`，执行文件提取到安装目录的 `.tmp\uv-tools`，缓存写入 `.tmp\uv-cache`。安装会话的 `TEMP` / `TMP` 也会指向安装目录的 `.tmp\runtime-temp`，Python 临时目录、wheel 解包和依赖检测不会占用系统盘的大量空间；这些变量只对安装脚本进程生效，不修改用户永久环境变量。在线安装器的完整离线包仍保存在在线安装器旁边的 `XB-SVCB-Downloads`。Windows 和 Inno Setup 启动自身仍可能使用少量系统临时空间，因此 C 盘不能完全为 0 字节可用。过滤后的临时 requirements 会自动创建父目录，因此全新安装中不存在 `.tmp` 时也能安装 DDSP legacy 环境。
+运行环境安装始终优先使用 `assets\wheels\bootstrap` 中固定版本的 `uv`，执行文件提取到安装目录的 `.tmp\uv-tools`，缓存写入 `.tmp\uv-cache`。引导 `uv` 用的 `pip` 缓存写入 `.tmp\pip-cache`，`uv` 托管的 Python 写入 `.tmp\uv-python`；安装会话的 `TEMP` / `TMP` 也会指向安装目录的 `.tmp\runtime-temp`，Python 临时目录、wheel 解包和依赖检测不会占用系统盘的大量空间；这些变量只对安装脚本进程生效，不修改用户永久环境变量。直接运行 `python install/install.py`（不传 `--root`）同样会把以上目录固定在脚本所在安装目录，`setup_env.bat`、`setup_shared_env.bat`、`install_prereqs.bat` 也会显式设置，因此 uv 不会退回 `%LOCALAPPDATA%\uv\cache`。磁盘剩余空间低于 12 GB 时安装器会打印中文告警；需要把缓存放到其他磁盘时，可在运行安装器前设置 `XB_UV_CACHE_DIR` / `XB_PIP_CACHE_DIR`（例如 `D:\xb-cache\uv` 与 `D:\xb-cache\pip`）。在线安装器的完整离线包仍保存在在线安装器旁边的 `XB-SVCB-Downloads`。Windows 和 Inno Setup 启动自身仍可能使用少量系统临时空间，因此 C 盘不能完全为 0 字节可用。过滤后的临时 requirements 会自动创建父目录，因此全新安装中不存在 `.tmp` 时也能安装 DDSP legacy 环境。
+
+安装器全链路统一使用 UTF-8：入口批处理先 `chcp 65001`，并给子 Python 设置 `PYTHONUTF8` / `PYTHONIOENCODING`，批处理里用 `for /f` 读取的路径由 Python 直接写出 UTF-8 字节；`install.py` 强制 stdout/stderr 使用 UTF-8；`installer_env.cmd`、`data_home.json` 与 `install_logs\*.log` 均按 UTF-8 写入，Inno Setup 也按 UTF-8 解码日志与命令输出。这样中文/日文用户名与中文安装路径（如 `D:\翻唱工具`）不会因为系统 ANSI 代码页（GBK/CP932/CP1252）不同而出现乱码或“找不到 Python”的安装失败。旧版安装器写出的 ANSI `data_home.json` 仍可被应用读取。
 
 ## 文件职责
 

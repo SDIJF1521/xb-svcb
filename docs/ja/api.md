@@ -2,7 +2,7 @@
 
 # XB-SVCB FastAPI連携
 
-対象: XB-SVCB 0.1.0
+対象: XB-SVCB 0.1.1
 
 ## 起動とセキュリティ
 
@@ -174,7 +174,7 @@ sourceとtarget voice referenceを別々にuploadし、`reference_upload_id`を�
 
 workflowは`auto_mix`、`auto_vocal_merge`、`manual_vocal_merge`、`auto_then_editor`、`full_manual_editor`です。後二つのvocal merge方式は単一モデルには使えません。
 
-`models[].params.auto_high_pitch_guard`はモデル別高音保護で、既定はtrueです。高音部分だけ低いpitchで推論後に戻します。旧requestはtop-level `params.auto_high_pitch_guard`も使えます。
+`models[].params.auto_high_pitch_guard`はモデル別高音保護で、既定はtrueです。高音部分だけ低いpitchで推論後に戻します。戻した後、確定した高音区間の高域成分はSnake-HiFiGAN（Snake weightがない場合は同梱NSF-HiFiGAN）ボコーダーで再合成し、レベル・息成分・狭帯域ピークの検査を通った区間だけ採用します。そのため追加パラメーターはありません。旧requestはtop-level `params.auto_high_pitch_guard`も使えます。
 
 完全な複数モデルPython client例は[英語版](../en/api.md#complete-python-example)または[中国語版](../api.md#完整-python-示例)にあり、fieldとendpointは言語間で共通です。
 
@@ -219,6 +219,12 @@ workflowは`auto_mix`、`auto_vocal_merge`、`manual_vocal_merge`、`auto_then_e
 | `POST` | clip `/separate` | UVR/PyMSS分離と任意dereverb |
 | `POST` | clip `/rerun` | 範囲再推論 |
 | `POST` | track `/clips/merge` | clip結合render |
+| `GET` | clip `/midi` | clipのMIDI音符を取得（`refresh=1`で再分析） |
+| `PUT` | clip `/midi` | clipのMIDI音符を保存 |
+| `POST` | clip `/midi/apply` | MIDI音符をclip音声へ適用（フォルマント保持PSOLA） |
+| `GET` | track `/midi` | トラック単位のMIDI音符を取得（空トラックは空のグリッド） |
+| `PUT` | track `/midi` | トラック単位のMIDI音符を保存（絶対時間） |
+| `POST` | track `/midi/apply` | トラック音符をclipごとに分割して音声へ適用 |
 
 ## 主なstatus code
 

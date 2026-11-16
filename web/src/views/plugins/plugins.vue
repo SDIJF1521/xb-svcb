@@ -92,6 +92,8 @@ function notify(type: 'success' | 'warning' | 'info' | 'error', message: string)
     message: translateUiText(message),
     position: 'top-right',
     customClass: 'xb-notification-center',
+    // 顶部导航高 64px，提示下移避免压住导航。
+    offset: 84,
     duration: type === 'error' ? 4200 : 2600,
     showClose: true,
   })

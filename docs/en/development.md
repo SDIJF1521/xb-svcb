@@ -16,7 +16,9 @@
 
 ## Backend Development
 
-Main-application dependencies are declared in `app/pyproject.toml`; the runtime entry point is `app/main.py`. Start with `app/api/bridge.py` and `app/application/` to follow application calls, then inspect concrete engines and workers in `app/infrastructure/`.
+Main-application dependencies are declared in `app/pyproject.toml`; the runtime entry point is `app/main.py`. Suggested reading order: `app/composition.py` (the single wiring point listing every adapter and use-case service), then the use-case services in `app/application/` and the port contracts in `app/application/ports.py`, and finally the concrete engines and workers in `app/infrastructure/`. Framework-free rules live in `app/domain/`; `app/api/` only adapts parameters and protocols.
+
+The dependency direction is a hard constraint enforced by `app/tests/test_architecture.py`; see [Layering Constraints (DDD)](../ddd-architecture.md).
 
 Run tests:
 
@@ -49,11 +51,11 @@ The output should be `engines/juce-vst3-host/xb-juce-vst3-host.exe`. See the ins
 
 Build scripts support `-Help` or `--help` without running preflight checks or packaging.
 
-The v0.1.0 history starts at commit `fc8d214e068457a273929e80c108b33f55b4e9e8`, and that commit is included in v0.1.0. Generate the release commit list with:
+The v0.1.1 history starts at commit `12f6db36754f5e86c9997449752367804e2da76a`, and that commit is included in v0.1.1. Generate the release commit list with:
 
-    git log --reverse fc8d214e068457a273929e80c108b33f55b4e9e8^..HEAD
+    git log --reverse 12f6db36754f5e86c9997449752367804e2da76a^..HEAD
 
-Use the same inclusive range for audits. Do not use `fc8d214e068457a273929e80c108b33f55b4e9e8..HEAD`, which omits the starting commit.
+Use the same inclusive range for audits. Do not use `12f6db36754f5e86c9997449752367804e2da76a..HEAD`, which omits the starting commit.
 
 Lightweight validation:
 

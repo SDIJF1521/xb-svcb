@@ -10,6 +10,19 @@ uv run --project app --with pytest --with scipy==1.13.1 pytest app/tests -q -rs
 
 キャッシュ準備後は`--offline`を追加できます。`-rs`は各skip理由を表示します。テスト成功は実モデル推論やリリース受け入れの成功を意味しません。
 
+## レイヤーとドメインルールの専用テスト
+
+アーキテクチャ変更、ルールのdomain/移設、ポート追加のときは必ずこの組も実行します。
+
+```powershell
+uv run --project app --with pytest pytest app/tests/test_architecture.py app/tests/test_composition.py \
+    app/tests/test_domain_entities.py app/tests/test_domain_editor_rules.py \
+    app/tests/test_work_request.py app/tests/test_data_maintenance.py -q
+```
+
+	est_architecture.pyは各層のimport方向、唯一の構成ルート、ポート／アダプタ契約、表示層が門面の私有メンバーに触れないことを検証します。
+	est_composition.pyは隔離したデータディレクトリでcomposition.build_api()を1回実行します。
+詳細は[レイヤー制約（DDD）](../ddd-architecture.md)を参照してください。
 ## 分類
 
 | マーカー | 内容 | 選択方法 |

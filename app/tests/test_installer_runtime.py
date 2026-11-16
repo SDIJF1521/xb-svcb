@@ -229,6 +229,91 @@ def test_installer_localization_catalog_covers_all_supported_languages() -> None
     assert cjk_literals == []
 
 
+def test_installer_entrypoints_pin_utf8_and_install_drive_caches() -> None:
+    setup_env = (ROOT / "setup_env.bat").read_text(encoding="utf-8")
+    shared_env = (ROOT / "setup_shared_env.bat").read_text(encoding="utf-8")
+    prereqs = (ROOT / "install_prereqs.bat").read_text(encoding="utf-8")
+    detector = DETECTOR.read_text(encoding="utf-8")
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+
+    # cmd decodes piped child output with the console code page, which is 65001.
+    for source in (setup_env, shared_env, prereqs, detector):
+        assert 'if not defined PYTHONUTF8 set "PYTHONUTF8=1"' in source
+        assert 'if not defined PYTHONIOENCODING set "PYTHONIOENCODING=utf-8"' in source
+
+    # uv/pip caches and temp traffic must stay on the install drive; uv's
+    # default %LOCALAPPDATA%\uv\cache fills small system drives.
+    for source in (setup_env, shared_env, prereqs):
+        assert 'set "XB_UV_CACHE_DIR=%~dp0.tmp\\uv-cache"' in source
+        assert 'set "UV_CACHE_DIR=%XB_UV_CACHE_DIR%"' in source
+        assert 'set "XB_PIP_CACHE_DIR=%~dp0.tmp\\pip-cache"' in source
+        assert 'set "PIP_CACHE_DIR=%XB_PIP_CACHE_DIR%"' in source
+        assert 'if not exist "%XB_UV_CACHE_DIR%" mkdir "%XB_UV_CACHE_DIR%"' in source
+        assert 'if not exist "%XB_PIP_CACHE_DIR%" mkdir "%XB_PIP_CACHE_DIR%"' in source
+
+    assert 'set "PYTHONUTF8=1"' in script
+    assert 'set "PYTHONIOENCODING=utf-8"' in script
+    assert 'set "XB_PIP_CACHE_DIR=' in script
+    assert 'set "PIP_CACHE_DIR=%XB_PIP_CACHE_DIR%"' in script
+    assert 'set "UV_PYTHON_INSTALL_DIR=' in script
+
+
+def test_installer_batch_python_probes_emit_utf8_bytes() -> None:
+    detector = DETECTOR.read_text(encoding="utf-8")
+    prereqs = (ROOT / "install_prereqs.bat").read_text(encoding="utf-8")
+
+    # A plain print() on a redirected pipe uses the ANSI code page while cmd
+    # decodes the pipe as UTF-8; write the bytes explicitly instead.
+    assert "sys.stdout.buffer.write(sys.executable.encode('utf-8'))" in detector
+    assert "(sysconfig.get_path('scripts') or '').encode('utf-8')" in prereqs
+    assert "(sysconfig.get_path('scripts', scheme='nt_user') or '').encode('utf-8')" in prereqs
+
+
+def test_install_ps1_pins_utf8_for_python_detection() -> None:
+    script = (ROOT / "install.ps1").read_text(encoding="utf-8-sig")
+
+    assert '$env:PYTHONUTF8 = "1"' in script
+    assert '$env:PYTHONIOENCODING = "utf-8"' in script
+    assert "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8" in script
+
+
+def test_installer_writes_utf8_payloads_and_decodes_utf8_logs() -> None:
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+
+    # installer_env.cmd is parsed by cmd at chcp 65001; an ANSI write breaks a
+    # Chinese install path and then Python/uv cannot be found.
+    assert "SaveStringToFile(ExpandConstant('{app}\\installer_env.cmd'), Utf8Encode(Payload), False)" in script
+    # app/config.py reads data_home.json as UTF-8.
+    assert "SaveStringToFile(ExpandConstant('{app}\\data_home.json'), Utf8Encode(Payload), False)" in script
+    assert "SaveStringToFile(ExpandConstant('{userappdata}\\XB-SVCB\\data_home.json'), Utf8Encode(Payload), False)" in script
+    # Step logs and validation lines are written as UTF-8 and read back as UTF-8.
+    assert "SaveStringToFile(LastInstallLog, Utf8Encode(Line + #13#10), True)" in script
+    assert "SaveStringToFile(CurrentLogPath, Utf8Encode(Line + #13#10), True)" in script
+    assert "CurrentText := SafeUtf8Decode(LogText);" in script
+    assert "SeenText := SafeUtf8Decode(FinalLogText);" in script
+    assert "LastInstallSummary := TailText(SafeUtf8Decode(FinalLogText), 1600);" in script
+    # Command output and runtime_manifest.py results are UTF-8 as well.
+    assert "Result := DecodeConsoleText(Text);" in script
+    assert "Resolved := Trim(DecodeConsoleText(Text))" in script
+    assert "function LooksLikeUtf8(" in script
+    assert "Utf8Decode(Raw)" in script
+
+
+def test_installer_warns_before_building_runtime_on_a_full_install_drive() -> None:
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    code = script.split("[Code]", 1)[1]
+    messages = script.split("[CustomMessages]", 1)[1].split("[Tasks]", 1)[0]
+
+    assert "procedure WarnLowDiskSpace();" in code
+    assert "GetSpaceOnDisk64(Dir, Free, Total)" in code
+    assert "if (FreeGb < 0) or (FreeGb >= 12) then" in code
+    assert "WarnLowDiskSpace();" in code
+    assert "M2('DiskSpaceLow'" in code
+    for language in ("zhcn", "en", "ja"):
+        assert f"{language}.DiskSpaceLow=" in messages
+    assert "XB_UV_CACHE_DIR" in messages
+
+
 def test_installer_entrypoints_suppress_uv_cross_drive_hardlink_warning() -> None:
     setup_env = (ROOT / "setup_env.bat").read_text(encoding="utf-8")
     prereqs = (ROOT / "install_prereqs.bat").read_text(encoding="utf-8")
@@ -379,6 +464,55 @@ def test_install_py_rejects_non312_verified_python_for_py312_venvs(
     assert installer.python_spec_for_venv("uv", "3.12") == "3.12"
 
 
+def test_install_py_where_python_decodes_utf8_profile_paths(monkeypatch) -> None:
+    """`where python` prints UTF-8 under chcp 65001 even on GBK Windows."""
+    installer = _load_install_module()
+    profile = "C:\\Users\\端木雪堂\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
+
+    def fake_run(cmd, **kwargs):
+        assert kwargs["capture_output"] is True
+        # Decoding must happen after the fact instead of trusting text=True:
+        # the ANSI code page is GBK and would kill subprocess' reader thread.
+        assert "text" not in kwargs and "encoding" not in kwargs
+        return SimpleNamespace(
+            args=cmd,
+            returncode=0,
+            stdout=(profile + "\r\n").encode("utf-8"),
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+    monkeypatch.setattr(installer.shutil, "which", lambda name: None)
+
+    assert installer._where_python_paths() == [profile]
+
+
+def test_install_py_console_decode_handles_gbk_and_missing_stdout(monkeypatch) -> None:
+    installer = _load_install_module()
+    profile = "C:\\Users\\端木雪堂\\python.exe"
+
+    assert installer._decode_console_output((profile + "\n").encode("utf-8")) == profile + "\n"
+    monkeypatch.setattr(
+        installer.locale,
+        "getpreferredencoding",
+        lambda do_setlocale=True: "cp936",
+    )
+    assert installer._decode_console_output((profile + "\n").encode("gbk")) == profile + "\n"
+
+    # A failed reader thread used to leave stdout as None and crash the
+    # installer with AttributeError; the helper must degrade to no paths.
+    monkeypatch.setattr(
+        installer.subprocess,
+        "run",
+        lambda cmd, **kwargs: SimpleNamespace(
+            args=cmd, returncode=0, stdout=None, stderr=None
+        ),
+    )
+    monkeypatch.setattr(installer.shutil, "which", lambda name: None)
+
+    assert installer._where_python_paths() == []
+
+
 def test_all_release_stacks_use_the_locked_python312_interpreter() -> None:
     installer = _load_install_module()
 
@@ -418,7 +552,49 @@ def test_consolidated_runtime_is_disabled_for_directml() -> None:
     assert installer.RVC_VENV == installer.ROOT / ".venv-rvc-directml"
 
 
-def test_directml_wheel_plan_includes_cpu_legacy_and_rvc_compat(tmp_path: Path, monkeypatch) -> None:
+def test_rvc_recipe_installs_official_stack_dependencies(tmp_path: Path) -> None:
+    installer = _load_install_module()
+    installer._derive_paths(tmp_path)
+    assert installer.RVC_BASE_MODEL_DIR == tmp_path / "engines" / "rvc" / "pretrain"
+    deps = installer.RVC_INFERENCE_DEPS
+
+    assert any(dep.startswith("fairseq-fixed") for dep in deps)
+    assert any(dep.startswith("faiss-cpu") for dep in deps)
+    assert any(dep.startswith("pyworld") for dep in deps)
+    assert any(dep.startswith("torchcrepe") for dep in deps)
+    assert not any("rvc-python" in dep for dep in deps)
+
+
+def test_rvc_base_models_are_seeded_into_the_models_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    installer = _load_install_module()
+    base_dir = tmp_path / "engines" / "rvc" / "pretrain"
+    source = tmp_path / "pretrain" / "hubert_base.pt"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"x" * (32 * 1024 * 1024 + 1))
+    rmvpe_source = tmp_path / "pretrain" / "rmvpe.pt"
+    rmvpe_source.write_bytes(b"y" * (32 * 1024 * 1024 + 1))
+
+    monkeypatch.setattr(installer, "RVC_BASE_MODEL_DIR", base_dir)
+    monkeypatch.setattr(
+        installer,
+        "_find_rvc_base_source",
+        lambda *names: source if any(n.endswith("hubert_base.pt") for n in names) else rmvpe_source,
+    )
+    def fake_normalize(_py, src, dest):  # noqa: ANN001, ANN202
+        Path(dest).write_bytes(Path(src).read_bytes())
+        return True
+
+    monkeypatch.setattr(installer, "_normalize_rvc_rmvpe_checkpoint", fake_normalize)
+
+    installer.seed_rvc_base_models(tmp_path / "python.exe")
+
+    assert (base_dir / "hubert_base.pt").is_file()
+    assert (base_dir / "rmvpe.pt").is_file()
+
+
+def test_directml_wheel_plan_includes_cpu_legacy_and_rvc_deps(tmp_path: Path, monkeypatch) -> None:
     wheelhouse = _load_wheelhouse_module()
     installer = _load_install_module()
     installer._derive_paths(tmp_path)
@@ -437,11 +613,45 @@ def test_directml_wheel_plan_includes_cpu_legacy_and_rvc_compat(tmp_path: Path, 
                batch.packages == ("pymss==2.0.18",) for batch in plan)
     assert any(batch.label == "svc directml source wheels" and
                batch.packages == ("fairseq-fixed==0.12.3.1",) for batch in plan)
+    assert any(batch.label == "rvc directml source wheels" and
+               batch.packages == ("fairseq-fixed==0.12.3.1",) and batch.build_source
+               for batch in plan)
     assert any(batch.label == "rvc directml" and
-               batch.packages == ("rvc-python==0.1.5+xb312",) for batch in plan)
+               batch.packages == tuple(
+                   dep for dep in installer.RVC_INFERENCE_DEPS
+                   if not dep.startswith("fairseq")
+               ) for batch in plan)
     assert any(batch.label == "ddsp legacy directml torch" and
                batch.dest == tmp_path / "assets/wheels/ddsp-legacy/py312/cpu" and
                batch.packages == ("torch==2.5.1", "torchaudio==2.5.1") for batch in plan)
+
+
+def test_npm_resolves_to_the_windows_command_shim(monkeypatch) -> None:
+    installer = _load_install_module()
+    monkeypatch.setattr(
+        installer.shutil,
+        "which",
+        lambda name: r"C:\node\npm.cmd" if name == "npm.cmd" else None,
+    )
+
+    assert installer._npm_executable() == r"C:\node\npm.cmd"
+
+
+def test_web_step_launches_the_resolved_npm_shim(tmp_path: Path, monkeypatch) -> None:
+    installer = _load_install_module()
+    (tmp_path / "package-lock.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(installer, "WEB_DIR", tmp_path)
+    monkeypatch.setattr(installer, "have", lambda _cmd: True)
+    monkeypatch.setattr(installer, "_npm_executable", lambda: r"C:\node\npm.cmd")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(installer, "run", lambda cmd, **_kw: calls.append(cmd))
+
+    installer.step_web()
+
+    assert calls == [
+        [r"C:\node\npm.cmd", "ci"],
+        [r"C:\node\npm.cmd", "run", "build"],
+    ]
 
 
 def test_directml_default_install_includes_pymss(tmp_path: Path, monkeypatch) -> None:
@@ -517,8 +727,11 @@ def test_rocm_runtime_lock_guard_reports_process_using_hip_dll(
 
 def test_rocm_svc_requirements_replace_legacy_starlette(tmp_path: Path) -> None:
     installer = _load_install_module()
+    source = ROOT / "engines" / "so-vits-svc" / "requirements_win.txt"
+    if not source.is_file():
+        pytest.skip("so-vits-svc engine source is fetched by the installer and absent from this checkout")
     filtered = installer._filter_requirements(
-        ROOT / "engines" / "so-vits-svc" / "requirements_win.txt",
+        source,
         extra_deny=installer.BLACKWELL_EXTRA_DENY,
         overrides=installer.SVC_SHARED_REQ_OVERRIDES,
         output=tmp_path / "svc-requirements.txt",
@@ -539,6 +752,69 @@ def test_filtered_requirements_create_missing_scratch_parent(tmp_path: Path) -> 
 
     assert result == output
     assert output.read_text(encoding="utf-8") == "numpy\n"
+
+
+def test_derive_paths_keeps_uv_and_pip_caches_on_the_install_drive(
+    tmp_path: Path, monkeypatch
+) -> None:
+    installer = _load_install_module()
+    for name in ("XB_UV_CACHE_DIR", "XB_PIP_CACHE_DIR", "XB_UV_PYTHON_DIR", "XB_RUNTIME_TEMP"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("UV_CACHE_DIR", r"C:\Users\tester\AppData\Local\uv\cache")
+
+    installer._derive_paths(tmp_path)
+
+    base = tmp_path / ".tmp"
+    assert installer.os.environ["UV_CACHE_DIR"] == str(base / "uv-cache")
+    assert installer.os.environ["PIP_CACHE_DIR"] == str(base / "pip-cache")
+    assert installer.os.environ["UV_PYTHON_INSTALL_DIR"] == str(base / "uv-python")
+    assert installer.os.environ["TEMP"] == str((base / "runtime-temp").resolve())
+    for name in ("uv-cache", "pip-cache", "uv-python", "runtime-temp"):
+        assert (base / name).is_dir()
+
+
+def test_derive_paths_honours_cache_overrides(tmp_path: Path, monkeypatch) -> None:
+    installer = _load_install_module()
+    cache = tmp_path / "other-drive" / "uv-cache"
+    pip_cache = tmp_path / "other-drive" / "pip-cache"
+    monkeypatch.setenv("XB_UV_CACHE_DIR", str(cache))
+    monkeypatch.setenv("XB_PIP_CACHE_DIR", str(pip_cache))
+
+    installer._derive_paths(tmp_path / "install")
+
+    assert installer.os.environ["UV_CACHE_DIR"] == str(cache.resolve())
+    assert installer.os.environ["PIP_CACHE_DIR"] == str(pip_cache.resolve())
+
+
+def test_storage_warning_points_at_the_uv_cache_override(tmp_path: Path) -> None:
+    installer = _load_install_module()
+    cache = tmp_path / "uv-cache"
+
+    assert installer.storage_warning(installer.STORAGE_MIN_FREE_BYTES, cache) is None
+    assert installer.storage_warning(None, cache) is None
+    warning = installer.storage_warning(2 * 1024 ** 3, cache)
+    assert warning is not None
+    assert "磁盘剩余空间不足" in warning
+    assert "XB_UV_CACHE_DIR" in warning
+    assert "XB_PIP_CACHE_DIR" in warning
+
+
+def test_main_derives_caches_even_without_root_argument(
+    tmp_path: Path, monkeypatch
+) -> None:
+    installer = _load_install_module()
+    assert installer._DERIVED_ROOT is None
+    derived: list[Path] = []
+    monkeypatch.setattr(installer, "_derive_paths", lambda root: derived.append(root))
+    monkeypatch.setattr(
+        installer,
+        "_configure_core_profile",
+        lambda *_args: (_ for _ in ()).throw(ValueError("stop")),
+    )
+    monkeypatch.setattr(installer.sys, "argv", ["install.py", "--only", "svc"])
+
+    assert installer.main() == 1
+    assert derived == [installer.ROOT]
 
 
 def test_ensure_uv_prefers_bundled_wheel_and_install_cache(tmp_path: Path, monkeypatch) -> None:

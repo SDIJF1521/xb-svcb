@@ -75,15 +75,27 @@ def _high_intervals(
     # Group neighboring voiced points first. This lets a note briefly dip below
     # the hard threshold without splitting its protection region.
     near_threshold = max(100.0, threshold - hysteresis)
-    near_points = [
+    # A confirmed dropout may sit entirely below the near threshold: one
+    # sustained high note is often a few Hz under the boundary (e.g. a D5 at
+    # 587 Hz against a 640 Hz boundary), and the model can still drop it. If
+    # grouping only uses ``near_points`` such a phrase never becomes a group,
+    # so the relaxed scoped fallback below had nothing to search. Let points
+    # inside a confirmed scope down to the relaxed threshold join the groups.
+    relaxed_threshold = max(100.0, threshold - max(110.0, hysteresis))
+
+    def in_scope(time: float) -> bool:
+        return any(start <= time <= end for start, end in scoped_regions)
+
+    group_points = [
         point
         for point in clean_points
         if point[1] >= near_threshold
+        or (scoped_regions and point[1] >= relaxed_threshold and in_scope(point[0]))
     ]
-    if not near_points:
+    if not group_points:
         return []
-    groups: list[list[tuple[float, float]]] = [[near_points[0]]]
-    for point in near_points[1:]:
+    groups: list[list[tuple[float, float]]] = [[group_points[0]]]
+    for point in group_points[1:]:
         if point[0] - groups[-1][-1][0] <= _HIGH_POINT_GROUP_GAP_SECONDS:
             groups[-1].append(point)
         else:
@@ -136,7 +148,6 @@ def _high_intervals(
     # A confirmed dropout can be below the initial protection boundary after
     # pitch conversion. Resolve each scope independently so one real high note
     # cannot suppress the fallback for a neighboring short note.
-    relaxed_threshold = max(100.0, threshold - max(110.0, hysteresis))
     scoped: list[tuple[float, float]] = []
     for scope_start, scope_end in scoped_regions:
         scope = (scope_start, scope_end)
@@ -145,12 +156,24 @@ def _high_intervals(
             allow_single=False,
             scope=scope,
         )
-        if not candidates:
-            candidates = candidates_for(
-                relaxed_threshold,
-                allow_single=True,
-                scope=scope,
-            )
+        # Also collect the lower-boundary candidates of the *same* scope. A
+        # scope often covers a whole phrase whose first part rises above the
+        # boundary while the rest stays a little under it (e.g. 177.6-178.4 s
+        # above 640 Hz, then the sustained note at ~587 Hz until 180.5 s).
+        # Running the fallback only when the strict pass found nothing left the
+        # tail of such a phrase unprotected, which is audible as "没唱上去".
+        # Extra candidates need two supporting points; a scope with no strict
+        # candidate keeps the documented single-point fallback for very short
+        # high notes.
+        fallback = candidates_for(
+            relaxed_threshold,
+            allow_single=not candidates,
+            scope=scope,
+        )
+        for start, end in fallback:
+            if not any(start < other_end and end > other_start for other_start, other_end in candidates):
+                candidates.append((start, end))
+        candidates.sort()
         for start, end in candidates:
             # The sample mask and pitch tier both apply the single shared fade
             # around this interval. Do not expand it a second time here.
@@ -402,6 +425,29 @@ def _selective_mono_psola(
     return rendered_audio
 
 
+def _curve_points(path, duration: float) -> list[tuple[float, float]]:
+    """把 F0 边车（rmvpe/fcpe 曲线）转成区间选择用的 (时间, 频率) 点。
+
+    Praat 的音高层在长高音、气声较强时会跳到低八度或丢点，正好漏掉最需要保护
+    的区间；推理前刚算出的 F0 曲线在高音区稳定得多，因此优先用它划区间，音高
+    操作本身仍然由 Praat 完成。
+    """
+    import numpy as np
+
+    try:
+        curve = np.asarray(np.load(str(path), allow_pickle=False), dtype=np.float64).reshape(-1)
+    except (OSError, ValueError, TypeError):
+        return []
+    if curve.size < 4 or not math.isfinite(float(duration)) or float(duration) <= 0.0:
+        return []
+    times = np.linspace(0.0, float(duration), curve.size)
+    return [
+        (float(time), float(value))
+        for time, value in zip(times, curve)
+        if math.isfinite(value) and value >= 100.0
+    ]
+
+
 def shift(
     source: Path,
     destination: Path,
@@ -410,6 +456,7 @@ def shift(
     mask_source: Path | None = None,
     loudness_source: Path | None = None,
     allowed_regions: list[tuple[float, float]] | None = None,
+    f0_curve: Path | None = None,
 ) -> list[tuple[float, float]]:
     import numpy as np
     import parselmouth
@@ -441,6 +488,11 @@ def shift(
     # would shift the original F0 a second time and overshoot the model output.
     source_points = _pitch_points(pitch_tier, call)
     mask_points = _pitch_points(mask_tier, call)
+    if f0_curve is not None:
+        curve_points = _curve_points(f0_curve, float(sound.xmax))
+        if len(curve_points) >= 4:
+            # 仅在区间选择上替换 Praat 音高层，音高操作仍用上面的 tier。
+            mask_points = curve_points
     intervals = _high_intervals(
         mask_points,
         max(100.0, float(high_threshold)),
@@ -561,6 +613,11 @@ def main() -> int:
         default="",
         help="可选：将实际处理的高音区间写入 JSON",
     )
+    parser.add_argument(
+        "--f0-npy",
+        default="",
+        help="可选：推理前的 F0 曲线（.npy），用于更稳定地选择高音区间",
+    )
     args = parser.parse_args()
     source = Path(args.input)
     destination = Path(args.output)
@@ -592,6 +649,7 @@ def main() -> int:
             mask_source=Path(args.mask_source) if args.mask_source else None,
             loudness_source=Path(args.loudness_source) if args.loudness_source else None,
             allowed_regions=allowed_regions,
+            f0_curve=Path(args.f0_npy) if args.f0_npy else None,
         )
         if args.report_json:
             report_path = Path(args.report_json)

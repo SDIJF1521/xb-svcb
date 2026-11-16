@@ -18,6 +18,8 @@ NVIDIA CUDA126 和 CUDA128 默认使用两层共享环境。ROCm 10 的 SVC/RVC/
 
 “共享”是依赖布局，不表示所有组件进入同一个 Python。两个共享层用于隔开 NumPy/protobuf/AudioTools 与旧 SVC/RVC 依赖之间的冲突。
 
+RVC 的推理代码内置在 `engines/rvc`（官方 RVC-Project 2.2.231006 推理子集，MIT），底模放在 `engines/rvc/pretrain`；安装器只安装 `fairseq-fixed`、`faiss-cpu`、`pyworld`、`torchcrepe`、`parselmouth`、`av`、`librosa`、`soundfile` 等推理依赖，不再安装第三方 `rvc-python`。
+
 ROCm 10 安装后还会校验 ROCm 主版本、HIP 与实际 GPU 运算，不会把 CPU Torch 误报为 AMD 安装成功。RVC 的 DirectML 版本必须保持独立，安装到 `.venv-rvc-directml`，并通过 `runtime.json` 的 `rvc-directml` 路由选择；它不能与 ROCm Torch 混装在同一个环境中。推理参数显式使用 `device=directml` 时才会启动该解释器，`device=rocm` 或 `auto` 继续使用 ROCm 路由。
 
 ## 组件路由
@@ -54,7 +56,7 @@ CPU:      --cpu
 python install/install.py --directml --only rvc
 ```
 
-ROCm RVC 默认保留 rvc-python 的 fp16 GPU 路径。若目标驱动或模型在 fp16 下不稳定，可临时设置 `XB_RVC_ROCM_FP32=1` 重试；worker 日志中的 `RVC_COMPONENT_DEVICES` 和 `RVC_TIMING` 会分别显示组件设备及模型/后处理耗时。
+ROCm RVC 默认保留官方推理栈的 fp16 GPU 路径。若目标驱动或模型在 fp16 下不稳定，可临时设置 `XB_RVC_ROCM_FP32=1` 重试；worker 日志中的 `RVC_COMPONENT_DEVICES` 和 `RVC_TIMING` 会分别显示组件设备及模型/后处理耗时。
 
 SVC、RVC、SeedVC、DDSP-SVC、UVR、PyMSS、F0 与 Vocal Worker 共享质量优先的 PyTorch 运行策略：关闭梯度记录，固定 CUDA/ROCm 当前设备，使用最高精度的 FP32 矩阵运算，并在 NVIDIA CUDA 上关闭 TF32。CPU 推理默认使用不超过 8 个 Torch 线程，可用 `XB_INFERENCE_CPU_THREADS` 覆盖；各模型的 FP16/FP32 选择和 DirectML 稳定回退仍由对应 Worker 决定。每个 Worker 会输出 `*_RUNTIME` 行，记录实际后端、设备和精度策略。
 

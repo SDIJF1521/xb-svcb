@@ -312,7 +312,7 @@ def _suppress_short_high_band_spikes(source: Path, output: Path) -> int:
     except Exception:
         shutil.copy2(source, output)
         return 0
-    data = np.asarray(audio, dtype=np.float64)
+    data = np.asarray(audio, dtype=np.float32)
     if data.ndim != 2 or len(data) < max(2048, int(sample_rate * 0.12)):
         shutil.copy2(source, output)
         return 0
@@ -323,6 +323,8 @@ def _suppress_short_high_band_spikes(source: Path, output: Path) -> int:
     try:
         cutoff = min(5600.0, sample_rate * 0.42)
         high_sos = butter(4, cutoff, btype="highpass", fs=sample_rate, output="sos")
+        # The detector only derives sample-rate gains and writes float32 output,
+        # so single precision halves the cost of the full-track filtering.
         high = sosfiltfilt(high_sos, data, axis=0)
         mono = np.mean(data, axis=1)
         high_mono = np.mean(high, axis=1)
@@ -346,7 +348,7 @@ def _suppress_short_high_band_spikes(source: Path, output: Path) -> int:
             ((0, 0), (0, max(0, n_fft - frames.shape[1]))),
         )[:, :n_fft]
         power = np.abs(
-            np.fft.rfft(fft_frames * np.hanning(n_fft), axis=1)
+            np.fft.rfft(fft_frames * np.hanning(n_fft).astype(np.float32), axis=1)
         ) ** 2
         frequencies = np.fft.rfftfreq(n_fft, 1.0 / float(sample_rate))
         audible = (frequencies >= 120.0) & (frequencies <= sample_rate * 0.48)
@@ -449,7 +451,7 @@ def _suppress_noise_like_high_band(
 
     try:
         audio, sample_rate = sf.read(str(source), always_2d=True, dtype="float32")
-        data = np.asarray(audio, dtype=np.float64)
+        data = np.asarray(audio, dtype=np.float32)
         if data.ndim != 2 or len(data) < max(2048, int(sample_rate * 0.12)):
             shutil.copy2(source, output)
             return 0, 0.0
@@ -477,7 +479,7 @@ def _suppress_noise_like_high_band(
             ((0, 0), (0, max(0, n_fft - frame_size))),
         )[:, :n_fft]
         spectrum = np.abs(
-            np.fft.rfft(fft_frames * np.hanning(n_fft), axis=1)
+            np.fft.rfft(fft_frames * np.hanning(n_fft).astype(np.float32), axis=1)
         ) ** 2
         frequencies = np.fft.rfftfreq(n_fft, 1.0 / float(sample_rate))
         high_bins = (frequencies >= cutoff) & (
@@ -604,7 +606,6 @@ def _restore_high_note_body(
             return 0, 0.0
         target = target[:frames]
         reference = reference[:frames]
-        target_mono = np.mean(target, axis=1)
         reference_mono = np.mean(reference, axis=1)
 
         frame_size = max(512, int(round(sample_rate * 0.040)))
@@ -626,8 +627,15 @@ def _restore_high_note_body(
             fs=sample_rate,
             output="sos",
         )
-        target_body = sosfiltfilt(body_sos, target_mono)
-        reference_body = sosfiltfilt(body_sos, reference_mono)
+        # A zero-phase filter is linear, so the mono body band is exactly the
+        # mean of the filtered channels. Filter the stereo signal once and reuse
+        # it: full-song 4th-order sosfiltfilt is the most expensive step in this
+        # stage, and the double pass over a long track dominated its runtime.
+        body = sosfiltfilt(body_sos, target.astype(np.float32, copy=False), axis=0)
+        target_body = body.mean(axis=1, dtype=np.float64)
+        reference_body = sosfiltfilt(
+            body_sos, reference_mono.astype(np.float32, copy=False)
+        )
         target_body_frames = np.pad(target_body, (0, padding)).reshape(
             frame_count, frame_size
         )
@@ -732,7 +740,6 @@ def _restore_high_note_body(
             right=float(boost_db[-1]),
         )
         gain = np.power(10.0, sample_boost / 20.0)
-        body = sosfiltfilt(body_sos, target, axis=0)
         processed = target + body * (gain[:, np.newaxis] - 1.0)
         peak = float(np.max(np.abs(processed))) if processed.size else 0.0
         if peak > 0.99:
@@ -1480,6 +1487,105 @@ def _ai_loudness_envelope(
     )
 
 
+# DeepFilterNet's ``enhance()`` pushes the entire track through the network in a
+# single forward pass, so activation memory grows with song length.  A five
+# minute stereo vocal needs several GB more than the model itself; 6-8 GB cards
+# then either raise CUDA OOM or, on Windows/WDDM, silently spill into shared
+# system memory - which runs 10-30x slower than VRAM and is the reason a single
+# song could take 10+ minutes.  Overlapping windows keep peak usage bounded
+# (~1 GB for a 60 s window) with no measurable throughput loss.
+_DF_CHUNK_SECONDS = 60.0
+_DF_OVERLAP_SECONDS = 1.0
+_DF_PRIME_SECONDS = 3.0
+
+
+def _chunk_plan(
+    total: int,
+    chunk: int,
+    overlap: int,
+    prime: int = 0,
+) -> list[tuple[int, int, int, int, int]]:
+    """Return ``(run_start, start, end, fade_in, fade_out)`` sample offsets.
+
+    ``start``/``end`` delimit the samples a window contributes; ``run_start``
+    is where inference actually begins, so the network has ``prime`` samples of
+    context before the kept region.  ``fade_in``/``fade_out`` are the crossfade
+    lengths: zero for the first and last window so the track keeps its original
+    head and tail, and ``overlap`` in between.  The windows are a partition with
+    overlaps, so the crossfaded estimates always sum to full weight.
+    """
+    plan: list[tuple[int, int, int, int, int]] = []
+    if total <= 0:
+        return plan
+    hop = max(1, chunk - overlap)
+    start = 0
+    while start < total:
+        end = min(start + chunk, total)
+        length = end - start
+        head = min(overlap, length) if start > 0 else 0
+        tail = min(overlap, length) if end < total else 0
+        plan.append((max(0, start - prime), start, end, head, tail))
+        if end >= total:
+            break
+        start += hop
+    return plan
+
+
+def _enhance_chunked(
+    model: object,
+    state: object,
+    audio: object,
+    *,
+    atten_lim_db: float | None,
+    chunk_seconds: float,
+    prime_seconds: float | None = None,
+) -> tuple[object, int]:
+    """Run DeepFilterNet on overlapping windows and crossfade the seams.
+
+    Windows overlap by ``_DF_OVERLAP_SECONDS`` and use a linear crossfade, so
+    the two estimates for the same samples sum to unity and the seam cannot
+    produce a gain bump.  ``prime_seconds`` of audio are fed to the network
+    before each window's kept region and then dropped: the model starts every
+    window with an empty recurrent state, so without that warm-up the mask
+    would differ from a whole-track pass for several seconds after each seam.
+    A short track still takes the single-pass path.
+    """
+    import torch
+    from df.enhance import enhance
+
+    sample_rate = int(state.sr())
+    fft_size = int(state.fft_size())
+    total = int(audio.shape[-1])
+    chunk = max(fft_size * 8, int(round(sample_rate * float(chunk_seconds))))
+    overlap = max(fft_size, int(round(sample_rate * _DF_OVERLAP_SECONDS)))
+    overlap = min(overlap, chunk // 2)
+    prime_seconds = _DF_PRIME_SECONDS if prime_seconds is None else prime_seconds
+    prime = max(0, int(round(sample_rate * float(prime_seconds))))
+    plan = _chunk_plan(total, chunk, overlap, prime)
+    if len(plan) <= 1:
+        return enhance(model, state, audio, atten_lim_db=atten_lim_db), 1
+
+    dtype = audio.dtype
+    ramp = torch.linspace(0.0, 1.0, overlap + 2, dtype=dtype)[1:-1]
+    accumulated = torch.zeros_like(audio)
+    weight = torch.zeros(total, dtype=dtype)
+
+    for run_start, start, end, head, tail in plan:
+        length = end - start
+        window = torch.ones(length, dtype=dtype)
+        if head:
+            window[:head] = ramp[:head]
+        if tail:
+            window[length - tail :] = (1.0 - ramp)[-tail:]
+        segment = audio[..., run_start:end]
+        enhanced = enhance(model, state, segment, atten_lim_db=atten_lim_db)
+        kept = enhanced[..., start - run_start :]
+        accumulated[..., start:end] += kept * window
+        weight[start:end] += window
+
+    return accumulated / weight.clamp_min(1e-6), len(plan)
+
+
 def _deepfilter(
     source: Path,
     output: Path,
@@ -1508,12 +1614,43 @@ def _deepfilter(
     )
     model_sr = int(state.sr())
     audio, info = load_audio(str(source), sr=model_sr)
-    enhanced = enhance(
-        model,
-        state,
-        audio,
-        atten_lim_db=float(max(1.5, min(12.0, atten_lim_db))),
-    )
+    attenuation = float(max(1.5, min(12.0, atten_lim_db)))
+    blocks = 1
+    used_chunk = _DF_CHUNK_SECONDS
+    if int(audio.shape[-1]) > int(model_sr * (_DF_CHUNK_SECONDS + _DF_OVERLAP_SECONDS)):
+        import torch
+
+        out_of_memory = getattr(torch.cuda, "OutOfMemoryError", RuntimeError)
+        enhanced = None
+        # Shrink the window when a card cannot hold the default working set; each
+        # attempt rebuilds from the untouched input, so a partial failure is safe.
+        for chunk_seconds in (_DF_CHUNK_SECONDS, 30.0, 15.0, 8.0, 4.0):
+            try:
+                enhanced, blocks = _enhance_chunked(
+                    model,
+                    state,
+                    audio,
+                    atten_lim_db=attenuation,
+                    chunk_seconds=chunk_seconds,
+                )
+                used_chunk = chunk_seconds
+                break
+            except out_of_memory:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+        if enhanced is None:
+            raise RuntimeError(
+                "DeepFilterNet 推理显存不足，请释放显存或改用 CPU 修复后重试"
+            )
+    else:
+        enhanced = enhance(model, state, audio, atten_lim_db=attenuation)
+    if blocks > 1:
+        seconds = float(info.num_frames) / max(1.0, float(info.sample_rate))
+        print(
+            f"  DeepFilterNet 分块推理: {blocks} 块 / {used_chunk:.0f}s 窗口"
+            f"（{seconds:.1f}s 音频）",
+            flush=True,
+        )
 
     orig_sr = int(info.sample_rate)
     if model_sr != orig_sr:

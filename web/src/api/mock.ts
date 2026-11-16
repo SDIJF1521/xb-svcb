@@ -46,6 +46,16 @@ import type {
   CreateBatchWorkPayload,
   EditorClip,
   EditorClipMergeResult,
+  EditorClipMidi,
+  EditorClipMidiApplyResult,
+  EditorClipMidiSaveResult,
+  EditorMidiNote,
+  EditorMidiDrumPiece,
+  EditorMidiRenderOptions,
+  EditorMidiRenderJob,
+  EditorMidiSession,
+  EditorMidiSessionResult,
+  EditorMidiImportResult,
   EditorAudioCopyResult,
   EditorAudioPasteResult,
   EditorPluginHostStatus,
@@ -84,6 +94,10 @@ import type {
   PluginMarketResult,
   PluginInstallResult,
   PluginActionResult,
+  CoverWorkflow,
+  WorkflowGraph,
+  WorkflowFileExportResult,
+  WorkflowFileImportResult,
 } from './types'
 
 const now = () => new Date().toISOString()
@@ -276,6 +290,7 @@ const mockModels: ModelDTO[] = [
 ]
 let defaultModelId = 'm1'
 let mockInferencePresets: InferencePreset[] = []
+let mockCoverWorkflows: CoverWorkflow[] = []
 const mockAudioImports = new Map<string, string>()
 
 // 音乐资源获取的模拟状态（仅浏览器开发环境）
@@ -468,8 +483,130 @@ const mockWorks: WorkDTO[] = [
 ]
 
 const cloneProject = (p: EditorProject): EditorProject => JSON.parse(JSON.stringify(p)) as EditorProject
-const mockEditorProjects: EditorProject[] = []
+
+// 浏览器 mock 的音频编辑器状态（工程 / MIDI 音符 / 编曲会话）持久化到 localStorage：
+// 否则刷新页面后内存全部清空，会表现为「刷新后变成暂无编辑工程」。
+const MOCK_EDITOR_STATE_KEY = 'xb-mock-editor-state'
+
+interface MockEditorState {
+  projects: EditorProject[]
+  midiNotes: Record<string, EditorMidiNote[]>
+  midiSessions: Record<string, EditorMidiSession>
+}
+
+function loadMockEditorState(): MockEditorState {
+  const empty: MockEditorState = { projects: [], midiNotes: {}, midiSessions: {} }
+  try {
+    const raw = localStorage.getItem(MOCK_EDITOR_STATE_KEY)
+    if (!raw) return empty
+    const parsed = JSON.parse(raw) as Partial<MockEditorState>
+    return {
+      projects: Array.isArray(parsed.projects) ? parsed.projects : [],
+      midiNotes: parsed.midiNotes && typeof parsed.midiNotes === 'object' ? parsed.midiNotes : {},
+      midiSessions: parsed.midiSessions && typeof parsed.midiSessions === 'object' ? parsed.midiSessions : {},
+    }
+  } catch {
+    return empty
+  }
+}
+
+const mockEditorState = loadMockEditorState()
+const mockEditorProjects: EditorProject[] = mockEditorState.projects
 const mockRerunJobs: Record<string, EditorRerunResult & { log?: string }> = {}
+const mockMidiNotes: Record<string, EditorMidiNote[]> = mockEditorState.midiNotes
+/** MIDI 编曲：浏览器 mock 下的会话存储（键为 `projectId:trackId`）。 */
+const mockMidiSessions: Record<string, EditorMidiSession> = mockEditorState.midiSessions
+const mockMidiRenderJobs: Record<string, EditorMidiRenderJob> = {}
+
+/** 把当前编辑器 mock 状态写回 localStorage，刷新后仍能恢复。 */
+function persistMockEditorState() {
+  try {
+    localStorage.setItem(
+      MOCK_EDITOR_STATE_KEY,
+      JSON.stringify({
+        projects: mockEditorProjects,
+        midiNotes: mockMidiNotes,
+        midiSessions: mockMidiSessions,
+      }),
+    )
+  } catch {
+    /* localStorage 不可用或超限时忽略，mock 退化为纯内存存储 */
+  }
+}
+/** 浏览器 mock 下的鼓件表（真名由后端下发，这里只放常用的几件）。 */
+const mockDrumKit: EditorMidiDrumPiece[] = [
+  { pitch: 35, name_zh: '底鼓 2', name_en: 'Acoustic Bass Drum', group: 'kick', group_zh: '底鼓' },
+  { pitch: 36, name_zh: '底鼓 1', name_en: 'Bass Drum 1', group: 'kick', group_zh: '底鼓' },
+  { pitch: 37, name_zh: '军鼓边击', name_en: 'Side Stick', group: 'rim', group_zh: '边击' },
+  { pitch: 38, name_zh: '军鼓 1', name_en: 'Acoustic Snare', group: 'snare', group_zh: '军鼓' },
+  { pitch: 39, name_zh: '拍手', name_en: 'Hand Clap', group: 'clap', group_zh: '拍手' },
+  { pitch: 40, name_zh: '军鼓 2', name_en: 'Electric Snare', group: 'snare', group_zh: '军鼓' },
+  { pitch: 41, name_zh: '落地嗵鼓（低）', name_en: 'Low Floor Tom', group: 'tom', group_zh: '通鼓' },
+  { pitch: 42, name_zh: '闭合踩镲', name_en: 'Closed Hi-Hat', group: 'hat', group_zh: '踩镲' },
+  { pitch: 43, name_zh: '落地嗵鼓（高）', name_en: 'High Floor Tom', group: 'tom', group_zh: '通鼓' },
+  { pitch: 44, name_zh: '踩镲踏板', name_en: 'Pedal Hi-Hat', group: 'hat', group_zh: '踩镲' },
+  { pitch: 45, name_zh: '低音通鼓', name_en: 'Low Tom', group: 'tom', group_zh: '通鼓' },
+  { pitch: 46, name_zh: '开音踩镲', name_en: 'Open Hi-Hat', group: 'hat_open', group_zh: '开镲' },
+  { pitch: 47, name_zh: '中低通鼓', name_en: 'Low-Mid Tom', group: 'tom', group_zh: '通鼓' },
+  { pitch: 48, name_zh: '中高通鼓', name_en: 'Hi-Mid Tom', group: 'tom', group_zh: '通鼓' },
+  { pitch: 49, name_zh: '吊镲 1', name_en: 'Crash Cymbal 1', group: 'crash', group_zh: '吊镲' },
+  { pitch: 50, name_zh: '高音通鼓', name_en: 'High Tom', group: 'tom', group_zh: '通鼓' },
+  { pitch: 51, name_zh: '叮叮镲 1', name_en: 'Ride Cymbal 1', group: 'ride', group_zh: '叮叮镲' },
+  { pitch: 54, name_zh: '铃鼓', name_en: 'Tambourine', group: 'perc', group_zh: '小打' },
+  { pitch: 56, name_zh: '牛铃', name_en: 'Cowbell', group: 'perc', group_zh: '小打' },
+  { pitch: 70, name_zh: '沙铃', name_en: 'Maracas', group: 'perc', group_zh: '小打' },
+]
+
+function findMockMidiClip(
+  projectId: string,
+  clipId: string,
+): { project: EditorProject; track: EditorProject['tracks'][number]; clip: EditorClip } | null {
+  const project = mockEditorProjects.find((item) => item.id === projectId)
+  if (!project) return null
+  for (const track of project.tracks || []) {
+    const clip = (track.clips || []).find((item) => item.id === clipId)
+    if (clip) return { project, track, clip }
+  }
+  return null
+}
+
+/** 生成一小段可编辑的旋律，方便浏览器开发环境直接体验 MIDI 编辑器。 */
+function buildMockMidiNotes(duration: number): EditorMidiNote[] {
+  const pattern = [57, 60, 62, 64, 62, 60, 59, 57]
+  const notes: EditorMidiNote[] = []
+  const step = Math.max(0.25, Math.min(0.6, duration / 8))
+  for (let index = 0; index < pattern.length; index += 1) {
+    const start = index * step
+    if (start >= duration) break
+    notes.push({
+      id: `mock_midi_${index + 1}`,
+      start: Math.round(start * 1000) / 1000,
+      end: Math.round(Math.min(duration, start + step * 0.8) * 1000) / 1000,
+      pitch: pattern[index]!,
+      detune: 0,
+    })
+  }
+  return notes
+}
+
+function findMockMidiTrack(
+  projectId: string,
+  trackId: string,
+): { project: EditorProject; track: EditorProject['tracks'][number] } | null {
+  const project = mockEditorProjects.find((item) => item.id === projectId)
+  if (!project) return null
+  const track = (project.tracks || []).find((item) => item.id === trackId)
+  return track ? { project, track } : null
+}
+
+function mockTrackDuration(project: EditorProject, track: EditorProject['tracks'][number]): number {
+  const end = (track.clips || []).reduce(
+    (value, clip) => Math.max(value, Number(clip.end) || 0),
+    0,
+  )
+  return Math.max(0.3, end || Number(project.duration) || 30)
+}
+
 const mockEditorHistory: Record<string, EditorProject[]> = {}
 const mockEditorFuture: Record<string, EditorProject[]> = {}
 const mockMinRerunClipSeconds = 1
@@ -667,7 +804,7 @@ export const mock = {
         { key: 'pymss', name: 'PyMSS 人声分离', desc: '可选 PyMSS 音乐源分离引擎，模型可从模型站下载', version: '2.0', status: '已就绪', ok: true },
         { key: 'ffmpeg', name: 'ffmpeg', desc: '音频转码 / 重采样 / 剪辑，统一格式与采样率', version: 'v6.1', status: '已就绪', ok: true },
         { key: 'svc', name: 'So-VITS-SVC 推理引擎', desc: '加载用户 So-VITS-SVC 模型进行歌声转换推理', version: 'torch', status: 'cuda', ok: true },
-        { key: 'rvc', name: 'RVC 推理引擎', desc: '加载用户 RVC 模型（.pth + 可选 .index）进行歌声转换推理', version: 'rvc-python', status: 'cuda', ok: true },
+        { key: 'rvc', name: 'RVC 推理引擎', desc: '加载用户 RVC 模型（.pth + 可选 .index）进行歌声转换推理', version: 'RVC 官方推理栈', status: 'cuda', ok: true },
         { key: 'seedvc', name: 'SeedVC 推理引擎', desc: '加载 SeedVC checkpoint + 参考音频进行歌声转换推理', version: 'Seed-VC', status: 'cuda', ok: true },
         { key: 'ddsp', name: 'DDSP-SVC 推理引擎', desc: '加载 DDSP-SVC Rectified Flow 模型进行歌声转换', version: 'DDSP-SVC', status: 'cuda', ok: true },
         { key: 'vocal-enhancement', name: 'AI Vocal Enhancement', desc: '原曲参考对齐与 AI 歌声增强', version: 'Natural Voice', status: '已就绪', ok: true },
@@ -986,6 +1123,18 @@ export const mock = {
   pickEffectPluginFile(): Promise<string | null> {
     return browserPickFile('.vst3,.dll,.component')
   },
+
+  pickEffectPluginDirectory(): Promise<string | null> {
+    return Promise.resolve(null)
+  },
+
+  scanEffectPluginDirectory(_directory: string) {
+    return [] as Array<{ name: string; path: string; collection: string }>
+  },
+
+  autoScanEffectPlugins() {
+    return [] as Array<{ name: string; path: string; collection: string }>
+  },
   listWorks(): WorkDTO[] {
     return mockWorks.map((w) => ({ ...w, steps: w.steps.map((s) => ({ ...s })) }))
   },
@@ -995,6 +1144,7 @@ export const mock = {
   },
   createWork(payload: CreateWorkPayload): WorkDTO {
     const isMulti = payload.mode === 'multi'
+    const isWorkflow = payload.mode === 'workflow'
     const workflow = normalizeMockWorkflow(payload.workflow, isMulti)
     const isEnhancement = workflow === 'ai_enhancement'
     const enhancement = Boolean(
@@ -1012,8 +1162,8 @@ export const mock = {
     const parent = isEnhancement ? mockWorks.find((item) => item.id === payload.target_work_id) : undefined
     const work: WorkDTO = {
       id: rid('wrk_'),
-      title: `${rawTitle} (${isEnhancement ? 'AI 增强' : isMulti ? '混合翻唱' : 'AI 翻唱'})`,
-      model: isEnhancement ? `${parent?.model || '翻唱作品'} · AI 增强` : isMulti ? `多模型混合（${payload.models?.length || 0} 个）` : (model?.name || '默认模型'),
+      title: `${rawTitle} (${isEnhancement ? 'AI 增强' : isWorkflow ? '自定义工作流' : isMulti ? '混合翻唱' : 'AI 翻唱'})`,
+      model: isEnhancement ? `${parent?.model || '翻唱作品'} · AI 增强` : isWorkflow ? `自定义工作流 · ${payload.workflow_graph?.name || '未命名'}` : isMulti ? `多模型混合（${payload.models?.length || 0} 个）` : (model?.name || '默认模型'),
       model_id: isEnhancement ? (parent?.model_id || '') : payload.models?.[0]?.model_id || model?.id || '',
       status: 'queue',
       progress: 0,
@@ -1038,9 +1188,15 @@ export const mock = {
         loudness_envelope: Math.max(0, Math.min(1, payload.vocal_enhancement?.loudness_envelope ?? 0.58)),
       },
       preprocess,
-      mode: isMulti ? 'multi' : 'single',
+      mode: isWorkflow ? 'workflow' : isMulti ? 'multi' : 'single',
       segments: payload.segments,
-      steps: isEnhancement ? enhancementSteps() : isMulti ? multiSteps(enhancement, preprocess.enabled) : baseSteps(enhancement, preprocess.enabled),
+      steps: isEnhancement
+        ? enhancementSteps()
+        : isWorkflow
+          ? (payload.workflow_graph?.nodes || []).map((n) => ({ key: n.id, label: n.type, status: 'wait' as const }))
+          : isMulti
+            ? multiSteps(enhancement, preprocess.enabled)
+            : baseSteps(enhancement, preprocess.enabled),
     }
     mockWorks.unshift(work)
     advance(work)
@@ -1084,6 +1240,16 @@ export const mock = {
       duration: 0,
       chunk_seconds: payload.chunk_seconds,
       buffer_seconds: payload.buffer_seconds,
+      prebuffer_blocks: payload.prebuffer_blocks ?? 1,
+      vocal_mode: payload.vocal_mode ?? 'separate',
+      separator_engine: payload.separator_engine ?? 'uvr',
+      separator_model: payload.separator_engine === 'pymss' ? payload.pymss_model : payload.uvr_model,
+      separator_device: 'auto',
+      latency_mode: payload.latency_mode ?? 'live',
+      latency_ms: 0,
+      block_ms: null,
+      infer_ms: null,
+      dropped_seconds: 0,
       ready_seconds: 0,
       processed_seconds: 0,
       ready_chunks: 0,
@@ -1155,6 +1321,57 @@ export const mock = {
     mockInferencePresets = mockInferencePresets.filter((p) => p.id !== id)
     return mockInferencePresets.length !== before
   },
+  listCoverWorkflows(): CoverWorkflow[] {
+    return [...mockCoverWorkflows]
+  },
+  saveCoverWorkflow(name: string, graph: WorkflowGraph): CoverWorkflow {
+    const existingId = String(graph.id || '').trim()
+    let displayName = (name || graph.name || '未命名工作流').trim() || '未命名工作流'
+    // 与后端一致：新建保存时重名自动加序号，避免列表里出现两条同名工作流。
+    const others = mockCoverWorkflows.filter((w) => w.id !== existingId)
+    const names = new Set(others.map((w) => w.name))
+    if (names.has(displayName)) {
+      let index = 2
+      while (names.has(`${displayName} (${index})`)) index += 1
+      displayName = `${displayName} (${index})`
+    }
+    const workflow: CoverWorkflow = {
+      id: existingId || rid('wf_'),
+      name: displayName,
+      updated_at: now(),
+      nodes: graph.nodes,
+      edges: graph.edges,
+    }
+    mockCoverWorkflows = [
+      workflow,
+      ...mockCoverWorkflows.filter((w) => w.id !== workflow.id),
+    ].slice(0, 50)
+    return workflow
+  },
+  deleteCoverWorkflow(id: string): boolean {
+    const before = mockCoverWorkflows.length
+    mockCoverWorkflows = mockCoverWorkflows.filter((w) => w.id !== id)
+    return mockCoverWorkflows.length !== before
+  },
+  exportCoverWorkflowFile(graph: WorkflowGraph): WorkflowFileExportResult {
+    const name = (graph.name || '未命名工作流').replace(/[\\/:*?"<>|]/g, '_')
+    return { ok: true, path: `C:/exports/${name}.xbworkflow.json` }
+  },
+  importCoverWorkflowFile(): WorkflowFileImportResult {
+    const source = mockCoverWorkflows[0]
+    if (!source) return { ok: false, cancelled: true }
+    return {
+      ok: true,
+      path: 'C:/exports/imported.xbworkflow.json',
+      graph: {
+        id: '',
+        name: `${source.name}（导入）`,
+        updated_at: '',
+        nodes: source.nodes,
+        edges: source.edges,
+      },
+    }
+  },
   retryWork(id: string): boolean {
     const w = mockWorks.find((x) => x.id === id)
     if (!w) return false
@@ -1182,6 +1399,11 @@ export const mock = {
   openWorkLog(id: string): boolean {
     console.info('[mock] openWorkLog', id)
     return false
+  },
+  getWorkLog(id: string, tail = 300): string {
+    void id
+    void tail
+    return ''
   },
   openPath(path: string): boolean {
     console.info('[mock] openPath', path)
@@ -1332,12 +1554,15 @@ export const mock = {
     const downloaded = mockPymssDownloaded.has(model) || mockPymssDownloaded.has(`${model}.ckpt`)
     return { ok: downloaded, environment: true, model, status: downloaded ? '已就绪' : '模型未下载', version: '2.0' }
   },
-  pymssModels(purpose?: 'vocal_separation' | 'dereverb' | 'harmony_removal'): PymssModel[] {
+  pymssModels(purpose?: 'vocal_separation' | 'dereverb' | 'harmony_removal', includeAll = false): PymssModel[] {
     const items: PymssModel[] = [
-      { name: 'bs_roformer_voc_hyperacev2.ckpt', architecture: 'bs_roformer', supported: true, category: 'vocal/vocal_extraction', purpose: 'vocal_separation', purpose_label: '人声分离', target_stem: 'vocals', downloaded: mockPymssDownloaded.has('bs_roformer_voc_hyperacev2.ckpt') },
-      { name: 'UVR-DeEcho-DeReverb.pth', architecture: 'vr_deecho_dereverb', supported: true, category: 'legacy_vr/vr_deecho_dereverb', purpose: 'dereverb', purpose_label: '去混响 / 人声净化', target_stem: 'vocals', downloaded: mockPymssDownloaded.has('UVR-DeEcho-DeReverb.pth') },
+      { name: 'bs_roformer_voc_hyperacev2.ckpt', architecture: 'bs_roformer', supported: true, category: 'vocal/vocal_extraction', category_label: '人声 / 人声提取', primary_category: 'vocal', primary_category_label: '人声', secondary_category: 'vocal_extraction', secondary_category_label: '人声提取', purpose: 'vocal_separation', purpose_label: '人声分离', target_stem: 'vocals', downloaded: mockPymssDownloaded.has('bs_roformer_voc_hyperacev2.ckpt') },
+      { name: 'UVR-DeEcho-DeReverb.pth', architecture: 'vr_deecho_dereverb', supported: true, category: 'legacy_vr/vr_deecho_dereverb', category_label: '传统 VR / 去回声与混响', primary_category: 'legacy_vr', primary_category_label: '传统 VR', secondary_category: 'vr_deecho_dereverb', secondary_category_label: '去回声与混响', purpose: 'dereverb', purpose_label: '去混响 / 人声净化', target_stem: 'vocals', downloaded: mockPymssDownloaded.has('UVR-DeEcho-DeReverb.pth') },
+      { name: 'HTDemucs4_6stems.th', architecture: 'demucs', supported: true, category: 'music_stems/six_stem', category_label: '音乐分轨 / 六轨分离', primary_category: 'music_stems', primary_category_label: '音乐分轨', secondary_category: 'six_stem', secondary_category_label: '六轨分离', target_stem: '', downloaded: mockPymssDownloaded.has('HTDemucs4_6stems.th') },
+      { name: 'Apollo_LQ_MP3_restoration.ckpt', architecture: 'apollo', supported: true, category: 'cleanup/audio_restoration', category_label: '音频清理/修复 / 音频/人声修复', primary_category: 'cleanup', primary_category_label: '音频清理/修复', secondary_category: 'audio_restoration', secondary_category_label: '音频/人声修复', target_stem: 'restored', downloaded: mockPymssDownloaded.has('Apollo_LQ_MP3_restoration.ckpt') },
     ]
-    return purpose ? items.filter((item) => item.purpose === purpose) : items
+    if (purpose) return items.filter((item) => item.purpose === purpose)
+    return includeAll ? items : items.filter((item) => item.purpose)
   },
   pymssDownloadModel(model: string): { ok: boolean; model?: string; key?: string; error?: string } {
     if (!model) return { ok: false, error: '未指定 PyMSS 模型' }
@@ -1653,6 +1878,7 @@ export const mock = {
     mockEditorProjects.splice(idx, 1)
     delete mockEditorHistory[projectId]
     delete mockEditorFuture[projectId]
+    persistMockEditorState()
     return true
   },
   createEditorProjectFromAudio(path: string, title?: string): EditorProject | null {
@@ -1661,6 +1887,7 @@ export const mock = {
     mockEditorProjects.unshift(project)
     mockEditorHistory[project.id] = []
     mockEditorFuture[project.id] = []
+    persistMockEditorState()
     return cloneProject(project)
   },
   exportEditorProjectBundle(projectId: string): EditorProjectTransferResult {
@@ -1674,7 +1901,37 @@ export const mock = {
     mockEditorProjects.unshift(project)
     mockEditorHistory[project.id] = []
     mockEditorFuture[project.id] = []
+    persistMockEditorState()
     return { ok: true, path: 'C:/imports/demo.xbproject', project: cloneProject(project) }
+  },
+  createEditorProjectBlank(title?: string): EditorProject | null {
+    const created = now()
+    const project: EditorProject = {
+      id: rid('edt_'),
+      title: title || '空白工程',
+      duration: 0,
+      sample_rate: 44100,
+      waveform_cache: {},
+      metadata: { mode: 'blank' },
+      created_at: created,
+      updated_at: created,
+      tracks: [
+        {
+          id: rid('trk_'),
+          name: '音轨 1',
+          type: 'audio',
+          volume: 1,
+          mute: false,
+          locked: false,
+          clips: [],
+        },
+      ],
+    }
+    mockEditorProjects.unshift(project)
+    mockEditorHistory[project.id] = []
+    mockEditorFuture[project.id] = []
+    persistMockEditorState()
+    return cloneProject(project)
   },
   createEditorProjectFromWork(workId: string): EditorProject | null {
     const work = mockWorks.find((w) => w.id === workId)
@@ -1782,6 +2039,7 @@ export const mock = {
     mockEditorProjects.unshift(project)
     mockEditorHistory[project.id] = []
     mockEditorFuture[project.id] = []
+    persistMockEditorState()
     return cloneProject(project)
   },
   addEditorTrack(projectId: string, name?: string, kind = 'audio'): EditorTrackMutationResult {
@@ -1885,6 +2143,7 @@ export const mock = {
       mockEditorHistory[next.id] = []
       mockEditorFuture[next.id] = []
     }
+    persistMockEditorState()
     return cloneProject(next)
   },
   undoEditorProject(projectId: string): EditorProject | null {
@@ -1895,6 +2154,7 @@ export const mock = {
     const prev = hist.pop()!
     mockEditorFuture[projectId] = [...(mockEditorFuture[projectId] || []), cloneProject(current)]
     mockEditorProjects[idx] = cloneProject(prev)
+    persistMockEditorState()
     return cloneProject(prev)
   },
   redoEditorProject(projectId: string): EditorProject | null {
@@ -1905,6 +2165,7 @@ export const mock = {
     const next = future.pop()!
     mockEditorHistory[projectId] = [...(mockEditorHistory[projectId] || []), cloneProject(current)]
     mockEditorProjects[idx] = cloneProject(next)
+    persistMockEditorState()
     return cloneProject(next)
   },
   getEditorClipAudio(projectId: string, clipId: string): string {
@@ -2058,6 +2319,9 @@ export const mock = {
   },
   exportEditorProject(projectId: string, fmt = 'wav'): string {
     return `C:/exports/${projectId}.${editorFormat(fmt)}`
+  },
+  exportEditorTrack(projectId: string, trackId: string, fmt = 'wav'): string {
+    return `C:/exports/${projectId}_${trackId}.${editorFormat(fmt)}`
   },
   getEditorWaveform(_projectId: string, clipId: string, bins = 160): EditorWaveform {
     const count = Math.max(16, Math.min(900, bins))
@@ -2351,6 +2615,7 @@ export const mock = {
       stereo_width?: number
       loudness_envelope?: number
     },
+    locale?: string,
   ): EditorRerunResult {
     const project = mockEditorProjects.find((p) => p.id === projectId)
     if (!project) return { ok: false, error: '工程不存在' }
@@ -2417,6 +2682,435 @@ export const mock = {
     }
     project.updated_at = now()
     return { ok: true, project: cloneProject(project), clip: { ...clip } }
+  },
+  getEditorClipMidi(projectId: string, clipId: string, refresh = false): EditorClipMidi {
+    const found = findMockMidiClip(projectId, clipId)
+    if (!found) return { ok: false, error: '工程或片段不存在' }
+    const { clip } = found
+    const duration = Math.max(0.3, Number(clip.end) - Number(clip.start))
+    const key = `${projectId}:${clipId}`
+    if (refresh || !mockMidiNotes[key]) mockMidiNotes[key] = buildMockMidiNotes(duration)
+    const notes = mockMidiNotes[key] || []
+    return {
+      ok: true,
+      clip_id: clipId,
+      track_id: found.track.id,
+      duration,
+      notes: notes.map((note) => ({ ...note })),
+      analysis: {
+        voiced_ratio: 0.86,
+        median_hz: 261.6,
+        note_count: notes.length,
+      },
+      meta: (clip.metadata?.midi as Record<string, unknown>) || {},
+      cached: !refresh,
+      midi_ready: true,
+    }
+  },
+  saveEditorClipMidi(
+    projectId: string,
+    clipId: string,
+    notes: EditorMidiNote[],
+  ): EditorClipMidiSaveResult {
+    const found = findMockMidiClip(projectId, clipId)
+    if (!found) return { ok: false, error: '工程或片段不存在' }
+    const key = `${projectId}:${clipId}`
+    mockMidiNotes[key] = notes.map((note) => ({ ...note }))
+    found.clip.metadata = {
+      ...(found.clip.metadata || {}),
+      midi: { note_count: notes.length, updated_at: now() },
+    }
+    found.project.updated_at = now()
+    persistMockEditorState()
+    return {
+      ok: true,
+      clip_id: clipId,
+      notes: mockMidiNotes[key],
+      meta: found.clip.metadata.midi as Record<string, unknown>,
+      project: cloneProject(found.project),
+    }
+  },
+  applyEditorClipMidi(
+    projectId: string,
+    clipId: string,
+    notes?: EditorMidiNote[],
+  ): EditorClipMidiApplyResult {
+    const found = findMockMidiClip(projectId, clipId)
+    if (!found) return { ok: false, error: '工程或片段不存在' }
+    const key = `${projectId}:${clipId}`
+    const applied = notes?.length ? notes : mockMidiNotes[key] || []
+    if (!applied.length) return { ok: false, error: '没有 MIDI 音符可以应用' }
+    mockMidiNotes[key] = applied.map((note) => ({ ...note }))
+    found.clip.metadata = {
+      ...(found.clip.metadata || {}),
+      midi: {
+        note_count: applied.length,
+        applied_notes: applied.length,
+        applied_seconds: applied.reduce((total, note) => total + (note.end - note.start), 0),
+        applied_at: now(),
+      },
+    }
+    if (!found.clip.name.includes('MIDI')) found.clip.name = `${found.clip.name} · MIDI`
+    found.project.updated_at = now()
+    persistMockEditorState()
+    return {
+      ok: true,
+      scope: 'clip',
+      clip_id: clipId,
+      report: { applied_notes: applied.length, applied_seconds: 0.5, skipped: [] },
+      project: cloneProject(found.project),
+      clip: { ...found.clip },
+    }
+  },
+  previewEditorClipMidi(
+    _projectId: string,
+    _clipId: string,
+    _notes?: EditorMidiNote[],
+  ): EditorClipMidiApplyResult {
+    return { ok: false, error: '浏览器 mock 没有 MIDI 音高重绘：请用桌面版试听' }
+  },
+  getEditorTrackMidi(projectId: string, trackId: string, refresh = false): EditorClipMidi {
+    const found = findMockMidiTrack(projectId, trackId)
+    if (!found) return { ok: false, error: '工程或音轨不存在' }
+    const duration = mockTrackDuration(found.project, found.track)
+    const key = `${projectId}:track:${trackId}`
+    const spans = (found.track.clips || []).map((clip) => ({
+      id: clip.id,
+      name: clip.name,
+      start: Number(clip.start) || 0,
+      end: Number(clip.end) || 0,
+    }))
+    if (refresh || !mockMidiNotes[key]) {
+      mockMidiNotes[key] = spans.length
+        ? spans.flatMap((span, index) =>
+            buildMockMidiNotes(Math.max(0.3, span.end - span.start))
+              .slice(0, 4)
+              .map((note, noteIndex) => ({
+                ...note,
+                id: `mock_track_${index}_${noteIndex}`,
+                start: Math.round((span.start + note.start) * 1000) / 1000,
+                end: Math.round((span.start + note.end) * 1000) / 1000,
+              })),
+          )
+        : []
+    }
+    const notes = mockMidiNotes[key] || []
+    return {
+      ok: true,
+      scope: 'track',
+      track_id: trackId,
+      duration,
+      notes: notes.map((note) => ({ ...note })),
+      analysis: { clips: [], empty_track: spans.length === 0 },
+      meta: (found.track.metadata?.midi as Record<string, unknown>) || {},
+      cached: !refresh,
+      midi_ready: true,
+      clip_spans: spans,
+    }
+  },
+  saveEditorTrackMidi(
+    projectId: string,
+    trackId: string,
+    notes: EditorMidiNote[],
+  ): EditorClipMidiSaveResult {
+    const found = findMockMidiTrack(projectId, trackId)
+    if (!found) return { ok: false, error: '工程或音轨不存在' }
+    const key = `${projectId}:track:${trackId}`
+    mockMidiNotes[key] = notes.map((note) => ({ ...note }))
+    found.track.metadata = {
+      ...(found.track.metadata || {}),
+      midi: { scope: 'track', note_count: notes.length, updated_at: now() },
+    }
+    found.project.updated_at = now()
+    persistMockEditorState()
+    return {
+      ok: true,
+      scope: 'track',
+      track_id: trackId,
+      notes: mockMidiNotes[key],
+      meta: found.track.metadata.midi as Record<string, unknown>,
+      project: cloneProject(found.project),
+    }
+  },
+  applyEditorTrackMidi(
+    projectId: string,
+    trackId: string,
+    notes?: EditorMidiNote[],
+  ): EditorClipMidiApplyResult {
+    const found = findMockMidiTrack(projectId, trackId)
+    if (!found) return { ok: false, error: '工程或音轨不存在' }
+    const clips = found.track.clips || []
+    if (!clips.length) {
+      return { ok: false, error: '音轨上没有可用片段：先把音频导入该轨再应用 MIDI' }
+    }
+    const key = `${projectId}:track:${trackId}`
+    const applied = notes?.length ? notes : mockMidiNotes[key] || []
+    if (!applied.length) return { ok: false, error: '没有 MIDI 音符可以应用' }
+    mockMidiNotes[key] = applied.map((note) => ({ ...note }))
+    const touched = clips.filter((clip) =>
+      applied.some((note) => note.end > clip.start && note.start < clip.end),
+    )
+    if (!touched.length) return { ok: false, error: '没有音符落在任何片段上' }
+    for (const clip of touched) {
+      clip.metadata = {
+        ...(clip.metadata || {}),
+        midi: { note_count: applied.length, applied_notes: applied.length, applied_at: now() },
+      }
+      if (!clip.name.includes('MIDI')) clip.name = `${clip.name} · MIDI`
+    }
+    found.track.metadata = {
+      ...(found.track.metadata || {}),
+      midi: {
+        scope: 'track',
+        note_count: applied.length,
+        applied_notes: applied.length,
+        applied_at: now(),
+      },
+    }
+    found.project.updated_at = now()
+    persistMockEditorState()
+    return {
+      ok: true,
+      scope: 'track',
+      track_id: trackId,
+      report: { applied_notes: applied.length, applied_seconds: 0.5, clips: [] },
+      project: cloneProject(found.project),
+      clips: touched.map((clip) => ({ ...clip })),
+    }
+  },
+  getEditorMidiSession(projectId: string, trackId: string): EditorMidiSessionResult {
+    const found = findMockMidiTrack(projectId, trackId)
+    if (!found) return { ok: false, error: '工程或音轨不存在' }
+    const key = `${projectId}:${trackId}`
+    const duration = Math.max(60, mockTrackDuration(found.project, found.track))
+    if (!mockMidiSessions[key]) {
+      const legacy = mockMidiNotes[`${projectId}:track:${trackId}`] || []
+      mockMidiSessions[key] = {
+        version: 1,
+        tempo: 120,
+        time_signature: [4, 4],
+        parts: [
+          {
+            id: 'part_1',
+            name: found.track.name || '旋律',
+            instrument: 0,
+            drum: false,
+            channel: 0,
+            volume: 1,
+            pan: 0,
+            mute: false,
+            solo: false,
+            color: '#5ec2ff',
+            notes: legacy.map((note, index) => ({
+              id: note.id || `cn_${index}`,
+              start: note.start,
+              end: note.end,
+              pitch: Math.round(note.pitch),
+              velocity: 100,
+            })),
+          },
+        ],
+      }
+    }
+    const session = mockMidiSessions[key]!
+    const spans = (found.track.clips || []).map((clip) => ({
+      id: clip.id,
+      name: clip.name,
+      start: Number(clip.start) || 0,
+      end: Number(clip.end) || 0,
+    }))
+    return {
+      ok: true,
+      track_id: trackId,
+      track_name: found.track.name || '',
+      duration,
+      session: { ...session, parts: session.parts.map((part) => ({ ...part, notes: part.notes.map((n) => ({ ...n })) })) },
+      instruments: [],
+      families: [],
+      drums: mockDrumKit,
+      clip_spans: spans,
+      has_audio: spans.length > 0,
+      midi_ready: true,
+    }
+  },
+  saveEditorMidiSession(
+    projectId: string,
+    trackId: string,
+    session: EditorMidiSession,
+  ): EditorMidiSessionResult {
+    const found = findMockMidiTrack(projectId, trackId)
+    if (!found) return { ok: false, error: '工程或音轨不存在' }
+    mockMidiSessions[`${projectId}:${trackId}`] = session
+    const noteCount = session.parts.reduce((total, part) => total + part.notes.length, 0)
+    found.track.metadata = {
+      ...(found.track.metadata || {}),
+      midi_compose: {
+        tempo: session.tempo,
+        time_signature: session.time_signature,
+        parts: session.parts.length,
+        note_count: noteCount,
+        updated_at: now(),
+      },
+    }
+    found.project.updated_at = now()
+    persistMockEditorState()
+    return {
+      ok: true,
+      track_id: trackId,
+      session,
+      summary: { note_count: noteCount },
+      project: cloneProject(found.project),
+    }
+  },
+  renderEditorMidiSession(
+    projectId: string,
+    trackId: string,
+    session: EditorMidiSession,
+    options?: EditorMidiRenderOptions,
+  ): EditorMidiSessionResult {
+    const found = findMockMidiTrack(projectId, trackId)
+    if (!found) return { ok: false, error: '工程或音轨不存在' }
+    const audible = session.parts.filter((part) => part.notes.length > 0)
+    if (!audible.length) return { ok: false, error: '没有可渲染的音符' }
+    mockMidiSessions[`${projectId}:${trackId}`] = session
+    const mode = options?.mode === 'mix' ? 'mix' : 'tracks'
+    const duration = Math.max(
+      0.1,
+      ...audible.flatMap((part) => part.notes.map((note) => note.end)),
+    )
+    const renderedClips: EditorClip[] = []
+    if (mode === 'mix') {
+      const clip = {
+        ...(found.track.clips[0] || {}),
+        id: `clp_midi_${Date.now().toString(36)}`,
+        name: `MIDI · ${found.track.name || '编曲'}`,
+        start: 0,
+        end: duration,
+        offset: 0,
+        volume: 1,
+        mute: false,
+        file: '',
+        effects: [],
+        locked: false,
+        fade_in: 0,
+        fade_out: 0,
+        metadata: { midi_render: { source_track: trackId, mode: 'mix', rendered_at: now() } },
+      } as EditorClip
+      found.track.clips = [clip]
+      renderedClips.push(clip)
+    } else {
+      found.project.tracks = found.project.tracks.filter(
+        (track) => (track.metadata || {}).midi_render_source !== trackId,
+      )
+      for (const part of audible) {
+        const first = Math.min(...part.notes.map((note) => note.start))
+        const last = Math.max(...part.notes.map((note) => note.end))
+        const clip = {
+          id: `clp_midi_${Date.now().toString(36)}${part.id}`,
+          name: `MIDI · ${part.name}`,
+          start: first,
+          end: last,
+          offset: 0,
+          volume: 1,
+          mute: false,
+          file: '',
+          effects: [],
+          locked: false,
+          fade_in: 0,
+          fade_out: 0,
+          metadata: { midi_render: { source_track: trackId, mode: 'part', part_id: part.id } },
+        } as EditorClip
+        found.project.tracks.push({
+          id: `trk_midi_${part.id}_${Date.now().toString(36)}`,
+          name: `MIDI · ${part.name}`,
+          type: 'audio',
+          clips: [clip],
+          effects: [],
+          locked: false,
+          mute: false,
+          volume: part.volume,
+          metadata: { midi_render_source: trackId, midi_part: part.id, midi_program: part.instrument },
+        })
+        renderedClips.push(clip)
+      }
+    }
+    found.project.updated_at = now()
+    persistMockEditorState()
+    return {
+      ok: true,
+      mode,
+      track_id: trackId,
+      clips: renderedClips,
+      report: { mode, parts: audible.length, clips: renderedClips.length },
+      project: cloneProject(found.project),
+    }
+  },
+  startEditorMidiRender(
+    projectId: string,
+    trackId: string,
+    session: EditorMidiSession,
+    options?: EditorMidiRenderOptions,
+  ): EditorMidiRenderJob {
+    const result = mock.renderEditorMidiSession(projectId, trackId, session, options)
+    const jobId = `mrender_mock_${Date.now().toString(36)}`
+    mockMidiRenderJobs[jobId] = {
+      ok: true,
+      job_id: jobId,
+      status: result.ok ? 'done' : 'error',
+      progress: result.ok ? 100 : 0,
+      message: result.ok ? '渲染完成' : String(result.error || '渲染失败'),
+      error: result.error || null,
+      result,
+    }
+    return { ok: true, job_id: jobId, status: 'queued', progress: 0, message: '等待开始' }
+  },
+  editorMidiRenderStatus(jobId: string): EditorMidiRenderJob {
+    return mockMidiRenderJobs[jobId] || {
+      ok: false,
+      error: '渲染任务不存在或已过期',
+    }
+  },
+  previewEditorMidiSession(
+    projectId: string,
+    trackId: string,
+    session: EditorMidiSession,
+  ): EditorMidiSessionResult {
+    const found = findMockMidiTrack(projectId, trackId)
+    if (!found) return { ok: false, error: '工程或音轨不存在' }
+    const count = session.parts.reduce((total, part) => total + part.notes.length, 0)
+    if (!count) return { ok: false, error: '没有可试听的音符' }
+    return {
+      ok: false,
+      error: '浏览器 mock 没有 MIDI 合成器：请用桌面版试听或渲染',
+      track_id: trackId,
+    }
+  },
+  exportEditorMidiFile(
+    projectId: string,
+    trackId: string,
+    session: EditorMidiSession,
+  ): EditorMidiSessionResult {
+    const found = findMockMidiTrack(projectId, trackId)
+    if (!found) return { ok: false, error: '工程或音轨不存在' }
+    mockMidiSessions[`${projectId}:${trackId}`] = session
+    persistMockEditorState()
+    return {
+      ok: true,
+      track_id: trackId,
+      path: `mock/${trackId}.mid`,
+      bytes: 128 + session.parts.reduce((total, part) => total + part.notes.length * 8, 0),
+    }
+  },
+  importEditorMidiFile(_projectId: string, trackId: string): EditorMidiSessionResult {
+    return {
+      ok: false,
+      cancelled: true,
+      track_id: trackId,
+      error: '浏览器 mock 不支持导入本地 MIDI 文件',
+    }
+  },
+  importEditorMidiTracks(): EditorMidiImportResult {
+    return { ok: false, cancelled: true, error: '浏览器 mock 不支持导入本地 MIDI 文件' }
   },
 }
 

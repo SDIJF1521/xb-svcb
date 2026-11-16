@@ -1170,7 +1170,11 @@ def test_dropout_core_regions_exclude_guard_context_from_final_merge() -> None:
             ]
         }
     )
-    assert core == pytest.approx([(27.18, 27.26), (45.42, 45.48)])
+    assert core is not None
+    assert np.allclose(
+        np.asarray(core, dtype=np.float64),
+        [(27.18, 27.26), (45.42, 45.48)],
+    )
 
 
 def test_dropout_recovery_uses_guard_only_after_verified_failure_and_falls_back(
@@ -1189,7 +1193,7 @@ def test_dropout_recovery_uses_guard_only_after_verified_failure_and_falls_back(
         "output_rms": 0.01,
         "duration": 0.3,
     }
-    detections = iter([issue, issue, issue, issue])
+    detections = iter([issue, issue, issue, issue, issue])
 
     def infer(vocals: Path, target: Path) -> None:
         calls.append((vocals, target))
@@ -1254,7 +1258,7 @@ def test_dropout_recovery_rejects_detector_clear_when_initial_core_is_still_air(
         "bad_frames": 10,
         "bad_regions": [{"start": core[0], "end": core[1]}],
     }
-    detections = iter([first_issue, None])
+    detections = iter([first_issue, first_issue, None])
 
     def infer(_vocals: Path, target: Path) -> None:
         target.write_bytes(b"baseline" if target == output else b"retry")
@@ -1334,7 +1338,7 @@ def test_dropout_recovery_keeps_initial_cores_fixed_across_quality_retries(
             {"start": start, "end": end} for start, end in cores
         ],
     }
-    detections = iter([first_issue, None, None])
+    detections = iter([first_issue, first_issue, None, None])
     measured_regions: list[list[tuple[float, float]]] = []
     quality_results = iter(
         [
@@ -1443,7 +1447,9 @@ def test_dropout_recovery_accepts_unguarded_retry_without_stale_regions(
         "bad_regions": [{"start": start, "end": end} for start, end in cores],
     }
     has_previous_guard = previous_guard_accepted is not None
-    detections = iter([first_issue, None, None])
+    # The guard re-detects at the lowered boundary, so the scripted detector
+    # answers the baseline pass twice with the same failure set.
+    detections = iter([first_issue, first_issue, None, None])
     calls: list[Path] = []
     reports: list[Path | None] = []
     sample_rate = 16000
@@ -1570,7 +1576,7 @@ def test_dropout_recovery_stops_when_retry_detects_failure_outside_guard_scope(
         "bad_frames": 10,
         "bad_regions": [{"start": 5.0, "end": 5.2}],
     }
-    detections = iter([first_issue, outside_issue])
+    detections = iter([first_issue, first_issue, outside_issue])
     calls: list[tuple[Path, Path]] = []
 
     def infer(vocals: Path, target: Path) -> None:
@@ -1634,7 +1640,7 @@ def test_dropout_recovery_does_not_use_unresolved_candidate_as_residual_baseline
         "bad_frames": 8,
         "bad_regions": [{"start": 1.1, "end": 1.2}],
     }
-    detections = iter([first_issue, residual_issue, None])
+    detections = iter([first_issue, first_issue, residual_issue, None])
 
     def infer(vocals: Path, target: Path) -> None:
         calls.append((vocals, target))
@@ -1706,7 +1712,7 @@ def test_dropout_recovery_keeps_partial_candidate_after_body_quality_pass(
         "bad_frames": 8,
         "bad_regions": [{"start": 1.1, "end": 1.2}],
     }
-    detections = iter([first_issue, residual_issue])
+    detections = iter([first_issue, first_issue, residual_issue])
 
     def infer(_vocals: Path, target: Path) -> None:
         target.write_bytes(b"baseline" if target == output else b"retry")
@@ -2647,6 +2653,134 @@ def test_formant_guard_applies_hysteresis_fallback_per_scope() -> None:
     assert len(intervals) == 2
     assert intervals[0][0] < 0.50 < intervals[0][1]
     assert intervals[1][0] < 0.80 < intervals[1][1]
+
+
+def test_formant_guard_covers_phrase_tail_below_near_threshold() -> None:
+    """确认范围内整句尾段略低于边界时也必须被保护（2:58 的持续 D5）。
+
+    现场案例：177.6-178.4s 的高音超过 640Hz 边界，同一句从 178.5s 起稳定在
+    ~587Hz（低于 588.8Hz 的近阈值），模型仍然唱不上去。此前严格候选一旦命中
+    句首，整句尾段的低一档候选就再也不会生成，尾段因此永远得不到保护。
+    """
+    head = [(0.30 + index * 0.02, 660.0) for index in range(4)]
+    tail = [(0.60 + index * 0.02, 587.0) for index in range(40)]
+
+    intervals = formant_pitch_worker._high_intervals(
+        head + tail,
+        640.0,
+        0.0,
+        1.6,
+        allowed_regions=[(0.25, 1.5)],
+    )
+
+    assert len(intervals) == 2
+    assert intervals[0][0] < 0.30 < intervals[0][1]
+    assert intervals[1][0] < 0.60 < intervals[1][1] > 1.3
+
+
+def test_formant_guard_ignores_sub_boundary_phrase_without_scope() -> None:
+    points = [(0.30 + index * 0.02, 587.0) for index in range(40)]
+    assert formant_pitch_worker._high_intervals(points, 640.0, 0.0, 1.6) == []
+
+
+def test_formant_guard_discovers_regions_from_f0_sidecar(tmp_path: Path) -> None:
+    curve_path = tmp_path / "f0.npy"
+    times = np.linspace(0.0, 2.0, 400)
+    curve = np.full(times.size, 300.0, dtype=np.float32)
+    curve[(times >= 0.8) & (times <= 1.6)] = 585.0
+    np.save(str(curve_path), curve)
+
+    points = formant_pitch_worker._curve_points(curve_path, 2.0)
+    assert points
+    intervals = formant_pitch_worker._high_intervals(
+        points, 640.0, 0.0, 2.0, allowed_regions=[(0.7, 1.7)]
+    )
+    assert intervals
+    assert intervals[0][0] < 0.8
+    assert intervals[0][1] > 1.5
+    assert formant_pitch_worker._curve_points(tmp_path / "absent.npy", 2.0) == []
+
+
+def test_guard_scope_is_refreshed_at_the_lowered_boundary(tmp_path: Path) -> None:
+    """保护区间必须按“降调后的边界”重新检测。
+
+    现场案例：首次检测在 800Hz 边界只看到 177.6-178.3s；边界随后降到 640Hz，
+    同一句在 178.5-180.5s（约 587Hz）已经掉音，但旧代码沿用 800Hz 的 scope，
+    以至于整句尾段既不在保护范围、也不在合并范围，成品里一直是模型塌掉的声音。
+    """
+    service = ConversionService.__new__(ConversionService)
+    service._log = lambda *_args: None
+    source = tmp_path / "vocals.wav"
+    output = tmp_path / "converted_raw.wav"
+    source.write_bytes(b"wav")
+    output.write_bytes(b"wav")
+
+    narrow = {
+        "start": 177.6,
+        "end": 178.3,
+        "source_f0_hz": 660.0,
+        "bad_frames": 20,
+        "bad_regions": [{"start": 177.64, "end": 178.4}],
+    }
+    wide = {
+        "start": 177.6,
+        "end": 180.5,
+        "source_f0_hz": 660.0,
+        "bad_frames": 60,
+        "bad_regions": [
+            {"start": 177.64, "end": 178.4},
+            {"start": 178.54, "end": 180.5},
+        ],
+    }
+    detections = iter([narrow, wide, None])
+    service._detect_model_dropout = lambda *_args: next(detections)
+
+    scopes: list[list[tuple[float, float]] | None] = []
+
+    def prepare(_src, _dst, _params, _log, _threshold=None, only_regions=None, semitones=None):
+        scopes.append(only_regions)
+        return _src, False
+
+    service._prepare_high_pitch_guard = prepare
+
+    def infer(_vocals: Path, target: Path) -> None:
+        target.write_bytes(b"render")
+
+    _rendered, history, guard_applied = service._infer_with_dropout_recovery(
+        engine=None,
+        model={},
+        source=source,
+        output=output,
+        params=InferenceParams(auto_high_pitch_guard=True, high_pitch_threshold=800.0),
+        duration=200.0,
+        log_file=tmp_path / "run.log",
+        allow_recovery=True,
+        infer=infer,
+    )
+
+    assert guard_applied is False
+    assert scopes, "带保护的重试没有执行"
+    assert scopes[0] is not None
+    assert any(end >= 180.5 for _start, end in scopes[0]), scopes[0]
+    refreshed = history[0].get("issue_at_threshold")
+    assert refreshed is not None
+    assert refreshed["bad_regions"][-1]["end"] == 180.5
+
+
+def test_guard_f0_curve_requires_a_fresh_sidecar(tmp_path: Path) -> None:
+    source = tmp_path / "infer_input.wav"
+    source.write_bytes(b"wav")
+    assert ConversionService._guard_f0_curve(source) is None
+
+    sidecar = tmp_path / "f0.npy"
+    np.save(str(sidecar), np.ones(64, dtype=np.float32))
+    assert ConversionService._guard_f0_curve(source) == sidecar
+
+    stale = sidecar.stat().st_mtime - 3600.0
+    import os
+
+    os.utime(sidecar, (stale, stale))
+    assert ConversionService._guard_f0_curve(source) is None
 
 
 def test_formant_guard_rejects_collapsed_render(tmp_path: Path, monkeypatch) -> None:
@@ -3725,6 +3859,38 @@ def test_deepfilter_uses_model_rate_then_restores_input_rate(
     }
 
 
+def test_deepfilter_chunk_plan_weights_sum_to_unity() -> None:
+    """Long tracks are split so peak VRAM stays bounded without seam gain.
+
+    Every sample must keep total crossfade weight 1.0 and the last window must
+    reach the final sample, otherwise the chunked path would attenuate the head
+    or tail of the repaired vocal.
+    """
+    sample_rate = 48000
+    total = sample_rate * 137
+    chunk = sample_rate * 60
+    overlap = sample_rate
+    prime = sample_rate * 3
+
+    plan = vocal_enhancement_worker._chunk_plan(total, chunk, overlap, prime)
+    assert len(plan) > 1
+    assert plan[0][1] == 0 and plan[0][3] == 0
+    assert plan[-1][2] == total and plan[-1][4] == 0
+    # Interior windows are primed with context that is trimmed afterwards.
+    assert plan[1][0] == plan[1][1] - prime
+
+    weight = np.zeros(total, dtype=np.float64)
+    for run_start, start, end, head, tail in plan:
+        assert run_start <= start < end <= total
+        window = np.ones(end - start, dtype=np.float64)
+        if head:
+            window[:head] = np.linspace(0.0, 1.0, head + 2)[1:-1]
+        if tail:
+            window[-tail:] = 1.0 - np.linspace(0.0, 1.0, tail + 2)[1:-1]
+        weight[start:end] += window
+    assert np.allclose(weight, 1.0)
+
+
 def test_float_writer_rejects_non_finite_audio(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -3830,6 +3996,43 @@ def test_noise_classified_model_output_still_enters_deepfilter(
     assert output.read_bytes() == b"RIFF-filtered"
 
 
+class _FinishedWorkerProcess:
+    """``subprocess.Popen`` stand-in for a worker that has already exited."""
+
+    def __init__(self, result: subprocess.CompletedProcess[str]) -> None:
+        self.args = result.args
+        self.returncode = int(result.returncode)
+        self.killed = False
+        self._stdout = result.stdout
+        self._stderr = result.stderr
+
+    def poll(self) -> int:
+        return self.returncode
+
+    def communicate(self) -> tuple[str | None, str | None]:
+        return self._stdout, self._stderr
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+
+def _popen_from_run(fake_run):
+    """Adapt a ``subprocess.run`` fake to the enhancement ``Popen`` path.
+
+    ``VocalEnhancementProcessor.enhance`` starts the worker with Popen so it can
+    poll for progress and enforce the hour-long timeout, while analysis, repair
+    and tuning still use ``subprocess.run``.  Both fakes must therefore see the
+    same command and keyword arguments, and the fake process reports the exit
+    code and captured output the test already declared.
+    """
+
+    def popen(cmd, **kwargs):
+        return _FinishedWorkerProcess(fake_run(cmd, **kwargs))
+
+    return popen
+
+
 def test_processor_invokes_isolated_worker_and_uses_project_cache(tmp_path: Path) -> None:
     source = tmp_path / "source.wav"
     output = tmp_path / "enhanced.wav"
@@ -3862,6 +4065,10 @@ def test_processor_invokes_isolated_worker_and_uses_project_cache(tmp_path: Path
         patch.object(config, "VOCAL_ENHANCEMENT_MARKER", marker),
         patch.object(config, "VOCAL_ENHANCEMENT_MODEL_DIR", cache_home),
         patch("infrastructure.vocal_enhancement.subprocess.run", side_effect=fake_run),
+        patch(
+            "infrastructure.vocal_enhancement.subprocess.Popen",
+            side_effect=_popen_from_run(fake_run),
+        ),
     ):
         result = VocalEnhancementProcessor().enhance(
             source,
@@ -3961,6 +4168,10 @@ def test_processor_tunes_before_enhancement_and_passes_strengths(
         patch.object(config, "SVC_PYTHON", svc_python),
         patch.object(config, "VOCAL_TUNING_WORKER", tuning_worker),
         patch("infrastructure.vocal_enhancement.subprocess.run", side_effect=fake_run),
+        patch(
+            "infrastructure.vocal_enhancement.subprocess.Popen",
+            side_effect=_popen_from_run(fake_run),
+        ),
     ):
         result = VocalEnhancementProcessor().enhance(
             source,
@@ -4016,6 +4227,10 @@ def test_processor_continues_when_natural_tuning_fails(tmp_path: Path) -> None:
         patch.object(config, "SVC_PYTHON", svc_python),
         patch.object(config, "VOCAL_TUNING_WORKER", tuning_worker),
         patch("infrastructure.vocal_enhancement.subprocess.run", side_effect=fake_run),
+        patch(
+            "infrastructure.vocal_enhancement.subprocess.Popen",
+            side_effect=_popen_from_run(fake_run),
+        ),
     ):
         result = VocalEnhancementProcessor().enhance(
             source,
@@ -4065,6 +4280,10 @@ def test_processor_rejects_unstable_natural_tuning_result(tmp_path: Path) -> Non
         patch.object(config, "VOCAL_ENHANCEMENT_MODEL_DIR", cache_home),
         patch.object(config, "VOCAL_TUNING_WORKER", tuning_worker),
         patch("infrastructure.vocal_enhancement.subprocess.run", side_effect=fake_run),
+        patch(
+            "infrastructure.vocal_enhancement.subprocess.Popen",
+            side_effect=_popen_from_run(fake_run),
+        ),
     ):
         result = VocalEnhancementProcessor().enhance(
             source,

@@ -1,5 +1,6 @@
 import { computed, readonly, ref, watch } from 'vue'
 import { enExtraPhrases, jaExtraPhrases, translateDynamicPhrase } from './extraPhrases'
+import { workflowEnPhrases, workflowJaPhrases, translateWorkflowDynamic } from './workflowPhrases'
 
 export type AppLocale = 'zh-CN' | 'en-US' | 'ja-JP'
 
@@ -101,6 +102,7 @@ type MessageKey = keyof (typeof messages)['zh-CN']
 
 const enPhrases: Record<string, string> = {
   ...enExtraPhrases,
+  ...workflowEnPhrases,
   '欢迎回来': 'Welcome back', '// 欢迎回来，Lkpap': '// Welcome back, Lkpap', '首页': 'Home', '资料库': 'Library', '资源获取': 'Resources',
   '我的模型': 'My Models', '我的作品': 'My Works', '插件中心': 'Plugins', 'API 接入': 'API Access',
   'AI 翻唱': 'AI Cover', 'AI 增强': 'AI Enhance', '音频编辑': 'Audio Editor',
@@ -256,6 +258,7 @@ const enPhrases: Record<string, string> = {
 const jaPhrases: Record<string, string> = {
   ...enPhrases,
   ...jaExtraPhrases,
+  ...workflowJaPhrases,
   '欢迎回来': 'おかえりなさい', '// 欢迎回来，Lkpap': '// おかえりなさい、Lkpap', '首页': 'ホーム', '资料库': 'ライブラリ', '资源获取': '素材取得',
   '我的模型': 'マイモデル', '我的作品': 'マイ作品', '插件中心': 'プラグイン', 'API 接入': 'API連携',
   'AI 翻唱': 'AIカバー', 'AI 增强': 'AI強化', '音频编辑': '音声編集',
@@ -437,6 +440,8 @@ function translateExact(source: string, targetLocale = currentLocale.value): str
   if (direct) return direct
   const dynamic = translateDynamicPhrase(source, targetLocale)
   if (dynamic) return dynamic
+  const workflowDynamic = translateWorkflowDynamic(source, targetLocale)
+  if (workflowDynamic) return workflowDynamic
   if (source.startsWith('// ')) {
     const translated = table[source.slice(3)]
     if (translated) return `// ${translated}`
@@ -445,9 +450,86 @@ function translateExact(source: string, targetLocale = currentLocale.value): str
 }
 
 export function translateUiText(source: string, targetLocale = currentLocale.value): string {
+  // 中文界面本就是源文本，直接返回，省掉每个文本节点都跑一遍正则和词表查找。
+  if (!source || targetLocale === 'zh-CN') return source
   const match = source.match(/^(\s*)(.*?)(\s*)$/s)
   if (!match) return source
   return `${match[1] ?? ''}${translateExact(match[2] ?? '', targetLocale)}${match[3] ?? ''}`
+}
+
+/**
+ * 逐行本地化后端写入的运行日志。
+ *
+ * 日志是后端按行追加的纯文本（``[HH:MM:SS] 内容``），这里保留时间戳前缀，
+ * 只翻译内容部分；缩进由 ``translateUiText`` 自己保留。这样日志面板在英文 /
+ * 日文界面下也是可读的，而不是整段中文。
+ */
+export function translateLogText(source: string, targetLocale = currentLocale.value): string {
+  if (!source || targetLocale === 'zh-CN') return source
+  return source
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^(\[\d{1,2}:\d{2}:\d{2}\]\s*)([\s\S]*)$/)
+      if (!match) return translateUiText(line, targetLocale)
+      return `${match[1] ?? ''}${translateUiText(match[2] ?? '', targetLocale)}`
+    })
+    .join('\n')
+}
+
+// PyMSS returns stable category ids alongside labels. Translate from those ids
+// so catalog versions that return Chinese, English, or shortened labels render
+// consistently in every supported UI language.
+const pymssPrimaryLabels: Record<string, string> = {
+  cleanup: '音频清理/修复', experimental_general: '实验/通用分离', instrumental: '伴奏/无人声提取',
+  karaoke: '卡拉OK/和声', legacy_models: '传统非 VR 模型', legacy_vr: '传统 VR 模型',
+  music_stems: '音乐多轨/分轨', reverb_echo_control: '混响/回声处理', single_instrument: '单乐器/单音轨',
+  spatial: '声像/空间分离', special: '特殊目标/差异提取', vocal: '人声',
+}
+
+const pymssSecondaryLabels: Record<string, string> = {
+  audio_restoration: '音频/人声修复', crowd_removal: '人群/观众声移除', noise_bleed_control: '降噪/串音抑制',
+  aspiration_breath: '气声/呼吸声分离', choir_vocal: '合唱/人群歌声分离', duet_vocal: '双人/二重唱分离',
+  speech_vocal: '语音/说话人声分离', vocal_extraction: '人声提取', vocal_gender_chorus: '男女声/合唱分离',
+  vocal_instrumental_dual: '人声-伴奏双向分离', vr_backing_vocal: 'VR 伴唱/和声', vr_deecho: 'VR 去回声',
+  vr_deecho_dereverb: 'VR 去回声+去混响', vr_denoise: 'VR 降噪', vr_dereverb: 'VR 去混响',
+  vr_harmonic_noise: 'VR 谐波/噪声分离', vr_hp2: 'VR HP2 系列', vr_instrumental_extraction: 'VR 伴奏/无人声提取',
+  vr_karaoke: 'VR 和声/伴唱', vr_mgm: 'VR MGM 系列', vr_sp: 'VR SP 系列', vr_vocal_extraction: 'VR 人声提取',
+  vr_wind_instrumental: 'VR 风声/管乐伴奏', dnr_stems: 'DNR 对话/音乐/音效分轨', drum_stems: '鼓组细分',
+  four_stem: '四轨分离', mega_53_stems: 'MVSep 53 轨分离', six_stem: '六轨分离',
+  dereverb: '去混响', dereverb_deecho: '去混响+去回声', bass: '贝斯', drums_percussion: '鼓/打击乐',
+  guitar: '吉他', strings: '弦乐', mono_stereo_duality: '单声道/立体声分离', phantom_center_wide: '中央/宽声像提取',
+}
+
+const pymssGeneralSecondaryLabels: Record<string, string> = {
+  experimental_general: '通用源分离', instrumental: '伴奏/无人声提取', karaoke: '卡拉OK/和声',
+  legacy_models: 'Demucs/HTDemucs 系列', special: '相似/差异分离',
+}
+
+export function translatePymssCategory(
+  primaryId?: string,
+  secondaryId?: string,
+  fallback = 'PyMSS',
+): string {
+  const primary = translateUiText(pymssPrimaryLabels[String(primaryId || '').trim()] || '')
+  const secondaryKey = String(secondaryId || '').trim()
+  const secondary = translateUiText(
+    pymssSecondaryLabels[secondaryKey] || (secondaryKey === '__general__' ? pymssGeneralSecondaryLabels[String(primaryId || '').trim()] || '' : ''),
+  )
+  if (primary && secondary) return `${primary} / ${secondary}`
+  if (primary) return primary
+  return translateUiText(fallback)
+}
+
+const pymssTargetStemLabels: Record<string, string> = {
+  vocal: '人声', vocals: '人声', singing: '人声', voice: '人声',
+  instrumental: '伴奏', accompaniment: '伴奏', drums: '鼓', bass: '贝斯', guitar: '吉他',
+  strings: '弦乐', piano: '钢琴', speech: '语音', noise: '噪声', restored: '修复音频',
+  restored_vocal: '修复人声', crowd: '人群声', effects: '音效', other: '其他',
+}
+
+export function translatePymssTargetStem(value?: string): string {
+  const key = String(value || '').trim().toLowerCase().replace(/[- ]+/g, '_')
+  return translateUiText(pymssTargetStemLabels[key] || value || '—')
 }
 
 export function setLocale(next: AppLocale) {
@@ -530,14 +612,45 @@ function localizeTree(root: Node) {
 
 let observer: MutationObserver | null = null
 
+/**
+ * DOM 本地化缓冲：Vue 批量渲染/高频更新时，MutationObserver 会一次抛来成百上千
+ * 条 mutation。这里把它们合并，在同一个宏任务里只做一轮树遍历，避免每一条
+ * mutation 都同步整树重扫（之前列表/日志/进度条高频更新时会造成卡顿）。
+ */
+const pendingLocalizeRoots = new Set<Node>()
+let localizationScheduled = false
+
+function scheduleLocalization(root: Node) {
+  pendingLocalizeRoots.add(root)
+  if (localizationScheduled) return
+  localizationScheduled = true
+  setTimeout(() => {
+    localizationScheduled = false
+    const roots = Array.from(pendingLocalizeRoots)
+    pendingLocalizeRoots.clear()
+    // 父节点已覆盖其子树，跳过会被重复遍历的后代，减少重复工作。
+    for (const node of roots) {
+      let covered = false
+      for (const other of roots) {
+        if (other === node) continue
+        if (other instanceof Element && other.contains(node)) {
+          covered = true
+          break
+        }
+      }
+      if (!covered) localizeTree(node)
+    }
+  }, 0)
+}
+
 export function startDomLocalization() {
   if (typeof document === 'undefined' || observer) return
   localizeTree(document.body)
   observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
-      if (mutation.type === 'characterData') localizeTree(mutation.target)
+      if (mutation.type === 'characterData') scheduleLocalization(mutation.target)
       if (mutation.type === 'attributes' && mutation.target instanceof Element) localizeElement(mutation.target)
-      for (const node of mutation.addedNodes) localizeTree(node)
+      for (const node of mutation.addedNodes) scheduleLocalization(node)
     }
   })
   observer.observe(document.body, {

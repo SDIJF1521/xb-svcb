@@ -24,7 +24,7 @@
 
 #define MyAppName "XB-SVCB"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.1.1"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 #ifndef XB_PACKAGE_STACK
@@ -44,8 +44,14 @@ LicenseFile=..\LICENSE
 ; 默认装到用户可写目录，避免在 Program Files 内建 venv / 下模型需要管理员权限
 DefaultDirName={localappdata}\Programs\{#MyAppShort}
 DefaultGroupName={#MyAppShort}
+#ifdef XB_REQUIRE_ADMIN
+; 受限环境（部分机器的非提权令牌不能写 %TEMP%）下，Inno 在显示界面前
+; 就要把自身解压到 %TEMP%\is-XXXX.tmp；启动即提权可以避开该失败。
+PrivilegesRequired=admin
+#else
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
+#endif
 ; 显式展示「选择安装位置」页，允许用户自定义安装路径（exe 与全部依赖都装到此目录）
 DisableDirPage=no
 UsePreviousAppDir=yes
@@ -444,6 +450,9 @@ ja.RuntimeCacheCleaned=ランタイムのセットアップが完了し、イン
 zhcn.RuntimePreparing=准备搭建运行环境…
 en.RuntimePreparing=Preparing runtime setup...
 ja.RuntimePreparing=ランタイムセットアップを準備しています...
+zhcn.DiskSpaceLow=安装目录所在磁盘仅剩 %1 GB（%2），而搭建 AI 运行环境通常需要 10-20 GB：uv 缓存、wheel 解包与虚拟环境都会写入该磁盘。%n%n可以继续安装，但依赖下载可能因空间不足中途失败。建议先清理磁盘，或设置 XB_UV_CACHE_DIR / XB_PIP_CACHE_DIR 指向空间更大的磁盘后重试。
+en.DiskSpaceLow=Only %1 GB is free on the drive that holds the install folder (%2), while building the AI runtime usually needs 10-20 GB: uv caches, wheel extraction and virtual environments all write there.%n%nSetup can continue, but package installation may fail halfway when the disk fills up. Free some space, or point XB_UV_CACHE_DIR / XB_PIP_CACHE_DIR at a larger drive and retry.
+ja.DiskSpaceLow=インストール先ドライブの空き容量は %1 GB です（%2）。AI ランタイムの構築には通常 10-20 GB 必要で、uv キャッシュ、wheel の展開、仮想環境がすべてこのドライブに書き込まれます。%n%n続行できますが、容量不足で依存関係のインストールが途中で失敗する可能性があります。空き容量を確保するか、XB_UV_CACHE_DIR / XB_PIP_CACHE_DIR を容量の大きいドライブに設定してから再試行してください。
 zhcn.PrereqsConfiguring=正在检测前置依赖并配置环境变量…
 en.PrereqsConfiguring=Checking prerequisites and configuring environment variables...
 ja.PrereqsConfiguring=前提条件を確認し、環境変数を設定しています...
@@ -481,7 +490,6 @@ Source: "..\install\runtime_profiles\*"; DestDir: "{app}\install\runtime_profile
 Source: "..\assets\runtime\*"; DestDir: "{app}\assets\runtime"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression skipifsourcedoesntexist
 Source: "..\install\configure_user_env.py"; DestDir: "{app}\install"; Flags: ignoreversion
 Source: "..\install\detect_python.bat"; DestDir: "{app}\install"; Flags: ignoreversion
-Source: "..\install\build_rvc_compat.py"; DestDir: "{app}\install"; Flags: ignoreversion
 Source: "..\setup_env.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\setup_shared_env.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\install_prereqs.bat"; DestDir: "{app}"; Flags: ignoreversion
@@ -495,6 +503,7 @@ Source: "..\assets\tools\ffmpeg\*"; DestDir: "{app}\tools\ffmpeg"; Flags: recurs
 Source: "..\.tmp\bundled-engines\so-vits-svc\*"; DestDir: "{app}\engines\so-vits-svc"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\.tmp\bundled-engines\ddsp-svc\*"; DestDir: "{app}\engines\ddsp-svc"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "..\.tmp\bundled-engines\seed-vc\*"; DestDir: "{app}\engines\seed-vc"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\.tmp\bundled-engines\rvc\*"; DestDir: "{app}\engines\rvc"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; 自带底模与 UVR 模型（随安装包分发；安装时由 install.py 本地复制，免联网慢下载）
 ; 模型为已压缩的二进制权重，用 nocompression 跳过再压缩，显著加快编译与安装速度
 ; FCPE 用于检测到极高音时自动扩展 F0 覆盖；分卷仍由 DiskSliceSize 控制在 2 GB 内
@@ -503,9 +512,9 @@ Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubd
 Source: "..\.tmp\installer-wheelhouse\*"; DestDir: "{app}\assets\wheels"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\docs\release-notes\release_notes_v0_1_0.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
-Source: "..\docs\release-notes\release_notes_v0_1_0.en.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
-Source: "..\docs\release-notes\release_notes_v0_1_0.ja.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
+Source: "..\docs\release-notes\release_notes_v0_1_1.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
+Source: "..\docs\release-notes\release_notes_v0_1_1.en.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
+Source: "..\docs\release-notes\release_notes_v0_1_1.ja.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
 Source: "..\docs\api.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 #endif
 
@@ -513,7 +522,10 @@ Source: "..\docs\api.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Name: "{group}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; IconFilename: "{app}\xb-svcb.ico"
 Name: "{group}\{cm:RepairEnvironment}"; Filename: "{app}\setup_env.bat"; WorkingDir: "{app}"; IconFilename: "{app}\xb-svcb.ico"
 Name: "{group}\{cm:UninstallApp,{#MyAppShort}}"; Filename: "{uninstallexe}"
-Name: "{commondesktop}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\xb-svcb.ico"
+; 桌面快捷方式：按用户安装写用户桌面，全用户（管理员）安装才写公共桌面。
+; 非提权时写 {commondesktop} 会因 C:\Users\Public\Desktop 不可写而报 0x80070005。
+Name: "{userdesktop}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\xb-svcb.ico"; Check: not IsAdminInstallMode
+Name: "{commondesktop}\{#MyAppShort}"; Filename: "{app}\{#MyAppExe}"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\xb-svcb.ico"; Check: IsAdminInstallMode
 
 [Run]
 ; 提供安装完成后直接启动选项（默认不勾）
@@ -706,6 +718,78 @@ begin
     Result := '...' + Copy(S, Length(S) - MaxLen + 1, MaxLen);
 end;
 
+{ ---- Byte decoding ------------------------------------------------------ }
+{ install.py, uv and pip all write UTF-8 (the batch console runs at
+  chcp 65001), but LoadStringFromFile returns raw bytes and String() decodes
+  them with the ANSI code page. Chinese log lines and Chinese install paths
+  therefore turned into mojibake. Decode UTF-8 first and keep the old ANSI
+  conversion only for content that is clearly not UTF-8 (console tools such as
+  where.exe emit the OEM code page). }
+function LooksLikeUtf8(const Raw: AnsiString): Boolean;
+var
+  I, N, B, Need, J: Integer;
+begin
+  Result := True;
+  I := 1;
+  N := Length(Raw);
+  while I <= N do
+  begin
+    B := Ord(Raw[I]);
+    if B < $80 then
+      Inc(I)
+    else
+    begin
+      if (B and $E0) = $C0 then
+        Need := 1
+      else if (B and $F0) = $E0 then
+        Need := 2
+      else if (B and $F8) = $F0 then
+        Need := 3
+      else
+      begin
+        Result := False;
+        Exit;
+      end;
+      Inc(I);
+      for J := 1 to Need do
+      begin
+        if I > N then
+        begin
+          Result := False;
+          Exit;
+        end;
+        B := Ord(Raw[I]);
+        if (B and $C0) <> $80 then
+        begin
+          Result := False;
+          Exit;
+        end;
+        Inc(I);
+      end;
+    end;
+  end;
+end;
+
+function SafeUtf8Decode(const Raw: AnsiString): String;
+begin
+  Result := '';
+  if Length(Raw) = 0 then
+    Exit;
+  try
+    Result := Utf8Decode(Raw);
+  except
+    Result := String(Raw);
+  end;
+end;
+
+function DecodeConsoleText(const Raw: AnsiString): String;
+begin
+  if LooksLikeUtf8(Raw) then
+    Result := SafeUtf8Decode(Raw)
+  else
+    Result := String(Raw);
+end;
+
 function CmdAvailable(const Exe: String): Boolean;
 var
   ResultCode: Integer;
@@ -834,7 +918,7 @@ begin
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
   begin
     if LoadStringFromFile(TempFile, Text) then
-      Result := String(Text);
+      Result := DecodeConsoleText(Text);
   end;
   DeleteFile(TempFile);
 end;
@@ -845,6 +929,32 @@ begin
     Result := '"' + S + '"'
   else
     Result := S;
+end;
+
+function FreeSpaceGigabytes(const Dir: String): Int64;
+var
+  Free, Total: Int64;
+begin
+  Result := -1;
+  if GetSpaceOnDisk64(Dir, Free, Total) then
+    Result := Free div (1024 * 1024 * 1024);
+end;
+
+procedure WarnLowDiskSpace();
+var
+  Dir: String;
+  FreeGb: Int64;
+begin
+  { uv caches, wheel extraction and the venvs all live under the install
+    folder's .tmp directory, so a nearly full install drive is the most common
+    cause of a half-finished setup. Tell the user before the long download
+    starts instead of failing with a uv "no space left" error later. }
+  Dir := ExpandConstant('{app}\.tmp');
+  ForceDirectories(Dir);
+  FreeGb := FreeSpaceGigabytes(Dir);
+  if (FreeGb < 0) or (FreeGb >= 12) then
+    Exit;
+  MsgBox(M2('DiskSpaceLow', IntToStr(FreeGb), Dir), mbInformation, MB_OK);
 end;
 
 function NvidiaSmiCommand(): String;
@@ -1456,7 +1566,7 @@ begin
   if Error then
     Line := '[err] ' + Line;
   if CurrentLogPath <> '' then
-    SaveStringToFile(CurrentLogPath, Line + #13#10, True);
+    SaveStringToFile(CurrentLogPath, Utf8Encode(Line + #13#10), True);
   AppendInstallDetail(Line);
 end;
 
@@ -1489,7 +1599,10 @@ begin
   Result := False;
   if not LoadStringFromFile(LogPath, LogText) then
     Exit;
-  CurrentText := String(LogText);
+  { The step log is UTF-8: install.py forces UTF-8 stdio and uv/pip always
+    emit UTF-8. Decoding it with the ANSI code page garbled every Chinese line
+    in the details panel and in the saved log. }
+  CurrentText := SafeUtf8Decode(LogText);
   if (Length(CurrentText) < Length(SeenText)) or
      (Copy(CurrentText, 1, Length(SeenText)) <> SeenText) then
   begin
@@ -1864,17 +1977,26 @@ begin
     'set "XB_WHEELHOUSE=' + BatchEscape(ExpandConstant('{app}\assets\wheels')) + '"' + #13#10 +
     'set "XB_WHEELHOUSE_STRICT=1"' + #13#10 +
     'set "UV_LINK_MODE=copy"' + #13#10 +
+    'set "PYTHONUTF8=1"' + #13#10 +
+    'set "PYTHONIOENCODING=utf-8"' + #13#10 +
     'set "XB_UV_CACHE_DIR=' + BatchEscape(ExpandConstant('{app}\.tmp\uv-cache')) + '"' + #13#10 +
     'set "UV_CACHE_DIR=%XB_UV_CACHE_DIR%"' + #13#10 +
+    'set "XB_PIP_CACHE_DIR=' + BatchEscape(ExpandConstant('{app}\.tmp\pip-cache')) + '"' + #13#10 +
+    'set "PIP_CACHE_DIR=%XB_PIP_CACHE_DIR%"' + #13#10 +
+    'set "UV_PYTHON_INSTALL_DIR=' + BatchEscape(ExpandConstant('{app}\.tmp\uv-python')) + '"' + #13#10 +
     'set "XB_RUNTIME_TEMP=' + BatchEscape(ExpandConstant('{app}\.tmp\runtime-temp')) + '"' + #13#10 +
     'set "PIP_DISABLE_PIP_VERSION_CHECK=1"' + #13#10;
-  SaveStringToFile(ExpandConstant('{app}\installer_env.cmd'), Payload, False);
+  { cmd parses this file with the console code page (chcp 65001), so it must be
+    UTF-8: an ANSI write turns a Chinese install path into a broken %XB_*%
+    value and Python/uv can no longer be found. }
+  SaveStringToFile(ExpandConstant('{app}\installer_env.cmd'), Utf8Encode(Payload), False);
 end;
 
 function RunSetupBatch(const BatchName, Args, Status: String; ProgressStart, ProgressEnd: Integer): Boolean;
 var
   ResultCode, ProcessId: Integer;
-  PollTicks: Integer;
+  PollTicks, StepSize: Integer;
+  ElapsedSec, SpanWidth, TargetPos: Integer;
   CmdLine, LogDir, LogPath, MarkerPath, StepName: String;
   SeenText, PendingLine, MarkerText: String;
   FinalLogText: AnsiString;
@@ -1890,10 +2012,10 @@ begin
   LastInstallLog := LogPath;
   CurrentLogPath := LogPath;
   SaveStringToFile(LogPath,
-    'XB-SVCB installer step: ' + BatchName + #13#10 +
+    Utf8Encode('XB-SVCB installer step: ' + BatchName + #13#10 +
     'Started at: ' + GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':') + #13#10 +
     'Command args: ' + Args + #13#10 +
-    '------------------------------------------------------------' + #13#10,
+    '------------------------------------------------------------' + #13#10),
     False);
   AppendInstallDetail('');
   AppendInstallDetail('============================================================');
@@ -1915,7 +2037,7 @@ begin
   SeenText := '';
   PendingLine := '';
   if LoadStringFromFile(LogPath, FinalLogText) then
-    SeenText := FinalLogText;
+    SeenText := SafeUtf8Decode(FinalLogText);
   try
     { Start the batch asynchronously. The polling loop keeps the Inno window
       repainting while uv/pip performs long wheel installs. }
@@ -1929,14 +2051,28 @@ begin
 
     if Result then
     begin
+      ElapsedSec := 0;
       repeat
         ReadInstallLogDelta(LogPath, SeenText, PendingLine);
         Inc(PollTicks);
         if PollTicks >= 8 then
         begin
           PollTicks := 0;
+          { 兜底推进：环境搭建阶段（uv 安装、模型下载）可能几分钟没有可解析的
+            输出。按“已用时间”做渐近推进：越接近区间末尾越慢，永远到不了末尾，
+            因此进度条不会停住；真实 [XB-PROGRESS] 标记到达时照常向前跳。 }
           if EnvProgressCurrent < EnvProgressEnd - 1 then
-            SetEnvProgress(EnvProgressCurrent + 1, M('RunningInstallStep'));
+          begin
+            { 每 2 秒累加一次，等价于已用秒数；不依赖计时 API }
+            ElapsedSec := ElapsedSec + 2;
+            SpanWidth := EnvProgressEnd - EnvProgressStart - 1;
+            if SpanWidth < 1 then
+              SpanWidth := 1;
+            { ratio = t / (t + 300s)，5 分钟约走完一半区间 }
+            TargetPos := EnvProgressStart + (SpanWidth * ((ElapsedSec * 1000) div (ElapsedSec + 300))) div 1000;
+            if TargetPos > EnvProgressCurrent then
+              SetEnvProgress(TargetPos, M('RunningInstallStep'));
+          end;
         end;
         WizardForm.Update;
         Sleep(250);
@@ -1958,7 +2094,7 @@ begin
   end;
   CurrentLogPath := '';
   if LoadStringFromFile(LogPath, FinalLogText) then
-    LastInstallSummary := TailText(FinalLogText, 1600);
+    LastInstallSummary := TailText(SafeUtf8Decode(FinalLogText), 1600);
   if (not Result) or (ResultCode <> 0) then
   begin
     MsgBox(M3('BatchFailed', BatchName, IntToStr(ResultCode), LogPath), mbError, MB_OK);
@@ -1972,7 +2108,7 @@ procedure AppendInstallValidation(const Line: String);
 begin
   AppendInstallDetail(Line);
   if LastInstallLog <> '' then
-    SaveStringToFile(LastInstallLog, Line + #13#10, True);
+    SaveStringToFile(LastInstallLog, Utf8Encode(Line + #13#10), True);
 end;
 
 function AddMissingRuntimeFile(const MissingText, ItemLabel, FilePath: String): String;
@@ -2019,6 +2155,10 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'AI vocal enhancement worker', PathJoin(InternalDir, 'infrastructure\vocal_enhancement_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\formant_pitch_worker.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'High-note protection worker', PathJoin(InternalDir, 'infrastructure\formant_pitch_worker.py'));
+  if not FileExists(PathJoin(InternalDir, 'infrastructure\high_note_vocoder_worker.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'High-note vocoder band worker', PathJoin(InternalDir, 'infrastructure\high_note_vocoder_worker.py'));
+  if not FileExists(PathJoin(InternalDir, 'infrastructure\midi_pitch_worker.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'MIDI pitch worker', PathJoin(InternalDir, 'infrastructure\midi_pitch_worker.py'));
   if not FileExists(PathJoin(InternalDir, 'infrastructure\vocal_tuning_worker.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'AI alignment and tuning worker', PathJoin(InternalDir, 'infrastructure\vocal_tuning_worker.py'));
   if not FileExists(PathJoin(AppDir, 'install\configure_user_env.py')) then
@@ -2035,6 +2175,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'So-VITS-SVC bundled source', PathJoin(AppDir, 'engines\so-vits-svc\inference\infer_tool.py'));
   if not FileExists(PathJoin(AppDir, 'engines\seed-vc\inference.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'SeedVC bundled source', PathJoin(AppDir, 'engines\seed-vc\inference.py'));
+  if not FileExists(PathJoin(AppDir, 'engines\rvc\rvc_session.py')) then
+    Missing := AddMissingRuntimeFile(Missing, 'RVC official inference stack', PathJoin(AppDir, 'engines\rvc\rvc_session.py'));
   if not FileExists(PathJoin(AppDir, 'engines\ddsp-svc\main_reflow.py')) then
     Missing := AddMissingRuntimeFile(Missing, 'DDSP-SVC bundled source', PathJoin(AppDir, 'engines\ddsp-svc\main_reflow.py'));
   if not FileExists(PathJoin(AppDir, 'assets\models\pretrain\rmvpe.pt')) then
@@ -2141,13 +2283,15 @@ begin
     turn a valid manifest route into a silent legacy-path fallback. }
   TempFile := ExpandConstant('{tmp}\xb_svcb_runtime_' + Component + '.txt');
   DeleteFile(TempFile);
+  { runtime_manifest.py writes UTF-8; an ANSI decode would corrupt a Chinese
+    install path and report a valid runtime as missing. }
   if Exec(HelperPython, CmdPath(Resolver) +
       ' --root ' + CmdPath(AppDir) + ' --component ' + Component +
       ' --legacy ' + CmdPath(LegacyRelative) +
       ' --output-file ' + CmdPath(TempFile),
       AppDir, SW_HIDE, ewWaitUntilTerminated, ResultCode) and
       (ResultCode = 0) and LoadStringFromFile(TempFile, Text) then
-    Resolved := Trim(String(Text))
+    Resolved := Trim(DecodeConsoleText(Text))
   else
     Resolved := '';
   DeleteFile(TempFile);
@@ -2272,13 +2416,15 @@ end;
 
 function ValidateVocalRuntime(): Boolean;
 var
-  AppDir, VocalPython, VocalWorker, TuningWorker, FormantWorker, VocalReady, Missing: String;
+  AppDir, VocalPython, VocalWorker, TuningWorker, FormantWorker, VocoderWorker, MidiWorker, VocalReady, Missing: String;
 begin
   AppDir := ExpandConstant('{app}');
   VocalPython := RuntimePython(AppDir, 'vocal', '.venv-vocal\Scripts\python.exe');
   VocalWorker := PathJoin(AppDir, '_internal\infrastructure\vocal_enhancement_worker.py');
   TuningWorker := PathJoin(AppDir, '_internal\infrastructure\vocal_tuning_worker.py');
   FormantWorker := PathJoin(AppDir, '_internal\infrastructure\formant_pitch_worker.py');
+  VocoderWorker := PathJoin(AppDir, '_internal\infrastructure\high_note_vocoder_worker.py');
+  MidiWorker := PathJoin(AppDir, '_internal\infrastructure\midi_pitch_worker.py');
   VocalReady := PathJoin(AppDir, 'models\vocal-enhancement\runtime.ready');
   Missing := '';
 
@@ -2296,6 +2442,10 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'AI alignment and tuning worker', TuningWorker);
   if not FileExists(FormantWorker) then
     Missing := AddMissingRuntimeFile(Missing, 'High-note protection worker', FormantWorker);
+  if not FileExists(VocoderWorker) then
+    Missing := AddMissingRuntimeFile(Missing, 'High-note vocoder band worker', VocoderWorker);
+  if not FileExists(MidiWorker) then
+    Missing := AddMissingRuntimeFile(Missing, 'MIDI pitch worker', MidiWorker);
   if not FileExists(VocalReady) then
     Missing := AddMissingRuntimeFile(Missing, 'runtime.ready marker', VocalReady);
 
@@ -2407,14 +2557,18 @@ begin
     Payload := '{' + #13#10 +
       '  "data_dir": "' + JsonEscape(DataDir) + '"' + #13#10 +
       '}' + #13#10;
-    SaveStringToFile(ExpandConstant('{app}\data_home.json'), Payload, False);
+    { app/config.py reads this as UTF-8. Writing it with the ANSI code page
+      broke every Chinese/Japanese data directory and the app then failed to
+      start, so always write UTF-8 bytes without a BOM. }
+    SaveStringToFile(ExpandConstant('{app}\data_home.json'), Utf8Encode(Payload), False);
     ForceDirectories(ExpandConstant('{userappdata}\XB-SVCB'));
-    SaveStringToFile(ExpandConstant('{userappdata}\XB-SVCB\data_home.json'), Payload, False);
+    SaveStringToFile(ExpandConstant('{userappdata}\XB-SVCB\data_home.json'), Utf8Encode(Payload), False);
 
     ValidateBundledRuntime();
 
     if BuildEnvSelected() or EnvConfigureSelected() then
     begin
+      WarnLowDiskSpace();
       SetEnvProgress(0, M('RuntimePreparing'));
       WriteInstallerEnv();
       PrereqsReady := True;

@@ -38,6 +38,8 @@
       :loading="pluginHostLoading"
       :session-id="pluginWindowSessionId"
       :editable="effectScopeEditable"
+      :plugins="vst3Plugins"
+      :scanning="pluginDirectoryScanning"
       @closed="onPluginDialogClose"
       @refresh="refreshPluginHostStatus"
       @inspect="inspectActivePlugin"
@@ -46,6 +48,50 @@
       @pick-plugin="activePluginEffect && pickPluginFile(activePluginEffect)"
       @set-path="activePluginEffect && setPluginPath(activePluginEffect, $event)"
       @set-params="activePluginEffect && setPluginParamJson(activePluginEffect, $event)"
+      @scan-directory="scanVst3Directory"
+      @select-plugin="activePluginEffect && selectVst3Plugin(activePluginEffect, $event)"
+    />
+
+    <MidiEditorDialog
+      v-model="midiDialogOpen"
+      :mode="midiMode"
+      :scope="midiScope"
+      :clip-name="midiClipName"
+      :track-name="midiTrackName"
+      :duration="midiDuration"
+      :has-audio="midiHasAudio"
+      :notes="midiNotes"
+      :clip-spans="midiClipSpans"
+      :loading="midiLoading"
+      :applying="midiApplying"
+      :ready="midiReady"
+      :error="midiError"
+      :analysis="midiAnalysis"
+      :pitch-curve="midiPitchCurve"
+      :playhead="clipPlaybackClipId === midiTargetId ? clipPreviewPosition : -1"
+      :playing="playing && clipPlaybackClipId === midiTargetId"
+      :compose-session="composeSession"
+      :compose-duration="composeDuration"
+      :instruments="composeInstruments"
+      :families="composeFamilies"
+      :compose-loading="composeLoading"
+      :compose-busy="composeBusy"
+      :compose-busy-action="composeBusyAction"
+      :compose-error="composeError"
+      :preview-url="composePreviewUrl"
+      :preview-loading="composePreviewLoading"
+      :render-progress="composeRenderProgress"
+      @update:mode="switchMidiMode"
+      @refresh="refreshMidiNotes"
+      @save="saveMidiNotesFromDialog"
+      @apply="applyMidiNotesToAudio"
+      @preview="previewMidiAudio"
+      @seek="seekMidiPlayhead"
+      @save-session="saveComposeSession"
+      @render-session="renderComposeSession"
+      @export-session="exportComposeSession"
+      @preview-session="previewComposeSession"
+      @import-session="importComposeSession"
     />
 
     <div class="editor-head" data-guide="editor-toolbar">
@@ -86,6 +132,11 @@
               <el-dropdown-item command="mp3">MP3</el-dropdown-item>
               <el-dropdown-item command="flac">FLAC</el-dropdown-item>
               <el-dropdown-item command="project" divided>工程文件 (.xbproject)</el-dropdown-item>
+              <el-dropdown-item command="track-wav" divided :disabled="!canExportTrack">
+                导出选中音轨 WAV
+              </el-dropdown-item>
+              <el-dropdown-item command="track-mp3" :disabled="!canExportTrack">导出选中音轨 MP3</el-dropdown-item>
+              <el-dropdown-item command="track-flac" :disabled="!canExportTrack">导出选中音轨 FLAC</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -117,7 +168,7 @@
           </div>
           <div class="tool-row">
             <span>缩放</span>
-            <el-slider v-model="zoom" :min="24" :max="180" :step="4" />
+            <el-slider v-model="zoom" :min="ZOOM_MIN" :max="ZOOM_MAX" :step="ZOOM_STEP" />
           </div>
           <div class="tool-row">
             <span>切口淡化</span>
@@ -306,6 +357,9 @@
             <button title="预览片段" @click="playSelectedClip">
               <el-icon><Aim /></el-icon>
             </button>
+            <button :title="translateUiText('MIDI 音高编辑（音符级）')" :disabled="!selectedClip" @click="openMidiEditor('clip')">
+              <el-icon><EditPen /></el-icon>
+            </button>
             <button title="复制片段音频" :disabled="copyingAudio" @click="copySelectedClipAudio">
               <el-icon><CopyDocument /></el-icon>
             </button>
@@ -414,7 +468,13 @@
             </div>
 
             <div v-if="activeEffects.length" class="effect-rack">
-              <div v-for="effect in activeEffects" :key="effect.id" class="effect-item">
+              <div
+                v-for="effect in activeEffects"
+                :key="effect.id"
+                class="effect-item"
+                :class="{ 'plugin-opening': openingPluginEffectId === effect.id }"
+                :aria-busy="openingPluginEffectId === effect.id"
+              >
                 <div class="effect-item-head">
                   <button
                     :class="{ active: effect.enabled }"
@@ -435,6 +495,30 @@
                   </button>
                 </div>
                 <div v-if="effect.type === 'plugin'" class="plugin-fields">
+                  <div class="plugin-library-row">
+                    <el-select
+                      class="vst3-select"
+                      :model-value="String(effect.params.path || '')"
+                      :disabled="!effectScopeEditable"
+                      filterable
+                      placeholder="选择 VST3 插件"
+                      no-data-text="未发现 VST3 插件"
+                      popper-class="editor-vst3-select-popper"
+                      @change="onInlinePluginSelect(effect, $event)"
+                    >
+                      <el-option
+                        v-if="effect.params.path && !vst3Plugins.some((item) => item.path === effect.params.path)"
+                        :label="String(effect.params.path)"
+                        :value="String(effect.params.path)"
+                      />
+                      <el-option-group v-for="group in vst3PluginGroups" :key="group.name" :label="group.name">
+                        <el-option v-for="item in group.items" :key="item.path" :label="item.name" :value="item.path" />
+                      </el-option-group>
+                    </el-select>
+                    <button :disabled="!effectScopeEditable || pluginDirectoryScanning" title="扫描 VST3 插件目录" @click="scanVst3Directory">
+                      <el-icon><Search /></el-icon>
+                    </button>
+                  </div>
                   <div class="plugin-path-row">
                     <input
                       :value="String(effect.params.path || '')"
@@ -458,12 +542,14 @@
                   />
                   <button
                     class="effect-add-wide"
-                    :disabled="!effect.params.path"
-                    title="打开插件窗口"
-                    @click="openPluginDialog(effect)"
+                    :disabled="!effect.params.path || openingPluginEffectId === effect.id"
+                    :title="openingPluginEffectId === effect.id ? '正在启动 VST3 插件' : '打开 VST3 原生界面'"
+                    @click="openPluginDirect(effect)"
                   >
-                    <el-icon><SwitchButton /></el-icon>
-                    <span>插件窗口</span>
+                    <el-icon :class="{ spin: openingPluginEffectId === effect.id }">
+                      <component :is="openingPluginEffectId === effect.id ? Loading : SwitchButton" />
+                    </el-icon>
+                    <span>{{ openingPluginEffectId === effect.id ? '正在打开' : '打开插件' }}</span>
                   </button>
                 </div>
                 <div v-for="control in effectControls(effect)" :key="control.key" class="effect-control">
@@ -518,23 +604,27 @@
               <template v-if="separationEngine === 'pymss'">
                 <div class="editor-separation-field">
                   <div class="editor-field-head">
-                    <span>{{ translateUiText('人声分离模型') }}</span>
+                    <span>{{ translateUiText('PyMSS 模型') }}</span>
                     <router-link to="/models?tab=pymss">{{ translateUiText('模型站') }} <el-icon><Right /></el-icon></router-link>
                   </div>
-                  <select v-model="separationPymssModel" :disabled="!downloadedSeparationPymssModels.length">
-                    <option value="">{{ translateUiText('选择已下载的模型') }}</option>
-                    <option v-for="item in downloadedSeparationPymssModels" :key="item.name" :value="item.name">
-                      {{ item.name }}
-                    </option>
-                  </select>
+                  <el-select v-model="separationPymssModel" filterable :disabled="!downloadedSeparationPymssModels.length" :placeholder="translateUiText('选择已下载的模型')">
+                    <el-option-group v-for="group in separationPymssModelGroups" :key="group.label" :label="group.label">
+                      <el-option v-for="item in group.items" :key="item.name" :label="item.name" :value="item.name" />
+                    </el-option-group>
+                  </el-select>
+                  <div v-if="selectedSeparationPymssModel" class="editor-pymss-model-meta">
+                    <span>{{ selectedPymssCategoryLabel }}</span>
+                    <span>{{ translateUiText('目标音轨') }}: {{ selectedSeparationPymssModel.target_stem ? translatePymssTargetStem(selectedSeparationPymssModel.target_stem) : translateUiText('按模型输出') }}</span>
+                    <span>{{ translateUiText(selectedPymssIsGeneric ? '多音轨输出' : '人声处理') }}</span>
+                  </div>
                   <span class="editor-separation-status" :class="{ ready: separationPymssStatus?.ok }">
                     <i></i>{{ translateUiText(separationStatusText) }}
                   </span>
                 </div>
-                <label class="editor-harmony-toggle">
+                <label v-if="separationHarmonyEligible" class="editor-harmony-toggle">
                   <input v-model="separationHarmonyEnabled" type="checkbox" :disabled="!separationPymssModel" />
                   <span>{{ translateUiText('分离后去混响 / 净化人声') }}</span>
-                  <small>PyMSS Dereverb</small>
+                  <small>PyMSS · {{ translateUiText('去混响 / 人声净化') }}</small>
                 </label>
                 <div v-if="separationHarmonyEnabled" class="editor-separation-field harmony-field">
                   <div class="editor-field-head">
@@ -884,7 +974,7 @@
             <div v-if="rerunJobId" class="rerun-progress" aria-live="polite">
               <div class="rerun-progress-head"><span>{{ translateUiText(rerunMessage || '正在处理') }}</span><b>{{ rerunProgress }}%</b></div>
               <div class="rerun-progress-track"><i :style="{ width: `${rerunProgress}%` }"></i></div>
-              <pre v-if="rerunLog" class="rerun-log">{{ rerunLog }}</pre>
+              <pre v-if="rerunLog" class="rerun-log">{{ translateLogText(rerunLog) }}</pre>
             </div>
           </div>
         </div>
@@ -965,7 +1055,13 @@
           <div class="render-path" :title="renderedPath">{{ renderedPath || '未导出' }}</div>
         </div>
 
-        <div ref="scrollEl" class="timeline-scroll" @pointerdown="onTimelinePointer" @scroll="onTimelineScroll">
+        <div
+          ref="scrollEl"
+          class="timeline-scroll"
+          @pointerdown="onTimelinePointer"
+          @scroll="onTimelineScroll"
+          @wheel="onTimelineWheel"
+        >
           <div
             ref="rulerEl"
             class="ruler"
@@ -1008,19 +1104,43 @@
                 <button title="粘贴音频" :disabled="track.locked || pastingAudio" @click="pasteAudioToTrack(track.id)">
                   <el-icon><CopyDocument /></el-icon>
                 </button>
+                <button
+                  title="导出该音轨音频"
+                  :disabled="!track.clips.length"
+                  @click.stop="exportTrackAudio(track, 'wav')"
+                >
+                  <el-icon><Download /></el-icon>
+                </button>
                 <button title="删除音轨" class="danger" :disabled="track.locked" @click="deleteTrack(track)">
                   <el-icon><Delete /></el-icon>
                 </button>
-                <el-tooltip :content="translateUiText(track.name)" placement="right" :show-after="250">
-                  <span class="track-name" :title="translateUiText(track.name)">
-                    <i
-                      v-if="trackRole(track)"
-                      class="track-role-dot"
-                      :style="{ '--role-color': trackRole(track)?.color }"
-                    ></i>
-                    <span class="track-name-text">{{ translateUiText(track.name) }}</span>
-                  </span>
-                </el-tooltip>
+                <input
+                  v-if="renamingTrackId === track.id"
+                  :data-track-name-input="track.id"
+                  v-model="renamingTrackName"
+                  class="track-name-input"
+                  type="text"
+                  maxlength="80"
+                  :aria-label="`重命名音轨 ${track.name}`"
+                  @click.stop
+                  @pointerdown.stop
+                  @keydown.enter.prevent="finishRenameTrack(track)"
+                  @keydown.esc.prevent="finishRenameTrack(track, true)"
+                  @blur="finishRenameTrack(track)"
+                />
+                <span
+                  v-else
+                  class="track-name"
+                  :title="`双击重命名：${translateUiText(track.name)}`"
+                  @dblclick.stop="startRenameTrack(track)"
+                >
+                  <i
+                    v-if="trackRole(track)"
+                    class="track-role-dot"
+                    :style="{ '--role-color': trackRole(track)?.color }"
+                  ></i>
+                  <span class="track-name-text">{{ translateUiText(track.name) }}</span>
+                </span>
                 <button
                   class="track-fx-btn"
                   :class="{ active: selectedTrack?.id === track.id && effectScope === 'track' }"
@@ -1145,6 +1265,7 @@ import {
   DArrowLeft,
   Delete,
   Download,
+  EditPen,
   FolderAdd,
   Loading,
   Lock,
@@ -1156,6 +1277,7 @@ import {
   RefreshLeft,
   RefreshRight,
   Right,
+  Search,
   Scissor,
   SwitchButton,
   VideoPause,
@@ -1165,12 +1287,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import EditorImportTrackDialog from '@/components/editor/EditorImportTrackDialog.vue'
 import EditorPluginDialog from '@/components/editor/EditorPluginDialog.vue'
 import EditorRoleManager from '@/components/editor/EditorRoleManager.vue'
+import MidiEditorDialog from '@/components/editor/MidiEditorDialog.vue'
 import TimelineTemplatePanel from '@/components/editor/TimelineTemplatePanel.vue'
 import { api } from '@/api'
-import { translateUiText } from '@/i18n'
+import { translateLogText, translatePymssCategory, translatePymssTargetStem, translateUiText } from '@/i18n'
 import { useModelsStore } from '@/stores/models'
 import { useSystemStore } from '@/stores/system'
 import { f0MethodsForFramework, normalizeF0Method } from '@/utils/f0'
+import type { MidiNote } from '@/utils/midi'
 import type {
   EditorClip,
   EditorClipChannel,
@@ -1178,6 +1302,11 @@ import type {
   EditorEffectType,
   EditorPluginHostStatus,
   EditorPluginInspectResult,
+  EditorMidiClipSpan,
+  EditorMidiInstrument,
+  EditorMidiInstrumentFamily,
+  EditorMidiSession,
+  EditorMidiSessionResult,
   EditorProject,
   EditorRole,
   EditorTimelineTemplate,
@@ -1337,6 +1466,9 @@ const pluginHostStatus = ref<EditorPluginHostStatus | null>(null)
 const pluginInspectResult = ref<EditorPluginInspectResult | null>(null)
 const pluginHostLoading = ref(false)
 const pluginWindowSessionId = ref('')
+const openingPluginEffectId = ref('')
+const vst3Plugins = ref<Array<{ name: string; path: string; collection: string }>>([])
+const pluginDirectoryScanning = ref(false)
 const pluginMonitorClipId = ref('')
 const pluginMonitorTimelineStart = ref(0)
 const nativeSeekRevision = ref(0)
@@ -1354,6 +1486,8 @@ const contextMenu = ref<ContextMenuState>({
 const activeInspectorPanel = ref<InspectorPanel>('clip')
 const effectScope = ref<EffectScope>('clip')
 const rerunModelId = ref('')
+const renamingTrackId = ref('')
+const renamingTrackName = ref('')
 const renderedPath = ref('')
 const audioPrimaryEl = ref<HTMLAudioElement | null>(null)
 const audioSecondaryEl = ref<HTMLAudioElement | null>(null)
@@ -1374,6 +1508,7 @@ let clipStopTimer: ReturnType<typeof setTimeout> | null = null
 let rerunPollTimer: ReturnType<typeof setInterval> | null = null
 let clipPlaybackClipId = ''
 let clipPreviewFrame = 0
+let mixPlayheadFrame = 0
 let lastPlayToggleAt = 0
 let mixPreviewRequestId = 0
 let clipPreviewRequestId = 0
@@ -1399,6 +1534,7 @@ let visibleWaveformTimer: ReturnType<typeof setTimeout> | null = null
 let projectLoadRequestId = 0
 let activeProjectLoadKey = ''
 let editorDependenciesStarted = false
+let vst3AutoScanPromise: Promise<void> | null = null
 const waveformLoading = new Set<string>()
 const waveformQueue: Array<{ clip: EditorClip; key: string; projectId: string; resolve: () => void }> = []
 let waveformWorkers = 0
@@ -1410,14 +1546,22 @@ const PLAY_TOGGLE_DEBOUNCE_MS = 350
 const LIVE_MIX_REFRESH_DEBOUNCE_MS = 90
 const LIVE_CONTROL_SAVE_DEBOUNCE_MS = 120
 const MIX_CROSSFADE_MS = 90
-const PLUGIN_STATE_SYNC_INTERVAL_MS = 120
+// 预览渲染/实时切换的看门狗：后端卡住或页面被挂起（requestAnimationFrame
+// 暂停）时，必须让 previewing 复位，否则播放按钮会一直处于禁用状态。
+const PREVIEW_RENDER_TIMEOUT_MS = 30_000
+const CROSSFADE_WATCHDOG_MS = MIX_CROSSFADE_MS + 1_200
+const PLAY_START_TIMEOUT_MS = 15_000
+const PLUGIN_STATE_SYNC_INTERVAL_MS = 200
 const TRACK_LABEL_WIDTH = 160
+const ZOOM_MIN = 24
+const ZOOM_MAX = 180
+const ZOOM_STEP = 4
 const RERUN_PREFS_KEY = 'xb-editor-rerun-params'
 const SEPARATION_PREFS_KEY = 'xb-editor-separation-params'
 const rerunFramework = () => models.value.find((m) => m.id === rerunModelId.value)?.framework || 'so-vits-svc'
 const rerunF0Methods = computed(() => f0MethodsForFramework(rerunFramework()))
 const deviceOptions = computed(() => systemStore.optionsForFramework(rerunFramework()))
-const rvcVersions = ['v2', 'v1']
+const rvcVersions = ['v2', 'v1', 'v3']
 const channelOptions: { value: EditorClipChannel; label: string; title: string }[] = [
   { value: 'stereo', label: '双', title: '双声道' },
   { value: 'left', label: 'L', title: '左声道' },
@@ -1691,6 +1835,14 @@ const activePluginEffect = computed(() => {
   return activeEffects.value.find((effect) => effect.id === activePluginEffectId.value) || null
 })
 const activePluginPath = computed(() => String(activePluginEffect.value?.params.path || ''))
+const vst3PluginGroups = computed(() => {
+  const groups = new Map<string, typeof vst3Plugins.value>()
+  for (const plugin of vst3Plugins.value) {
+    const name = plugin.collection || '未分组'
+    groups.set(name, [...(groups.get(name) || []), plugin])
+  }
+  return [...groups.entries()].map(([name, items]) => ({ name, items }))
+})
 const activeTemplateId = computed(() => {
   const value = project.value?.metadata?.timeline_template_id
   return typeof value === 'string' ? value : ''
@@ -1698,13 +1850,39 @@ const activeTemplateId = computed(() => {
 const exportLabel = computed(() =>
   project.value?.metadata?.export_mode === 'vocal' ? '导出人声' : '导出',
 )
+/** 选中音轨有片段时才允许导出单轨。 */
+const canExportTrack = computed(() => Boolean(selectedTrack.value?.clips?.length))
 const selectedClipDuration = computed(() => {
   const clip = selectedClip.value
   return clip ? Math.max(0, clip.end - clip.start) : 0
 })
 const downloadedSeparationPymssModels = computed(() =>
-  separationPymssModels.value.filter((item) => item.purpose === 'vocal_separation' && item.downloaded),
+  separationPymssModels.value.filter((item) => item.downloaded),
 )
+const selectedSeparationPymssModel = computed(() =>
+  separationPymssModels.value.find((item) => item.name === separationPymssModel.value),
+)
+const selectedPymssIsGeneric = computed(() => selectedSeparationPymssModel.value?.purpose !== 'vocal_separation' && selectedSeparationPymssModel.value?.purpose !== 'dereverb' && selectedSeparationPymssModel.value?.purpose !== 'harmony_removal')
+const selectedPymssCategoryLabel = computed(() => {
+  const item = selectedSeparationPymssModel.value
+  if (!item) return ''
+  return translatePymssCategory(item.primary_category, item.secondary_category, item.category_label || item.category || 'PyMSS')
+})
+const separationHarmonyEligible = computed(() =>
+  selectedSeparationPymssModel.value?.purpose === 'vocal_separation',
+)
+const separationPymssModelGroups = computed(() => {
+  const groups = new Map<string, PymssModel[]>()
+  for (const item of downloadedSeparationPymssModels.value) {
+    const label = translatePymssCategory(item.primary_category, item.secondary_category, item.primary_category_label || item.category_label || item.category || 'PyMSS')
+    const values = groups.get(label) || []
+    values.push(item)
+    groups.set(label, values)
+  }
+  return [...groups.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([label, items]) => ({ label, items: items.sort((a, b) => a.name.localeCompare(b.name)) }))
+})
 const downloadedSeparationHarmonyModels = computed(() =>
   separationPymssModels.value.filter((item) => (item.purpose === 'dereverb' || item.purpose === 'harmony_removal') && item.downloaded),
 )
@@ -1719,7 +1897,7 @@ const separationReady = computed(() =>
 )
 const separationStatusText = computed(() => {
   if (separationEngine.value === 'uvr') return '使用现有 UVR 分离配置'
-  if (!separationPymssModel.value) return '请先在模型站下载人声分离模型'
+  if (!separationPymssModel.value) return '请先在模型站下载 PyMSS 模型'
   if (!separationPymssStatus.value) return '正在检查 PyMSS 环境'
   return separationPymssStatus.value.status
 })
@@ -1742,7 +1920,7 @@ const selectedRerunModel = computed(() => models.value.find((m) => m.id === reru
 const selectedRerunFramework = computed(() => selectedRerunModel.value?.framework || 'so-vits-svc')
 const detectedRerunRvcVersion = computed(() => {
   const value = String(selectedRerunModel.value?.metadata?.rvc_version || '').toLowerCase()
-  return value === 'v1' || value === 'v2' ? value : ''
+  return value === 'v1' || value === 'v2' || value === 'v3' ? value : ''
 })
 const rerunSpeakerOptions = computed(() => selectedRerunModel.value?.speakers || [])
 const isRvcRerunModel = computed(() => selectedRerunFramework.value === 'rvc')
@@ -1802,6 +1980,7 @@ const contextMenuItems = computed<ContextMenuItem[]>(() => {
   if (state.kind === 'clip') {
     return [
       { id: 'preview', label: '试听片段', icon: VideoPlay, run: () => playClip(state.trackId, state.clipId) },
+      { id: 'clip-midi', label: 'MIDI 音高编辑（片段）', icon: EditPen, run: () => openMidiEditor('clip', state.trackId, state.clipId) },
       { id: 'split', label: '在播放头剪切', icon: Scissor, shortcut: 'Ctrl+K', disabled: !canSplitAtPlayhead.value, run: splitAtPlayhead },
       { id: 'copy-clip', label: '复制片段音频', icon: CopyDocument, shortcut: 'Ctrl+C', disabled: copyingAudio.value, run: copySelectedClipAudio },
       { id: 'merge', label: mergingAudio.value ? '正在合并' : '与下一片段合并', icon: Connection, disabled: !canMergeNextClip.value || mergingAudio.value, run: mergeSelectedClipWithNext },
@@ -1812,10 +1991,14 @@ const contextMenuItems = computed<ContextMenuItem[]>(() => {
   }
   if (state.kind === 'track') {
     return [
-      { id: 'import-track', label: '导入音频到此轨', icon: FolderAdd, disabled: !track || !!track.locked, run: () => importAudioToTrack(state.trackId) },
+      { id: 'track-compose', label: 'MIDI 编曲（多乐器 / 空轨道可用）', icon: EditPen, disabled: !track, run: () => { if (track) openMidiEditor('track', track.id, undefined, 'compose') } },
+      { id: 'track-midi', label: track?.clips.length ? 'MIDI 音高编辑（整轨）' : 'MIDI 编辑（空白轨道）', icon: EditPen, disabled: !track, run: () => { if (track) openMidiEditor('track', track.id, undefined, track.clips.length ? 'pitch' : 'compose') } },
+      { id: 'import-track', label: '导入音频到此轨', icon: FolderAdd, separatorBefore: true, disabled: !track || !!track.locked, run: () => importAudioToTrack(state.trackId) },
       { id: 'paste-track', label: '粘贴到播放头', icon: CopyDocument, shortcut: 'Ctrl+V', disabled: !track || !!track.locked || pastingAudio.value, run: () => pasteAudioToTrack(state.trackId) },
       { id: 'copy-track', label: '复制整轨音频', icon: CopyDocument, disabled: !track?.clips.length || copyingAudio.value, run: copySelectedTrackAudio },
-      { id: 'track-effects', label: '管理整轨效果', icon: Operation, separatorBefore: true, disabled: !track, run: () => { if (track) selectTrack(track.id) } },
+      { id: 'export-track', label: '导出该音轨音频 (WAV)', icon: Download, disabled: !track?.clips.length, run: () => exportTrackAudio(track, 'wav') },
+      { id: 'rename-track', label: '重命名音轨', icon: Operation, separatorBefore: true, disabled: !track || !!track.locked, run: () => { if (track) startRenameTrack(track) } },
+      { id: 'track-effects', label: '管理整轨效果', icon: Operation, disabled: !track, run: () => { if (track) selectTrack(track.id) } },
       { id: 'mute-track', label: track?.mute ? '取消音轨静音' : '静音音轨', icon: Mute, disabled: !track, run: () => { if (track) toggleTrackMute(track) } },
       { id: 'lock-track', label: track?.locked ? '解除音轨锁定' : '锁定音轨', icon: Lock, disabled: !track, run: () => { if (track) toggleTrackLock(track) } },
       { id: 'delete-track', label: '删除音轨', icon: Delete, danger: true, separatorBefore: true, disabled: !track || !!track.locked, run: () => track ? deleteTrack(track) : undefined },
@@ -2269,6 +2452,7 @@ function loadEditorDependencies() {
     modelsStore.load().catch(() => undefined),
     loadSeparationModels(),
     systemStore.loaded ? Promise.resolve() : systemStore.load().catch(() => undefined),
+    autoScanVst3Plugins(),
   ])
 }
 
@@ -2325,7 +2509,7 @@ async function loadInitial() {
 
 async function loadSeparationModels() {
   try {
-    separationPymssModels.value = await api.pymssModels()
+    separationPymssModels.value = await api.pymssModels(undefined, true)
     if (!downloadedSeparationPymssModels.value.some((item) => item.name === separationPymssModel.value)) {
       separationPymssModel.value = downloadedSeparationPymssModels.value[0]?.name || separationPymssModel.value
     }
@@ -2371,7 +2555,10 @@ watch(
     )
   },
 )
-watch(separationPymssModel, () => { void refreshSeparationStatus() })
+watch(separationPymssModel, () => {
+  if (!separationHarmonyEligible.value) separationHarmonyEnabled.value = false
+  void refreshSeparationStatus()
+})
 
 async function importAudio() {
   const path = await api.pickAudioFile()
@@ -2806,6 +2993,35 @@ function onTimelineScroll() {
   }
 }
 
+async function onTimelineWheel(event: WheelEvent) {
+  if (!event.ctrlKey || !scrollEl.value || !project.value || event.deltaY === 0) return
+  event.preventDefault()
+
+  const el = scrollEl.value
+  const oldZoom = zoom.value
+  const direction = event.deltaY < 0 ? 1 : -1
+  const nextZoom = clamp(oldZoom + direction * ZOOM_STEP, ZOOM_MIN, ZOOM_MAX)
+  if (nextZoom === oldZoom) return
+
+  const rect = el.getBoundingClientRect()
+  const laneWidth = Math.max(0, el.clientWidth - TRACK_LABEL_WIDTH)
+  const pointerInLane = clamp(event.clientX - rect.left - TRACK_LABEL_WIDTH, 0, laneWidth)
+  const anchorSeconds = (el.scrollLeft + pointerInLane) / oldZoom
+
+  zoom.value = nextZoom
+  await nextTick()
+
+  const target = anchorSeconds * nextZoom - pointerInLane
+  programmaticTimelineScroll = true
+  el.scrollLeft = clamp(target, 0, Math.max(0, el.scrollWidth - el.clientWidth))
+  lastTimelineScrollLeft = el.scrollLeft
+  if (programmaticScrollFrame) cancelAnimationFrame(programmaticScrollFrame)
+  programmaticScrollFrame = requestAnimationFrame(() => {
+    programmaticTimelineScroll = false
+    programmaticScrollFrame = 0
+  })
+}
+
 function followPlayheadIntoView(force = false) {
   const el = scrollEl.value
   if (!el || !followPlayhead.value || timelineSeeking.value) return
@@ -2853,7 +3069,7 @@ function clipPreviewPlayheadStyle(clip: EditorClip) {
 
 function waveformBins(clip: EditorClip) {
   const drawable = Math.max(12, clipPixelWidth(clip))
-  return Math.max(16, Math.min(900, Math.round(drawable / 3)))
+  return Math.max(32, Math.min(4096, Math.round(drawable / 2)))
 }
 
 function waveformKey(clip: EditorClip) {
@@ -2920,6 +3136,25 @@ function toggleTrackMute(track: EditorTrack) {
 function toggleTrackLock(track: EditorTrack) {
   track.locked = !track.locked
   saveProject()
+}
+function startRenameTrack(track: EditorTrack) {
+  if (track.locked) return
+  renamingTrackId.value = track.id
+  renamingTrackName.value = track.name
+  void nextTick(() => {
+    document.querySelector<HTMLInputElement>(`[data-track-name-input="${track.id}"]`)?.select()
+  })
+}
+async function finishRenameTrack(track: EditorTrack, cancelled = false) {
+  if (renamingTrackId.value !== track.id) return
+  const nextName = renamingTrackName.value.trim()
+  renamingTrackId.value = ''
+  renamingTrackName.value = ''
+  if (cancelled || !nextName || nextName === track.name) return
+  pushHistory()
+  track.name = nextName
+  renderedPath.value = ''
+  await saveProject()
 }
 async function deleteTrack(track: EditorTrack) {
   if (!project.value || track.locked) return
@@ -3058,6 +3293,7 @@ async function addScopedEffect(type: EditorEffectType) {
   ])
   renderedPath.value = ''
   await saveProject()
+  if (type === 'plugin' && !vst3Plugins.value.length) await autoScanVst3Plugins(true)
 }
 
 async function toggleScopedEffect(effect: EditorClipEffect) {
@@ -3106,6 +3342,53 @@ async function pickPluginFile(effect: EditorClipEffect) {
   }
 }
 
+async function selectVst3Plugin(effect: EditorClipEffect, path: string) {
+  if (!effectScopeEditable.value || !path) return
+  pushHistory()
+  effect.params = { ...(effect.params || {}), path }
+  renderedPath.value = ''
+  await saveProject()
+  if (activePluginEffectId.value === effect.id) await inspectActivePlugin()
+}
+
+function onInlinePluginSelect(effect: EditorClipEffect, value: unknown) {
+  const path = String(value || '')
+  void selectVst3Plugin(effect, path)
+}
+
+async function scanVst3Directory() {
+  if (!effectScopeEditable.value || pluginDirectoryScanning.value) return
+  const directory = await api.pickEffectPluginDirectory()
+  if (!directory) return
+  pluginDirectoryScanning.value = true
+  try {
+    const found = await api.scanEffectPluginDirectory(directory)
+    vst3Plugins.value = found
+    if (found.length) ElMessage.success(`已发现 ${found.length} 个 VST3 插件`)
+    else ElMessage.info('所选目录中未发现 VST3 插件')
+  } finally {
+    pluginDirectoryScanning.value = false
+  }
+}
+
+function autoScanVst3Plugins(force = false) {
+  if (vst3Plugins.value.length && !force) return Promise.resolve()
+  if (vst3AutoScanPromise) return vst3AutoScanPromise
+  pluginDirectoryScanning.value = true
+  vst3AutoScanPromise = api.autoScanEffectPlugins()
+    .then((found) => {
+      vst3Plugins.value = found
+    })
+    .catch(() => {
+      vst3Plugins.value = []
+    })
+    .finally(() => {
+      pluginDirectoryScanning.value = false
+      vst3AutoScanPromise = null
+    })
+  return vst3AutoScanPromise
+}
+
 function pluginParamJson(effect: EditorClipEffect) {
   const params = effect.params?.parameters
   try {
@@ -3136,7 +3419,29 @@ async function openPluginDialog(effect: EditorClipEffect) {
   activePluginEffectId.value = effect.id
   pluginInspectResult.value = null
   pluginDialogOpen.value = true
+  if (!vst3Plugins.value.length) {
+    await autoScanVst3Plugins(true)
+  }
   await refreshPluginHostStatus()
+}
+
+async function openPluginDirect(effect: EditorClipEffect) {
+  if (!effect.params.path || pluginHostLoading.value || openingPluginEffectId.value) return
+  openingPluginEffectId.value = effect.id
+  activePluginEffectId.value = effect.id
+  pluginInspectResult.value = null
+  try {
+    await refreshPluginHostStatus()
+    if (!pluginHostStatus.value?.ready) {
+      ElMessage.error(pluginHostStatus.value?.error || pluginHostStatus.value?.message || 'JUCE Host 未就绪')
+      return
+    }
+    await openPluginNativeEditor()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : 'VST3 插件启动失败')
+  } finally {
+    if (openingPluginEffectId.value === effect.id) openingPluginEffectId.value = ''
+  }
 }
 
 async function refreshPluginHostStatus() {
@@ -3217,7 +3522,7 @@ async function openPluginNativeEditor() {
     } else if (res.realtime_reason) {
       ElMessage.warning(res.realtime_reason)
     } else if (res.monitor_ready) ElMessage.success('插件 GUI 已打开，实时监听已连接')
-    else ElMessage.warning('插件 GUI 已打开，但监听音频准备失败')
+    else ElMessage.warning(res.monitor_reason || '插件 GUI 已打开，但监听音频准备失败')
   } finally {
     pluginHostLoading.value = false
   }
@@ -3710,6 +4015,10 @@ async function separateSelectedClip() {
     }
     if (separationEngine.value === 'pymss') {
       options.pymss_model = separationPymssModel.value || undefined
+      const purpose = selectedSeparationPymssModel.value?.purpose
+      options.pymss_purpose = purpose === 'vocal_separation' || purpose === 'dereverb' || purpose === 'harmony_removal'
+        ? purpose
+        : 'generic'
       options.harmony_removal_enabled = separationHarmonyEnabled.value
       options.harmony_model = separationHarmonyModel.value || undefined
     }
@@ -3734,7 +4043,7 @@ async function separateSelectedClip() {
     } else if (res.harmony_removed) {
       ElMessage.success('人声、伴奏已加入时间线，并已完成去混响净化')
     } else {
-      ElMessage.success(res.engine === 'pymss' ? 'PyMSS 人声与伴奏已加入时间线' : '人声与伴奏已加入时间线')
+      ElMessage.success(translateUiText(res.engine === 'pymss' ? 'PyMSS 分离音轨已加入时间线' : '人声与伴奏已加入时间线'))
     }
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '人声分离失败')
@@ -3920,7 +4229,12 @@ function mixRenderSignature(value: EditorProject) {
     projectId: value.id,
     duration: value.duration,
     sampleRate: value.sample_rate,
-    roleEffects: (value.roles || []).map((role) => ({ id: role.id, effects: role.effects || [] })),
+    roleEffects: (value.roles || []).map((role) => ({
+      id: role.id,
+      effects: role.effects || [],
+      // 角色变调也必须进签名，否则改了变调仍会复用旧的混音缓存（听起来「没效果」）。
+      pitch: Number(role.pitch) || 0,
+    })),
     tracks: value.tracks.map((track) => ({
       volume: track.volume,
       mute: track.mute,
@@ -3985,6 +4299,31 @@ function startClipPreviewTicker() {
   clipPreviewFrame = requestAnimationFrame(update)
 }
 
+function stopMixPlayheadTicker() {
+  if (!mixPlayheadFrame) return
+  cancelAnimationFrame(mixPlayheadFrame)
+  mixPlayheadFrame = 0
+}
+
+// 混音播放时用 requestAnimationFrame 每帧把播放线贴到真实 currentTime，
+// 而不是只靠 HTMLMediaElement 约 4Hz 的 timeupdate 事件，否则播放线会一顿一顿地跳。
+function startMixPlayheadTicker() {
+  stopMixPlayheadTicker()
+  const update = () => {
+    const el = audioEl.value
+    if (!el || playbackMode.value !== 'mix' || el.paused || el.ended) {
+      mixPlayheadFrame = 0
+      return
+    }
+    if (!timelineSeeking.value) {
+      playhead.value = clamp(el.currentTime, 0, project.value?.duration || el.currentTime)
+      followPlayheadIntoView()
+    }
+    mixPlayheadFrame = requestAnimationFrame(update)
+  }
+  mixPlayheadFrame = requestAnimationFrame(update)
+}
+
 function htmlAudioOutputActive() {
   return [audioPrimaryEl.value, audioSecondaryEl.value]
     .some((el) => !!el?.src && !el.paused)
@@ -3995,12 +4334,37 @@ function pauseHtmlAudioOutputs() {
   audioSecondaryEl.value?.pause()
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      reject(new Error(`${label}超时（${Math.round(ms / 1000)} 秒）`))
+    }, ms)
+    promise.then(
+      (value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+}
+
 async function getMixPreviewData(projectId: string, signature: string): Promise<string> {
   if (cachedMixSignature === signature && cachedMixData) return cachedMixData
   if (mixPreloadSignature === signature && mixPreloadPromise) return mixPreloadPromise
 
   mixPreloadSignature = signature
-  const task = api.renderEditorPreview(projectId)
+  const task = withTimeout(api.renderEditorPreview(projectId), PREVIEW_RENDER_TIMEOUT_MS, '预览渲染')
     .then((data) => {
       if (!data) throw new Error('后端没有返回预览音频')
       if (project.value?.id === projectId && mixRenderSignature(project.value) === signature) {
@@ -4046,11 +4410,26 @@ function crossfadeAudioPlayers(
 ) {
   return new Promise<boolean>((resolve) => {
     const started = performance.now()
+    let settled = false
+    const finish = (value: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(watchdog)
+      resolve(value)
+    }
+    // 页面切到后台时 requestAnimationFrame 会被暂停，跨淡 Promise 永远不
+    // resolve，会把 previewing 卡在 true；加一个看门狗强制收尾。
+    const watchdog = setTimeout(() => {
+      from.volume = 1
+      resetAudioPlayer(to)
+      finish(false)
+    }, CROSSFADE_WATCHDOG_MS)
     const step = (now: number) => {
+      if (settled) return
       if (requestId !== mixPreviewRequestId || !isMixPlaybackActive()) {
         from.volume = 1
         resetAudioPlayer(to)
-        resolve(false)
+        finish(false)
         return
       }
       const ratio = clamp((now - started) / MIX_CROSSFADE_MS, 0, 1)
@@ -4063,7 +4442,7 @@ function crossfadeAudioPlayers(
       activeAudioSlot.value = to === audioPrimaryEl.value ? 0 : 1
       to.volume = 1
       resetAudioPlayer(from)
-      resolve(true)
+      finish(true)
     }
     requestAnimationFrame(step)
   })
@@ -4080,7 +4459,7 @@ async function refreshLiveMixPreview() {
   liveMixRenderInFlight = true
   previewing.value = true
   try {
-    const data = await api.renderEditorPreview(currentProject.id)
+    const data = await withTimeout(api.renderEditorPreview(currentProject.id), PREVIEW_RENDER_TIMEOUT_MS, '实时预览渲染')
     if (requestId !== mixPreviewRequestId || !isMixPlaybackActive()) return
     if (!data) throw new Error('后端没有返回预览音频')
 
@@ -4092,7 +4471,7 @@ async function refreshLiveMixPreview() {
       to.volume = 0
       to.src = data
       to.currentTime = resumeAt
-      await to.play()
+      await withTimeout(to.play(), PLAY_START_TIMEOUT_MS, '播放启动')
       if (await crossfadeAudioPlayers(from, to, requestId)) activeMixSignature = mixSignature
     } catch (err) {
       from.volume = 1
@@ -4138,6 +4517,8 @@ function stopPlayback() {
 
 function pauseMixPlayback() {
   cancelScheduledLiveMixRefresh()
+  mixPreviewRequestId += 1
+  previewing.value = false
   playing.value = false
   playbackBuffering.value = false
   if (nativeRealtimeReady.value) {
@@ -4155,7 +4536,13 @@ async function playMix() {
     else stopPlayback()
     return
   }
-  if (previewing.value) return
+  if (previewing.value) {
+    // 上一次预览渲染/跨淡没有收尾（后端超时、页面挂起等）时不能把播放按钮
+    // 永久锁死：取消在途请求后继续播放。
+    mixPreviewRequestId += 1
+    previewing.value = false
+    playbackBuffering.value = false
+  }
   timelineSeeking.value = false
   followPlayheadIntoView(true)
   if (nativeRealtimeReady.value) {
@@ -4186,7 +4573,7 @@ async function playMix() {
     playbackBuffering.value = true
     try {
       el.currentTime = clamp(playhead.value, 0, project.value.duration)
-      await el.play()
+      await withTimeout(el.play(), PLAY_START_TIMEOUT_MS, '播放启动')
       playing.value = true
     } catch (err) {
       playbackBuffering.value = false
@@ -4216,7 +4603,7 @@ async function playMix() {
     el.src = data
     el.currentTime = Math.max(0, playhead.value)
     playbackBuffering.value = true
-    await el.play()
+    await withTimeout(el.play(), PLAY_START_TIMEOUT_MS, '播放启动')
     playing.value = true
     activeMixSignature = signature
   } catch (err) {
@@ -4254,7 +4641,7 @@ async function playClip(trackId: string, clipId: string) {
     await saveProject()
     if (requestId !== clipPreviewRequestId || project.value?.id !== currentProject.id) return
 
-    const data = await api.getEditorClipAudio(currentProject.id, clip.id)
+    const data = await withTimeout(api.getEditorClipAudio(currentProject.id, clip.id), PREVIEW_RENDER_TIMEOUT_MS, '片段音频加载')
     if (requestId !== clipPreviewRequestId || project.value?.id !== currentProject.id) return
     if (!data) throw new Error('后端没有返回片段音频')
 
@@ -4262,7 +4649,7 @@ async function playClip(trackId: string, clipId: string) {
     if (!el) throw new Error('音频播放器未就绪')
     el.src = data
     el.currentTime = 0
-    await el.play()
+    await withTimeout(el.play(), PLAY_START_TIMEOUT_MS, '播放启动')
     if (requestId !== clipPreviewRequestId) {
       el.pause()
       return
@@ -4323,7 +4710,27 @@ async function handleExportCommand(command: string) {
     await exportProjectBundle()
     return
   }
+  if (command.startsWith('track-')) {
+    await exportTrackAudio(selectedTrack.value, command.slice('track-'.length))
+    return
+  }
   await exportMix(command)
+}
+
+/** 导出指定音轨的音频文件（只渲染该轨的片段与整轨效果）。 */
+async function exportTrackAudio(track: EditorTrack | null | undefined, fmt = 'wav') {
+  if (!project.value || !track) return
+  if (!track.clips?.length) {
+    ElMessage.info('该音轨还没有音频片段')
+    return
+  }
+  await saveProject()
+  const dest = await api.exportEditorTrack(project.value.id, track.id, fmt)
+  if (dest) {
+    ElMessage.success(`音轨「${translateUiText(track.name)}」已导出到：${dest}`)
+  } else {
+    ElMessage.info('已取消导出')
+  }
 }
 
 async function exitEditor() {
@@ -4474,6 +4881,476 @@ async function enhanceSelectedClip() {
   ElMessage.success('当前片段已增强，可使用撤销恢复原片段')
 }
 
+// ---- MIDI 子编辑器：编曲（多乐器）+ 演唱音准（音符级音高） ----
+const midiDialogOpen = ref(false)
+const midiMode = ref<'compose' | 'pitch'>('compose')
+const midiScope = ref<'clip' | 'track'>('clip')
+const midiTargetId = ref('')
+const midiTrackId = ref('')
+const midiClipName = ref('')
+const midiTrackName = ref('')
+const midiClipSpans = ref<EditorMidiClipSpan[]>([])
+const midiDuration = ref(0)
+const midiHasAudio = ref(false)
+const midiNotes = ref<MidiNote[]>([])
+const midiAnalysis = ref<Record<string, unknown>>({})
+/** 音频原本的音高曲线（[[秒, MIDI], ...]），钢琴卷帘里画成参考线。 */
+const midiPitchCurve = ref<Array<[number, number]>>([])
+const midiLoading = ref(false)
+const midiApplying = ref(false)
+const midiReady = ref(true)
+const midiError = ref('')
+const midiNotesLoaded = ref(false)
+
+// 编曲模式
+const composeSession = ref<EditorMidiSession | null>(null)
+const composeDuration = ref(0)
+const composeInstruments = ref<EditorMidiInstrument[]>([])
+const composeFamilies = ref<EditorMidiInstrumentFamily[]>([])
+const composeLoading = ref(false)
+const composeBusy = ref(false)
+const composeBusyAction = ref('')
+const composeRenderProgress = ref<{ percent: number; message: string } | null>(null)
+const composeError = ref('')
+const composePreviewUrl = ref('')
+const composePreviewLoading = ref(false)
+const composeLoaded = ref(false)
+
+async function openMidiEditor(
+  scope: 'clip' | 'track' = 'clip',
+  trackId?: string,
+  clipId?: string,
+  mode?: 'compose' | 'pitch',
+) {
+  const currentProject = project.value
+  if (!currentProject) {
+    ElMessage.error('先打开一个编辑工程')
+    return
+  }
+  const targetTrackId = trackId || selected.value?.trackId || ''
+  const track = currentProject.tracks.find((item) => item.id === targetTrackId) || null
+  if (scope === 'clip') {
+    const targetClipId = clipId || selected.value?.clipId || ''
+    const clip = track?.clips.find((item) => item.id === targetClipId) || null
+    if (!track || !clip) {
+      ElMessage.error(translateUiText('先选中一个片段再打开 MIDI 编辑器'))
+      return
+    }
+    midiScope.value = 'clip'
+    midiTargetId.value = clip.id
+    midiTrackId.value = track.id
+    midiClipName.value = clip.name || '片段'
+    midiTrackName.value = track.name || ''
+    midiClipSpans.value = []
+    midiHasAudio.value = true
+  } else {
+    if (!track) {
+      ElMessage.error('找不到要编辑的音轨')
+      return
+    }
+    midiScope.value = 'track'
+    midiTargetId.value = track.id
+    midiTrackId.value = track.id
+    midiClipName.value = ''
+    midiTrackName.value = track.name || '音轨'
+    midiClipSpans.value = (track.clips || []).map((clip) => ({
+      id: clip.id,
+      name: clip.name || '片段',
+      start: Number(clip.start) || 0,
+      end: Number(clip.end) || 0,
+    }))
+    midiHasAudio.value = (track.clips || []).length > 0
+  }
+  midiDuration.value =
+    midiScope.value === 'clip' && selectedClip.value
+      ? Math.max(0.01, Number(selectedClip.value.end) - Number(selectedClip.value.start))
+      : Math.max(0.3, Number(currentProject.duration) || 600)
+  // 有音频时默认做音高修正；空白轨道直接进编曲。
+  const fallbackMode: 'compose' | 'pitch' = midiHasAudio.value && midiScope.value === 'clip' ? 'pitch' : 'compose'
+  midiMode.value = mode || (midiHasAudio.value ? 'pitch' : fallbackMode)
+  midiNotes.value = []
+  midiNotesLoaded.value = false
+  midiAnalysis.value = {}
+  midiPitchCurve.value = []
+  midiError.value = ''
+  midiReady.value = true
+  composeSession.value = null
+  composeLoaded.value = false
+  composeError.value = ''
+  composePreviewUrl.value = ''
+  composeLoading.value = false
+  composeBusy.value = false
+  composeBusyAction.value = ''
+  midiDialogOpen.value = true
+  await loadActiveMidiMode()
+}
+
+async function loadActiveMidiMode() {
+  if (midiMode.value === 'compose') {
+    await loadComposeSession()
+    return
+  }
+  if (midiNotesLoaded.value) return
+  await loadMidiNotes(false)
+}
+
+async function switchMidiMode(mode: 'compose' | 'pitch') {
+  if (mode === midiMode.value) return
+  midiMode.value = mode
+  composePreviewUrl.value = ''
+  composePreviewLoading.value = false
+  await loadActiveMidiMode()
+}
+
+async function loadComposeSession() {
+  const currentProject = project.value
+  const trackId = midiTrackId.value
+  if (!currentProject || !trackId) return
+  composeLoading.value = true
+  composeError.value = ''
+  try {
+    await saveProject()
+    const result = await api.getEditorMidiSession(currentProject.id, trackId)
+    if (project.value?.id !== currentProject.id || midiTrackId.value !== trackId) return
+    if (!result?.ok || !result.session) {
+      composeSession.value = null
+      composeError.value = translateUiText(result?.error || 'MIDI 编曲会话读取失败')
+      return
+    }
+    composeSession.value = result.session
+    composeDuration.value = Math.max(Number(result.duration) || 0, 60)
+    composeInstruments.value = result.instruments || []
+    composeFamilies.value = result.families || []
+    composeLoaded.value = true
+    composePreviewUrl.value = ''
+    if (result.clip_spans) midiClipSpans.value = result.clip_spans
+    midiHasAudio.value = result.has_audio ?? midiHasAudio.value
+  } catch (err) {
+    composeSession.value = null
+    composeError.value = err instanceof Error ? translateUiText(err.message) : 'MIDI 编曲会话读取失败'
+  } finally {
+    composeLoading.value = false
+  }
+}
+
+async function saveComposeSession(session: EditorMidiSession) {
+  const currentProject = project.value
+  const trackId = midiTrackId.value
+  if (!currentProject || !trackId) return
+  composeBusy.value = true
+  composeBusyAction.value = 'save'
+  composeError.value = ''
+  try {
+    const result = await api.saveEditorMidiSession(currentProject.id, trackId, session)
+    if (!result?.ok) {
+      composeError.value = translateUiText(result?.error || 'MIDI 编曲保存失败')
+      ElMessage.error(composeError.value)
+      return
+    }
+    if (result.session) composeSession.value = result.session
+    if (result.project) applyProject(result.project)
+    const parts = Number(result.summary?.parts ?? session.parts.length)
+    const notes = Number(result.summary?.note_count ?? 0)
+    ElMessage.success(translateUiText(`MIDI 编曲已保存（${parts} 个声部 · ${notes} 个音符）`))
+  } catch (err) {
+    composeError.value = err instanceof Error ? translateUiText(err.message) : 'MIDI 编曲保存失败'
+    ElMessage.error(composeError.value)
+  } finally {
+    composeBusy.value = false
+    composeBusyAction.value = ''
+  }
+}
+
+async function renderComposeSession(session: EditorMidiSession, mode: 'tracks' | 'mix') {
+  const currentProject = project.value
+  const trackId = midiTrackId.value
+  if (!currentProject || !trackId || composeBusy.value) return
+  composeBusy.value = true
+  composeBusyAction.value = mode
+  composeRenderProgress.value = { percent: 1, message: '准备渲染' }
+  composeError.value = ''
+  try {
+    await saveProject()
+    const started = await api.startEditorMidiRender(currentProject.id, trackId, session, { mode })
+    if (!started?.ok || !started.job_id) {
+      throw new Error(started?.error || '无法启动 MIDI 渲染')
+    }
+    const jobId = started.job_id
+    const deadline = Date.now() + 10 * 60 * 1000
+    let result: EditorMidiSessionResult | null = null
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      const status = await api.editorMidiRenderStatus(jobId)
+      if (!status?.ok) throw new Error(status?.error || '渲染任务不存在或已过期')
+      composeRenderProgress.value = {
+        percent: Number(status.progress ?? 0),
+        message: status.message || '渲染中…',
+      }
+      if (status.status === 'done') {
+        result = status.result || null
+        break
+      }
+      if (status.status === 'error') {
+        throw new Error(status.error || status.message || '渲染失败')
+      }
+      if (Date.now() > deadline) throw new Error('渲染超时，请重试')
+    }
+    if (!result?.ok) {
+      composeError.value = translateUiText(result?.error || '渲染失败')
+      ElMessage.error(composeError.value)
+      return
+    }
+    composeSession.value = session
+    if (result.project) applyProject(result.project)
+    composePreviewUrl.value = ''
+    const clips = Number(result.clips?.length || 0)
+    if (mode === 'tracks') {
+      ElMessage.success(`已按乐器生成 ${clips} 条音轨，可直接播放或调整音量/效果`)
+    } else {
+      ElMessage.success('已把编曲混合渲染到当前音轨，可用撤销恢复')
+    }
+  } catch (err) {
+    composeError.value = err instanceof Error ? translateUiText(err.message) : '渲染失败'
+    ElMessage.error(composeError.value)
+  } finally {
+    composeBusy.value = false
+    composeBusyAction.value = ''
+    composeRenderProgress.value = null
+  }
+}
+
+async function exportComposeSession(session: EditorMidiSession) {
+  const currentProject = project.value
+  const trackId = midiTrackId.value
+  if (!currentProject || !trackId) return
+  composeBusy.value = true
+  composeBusyAction.value = 'export'
+  composeError.value = ''
+  try {
+    const result = await api.exportEditorMidiFile(currentProject.id, trackId, session)
+    if (result?.cancelled) return
+    if (!result?.ok) {
+      composeError.value = translateUiText(result?.error || 'MIDI 导出失败')
+      ElMessage.error(composeError.value)
+      return
+    }
+    composeSession.value = session
+    ElMessage.success(`MIDI 文件已导出：${result.path || ''}`)
+  } catch (err) {
+    composeError.value = err instanceof Error ? translateUiText(err.message) : 'MIDI 导出失败'
+    ElMessage.error(composeError.value)
+  } finally {
+    composeBusy.value = false
+    composeBusyAction.value = ''
+  }
+}
+
+async function previewComposeSession(session: EditorMidiSession) {
+  const currentProject = project.value
+  const trackId = midiTrackId.value
+  if (!currentProject || !trackId) return
+  composePreviewLoading.value = true
+  composeBusyAction.value = 'preview'
+  composeError.value = ''
+  try {
+    const result = await api.previewEditorMidiSession(currentProject.id, trackId, session)
+    if (!result?.ok) {
+      composeError.value = translateUiText(result?.error || '试听渲染失败')
+      ElMessage.error(composeError.value)
+      return
+    }
+    composePreviewUrl.value = result.audio || ''
+  } catch (err) {
+    composeError.value = err instanceof Error ? translateUiText(err.message) : '试听渲染失败'
+    ElMessage.error(composeError.value)
+  } finally {
+    composePreviewLoading.value = false
+    composeBusyAction.value = ''
+  }
+}
+
+async function importComposeSession() {
+  const currentProject = project.value
+  const trackId = midiTrackId.value
+  if (!currentProject || !trackId) return
+  composeBusy.value = true
+  composeBusyAction.value = 'import'
+  composeError.value = ''
+  try {
+    const result = await api.importEditorMidiFile(currentProject.id, trackId)
+    if (result?.cancelled) return
+    if (!result?.ok || !result.session) {
+      composeError.value = translateUiText(result?.error || 'MIDI 导入失败')
+      ElMessage.error(composeError.value)
+      return
+    }
+    composeSession.value = result.session
+    composeDuration.value = Math.max(Number(result.duration) || composeDuration.value, 60)
+    composeLoaded.value = true
+    composePreviewUrl.value = ''
+    ElMessage.success(`已导入 ${result.session.parts.length} 个声部，记得点「保存编曲」`)
+  } catch (err) {
+    composeError.value = err instanceof Error ? translateUiText(err.message) : 'MIDI 导入失败'
+    ElMessage.error(composeError.value)
+  } finally {
+    composeBusy.value = false
+    composeBusyAction.value = ''
+  }
+}
+
+async function loadMidiNotes(refresh: boolean) {
+  const currentProject = project.value
+  const targetId = midiTargetId.value
+  const scope = midiScope.value
+  if (!currentProject || !targetId) return
+  midiLoading.value = true
+  midiError.value = ''
+  try {
+    await saveProject()
+    const result =
+      scope === 'track'
+        ? await api.getEditorTrackMidi(currentProject.id, targetId, refresh)
+        : await api.getEditorClipMidi(currentProject.id, targetId, refresh)
+    if (project.value?.id !== currentProject.id || midiTargetId.value !== targetId) return
+    midiNotesLoaded.value = true
+    if (!result?.ok) {
+      midiNotes.value = []
+      midiError.value = translateUiText(result?.error || 'MIDI 分析失败')
+      if (result?.clip_spans) midiClipSpans.value = result.clip_spans
+      return
+    }
+    midiNotes.value = (result.notes || []).map((note) => {
+      const mapped: MidiNote = {
+        id: note.id,
+        start: Number(note.start) || 0,
+        end: Number(note.end) || 0,
+        pitch: Number(note.pitch) || 60,
+        detune: Number(note.detune) || 0,
+      }
+      // 音高曲线（滑音/颤音）要跟着一起回来，否则重开编辑器就丢了。
+      if (Array.isArray(note.curve) && note.curve.length >= 2) {
+        mapped.curve = note.curve.map((point) => ({ t: Number(point.t) || 0, v: Number(point.v) || 0 }))
+      }
+      return mapped
+    })
+    midiAnalysis.value = result.analysis || {}
+    midiPitchCurve.value = Array.isArray(result.pitch_curve)
+      ? result.pitch_curve
+          .filter((point): point is [number, number] => Array.isArray(point) && point.length >= 2)
+          .map((point) => [Number(point[0]) || 0, Number(point[1]) || 0])
+      : []
+    midiDuration.value = Number(result.duration) || midiDuration.value
+    midiReady.value = result.midi_ready !== false
+    if (scope === 'track') {
+      midiClipSpans.value = result.clip_spans || midiClipSpans.value
+      midiHasAudio.value = midiClipSpans.value.length > 0
+    }
+  } catch (err) {
+    midiNotes.value = []
+    midiError.value = err instanceof Error ? translateUiText(err.message) : 'MIDI 分析失败'
+  } finally {
+    midiLoading.value = false
+  }
+}
+
+async function refreshMidiNotes() {
+  await loadMidiNotes(true)
+}
+
+async function saveMidiNotesFromDialog(notes: MidiNote[]) {
+  const currentProject = project.value
+  const targetId = midiTargetId.value
+  if (!currentProject || !targetId) return
+  try {
+    const result =
+      midiScope.value === 'track'
+        ? await api.saveEditorTrackMidi(currentProject.id, targetId, notes)
+        : await api.saveEditorClipMidi(currentProject.id, targetId, notes)
+    if (!result?.ok) {
+      ElMessage.error(translateUiText(result?.error || 'MIDI 保存失败'))
+      return
+    }
+    midiNotes.value = notes
+    if (result.project) applyProject(result.project)
+    ElMessage.success(`MIDI 音符已保存（${notes.length} 个）`)
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? translateUiText(err.message) : 'MIDI 保存失败')
+  }
+}
+
+async function applyMidiNotesToAudio(notes: MidiNote[]) {
+  const currentProject = project.value
+  const targetId = midiTargetId.value
+  if (!currentProject || !targetId || midiApplying.value) return
+  midiApplying.value = true
+  try {
+    await saveProject()
+    const result =
+      midiScope.value === 'track'
+        ? await api.applyEditorTrackMidi(currentProject.id, targetId, notes)
+        : await api.applyEditorClipMidi(currentProject.id, targetId, notes)
+    if (!result?.ok) {
+      ElMessage.error(translateUiText(result?.error || '应用 MIDI 到音频失败'))
+      if (result?.report) midiAnalysis.value = { ...midiAnalysis.value, ...result.report }
+      return
+    }
+    midiNotes.value = notes
+    if (result.project) applyProject(result.project)
+    const applied = Number(result.report?.applied_notes || 0)
+    const scopeText = midiScope.value === 'track' ? '轨道片段' : '片段'
+    ElMessage.success(`已把 ${applied} 个音符应用到${scopeText}音频，可用撤销恢复`)
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? translateUiText(err.message) : '应用 MIDI 到音频失败')
+  } finally {
+    midiApplying.value = false
+  }
+}
+
+async function previewMidiAudio(notes?: MidiNote[]) {
+  const currentProject = project.value
+  if (!currentProject) return
+  if (midiScope.value === 'clip') {
+    const clipId = midiTargetId.value
+    if (!currentProject || !clipId) return
+    composePreviewLoading.value = true
+    composePreviewUrl.value = ''
+    audioEl.value?.pause()
+    try {
+      const result = await api.previewEditorClipMidi(currentProject.id, clipId, notes || [])
+      if (!result?.ok || !result.audio) {
+        ElMessage.error(translateUiText(result?.error || '试听渲染失败'))
+        return
+      }
+      composePreviewUrl.value = result.audio
+    } catch (err) {
+      ElMessage.error(err instanceof Error ? translateUiText(err.message) : '试听渲染失败')
+    } finally {
+      composePreviewLoading.value = false
+    }
+    return
+  }
+  const track = currentProject.tracks.find((item) => item.id === midiTargetId.value)
+  const clips = (track?.clips || []).slice().sort((a, b) => Number(a.start) - Number(b.start))
+  if (!clips.length) {
+    ElMessage.warning('空白轨道没有音频可试听：把人声/伴奏导入该轨后再试听')
+    return
+  }
+  const playheadTime = Number(playhead.value) || 0
+  const hit =
+    clips.find((clip) => playheadTime >= Number(clip.start) && playheadTime <= Number(clip.end)) ||
+    clips[0]!
+  void playClip(midiTargetId.value, hit.id)
+}
+
+function seekMidiPlayhead(seconds: number) {
+  const total = Number(project.value?.duration || 0)
+  const target = Math.max(0, total ? Math.min(seconds, total) : seconds)
+  playhead.value = target
+  if (audioEl.value && playbackMode.value === 'mix') {
+    audioEl.value.currentTime = Math.max(0, target)
+  }
+}
+
 function seekStart() {
   playhead.value = 0
   if (nativeRealtimeReady.value && playbackMode.value === 'mix') {
@@ -4489,6 +5366,7 @@ function isActiveAudioEvent(event: Event) {
 function onAudioPause(event: Event) {
   if (!isActiveAudioEvent(event)) return
   if (playbackMode.value === 'clip') stopClipPreviewTicker()
+  else if (playbackMode.value === 'mix') stopMixPlayheadTicker()
   if (audioEl.value?.ended) playing.value = false
 }
 function onAudioPlaying(event: Event) {
@@ -4496,6 +5374,7 @@ function onAudioPlaying(event: Event) {
   playbackBuffering.value = false
   playing.value = true
   if (playbackMode.value === 'clip') startClipPreviewTicker()
+  else if (playbackMode.value === 'mix') startMixPlayheadTicker()
 }
 function onAudioWaiting(event: Event) {
   if (!isActiveAudioEvent(event) || audioEl.value?.paused) return
@@ -4504,6 +5383,7 @@ function onAudioWaiting(event: Event) {
 function onAudioError(event: Event) {
   if (!isActiveAudioEvent(event)) return
   stopClipPreviewTicker()
+  stopMixPlayheadTicker()
   playbackBuffering.value = false
   playing.value = false
   if (playbackMode.value === 'clip') {
@@ -4516,6 +5396,7 @@ function onAudioEnded(event: Event) {
   if (!isActiveAudioEvent(event)) return
   const endedMode = playbackMode.value
   stopClipPreviewTicker()
+  stopMixPlayheadTicker()
   cancelScheduledLiveMixRefresh()
   clipPlaybackClipId = ''
   clipPreviewPosition.value = 0
@@ -4808,6 +5689,8 @@ function isTypingTarget(target: EventTarget | null) {
 }
 function onKey(e: KeyboardEvent) {
   if (!project.value || isTypingTarget(e.target)) return
+  // MIDI 子编辑器打开时，全局快捷键（尤其是空格）交给它自己处理，避免主编辑器也同时播放。
+  if (midiDialogOpen.value) return
   const key = e.key.toLowerCase()
   const command = e.ctrlKey || e.metaKey
   if (key === 'escape') {
@@ -4874,6 +5757,7 @@ onMounted(() => {
 onUnmounted(() => {
   cancelScheduledLiveMixRefresh()
   stopClipPreviewTicker()
+  stopMixPlayheadTicker()
   if (liveControlSaveTimer) clearTimeout(liveControlSaveTimer)
   resetAudioPlayer(audioPrimaryEl.value)
   resetAudioPlayer(audioSecondaryEl.value)
@@ -4899,9 +5783,11 @@ onUnmounted(() => {
 
 <style scoped>
 .editor-page {
-  max-width: 1460px;
-  margin: 0 auto;
-  padding: 24px 24px 56px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 18px 20px 40px;
+  min-height: calc(100vh - 72px);
 }
 .editor-head {
   display: flex;
@@ -4962,13 +5848,14 @@ onUnmounted(() => {
 }
 .editor-shell {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: clamp(340px, 27vw, 400px) minmax(0, 1fr);
+  gap: 14px;
   align-items: start;
 }
 .inspector {
   border-radius: 6px;
   padding: 18px;
+  container-type: inline-size;
   position: sticky;
   top: 18px;
   max-height: calc(100vh - 36px);
@@ -5153,17 +6040,28 @@ onUnmounted(() => {
 }
 .field-grid {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: auto 38px;
+  column-gap: 8px;
+  row-gap: 5px;
   color: var(--xb-muted);
   font-size: 12px;
 }
+.field-grid label:nth-of-type(1),
+.field-grid input:nth-of-type(1) { grid-column: 1; }
+.field-grid label:nth-of-type(2),
+.field-grid input:nth-of-type(2) { grid-column: 2; }
+.field-grid label:nth-of-type(3),
+.field-grid input:nth-of-type(3) { grid-column: 3; }
+.field-grid label { grid-row: 1; }
+.field-grid input { grid-row: 2; min-width: 0; }
 .clip-actions {
-  display: flex;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(32px, 1fr));
+  gap: 6px;
   margin-top: 12px;
 }
+.clip-actions button { width: 100%; }
 .clip-panel {
   display: grid;
   gap: 10px;
@@ -5171,7 +6069,7 @@ onUnmounted(() => {
 }
 .inspector-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--xb-border);
@@ -5179,6 +6077,7 @@ onUnmounted(() => {
   background: rgba(var(--xb-fill-rgb), 0.04);
 }
 .inspector-tabs button {
+  min-width: 0;
   height: 30px;
   border: none;
   border-radius: 6px;
@@ -5188,6 +6087,14 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@container (max-width: 350px) {
+  .inspector-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 .inspector-tabs button.active,
 .inspector-tabs button:hover {
@@ -5301,6 +6208,22 @@ onUnmounted(() => {
 }
 .editor-field-head a:hover { color: var(--xb-text); }
 .editor-separation-field select { height: 32px; font-size: 12px; }
+.editor-separation-field :deep(.el-select) { width: 100%; }
+.editor-separation-field :deep(.el-select__wrapper) { min-height: 32px; font-size: 12px; }
+.editor-pymss-model-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  color: var(--xb-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+.editor-pymss-model-meta span {
+  padding: 3px 7px;
+  border: 1px solid rgba(var(--xb-primary-rgb), .18);
+  border-radius: 999px;
+  background: rgba(var(--xb-primary-rgb), .045);
+}
 .editor-separation-status {
   display: inline-flex;
   align-items: center;
@@ -5487,12 +6410,40 @@ onUnmounted(() => {
   text-align: center;
 }
 .effect-item {
+  position: relative;
+  overflow: hidden;
   display: grid;
   gap: 8px;
   padding: 10px;
   border: 1px solid var(--xb-border);
   border-radius: 8px;
   background: rgba(var(--xb-fill-rgb), 0.035);
+}
+.effect-item.plugin-opening {
+  border-color: rgba(var(--xb-primary-rgb), 0.55);
+  background: rgba(var(--xb-primary-rgb), 0.055);
+}
+.effect-item.plugin-opening::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 38%;
+  height: 2px;
+  border-radius: 0 999px 999px 0;
+  background: var(--xb-brand-gradient);
+  box-shadow: 0 0 10px rgba(var(--xb-primary-rgb), 0.55);
+  animation: plugin-opening-progress 1.05s ease-in-out infinite;
+  pointer-events: none;
+}
+.effect-add-wide .spin {
+  animation: editor-spin 0.8s linear infinite;
+}
+@keyframes plugin-opening-progress {
+  0% { transform: translateX(-110%); }
+  55% { transform: translateX(115%); }
+  100% { transform: translateX(285%); }
 }
 .effect-item-head {
   display: grid;
@@ -5537,6 +6488,82 @@ onUnmounted(() => {
 .plugin-fields {
   display: grid;
   gap: 8px;
+}
+.plugin-library-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 6px;
+  align-items: center;
+}
+.vst3-select {
+  width: 100%;
+  min-width: 0;
+}
+.vst3-select :deep(.el-select__wrapper) {
+  min-height: 30px;
+  border-radius: 8px;
+  padding-inline: 9px;
+}
+.plugin-library-row button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--xb-border);
+  border-radius: 8px;
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-muted);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+.plugin-library-row button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+:global(.editor-vst3-select-popper.el-popper) {
+  overflow: hidden;
+  border: 1px solid var(--xb-border) !important;
+  border-radius: 8px !important;
+  background: color-mix(in srgb, var(--xb-bg-2) 96%, transparent) !important;
+  box-shadow: 0 16px 40px rgba(var(--xb-bg-rgb), 0.38), 0 0 0 1px rgba(var(--xb-primary-rgb), 0.08) !important;
+  backdrop-filter: blur(18px);
+}
+:global(.editor-vst3-select-popper .el-select-dropdown__wrap) {
+  max-height: 360px;
+  padding-block: 5px;
+}
+:global(.editor-vst3-select-popper .el-select-group__title) {
+  height: 30px;
+  padding: 6px 12px 4px;
+  color: var(--xb-muted) !important;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 20px;
+  letter-spacing: 0;
+}
+:global(.editor-vst3-select-popper .el-select-group__wrap:not(:last-of-type)::after) {
+  left: 10px;
+  right: 10px;
+  background: var(--xb-border);
+}
+:global(.editor-vst3-select-popper .el-select-dropdown__item) {
+  width: calc(100% - 12px);
+  height: 34px;
+  margin: 2px 6px;
+  padding: 0 10px;
+  border-radius: 6px;
+  line-height: 34px;
+  font-size: 13px;
+}
+:global(.editor-vst3-select-popper .el-select-dropdown__item.hover),
+:global(.editor-vst3-select-popper .el-select-dropdown__item:hover) {
+  color: var(--xb-primary) !important;
+  background: rgba(var(--xb-primary-rgb), 0.11) !important;
+}
+:global(.editor-vst3-select-popper .el-select-dropdown__item.is-selected) {
+  color: var(--xb-primary) !important;
+  background: rgba(var(--xb-primary-rgb), 0.17) !important;
+  font-weight: 800;
 }
 .plugin-path-row {
   display: grid;
@@ -5863,12 +6890,12 @@ onUnmounted(() => {
   min-height: 640px;
 }
 .timeline-top {
-  height: 52px;
-  display: flex;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 16px;
+  gap: 7px;
+  padding: 9px 16px 8px;
   border-bottom: 1px solid var(--xb-border);
 }
 .timeline-main-tools {
@@ -5876,11 +6903,18 @@ onUnmounted(() => {
   align-items: center;
   gap: 14px;
   min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.timeline-main-tools::-webkit-scrollbar {
+  display: none;
 }
 .transport {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
 }
 .transport > button:nth-child(2) {
   width: 32px;
@@ -5904,14 +6938,19 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
 }
 .edit-tools .split-btn {
   width: auto;
   min-width: 72px;
+  height: 32px;
   padding: 0 10px;
+  flex: 0 0 auto;
   grid-auto-flow: column;
   gap: 6px;
   font-weight: 700;
+  white-space: nowrap;
 }
 .edit-tools .split-btn:not(:disabled):hover {
   color: var(--xb-primary);
@@ -5930,8 +6969,9 @@ onUnmounted(() => {
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
 .render-path {
+  width: 100%;
   min-width: 0;
-  max-width: 50%;
+  max-width: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6049,7 +7089,7 @@ onUnmounted(() => {
   left: 0;
   z-index: 4;
   display: grid;
-  grid-template-columns: repeat(5, 24px) minmax(0, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   grid-template-rows: 20px 24px;
   align-items: center;
   gap: 4px;
@@ -6081,17 +7121,17 @@ onUnmounted(() => {
   grid-column: 5;
 }
 .track-label .track-fx-btn {
-  width: auto;
-  min-width: 38px;
+  width: 100%;
+  min-width: 0;
   height: 20px;
   grid-column: 5;
   grid-row: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 1px;
   justify-self: end;
-  padding: 0 4px;
+  padding: 0 2px;
   color: var(--xb-primary);
   font-size: 9px;
   font-weight: 900;
@@ -6120,6 +7160,22 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.track-name-input {
+  grid-column: 1 / 5;
+  grid-row: 1;
+  width: 100%;
+  min-width: 0;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid var(--xb-primary);
+  border-radius: 4px;
+  outline: none;
+  background: rgba(var(--xb-fill-rgb), 0.1);
+  color: var(--xb-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
 }
 .track-role-dot {
   width: 8px;
@@ -6335,5 +7391,29 @@ onUnmounted(() => {
   }
   .rerun-param-head { flex-wrap: wrap; }
   .editor-manual-switch { width: 100%; margin-left: 0; justify-content: space-between; white-space: normal; }
+}
+@media (max-width: 760px) {
+  .editor-page {
+    padding-inline: 10px;
+  }
+  .inspector {
+    padding: 14px;
+  }
+  .inspector-tabs button {
+    font-size: 11px;
+  }
+  .tool-row,
+  .slider-row,
+  .channel-row,
+  .role-row {
+    grid-template-columns: 82px minmax(0, 1fr);
+  }
+  .timeline-top {
+    gap: 7px;
+    padding-block: 8px;
+  }
+  .timeline-main-tools {
+    gap: 10px;
+  }
 }
 </style>

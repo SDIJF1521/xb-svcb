@@ -21,6 +21,7 @@ Create a complete AI song cover in one workflow. Supports **So-VITS-SVC and RVC 
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](#)
 [![Vue](https://img.shields.io/badge/Vue%203-Element%20Plus-42b883?logo=vuedotjs&logoColor=white)](#)
 [![Engines](https://img.shields.io/badge/engines-So--VITS--SVC%20·%20RVC%20·%20SeedVC%20·%20DDSP--SVC-8a2be2)](#architecture)
+[![main](https://github.com/SDIJF1521/xb-svcb/actions/workflows/main.yml/badge.svg?branch=dev)](https://github.com/SDIJF1521/xb-svcb/actions/workflows/main.yml)
 
 ### [Download the ModelScope online installer: automatic CPU / AMD / NVIDIA selection](https://github.com/SDIJF1521/xb-svcb/releases/latest)
 
@@ -40,7 +41,7 @@ Create a complete AI song cover in one workflow. Supports **So-VITS-SVC and RVC 
 <div align="center">
   <img src="docs/images/xb-svcb-app-en.png" width="100%" alt="XB-SVCB AI cover workspace running in English" />
   <br/>
-  <sub>XB-SVCB 0.1.0 · Actual AI cover workspace in English</sub>
+  <sub>XB-SVCB 0.1.1 · Actual AI cover workspace in English</sub>
 </div>
 
 ## Overview
@@ -53,9 +54,9 @@ The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UV
 
 - Run vocal separation, dereverb, F0 analysis, voice conversion, enhancement, and mixing as one workflow.
 - Manage So-VITS-SVC, RVC, SeedVC, and DDSP-SVC models through one interface with framework-specific parameters.
-- Protect notes outside a model's range by retrying affected regions at a lower pitch and restoring the original pitch afterward.
+- Protect notes outside a model's range by retrying affected regions at a lower pitch and restoring the original pitch afterward; the confirmed high-note regions then get their upper band rebuilt by a Snake-HiFiGAN / NSF-HiFiGAN high-note vocoder, which replaces the PSOLA air and missing harmonics.
 - Split songs from lyrics or silence detection, assign models on a visual timeline, and create multi-singer or ensemble covers.
-- Edit tracks, cut and fade clips, route channels, apply effects, and export WAV / MP3 / FLAC with Audio Editor Lite.
+- Edit tracks, cut and fade clips, route channels, apply effects, and export WAV / MP3 / FLAC with Audio Editor Lite; its built-in MIDI sub-editor (piano roll) edits clip pitch note by note, and preview always plays the clip audio instead of a MIDI synth.
 - Import TXT / LRC lyrics and use role-based solo, duet, and harmony timeline templates.
 - Convert player audio in real time through WASAPI loopback or VB-CABLE while preserving the accompaniment.
 - Search, upload, and download models through ModelScope with background transfers, resume support, and manifest verification.
@@ -68,7 +69,7 @@ The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UV
 
 ### Installer
 
-For normal use, download the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`, from the latest GitHub release. It downloads verified offline packages from the ModelScope `v0.1.0` revision. The fallback `XB-SVCB-Online-Setup.exe` is not published on GitHub; contact the developer to obtain it separately.
+For normal use, download the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`, from the latest GitHub release. It downloads verified offline packages from the ModelScope `v0.1.1` revision. The fallback `XB-SVCB-Online-Setup.exe` is not published on GitHub; contact the developer to obtain it separately.
 
 1. Run the online installer and use automatic detection, or manually select CPU, ROCm 10, DirectML, CUDA126, or CUDA128.
 2. Wait for the matching complete package to download and pass SHA-256 verification, then select both the application directory and user-data directory.
@@ -180,7 +181,7 @@ Start with the [English plugin documentation](docs/en/plugins/README.md). The se
 xb-svcb/
 ├─ app/               Python backend, services, adapters, and tests
 ├─ web/               Vue 3 + Vite frontend
-├─ engines/           So-VITS-SVC, SeedVC, DDSP-SVC, and other engines
+├─ engines/           So-VITS-SVC, RVC (official infer stack), SeedVC, DDSP-SVC, and other engines
 ├─ assets/            Bundled models, tools, and offline wheelhouse
 ├─ install/           Environment and model deployment scripts
 ├─ installer/         PyInstaller / Inno Setup packaging
@@ -224,11 +225,11 @@ See the [documentation index](docs/en/README.md) for architecture, startup, test
 
 ## Roadmap
 
-Current version: **v0.1.0**
+Current version: **v0.1.1**
 
 The core multi-framework inference workflow, timeline-based multi-singer covers, Audio Editor Lite, ModelScope model hub, FastAPI integration, CUDA / ROCm 10 / DirectML / CPU paths, and plugin runtime are available. Current priorities include automatic lyric recognition, improved automatic timelines, standardized model metadata, project import/export and autosave, more conversion frameworks, video and lyric-video export, and improved Intel GPU / CPU / multi-GPU scheduling.
 
-See the [release-notes directory](docs/release-notes/) for the full version history. The current release is available as [v0.1.0 release notes](docs/release-notes/release_notes_v0_1_0.en.md).
+See the [release-notes directory](docs/release-notes/) for the full version history. The current release is available as [v0.1.1 release notes](docs/release-notes/release_notes_v0_1_1.en.md).
 
 ## Contributors
 
@@ -241,10 +242,10 @@ Contributors: **SDIJF1521 (YGXB) · emptyelse · GFMAA · SugarCatCat**. Click a
 ## Acknowledgements
 
 - Most bundled and demonstration voice models were provided by **白菜工厂1145号员工**. Model copyrights remain with their respective authors; use each model only within its license or authorization.
-- XB-SVCB builds on projects including [so-vits-svc](https://github.com/svc-develop-team/so-vits-svc), [rvc-python](https://github.com/daswer123/rvc-python), [Seed-VC](https://github.com/Plachtaa/seed-vc), [DDSP-SVC](https://github.com/yxlllc/DDSP-SVC), [Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui), [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet), [Pedalboard](https://github.com/spotify/pedalboard), and [ModelScope](https://www.modelscope.cn/).
+- XB-SVCB builds on projects including [so-vits-svc](https://github.com/svc-develop-team/so-vits-svc), [RVC / Retrieval-based-Voice-Conversion-WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI), [Seed-VC](https://github.com/Plachtaa/seed-vc), [DDSP-SVC](https://github.com/yxlllc/DDSP-SVC), [Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui), [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet), [Pedalboard](https://github.com/spotify/pedalboard), and [ModelScope](https://www.modelscope.cn/).
 
 ## License
 
 The project's own source code is licensed under **[GNU General Public License v3.0 only](LICENSE)**. Copyright © 2026 SDIJF1521.
 
-Bundled third-party components, models, and resources retain their original licenses. In particular, so-vits-svc 4.1 is AGPL-3.0, DDSP-SVC 6.3 is MIT-licensed, and base models and UVR models use their respective upstream terms. GPL-3.0-only does not replace those third-party terms.
+Bundled third-party components, models, and resources retain their original licenses. In particular, so-vits-svc 4.1 is AGPL-3.0, DDSP-SVC 6.3 is MIT-licensed, the bundled RVC inference stack is MIT-licensed, and base models and UVR models use their respective upstream terms. GPL-3.0-only does not replace those third-party terms.

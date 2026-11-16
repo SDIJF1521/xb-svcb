@@ -54,7 +54,7 @@ def test_system_ffmpeg_keeps_existing_path(tmp_path: Path, monkeypatch) -> None:
     assert os.environ["PATH"] == r"C:\Tools"
 
 
-def test_mix_brings_vocal_forward_and_limits_true_peak_headroom(
+def test_mix_keeps_vocal_below_backing_and_limits_true_peak_headroom(
     tmp_path: Path, monkeypatch
 ) -> None:
     tool = FfmpegTool()
@@ -75,14 +75,19 @@ def test_mix_brings_vocal_forward_and_limits_true_peak_headroom(
 
     assert tool.mix(vocals, instrumental, output)
     filter_graph = captured[captured.index("-filter_complex") + 1]
-    assert "volume=1.230269[v]" in filter_graph
-    assert "volume=0.922571[m]" in filter_graph
+    # 默认人声低于伴奏（人声 -1.0 dB / 伴奏 -0.5 dB），避免窄带人声盖住全频段伴奏
+    assert tool.DEFAULT_VOCAL_GAIN_DB < tool.DEFAULT_INSTRUMENTAL_GAIN_DB
+    assert "volume=0.891251[v]" in filter_graph
+    assert "volume=0.944061[m]" in filter_graph
+    # 人声总线收敛：切次低频 + 轻微收敛 3 kHz 贴脸感
+    assert "highpass=f=65" in filter_graph
+    assert "equalizer=f=3000:t=q:w=1.2:g=-1" in filter_graph
     assert "amix=inputs=2:duration=longest:normalize=0" in filter_graph
     assert "alimiter=limit=0.841395" in filter_graph
     assert "level=false" in filter_graph
 
 
-def test_adaptive_mix_profile_places_enhanced_vocal_over_music(
+def test_adaptive_mix_profile_keeps_vocal_just_below_backing(
     tmp_path: Path, monkeypatch
 ) -> None:
     tool = FfmpegTool()
@@ -104,11 +109,19 @@ def test_adaptive_mix_profile_places_enhanced_vocal_over_music(
     assert profile["adaptive"] is True
     assert profile["vocal_lufs"] == -13.91
     assert profile["instrumental_lufs"] == -12.89
-    assert profile["vocal_gain_db"] == pytest.approx(2.4468)
     assert profile["instrumental_gain_db"] == pytest.approx(-0.0732)
+    # 混合后的人声响度应比伴奏低 1 LU（不盖过伴奏）
+    vocal_after = float(profile["vocal_lufs"]) + float(profile["vocal_gain_db"])  # type: ignore[arg-type]
+    music_after = float(profile["instrumental_lufs"]) + float(  # type: ignore[arg-type]
+        profile["instrumental_gain_db"]
+    )
+    assert vocal_after - music_after == pytest.approx(
+        FfmpegTool.ADAPTIVE_VOCAL_OVER_MUSIC_DB
+    )
+    assert vocal_after - music_after == pytest.approx(-1.0)
 
 
-def test_adaptive_mix_profile_uses_vocal_forward_fallback_when_measurement_fails(
+def test_adaptive_mix_profile_uses_balanced_fallback_when_measurement_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
     tool = FfmpegTool()
@@ -125,15 +138,16 @@ def test_adaptive_mix_profile_uses_vocal_forward_fallback_when_measurement_fails
     profile = tool.adaptive_mix_profile(vocals, instrumental)
 
     assert profile["adaptive"] is False
-    assert profile["vocal_gain_db"] == 1.8
-    assert profile["instrumental_gain_db"] == -0.7
+    assert profile["vocal_gain_db"] == FfmpegTool.DEFAULT_VOCAL_GAIN_DB
+    assert profile["instrumental_gain_db"] == FfmpegTool.DEFAULT_INSTRUMENTAL_GAIN_DB
+    assert tool.DEFAULT_VOCAL_GAIN_DB < tool.DEFAULT_INSTRUMENTAL_GAIN_DB
 
 
 @pytest.mark.parametrize(
     ("vocal_lufs", "music_lufs", "expected_gain"),
     [
-        (-22.0, -12.0, 4.0),
-        (-9.0, -14.0, -1.0),
+        (-22.0, -12.0, 3.0),
+        (-9.0, -14.0, -5.94),
     ],
 )
 def test_adaptive_mix_profile_bounds_extreme_vocal_gain(
@@ -159,7 +173,7 @@ def test_adaptive_mix_profile_bounds_extreme_vocal_gain(
 
     profile = tool.adaptive_mix_profile(vocals, instrumental)
 
-    assert profile["vocal_gain_db"] == expected_gain
+    assert profile["vocal_gain_db"] == pytest.approx(expected_gain)
 
 
 def test_mix_can_apply_light_parallel_glue(tmp_path: Path, monkeypatch) -> None:
@@ -244,3 +258,38 @@ def test_pitch_shift_rejects_collapsed_worker_output(
     monkeypatch.setattr("infrastructure.ffmpeg_tool.subprocess.run", fake_run)
 
     assert not tool.pitch_shift(source, output, -7)
+
+
+def test_pitch_shift_forwards_f0_curve_and_regions(tmp_path: Path, monkeypatch) -> None:
+    tool = FfmpegTool()
+    source = tmp_path / "source.wav"
+    output = tmp_path / "output.wav"
+    worker_python = tmp_path / "python.exe"
+    worker_script = tmp_path / "formant_pitch_worker.py"
+    f0_curve = tmp_path / "f0.npy"
+    worker_python.write_bytes(b"")
+    worker_script.write_bytes(b"")
+    f0_curve.write_bytes(b"npy")
+    _write_test_wav(source, 12000)
+    monkeypatch.setattr(config, "VOCAL_ENHANCEMENT_PYTHON", worker_python)
+    monkeypatch.setattr(config, "FORMANT_PITCH_WORKER", worker_script)
+    captured: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        captured.append(command)
+        target = Path(command[command.index("--output") + 1])
+        target.write_bytes(source.read_bytes())
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("infrastructure.ffmpeg_tool.subprocess.run", fake_run)
+
+    assert tool.pitch_shift(
+        source,
+        output,
+        -7,
+        regions=[(0.2, 0.6)],
+        f0_curve=f0_curve,
+    )
+    command = captured[0]
+    assert command[command.index("--f0-npy") + 1] == str(f0_curve)
+    assert command[command.index("--regions-json") + 1].endswith(".scope.json")

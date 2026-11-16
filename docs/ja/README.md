@@ -16,6 +16,7 @@
 
 ## 開発者向け
 
+- [レイヤー制約（DDD）](ddd-architecture.md): 層の依存ルール、ポートとアダプタ、構成ルート、新機能の配置指針。`app/tests/test_architecture.py`が検証します。
 - [システムアーキテクチャ](architecture.md): Pythonバックエンド、Vueフロントエンド、Worker、キュー、モデル、音声ツールの責務と接続。
 - [起動と推論の流れ](startup-chain.md): アプリ起動、通常タスク、リアルタイム処理。
 - [開発とリリース](development.md): リポジトリ構成、テスト、フロントエンドビルド、JUCE Host、インストーラー作成。
@@ -40,6 +41,7 @@
 
 全バージョンの履歴は[`docs/release-notes`](../release-notes/)にあります。v0.1.0以降のリリースノートは簡体字中国語、英語、日本語で公開します。
 
+- [v0.1.1](../release-notes/release_notes_v0_1_1.ja.md): MIDIサブエディターとピッチカーブ、カスタムワークフロー、リアルタイム変換とRVCスタックの更新、インストーラーの文字コード修正。
 - [v0.1.0](../release-notes/release_notes_v0_1_0.ja.md): 作成と推論、オーディオエディター、多言語UIとインストーラー、オンラインセットアップ、モデルリポジトリ変更。
 - [v0.0.32](../release-notes/release_notes_v032.md): Python 3.12、ROCm 10、DirectML推論の修正。
 - [v0.0.31](../release-notes/release_notes_v031.md): 共有ランタイム、初回ガイド、高音・ベルティングの安定性。

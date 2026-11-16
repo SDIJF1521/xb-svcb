@@ -38,7 +38,6 @@
             @click="emit('select', role.id)"
           >
             <el-icon><Operation /></el-icon>
-            <span>效果</span>
             <b>{{ role.effects?.length || 0 }}</b>
           </button>
           <button
@@ -215,15 +214,15 @@ function updateRole(id: string, patch: Partial<EditorRole>) {
 }
 .role-top {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 58px 28px;
+  grid-template-columns: 28px minmax(100px, 1fr) 42px 28px;
   gap: 8px;
   align-items: center;
 }
 .role-effects {
   position: relative;
-  width: 58px;
+  width: 42px;
   grid-auto-flow: column;
-  gap: 2px;
+  gap: 3px;
   font-size: 10px;
 }
 .role-effects b {

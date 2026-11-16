@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 import queue
+import re
 import threading
 import warnings
 
@@ -21,6 +22,7 @@ class SystemAudioDevice:
     kind: str
     loopback: bool = False
     system_mix: bool = False
+    virtual_capture: bool = False
 
     def public(self) -> dict[str, Any]:
         return {
@@ -29,6 +31,7 @@ class SystemAudioDevice:
             "kind": self.kind,
             "loopback": self.loopback,
             "system_mix": self.system_mix,
+            "virtual_capture": self.virtual_capture,
         }
 
 
@@ -45,6 +48,52 @@ def _is_system_mix_input(name: str, loopback: bool) -> bool:
         "waveout", "loopback", "回环", "立体声混音", "虚拟音频", "虚拟线路",
     )
     return any(marker in normalized for marker in markers)
+
+
+def _is_virtual_cable(name: str) -> bool:
+    normalized = name.casefold()
+    return any(
+        marker in normalized
+        for marker in ("cable", "voicemeeter", "vb-audio", "virtual audio", "虚拟音频", "虚拟线路")
+    )
+
+
+def _endpoint_base(name: str) -> str:
+    """Drop input/output role words so paired endpoints compare equal."""
+    text = re.sub(r"\b(?:output|input|out|in)\b", " ", name.casefold())
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def paired_playback_name(device_name: str, speaker_names: list[str]) -> str | None:
+    """Map a virtual-cable capture endpoint to its playable endpoint.
+
+    VB-CABLE exposes the render side as ``CABLE Input`` and the capture side
+    as ``CABLE Output``. Applications that want to send audio *into* the
+    cable must play to ``CABLE Input``; other programs then read
+    ``CABLE Output``. Users naturally pick ``CABLE Output`` as the output, so
+    accept that name and resolve it here.
+    """
+    if not device_name or not _is_virtual_cable(device_name) or not speaker_names:
+        return None
+    by_casefold = {name.casefold(): name for name in speaker_names}
+    normalized = device_name.casefold()
+    for source, target in (("output", "input"), ("out", "in")):
+        swapped = re.sub(
+            rf"\b{source}\b",
+            target,
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if swapped in by_casefold:
+            return by_casefold[swapped]
+    base = _endpoint_base(device_name)
+    if not base:
+        return None
+    matches = [
+        name for name in speaker_names
+        if _endpoint_base(name) == base
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _soundcard():
@@ -66,6 +115,12 @@ def list_devices() -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     try:
         microphones = soundcard.all_microphones(include_loopback=True)
+        speakers = soundcard.all_speakers()
+        speaker_names = [
+            str(getattr(item, "name", "") or "").strip()
+            for item in speakers
+            if str(getattr(item, "name", "") or "").strip()
+        ]
         for item in microphones:
             name = str(getattr(item, "name", "") or "").strip()
             if not name:
@@ -80,10 +135,23 @@ def list_devices() -> list[dict[str, Any]]:
                     system_mix=_is_system_mix_input(name, loopback),
                 ).public()
             )
-        for item in soundcard.all_speakers():
-            name = str(getattr(item, "name", "") or "").strip()
-            if name:
-                result.append(SystemAudioDevice(id=name, name=name, kind="output").public())
+            # "CABLE Output" is a capture endpoint, but users naturally want
+            # to pick it as the output destination. Expose it as an output
+            # candidate; SystemAudioWriter resolves it to "CABLE Input".
+            paired = paired_playback_name(name, speaker_names)
+            if paired and not loopback:
+                result.append(
+                    SystemAudioDevice(
+                        id=name,
+                        name=f"{name} → {paired}",
+                        kind="output",
+                        virtual_capture=True,
+                    ).public()
+                )
+        for name in speaker_names:
+            result.append(
+                SystemAudioDevice(id=name, name=name, kind="output").public()
+            )
     except Exception:  # noqa: BLE001 - device enumeration is best effort
         return []
     return result
@@ -102,8 +170,8 @@ class SystemAudioReader:
             None,
         )
         if selected is None:
-            raise RuntimeError("系统混合音频输入不存在，请选择 QQ 音乐所在的虚拟音频线")
-        blocksize = max(1024, round(sample_rate * 0.25))
+            raise RuntimeError("音频输入设备不存在，请选择麦克风、回环或虚拟音频线")
+        blocksize = max(1024, round(sample_rate * 0.05))
         self._recorder = selected.recorder(
             samplerate=sample_rate,
             channels=channels,
@@ -138,13 +206,30 @@ class SystemAudioWriter:
         if soundcard is None:
             raise RuntimeError("未安装 Windows 系统音频输出依赖 soundcard")
         speakers = soundcard.all_speakers()
+        speaker_names = [
+            str(getattr(item, "name", "") or "").strip()
+            for item in speakers
+            if str(getattr(item, "name", "") or "").strip()
+        ]
         selected = next(
             (item for item in speakers if str(getattr(item, "name", "")) == device_name),
             None,
         )
         if selected is None:
+            paired = paired_playback_name(device_name, speaker_names)
+            if paired:
+                selected = next(
+                    (item for item in speakers if str(getattr(item, "name", "")) == paired),
+                    None,
+                )
+        if selected is None:
             raise RuntimeError("系统音频输出设备不存在")
-        self._player = selected.player(samplerate=sample_rate, channels=channels)
+        self.resolved_device_name = str(getattr(selected, "name", "") or device_name)
+        self._player = selected.player(
+            samplerate=sample_rate,
+            channels=channels,
+            blocksize=max(512, round(sample_rate * 0.05)),
+        )
         self._prebuffer_blocks = max(0, int(prebuffer_blocks))
         self._crossfade_frames = max(0, int(crossfade_frames))
         self._pending_tail: Any | None = None
@@ -154,7 +239,9 @@ class SystemAudioWriter:
     def __enter__(self) -> "SystemAudioWriter":
         self._player.__enter__()
         if self._prebuffer_blocks:
-            self._queue = queue.Queue(maxsize=max(4, self._prebuffer_blocks * 4))
+            # Keep the playback queue short: a stalled output device must not
+            # make the live pipeline replay several seconds of stale audio.
+            self._queue = queue.Queue(maxsize=max(2, self._prebuffer_blocks + 1))
             self._thread = threading.Thread(target=self._play_loop, daemon=True)
             self._thread.start()
         return self
@@ -168,33 +255,59 @@ class SystemAudioWriter:
             self._flush_tail()
         self._player.__exit__(exc_type, exc, tb)
 
-    def write(self, audio, *, overlap_frames: int = 0) -> None:  # noqa: ANN001
+    def write(
+        self,
+        audio,  # noqa: ANN001
+        *,
+        overlap_frames: int = 0,
+        discontinuity: bool = False,
+    ) -> None:
         import numpy as np
 
-        item = (np.asarray(audio, dtype=np.float32).copy(), max(0, int(overlap_frames)))
+        item = (
+            np.asarray(audio, dtype=np.float32).copy(),
+            max(0, int(overlap_frames)),
+            bool(discontinuity),
+        )
         if self._queue is None:
             self._play_stitched(*item)
             return
         self._queue.put(item)
 
-    def _play_stitched(self, audio, overlap_frames: int) -> None:  # noqa: ANN001
+    def _play_stitched(
+        self,
+        audio,  # noqa: ANN001
+        overlap_frames: int,
+        discontinuity: bool = False,
+    ) -> None:
         """Play one block while crossfading its repeated input context.
 
         ``audio[:overlap_frames]`` represents the same source time as the
         pending tail from the previous block. Only that duplicated region is
         overlapped, so smoothing a boundary never shortens the stream clock.
+
+        ``discontinuity`` is used after stale blocks were dropped: the held
+        tail is flushed first and the new block starts without crossfading
+        against non-adjacent audio.
         """
         import numpy as np
 
         block = np.asarray(audio, dtype=np.float32)
         if block.size == 0 or block.shape[0] == 0:
             return
+        if discontinuity and self._pending_tail is not None and self._pending_tail.shape[0]:
+            self._player.play(self._pending_tail)
+            self._pending_tail = None
         fade_frames = min(self._crossfade_frames, block.shape[0])
         if fade_frames <= 0:
             self._player.play(block)
             return
 
-        overlap = min(max(0, int(overlap_frames)), block.shape[0])
+        overlap = (
+            0
+            if discontinuity
+            else min(max(0, int(overlap_frames)), block.shape[0])
+        )
         unique = block[overlap:]
         pieces: list[Any] = []
         pending = self._pending_tail

@@ -20,15 +20,20 @@ import zipfile
 from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 
 import config
-from infrastructure.storage import SettingsStore
+from .plugin_market import (
+    is_github_url,
+    is_valid_id,
+    market_records,
+    normalise_market_item,
+    parse_market_payload,
+)
+from .ports import SettingsRepository
 
 
-_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,63}$")
 _MANIFEST_NAME = "xb-svcb-plugin.json"
 _MAX_BUNDLE_BYTES = 20 * 1024 * 1024
 _MAX_MANIFEST_BYTES = 512 * 1024
@@ -55,7 +60,7 @@ _ALLOWED_PARAMS = {
 class PluginService:
     """安装、配置和执行可审计的声明式插件。"""
 
-    def __init__(self, settings: SettingsStore) -> None:
+    def __init__(self, settings: SettingsRepository) -> None:
         self._settings = settings
         config.PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
         config.PLUGIN_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -73,7 +78,7 @@ class PluginService:
             self._settings.set("plugins_enabled", bool(payload.get("enabled")))
         if "market_url" in payload:
             raw = str(payload.get("market_url") or "").strip()
-            if raw and not self._is_github_url(raw):
+            if raw and not is_github_url(raw):
                 return {"ok": False, "error": "插件市场仅支持 GitHub HTTPS raw 或 API 地址。", **self.status()}
             self._settings.set("plugin_market_url", raw)
         return {"ok": True, **self.status()}
@@ -267,13 +272,13 @@ class PluginService:
 
     def install_from_market(self, url: str) -> dict[str, Any]:
         raw = str(url or "").strip()
-        if not self._is_github_url(raw):
+        if not is_github_url(raw):
             return {"ok": False, "error": "仅允许从 GitHub HTTPS 地址安装插件。"}
         try:
             with httpx.Client(timeout=30, follow_redirects=True) as client:
                 response = client.get(raw)
                 response.raise_for_status()
-                if not self._is_github_url(str(response.url)):
+                if not is_github_url(str(response.url)):
                     return {"ok": False, "error": "GitHub 下载跳转到了不受信任的站点。"}
                 if len(response.content) > _MAX_BUNDLE_BYTES:
                     return {"ok": False, "error": "插件包超过 20 MB 限制。"}
@@ -303,21 +308,21 @@ class PluginService:
         url = str(self._settings.get("plugin_market_url", "") or "").strip()
         if not url:
             return {"ok": False, "error": "请先填写插件市场索引地址。", "items": []}
-        if not self._is_github_url(url):
+        if not is_github_url(url):
             return {"ok": False, "error": "插件市场仅支持 GitHub HTTPS raw 或 API 地址。", "items": []}
         try:
             response = httpx.get(url, timeout=20, follow_redirects=True)
             response.raise_for_status()
-            if not self._is_github_url(str(response.url)):
+            if not is_github_url(str(response.url)):
                 return {"ok": False, "error": "插件市场跳转到了不受信任的站点。", "items": []}
-            payload = self._parse_market_payload(response.text)
+            payload = parse_market_payload(response.text)
         except httpx.HTTPError as exc:
             return {"ok": False, "error": f"读取插件市场失败：{exc}", "items": []}
         except ValueError as exc:
             return {"ok": False, "error": f"插件市场索引格式无效：{exc}", "items": []}
         items = []
-        for item in self._market_records(payload):
-            normalized = self._normalise_market_item(item)
+        for item in market_records(payload):
+            normalized = normalise_market_item(item)
             if normalized:
                 items.append(normalized)
         return {"ok": True, "items": items}
@@ -444,7 +449,7 @@ class PluginService:
             item = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None
-        if not isinstance(item, dict) or not self._valid_id(str(item.get("id") or "")):
+        if not isinstance(item, dict) or not is_valid_id(str(item.get("id") or "")):
             return None
         if not all(isinstance(item.get(key), str) and item[key].strip() for key in ("name", "version")):
             return None
@@ -490,18 +495,20 @@ class PluginService:
             "pages": pages, "actions": actions, "workflow": item.get("workflow") if isinstance(item.get("workflow"), dict) else {},
         }
 
-    def _valid_page(self, page: dict[str, Any]) -> bool:
-        if not self._valid_id(str(page.get("id") or "")) or not str(page.get("title") or "").strip():
+    @staticmethod
+    def _valid_page(page: dict[str, Any]) -> bool:
+        if not is_valid_id(str(page.get("id") or "")) or not str(page.get("title") or "").strip():
             return False
         fields = page.get("fields", [])
         return isinstance(fields, list) and all(
-            isinstance(field, dict) and self._valid_id(str(field.get("id") or ""))
+            isinstance(field, dict) and is_valid_id(str(field.get("id") or ""))
             and field.get("type") in _ALLOWED_COMPONENTS for field in fields
         )
 
-    def _valid_action(self, action: dict[str, Any]) -> bool:
+    @staticmethod
+    def _valid_action(action: dict[str, Any]) -> bool:
         if not (
-            self._valid_id(str(action.get("id") or ""))
+            is_valid_id(str(action.get("id") or ""))
             and action.get("type") in _ALLOWED_ACTIONS
             and bool(str(action.get("label") or "").strip())
         ):
@@ -643,93 +650,6 @@ class PluginService:
         return not PurePosixPath(raw).is_absolute()
 
     @staticmethod
-    def _parse_market_payload(raw: str) -> Any:
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            without_blocks = re.sub(r"/\*.*?\*/", "", raw, flags=re.S)
-            without_line_comments = re.sub(r"(?m)^\s*//.*$", "", without_blocks)
-            without_trailing_commas = re.sub(r",(\s*[}\]])", r"\1", without_line_comments)
-            try:
-                return json.loads(without_trailing_commas)
-            except json.JSONDecodeError as exc:
-                raise ValueError(str(exc)) from exc
-
-    @staticmethod
-    def _market_records(payload: Any) -> list[Any]:
-        if isinstance(payload, list):
-            return payload
-        if isinstance(payload, dict):
-            records = payload.get("plugins")
-            if isinstance(records, list):
-                return records
-            records = payload.get("items")
-            if isinstance(records, list):
-                return records
-        return []
-
-    @staticmethod
-    def _market_id(value: str) -> str:
-        cleaned = re.sub(r"[^a-z0-9._-]+", "-", value.lower()).strip("._-")
-        if len(cleaned) < 3:
-            cleaned = f"plugin-{cleaned}".strip("-")
-        return cleaned[:64]
-
-    def _normalise_market_item(self, item: Any) -> dict[str, Any] | None:
-        if not isinstance(item, dict):
-            return None
-        module_name = str(item.get("module_name") or item.get("id") or "").strip()
-        raw_id = str(item.get("id") or module_name or item.get("project_link") or "").strip()
-        plugin_id = self._market_id(raw_id)
-        if not plugin_id or not self._valid_id(plugin_id):
-            return None
-        project_link = str(item.get("project_link") or "").strip()
-        homepage = str(
-            item.get("homepage")
-            or item.get("homepage_url")
-            or item.get("repository")
-            or item.get("repo")
-            or ""
-        ).strip()
-        if not homepage and project_link:
-            homepage = project_link if project_link.startswith("https://") else f"https://pypi.org/project/{project_link}/"
-        bundle_url = str(
-            item.get("bundle_url")
-            or item.get("download_url")
-            or item.get("release_url")
-            or ""
-        ).strip()
-        if bundle_url and not self._is_github_url(bundle_url):
-            bundle_url = ""
-        tags = []
-        raw_tags = item.get("tags")
-        if isinstance(raw_tags, list):
-            for tag in raw_tags:
-                if isinstance(tag, dict):
-                    label = str(tag.get("label") or tag.get("name") or "").strip()
-                    if label:
-                        tags.append({"label": label, "color": str(tag.get("color") or "")})
-                else:
-                    label = str(tag or "").strip()
-                    if label:
-                        tags.append({"label": label, "color": ""})
-        author = str(item.get("author") or item.get("author_name") or item.get("author_id") or "")
-        description = str(item.get("description") or item.get("desc") or item.get("summary") or "")
-        name = str(item.get("name") or module_name or project_link or plugin_id)
-        return {
-            "id": plugin_id,
-            "module_name": module_name,
-            "project_link": project_link,
-            "name": name,
-            "version": str(item.get("version") or ""),
-            "description": description,
-            "author": author,
-            "bundle_url": bundle_url,
-            "homepage": homepage,
-            "tags": tags,
-            "is_official": bool(item.get("is_official", False)),
-        }
-    @staticmethod
     def _write_plugin_error(plugin_id: str, detail: str) -> None:
         if not detail.strip():
             return
@@ -757,17 +677,85 @@ class PluginService:
                 result = result.replace("{{" + str(key) + "}}", str(item))
         return result
 
-    @staticmethod
-    def _valid_id(value: str) -> bool:
-        return bool(_ID_RE.fullmatch(value))
+    # ---- 效果器插件（VST3）目录扫描 ----
+
+    def scan_effect_plugin_directory(self, directory: str) -> list[dict[str, str]]:
+        """递归发现指定目录下的 VST3 效果器插件，并记住该目录。"""
+        try:
+            root = Path(str(directory or "")).expanduser()
+        except (OSError, ValueError):
+            return []
+        if not root.is_dir():
+            return []
+        found = self._scan_effect_plugin_root(root)
+        saved = [str(value) for value in self._settings.get("vst3_directories", []) if str(value).strip()]
+        root_text = str(root.resolve())
+        if root_text.casefold() not in {value.casefold() for value in saved}:
+            self._settings.set("vst3_directories", [*saved, root_text])
+        return found
 
     @staticmethod
-    def _is_github_url(value: str) -> bool:
-        parsed = urlparse(value)
-        host = (parsed.hostname or "").lower()
-        return parsed.scheme == "https" and (
-            host in {"github.com", "api.github.com"}
-            or host.endswith(".github.com")
-            or host == "githubusercontent.com"
-            or host.endswith(".githubusercontent.com")
+    def _scan_effect_plugin_root(root: Path) -> list[dict[str, str]]:
+        found: dict[str, dict[str, str]] = {}
+
+        def add_plugin(path: Path) -> None:
+            try:
+                relative = path.relative_to(root)
+            except ValueError:
+                relative = Path(path.name)
+            if len(relative.parts) > 1:
+                collection = relative.parts[0]
+            elif root.name.casefold() != "vst3":
+                collection = root.name
+            else:
+                collection = "未分组"
+            found[str(path).casefold()] = {
+                "name": path.stem,
+                "path": str(path),
+                "collection": collection,
+            }
+
+        try:
+            for current, directories, files in os.walk(root):
+                base = Path(current)
+                bundles = [name for name in directories if name.lower().endswith(".vst3")]
+                for name in [*bundles, *(item for item in files if item.lower().endswith(".vst3"))]:
+                    add_plugin(base / name)
+                # A VST3 bundle is self-contained; do not crawl its internal binaries/resources.
+                directories[:] = [name for name in directories if name not in bundles]
+        except OSError:
+            return []
+        return sorted(
+            found.values(),
+            key=lambda item: (item["collection"].casefold(), item["name"].casefold(), item["path"].casefold()),
+        )
+
+    def auto_scan_effect_plugins(self) -> list[dict[str, str]]:
+        """扫描常见 VST3 安装位置，无需用户手动指定目录。"""
+        roots: list[Path] = []
+        if os.name == "nt":
+            common_program_files = os.environ.get("COMMONPROGRAMFILES")
+            program_files = os.environ.get("PROGRAMFILES")
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            if common_program_files:
+                roots.append(Path(common_program_files) / "VST3")
+            if program_files:
+                roots.append(Path(program_files) / "Common Files" / "VST3")
+            if local_app_data:
+                roots.append(Path(local_app_data) / "Programs" / "Common" / "VST3")
+        else:
+            roots.extend([Path.home() / ".vst3", Path("/usr/lib/vst3"), Path("/usr/local/lib/vst3")])
+        roots.extend(
+            Path(str(value)).expanduser()
+            for value in self._settings.get("vst3_directories", [])
+        )
+        merged: dict[str, dict[str, str]] = {}
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for item in self._scan_effect_plugin_root(root):
+                merged[item["path"].casefold()] = item
+        return sorted(
+            merged.values(),
+            key=lambda item: (item.get("collection", "").casefold(), item["name"].casefold()),
         )

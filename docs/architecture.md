@@ -34,6 +34,14 @@ XB-SVCB 是一个本地优先的桌面应用。前端负责交互和状态展示
 | Application Services -> Vocal Enhancement | 按任务配置执行可选的人声修复、对齐、修音和母带增强。 |
 | Model Worker -> FFmpeg | 表示推理结果进入后处理和最终混音流程；FFmpeg 的实际调用由业务流程编排。 |
 
+## 分层契约
+
+`app/api`（表现层）→ `app/application`（用例层）→ `app/domain`（领域层），
+`app/infrastructure`（适配层）实现用例层声明的端口，唯一装配点是 `app/composition.py`。
+依赖方向、端口约定、新增功能的放置规则和迁移台账见
+[分层架构约束（DDD）](ddd-architecture.md)；这套规则由
+`app/tests/test_architecture.py` 自动校验。
+
 ## 主要模块
 
 ### app/main.py
@@ -44,12 +52,19 @@ XB-SVCB 是一个本地优先的桌面应用。前端负责交互和状态展示
 
 表现层：
 
-- bridge.py 定义暴露给 Vue 的 Api 和组合根 build_api()。
+- bridge.py 定义暴露给 Vue 的 Api；组合根在 `app/composition.py` 的 build_api()，负责装配基础设施与应用服务。
 - http_server.py 创建可手动启停的 FastAPI/Uvicorn 服务。
+
+### app/composition.py
+
+组合根：创建基础设施适配器与仓储，注入用例服务，装成表现层 `Api`；`main.py` 只调用它的 `build_api()`。
 
 ### app/application/
 
-用例和业务编排层，包含模型管理、作品管理、音乐资源、音频编辑、实时翻唱、插件和转换任务等服务。普通推理任务在 conversion_service.py 中进入串行队列。
+用例和业务编排层，包含模型管理、作品管理、音乐资源、音频编辑（`audio_editor_service` 负责工程/片段/插件会话，`editor_render_service` 负责渲染与波形）、媒体试听导出、拖拽音频导入、主题媒体、数据目录维护、实时翻唱、插件（`plugin_service` 与 `plugin_market`）和转换任务等服务。
+
+普通推理任务在 conversion_service.py 中进入串行队列；成品混音按测量到的 LUFS 平衡人声与伴奏。
+本层只依赖 `application/ports.py` 声明的端口，不 import 基础设施。
 
 ### app/domain/
 
@@ -57,7 +72,7 @@ XB-SVCB 是一个本地优先的桌面应用。前端负责交互和状态展示
 
 ### app/infrastructure/
 
-负责文件存储、路径、FFmpeg、系统音频、UVR、F0、模型引擎适配和 Worker 进程。svc_engine.py、rvc_engine.py、seedvc_engine.py、ddsp_engine.py 是框架适配入口。
+负责文件存储、路径、FFmpeg、系统音频、UVR、F0、模型引擎适配和 Worker 进程。svc_engine.py、rvc_engine.py、seedvc_engine.py、ddsp_engine.py 是框架适配入口；RVC 适配器加载 `engines/rvc` 内置的官方推理栈，不再依赖第三方 `rvc-python`。
 
 ### web/
 

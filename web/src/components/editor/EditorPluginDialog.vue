@@ -39,6 +39,30 @@
         </div>
       </div>
       <div v-if="effect" class="plugin-dialog-fields">
+        <div class="plugin-library-row">
+          <el-select
+            class="vst3-select"
+            :model-value="activePath"
+            :disabled="!editable"
+            filterable
+            placeholder="选择 VST3 插件"
+            no-data-text="未发现 VST3 插件"
+            popper-class="editor-vst3-select-popper"
+            @change="onSelectPluginChange"
+          >
+            <el-option
+              v-if="activePath && !plugins.some((item) => item.path === activePath)"
+              :label="activePath"
+              :value="activePath"
+            />
+            <el-option-group v-for="group in pluginGroups" :key="group.name" :label="group.name">
+              <el-option v-for="item in group.items" :key="item.path" :label="item.name" :value="item.path" />
+            </el-option-group>
+          </el-select>
+          <button :disabled="!editable || scanning" title="导入并扫描 VST3 目录" @click="emit('scanDirectory')">
+            <el-icon><Search /></el-icon>
+          </button>
+        </div>
         <div class="plugin-path-row wide">
           <input
             :value="activePath"
@@ -81,8 +105,8 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { FolderAdd, Monitor, Refresh } from '@element-plus/icons-vue'
-import type { EditorClipEffect, EditorPluginHostStatus } from '@/api'
+import { FolderAdd, Monitor, Refresh, Search } from '@element-plus/icons-vue'
+import type { EditorClipEffect, EditorPluginHostStatus, EditorPluginPathOption } from '@/api'
 
 const props = defineProps<{
   modelValue: boolean
@@ -92,6 +116,8 @@ const props = defineProps<{
   loading: boolean
   sessionId: string
   editable: boolean
+  plugins: EditorPluginPathOption[]
+  scanning: boolean
 }>()
 
 const emit = defineEmits<{
@@ -102,6 +128,8 @@ const emit = defineEmits<{
   closeNative: []
   openNative: []
   pickPlugin: []
+  scanDirectory: []
+  selectPlugin: [path: string]
   setPath: [event: Event]
   setParams: [event: Event]
 }>()
@@ -111,6 +139,15 @@ const open = computed({
   set: (value) => emit('update:modelValue', value),
 })
 
+const pluginGroups = computed(() => {
+  const groups = new Map<string, EditorPluginPathOption[]>()
+  for (const plugin of props.plugins) {
+    const name = plugin.collection || '未分组'
+    groups.set(name, [...(groups.get(name) || []), plugin])
+  }
+  return [...groups.entries()].map(([name, items]) => ({ name, items }))
+})
+
 function pluginParamJson(effect: EditorClipEffect) {
   const params = effect.params?.parameters
   try {
@@ -118,6 +155,10 @@ function pluginParamJson(effect: EditorClipEffect) {
   } catch {
     return '{}'
   }
+}
+
+function onSelectPluginChange(value: string) {
+  emit('selectPlugin', String(value || ''))
 }
 </script>
 
@@ -211,6 +252,26 @@ function pluginParamJson(effect: EditorClipEffect) {
   color: var(--xb-text);
   padding: 0 10px;
   outline: none;
+}
+.plugin-library-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 6px;
+}
+.vst3-select {
+  min-width: 0;
+  width: 100%;
+}
+.vst3-select :deep(.el-select__wrapper) {
+  min-height: 36px;
+  border-radius: 8px;
+}
+.plugin-library-row button {
+  border: 1px solid var(--xb-border);
+  border-radius: 8px;
+  background: rgba(var(--xb-fill-rgb), 0.04);
+  color: var(--xb-text);
+  cursor: pointer;
 }
 .plugin-path-row {
   display: grid;

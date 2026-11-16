@@ -58,7 +58,13 @@ juce_add_console_app(xb-juce-vst3-host
 )
 
 target_sources(xb-juce-vst3-host PRIVATE
+    src/HostProtocol.cpp
+    src/HostProtocol.h
     src/Main.cpp
+    src/PluginEditorWindow.cpp
+    src/PluginEditorWindow.h
+    src/PluginRuntime.cpp
+    src/PluginRuntime.h
 )
 
 target_compile_definitions(xb-juce-vst3-host PRIVATE

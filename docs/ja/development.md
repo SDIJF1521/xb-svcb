@@ -16,7 +16,9 @@
 
 ## バックエンド開発
 
-メインアプリの依存関係は`app/pyproject.toml`、実行エントリは`app/main.py`です。`app/api/bridge.py`と`app/application/`から処理を追い、具体的なエンジンとWorkerは`app/infrastructure/`を確認してください。
+メインアプリの依存関係は`app/pyproject.toml`、実行エントリは`app/main.py`です。読む順序の推奨は、`app/composition.py`（唯一の組み立て箇所でアダプタとユースケースサービスが一覧できる）、次に`app/application/`のユースケースサービスと`app/application/ports.py`のポート契約、最後に`app/infrastructure/`のエンジンとWorker実装です。フレームワーク非依存のルールは`app/domain/`にあり、`app/api/`はパラメータ変換とプロトコル適応のみを行います。
+
+依存方向は厳格な制約で、`app/tests/test_architecture.py`が検証します。詳細は[レイヤー制約（DDD）](../ddd-architecture.md)を参照してください。
 
 テスト:
 
@@ -49,11 +51,11 @@ JUCEのパスを設定してビルドします。
 
 `-Help`または`--help`では事前検証やパッケージ作成を実行せずに引数を確認できます。
 
-v0.1.0の履歴はcommit `fc8d214e068457a273929e80c108b33f55b4e9e8`から始まり、このcommit自体もv0.1.0に含まれます。release commit一覧は次の範囲で生成します。
+v0.1.1の履歴はcommit `12f6db36754f5e86c9997449752367804e2da76a`から始まり、このcommit自体もv0.1.1に含まれます。release commit一覧は次の範囲で生成します。
 
-    git log --reverse fc8d214e068457a273929e80c108b33f55b4e9e8^..HEAD
+    git log --reverse 12f6db36754f5e86c9997449752367804e2da76a^..HEAD
 
-監査でも同じ包括範囲を使用してください。`fc8d214e068457a273929e80c108b33f55b4e9e8..HEAD`では開始commitが除外されるため使用しません。
+監査でも同じ包括範囲を使用してください。`12f6db36754f5e86c9997449752367804e2da76a..HEAD`では開始commitが除外されるため使用しません。
 
 簡易検証:
 
