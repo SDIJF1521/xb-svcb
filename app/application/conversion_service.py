@@ -45,6 +45,28 @@ if TYPE_CHECKING:
 
 _VOCAL_OUTPUT_WORKFLOWS = {"auto_vocal_merge", "manual_vocal_merge"}
 
+# 保存节点常同时接入原始分离音轨（伴奏/男声/女声）和成品混音。作品库的
+# 「成品」只能取其中一路，必须优先取最接近最终成品的节点；否则按连线顺序
+# 取到先接入的伴奏，就会出现「混音里有声、成品只有 BGM」的假故障。
+_SAVE_TRACK_PRIORITY: dict[str, int] = {
+    "mix": 100,
+    "blend": 90,
+    "merge": 80,
+    "concat": 70,
+    "normalize": 60,
+    "effect": 55,
+    "trim": 50,
+    "fade": 50,
+    "pitch": 45,
+    "stretch": 45,
+    "enhance": 40,
+    "convert": 30,
+    "dereverb": 20,
+    "repair": 20,
+    "separate": 10,
+    "input": 0,
+}
+
 _TimeRegion = tuple[float, float]
 
 
@@ -4948,9 +4970,9 @@ class ConversionService:
 
             # 汇总所有「保存」节点接入的音轨：每个保存节点可收集多路，
             # 任一音轨都可以继续处理、被直接保存，或被丢弃（不连线）。
-            # 第一路作为「翻唱成品」（output.wav，进入作品库）；其余只落在本次任务
-            # 目录的 outputs/ 下，作为音频编辑器的素材。
-            saved_tracks: list[tuple[Path, str, str]] = []
+            # 优先级最高的一路作为「翻唱成品」（output.wav，进入作品库）；其余只落在
+            # 本次任务目录的 outputs/ 下，作为音频编辑器的素材。
+            saved_tracks: list[tuple[int, Path, str, str]] = []
             seen_tracks: set[tuple[str, str]] = set()
             for onode in nodes:
                 if str(onode.get("type") or "") != "output":
@@ -4969,25 +4991,40 @@ class ConversionService:
                         continue
                     seen_tracks.add(track_key)
                     source_node = node_by_id.get(str(frm.get("node") or "")) or {}
-                    label = NODE_LABELS.get(str(source_node.get("type") or ""), "音频")
+                    source_type = str(source_node.get("type") or "")
+                    label = NODE_LABELS.get(source_type, "音频")
                     # 不同模型可能同时保存人声/伴奏/附加音轨，标题要带上端口名才分得清。
                     if port and port != "audio":
                         label = f"{label} · {port_label(port)}"
-                    saved_tracks.append((Path(track), label, port))
+                    saved_tracks.append(
+                        (
+                            _SAVE_TRACK_PRIORITY.get(source_type, 0),
+                            Path(track),
+                            label,
+                            port,
+                        )
+                    )
             if not saved_tracks:
                 raise RuntimeError("工作流缺少可用的保存音轨")
 
+            # 优先混音/合并等成品节点，避免先连入保存节点的原始伴奏被当成成品；
+            # 同优先级（如同一分离节点的 vocals/instrumental）保持原有连线顺序。
+            saved_tracks.sort(key=lambda item: item[0], reverse=True)
+
             # 标签去重：多个节点用同一模型/端口名时 label 会重复，编辑器里分不清。
             label_counts: dict[str, int] = {}
-            unique_tracks: list[tuple[Path, str, str]] = []
-            for track, label, port in saved_tracks:
+            unique_tracks: list[tuple[int, Path, str, str]] = []
+            for priority, track, label, port in saved_tracks:
                 count = label_counts.get(label, 0) + 1
                 label_counts[label] = count
-                unique_tracks.append((track, f"{label} ({count})" if count > 1 else label, port))
+                unique_tracks.append(
+                    (priority, track, f"{label} ({count})" if count > 1 else label, port)
+                )
             saved_tracks = unique_tracks
 
-            primary_label, primary_port = saved_tracks[0][1], saved_tracks[0][2]
-            primary = saved_tracks[0][0]
+            primary_label, primary_port = saved_tracks[0][2], saved_tracks[0][3]
+            primary = saved_tracks[0][1]
+            self._log(log_file, f"  成品主音轨: {primary_label}")
             # 清理上一次运行残留的附加音轨，避免重跑后目录里留下过期 track_XX.wav。
             outputs_dir = work_dir / "outputs"
             if outputs_dir.is_dir():
@@ -5008,7 +5045,7 @@ class ConversionService:
                     "port": primary_port,
                 }
             ]
-            for index, (track, label, port) in enumerate(saved_tracks[1:], start=1):
+            for index, (_priority, track, label, port) in enumerate(saved_tracks[1:], start=1):
                 outputs_dir.mkdir(parents=True, exist_ok=True)
                 dest = outputs_dir / f"track_{index:02d}.wav"
                 saved = track

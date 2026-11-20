@@ -531,6 +531,30 @@ def test_run_workflow_saves_multiple_tracks_into_one_save_node(wtmp: Path, monke
     assert len(saved["workflow_outputs"]) == 2
 
 
+def test_run_workflow_prefers_mix_as_primary_output(wtmp: Path, monkeypatch) -> None:  # noqa: ANN001
+    """保存节点先接入原始伴奏、后接入混音时，成品仍应取混音而非纯伴奏。"""
+    repo = _repo(wtmp, monkeypatch)
+    graph = _graph()
+    graph["edges"].insert(
+        -1,
+        {"id": "e6", "from": {"node": "s", "port": "instrumental"}, "to": {"node": "o", "port": "audio"}},
+    )
+    work = _work_record(wtmp, graph)
+    repo.add(work)
+
+    service = _run_service(repo)
+    service._run_workflow(work["id"])  # noqa: SLF001
+
+    saved = repo.get(work["id"])
+    assert saved is not None
+    assert saved["status"] == "done", saved.get("error")
+    outputs = saved["workflow_outputs"]
+    assert outputs[0]["label"] == "混音合成"
+    assert outputs[0]["port"] == "audio"
+    assert Path(outputs[0]["path"]).read_bytes() == b"converted-vocalsinstrumental"
+    assert "人声分离 · 伴奏" in {item["label"] for item in outputs[1:]}
+
+
 def test_editor_material_includes_extra_workflow_outputs(wtmp: Path, monkeypatch) -> None:  # noqa: ANN001
     repo = _repo(wtmp, monkeypatch)
     work_dir = config.WORKS_DIR / "wrk_wf"
