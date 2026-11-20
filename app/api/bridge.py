@@ -155,6 +155,8 @@ class Api:
         """释放桌面进程内的后台服务。"""
         self._realtime_cover.shutdown()
         self._http_api.shutdown()
+        # 播放器直通服务随桌面进程退出而关闭，避免遗留监听端口。
+        self._media.shutdown()
         # 清理所有应用生成的临时音频、UVR 中间文件和编辑器缓存；保留
         # data/temp 目录本身，便于下次启动直接复用。
         self._cleanup_temp()
@@ -800,6 +802,24 @@ class Api:
         """
         return self._media.data_uri(work_id, kind)
 
+    def get_work_stream(self, work_id: str, kind: str = "output") -> dict[str, Any]:
+        """返回作品的直通播放地址与技术参数（本地 HTTP + Range，无损直出）。"""
+        return self._media.stream_work(work_id, kind)
+
+    def get_music_stream(self, path: str) -> dict[str, Any]:
+        """返回已下载歌曲的直通播放地址与技术参数。"""
+        return self._media.stream_music(path)
+
+    def stream_music_online(
+        self,
+        msg: str,
+        n: int,
+        source: str | None = None,
+        song_id: str | None = None,
+    ) -> dict[str, Any]:
+        """返回整首在线歌曲的播放地址（本机代理，保留原始音质）。"""
+        return self._music.stream_online(msg, n, source, song_id)
+
     def export_work(self, work_id: str, fmt: str = "wav") -> str:
         """按指定格式导出翻唱成品，返回用户选择的保存路径。"""
         src = self._media.stem_path(work_id, "output")
@@ -1084,6 +1104,30 @@ class Api:
     def render_editor_project(self, project_id: str, fmt: str = "wav") -> str:
         path = self._editor.render(project_id, fmt)
         return str(path) if path else ""
+
+    def import_editor_project_to_works(
+        self, project_id: str, fmt: str = "wav"
+    ) -> dict[str, Any]:
+        """把编辑器渲染好的成品归档进「我的作品」，可直接播放、再编辑或导出。"""
+        project = self._editor.get(project_id)
+        if not project:
+            return {"ok": False, "error": "编辑工程不存在"}
+        output_format = str(fmt or "wav").strip().lower().lstrip(".")
+        if output_format not in {"wav", "mp3", "flac"}:
+            output_format = "wav"
+        path = self._editor.render(project_id, output_format)
+        if path is None:
+            return {"ok": False, "error": "渲染编辑工程失败，请确认工程中有音频片段"}
+        work = self._works.import_rendered_audio(
+            path,
+            title=str(project.get("title") or ""),
+            model_label="音频编辑器",
+            workflow="audio_editor",
+            duration=self._media.duration(str(path)),
+        )
+        if work is None:
+            return {"ok": False, "error": "保存到作品库失败，请检查数据目录权限"}
+        return {"ok": True, "work": work}
 
     def export_editor_project(self, project_id: str, fmt: str = "wav") -> str:
         src = self._editor.render(project_id, fmt)

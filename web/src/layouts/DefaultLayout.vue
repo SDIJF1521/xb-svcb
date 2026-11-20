@@ -11,6 +11,8 @@
         </Transition>
       </router-view>
     </main>
+
+    <GlobalPlayer />
   </div>
 </template>
 
@@ -18,6 +20,7 @@
 import { onMounted, onUnmounted } from 'vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import FirstUseGuide from '@/components/onboarding/FirstUseGuide.vue'
+import GlobalPlayer from '@/components/player/GlobalPlayer.vue'
 import ThemeBackground from '@/components/theme/ThemeBackground.vue'
 import { useNotificationsStore } from '@/stores/notifications'
 

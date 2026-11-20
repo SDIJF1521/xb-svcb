@@ -236,6 +236,7 @@ export type CreateWorkflow =
   | 'full_manual_editor'
   | 'realtime_cover'
   | 'ai_enhancement'
+  | 'audio_editor'
 
 export type VocalEnhancementLevel = 'basic' | 'advanced'
 
@@ -680,6 +681,31 @@ export interface MusicPreviewResult {
   error?: string
   src?: string
 }
+
+/**
+ * 播放器直通音频流信息。
+ *
+ * `url` 指向本机回环音频服务（支持 Range 与跨域），因此可以完整播放、
+ * 拖动进度，并让 Web Audio 读取同一路音频。`lossless` 表示原始文件为
+ * 无损格式；`sample_rate` / `bit_depth` / `channels` 用于界面展示。
+ */
+export interface AudioStreamInfo {
+  ok: boolean
+  error?: string
+  url?: string
+  format?: string
+  codec?: string
+  sample_rate?: number
+  channels?: number
+  bit_depth?: number
+  duration?: number
+  size?: number
+  lossless?: boolean
+  quality?: string
+  /** 后端无法代理而直接返回上游地址时为 true（不保证可跨域处理）。 */
+  direct?: boolean
+}
+
 
 /** 已下载到本地的歌曲。 */
 export interface DownloadedMusic {
@@ -1129,6 +1155,13 @@ export interface EditorProjectTransferResult {
   error?: string
   path?: string
   project?: EditorProject
+}
+
+/** 编辑器成品归档到「我的作品」的结果。 */
+export interface EditorWorkImportResult {
+  ok: boolean
+  error?: string
+  work?: WorkDTO
 }
 
 export interface EditorWaveform {

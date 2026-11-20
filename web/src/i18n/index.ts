@@ -253,6 +253,14 @@ const enPhrases: Record<string, string> = {
   '主模型高': 'More main model', '速度快、音色轮廓稳定、显存压力较小': 'Faster, stable voice shape, and lower GPU memory use',
   '浅扩散高': 'More diffusion', '细节与自然度通常更丰富，但更慢且更吃显存': 'Often more detailed and natural, but slower and more memory intensive', '调法': 'Tuning', '先用默认值，出现毛刺或细节不足时小步调整': 'Start with defaults and make small changes when detail is lacking',
   '跳过引导': 'Skip Guide', '下一步': 'Next',
+  '播放队列': 'Play Queue', '播放全部': 'Play All', '加入播放队列': 'Add to Queue',
+  '顺序播放': 'Play in Order', '列表循环': 'Repeat All', '单曲循环': 'Repeat One', '随机播放': 'Shuffle',
+  '音乐播放器': 'Music Player', '高保真输出': 'HiFi Output', '当前音源': 'Source', '输出方式': 'Output',
+  '母带直通 · 未处理': 'Direct · Untouched', '10 段均衡器': '10-band EQ',
+  '上一首': 'Previous Track', '下一首': 'Next Track', '静音': 'Mute', '取消静音': 'Unmute',
+  '直通输出': 'Direct output', '还没有可播放的音乐': 'Nothing to play yet', '打开作品库': 'Open Library',
+  '按歌曲名获取': 'Fetch by song title', '保存到作品': 'Save to Works', '已保存到我的作品': 'Saved to My Works',
+  '音频编辑器成品': 'Audio Editor Output',
 }
 
 const jaPhrases: Record<string, string> = {
@@ -400,6 +408,14 @@ const jaPhrases: Record<string, string> = {
   '主模型高': 'メインモデル寄り', '速度快、音色轮廓稳定、显存压力较小': '高速で音色が安定し、GPUメモリ使用量が少ない',
   '浅扩散高': '拡散モデル寄り', '细节与自然度通常更丰富，但更慢且更吃显存': '細部と自然さが増す一方、低速でGPUメモリを多く使用', '调法': '調整方法',
   '先用默认值，出现毛刺或细节不足时小步调整': 'まずデフォルトを使い、ノイズや細部不足がある場合に少しずつ調整', '跳过引导': 'ガイドをスキップ', '下一步': '次へ',
+  '播放队列': '再生キュー', '播放全部': 'すべて再生', '加入播放队列': 'キューに追加',
+  '顺序播放': '順番に再生', '列表循环': 'リストループ', '单曲循环': '1曲リピート', '随机播放': 'シャッフル',
+  '音乐播放器': 'ミュージックプレーヤー', '高保真输出': 'ハイファイ出力', '当前音源': '現在の音源', '输出方式': '出力方式',
+  '母带直通 · 未处理': 'ダイレクト · 未処理', '10 段均衡器': '10バンドEQ',
+  '上一首': '前の曲', '下一首': '次の曲', '静音': 'ミュート', '取消静音': 'ミュート解除',
+  '直通输出': 'ダイレクト出力', '还没有可播放的音乐': '再生できる曲がありません', '打开作品库': '作品一覧を開く',
+  '按歌曲名获取': '曲名で取得', '保存到作品': '作品に保存', '已保存到我的作品': 'マイ作品に保存しました',
+  '音频编辑器成品': '音声編集の完成品',
 }
 
 const phraseTables: Record<AppLocale, Record<string, string>> = {

@@ -47,6 +47,7 @@ from infrastructure.theme_media import ThemeMediaStore
 from infrastructure.uvr_tool import UvrTool
 from infrastructure.vocal_enhancement import VocalEnhancementProcessor
 from infrastructure.audio_import import AudioImportStore
+from infrastructure.audio_streamer import LocalAudioStreamer
 from infrastructure.editor_project_store import EditorProjectStore
 from infrastructure.work_files import WorkFiles
 from infrastructure.data_transfer import DataTransfer
@@ -77,6 +78,9 @@ def build_api() -> Api:
     editor_repo = ListRepository(config.EDITOR_PROJECTS_DB)
     settings = SettingsStore(config.SETTINGS_DB)
 
+    # 播放器直通：本机回环音频流（本地文件 + 在线歌曲代理）
+    audio_streamer = LocalAudioStreamer()
+
     # ---- 应用服务 ----
     system_service = SystemService(
         ffmpeg, uvr, svc, rvc, seedvc, ddsp, vocal_enhancement, pymss
@@ -95,7 +99,7 @@ def build_api() -> Api:
     work_service = WorkService(
         works_repo, conversion_service, model_service, settings, files=work_files
     )
-    music_service = MusicService(settings)
+    music_service = MusicService(settings, streamer=audio_streamer)
     hub_service = ModelHubService(settings, model_service)
     editor_service = AudioEditorService(
         editor_repo,
@@ -112,7 +116,7 @@ def build_api() -> Api:
     )
     plugin_service = PluginService(settings)
     realtime_cover_service = RealtimeCoverService(model_service, ffmpeg, uvr, engines, pymss)
-    media_service = MediaService(works_repo, ffmpeg)
+    media_service = MediaService(works_repo, ffmpeg, streamer=audio_streamer)
     theme_media_service = ThemeMediaService(ThemeMediaStore())
     audio_import_service = AudioImportService(AudioImportStore())
     data_maintenance_service = DataMaintenanceService(

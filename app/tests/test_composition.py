@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import wave
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,34 @@ def test_build_api_wires_every_use_case(wired_api) -> None:  # noqa: ANN001
     assert api.list_editor_projects() == []
     assert api.get_theme_media_data("") == ""
     assert api.import_audio_data("song.mid", "QUJD") is None
+    # 播放器直通：缺失音频时返回可读错误，而不是抛异常
+    assert api.get_work_stream("missing")["ok"] is False
+    assert api.get_music_stream("")["ok"] is False
+    assert api.import_editor_project_to_works("missing")["ok"] is False
+
+
+def test_editor_render_can_be_imported_into_works(wired_api, tmp_path: Path) -> None:  # noqa: ANN001
+    """编辑器成品应能渲染、归档并出现在作品列表中。"""
+    source = tmp_path / "editor-source.wav"
+    with wave.open(str(source), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(8000)
+        handle.writeframes(b"\x00\x00" * 8000)
+
+    project = wired_api.create_editor_project_from_audio(str(source), "编辑器测试")
+    assert project is not None
+
+    result = wired_api.import_editor_project_to_works(project["id"], "wav")
+    assert result["ok"] is True, result
+    work = result["work"]
+    assert work["status"] == "done"
+    assert work["workflow"] == "audio_editor"
+    assert work["model"] == "音频编辑器"
+    output = Path(work["output_path"])
+    assert output.is_file()
+    assert output.read_bytes() == source.read_bytes() or output.stat().st_size > 44
+    assert any(item["id"] == work["id"] for item in wired_api.list_works())
 
 
 def test_composition_is_the_only_assembler() -> None:

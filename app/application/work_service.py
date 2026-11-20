@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import threading
 import time
 from datetime import datetime
@@ -155,6 +156,61 @@ class WorkService:
                     record[key] = str(candidate)
             self._repo.add(record)
             return self._view(record)
+
+    def import_rendered_audio(
+        self,
+        source: Path | str,
+        *,
+        title: str = "",
+        model_label: str = "音频编辑器",
+        workflow: str = "audio_editor",
+        duration: float = 0.0,
+    ) -> dict[str, Any] | None:
+        """把编辑器渲染好的成品复制进作品库，登记为一条已完成作品。
+
+        与 AI 任务不同，这里没有推理队列：渲染文件已经存在，只需要归档到
+        ``WORKS_DIR/<id>``，之后就能走统一的播放器、编辑器、导出和删除路径。
+        """
+        try:
+            src = Path(source).expanduser().resolve()
+        except (OSError, ValueError):
+            return None
+        if not src.is_file() or src.suffix.lower() not in config.AUDIO_EXTS:
+            return None
+
+        work_id = new_id("wrk_")
+        work_dir = self._files.work_dir(work_id)
+        destination = work_dir / f"output{src.suffix.lower()}"
+        try:
+            work_dir.mkdir(parents=True, exist_ok=False)
+            shutil.copyfile(src, destination)
+        except OSError:
+            self._files.remove_tree(work_dir)
+            return None
+
+        record = {
+            "id": work_id,
+            "title": str(title or "").strip() or "音频编辑器成品",
+            "model": str(model_label or "").strip() or "音频编辑器",
+            "model_id": "",
+            "status": JobStatus.DONE.value,
+            "progress": 100,
+            "duration": self._format_duration(duration) if duration > 0 else "—",
+            "format": destination.suffix.lstrip(".").upper() or "WAV",
+            "size": file_size_label(destination),
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "source_path": None,
+            "output_path": str(destination),
+            "error": None,
+            "params": {},
+            "steps": [{"key": "editor", "label": "音频编辑器", "status": JobStatus.DONE.value}],
+            "workflow": str(workflow or "audio_editor"),
+            "mode": "single",
+            "segments": [],
+            "log_path": None,
+        }
+        self._repo.add(record)
+        return self._view(record)
 
     @staticmethod
     def _duration_seconds(value: Any) -> float:

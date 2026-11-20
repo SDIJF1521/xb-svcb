@@ -189,11 +189,13 @@
         <div class="work-row" v-for="w in recentWorks" :key="w.id">
           <button
             class="work-play"
+            :class="{ playing: player.isPlayingKey(`work:${w.id}`) }"
             :disabled="w.status !== 'done'"
             :title="w.status === 'done' ? '试听' : '尚未完成'"
-            @click="openPlayer(w.id)"
+            @click="onPlay(w)"
           >
-            <el-icon><VideoPlay /></el-icon>
+            <el-icon v-if="player.isPlayingKey(`work:${w.id}`)"><VideoPause /></el-icon>
+            <el-icon v-else><VideoPlay /></el-icon>
           </button>
           <div class="work-cover" :style="{ '--wc': w.color }">
             <el-icon><Headset /></el-icon>
@@ -232,7 +234,10 @@
                   <el-dropdown-item command="rename">
                     <el-icon><EditPen /></el-icon> 重命名
                   </el-dropdown-item>
-                  <el-dropdown-item v-if="w.workflow !== 'realtime_cover'" command="retry">
+                  <el-dropdown-item
+                    v-if="w.workflow !== 'realtime_cover' && w.workflow !== 'audio_editor'"
+                    command="retry"
+                  >
                     <el-icon><RefreshRight /></el-icon> 重新生成
                   </el-dropdown-item>
                   <el-dropdown-item v-if="w.status === 'failed'" command="log">
@@ -265,6 +270,7 @@ import {
   FolderAdd,
   Right,
   VideoPlay,
+  VideoPause,
   Headset,
   Download,
   MoreFilled,
@@ -287,8 +293,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useSystemStore } from '@/stores/system'
 import { useModelsStore } from '@/stores/models'
 import { useWorksStore } from '@/stores/works'
+import { usePlayerStore } from '@/stores/player'
+import { workToTrack } from '@/player/tracks'
 import { api } from '@/api'
-import type { DataMigrationProgress, DataStorageStatus, JobStatus, WorkAudioExportFormat } from '@/api'
+import type { DataMigrationProgress, DataStorageStatus, JobStatus, WorkAudioExportFormat, WorkDTO } from '@/api'
 import { setPendingAudio } from '@/utils/pendingAudio'
 import { importDroppedAudio } from '@/utils/audioImport'
 import { translateUiText } from '@/i18n'
@@ -299,6 +307,7 @@ const router = useRouter()
 const systemStore = useSystemStore()
 const modelsStore = useModelsStore()
 const worksStore = useWorksStore()
+const player = usePlayerStore()
 
 const { tools, ready: systemReady, loaded: systemLoaded } = storeToRefs(systemStore)
 const { models } = storeToRefs(modelsStore)
@@ -350,8 +359,15 @@ const toolColor = (key: string): string => toolColorMap[key] ?? '#00f0ff'
 const statusText = (s: JobStatus) =>
   ({ done: '已完成', running: '生成中', queue: '排队中', failed: '失败' })[s]
 
-// 进入独立音乐播放页，播放页会负责音频、歌词和 MV 画面。
-const openPlayer = (id: string) => router.push({ path: '/player', query: { work: id } })
+// 最近作品的行内播放只试听这一首，不建立队列、不跳转页面。
+function onPlay(w: WorkDTO) {
+  const key = `work:${w.id}`
+  if (player.isCurrent(key)) {
+    void player.togglePlay()
+    return
+  }
+  void player.playAudition(workToTrack(w))
+}
 
 const onDownload = async (id: string, format: WorkAudioExportFormat) => {
   const dest = await api.exportWork(id, format)
@@ -611,6 +627,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopMigrationPoll()
+  if (player.isAudition) player.stopAudition()
 })
 </script>
 
@@ -1155,6 +1172,11 @@ onUnmounted(() => {
   transition: all 0.2s;
 }
 .work-play:hover:not(:disabled) { background: var(--xb-primary); color: var(--xb-on-primary); }
+.work-play.playing {
+  background: linear-gradient(135deg, var(--xb-primary), var(--xb-primary-2));
+  color: var(--xb-on-primary);
+  box-shadow: 0 0 18px rgba(var(--xb-primary-rgb), 0.4);
+}
 .work-play:disabled { opacity: 0.35; cursor: not-allowed; }
 .work-cover {
   width: 42px; height: 42px;

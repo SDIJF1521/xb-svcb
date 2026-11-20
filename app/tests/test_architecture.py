@@ -214,6 +214,7 @@ PORT_ADAPTERS = [
     ("infrastructure.engine", "EngineRegistry", "EngineRegistryPort"),
     ("infrastructure.theme_media", "ThemeMediaStore", "ThemeMediaStorePort"),
     ("infrastructure.audio_import", "AudioImportStore", "AudioImportStorePort"),
+    ("infrastructure.audio_streamer", "LocalAudioStreamer", "AudioStreamerPort"),
     ("infrastructure.work_files", "WorkFiles", "WorkFilesPort"),
     ("infrastructure.editor_project_store", "EditorProjectStore", "EditorProjectStorePort"),
 ]

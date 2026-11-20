@@ -251,6 +251,18 @@ setup_env.bat
 
 インストーラーパッケージには FFmpeg が含まれます。ソースから実行する場合は、システムの `PATH` に `ffmpeg` を追加するか、完全な Windows ビルドを `assets/tools/ffmpeg` に配置してください。
 
+### 非 ASCII パスで Failed to resolve Python.Runtime.Loader.Initialize が出る
+
+Windows の非 ASCII 文字を含むパスにおける pythonnet / clr-loader の既知の互換問題です（pythonnet #2141、clr-loader #59）。.NET Framework が `Python.Runtime.dll` をネットワーク上の場所と誤判定することがあります。
+
+起動時に pythonnet ランタイムと pywebview の WebView2 アセンブリを次の場所へミラーし、ASCII のみのパスから読み込みます。
+
+```text
+%LOCALAPPDATA%\XB-SVCB\clr-mirror
+```
+
+これによりプロジェクトはローカライズされたディレクトリのまま使用できます。起動できない場合は、このディレクトリへの書き込み権限を確認するか、プロジェクトを ASCII のみのパスへ移動してください。
+
 ### フロントエンドを変更しても古いページが表示される
 
 `web/dist` を再ビルドし、アプリケーションを完全に終了してから起動してください。開発中は Vite に接続する `--dev` を推奨します。

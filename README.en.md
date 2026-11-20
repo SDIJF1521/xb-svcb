@@ -57,10 +57,12 @@ The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UV
 - Protect notes outside a model's range by retrying affected regions at a lower pitch and restoring the original pitch afterward; the confirmed high-note regions then get their upper band rebuilt by a Snake-HiFiGAN / NSF-HiFiGAN high-note vocoder, which replaces the PSOLA air and missing harmonics.
 - Split songs from lyrics or silence detection, assign models on a visual timeline, and create multi-singer or ensemble covers.
 - Edit tracks, cut and fade clips, route channels, apply effects, and export WAV / MP3 / FLAC with Audio Editor Lite; its built-in MIDI sub-editor (piano roll) edits clip pitch note by note, and preview always plays the clip audio instead of a MIDI synth.
+- Save an Audio Editor Lite render directly to My Works, where it shares the same player, download, and re-editing paths as AI covers.
 - Import TXT / LRC lyrics and use role-based solo, duet, and harmony timeline templates.
 - Convert player audio in real time through WASAPI loopback or VB-CABLE while preserving the accompaniment.
 - Search, upload, and download models through ModelScope with background transfers, resume support, and manifest verification.
 - Search, preview, and download songs and lyrics from NetEase Cloud Music, QQ Music, and Kuwo Music.
+- Covers support queued audition: clicking a track plays only that track, while queue playback / continuous audition must be chosen explicitly. Queues support in-order, repeat-all, repeat-one, and shuffle play, with lossless direct output and an equalizer; the audition page shows lyrics and MV.
 - Select NVIDIA CUDA, Windows AMD ROCm 10, DirectML, or CPU execution.
 - Enable an optional FastAPI service for task creation, progress tracking, model management, and result downloads.
 - Extend the application with custom pages, Python plugin workers, and a C++ JUCE VST3 host.

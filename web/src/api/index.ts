@@ -25,6 +25,7 @@ import type {
   MusicSongResult,
   MusicDownloadResult,
   MusicPreviewResult,
+  AudioStreamInfo,
   DownloadedMusic,
   MusicSource,
   LyricsResult,
@@ -44,6 +45,7 @@ import type {
   EditorProject,
   EditorProjectSummary,
   EditorProjectTransferResult,
+  EditorWorkImportResult,
   EditorAudioPasteResult,
   EditorWaveform,
   EditorAudioCopyResult,
@@ -445,6 +447,20 @@ export const api = {
   getWorkAudio: (id: string) =>
     invoke<string>('get_work_audio', [id], () => mock.getWorkAudio(id)),
 
+  /** 作品直通播放地址（本地 HTTP + Range，保留无损原始音频）。 */
+  getWorkStream: (id: string, kind: 'output' | 'instrumental' | 'vocals' = 'output') =>
+    invoke<AudioStreamInfo>('get_work_stream', [id, kind], () => mock.getWorkStream(id, kind)),
+
+  /** 已下载歌曲的直通播放地址。 */
+  getMusicStream: (path: string) =>
+    invoke<AudioStreamInfo>('get_music_stream', [path], () => mock.getMusicStream(path)),
+
+  /** 整首在线歌曲的播放地址（后端代理，保留原始音质）。 */
+  streamMusicOnline: (msg: string, n: number, source?: string, songId?: string) =>
+    invoke<AudioStreamInfo>('stream_music_online', [msg, n, source, songId], () =>
+      mock.streamMusicOnline(msg, n, source, songId),
+    ),
+
   getStemAudio: (id: string, kind: 'output' | 'instrumental' | 'vocals') =>
     invoke<string>('get_stem_audio', [id, kind], () => mock.getStemAudio(id, kind)),
 
@@ -762,6 +778,12 @@ export const api = {
   renderEditorProject: (projectId: string, fmt = 'wav') =>
     invoke<string>('render_editor_project', [projectId, fmt], () =>
       mock.renderEditorProject(projectId, fmt),
+    ),
+
+  /** 把编辑器成品渲染并归档到「我的作品」。 */
+  importEditorProjectToWorks: (projectId: string, fmt = 'wav') =>
+    invoke<EditorWorkImportResult>('import_editor_project_to_works', [projectId, fmt], () =>
+      mock.importEditorProjectToWorks(projectId, fmt),
     ),
 
   exportEditorProject: (projectId: string, fmt = 'wav') =>

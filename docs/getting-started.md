@@ -251,6 +251,18 @@ setup_env.bat
 
 安装包自带 FFmpeg。源码运行需要系统 `PATH` 中存在 `ffmpeg`，或把完整 Windows 构建放到 `assets/tools/ffmpeg`。
 
+### 中文路径启动时报 Failed to resolve Python.Runtime.Loader.Initialize
+
+这是 pythonnet / clr-loader 在 Windows 非 ASCII 路径下的已知兼容问题（pythonnet #2141、clr-loader #59）：.NET Framework 会把中文目录下的 `Python.Runtime.dll` 误判为网络位置。
+
+应用启动时会自动把 pythonnet 运行时和 pywebview 的 WebView2 程序集镜像到：
+
+```text
+%LOCALAPPDATA%\XB-SVCB\clr-mirror
+```
+
+再从纯 ASCII 路径加载，因此项目可以继续放在中文目录。若仍失败，请检查该目录的写入权限，或把项目放到纯英文路径后重新运行。
+
 ### 修改前端后仍显示旧页面
 
 重新构建 `web/dist` 并完全退出应用后启动。开发期间优先使用 `--dev` 连接 Vite。

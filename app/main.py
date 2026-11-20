@@ -17,6 +17,12 @@ from __future__ import annotations
 import os
 import sys
 
+from infrastructure.win_clr_path import install as install_clr_path_workaround
+
+# Windows 中文/非 ASCII 安装路径会让 .NET Framework 把 pythonnet 程序集误判为
+# 网络位置；必须在导入 webview 后端之前安装兼容补丁。
+install_clr_path_workaround()
+
 import webview
 
 import config

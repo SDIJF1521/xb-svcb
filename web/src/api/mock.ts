@@ -21,6 +21,7 @@ import type {
   MusicSongResult,
   MusicDownloadResult,
   MusicPreviewResult,
+  AudioStreamInfo,
   DownloadedMusic,
   MusicSource,
   LyricsResult,
@@ -66,6 +67,7 @@ import type {
   EditorProject,
   EditorProjectSummary,
   EditorProjectTransferResult,
+  EditorWorkImportResult,
   EditorTrack,
   RealtimeCoverPayload,
   RealtimeCoverStatus,
@@ -103,6 +105,43 @@ import type {
 const now = () => new Date().toISOString()
 const rid = (p: string) => p + Math.random().toString(36).slice(2, 12)
 const fileName = (p: string) => p.split(/[/\\]/).pop() || p
+
+/**
+ * 浏览器开发环境没有真实作品音频：现场生成一段 8 秒静音 WAV（4 kHz / 8 bit），
+ * 让播放器状态机、队列与切歌逻辑可以在 npm run dev 里完整走一遍。
+ */
+function mockSilentWav(seconds = 8): string {
+  const rate = 4000
+  const samples = Math.max(1, Math.floor(rate * seconds))
+  const buffer = new ArrayBuffer(44 + samples)
+  const view = new DataView(buffer)
+  const writeText = (offset: number, value: string) => {
+    for (let i = 0; i < value.length; i += 1) view.setUint8(offset + i, value.charCodeAt(i))
+  }
+  writeText(0, 'RIFF')
+  view.setUint32(4, 36 + samples, true)
+  writeText(8, 'WAVE')
+  writeText(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, rate, true)
+  view.setUint32(28, rate, true)
+  view.setUint16(32, 1, true)
+  view.setUint16(34, 8, true)
+  writeText(36, 'data')
+  view.setUint32(40, samples, true)
+  new Uint8Array(buffer, 44).fill(128)
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  }
+  return `data:audio/wav;base64,${btoa(binary)}`
+}
+
+const MOCK_SILENT_AUDIO = mockSilentWav()
+
 const editorFormat = (fmt = 'wav') => {
   const value = fmt.trim().toLowerCase().replace(/^\./, '')
   return ['wav', 'mp3', 'flac'].includes(value) ? value : 'wav'
@@ -1417,6 +1456,50 @@ export const mock = {
     console.info('[mock] getStemAudio', id, kind)
     return ''
   },
+  getWorkStream(id: string, kind: string): AudioStreamInfo {
+    console.info('[mock] getWorkStream', id, kind)
+    // 浏览器开发环境没有真实作品音频：返回一小段静音 WAV，让播放器状态机可调试。
+    return {
+      ok: true,
+      url: MOCK_SILENT_AUDIO,
+      format: 'wav',
+      sample_rate: 44100,
+      channels: 2,
+      bit_depth: 16,
+      duration: 1,
+      lossless: true,
+    }
+  },
+  getMusicStream(path: string): AudioStreamInfo {
+    console.info('[mock] getMusicStream', path)
+    return {
+      ok: true,
+      url: MOCK_SILENT_AUDIO,
+      format: 'wav',
+      sample_rate: 44100,
+      channels: 2,
+      bit_depth: 16,
+      duration: 1,
+      lossless: true,
+    }
+  },
+  streamMusicOnline(msg: string, n: number, _source?: string, _songId?: string): AudioStreamInfo {
+    void msg
+    void n
+    void _source
+    void _songId
+    return {
+      ok: true,
+      url: MOCK_SILENT_AUDIO,
+      format: 'wav',
+      quality: '模拟音质',
+      sample_rate: 44100,
+      channels: 2,
+      bit_depth: 16,
+      duration: 1,
+      lossless: false,
+    }
+  },
   exportWork(id: string, fmt: WorkAudioExportFormat = 'wav'): string {
     console.info('[mock] exportWork', id, fmt)
     return `C:/exports/${id}.${fmt}`
@@ -1741,7 +1824,7 @@ export const mock = {
       mime: asset.mime,
       data: isImage
         ? 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="100%" height="100%" fill="%23202a3a"/><text x="50%" y="50%" fill="%23ffffff" text-anchor="middle" font-size="28">XB-SVCB Preview</text></svg>'
-        : 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=',
+        : MOCK_SILENT_AUDIO,
     }
   },
 
@@ -2316,6 +2399,29 @@ export const mock = {
   },
   renderEditorProject(projectId: string, fmt = 'wav'): string {
     return `C:/exports/${projectId}.${editorFormat(fmt)}`
+  },
+  importEditorProjectToWorks(projectId: string, fmt = 'wav'): EditorWorkImportResult {
+    const project = this.getEditorProject(projectId)
+    if (!project) return { ok: false, error: '编辑工程不存在' }
+    const work: WorkDTO = {
+      id: rid('wrk_'),
+      title: project.title || '音频编辑器成品',
+      model: '音频编辑器',
+      model_id: '',
+      status: 'done',
+      progress: 100,
+      duration: '00:00',
+      format: editorFormat(fmt).toUpperCase(),
+      size: '—',
+      created_at: now(),
+      time: '刚刚',
+      steps: [{ key: 'editor', label: '音频编辑器', status: 'done' }],
+      workflow: 'audio_editor',
+      mode: 'single',
+      output: MOCK_SILENT_AUDIO,
+    }
+    mockWorks.unshift(work)
+    return { ok: true, work }
   },
   exportEditorProject(projectId: string, fmt = 'wav'): string {
     return `C:/exports/${projectId}.${editorFormat(fmt)}`

@@ -251,6 +251,18 @@ setup_env.bat
 
 Installer packages include FFmpeg. Running from source requires `ffmpeg` on the system `PATH`, or a complete Windows build placed in `assets/tools/ffmpeg`.
 
+### Startup fails with Failed to resolve Python.Runtime.Loader.Initialize on a non-ASCII path
+
+This is a known pythonnet / clr-loader compatibility issue on Windows paths that contain non-ASCII characters (pythonnet #2141, clr-loader #59): .NET Framework can treat `Python.Runtime.dll` under such a directory as a network location.
+
+At startup the application mirrors the pythonnet runtime and pywebview's WebView2 assemblies to:
+
+```text
+%LOCALAPPDATA%\XB-SVCB\clr-mirror
+```
+
+and loads them from that ASCII-only path, so the project can stay in a localized directory. If startup still fails, check write access to that directory or move the project to an ASCII-only path.
+
 ### Frontend Changes Still Show the Old Page
 
 Rebuild `web/dist`, completely exit the application, and start it again. During development, prefer `--dev` with Vite.

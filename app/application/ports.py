@@ -26,6 +26,7 @@ from domain.vocal_enhancement import VocalEnhancementControls
 __all__ = [
     "AudioEnginePort",
     "AudioImportStorePort",
+    "AudioStreamerPort",
     "DataTransferPort",
     "EditorProjectStorePort",
     "WorkFilesPort",
@@ -110,6 +111,8 @@ class FfmpegGateway(ToolAdapter, Protocol):
     """
 
     def probe_duration(self, src: Path) -> float | None: ...
+
+    def probe_audio(self, src: Path) -> dict[str, Any]: ...
 
     def detect_silences(
         self,
@@ -408,6 +411,23 @@ class ThemeMediaStorePort(Protocol):
     def data_uri(self, media_path: str) -> str: ...
 
     def delete(self, media_path: str) -> bool: ...
+
+
+@runtime_checkable
+class AudioStreamerPort(Protocol):
+    """把音频文件发布为可由界面播放的地址（本地 HTTP，支持 Range）。
+
+    播放器需要逐段读取音频、拖动进度，因此不能把整首音频编码成 data URI；
+    适配器负责提供一个本机回环地址，并自行处理鉴权与并发。
+    """
+
+    def publish_file(self, path: Path, *, content_type: str = "") -> str: ...
+
+    def publish_remote(
+        self, urls: list[str], headers: dict[str, str], *, content_type: str = ""
+    ) -> str: ...
+
+    def stop(self) -> None: ...
 
 
 @runtime_checkable
