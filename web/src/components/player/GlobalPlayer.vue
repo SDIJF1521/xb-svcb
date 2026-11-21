@@ -32,7 +32,7 @@
         class="gp-play"
         type="button"
         :title="player.playing ? '暂停' : '播放'"
-        :disabled="!player.hasQueue"
+        :disabled="!hasPlayable"
         @click="player.togglePlay()"
       >
         <el-icon v-if="player.resolvingKey" class="spin"><Loading /></el-icon>
@@ -142,14 +142,18 @@ const MINI_PLAYER_ROUTES = new Set(['Works', 'Music'])
 const canShowMiniPlayer = computed(() => MINI_PLAYER_ROUTES.has(String(route.name)))
 /** 全屏播放页不显示迷你条，但仍允许媒体快捷键继续工作。 */
 const canControlPlayer = computed(() => canShowMiniPlayer.value || route.name === 'Player')
+/**
+ * 迷你播放条同时服务于「队列播放」和「单曲试听」：两者都只在本次会话真正
+ * 开始过播放后出现，离开播放页也不会消失，用户可以继续暂停 / 拖动进度。
+ */
 const visible = computed(
   () =>
     route.name !== 'Player' &&
     canShowMiniPlayer.value &&
-    player.hasQueue &&
     player.sessionStarted &&
-    !player.isAudition,
+    (player.hasQueue || player.isAudition),
 )
+const hasPlayable = computed(() => !!player.currentTrack)
 const track = computed(() => player.currentTrack)
 const seekDraft = ref<number | null>(null)
 const seekDisplay = computed(() => seekDraft.value ?? player.currentTime)
@@ -166,8 +170,8 @@ watch(
   () => {
     if (route.name !== 'Player' && player.queueOpen) player.toggleQueue(false)
     if (canControlPlayer.value) return
-    // 工作区有自己的试听/播放，离开浏览页面时暂停全局背景音乐，避免声音来源混淆。
-    if (player.playing && !player.isAudition) player.pause()
+    // 工作区有自己的试听/播放，离开浏览页面时暂停全局播放（含单曲试听），避免声音来源混淆。
+    if (player.playing) player.pause()
   },
 )
 
@@ -224,7 +228,7 @@ function onKeydown(event: KeyboardEvent) {
   }
   switch (event.code) {
     case 'Space':
-      if (!player.hasQueue) return
+      if (!hasPlayable.value) return
       event.preventDefault()
       void player.togglePlay()
       break

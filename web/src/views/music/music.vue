@@ -203,7 +203,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Search,
@@ -503,10 +503,6 @@ onMounted(async () => {
   if (srcList.length) sources.value = srcList
   if (srcList.some((s) => s.id === curSource)) source.value = curSource
   resultSource.value = source.value
-})
-
-onUnmounted(() => {
-  if (player.isAudition) player.stopAudition()
 })
 </script>
 

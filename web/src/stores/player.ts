@@ -4,6 +4,9 @@
  * 一个 Pinia store 持有唯一一个 <audio> 元素与队列，因此切页不会中断播放，
  * 播放页、迷你播放条和队列面板共享同一份状态。
  *
+ * 任何一次播放（含单曲播放 playAudition）都会把歌曲放进播放队列并设为当前项，
+ * 所以播放始终由队列管理（上一首 / 下一首、播放模式、持久化），且切页不中断。
+ *
  * 播放顺序：order / repeat / single / shuffle，规则在 ``@/player/queue``。
  * 音质：后端把作品与在线歌曲发布为支持 Range 的本机音频流，前端不再把
  * 整首 WAV 转成 MP3 data URI；默认直通（不经过任何音效），仅当用户主动
@@ -119,6 +122,13 @@ function isCorsSafeUrl(url: string): boolean {
 
 function mediaSessionAvailable(): boolean {
   return typeof navigator !== 'undefined' && 'mediaSession' in navigator
+}
+
+/** 把播放失败转成可读提示；自动播放被浏览器拦截时给出可操作的文案。 */
+function playbackErrorMessage(err: unknown): string {
+  const name = err instanceof Error ? err.name : ''
+  if (name === 'NotAllowedError') return '系统阻止了自动播放，请点击播放按钮开始'
+  return err instanceof Error ? err.message : String(err)
 }
 
 export const usePlayerStore = defineStore('player', () => {
@@ -270,7 +280,8 @@ export const usePlayerStore = defineStore('player', () => {
 
   function handlePlay() {
     playing.value = true
-    if (!auditionTrack.value) sessionStarted.value = true
+    // 试听同样属于「本次会话真的开始过播放」：离开播放页后播放条要继续可控制。
+    sessionStarted.value = true
     buffering.value = false
     setMediaPlaybackState('playing')
   }
@@ -632,7 +643,7 @@ export const usePlayerStore = defineStore('player', () => {
       if (token !== loadToken) return false
       playing.value = false
       buffering.value = false
-      const message = err instanceof Error ? err.message : String(err)
+      const message = playbackErrorMessage(err)
       error.value = message
       lastError.value = message
       return false
@@ -671,10 +682,11 @@ export const usePlayerStore = defineStore('player', () => {
   }
 
   /**
-   * 单曲试听：只播放传入的一首，不改动音乐队列，不自动切歌。
+   * 单曲播放：把这一首歌加入播放队列并设为当前曲目，不清空已有队列。
    *
-   * 作品库、在线曲库的播放按钮使用这个入口；只有显式的「队列播放 / 连续试听」
-   * 才会调用 playQueue / playWorks。
+   * 作品库、在线曲库的播放按钮使用这个入口；无论播放一首还是多首，正在播放的
+   * 歌曲始终在播放队列里，由队列统一管理（上一首 / 下一首、播放模式、持久化）。
+   * 只有显式的「队列播放 / 连续试听」才会调用 playQueue / playWorks 重建整个队列。
    */
   async function playAudition(
     track: PlayerTrack,
@@ -710,6 +722,8 @@ export const usePlayerStore = defineStore('player', () => {
       if (info) mergeAudioInfo(copy, info)
       if (copy.duration) duration.value = copy.duration
       applySource(copy, url)
+      // 音频地址已就绪后再并入队列：队列项带着已解析的 url，播放不重新加载。
+      if (adoptAuditionTrack()) refreshShuffle()
       if (autoplay) await (audioEl as HTMLAudioElement).play()
       else buffering.value = false
       updateMediaSession(copy)
@@ -720,7 +734,7 @@ export const usePlayerStore = defineStore('player', () => {
       if (token !== loadToken) return false
       playing.value = false
       buffering.value = false
-      const message = err instanceof Error ? err.message : String(err)
+      const message = playbackErrorMessage(err)
       error.value = message
       lastError.value = message
       return false
@@ -729,7 +743,7 @@ export const usePlayerStore = defineStore('player', () => {
     }
   }
 
-  /** 结束单曲试听，回到队列当前曲目（不自动续播）。 */
+  /** 结束单曲试听状态，回到队列当前曲目（不自动续播）。 */
   function stopAudition() {
     if (!auditionTrack.value) return
     loadToken += 1
@@ -920,12 +934,53 @@ export const usePlayerStore = defineStore('player', () => {
   }
 
   // ---- 队列编辑 ----
+  /**
+   * 把「单曲试听」并入播放队列（不重新加载音频）。
+   *
+   * 试听曲目直接成为队列里的当前项：<audio> 的 src、播放进度和播放状态都不动，
+   * 因此正在播放的歌曲不会被打断；之后它和队列里的其它歌曲一样由队列管理
+   * （上一首 / 下一首、播放模式、重排、移除都生效）。
+   */
+  function adoptAuditionTrack(): PlayerTrack | null {
+    const audition = auditionTrack.value
+    if (!audition) return null
+    auditionTrack.value = null
+    const existing = queue.value.find((track) => track.key === audition.key)
+    if (existing) {
+      // 队列里已有这首歌：用刚解析到的地址 / 音质信息刷新，避免界面显示旧数据。
+      if (audition.url) existing.url = audition.url
+      if (audition.audioInfo) existing.audioInfo = audition.audioInfo
+      if (!existing.duration && audition.duration) existing.duration = audition.duration
+      currentKey.value = existing.key
+      sessionStarted.value = true
+      return existing
+    }
+    // 保留已解析的 url / audioInfo / duration，避免重新解析地址或重置进度。
+    const adopted: PlayerTrack = { ...audition }
+    queue.value.push(adopted)
+    currentKey.value = adopted.key
+    sessionStarted.value = true
+    return adopted
+  }
+
   function addToQueue(tracks: PlayerTrack[], options: { next?: boolean } = {}): number {
+    // 正在试听时先把试听曲目并入队列：播放中的歌曲和新加入的歌曲都进入队列，
+    // 并且不重新加载音频，保证正在播放的声音不中断。
+    const adopted = adoptAuditionTrack()
     const existing = new Set(queue.value.map((track) => track.key))
     const additions = tracks.filter((track) => !existing.has(track.key)).map((track) => ({ ...track }))
-    if (!additions.length) return 0
-    if (options.next && currentIndex.value >= 0) {
-      queue.value.splice(currentIndex.value + 1, 0, ...additions)
+    if (!additions.length) {
+      if (adopted) {
+        refreshShuffle()
+        persistSoon()
+      }
+      return 0
+    }
+    const anchor = adopted
+      ? queue.value.findIndex((track) => track.key === adopted.key)
+      : currentIndex.value
+    if (options.next && anchor >= 0) {
+      queue.value.splice(anchor + 1, 0, ...additions)
     } else {
       queue.value.push(...additions)
     }
@@ -1077,11 +1132,28 @@ export const usePlayerStore = defineStore('player', () => {
   }
 
   function toggleQueue(open = !queueOpen.value) {
+    if (open) {
+      // 打开队列时把单曲试听并入队列，让面板里的「正在播放」与真实播放一致。
+      if (adoptAuditionTrack()) {
+        refreshShuffle()
+        persistSoon()
+      }
+    }
     queueOpen.value = open
   }
 
   function isCurrent(key: string): boolean {
     return activeKey.value === key
+  }
+
+  /**
+   * 当前曲目的音频地址是否已经加载。
+   *
+   * 用于进入播放页时决定是否自动开始：已加载但暂停的曲目保持暂停（不打断用户），
+   * 只是被选为当前项、还没加载过的曲目则自动开始播放。
+   */
+  function isCurrentLoaded(): boolean {
+    return !!loadedKey && loadedKey === activeKey.value
   }
 
   function isPlayingKey(key: string): boolean {
@@ -1165,6 +1237,7 @@ export const usePlayerStore = defineStore('player', () => {
     // 界面
     toggleQueue,
     isCurrent,
+    isCurrentLoaded,
     isPlayingKey,
     clearError,
   }

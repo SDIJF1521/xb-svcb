@@ -627,7 +627,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopMigrationPoll()
-  if (player.isAudition) player.stopAudition()
 })
 </script>
 

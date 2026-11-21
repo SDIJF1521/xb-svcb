@@ -16,7 +16,7 @@
         </div>
         <div class="head-actions">
           <button
-            v-if="showsQueueControls"
+            v-if="player.queue.length"
             class="text-btn queue-entry"
             title="打开播放队列"
             @click="player.toggleQueue()"
@@ -206,7 +206,7 @@
           <button
             class="transport-play"
             :title="player.playing ? '暂停' : '播放'"
-            :disabled="!player.hasQueue"
+            :disabled="!hasPlayable"
             @click="player.togglePlay()"
           >
             <el-icon v-if="player.resolvingKey" class="spin"><Loading /></el-icon>
@@ -269,7 +269,7 @@
               @input="onVolume"
             />
           </div>
-          <button v-if="showsQueueControls" class="queue-btn" title="播放队列" @click="player.toggleQueue()">
+          <button v-if="player.queue.length" class="queue-btn" title="播放队列" @click="player.toggleQueue()">
             <el-icon><List /></el-icon>
             <span>{{ player.queue.length }}</span>
           </button>
@@ -290,7 +290,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft,
@@ -367,6 +367,8 @@ const workId = computed(() => {
 const work = computed(() => worksStore.works.find((item) => item.id === workId.value) || null)
 const canDownload = computed(() => isWork.value && work.value?.status === 'done')
 const showsQueueControls = computed(() => player.queue.length > 1 && !player.isAudition)
+/** 只要有当前曲目（含单曲试听）就应该能播放 / 暂停，不依赖队列是否非空。 */
+const hasPlayable = computed(() => !!player.currentTrack)
 const coverColor = computed(() => track.value?.color || pickColor(workId.value || 'player'))
 const duration = computed(() => player.duration || track.value?.duration || 0)
 const seekDisplay = computed(() => seekDraft.value ?? player.currentTime)
@@ -765,22 +767,25 @@ onMounted(async () => {
       if (index >= 0) {
         const requestedTrack = tracks[index] as (typeof tracks)[number]
         const queueRequested = String(route.query.queue || '') === '1'
-        if (queueRequested) {
-          // 队列已经由「队列播放」按钮按当前筛选结果建好；只有直接带
-          // queue=1 打开页面、队列里又没有该作品时才回退到全部作品。
-          const hasRequested = player.queue.some((item) => item.key === requestedTrack.key)
-          if (!hasRequested) {
-            await player.playQueue(tracks, index, { autoplay: player.playing })
-          } else if (player.currentTrack?.key !== requestedTrack.key) {
-            const queueIndex = player.queue.findIndex((item) => item.key === requestedTrack.key)
-            if (queueIndex >= 0) await player.playAt(queueIndex, { autoplay: player.playing })
+        // 这首作品已经是当前曲目时：已加载就保持原状（可能是用户主动暂停），
+        // 只是被选中但还没加载过则自动开始播放；换一首作品也直接开始播放。
+        if (player.currentTrack?.key !== requestedTrack.key) {
+          if (queueRequested) {
+            // 队列已经由「队列播放」按钮按当前筛选结果建好；只有直接带
+            // queue=1 打开页面、队列里又没有该作品时才回退到全部作品。
+            const hasRequested = player.queue.some((item) => item.key === requestedTrack.key)
+            if (!hasRequested) {
+              await player.playQueue(tracks, index, { autoplay: true })
+            } else {
+              const queueIndex = player.queue.findIndex((item) => item.key === requestedTrack.key)
+              if (queueIndex >= 0) await player.playAt(queueIndex, { autoplay: true })
+            }
+          } else {
+            // 单曲播放也进入播放队列，不把其余作品加入队列，也不破坏已有的音乐队列。
+            await player.playAudition(requestedTrack, { autoplay: true })
           }
-        } else if (
-          !player.isAudition ||
-          player.currentTrack?.key !== requestedTrack.key
-        ) {
-          // 默认只试听当前作品，不把其余作品加入队列，也不破坏已有的音乐队列。
-          await player.playAudition(requestedTrack, { autoplay: player.playing })
+        } else if (!player.isCurrentLoaded()) {
+          await player.playAudition(requestedTrack, { autoplay: true })
         }
       }
     }
@@ -788,11 +793,6 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-})
-
-onUnmounted(() => {
-  // 单曲试听是临时行为：离开试听页就停止，不留下后台播放。
-  if (player.isAudition) player.stopAudition()
 })
 </script>
 

@@ -236,8 +236,8 @@ function onPlay(w: WorkDTO) {
 }
 
 function openPlayer(w: WorkDTO) {
-  // 打开独立的作品试听页；这里会结束行内试听，页面自己只加载这一首。
-  player.stopAudition()
+  // 打开独立的作品试听页；已在播放的歌保持原状（播放进度与队列都不重置），
+  // 播放页只负责展示当前播放的作品。
   void router.push({ path: '/player', query: { work: w.id } })
 }
 
@@ -300,7 +300,6 @@ onMounted(() => {
 })
 onUnmounted(() => {
   if (timer) clearInterval(timer)
-  if (player.isAudition) player.stopAudition()
 })
 </script>
 

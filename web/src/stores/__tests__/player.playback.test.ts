@@ -107,31 +107,88 @@ describe('global player playback', () => {
     expect(player.currentQuality).toBe('HiFi 无损')
   })
 
-  it('auditions a single track without touching the music queue or auto-advancing', async () => {
+  it('keeps a single played song in the queue and manages it there', async () => {
     const player = usePlayerStore()
     await player.playQueue([track('a'), track('b')], 0)
-    expect(player.queue.map((item) => item.id)).toEqual(['a', 'b'])
 
     await player.playAudition(track('c'))
-    expect(player.isAudition).toBe(true)
+    // 单曲播放不清空已有队列，但正在播放的歌一定进入队列并成为当前项。
+    expect(player.isAudition).toBe(false)
     expect(player.activeKey).toBe('work:c')
+    expect(player.currentKey).toBe('work:c')
     expect(player.currentTrack?.id).toBe('c')
-    expect(player.queue.map((item) => item.id)).toEqual(['a', 'b'])
+    expect(player.queue.map((item) => item.id)).toEqual(['a', 'b', 'c'])
     expect(player.isPlayingKey('work:c')).toBe(true)
 
-    // 试听模式下 next 不会改变曲目，也不会把队列的下一首加进来。
-    await player.next(false)
-    expect(player.activeKey).toBe('work:c')
-    expect(player.queue).toHaveLength(2)
+    // 由队列管理：上一首回到队列里的 b。
+    await player.previous()
+    expect(player.currentKey).toBe('work:b')
+    expect(player.playing).toBe(true)
 
+    // 顺序播放走到最后一首 c 后停止。
+    await player.next(false)
+    expect(player.currentKey).toBe('work:c')
     const element = document.querySelector('audio') as HTMLAudioElement
     element.dispatchEvent(new Event('ended'))
     expect(player.playing).toBe(false)
     expect(player.activeKey).toBe('work:c')
+    expect(player.queue).toHaveLength(3)
+  })
 
-    player.stopAudition()
-    expect(player.isAudition).toBe(false)
-    expect(player.activeKey).toBe('work:a')
+  it('adds to the queue without reloading the currently playing song', async () => {
+    const player = usePlayerStore()
+    await player.playAudition(track('a'))
+    const element = document.querySelector('audio') as HTMLAudioElement
+    Object.defineProperty(element, 'currentTime', { configurable: true, value: 12 })
+    element.dispatchEvent(new Event('timeupdate'))
+    const loadCalls = vi.mocked(HTMLMediaElement.prototype.load).mock.calls.length
+    expect(player.queue.map((item) => item.id)).toEqual(['a'])
+    expect(player.duration).toBe(10)
+    expect(player.currentTime).toBe(12)
+
+    expect(player.addToQueue([track('b')])).toBe(1)
+
+    // 播放中的歌曲仍是当前项：音频不重新加载，播放状态和进度都不变。
     expect(player.queue.map((item) => item.id)).toEqual(['a', 'b'])
+    expect(player.currentKey).toBe('work:a')
+    expect(player.activeKey).toBe('work:a')
+    expect(player.currentTrack?.id).toBe('a')
+    expect(player.playing).toBe(true)
+    expect(player.currentTime).toBe(12)
+    expect(player.duration).toBe(10)
+    expect(vi.mocked(HTMLMediaElement.prototype.load).mock.calls.length).toBe(loadCalls)
+    expect(document.querySelector('audio')).toBe(element)
+  })
+
+  it('adds to a playing queue without interrupting the current song', async () => {
+    const player = usePlayerStore()
+    await player.playQueue([track('a'), track('b')], 0)
+    const element = document.querySelector('audio') as HTMLAudioElement
+    Object.defineProperty(element, 'currentTime', { configurable: true, value: 7 })
+    element.dispatchEvent(new Event('timeupdate'))
+    const loadCalls = vi.mocked(HTMLMediaElement.prototype.load).mock.calls.length
+
+    expect(player.addToQueue([track('c')])).toBe(1)
+
+    expect(player.queue.map((item) => item.id)).toEqual(['a', 'b', 'c'])
+    expect(player.currentKey).toBe('work:a')
+    expect(player.playing).toBe(true)
+    expect(player.currentTime).toBe(7)
+    expect(vi.mocked(HTMLMediaElement.prototype.load).mock.calls.length).toBe(loadCalls)
+  })
+
+  it('opens the queue panel during single playback without interrupting it', async () => {
+    const player = usePlayerStore()
+    await player.playAudition(track('a'))
+    const loadCalls = vi.mocked(HTMLMediaElement.prototype.load).mock.calls.length
+    expect(player.queue.map((item) => item.id)).toEqual(['a'])
+
+    player.toggleQueue(true)
+
+    expect(player.queueOpen).toBe(true)
+    expect(player.queue.map((item) => item.id)).toEqual(['a'])
+    expect(player.currentKey).toBe('work:a')
+    expect(player.playing).toBe(true)
+    expect(vi.mocked(HTMLMediaElement.prototype.load).mock.calls.length).toBe(loadCalls)
   })
 })
