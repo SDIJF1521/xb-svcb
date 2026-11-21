@@ -385,9 +385,9 @@ onMounted(loadProjects)
 
 <style scoped>
 .projects-page {
-  max-width: 1180px;
+  max-width: var(--xb-page-max, 1180px);
   margin: 0 auto;
-  padding: 24px 24px 56px;
+  padding: 24px var(--xb-page-gutter, 24px) 56px;
 }
 .projects-head {
   display: flex;

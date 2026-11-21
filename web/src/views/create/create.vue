@@ -3481,9 +3481,9 @@ onUnmounted(() => {
 
 <style scoped>
 .page {
-  max-width: 1320px;
+  max-width: var(--xb-page-max, 1320px);
   margin: 0 auto;
-  padding: 28px 24px 60px;
+  padding: 28px var(--xb-page-gutter, 24px) 60px;
 }
 .page-head { margin-bottom: 24px; }
 .eyebrow {
@@ -3738,13 +3738,13 @@ onUnmounted(() => {
 .model-check { color: var(--xb-primary); font-size: 18px; }
 
 /* 模式切换 */
-.mode-card { display: flex; gap: 10px; padding: 12px; }
+.mode-card { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(16px, 1vw, 24px); padding: 16px; margin-bottom: 24px; }
 .mode-item {
   flex: 1;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
+  gap: 12px;
+  padding: 14px 16px;
   border-radius: 10px;
   border: 1px solid var(--xb-border);
   background: rgba(var(--xb-fill-rgb), 0.02);
@@ -5174,6 +5174,8 @@ input[type='range'] {
 }
 :global(html[data-locale='ja-JP'] .quick-btn) { font-size: 11.5px; }
 
+@media (min-width: 1700px) { .layout { grid-template-columns: minmax(0, 1fr) minmax(520px, 700px); } }
+@media (max-width: 760px) { .mode-card { grid-template-columns: 1fr; gap: 10px; padding: 12px; } }
 @media (max-width: 980px) {
   .layout { grid-template-columns: 1fr; }
   .preview { position: static; }

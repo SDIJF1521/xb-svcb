@@ -924,10 +924,6 @@ export interface HubModelItem {
   tags?: string[]
   version?: string
   uploaded_at?: string
-  downloads?: number
-  local_downloads?: number
-  download_count?: number
-  likes?: number
   screenshots?: HubModelAsset[]
   preview_audio?: HubModelAsset | null
   dependency_ok?: boolean

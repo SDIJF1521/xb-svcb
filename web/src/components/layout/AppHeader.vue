@@ -469,10 +469,10 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--xb-border);
 }
 .header-inner {
-  max-width: 1320px;
+  max-width: var(--xb-page-max, 1320px);
   margin: 0 auto;
   height: 64px;
-  padding: 0 24px;
+  padding: 0 var(--xb-page-gutter, 24px);
   display: flex;
   align-items: center;
   gap: 20px;
@@ -1002,6 +1002,10 @@ onUnmounted(() => {
 }
 .pf-btn.primary:hover { box-shadow: 0 0 16px rgba(var(--xb-primary-rgb), 0.4); color: var(--xb-on-primary); }
 
+@media (min-width: 1700px) {
+  .header-inner { gap: 28px; }
+  .search { width: 300px; }
+}
 @media (max-width: 1180px) {
   .env-status span:last-child { display: none; }
   .env-status { padding: 7px 10px; }

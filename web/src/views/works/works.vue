@@ -306,9 +306,9 @@ onUnmounted(() => {
 
 <style scoped>
 .page {
-  max-width: 1320px;
+  max-width: var(--xb-page-max, 1320px);
   margin: 0 auto;
-  padding: 28px 24px 60px;
+  padding: 28px var(--xb-page-gutter, 24px) 60px;
 }
 .page-head {
   display: flex;

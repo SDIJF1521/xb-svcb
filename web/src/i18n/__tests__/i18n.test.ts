@@ -115,12 +115,14 @@ describe('application localization', () => {
     expect(translateUiText('典型流程：上传音频、读取模型、创建任务、轮询状态、下载成品。'))
       .toContain('Typical flow')
     expect(translateUiText('PyMSS 音乐源分离模型站')).toBe('PyMSS Source Separation Model Hub')
+    expect(translateUiText('已下载曲库')).toBe('Downloaded Library')
     expect(translateUiText('片段已替换，已移除 2 个插件效果避免污染干声'))
       .toContain('removed 2 plugin effects')
 
     setLocale('ja-JP')
     expect(translateUiText('所有受保护接口均需 X-API-Key')).toContain('X-API-Key')
     expect(translateUiText('模型详情')).toBe('モデル詳細')
+    expect(translateUiText('已下载曲库')).toBe('ダウンロード済みライブラリ')
     expect(translateUiText('正在提交重推理任务')).toBe('再推論タスクを送信中')
     expect(translateUiText('=== 重推理成功 ===')).toBe('=== 再推論に成功 ===')
   })
@@ -250,3 +252,5 @@ describe('application localization', () => {
     expect(translateUiText('打开设置')).toBe('設定を開く')
   })
 })
+
+

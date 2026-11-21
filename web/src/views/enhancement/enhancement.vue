@@ -74,6 +74,9 @@
             <button :class="{ active: originalMode === 'local' }" @click="originalMode = 'local'">
               <el-icon><Upload /></el-icon><span>本地文件</span>
             </button>
+            <button :class="{ active: originalMode === 'downloaded' }" @click="originalMode = 'downloaded'">
+              <el-icon><Headset /></el-icon><span>已下载曲库</span>
+            </button>
             <button :class="{ active: originalMode === 'online' }" @click="originalMode = 'online'">
               <el-icon><Search /></el-icon><span>在线曲库</span>
             </button>
@@ -86,6 +89,34 @@
             </span>
             <span class="pick-command">{{ originalAudioPath ? '更换' : '选择' }}</span>
           </button>
+          <div v-else-if="originalMode === 'downloaded'" class="library-picker">
+            <div v-if="downloadedMusic.length" class="library-list">
+              <button
+                v-for="track in downloadedMusic"
+                :key="track.path"
+                class="library-option"
+                :class="{ selected: originalAudioPath === track.path }"
+                :title="track.name"
+                @click="pickDownloadedOriginal(track)"
+              >
+                <span class="library-icon"><el-icon><Headset /></el-icon></span>
+                <span class="library-copy">
+                  <strong>{{ track.name }}</strong>
+                  <small>{{ track.size }}</small>
+                </span>
+                <span class="select-indicator"><el-icon v-if="originalAudioPath === track.path"><Check /></el-icon></span>
+              </button>
+            </div>
+            <div v-else class="empty-state">
+              <el-icon><Headset /></el-icon>
+              <span>{{ translateUiText('暂无已下载素材') }}</span>
+              <router-link to="/music">{{ translateUiText('资源获取') }}</router-link>
+            </div>
+            <div v-if="originalAudioPath" class="online-selected">
+              <el-icon><Check /></el-icon>
+              <span><small>当前原始歌曲</small><strong>{{ originalAudioName }}</strong></span>
+            </div>
+          </div>
           <div v-else class="online-picker">
             <div class="online-search">
               <input v-model="onlineKeyword" type="search" placeholder="搜索歌名 / 歌手" @keyup.enter="searchOriginal" />
@@ -207,7 +238,7 @@ import {
   VideoPlay,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { api, type JobStatus, type MusicSearchItem, type MusicSource, type VocalEnhancementLevel, type WorkDTO } from '@/api'
+import { api, type DownloadedMusic, type JobStatus, type MusicSearchItem, type MusicSource, type VocalEnhancementLevel, type WorkDTO } from '@/api'
 import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
 import { translateUiText } from '@/i18n'
@@ -246,7 +277,8 @@ const selectedWorkId = ref(typeof route.query.work === 'string' ? route.query.wo
 const targetMode = ref<'work' | 'import'>(selectedWorkId.value ? 'work' : 'work')
 const targetAudioPath = ref('')
 const originalAudioPath = ref('')
-const originalMode = ref<'local' | 'online'>('local')
+const originalMode = ref<'local' | 'downloaded' | 'online'>('local')
+const downloadedMusic = ref<DownloadedMusic[]>([])
 const onlineKeyword = ref('')
 const onlineSource = ref('wy')
 const onlineResultKeyword = ref('')
@@ -298,6 +330,19 @@ async function pickOriginalAudio() {
   if (path) originalAudioPath.value = path
 }
 
+async function loadDownloadedMusic() {
+  try {
+    downloadedMusic.value = await api.listMusic()
+  } catch {
+    /* 曲库读取失败时保留当前列表；本地文件与在线曲库仍可使用。 */
+  }
+}
+
+function pickDownloadedOriginal(track: DownloadedMusic) {
+  originalAudioPath.value = track.path
+  ElMessage.success(`${translateUiText('已选择曲库原曲')}：${track.name}`)
+}
+
 async function searchOriginal() {
   const keyword = onlineKeyword.value.trim()
   if (!keyword) return
@@ -334,6 +379,7 @@ async function useOnlineOriginal(item: MusicSearchItem) {
       return
     }
     originalAudioPath.value = result.path
+    void loadDownloadedMusic()
     ElMessage.success(`已下载原始歌曲：${result.name || item.name}`)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '原始歌曲下载失败')
@@ -419,6 +465,7 @@ onMounted(async () => {
       musicSources.value = items
       onlineSource.value = items.find((item) => item.id === 'wy')?.id || items[0]?.id || 'wy'
     }),
+    loadDownloadedMusic(),
   ])
   if (!selectedWorkId.value && availableWorks.value.length) selectedWorkId.value = availableWorks.value[0]!.id
 })
@@ -426,7 +473,7 @@ onUnmounted(stopPolling)
 </script>
 
 <style scoped>
-.page { max-width: 1320px; margin: 0 auto; padding: 28px 24px 60px; }
+.page { max-width: var(--xb-page-max, 1320px); margin: 0 auto; padding: 28px var(--xb-page-gutter, 24px) 60px; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
 .eyebrow { margin: 0 0 7px; color: var(--xb-primary); font: 700 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
 h1 { margin: 0; font-size: 30px; letter-spacing: 0; }
@@ -446,7 +493,7 @@ h1 { margin: 0; font-size: 30px; letter-spacing: 0; }
 .target-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 4px; margin-bottom: 12px; border: 1px solid var(--xb-border); background: rgba(var(--xb-fill-rgb), .025); }
 .target-switch button { min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; color: var(--xb-muted); background: transparent; cursor: pointer; font-weight: 700; }
 .target-switch button.active { border-color: rgba(var(--xb-primary-rgb), .5); color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), .08); }
-.source-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 4px; margin-bottom: 12px; border: 1px solid var(--xb-border); background: rgba(var(--xb-fill-rgb), .025); }
+.source-switch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; padding: 4px; margin-bottom: 12px; border: 1px solid var(--xb-border); background: rgba(var(--xb-fill-rgb), .025); }
 .source-switch button { min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; color: var(--xb-muted); background: transparent; cursor: pointer; font-weight: 700; }
 .source-switch button.active { border-color: rgba(var(--xb-primary-rgb), .5); color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), .08); }
 .online-picker { display: grid; gap: 10px; }
@@ -467,6 +514,16 @@ h1 { margin: 0; font-size: 30px; letter-spacing: 0; }
 .online-selected { min-height: 48px; display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid rgba(var(--xb-success-rgb), .35); color: var(--xb-success); background: rgba(var(--xb-success-rgb), .06); }
 .online-selected > span { display: grid; gap: 2px; min-width: 0; }.online-selected small { color: var(--xb-muted); font-size: 9px; }.online-selected strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .work-list { display: grid; max-height: 330px; overflow: auto; border-top: 1px solid var(--xb-border); }
+.library-picker { display: grid; gap: 10px; }
+.library-list { display: grid; max-height: 280px; overflow: auto; border-top: 1px solid var(--xb-border); }
+.library-option { display: grid; grid-template-columns: 38px minmax(0, 1fr) 24px; align-items: center; gap: 11px; min-height: 58px; padding: 9px 8px; border: 0; border-bottom: 1px solid var(--xb-border); color: var(--xb-text); background: transparent; text-align: left; cursor: pointer; }
+.library-option:hover { background: rgba(var(--xb-fill-rgb), .045); }
+.library-option.selected { background: rgba(var(--xb-primary-rgb), .08); box-shadow: inset 3px 0 var(--xb-primary); }
+.library-icon { width: 36px; height: 36px; display: grid; place-items: center; color: var(--xb-primary); background: rgba(var(--xb-primary-rgb), .10); }
+.library-copy { display: grid; gap: 4px; min-width: 0; }
+.library-copy strong, .library-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-copy strong { font-size: 13px; }
+.library-copy small { color: var(--xb-muted); font-size: 11px; }
 .work-option { display: grid; grid-template-columns: 42px minmax(0, 1fr) 24px; align-items: center; gap: 11px; min-height: 68px; padding: 10px 8px; border: 0; border-bottom: 1px solid var(--xb-border); color: var(--xb-text); background: transparent; text-align: left; cursor: pointer; }
 .work-option:hover { background: rgba(var(--xb-fill-rgb), .045); }
 .work-option.selected { background: rgba(var(--xb-primary-rgb), .08); box-shadow: inset 3px 0 var(--xb-primary); }
@@ -527,6 +584,7 @@ h1 { margin: 0; font-size: 30px; letter-spacing: 0; }
 .secondary-action { color: var(--xb-primary); background: transparent; }
 .spin { animation: spin .9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+@media (min-width: 1700px) { .workspace { grid-template-columns: minmax(0, 1fr) minmax(420px, 520px); } }
 @media (max-width: 980px) { .workspace { grid-template-columns: 1fr; } .monitor { position: static; } }
-@media (max-width: 640px) { .page { padding: 20px 14px 40px; } .page-head { align-items: flex-start; flex-direction: column; } .control-grid { grid-template-columns: 1fr; } .online-search { grid-template-columns: minmax(0, 1fr) 42px; } .online-search select { grid-column: 1 / -1; grid-row: 2; } .monitor-head { grid-template-columns: 42px minmax(0, 1fr); } .env-badge { grid-column: 2; width: max-content; } }
+@media (max-width: 640px) { .page { padding: 20px 14px 40px; } .page-head { align-items: flex-start; flex-direction: column; } .control-grid { grid-template-columns: 1fr; } .source-switch { grid-template-columns: 1fr; } .online-search { grid-template-columns: minmax(0, 1fr) 42px; } .online-search select { grid-column: 1 / -1; grid-row: 2; } .monitor-head { grid-template-columns: 42px minmax(0, 1fr); } .env-badge { grid-column: 2; width: max-content; } }
 </style>

@@ -633,9 +633,9 @@ onUnmounted(() => {
 
 <style scoped>
 .home {
-  max-width: 1320px;
+  max-width: var(--xb-page-max, 1320px);
   margin: 0 auto;
-  padding: 28px 24px 60px;
+  padding: 28px var(--xb-page-gutter, 24px) 60px;
 }
 
 .glass {
@@ -1244,6 +1244,15 @@ onUnmounted(() => {
 .work-ops button:disabled { opacity: 0.35; cursor: not-allowed; }
 .work-ops :deep(.el-dropdown) { display: inline-flex; }
 
+/* 大屏：放大首屏信息层级与卡片内边距，避免内容在超宽容器里显得松散。 */
+@media (min-width: 1700px) {
+  .welcome { padding: 44px 46px; gap: 44px; }
+  .welcome-text h1 { font-size: 44px; }
+  .welcome-sub { max-width: 650px; font-size: 16px; }
+  .stat-card { padding: 22px 24px; }
+  .quick-card { padding: 24px; }
+  .tool-card { padding: 22px; }
+}
 /* 响应式 */
 @media (max-width: 1080px) {
   .model-grid { grid-template-columns: repeat(3, 1fr); }

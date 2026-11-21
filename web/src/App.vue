@@ -73,6 +73,11 @@ html[data-theme='cyber'] {
   --xb-particle-size: 3.5px;
 
   --xb-font: 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+
+  /* 页面容器：随视口流体扩展，避免 2K/4K 屏两侧留下大片空白。
+     1320px 仍是 1366/1440 屏的舒适宽度，超宽屏最多扩到 2200px。 */
+  --xb-page-max: clamp(1320px, 92vw, 2200px);
+  --xb-page-gutter: clamp(20px, 1.4vw, 36px);
 }
 
 /* —— XB 品牌主题（取自 Logo 的樱粉声波、紫电与冰蓝高光） —— */

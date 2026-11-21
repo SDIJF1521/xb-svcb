@@ -1,5 +1,6 @@
 import asyncio
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -21,12 +22,17 @@ from infrastructure.storage import SettingsStore
 class DummyModels:
     def __init__(self, items=None) -> None:
         self._items = items or []
+        self.imported = None
 
     def list(self):
         return list(self._items)
 
     def get(self, model_id):
         return next((item for item in self._items if item.get("id") == model_id), None)
+
+    def import_model(self, payload):
+        self.imported = payload
+        return {"id": "mdl_imported", "name": payload.get("name", "")}
 
 
 class ModelHubEcosystemTests(unittest.TestCase):
@@ -69,6 +75,7 @@ class ModelHubEcosystemTests(unittest.TestCase):
                 },
             }
             with (
+                patch.object(config, "MODELHUB_DIR", Path(td) / "modelhub"),
                 patch("application.model_hub_service.shutil.which", return_value="ffmpeg"),
                 patch("application.model_hub_service.config.uvr_ready", return_value=True),
                 patch("application.model_hub_service.config.rvc_engine_ready", return_value=True),
@@ -80,7 +87,6 @@ class ModelHubEcosystemTests(unittest.TestCase):
             )
 
             self.assertEqual(item["version"], "1.2.0")
-            self.assertEqual(item["download_count"], 0)
             self.assertTrue(item["dependency_ok"])
             self.assertTrue(item["update"]["available"])
             self.assertEqual(item["preview_audio"]["path"], "preview.wav")
@@ -133,6 +139,45 @@ class ModelHubEcosystemTests(unittest.TestCase):
             self.assertIn("url", res)
             self.assertNotIn("data", res)
             self.assertIn("FilePath=assets%2Fpreview.mp3", res["url"])
+
+    def test_successful_download_returns_imported_model(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo_id = "owner/xb-svcb-demo"
+            manifest = {
+                "magic": config.MODELHUB_MAGIC,
+                "name": "Demo voice",
+                "framework": "rvc",
+                "sample_rate": "48kHz",
+                "files": {"main_model": "voice.pth"},
+                "version": "1.0.0",
+            }
+            service = self.make_service(root)
+            service._progress = {}
+            service._progress_lock = threading.Lock()
+
+            async def fake_fetch_manifest(_repo_id):
+                return manifest
+
+            async def fake_list_files(_repo_id):
+                return {"voice.pth": 4}
+
+            async def fake_download_to(_repo_id, _file_path, _dst, _cb, _expected_size=0):
+                return True
+
+            service._fetch_manifest = fake_fetch_manifest
+            service._list_files = fake_list_files
+            service._download_to = fake_download_to
+
+            with (
+                patch.object(config, "MODELHUB_DIR", root / "modelhub"),
+                patch("application.model_hub_service.ensure_data_dirs"),
+            ):
+                result = asyncio.run(service._download(repo_id))
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["model"]["id"], "mdl_imported")
+            self.assertEqual(service._models.imported["source_repo_id"], repo_id)
 
     def test_remote_version_comparison_uses_semver_then_timestamp(self) -> None:
         self.assertTrue(_is_remote_newer("1.2.0", "1.1.9"))

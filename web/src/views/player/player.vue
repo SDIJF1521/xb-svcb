@@ -797,7 +797,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.player-page { min-height: calc(100vh - 64px); max-width: 1440px; margin: 0 auto; padding: 20px 28px 42px; color: var(--xb-text); }
+.player-page { min-height: calc(100vh - 64px); max-width: var(--xb-page-max, 1440px); margin: 0 auto; padding: 20px var(--xb-page-gutter, 28px) 42px; color: var(--xb-text); }
 .player-head { display: flex; align-items: center; gap: 14px; min-height: 46px; margin-bottom: 18px; }
 .head-context { display: flex; align-items: baseline; gap: 10px; }
 .head-kicker, .eyebrow { color: var(--xb-primary); font: 700 11px/1 ui-monospace, monospace; letter-spacing: 1.6px; }
@@ -944,6 +944,9 @@ onUnmounted(() => {
 .spin { animation: spin-record 1s linear infinite; }
 @keyframes spin-record { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .record.spinning, .spin, .loading-icon { animation: none; } }
+@media (min-width: 1700px) {
+  .player-layout { grid-template-columns: minmax(0, 1fr) minmax(420px, 520px); }
+}
 @media (max-width: 1100px) {
   .hifi-inline { display: none; }
   .head-actions .text-btn:not(.hifi-entry) { padding: 8px 6px; }

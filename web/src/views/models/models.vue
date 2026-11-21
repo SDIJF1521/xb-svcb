@@ -328,7 +328,6 @@
         <div class="rank-field">
           <el-select v-model="hubSort" class="rank-select" :placeholder="translateUiText('排序')">
             <el-option :label="translateUiText('综合排序')" value="score" />
-            <el-option :label="translateUiText('下载排行')" value="downloads" />
             <el-option :label="translateUiText('最近更新')" value="recent" />
           </el-select>
         </div>
@@ -369,7 +368,6 @@
             </div>
             <div class="row-sub">
               {{ it.sample_rate || '44.1kHz' }} · {{ translateUiText('作者') }} {{ it.author }}
-              · {{ countText(it.download_count) }} {{ translateUiText('下载') }}
             </div>
             <div v-if="(it.tags || []).length || it.preview_audio || (it.screenshots || []).length" class="row-tags">
               <span v-for="tag in (it.tags || []).slice(0, 4)" :key="tag" class="mini-tag">{{ tag }}</span>
@@ -411,9 +409,9 @@
               :loading="dlJob(it.repo_id)?.status === 'running'"
               @click="downloadHub(it)"
             >
-              <el-icon v-if="dlJob(it.repo_id)?.status === 'done'" class="el-icon--left"><CircleCheck /></el-icon>
+              <el-icon v-if="dlJob(it.repo_id)?.status !== 'running' && isHubInstalled(it)" class="el-icon--left"><CircleCheck /></el-icon>
               <el-icon v-else-if="dlJob(it.repo_id)?.status !== 'running'" class="el-icon--left"><Download /></el-icon>
-              {{ translateUiText(dlJob(it.repo_id)?.status === 'done' ? '查看本地' : dlJob(it.repo_id)?.status === 'failed' ? '继续下载' : '下载导入') }}
+              {{ translateUiText(dlJob(it.repo_id)?.status === 'running' ? '下载导入' : isHubInstalled(it) ? '查看本地' : dlJob(it.repo_id)?.status === 'failed' ? '继续下载' : '下载导入') }}
             </el-button>
           </div>
         </div>
@@ -619,8 +617,6 @@
             </div>
             <p v-if="hubDetail.description" class="detail-desc">{{ hubDetail.description }}</p>
             <div class="detail-stats">
-              <span>{{ countText(hubDetail.download_count) }} 下载</span>
-              <span v-if="hubDetail.likes">{{ countText(hubDetail.likes) }} 喜欢</span>
               <span>{{ hubDetail.uploaded_at || '未知时间' }}</span>
             </div>
             <div v-if="(hubDetail.tags || []).length" class="row-tags">
@@ -924,8 +920,40 @@ async function removeModel(m: ModelVM) {
   } catch {
     return
   }
-  if (await modelsStore.remove(m.id)) ElMessage.success('已删除')
-  else ElMessage.error('删除失败')
+  const repoId = String(m.metadata?.source_repo_id || '')
+  if (await modelsStore.remove(m.id)) {
+    // 删除后同步清掉模型站的「已下载」任务与详情安装态，避免历史任务把已删除模型显示成仍存在。
+    if (repoId) {
+      try {
+        await transfers.clear(`dl:${repoId}`)
+      } catch {
+        /* 任务清理失败不影响删除结果；安装态仍按本地模型库刷新。 */
+      }
+      syncHubInstallState(repoId)
+    }
+    ElMessage.success('已删除')
+  } else {
+    ElMessage.error('删除失败')
+  }
+}
+
+/** 根据当前本地模型库刷新模型站条目的安装状态（删除 / 下载后都可调用）。 */
+function syncHubInstallState(repoId: string) {
+  const installed = modelsStore.models.some(
+    (model) => String(model.metadata?.source_repo_id || '') === repoId,
+  )
+  const row = hubItems.value.find((item) => item.repo_id === repoId)
+  if (row?.update) {
+    row.update.installed = installed
+    row.update.installed_models = installed ? row.update.installed_models : []
+    if (!installed) row.update.available = false
+  }
+  const detail = hubDetail.value
+  if (detail?.repo_id === repoId && detail.update) {
+    detail.update.installed = installed
+    detail.update.installed_models = installed ? detail.update.installed_models : []
+    if (!installed) detail.update.available = false
+  }
 }
 
 /* ---------- 模型站令牌 ---------- */
@@ -989,7 +1017,7 @@ const hubItems = ref<HubModelItem[]>([])
 const hubPage = ref(1)
 const hubHasMore = ref(false)
 const hubLoadingMore = ref(false)
-const hubSort = ref<'score' | 'downloads' | 'recent'>('score')
+const hubSort = ref<'score' | 'recent'>('score')
 const modelUpdates = ref<HubModelUpdateItem[]>([])
 const firstUpdate = computed(() => modelUpdates.value[0] || null)
 const upgradingId = ref('')
@@ -1187,7 +1215,6 @@ const sortedHubItems = computed(() => {
   const rows = [...hubItems.value]
   const sort = hubSort.value
   rows.sort((a, b) => {
-    if (sort === 'downloads') return (b.download_count || 0) - (a.download_count || 0)
     if (sort === 'recent') return String(b.uploaded_at || '').localeCompare(String(a.uploaded_at || ''))
     return (b.score || 0) - (a.score || 0)
   })
@@ -1201,11 +1228,11 @@ function dlJob(repoId: string) {
   return transfers.jobByKey(`dl:${repoId}`)
 }
 
-function countText(value?: number): string {
-  const n = Number(value || 0)
-  if (n >= 10000) return `${(n / 10000).toFixed(1)}万`
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
-  return String(n)
+/** 模型站条目的「已安装」以本地模型库为准，不能只看历史下载任务状态。 */
+function isHubInstalled(it: HubModelItem): boolean {
+  return modelsStore.models.some(
+    (model) => String(model.metadata?.source_repo_id || '') === it.repo_id,
+  )
 }
 
 async function refreshUpdates() {
@@ -1359,10 +1386,13 @@ async function downloadHub(it: HubModelItem) {
     ElMessage.info('该模型正在后台下载，请在顶栏「传输」查看进度')
     return
   }
-  if (job?.status === 'done') {
+  if (isHubInstalled(it)) {
     await modelsStore.load()
+    const local = modelsStore.models.find(
+      (model) => String(model.metadata?.source_repo_id || '') === it.repo_id,
+    )
     tab.value = 'local'
-    localQuery.value = job.result?.model?.name || ''
+    localQuery.value = local?.name || it.name
     return
   }
   const key = await transfers.startDownload(it.repo_id)
@@ -1462,7 +1492,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.page { max-width: 1320px; margin: 0 auto; padding: 28px 24px 60px; }
+.page { max-width: var(--xb-page-max, 1320px); margin: 0 auto; padding: 28px var(--xb-page-gutter, 24px) 60px; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
 .eyebrow { color: var(--xb-primary); font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 14px; margin: 0 0 8px; }
 .page-head h1 { font-size: 30px; font-weight: 800; margin: 0 0 8px; }
@@ -1512,7 +1542,7 @@ onUnmounted(() => {
 /* 多框架概览 */
 .framework-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
 }
 .fw-card {

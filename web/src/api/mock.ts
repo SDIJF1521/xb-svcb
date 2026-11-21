@@ -367,10 +367,6 @@ const mockHubModels: HubModelItem[] = [
     tags: ['中文', '女声', '扩散'],
     version: '1.3.0',
     uploaded_at: '2026-07-20T12:00:00',
-    download_count: 238,
-    downloads: 236,
-    local_downloads: 2,
-    likes: 41,
     screenshots: [{ path: 'screenshot_1_demo.png', name: 'screenshot_1_demo.png', kind: 'image', mime: 'image/png' }],
     preview_audio: { path: 'preview_demo.mp3', name: 'preview_demo.mp3', kind: 'audio', mime: 'audio/mpeg' },
     dependency_ok: true,
@@ -392,10 +388,6 @@ const mockHubModels: HubModelItem[] = [
     tags: ['RVC', '女声', 'index'],
     version: '2.1.0',
     uploaded_at: '2026-07-24T16:20:00',
-    download_count: 412,
-    downloads: 412,
-    local_downloads: 0,
-    likes: 62,
     screenshots: [],
     preview_audio: { path: 'preview_reze.mp3', name: 'preview_reze.mp3', kind: 'audio', mime: 'audio/mpeg' },
     dependency_ok: true,
@@ -417,10 +409,6 @@ const mockHubModels: HubModelItem[] = [
     tags: ['SeedVC', 'zero-shot'],
     version: '1.0.0',
     uploaded_at: '2026-07-18T08:00:00',
-    download_count: 96,
-    downloads: 96,
-    local_downloads: 0,
-    likes: 15,
     screenshots: [],
     preview_audio: null,
     dependency_ok: false,
@@ -1736,8 +1724,6 @@ export const mock = {
       },
     }
     mockModels.unshift(m)
-    hit.local_downloads = (hit.local_downloads || 0) + 1
-    hit.download_count = (hit.downloads || 0) + (hit.local_downloads || 0)
     return { ok: true, model: m }
   },
   hubUploadModel(modelId: string, name?: string, framework?: string, options?: HubUploadOptions): HubUploadResult {
@@ -1762,10 +1748,6 @@ export const mock = {
       tags: options?.tags || [],
       version,
       uploaded_at: uploadedAt,
-      download_count: 0,
-      downloads: 0,
-      local_downloads: 0,
-      likes: 0,
       screenshots: (options?.screenshots || []).map((path) => ({
         path,
         name: fileName(path),
@@ -1914,6 +1896,8 @@ export const mock = {
             mockPymssDownloaded.add(job.title.replace(/^PyMSS · /, ''))
             continue
           }
+          const repoId = key.startsWith('dl:') ? key.slice(3) : ''
+          const hit = mockHubModels.find((item) => item.repo_id === repoId)
           const m: ModelDTO = {
             id: rid('mdl_'),
             name: job.title.split('/').pop() || job.title,
@@ -1925,6 +1909,15 @@ export const mock = {
             main_config: { name: 'config.json', path: '' },
             diffusion_model: null,
             diffusion_config: null,
+            framework: hit?.framework || 'so-vits-svc',
+            metadata: {
+              schema: 'xb-svcb.model.v1',
+              framework: hit?.framework || 'so-vits-svc',
+              valid: true,
+              source_repo_id: repoId,
+              source_version: hit?.version || '1.0.0',
+              source_uploaded_at: hit?.uploaded_at || '',
+            },
           }
           mockModels.unshift(m)
           job.result = { model: m }

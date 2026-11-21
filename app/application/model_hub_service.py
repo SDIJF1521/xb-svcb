@@ -79,24 +79,6 @@ def _first(d: dict[str, Any], *keys: str) -> Any:
     return None
 
 
-def _as_int(value: Any, default: int = 0) -> int:
-    try:
-        if isinstance(value, str):
-            value = value.replace(",", "").strip()
-        return int(float(value))
-    except (TypeError, ValueError):
-        return default
-
-
-def _as_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if isinstance(value, str):
-            value = value.replace(",", "").strip()
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
 def _trim_text(value: Any, max_len: int) -> str:
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]+", " ", str(value or "")).strip()
     return text[:max_len]
@@ -497,27 +479,6 @@ class ModelHubService:
             out.append({**spec, "ok": ok, "message": message})
         return out
 
-    def _metric_summary(
-        self,
-        manifest: dict[str, Any] | None = None,
-        entry: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        manifest = manifest or {}
-        entry = entry or {}
-        metrics = manifest.get("metrics")
-        if not isinstance(metrics, dict):
-            metrics = {}
-        downloads = max(
-            _as_int(_first(entry, "DownloadCount", "Downloads", "DownloadsCount", "download_count")),
-            _as_int(metrics.get("downloads")),
-        )
-        return {
-            "downloads": downloads,
-            "local_downloads": 0,
-            "download_count": downloads,
-            "likes": max(_as_int(_first(entry, "LikeCount", "Likes", "like_count")), _as_int(metrics.get("likes"))),
-        }
-
     def _assets_from_manifest(self, manifest: dict[str, Any]) -> dict[str, Any]:
         raw = manifest.get("assets")
         if not isinstance(raw, dict):
@@ -595,7 +556,6 @@ class ModelHubService:
         self,
         repo_id: str,
         manifest: dict[str, Any],
-        entry: dict[str, Any] | None = None,
         *,
         detail: bool = False,
     ) -> dict[str, Any]:
@@ -603,7 +563,6 @@ class ModelHubService:
         raw_files = manifest.get("files")
         files = raw_files if isinstance(raw_files, dict) else {}
         assets = self._assets_from_manifest(manifest)
-        metric_summary = self._metric_summary(manifest, entry)
         deps = self._dependency_status(fw, files)
         required_deps_ok = all(d.get("ok") for d in deps if d.get("required"))
         version = str(manifest.get("version") or "1.0.0")
@@ -637,20 +596,14 @@ class ModelHubService:
                 }
             ],
             "update": self._installed_info(repo_id, manifest),
-            **metric_summary,
         }
         item["score"] = round(
-            min(10, _as_int(item.get("download_count")) / 10)
-            + (8 if item.get("preview_audio") else 0)
+            (8 if item.get("preview_audio") else 0)
             + min(8, len(item.get("screenshots") or []) * 2)
             + (6 if item.get("dependency_ok") else 0),
             2,
         )
         return item
-
-    def _record_download(self, repo_id: str, manifest: dict[str, Any]) -> None:
-        # 下载量以 ModelScope 仓库返回值为准，不在本地伪造社区数据。
-        return None
 
     def model_detail(self, repo_id: str) -> dict[str, Any]:
         return self._submit(self._model_detail(repo_id))
@@ -855,10 +808,9 @@ class ModelHubService:
             self._build_item(
                 repo_id,
                 manifest,
-                entry,
                 detail=False,
             )
-            for repo_id, manifest, entry in candidates
+            for repo_id, manifest, _entry in candidates
         ]
         return {
             "ok": True,
@@ -1234,7 +1186,6 @@ class ModelHubService:
         if not imported:
             self._set_progress(key, "error", 0, "导入失败")
             return {"ok": False, "error": "导入到本地模型库失败"}
-        self._record_download(repo_id, manifest)
         shutil.rmtree(stage, ignore_errors=True)  # 导入成功后才清理断点文件
         self._set_progress(key, "done", 100, "完成")
         return {"ok": True, "model": imported}
