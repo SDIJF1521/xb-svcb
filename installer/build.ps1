@@ -757,9 +757,9 @@ Require-WorkerContract `
   "Formant pitch worker source" `
   @("--high-threshold", "FORMANT_PITCH_OK") `
   @("--out-npy", "F0_OK")
-Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_1.md") "v0.1.1 Simplified Chinese release notes"
-Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_1.en.md") "v0.1.1 English release notes"
-Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_1.ja.md") "v0.1.1 Japanese release notes"
+Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_2.md") "v0.1.2 Simplified Chinese release notes"
+Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_2.en.md") "v0.1.2 English release notes"
+Require-File (Join-Path $Root "docs\release-notes\release_notes_v0_1_2.ja.md") "v0.1.2 Japanese release notes"
 Require-File (Join-Path $Root "docs\api.md") "FastAPI integration guide"
 Require-File (Join-Path $Root "install\configure_user_env.py") "User environment helper"
 Require-File (Join-Path $Root "install\detect_python.bat") "Python runtime detector"

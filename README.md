@@ -10,7 +10,7 @@
 
 **🎵 导入歌曲 ｜ 🎚️ 人声分离 ｜ 🌫️ 去混响 ｜ 🗣️ AI 歌声转换 ｜ 🎧 AI 歌声增强 ｜ 🎼 合并伴奏 ｜ 🎤 成品翻唱**
 
-一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **实时系统音频变声** · **AI 歌声增强工程** · **在线曲库** · **模型站** · **音频编辑器**
+一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **实时系统音频变声** · **AI 歌声增强工程** · **在线曲库** · **模型站** · **工作流商城** · **音频编辑器**
 
 <br/>
 
@@ -46,14 +46,14 @@
 <div align="center">
   <img src="docs/images/xb-svcb-app.png" width="100%" alt="XB-SVCB AI 翻唱工作台真实运行界面" />
   <br/>
-  <sub>XB-SVCB 0.1.1 · AI 翻唱工作台实际运行界面</sub>
+  <sub>XB-SVCB 0.1.2 · AI 翻唱工作台实际运行界面</sub>
 </div>
 
 ## 项目简介
 
 XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它以 Vue 3 作为界面，以 Python 作为业务核心，并将不同 AI 框架放在独立环境和 Worker 进程中运行。
 
-项目目前支持 So-VITS-SVC、RVC、SeedVC 和 DDSP-SVC 四种歌声转换框架，同时提供 UVR / PyMSS 人声分离、AI 歌声增强、高音保护、在线曲库、模型站、实时系统音频变声和 Audio Editor Lite 音频编辑器。
+项目目前支持 So-VITS-SVC、RVC、SeedVC 和 DDSP-SVC 四种歌声转换框架，同时提供 UVR / PyMSS 人声分离、AI 歌声增强、高音保护、在线曲库、模型站、工作流商城、实时系统音频变声和 Audio Editor Lite 音频编辑器。
 
 ## 主要功能
 
@@ -66,6 +66,7 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 - 支持 TXT / LRC 歌词导入、角色管理和独唱、对唱、和声等时间轴模板。
 - 通过 WASAPI 回环或 VB-CABLE 对播放器音频进行实时人声转换，伴奏保持原样。
 - 通过 ModelScope 搜索、上传和下载模型，支持后台传输、断点续传和模型清单校验。
+- 通过工作流商城上传、搜索、分页预览和下载 AI 翻唱工作流；下载时自动同步清单中的 PyMSS 模型，并可在 AI 翻唱工作台直接载入。
 - 支持网易云、QQ 音乐、酷我音乐的搜索、试听、下载和歌词获取。
 - 翻唱作品支持队列试听：单击默认只试听单曲，显式「队列播放 / 连续试听」才建立队列；支持顺序 / 列表循环 / 单曲循环 / 随机播放、无损直通与均衡器，作品试听页可查看歌词和 MV。
 - 支持 GPU / CPU 切换：NVIDIA 使用 CUDA，Windows AMD 优先使用 ROCm 10，也可选择独立 DirectML 包；无兼容 GPU 时使用 CPU。
@@ -76,7 +77,7 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 
 ### 使用安装包
 
-普通用户建议直接使用 GitHub Releases 中的魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`。该安装器从 ModelScope 的 `v0.1.1` 版本下载经过校验的离线安装包。备用版 `XB-SVCB-Online-Setup.exe` 不在 GitHub 公开发布，如有需要请联系开发者单独获取。
+普通用户建议直接使用 GitHub Releases 中的魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`。该安装器从 ModelScope 的 `v0.1.2` 版本下载经过校验的离线安装包。备用版 `XB-SVCB-Online-Setup.exe` 不在 GitHub 公开发布，如有需要请联系开发者单独获取。
 
 1. 运行在线安装器，使用自动检测或手动选择 CPU、ROCm 10、DirectML、CUDA126、CUDA128。
 2. 等待对应的完整安装包下载并通过 SHA-256 校验，然后选择应用安装目录和用户数据目录。
@@ -346,9 +347,9 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 
 ## Roadmap
 
-当前版本：**v0.1.1**
+当前版本：**v0.1.2**
 
-完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.1.1 更新说明](docs/release-notes/release_notes_v0_1_1.md)。
+完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.1.2 更新说明](docs/release-notes/release_notes_v0_1_2.md)。
 
 ## 🤝 贡献者
 
@@ -393,3 +394,13 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 > - **UVR 模型**：`5_HP-Karaoke-UVR`、`UVR-DeEcho-DeReverb` 等遵循 Ultimate Vocal Remover 项目相应许可。
 >
 > GPL-3.0-only 仅覆盖本仓库自有代码，不改变上述第三方组件、模型和资源的原始授权条款。
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=sdijf1521%2Fxb-svcb&type=date&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&legend=top-left" />
+ </picture>
+</a>

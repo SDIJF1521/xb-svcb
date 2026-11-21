@@ -67,6 +67,14 @@ class PymssTool:
     def status(self, model: str = "") -> str:
         return config.pymss_status(model)
 
+    def model_ready(self, model: str = "") -> bool:
+        """指定 catalog 模型的权重是否已经下载（端口方法）。"""
+        return config.pymss_model_ready(model)
+
+    def downloaded_model_stems(self) -> set[str]:
+        """一次扫描目录，返回已下载模型的 stem 集合（端口方法）。"""
+        return config.pymss_downloaded_model_stems()
+
     @staticmethod
     def declared_stems(model: str = "") -> list[str]:
         """模型 yaml 里声明的输出音轨（只读配置，不加载权重）。"""

@@ -254,6 +254,10 @@ class PymssGateway(SeparationGateway, Protocol):
 
     def declared_stems(self, model: str = "") -> list[str]: ...
 
+    def model_ready(self, model: str = "") -> bool: ...
+
+    def downloaded_model_stems(self) -> set[str]: ...
+
     def list_models(self, *args: Any, **kwargs: Any) -> Any: ...
 
     def download_model(self, model: str, out_dir: Path | None = None, purpose: str = "") -> dict[str, Any]: ...
@@ -267,6 +271,45 @@ class PymssGateway(SeparationGateway, Protocol):
     def delete_model(self, model: str) -> bool: ...
 
     def clear_download_job(self, key: str) -> bool: ...
+
+
+@runtime_checkable
+class WorkflowHubGateway(Protocol):
+    """工作流商城的远端能力（ModelScope 搜索 / 清单读取 / 上传）。
+
+    实现位于 ``infrastructure/workflow_hub_client.py``；用例层只依赖本协议，
+    不直接发 HTTP、起子进程或写暂存目录。
+    """
+
+    def upload_ready(self) -> bool: ...
+
+    async def verify_token(self, token: str) -> dict[str, Any]: ...
+
+    async def search(
+        self,
+        *,
+        token: str,
+        query: str,
+        page: int,
+        page_size: int,
+        viewer: str,
+        mine_only: bool,
+    ) -> dict[str, Any]: ...
+
+    async def fetch_manifest(
+        self, repo_id: str, token: str
+    ) -> dict[str, Any] | None: ...
+
+    def upload_manifest(
+        self,
+        *,
+        token: str,
+        repo_id: str,
+        manifest: dict[str, Any],
+        readme: str,
+        display_name: str,
+        on_progress: Callable[[int, int, str], None] | None = None,
+    ) -> dict[str, Any]: ...
 
 
 @runtime_checkable

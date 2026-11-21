@@ -217,6 +217,7 @@ PORT_ADAPTERS = [
     ("infrastructure.audio_streamer", "LocalAudioStreamer", "AudioStreamerPort"),
     ("infrastructure.work_files", "WorkFiles", "WorkFilesPort"),
     ("infrastructure.editor_project_store", "EditorProjectStore", "EditorProjectStorePort"),
+    ("infrastructure.workflow_hub_client", "WorkflowHubClient", "WorkflowHubGateway"),
 ]
 
 

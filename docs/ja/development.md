@@ -51,11 +51,11 @@ JUCEのパスを設定してビルドします。
 
 `-Help`または`--help`では事前検証やパッケージ作成を実行せずに引数を確認できます。
 
-v0.1.1の履歴はcommit `12f6db36754f5e86c9997449752367804e2da76a`から始まり、このcommit自体もv0.1.1に含まれます。release commit一覧は次の範囲で生成します。
+v0.1.2の履歴はcommit `5afbb7eb522b2bdc244aea9c6daeb8105acb62a5`（「自定义工作流节点优先级添加」、2026-11-20）から始まり、このcommit自体もv0.1.2に含まれます。release commit一覧は次の範囲で生成します。
 
-    git log --reverse 12f6db36754f5e86c9997449752367804e2da76a^..HEAD
+    git log --reverse 5afbb7eb522b2bdc244aea9c6daeb8105acb62a5^..HEAD
 
-監査でも同じ包括範囲を使用してください。`12f6db36754f5e86c9997449752367804e2da76a..HEAD`では開始commitが除外されるため使用しません。
+監査でも同じ包括範囲を使用してください。`5afbb7eb522b2bdc244aea9c6daeb8105acb62a5..HEAD`では開始commitが除外されるため使用しません。
 
 簡易検証:
 

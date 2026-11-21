@@ -31,6 +31,7 @@ from application import (
     SystemService,
     ThemeMediaService,
     WorkService,
+    WorkflowHubService,
 )
 from infrastructure import paths
 from infrastructure.ddsp_engine import DdspSvcEngine
@@ -46,6 +47,7 @@ from infrastructure.svc_engine import SvcEngine
 from infrastructure.theme_media import ThemeMediaStore
 from infrastructure.uvr_tool import UvrTool
 from infrastructure.vocal_enhancement import VocalEnhancementProcessor
+from infrastructure.workflow_hub_client import WorkflowHubClient
 from infrastructure.audio_import import AudioImportStore
 from infrastructure.audio_streamer import LocalAudioStreamer
 from infrastructure.editor_project_store import EditorProjectStore
@@ -101,6 +103,9 @@ def build_api() -> Api:
     )
     music_service = MusicService(settings, streamer=audio_streamer)
     hub_service = ModelHubService(settings, model_service)
+    workflow_hub_service = WorkflowHubService(
+        settings, work_service, pymss, WorkflowHubClient()
+    )
     editor_service = AudioEditorService(
         editor_repo,
         works_repo,
@@ -137,6 +142,7 @@ def build_api() -> Api:
         work_service,
         music_service,
         hub_service,
+        workflow_hub_service,
         editor_service,
         models_repo,
         works_repo,

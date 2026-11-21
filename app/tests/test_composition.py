@@ -52,6 +52,7 @@ def test_build_api_wires_every_use_case(wired_api) -> None:  # noqa: ANN001
         SystemService,
         ThemeMediaService,
         WorkService,
+        WorkflowHubService,
     )
     from application.ports import ItemRepository, PymssGateway, SettingsRepository
 
@@ -61,6 +62,7 @@ def test_build_api_wires_every_use_case(wired_api) -> None:  # noqa: ANN001
     assert isinstance(api._works, WorkService)
     assert isinstance(api._music, MusicService)
     assert isinstance(api._hub, ModelHubService)
+    assert isinstance(api._workflow_hub, WorkflowHubService)
     assert isinstance(api._editor, AudioEditorService)
     assert isinstance(api._plugins, PluginService)
     assert isinstance(api._realtime_cover, RealtimeCoverService)

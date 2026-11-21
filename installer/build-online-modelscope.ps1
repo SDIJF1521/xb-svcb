@@ -32,7 +32,7 @@ Options:
   -Help, -h, --help        Show this help and exit.
 
 Source files:
-  https://www.modelscope.cn/models/lkpp233/xb-svcb/files?version=v0.1.1
+  https://www.modelscope.cn/models/lkpp233/xb-svcb/files?version=v0.1.2
 
 Example:
   .\installer\build-online-modelscope.ps1

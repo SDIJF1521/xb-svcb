@@ -12,10 +12,17 @@ from pathlib import Path
 
 from domain.entities import guess_framework as _domain_guess_framework
 from domain.entities import normalize_framework as _domain_normalize_framework
+from domain.workflow_manifest import (
+    WORKFLOW_MANIFEST_MAGIC as _WORKFLOW_MANIFEST_MAGIC,
+    WORKFLOW_MANIFEST_MAX_BYTES as _WORKFLOW_MANIFEST_MAX_BYTES,
+    WORKFLOW_MANIFEST_MAX_EDGES as _WORKFLOW_MANIFEST_MAX_EDGES,
+    WORKFLOW_MANIFEST_MAX_NODES as _WORKFLOW_MANIFEST_MAX_NODES,
+    WORKFLOW_MANIFEST_SCHEMA as _WORKFLOW_MANIFEST_SCHEMA,
+)
 
 APP_NAME = "XB-SVCB"
 APP_TITLE = "XB-SVCB"
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 APP_BG = "#05060d"
 
 
@@ -729,6 +736,30 @@ def pymss_environment_ready() -> bool:
     return bool(PYMSS_PYTHON and PYMSS_PYTHON.is_file() and PYMSS_WORKER.is_file())
 
 
+def pymss_downloaded_model_stems() -> set[str]:
+    """一次扫描 PyMSS 模型目录，返回已下载模型的 stem 集合。
+
+    工作流商城一个列表页可能引用十几个模型，逐条调用
+    ``pymss_model_ready`` 会重复 rglob 整个目录；这里统一扫描一次。
+    """
+    stems: set[str] = set()
+    if not PYMSS_MODEL_DIR or not PYMSS_MODEL_DIR.exists():
+        return stems
+    try:
+        for path in PYMSS_MODEL_DIR.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in _PYMSS_MODEL_SUFFIXES:
+                continue
+            if path.name.lower().endswith(".pymss_state_dict.pt"):
+                continue
+            stems.add(path.stem.lower())
+            stems.add(path.parent.name.lower())
+    except OSError:
+        return stems
+    return stems
+
+
 def pymss_model_ready(model: str = "") -> bool:
     """指定 PyMSS catalog 模型的权重是否已下载。"""
     if not PYMSS_MODEL_DIR or not PYMSS_MODEL_DIR.exists():
@@ -1208,7 +1239,7 @@ def cleanup_pending_migration() -> None:
 def _apply_data_dir(data_dir: Path) -> None:
     """更新当前进程内的数据目录派生路径。"""
     global DATA_DIR, MODELS_DIR, WORKS_DIR, TEMP_DIR, MUSIC_DIR, WEBVIEW_DIR
-    global MODELS_DB, WORKS_DB, SETTINGS_DB, MODELHUB_DIR, EDITOR_DIR
+    global MODELS_DB, WORKS_DB, SETTINGS_DB, MODELHUB_DIR, WORKFLOWHUB_DIR, EDITOR_DIR
     global EDITOR_CACHE_DIR, EDITOR_PROJECTS_DB, THEME_MEDIA_DIR, API_UPLOADS_DIR, PLUGINS_DIR, PLUGIN_DATA_DIR
 
     DATA_DIR = data_dir.expanduser().resolve()
@@ -1226,6 +1257,8 @@ def _apply_data_dir(data_dir: Path) -> None:
     SETTINGS_DB = DATA_DIR / "settings.json"
     # 上传 / 下载暂存目录
     MODELHUB_DIR = DATA_DIR / "modelhub"
+    # 工作流商城上传 / 下载暂存目录
+    WORKFLOWHUB_DIR = DATA_DIR / "workflowhub"
     # 轻量音频编辑器工程与缓存目录
     EDITOR_DIR = DATA_DIR / "editor"
     EDITOR_CACHE_DIR = EDITOR_DIR / "cache"
@@ -1315,6 +1348,8 @@ def modelhub_guess_framework(model_type: str | None) -> str:
 
 # 上传 / 下载暂存目录
 MODELHUB_DIR = DATA_DIR / "modelhub"
+# 工作流商城上传 / 下载暂存目录
+WORKFLOWHUB_DIR = DATA_DIR / "workflowhub"
 # 轻量音频编辑器工程与缓存目录
 EDITOR_DIR = DATA_DIR / "editor"
 EDITOR_CACHE_DIR = EDITOR_DIR / "cache"
@@ -1325,6 +1360,20 @@ PLUGIN_DATA_DIR = DATA_DIR / "plugin-data"
 MODELSCOPE_QPS = 5
 # settings.json 中保存 ModelScope 访问令牌的键名
 MODELSCOPE_TOKEN_SETTING = "modelscope_token"
+
+# ---- 工作流商城（同样基于 ModelScope 魔搭社区）----
+# 与模型站共用访问令牌与限流，但使用独立仓库前缀、清单文件和 magic，
+# 避免工作流与声音模型互相污染搜索结果。
+WORKFLOWHUB_REPO_PREFIX = "xb-cover-workflow"
+WORKFLOWHUB_MANIFEST = "xb-cover-workflow.json"
+WORKFLOWHUB_SCHEMA = _WORKFLOW_MANIFEST_SCHEMA
+WORKFLOWHUB_MAGIC = _WORKFLOW_MANIFEST_MAGIC
+# 工作流 README / 清单里的标记关键词（便于在魔搭社区说明页被检索）。
+MODELSCOPE_WORKFLOW_MARKER = "xb-svcb-cover-workflow"
+# 清单 / 图数据的安全上限（定义在领域层，这里只做别名，避免两处漂移）。
+WORKFLOWHUB_MAX_MANIFEST_BYTES = _WORKFLOW_MANIFEST_MAX_BYTES
+WORKFLOWHUB_MAX_NODES = _WORKFLOW_MANIFEST_MAX_NODES
+WORKFLOWHUB_MAX_EDGES = _WORKFLOW_MANIFEST_MAX_EDGES
 
 # 支持的音频与模型扩展名
 AUDIO_EXTS = (".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac")

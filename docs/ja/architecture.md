@@ -61,19 +61,19 @@ XB-SVCBはローカル優先のデスクトップアプリケーションです�
 
 ### `app/application/`
 
-ユースケースと処理調整層です。モデル、作品、音楽ソース、音声編集、リアルタイム変換、プラグイン、変換タスクのサービスを含みます。通常の推論タスクは`conversion_service.py`から直列キューへ入ります。
+ユースケースと処理調整層です。モデル、ワークフローストア（`workflow_hub_service` がページ分割検索、プレビュー、アップロード、ダウンロード、PyMSS 依存同期を担当）、作品、音楽ソース、音声編集、リアルタイム変換、プラグイン、変換タスクのサービスを含みます。通常の推論タスクは`conversion_service.py`から直列キューへ入ります。
 
 ### `app/domain/`
 
-編集プロジェクト、タスク、モデルのドメインオブジェクトと列挙型を保持し、pywebview、FastAPI、具体的なAIフレームワークへの依存を抑えます。
+編集プロジェクト、タスク、モデルのドメインオブジェクトと列挙型、およびワークフローストアのマニフェスト規則（`workflow_manifest.py`）を保持し、pywebview、FastAPI、具体的なAIフレームワークへの依存を抑えます。
 
 ### `app/infrastructure/`
 
-ファイル保存、パス、FFmpeg、システム音声、UVR、F0、エンジンアダプター、Workerを実装します。`svc_engine.py`、`rvc_engine.py`、`seedvc_engine.py`、`ddsp_engine.py`が各フレームワークの入口です。RVCアダプターは`engines/rvc`の公式推論スタックを読み込み、サードパーティの`rvc-python`には依存しません。
+ファイル保存、パス、FFmpeg、システム音声、UVR、F0、エンジンアダプター、Workerを実装します。`svc_engine.py`、`rvc_engine.py`、`seedvc_engine.py`、`ddsp_engine.py`が各フレームワークの入口です。RVCアダプターは`engines/rvc`の公式推論スタックを読み込み、サードパーティの`rvc-python`には依存しません。ワークフローストアのModelScope検索、マニフェスト取得、子プロセスアップロードは`workflow_hub_client.py`にあり、`WorkflowHubGateway`ポートを実装します。
 
 ### `web/`
 
-Vue 3 + Viteフロントエンドです。`views/`が画面、`stores/`が画面間状態、`src/api/`がpywebview BridgeとHTTP型を管理します。
+Vue 3 + Viteフロントエンドです。`views/`が画面（`views/workflows/market.vue`のワークフローストアを含む）、`stores/`が画面間状態、`components/workflow`が読み取り専用のワークフロープレビュー、`src/api/`がpywebview BridgeとHTTP型を管理します。
 
 ## 実行境界
 

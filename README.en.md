@@ -10,7 +10,7 @@
 
 **Import · Vocal separation · Dereverb · Voice conversion · Vocal enhancement · Mixing · Export**
 
-Create a complete AI song cover in one workflow. Supports **So-VITS-SVC and RVC inference**, **multi-singer covers**, **real-time system-audio conversion**, **AI vocal enhancement projects**, an **online music library**, a **model hub**, and an **audio editor**.
+Create a complete AI song cover in one workflow. Supports **So-VITS-SVC and RVC inference**, **multi-singer covers**, **real-time system-audio conversion**, **AI vocal enhancement projects**, an **online music library**, a **model hub**, a **workflow store**, and an **audio editor**.
 
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release&color=ff6b9d)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
@@ -41,14 +41,14 @@ Create a complete AI song cover in one workflow. Supports **So-VITS-SVC and RVC 
 <div align="center">
   <img src="docs/images/xb-svcb-app-en.png" width="100%" alt="XB-SVCB AI cover workspace running in English" />
   <br/>
-  <sub>XB-SVCB 0.1.1 · Actual AI cover workspace in English</sub>
+  <sub>XB-SVCB 0.1.2 · Actual AI cover workspace in English</sub>
 </div>
 
 ## Overview
 
 XB-SVCB is a local-first Windows application for AI song covers and audio production. Its interface is built with Vue 3, its application core is written in Python, and each AI framework runs in an isolated environment and worker process.
 
-The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UVR / PyMSS vocal separation, AI vocal enhancement, high-note protection, an online music library, a model hub, real-time system-audio conversion, and the Audio Editor Lite multitrack editor.
+The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UVR / PyMSS vocal separation, AI vocal enhancement, high-note protection, an online music library, a model hub, a workflow store, real-time system-audio conversion, and the Audio Editor Lite multitrack editor.
 
 ## Features
 
@@ -61,6 +61,7 @@ The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UV
 - Import TXT / LRC lyrics and use role-based solo, duet, and harmony timeline templates.
 - Convert player audio in real time through WASAPI loopback or VB-CABLE while preserving the accompaniment.
 - Search, upload, and download models through ModelScope with background transfers, resume support, and manifest verification.
+- Upload, search, paginate, preview, and download AI cover workflows through the Workflow Store. Downloads sync the PyMSS models declared in each manifest and can be opened directly in the AI Cover studio.
 - Search, preview, and download songs and lyrics from NetEase Cloud Music, QQ Music, and Kuwo Music.
 - Covers support queued audition: clicking a track plays only that track, while queue playback / continuous audition must be chosen explicitly. Queues support in-order, repeat-all, repeat-one, and shuffle play, with lossless direct output and an equalizer; the audition page shows lyrics and MV.
 - Select NVIDIA CUDA, Windows AMD ROCm 10, DirectML, or CPU execution.
@@ -71,7 +72,7 @@ The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UV
 
 ### Installer
 
-For normal use, download the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`, from the latest GitHub release. It downloads verified offline packages from the ModelScope `v0.1.1` revision. The fallback `XB-SVCB-Online-Setup.exe` is not published on GitHub; contact the developer to obtain it separately.
+For normal use, download the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`, from the latest GitHub release. It downloads verified offline packages from the ModelScope `v0.1.2` revision. The fallback `XB-SVCB-Online-Setup.exe` is not published on GitHub; contact the developer to obtain it separately.
 
 1. Run the online installer and use automatic detection, or manually select CPU, ROCm 10, DirectML, CUDA126, or CUDA128.
 2. Wait for the matching complete package to download and pass SHA-256 verification, then select both the application directory and user-data directory.
@@ -227,11 +228,11 @@ See the [documentation index](docs/en/README.md) for architecture, startup, test
 
 ## Roadmap
 
-Current version: **v0.1.1**
+Current version: **v0.1.2**
 
 The core multi-framework inference workflow, timeline-based multi-singer covers, Audio Editor Lite, ModelScope model hub, FastAPI integration, CUDA / ROCm 10 / DirectML / CPU paths, and plugin runtime are available. Current priorities include automatic lyric recognition, improved automatic timelines, standardized model metadata, project import/export and autosave, more conversion frameworks, video and lyric-video export, and improved Intel GPU / CPU / multi-GPU scheduling.
 
-See the [release-notes directory](docs/release-notes/) for the full version history. The current release is available as [v0.1.1 release notes](docs/release-notes/release_notes_v0_1_1.en.md).
+See the [release-notes directory](docs/release-notes/) for the full version history. The current release is available as [v0.1.2 release notes](docs/release-notes/release_notes_v0_1_2.en.md).
 
 ## Contributors
 
@@ -251,3 +252,13 @@ Contributors: **SDIJF1521 (YGXB) · emptyelse · GFMAA · SugarCatCat**. Click a
 The project's own source code is licensed under **[GNU General Public License v3.0 only](LICENSE)**. Copyright © 2026 SDIJF1521.
 
 Bundled third-party components, models, and resources retain their original licenses. In particular, so-vits-svc 4.1 is AGPL-3.0, DDSP-SVC 6.3 is MIT-licensed, the bundled RVC inference stack is MIT-licensed, and base models and UVR models use their respective upstream terms. GPL-3.0-only does not replace those third-party terms.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=sdijf1521%2Fxb-svcb&type=date&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&legend=top-left" />
+ </picture>
+</a>

@@ -68,6 +68,7 @@ class DataMaintenanceService:
             config.TEMP_DIR,
             config.MUSIC_DIR,
             config.MODELHUB_DIR,
+            config.WORKFLOWHUB_DIR,
             config.EDITOR_DIR,
             config.EDITOR_CACHE_DIR,
             config.THEME_MEDIA_DIR,

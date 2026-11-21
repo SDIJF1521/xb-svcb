@@ -33,6 +33,7 @@ from application import (
     SystemService,
     ThemeMediaService,
     WorkService,
+    WorkflowHubService,
 )
 from application.ports import (
     ItemRepository,
@@ -59,6 +60,7 @@ class Api:
         works: WorkService,
         music: MusicService,
         hub: ModelHubService,
+        workflow_hub: WorkflowHubService,
         editor: AudioEditorService,
         models_repo: ItemRepository,
         works_repo: ItemRepository,
@@ -79,6 +81,7 @@ class Api:
         self._works = works
         self._music = music
         self._hub = hub
+        self._workflow_hub = workflow_hub
         self._editor = editor
         self._models_repo = models_repo
         self._works_repo = works_repo
@@ -502,6 +505,8 @@ class Api:
             )
         # 音乐曲库下载同样纳入传输中心，避免下载大文件时界面没有反馈。
         jobs.extend(self._music.download_jobs())
+        # 工作流商城的上传 / 下载（含 PyMSS 依赖同步）也统一展示。
+        jobs.extend(self._workflow_hub.list_jobs())
         return jobs
 
     def hub_clear_job(self, key: str) -> bool:
@@ -510,7 +515,50 @@ class Api:
             return self._pymss.clear_download_job(key)
         if str(key or "").startswith("music:"):
             return self._music.clear_download_job(key)
+        if str(key or "").startswith(("wfdl:", "wful:")):
+            return self._workflow_hub.clear_job(key)
         return self._hub.clear_job(key or "")
+
+    # ---- 工作流商城（ModelScope 魔搭社区）----
+    def workflow_hub_search(
+        self,
+        query: str = "",
+        page: int = 1,
+        page_size: int = 12,
+        mine_only: bool = False,
+    ) -> dict[str, Any]:
+        """分页搜索工作流商城中由本软件上传的工作流。"""
+        return self._workflow_hub.search(
+            query or "", int(page or 1), int(page_size or 12), bool(mine_only)
+        )
+
+    def workflow_hub_detail(self, repo_id: str) -> dict[str, Any]:
+        """读取工作流详情：完整节点图、依赖的 PyMSS 模型与本地安装状态。"""
+        return self._workflow_hub.detail(repo_id)
+
+    def workflow_hub_start_download(self, repo_id: str) -> dict[str, Any]:
+        """后台下载工作流并同步 PyMSS 模型，立即返回任务 key。"""
+        return self._workflow_hub.start_download(repo_id)
+
+    def workflow_hub_start_upload(
+        self,
+        workflow_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """后台上传本地已保存工作流到商城，立即返回任务 key。"""
+        return self._workflow_hub.start_upload(workflow_id, metadata or {})
+
+    def workflow_hub_progress(self, key: str) -> dict[str, Any]:
+        """轮询工作流上传 / 下载进度。key 形如 'wfdl:<repo>' 或 'wful:<id>'。"""
+        return self._workflow_hub.get_progress(key or "")
+
+    def workflow_hub_list_jobs(self) -> list[dict[str, Any]]:
+        """列出工作流商城后台任务（含实时进度）。"""
+        return self._workflow_hub.list_jobs()
+
+    def workflow_hub_clear_job(self, key: str) -> bool:
+        """清理一条工作流商城任务记录。"""
+        return self._workflow_hub.clear_job(key or "")
 
     # ---- 作品 / 翻唱 ----
     def pick_audio_file(self) -> str | None:

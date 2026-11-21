@@ -1,6 +1,6 @@
 # XB-SVCB 应用本体
 
-版本：`0.1.1`
+版本：`0.1.2`
 
 这里是 XB-SVCB 的桌面应用壳、本地 API、应用服务、领域对象和基础设施适配层。
 
@@ -9,6 +9,13 @@
 - `app/main.py` 启动 pywebview 桌面壳。
 - `app/config.py` 提供应用元信息、路径与运行环境位置。
 - 重型 AI 依赖不打进应用本体。CUDA126/CUDA128 默认放入 `runtimes/core-*` 与 `runtimes/svc-*` 两层共享环境；ROCm 10 的 SVC/RVC/Vocal 共用 `runtimes/svc-rocm10`；CPU、DirectML 和其余 ROCm 组件使用隔离环境。实际解释器路由由 `runtime.json` 决定。
+
+## v0.1.2 版本说明
+
+- 新增工作流商城：基于 ModelScope 上传、分页搜索、只读预览与下载 AI 翻唱工作流，下载时同步清单中的 PyMSS 模型。
+- 工作流清单规则下沉领域层，ModelScope 网络与子进程上传收敛到适配层；新增 `WorkflowHubGateway` 端口与契约测试。
+- 下载工作流自动进入「已保存工作流」，可一键前往 AI 翻唱工作台并自动载入；修复下载工作流连线被错误裁剪等问题。
+- 详细更新内容见 [v0.1.2 更新说明](../docs/release-notes/release_notes_v0_1_2.md)。
 
 ## v0.1.1 版本说明
 
