@@ -564,4 +564,133 @@ html.theme-transitioning {
     animation: none;
   }
 }
+
+/* ============================================================
+   Element Plus 弹窗统一外观
+   部分环境缺少 MessageBox 的居中规则 / 主题变量被覆盖，导致确认框
+   缩在左上角。这里用 flex 布局重新居中，并统一背景、按钮与排版。
+   ============================================================ */
+.el-overlay {
+  backdrop-filter: blur(2px);
+}
+.el-overlay-message-box {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 24px !important;
+  overflow: auto !important;
+  text-align: left !important;
+}
+.el-overlay-message-box::after {
+  display: none !important;
+}
+/* 关闭 MessageBox 自带的位移淡入，避免低帧率环境卡在 translateY(-20px)。 */
+.fade-in-linear-enter-active .el-overlay-message-box,
+.fade-in-linear-leave-active .el-overlay-message-box {
+  animation: none !important;
+}
+.el-message-box {
+  display: block !important;
+  width: min(500px, calc(100vw - 48px)) !important;
+  max-width: 500px !important;
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  margin: 0 !important;
+  padding: 20px 22px !important;
+  border: 1px solid var(--xb-border) !important;
+  border-radius: 18px !important;
+  background:
+    linear-gradient(160deg, rgba(var(--xb-primary-rgb), 0.09), transparent 46%),
+    var(--xb-bg-2) !important;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.48), 0 0 0 1px rgba(var(--xb-primary-rgb), 0.06) inset !important;
+  color: var(--xb-text);
+}
+.el-message-box__header {
+  padding: 0 30px 12px 0 !important;
+}
+.el-message-box__title {
+  color: var(--xb-text) !important;
+  font-size: 17px !important;
+  font-weight: 700 !important;
+  line-height: 1.4 !important;
+}
+.el-message-box__headerbtn {
+  top: 14px !important;
+  right: 14px !important;
+  width: 28px !important;
+  height: 28px !important;
+  border-radius: 8px !important;
+}
+.el-message-box__headerbtn:hover {
+  background: rgba(var(--xb-primary-rgb), 0.12) !important;
+}
+.el-message-box__headerbtn .el-message-box__close {
+  color: var(--xb-muted) !important;
+}
+.el-message-box__content {
+  padding: 0 !important;
+  color: var(--xb-muted) !important;
+  font-size: 14px !important;
+  line-height: 1.7 !important;
+}
+.el-message-box__container {
+  gap: 10px;
+  align-items: flex-start;
+}
+.el-message-box__status {
+  color: var(--xb-primary) !important;
+  margin-top: 2px;
+}
+.el-message-box__message {
+  padding: 0 !important;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  color: var(--xb-muted);
+}
+.el-message-box__message p {
+  margin: 0;
+}
+.el-message-box__input {
+  padding-top: 12px !important;
+}
+.el-message-box__btns {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 18px !important;
+}
+.el-message-box__btns .el-button {
+  min-width: 86px;
+  margin-left: 0 !important;
+  border-radius: 999px !important;
+}
+.el-message-box__btns .el-button:not(.el-button--primary) {
+  background: rgba(var(--xb-primary-rgb), 0.06) !important;
+  border-color: var(--xb-border) !important;
+  color: var(--xb-text) !important;
+}
+.el-message-box__btns .el-button--primary {
+  background: linear-gradient(135deg, var(--xb-primary), var(--xb-primary-2)) !important;
+  border: none !important;
+  color: var(--xb-on-primary) !important;
+  font-weight: 700;
+}
+.el-dialog {
+  border: 1px solid var(--xb-border) !important;
+  border-radius: 18px !important;
+  background:
+    linear-gradient(160deg, rgba(var(--xb-primary-rgb), 0.06), transparent 48%),
+    var(--xb-bg-2) !important;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.5) !important;
+}
+.el-dialog__title {
+  color: var(--xb-text) !important;
+  font-weight: 700 !important;
+}
+.el-dialog__headerbtn .el-dialog__close {
+  color: var(--xb-muted) !important;
+}
+.el-dialog__headerbtn:hover .el-dialog__close {
+  color: var(--xb-primary) !important;
+}
 </style>

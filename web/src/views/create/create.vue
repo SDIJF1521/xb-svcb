@@ -1278,9 +1278,11 @@
         :run-status="currentWork?.mode === 'workflow' ? currentWork.status : ''"
         :run-steps="currentWork?.mode === 'workflow' ? currentWork.steps : []"
         :run-progress="currentWork?.mode === 'workflow' ? currentWork.progress : 0"
+        :initial-workflow-id="initialWorkflowId"
         @pick-song="onPickSong"
         @run="generate"
         @download-pymss="onWorkflowDownloadPymss"
+        @open-market="openWorkflowMarket"
       />
 
       <section class="card glass wf-runlog">
@@ -1402,7 +1404,16 @@ const modelsStore = useModelsStore()
 const systemStore = useSystemStore()
 const worksStore = useWorksStore()
 const router = useRouter()
+const route = useRoute()
 const { models, defaultId } = storeToRefs(modelsStore)
+
+/** 从工作流商城「前往 AI 翻唱工作台」进入时，自动载入对应工作流。 */
+const initialWorkflowId = computed(() => {
+  const raw = route.query.workflow
+  const value = Array.isArray(raw) ? raw[0] : raw
+  return typeof value === 'string' ? value.trim() : ''
+})
+const openInWorkflowMode = route.query.mode === 'workflow' || !!initialWorkflowId.value
 
 interface Song {
   name: string
@@ -1481,6 +1492,11 @@ async function refreshAllPymssModels() {
   } catch {
     /* PyMSS 可选，目录获取失败时保持原列表。 */
   }
+}
+
+/** 打开工作流商城（画布「已保存工作流」面板入口）。 */
+function openWorkflowMarket() {
+  void router.push('/workflows')
 }
 
 /** 工作流节点内直接下载任意 PyMSS 模型。 */
@@ -1702,7 +1718,9 @@ function paramsForFramework(framework: string, values: ParamValues): InferencePa
   return params
 }
 const mode = ref<'single' | 'multi' | 'workflow'>(
-  prefs.mode === 'multi' ? 'multi' : prefs.mode === 'workflow' ? 'workflow' : 'single',
+  openInWorkflowMode
+    ? 'workflow'
+    : prefs.mode === 'multi' ? 'multi' : prefs.mode === 'workflow' ? 'workflow' : 'single',
 )
 
 // 自定义工作流：画布节点图。初始为空，由 WorkflowCanvas 挂载时生成默认模板。
@@ -3139,7 +3157,6 @@ async function pickMultiReference(id: string) {
 }
 
 // 已下载素材（来自「资源获取」页）
-const route = useRoute()
 const downloaded = ref<DownloadedMusic[]>([])
 
 function pickDownloaded(d: DownloadedMusic) {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, ArrowUp, Close, Delete, Download, FolderOpened, FullScreen, Grid, MagicStick, Plus, RefreshLeft, RefreshRight, Setting, Upload } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowUp, Close, Delete, Download, FolderOpened, FullScreen, Grid, MagicStick, Plus, RefreshLeft, RefreshRight, Setting, Shop, Upload } from '@element-plus/icons-vue'
 import { api, type CoverWorkflow, type PymssModel, type WorkflowEdge, type WorkflowGraph, type WorkflowNode, type WorkflowNodeType } from '@/api'
 import { translateUiText } from '@/i18n'
 import { f0MethodsForFramework } from '@/utils/f0'
@@ -25,6 +25,8 @@ const props = withDefaults(
     pymssHarmonyModels?: string[]
     pymssAllModels?: PymssModel[]
     songName?: string
+    /** 从商城进入时自动载入的已保存工作流 ID。 */
+    initialWorkflowId?: string
     runStatus?: string
     runProgress?: number
     runSteps?: { key: string; status: string }[]
@@ -36,6 +38,7 @@ const props = withDefaults(
     pymssHarmonyModels: () => [],
     pymssAllModels: () => [],
     songName: '',
+    initialWorkflowId: '',
     runStatus: '',
     runProgress: 0,
     runSteps: () => [],
@@ -46,6 +49,7 @@ const emit = defineEmits<{
   (e: 'pick-song'): void
   (e: 'run'): void
   (e: 'download-pymss', name: string): void
+  (e: 'open-market'): void
 }>()
 
 const graph = defineModel<WorkflowGraph>({ required: true })
@@ -304,6 +308,17 @@ function separateStemsUnknown(node: WorkflowNode): boolean {
   return declaredStems(node).length === 0
 }
 
+/**
+ * 仅当能确定 PyMSS 模型实际输出音轨时才清理旧连线。
+ * 工作流商城的自动载入会先渲染画布、后拿到模型目录；此时模型音轨未知，
+ * 如果仍按「只有 audio」推断去裁剪，会把 male / female / stem:xxx 等
+ * 有效连线全部删掉，看起来就像下载后的连线错乱。
+ */
+function canPruneSeparateEdges(node: WorkflowNode): boolean {
+  if (String(node.params?.engine || 'uvr').toLowerCase() !== 'pymss') return true
+  return !separateStemsUnknown(node)
+}
+
 // ---- 默认参数 ----
 function defaultParams(type: WorkflowNodeType): Record<string, any> {
   switch (type) {
@@ -407,7 +422,13 @@ const worldStyle = computed(() => ({
 /** 端口中心相对节点左上角的偏移（世界坐标，由 DOM 实测）。 */
 function portPos(node: WorkflowNode, side: 'in' | 'out', port: string) {
   const off = portOffsets.value[portKey(node.id, side, port)]
-  return { x: node.x + (off?.x ?? 0), y: node.y + (off?.y ?? 0) }
+  if (off) return { x: node.x + off.x, y: node.y + off.y }
+  // 模型目录尚未返回 / 端口刚变化时可能还没测量：回落到节点左右边缘中点，
+  // 避免连线从节点左上角飞出去，看起来像“连错节点”。
+  return {
+    x: node.x + (side === 'out' ? NODE_W : 0),
+    y: node.y + nodeHeightOf(node) / 2,
+  }
 }
 
 function edgePath(e: WorkflowEdge): string {
@@ -639,7 +660,7 @@ function layoutRanks(): Map<string, number> {
  * 一键整理：按连线依赖分层、从左到右排列，同层纵向居中铺开，
  * 并用重心法做多轮扫描以减少连线交叉，最后自动缩放铺满画布。
  */
-async function tidyLayout() {
+async function tidyLayout(notify = true) {
   if (!nodes.value.length) return
   await nextTick()
   const heights = new Map<string, number>()
@@ -740,7 +761,7 @@ async function tidyLayout() {
   void measurePorts()
   await nextTick()
   await fitView()
-  ElMessage.success('已自动整理画布节点')
+  if (notify) ElMessage.success('已自动整理画布节点')
 }
 
 const panning = ref<{ startX: number; startY: number; ox: number; oy: number } | null>(null)
@@ -1413,7 +1434,7 @@ async function saveWorkflow() {
   }
 }
 
-async function loadWorkflow(id: string) {
+async function loadWorkflow(id: string, options: { autoTidy?: boolean } = {}) {
   const wf = savedWorkflows.value.find((w) => w.id === id)
   if (!wf) return
   graph.value = { id: wf.id, name: wf.name, updated_at: wf.updated_at, nodes: wf.nodes, edges: wf.edges }
@@ -1421,6 +1442,8 @@ async function loadWorkflow(id: string) {
   selectedNodeId.value = null
   selectedEdgeId.value = null
   await fitView()
+  // 商城工作流沿用作者的画布坐标可能很散，首次载入自动整理一次，减少交叉连线。
+  if (options.autoTidy) await tidyLayout(false)
 }
 
 // ---- 工作流文件导入 / 导出 ----
@@ -1521,8 +1544,11 @@ function normalizeNodes() {
     if (node.type === 'separate' || node.type === 'dereverb') syncPymssNodeType(node, false)
   }
   // 旧工作流可能连了当前模型并不输出的音轨，载入时静默清理。
+  // 模型目录尚未返回时先保留连线，等 watch(pymssAllModels) 拿到音轨后再判断。
   for (const node of graph.value.nodes) {
-    if (node.type === 'separate') pruneStalePortEdges(node, true)
+    if (node.type === 'separate' && canPruneSeparateEdges(node)) {
+      pruneStalePortEdges(node, true)
+    }
   }
 }
 
@@ -1534,8 +1560,12 @@ watch(
   () => {
     for (const node of nodes.value) {
       if (node.type === 'separate' || node.type === 'dereverb') syncPymssNodeType(node, false)
-      if (node.type === 'separate') pruneStalePortEdges(node, true)
+      if (node.type === 'separate' && canPruneSeparateEdges(node)) {
+        pruneStalePortEdges(node, true)
+      }
     }
+    // 模型音轨补全后端口数量可能变化，重新测量端口位置，避免连线落在节点角落。
+    void measurePorts()
   },
   { deep: true },
 )
@@ -1611,13 +1641,23 @@ const DEVICE_OPTIONS = [
   { label: 'CPU', value: 'cpu' },
 ]
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener('keydown', onKeydown)
   window.addEventListener('pointerdown', onWindowPointerDown, true)
-  if (!graph.value.nodes?.length) newWorkflow()
-  else void fitView()
+  await refreshWorkflows()
+  const wantedId = String(props.initialWorkflowId || '').trim()
+  const wanted = wantedId
+    ? savedWorkflows.value.find((workflow) => workflow.id === wantedId)
+    : undefined
+  if (wanted) {
+    await loadWorkflow(wanted.id, { autoTidy: wanted.source?.origin === 'downloaded' })
+    ElMessage.success(`已载入工作流「${wanted.name}」`)
+  } else if (!graph.value.nodes?.length) {
+    newWorkflow()
+  } else {
+    void fitView()
+  }
   normalizeNodes()
-  void refreshWorkflows()
   pushHistory()
 })
 onUnmounted(() => {
@@ -1787,6 +1827,9 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
         <div v-if="savedPanelOpen" class="wf-saved-panel" @pointerdown.stop>
           <div class="wf-saved-head">
             <span>已保存工作流</span>
+            <button class="wf-saved-shop" title="打开工作流商城" @click="emit('open-market')">
+              <el-icon><Shop /></el-icon>商城
+            </button>
             <button class="wf-saved-close" title="关闭" @click="savedPanelOpen = false">
               <el-icon><Close /></el-icon>
             </button>
@@ -1799,7 +1842,12 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
             :class="{ active: w.id === graph.id }"
           >
             <button class="wf-saved-pick" :title="`载入「${w.name}」`" @click="pickSavedWorkflow(w.id)">
-              <span class="wf-saved-name">{{ w.name }}</span>
+              <span class="wf-saved-name">
+                {{ w.name }}
+                <span v-if="w.source?.repo_id" class="wf-saved-src">
+                  {{ w.source.origin === 'uploaded' ? '已分享' : '商城' }}
+                </span>
+              </span>
               <span v-if="w.updated_at" class="wf-saved-meta">{{ w.updated_at }}</span>
             </button>
             <button class="wf-saved-del" title="删除该工作流" @click.stop="deleteSavedWorkflow(w)">
@@ -1820,7 +1868,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
         class="ghost-btn"
         :disabled="!nodes.length"
         title="按连线依赖自动排列节点，减少交叉"
-        @click="tidyLayout"
+        @click="tidyLayout()"
       >
         <el-icon class="el-icon--left"><Grid /></el-icon>一键整理
       </el-button>
@@ -2617,6 +2665,33 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
   background: transparent;
   color: var(--xb-muted);
   cursor: pointer;
+}
+.wf-saved-shop {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  margin-right: 4px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--xb-primary) 35%, transparent);
+  background: color-mix(in srgb, var(--xb-primary) 10%, transparent);
+  color: var(--xb-primary);
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.wf-saved-shop:hover { background: color-mix(in srgb, var(--xb-primary) 20%, transparent); }
+.wf-saved-src {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--xb-primary) 16%, transparent);
+  color: var(--xb-primary);
+  font-size: 9.5px;
+  font-weight: 700;
+  vertical-align: middle;
 }
 .wf-saved-close:hover { background: rgba(127, 127, 127, 0.16); color: var(--xb-text); }
 .wf-saved-empty { padding: 12px 8px; font-size: 12px; color: var(--xb-muted); text-align: center; }

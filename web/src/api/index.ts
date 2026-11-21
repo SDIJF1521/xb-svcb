@@ -98,6 +98,9 @@ import type {
   WorkflowGraph,
   WorkflowFileExportResult,
   WorkflowFileImportResult,
+  WorkflowHubSearchResult,
+  WorkflowHubDetailResult,
+  WorkflowHubUploadOptions,
 } from './types'
 
 export * from './types'
@@ -425,6 +428,50 @@ export const api = {
       [labels.title || '', labels.file || '', labels.allFiles || ''],
       () => mock.importCoverWorkflowFile(),
     ),
+
+  // ---- 工作流商城（ModelScope 魔搭社区）----
+
+  /** 分页搜索工作流商城（可按关键词、只看自己上传筛选）。 */
+  workflowHubSearch: (
+    query = '',
+    page = 1,
+    pageSize = 12,
+    mineOnly = false,
+  ) =>
+    invoke<WorkflowHubSearchResult>(
+      'workflow_hub_search',
+      [query, page, pageSize, mineOnly],
+      () => mock.workflowHubSearch(query, page, pageSize, mineOnly),
+    ),
+
+  /** 读取商城工作流详情（完整节点图 + PyMSS 依赖状态）。 */
+  workflowHubDetail: (repoId: string) =>
+    invoke<WorkflowHubDetailResult>('workflow_hub_detail', [repoId], () =>
+      mock.workflowHubDetail(repoId),
+    ),
+
+  /** 后台下载工作流并同步其 PyMSS 依赖，立即返回任务 key。 */
+  workflowHubStartDownload: (repoId: string) =>
+    invoke<HubStartResult>('workflow_hub_start_download', [repoId], () =>
+      mock.workflowHubStartDownload(repoId),
+    ),
+
+  /** 后台上传本地已保存工作流，立即返回任务 key。 */
+  workflowHubStartUpload: (workflowId: string, options?: WorkflowHubUploadOptions) =>
+    invoke<HubStartResult>(
+      'workflow_hub_start_upload',
+      [workflowId, options],
+      () => mock.workflowHubStartUpload(workflowId, options),
+    ),
+
+  workflowHubProgress: (key: string) =>
+    invoke<HubProgress>('workflow_hub_progress', [key], () => mock.workflowHubProgress(key)),
+
+  workflowHubListJobs: () =>
+    invoke<HubJob[]>('workflow_hub_list_jobs', [], () => mock.workflowHubListJobs()),
+
+  workflowHubClearJob: (key: string) =>
+    invoke<boolean>('workflow_hub_clear_job', [key], () => mock.workflowHubClearJob(key)),
 
   retryWork: (id: string) =>
     invoke<boolean>('retry_work', [id], () => mock.retryWork(id)),

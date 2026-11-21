@@ -34,6 +34,7 @@ declare module 'vue' {
     ElInputNumber: typeof import('element-plus/es')['ElInputNumber']
     ElOption: typeof import('element-plus/es')['ElOption']
     ElOptionGroup: typeof import('element-plus/es')['ElOptionGroup']
+    ElPagination: typeof import('element-plus/es')['ElPagination']
     ElPopover: typeof import('element-plus/es')['ElPopover']
     ElProgress: typeof import('element-plus/es')['ElProgress']
     ElRadio: typeof import('element-plus/es')['ElRadio']
@@ -59,5 +60,6 @@ declare module 'vue' {
     ThemePresetList: typeof import('./../components/theme/ThemePresetList.vue')['default']
     ThemeSwitcher: typeof import('./../components/theme/ThemeSwitcher.vue')['default']
     TimelineTemplatePanel: typeof import('./../components/editor/TimelineTemplatePanel.vue')['default']
+    WorkflowGraphPreview: typeof import('./../components/workflow/WorkflowGraphPreview.vue')['default']
   }
 }

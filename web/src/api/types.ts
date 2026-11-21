@@ -419,6 +419,18 @@ export interface WorkflowGraph {
   edges: WorkflowEdge[]
 }
 
+/** 工作流来源信息：区分「从商城下载」与「上传到商城」。 */
+export interface WorkflowSource {
+  origin?: 'downloaded' | 'uploaded' | ''
+  repo_id?: string
+  version?: string
+  uploaded_at?: string
+  author?: string
+  lineage_id?: string
+  /** 远端清单里的名称（用于判断用户是否改过本地名称）。 */
+  remote_name?: string
+}
+
 /** 已保存的自定义工作流（后端持久化记录）。 */
 export interface CoverWorkflow {
   id: string
@@ -426,6 +438,8 @@ export interface CoverWorkflow {
   updated_at: string
   nodes: WorkflowNode[]
   edges: WorkflowEdge[]
+  /** 商城来源信息（普通本地工作流没有该字段）。 */
+  source?: WorkflowSource
 }
 
 /** 工作流文件导出结果。 */
@@ -1023,11 +1037,114 @@ export interface HubJob {
   title: string
   status: 'running' | 'done' | 'failed'
   error?: string | null
-  result?: { model?: ModelDTO; url?: string; repo_id?: string } | null
+  result?: {
+    model?: ModelDTO
+    url?: string
+    repo_id?: string
+    workflow?: CoverWorkflow
+    warnings?: string[]
+    pymss_failed?: { name: string; error: string }[]
+  } | null
   created_at?: string
   pct: number
   msg: string
   phase: string
+}
+
+// ---- 工作流商城（ModelScope 魔搭社区）----
+
+/** 工作流依赖的一个 PyMSS 模型及其本地安装状态。 */
+export interface WorkflowHubPymssModel {
+  name: string
+  purpose?: string
+  purpose_label?: string
+  architecture?: string
+  category_label?: string
+  target_stem?: string
+  size_bytes?: number
+  downloaded: boolean
+}
+
+/** 工作流缩略图数据：只有节点位置与连线，不含节点参数。 */
+export interface WorkflowPreviewNode {
+  id: string
+  type: string
+  x: number
+  y: number
+}
+
+export interface WorkflowPreviewGraph {
+  nodes: WorkflowPreviewNode[]
+  edges: WorkflowEdge[]
+}
+
+/** 一份可预览 / 可下载的商城工作流。 */
+export interface WorkflowHubItem {
+  repo_id: string
+  name: string
+  description?: string
+  author: string
+  version: string
+  uploaded_at?: string
+  tags?: string[]
+  url: string
+  node_count: number
+  edge_count: number
+  pymss_models?: WorkflowHubPymssModel[]
+  /** 本地「已保存工作流」中是否已有该来源。 */
+  downloaded: boolean
+  /** 已下载时对应的本地工作流 ID。 */
+  local_workflow_id?: string
+  /** 列表缩略图用的轻量节点图（不含节点参数）。 */
+  preview_graph?: WorkflowPreviewGraph | null
+  /** 详情接口返回的完整节点图。 */
+  graph?: WorkflowGraph | null
+}
+
+export interface WorkflowHubSearchResult {
+  ok: boolean
+  error?: string
+  items?: WorkflowHubItem[]
+  page?: number
+  page_size?: number
+  /** 服务端返回的总条数（用于分页组件）。 */
+  total?: number
+  has_more?: boolean
+  /** 当前 ModelScope 登录用户名（用于「我上传的」与上传提示）。 */
+  viewer?: string
+  mine_only?: boolean
+}
+
+export interface WorkflowHubDetailResult {
+  ok: boolean
+  error?: string
+  item?: WorkflowHubItem
+}
+
+/** 上传工作流到商城时可填写的展示信息。 */
+export interface WorkflowHubUploadOptions {
+  name?: string
+  version?: string
+  description?: string
+  tags?: string[]
+}
+
+export interface WorkflowHubUploadResult {
+  ok: boolean
+  error?: string
+  url?: string
+  repo_id?: string
+}
+
+/** 工作流下载结果：工作流已保存，并附带 PyMSS 依赖同步结果。 */
+export interface WorkflowHubDownloadResult {
+  ok: boolean
+  error?: string
+  repo_id?: string
+  workflow?: CoverWorkflow
+  pymss_downloaded?: string[]
+  pymss_failed?: { name: string; error: string }[]
+  warnings?: string[]
 }
 
 // ---- 音频编辑器（Audio Editor Lite）----

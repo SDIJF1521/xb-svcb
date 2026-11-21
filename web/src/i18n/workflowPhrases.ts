@@ -286,6 +286,128 @@ export const workflowEnPhrases: Record<string, string> = {
   '暂无已下载素材': 'No downloaded materials yet',
   '去资源获取下载': 'Download more in Resources',
   '未检测到模型版本，将由软件自动推断': 'Version not detected; it will be inferred automatically.',
+  // 工作流商城
+  '工作流商城': 'Workflow Store',
+  '浏览、预览并下载社区分享的 AI 翻唱工作流；下载后自动同步所需的 PyMSS 模型，并在「已保存工作流」中直接使用。':
+    'Browse, preview and download community AI cover workflows. Downloads sync the required PyMSS models and appear in Saved Workflows.',
+  'ModelScope 设置': 'ModelScope Settings',
+  '上传工作流': 'Upload Workflow',
+  '尚未配置 ModelScope 访问令牌': 'ModelScope access token is not configured',
+  '浏览、预览与下载无需令牌；上传工作流时需要配置你自己的访问令牌（与模型站共用）。':
+    'Browsing, previewing and downloading need no token. Uploading uses the same access token as the model store.',
+  '前往设置': 'Open Settings',
+  '全部工作流': 'All workflows',
+  '我上传的工作流': 'My uploaded workflows',
+  '共': 'Total',
+  '个工作流': 'workflows',
+  '每页': 'Per page',
+  '搜索工作流名称、简介或标签（留空浏览全部）…': 'Search workflow name, description or tags (leave empty to browse all)…',
+  '清除': 'Clear',
+  '搜索': 'Search',
+  '刷新': 'Refresh',
+  '仅展示由本软件上传并通过清单校验的工作流。预览不会写入本地；下载后会保存到「已保存工作流」，并自动安装缺失的 PyMSS 模型。':
+    'Only workflows uploaded by this app and verified by their manifest are shown. Preview stays local; downloading saves it to Saved Workflows and installs missing PyMSS models.',
+  '当前账号': 'Current account',
+  '预览工作流': 'Preview workflow',
+  '已保存': 'Saved',
+  '作者': 'Author',
+  '匿名': 'Anonymous',
+  '下载中…': 'Downloading…',
+  '下载失败，可重试': 'Download failed. Try again.',
+  '预览': 'Preview',
+  '重新下载': 'Download again',
+  '下载工作流': 'Download workflow',
+  '正在读取工作流商城…': 'Loading the workflow store…',
+  '没有找到相关工作流': 'No matching workflows',
+  '你还没有上传过工作流，或当前令牌下没有匹配项。': 'You have not uploaded any workflow, or this token has no matches.',
+  '换个关键词，或把你的工作流「上传到商城」让社区也能用。': 'Try another keyword, or upload your workflow to share it with the community.',
+  '工作流详情': 'Workflow details',
+  '正在读取工作流清单…': 'Reading workflow manifest…',
+  '已保存到我的工作流': 'Saved to My Workflows',
+  '在 ModelScope 查看': 'View on ModelScope',
+  '暂无可预览的节点': 'No previewable nodes',
+  '相关 PyMSS 模型': 'Related PyMSS models',
+  'PyMSS 分离模型': 'PyMSS separation model',
+  '已安装': 'Installed',
+  '待下载': 'Not installed',
+  '该工作流未依赖 PyMSS 模型。': 'This workflow does not depend on any PyMSS model.',
+  '下载工作流时会自动同步安装缺失的 PyMSS 模型，已安装的会自动跳过。':
+    'Downloading the workflow installs missing PyMSS models automatically and skips installed ones.',
+  '标签': 'Tags',
+  '暂无标签': 'No tags',
+  '使用方式': 'How to use',
+  '下载完成后，在 AI 翻唱工作台的「已保存工作流」面板中载入即可。':
+    'After downloading, load it from the Saved Workflows panel in the AI Cover studio.',
+  '预览仅用于查看工作流结构，未下载前不能载入或运行；下载后会保存到「已保存工作流」，转换节点仍需要选择你本地的声音模型。':
+    'Preview only shows the structure and cannot be loaded or run before download. After downloading it is saved to Saved Workflows; pick your own local voice model in conversion nodes.',
+  '处理中…': 'Working…',
+  '关闭': 'Close',
+  '前往 AI 翻唱工作台': 'Open AI Cover studio',
+  '重新下载并同步依赖': 'Download again and sync dependencies',
+  '下载工作流并同步 PyMSS': 'Download workflow and sync PyMSS',
+  '上传工作流到商城': 'Upload workflow to store',
+  '从「已保存工作流」中选择一个，上传到你的 ModelScope 公开仓库，供其他用户搜索、预览和下载。':
+    'Pick a saved workflow and upload it to your public ModelScope repository so others can search, preview and download it.',
+  '选择工作流': 'Choose a workflow',
+  '选择要上传的已保存工作流': 'Choose a saved workflow to upload',
+  '还没有已保存的工作流，请先到 AI 翻唱工作台画布中保存一个。':
+    'No saved workflows yet. Save one on the AI Cover canvas first.',
+  '该工作流之前分享过，重新上传会更新同一个仓库。':
+    'This workflow was shared before; uploading again updates the same repository.',
+  '名称': 'Name',
+  '版本号': 'Version',
+  '简介': 'Description',
+  '描述适用曲风、分离 / 增强思路或使用说明': 'Describe the genres, separation / enhancement approach or usage',
+  '例如：女声, 流行, PyMSS': 'For example: female, pop, PyMSS',
+  '该工作流依赖的 PyMSS 模型会写入清单，下载者会自动同步安装：':
+    'The PyMSS models this workflow depends on are written to the manifest and installed automatically for downloaders:',
+  '上传只包含工作流结构与 PyMSS 依赖，不包含声音模型文件；下载者需要在转换节点选择自己的本地模型。':
+    'Upload includes only the workflow structure and PyMSS dependencies, not voice model files. Downloaders pick their own local model in conversion nodes.',
+  '上传会在后台进行，不影响继续操作；进度可在顶栏「传输」面板查看。':
+    'Upload runs in the background; check progress in the top-bar Transfers panel.',
+  '取消': 'Cancel',
+  '上传': 'Upload',
+  '工作流商城基于魔搭社区 ModelScope，与模型站共用访问令牌。请登录后在「个人中心 → 访问令牌」获取令牌填入下方。':
+    'The Workflow Store is built on ModelScope and shares the access token with the model store. Get a token from Profile → Access Token and paste it below.',
+  '访问令牌（Access Token）': 'Access Token',
+  '粘贴你的 ModelScope 访问令牌': 'Paste your ModelScope access token',
+  '已验证': 'Verified',
+  '未检测到上传组件（.venv-hub）。搜索 / 下载不受影响；如需上传工作流，请在安装器中安装「模型上传组件」。':
+    'Upload component (.venv-hub) not found. Search and download still work; install the model upload component to upload workflows.',
+  '验证': 'Verify',
+  '请先填写访问令牌': 'Enter an access token first',
+  '令牌有效': 'Token is valid',
+  '令牌无效': 'Invalid token',
+  '读取工作流商城失败': 'Failed to load the workflow store',
+  '读取工作流详情失败': 'Failed to load workflow details',
+  '该工作流正在后台下载，请在顶栏「传输」查看进度':
+    'This workflow is downloading in the background. Check the top-bar Transfers panel.',
+  '下载后会保存到「已保存工作流」，可在 AI 翻唱工作台中使用。':
+    'The download is saved to Saved Workflows and can be used in the AI Cover studio.',
+  '将同时下载': 'Also downloading',
+  '个缺失的 PyMSS 模型：': 'missing PyMSS model(s):',
+  '该工作流依赖的 PyMSS 模型都已安装，无需额外下载。':
+    'All PyMSS models this workflow depends on are already installed.',
+  '开始下载': 'Start download',
+  '启动下载失败': 'Failed to start the download',
+  '已加入后台下载，可在顶栏「传输」查看进度':
+    'Added to background downloads. Check the top-bar Transfers panel.',
+  '请先在「ModelScope 设置」填写访问令牌': 'Set the access token in ModelScope Settings first',
+  '未安装上传组件（.venv-hub），请在安装器中安装「模型上传组件」后重试':
+    'Upload component (.venv-hub) is missing. Install the model upload component and retry.',
+  '还没有已保存的工作流，请先在 AI 翻唱工作台保存一个':
+    'No saved workflows yet. Save one in the AI Cover studio first.',
+  '请填写工作流名称': 'Enter a workflow name',
+  '启动上传失败': 'Failed to start the upload',
+  '已加入后台上传，可在顶栏「传输」查看进度':
+    'Added to background uploads. Check the top-bar Transfers panel.',
+  '工作流已保存，但部分依赖下载失败': 'Workflow saved, but some dependencies failed to download',
+  '工作流已保存到「已保存工作流」，依赖模型已就绪':
+    'Workflow saved to Saved Workflows; dependencies are ready',
+  '工作流下载失败': 'Workflow download failed',
+  '工作流已上传到商城': 'Workflow uploaded to the store',
+  '工作流上传失败': 'Workflow upload failed',
+  '未知时间': 'Unknown time',
 }
 
 export const workflowJaPhrases: Record<string, string> = {
@@ -557,6 +679,128 @@ export const workflowJaPhrases: Record<string, string> = {
   '暂无已下载素材': 'ダウンロード済み素材はありません',
   '去资源获取下载': '素材取得でダウンロード',
   '未检测到模型版本，将由软件自动推断': 'モデルのバージョンが検出されませんでした。自動的に推測されます。',
+  // ワークフローストア
+  '工作流商城': 'ワークフローストア',
+  '浏览、预览并下载社区分享的 AI 翻唱工作流；下载后自动同步所需的 PyMSS 模型，并在「已保存工作流」中直接使用。':
+    'コミュニティが共有する AI カバーワークフローを閲覧・プレビュー・ダウンロードできます。ダウンロード時に必要な PyMSS モデルを同期し、「保存済みワークフロー」から利用できます。',
+  'ModelScope 设置': 'ModelScope 設定',
+  '上传工作流': 'ワークフローをアップロード',
+  '尚未配置 ModelScope 访问令牌': 'ModelScope アクセストークンが未設定です',
+  '浏览、预览与下载无需令牌；上传工作流时需要配置你自己的访问令牌（与模型站共用）。':
+    '閲覧・プレビュー・ダウンロードにトークンは不要です。アップロード時はモデルストアと共通のアクセストークンを使用します。',
+  '前往设置': '設定へ',
+  '全部工作流': 'すべてのワークフロー',
+  '我上传的工作流': '自分が投稿したワークフロー',
+  '共': '合計',
+  '个工作流': 'ワークフロー',
+  '每页': '1ページ',
+  '搜索工作流名称、简介或标签（留空浏览全部）…': 'ワークフロー名・説明・タグで検索（空欄で全件表示）…',
+  '清除': 'クリア',
+  '搜索': '検索',
+  '刷新': '更新',
+  '仅展示由本软件上传并通过清单校验的工作流。预览不会写入本地；下载后会保存到「已保存工作流」，并自动安装缺失的 PyMSS 模型。':
+    '本ソフトがアップロードし、マニフェスト検証に合格したワークフローのみ表示します。プレビューは保存されません。ダウンロード後は「保存済みワークフロー」に保存され、不足している PyMSS モデルが自動でインストールされます。',
+  '当前账号': '現在のアカウント',
+  '预览工作流': 'ワークフローをプレビュー',
+  '已保存': '保存済み',
+  '作者': '作者',
+  '匿名': '匿名',
+  '下载中…': 'ダウンロード中…',
+  '下载失败，可重试': 'ダウンロードに失敗しました。再試行できます。',
+  '预览': 'プレビュー',
+  '重新下载': '再ダウンロード',
+  '下载工作流': 'ワークフローをダウンロード',
+  '正在读取工作流商城…': 'ワークフローストアを読み込み中…',
+  '没有找到相关工作流': '該当するワークフローがありません',
+  '你还没有上传过工作流，或当前令牌下没有匹配项。': 'まだワークフローを投稿していないか、このトークンに一致する項目がありません。',
+  '换个关键词，或把你的工作流「上传到商城」让社区也能用。': '別のキーワードを試すか、ワークフローを投稿して共有しましょう。',
+  '工作流详情': 'ワークフロー詳細',
+  '正在读取工作流清单…': 'ワークフローマニフェストを読み込み中…',
+  '已保存到我的工作流': 'マイワークフローに保存済み',
+  '在 ModelScope 查看': 'ModelScope で表示',
+  '暂无可预览的节点': 'プレビューできるノードがありません',
+  '相关 PyMSS 模型': '関連する PyMSS モデル',
+  'PyMSS 分离模型': 'PyMSS 分離モデル',
+  '已安装': 'インストール済み',
+  '待下载': '未インストール',
+  '该工作流未依赖 PyMSS 模型。': 'このワークフローは PyMSS モデルに依存していません。',
+  '下载工作流时会自动同步安装缺失的 PyMSS 模型，已安装的会自动跳过。':
+    'ワークフローをダウンロードすると不足している PyMSS モデルが自動で同期され、インストール済みのものはスキップされます。',
+  '标签': 'タグ',
+  '暂无标签': 'タグなし',
+  '使用方式': '使い方',
+  '下载完成后，在 AI 翻唱工作台的「已保存工作流」面板中载入即可。':
+    'ダウンロード後、AI カバーワークベンチの「保存済みワークフロー」から読み込めます。',
+  '预览仅用于查看工作流结构，未下载前不能载入或运行；下载后会保存到「已保存工作流」，转换节点仍需要选择你本地的声音模型。':
+    'プレビューは構成の確認専用で、ダウンロード前は読み込み・実行できません。ダウンロード後は「保存済みワークフロー」に保存されます。変換ノードではローカルの音声モデルを選択してください。',
+  '处理中…': '処理中…',
+  '关闭': '閉じる',
+  '前往 AI 翻唱工作台': 'AI カバーワークベンチへ',
+  '重新下载并同步依赖': '再ダウンロードして依存関係を同期',
+  '下载工作流并同步 PyMSS': 'ワークフローをダウンロードして PyMSS を同期',
+  '上传工作流到商城': 'ワークフローをストアに投稿',
+  '从「已保存工作流」中选择一个，上传到你的 ModelScope 公开仓库，供其他用户搜索、预览和下载。':
+    '「保存済みワークフロー」から選択し、ModelScope の公開リポジトリに投稿します。他のユーザーが検索・プレビュー・ダウンロードできます。',
+  '选择工作流': 'ワークフローを選択',
+  '选择要上传的已保存工作流': '投稿する保存済みワークフローを選択',
+  '还没有已保存的工作流，请先到 AI 翻唱工作台画布中保存一个。':
+    '保存済みワークフローがありません。先に AI カバーキャンバスで保存してください。',
+  '该工作流之前分享过，重新上传会更新同一个仓库。':
+    'このワークフローは以前に共有されています。再投稿すると同じリポジトリが更新されます。',
+  '名称': '名前',
+  '版本号': 'バージョン',
+  '简介': '説明',
+  '描述适用曲风、分离 / 增强思路或使用说明': 'ジャンル、分離 / 強化の方針、使い方を記入',
+  '例如：女声, 流行, PyMSS': '例：女性ボーカル, ポップス, PyMSS',
+  '该工作流依赖的 PyMSS 模型会写入清单，下载者会自动同步安装：':
+    'このワークフローが依存する PyMSS モデルはマニフェストに記録され、ダウンロード時に自動でインストールされます：',
+  '上传只包含工作流结构与 PyMSS 依赖，不包含声音模型文件；下载者需要在转换节点选择自己的本地模型。':
+    'アップロードにはワークフロー構成と PyMSS 依存のみが含まれ、音声モデルファイルは含まれません。ダウンロードしたユーザーは変換ノードで自分のローカルモデルを選択します。',
+  '上传会在后台进行，不影响继续操作；进度可在顶栏「传输」面板查看。':
+    'アップロードはバックグラウンドで実行されます。進捗は上部の「転送」パネルで確認できます。',
+  '取消': 'キャンセル',
+  '上传': 'アップロード',
+  '工作流商城基于魔搭社区 ModelScope，与模型站共用访问令牌。请登录后在「个人中心 → 访问令牌」获取令牌填入下方。':
+    'ワークフローストアは ModelScope を利用しており、モデルストアとアクセストークンを共有します。「個人センター → アクセストークン」から取得して入力してください。',
+  '访问令牌（Access Token）': 'アクセストークン',
+  '粘贴你的 ModelScope 访问令牌': 'ModelScope のアクセストークンを貼り付け',
+  '已验证': '検証済み',
+  '未检测到上传组件（.venv-hub）。搜索 / 下载不受影响；如需上传工作流，请在安装器中安装「模型上传组件」。':
+    'アップロードコンポーネント（.venv-hub）が見つかりません。検索 / ダウンロードは利用できます。投稿するにはインストーラーで「モデルアップロードコンポーネント」をインストールしてください。',
+  '验证': '検証',
+  '请先填写访问令牌': '先にアクセストークンを入力してください',
+  '令牌有效': 'トークンは有効です',
+  '令牌无效': '無効なトークンです',
+  '读取工作流商城失败': 'ワークフローストアの読み込みに失敗しました',
+  '读取工作流详情失败': 'ワークフロー詳細の読み込みに失敗しました',
+  '该工作流正在后台下载，请在顶栏「传输」查看进度':
+    'このワークフローはバックグラウンドでダウンロード中です。上部の「転送」で確認してください。',
+  '下载后会保存到「已保存工作流」，可在 AI 翻唱工作台中使用。':
+    'ダウンロード後は「保存済みワークフロー」に保存され、AI カバーワークベンチで使用できます。',
+  '将同时下载': '同時にダウンロード',
+  '个缺失的 PyMSS 模型：': '個の不足している PyMSS モデル：',
+  '该工作流依赖的 PyMSS 模型都已安装，无需额外下载。':
+    'このワークフローが依存する PyMSS モデルはすべてインストール済みです。',
+  '开始下载': 'ダウンロード開始',
+  '启动下载失败': 'ダウンロードの開始に失敗しました',
+  '已加入后台下载，可在顶栏「传输」查看进度':
+    'バックグラウンドダウンロードに追加しました。上部の「転送」で確認できます。',
+  '请先在「ModelScope 设置」填写访问令牌': '先に「ModelScope 設定」でアクセストークンを入力してください',
+  '未安装上传组件（.venv-hub），请在安装器中安装「模型上传组件」后重试':
+    'アップロードコンポーネント（.venv-hub）がありません。インストーラーでインストールしてから再試行してください。',
+  '还没有已保存的工作流，请先在 AI 翻唱工作台保存一个':
+    '保存済みワークフローがありません。先に AI カバーワークベンチで保存してください。',
+  '请填写工作流名称': 'ワークフロー名を入力してください',
+  '启动上传失败': 'アップロードの開始に失敗しました',
+  '已加入后台上传，可在顶栏「传输」查看进度':
+    'バックグラウンドアップロードに追加しました。上部の「転送」で確認できます。',
+  '工作流已保存，但部分依赖下载失败': 'ワークフローは保存されましたが、一部の依存関係のダウンロードに失敗しました',
+  '工作流已保存到「已保存工作流」，依赖模型已就绪':
+    'ワークフローを「保存済みワークフロー」に保存しました。依存モデルの準備ができました。',
+  '工作流下载失败': 'ワークフローのダウンロードに失敗しました',
+  '工作流已上传到商城': 'ワークフローをストアに投稿しました',
+  '工作流上传失败': 'ワークフローのアップロードに失敗しました',
+  '未知时间': '不明な日時',
 }
 
 const workflowEnRules: readonly (readonly [RegExp, string])[] = [
