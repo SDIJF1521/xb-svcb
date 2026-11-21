@@ -4,6 +4,13 @@
 
 普通用户可以使用在线安装器自动选择硬件包，也可以下载与硬件匹配的完整离线安装包。源码方式面向开发者和需要修改引擎的人。
 
+## 运行前置要求
+
+- Windows 10 1809 及以上或 Windows 11，64 位。
+- **Microsoft Visual C++ 2015-2022 x64 运行库，必须是最新版本**：<https://aka.ms/vs/17/release/vc_redist.x64.exe>。以前装过也要再运行一次并选择「修复」。该运行库过旧、或被其它软件自带的旧 `msvcp140.dll` 覆盖时，UVR 依赖的 `onnxruntime` 会在导入阶段崩溃（`0xC0000005`），安装停在第 4/12 步或最终共享运行时校验，见[安装最后一步失败：UVR 探针崩溃](#安装最后一步失败uvr-探针崩溃)。
+- 与硬件匹配的显卡驱动：NVIDIA 40 系及以下用 CUDA126，RTX 50 系用 CUDA128，AMD 优先 ROCm 10（可选 DirectML），无兼容显卡时用 CPU。
+- 64 位 CPython 3.12.x：安装包已内置，无需另装；源码运行需自行准备，另需 Node.js 20.19+ 或 22.12+。
+
 ## 在线安装
 
 从 GitHub Releases 下载并运行魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`，选择“自动检测（推荐）”或手动指定硬件版本。在线安装器从 ModelScope 的 `v0.1.2` 版本只下载所选硬件的完整 EXE/BIN 文件，逐个校验 SHA-256 后启动三语离线安装向导。下载期间需要保持网络连接，并确保防火墙允许访问 `www.modelscope.cn`。
@@ -161,6 +168,7 @@ Set-Location $root
 ## 源码环境要求
 
 - Windows。
+- 最新版 Microsoft Visual C++ 2015-2022 x64 运行库（UVR 的 `onnxruntime` 依赖它，见[运行前置要求](#运行前置要求)）。
 - 源码运行和发布构建需要 64 位 CPython 3.12.x；普通安装用户使用安装器内置版本。
 - Node.js 20.19+ 或 22.12+，仅构建前端需要。
 - 可访问 PyPI、模型源和上游仓库，或已准备离线 wheelhouse 与模型资产。
@@ -246,6 +254,29 @@ set XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple
 set XB_GH_MIRROR=https://ghfast.top
 setup_env.bat
 ```
+
+### 安装最后一步失败：UVR 探针崩溃
+
+`uvr_mdx` / `uvr_vr` 探针退出码为 `3221225477`（`0xC0000005`），而 `pip check` 显示全部兼容。这是系统 C++ 运行库的问题：UVR 依赖的 `onnxruntime` pybind 扩展静态链接，导入时若 `C:\Windows\System32\msvcp140.dll` 版本过旧或与 `msvcp140_1.dll` 不一致，就会在初始化阶段访问冲突。Windows 事件查看器（应用程序日志，事件 ID 1000）会直接指出错误模块为 `MSVCP140.dll`。
+
+1. 安装最新版 [Microsoft Visual C++ 2015-2022 x64 运行库](https://aka.ms/vs/17/release/vc_redist.x64.exe)，已装过也要运行并选择「修复」。
+2. 仍崩溃时，通常是别的软件把自带的旧 `msvcp140.dll` 覆盖进了 System32：在「应用和功能」卸载旧的 `Microsoft Visual C++ 2015 Redistributable (x64) - 14.0.x` 后再修复 2015-2022 运行库。
+3. 四个文件版本应一致且不低于 14.38：
+
+```powershell
+foreach ($n in 'msvcp140.dll','msvcp140_1.dll','vcruntime140.dll','vcruntime140_1.dll') {
+  "{0} {1}" -f $n, [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$env:SystemRoot\System32\$n").FileVersion
+}
+```
+
+4. 复验导入，然后继续安装：
+
+```bat
+runtimes\core-cu126\Scripts\python.exe -c "import onnxruntime; print('ORT_OK')"
+setup_env.bat --cu126 --only uvr seedvc ddsp
+```
+
+重装应用、换安装目录、重建 Python 环境都不能绕过：问题在系统运行库，不在安装目录。
 
 ### 找不到 FFmpeg
 

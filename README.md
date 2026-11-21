@@ -75,6 +75,13 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 
 ## 快速开始
 
+### 系统要求
+
+- Windows 10 1809 及以上或 Windows 11，64 位。
+- **Microsoft Visual C++ 2015-2022 x64 运行库，必须是最新版本**：<https://aka.ms/vs/17/release/vc_redist.x64.exe>。以前装过也要再运行一次并选择「修复」。版本过旧、或被其它软件自带的旧 `msvcp140.dll` 覆盖时，`onnxruntime` 会在导入阶段直接崩溃（`0xC0000005`），安装会停在第 4/12 步或最后的共享运行时校验，详见[常见问题](#安装最后一步失败uvr-探针崩溃)。
+- NVIDIA 40 系及以下用 CUDA126，RTX 50 系用 CUDA128，AMD 优先 ROCm 10、可选 DirectML，没有兼容显卡时用 CPU。
+- 64 位 CPython 3.12.x：安装包已内置，无需另装；源码运行需自行准备，另需 Node.js 20.19+ 或 22.12+。
+
 ### 使用安装包
 
 普通用户建议直接使用 GitHub Releases 中的魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`。该安装器从 ModelScope 的 `v0.1.2` 版本下载经过校验的离线安装包。备用版 `XB-SVCB-Online-Setup.exe` 不在 GitHub 公开发布，如有需要请联系开发者单独获取。
@@ -328,6 +335,29 @@ set XB_GH_MIRROR=https://ghfast.top
 ```
 
 v0.0.32 CUDA128 安装若在 <code>torch-2.7.1+cu128</code> 处提示 <code>Missing .dist-info directory</code>，或组件安装成功后最终校验提示缺少 <code>exceptiongroup</code>，请按[源码安装与启动中的 CUDA128 离线安装修复](docs/getting-started.md#v0032-cuda128-离线安装修复)核对 wheel 哈希、刷新 <code>uv</code> 缓存并补齐依赖。不要切换到旧隔离环境，也不需要重新安装 CUDA Toolkit。
+
+### 安装最后一步失败：UVR 探针崩溃
+
+日志里 `uvr_mdx`、`uvr_vr` 两个探针的退出码是 `3221225477`（即 `0xC0000005`），但前面的 `pip check` 显示 `All installed packages are compatible`。这不是依赖冲突，而是 `onnxruntime` 依赖的系统 C++ 运行库有问题——Windows 事件查看器（应用程序日志，事件 ID 1000）里会看到错误模块是 `MSVCP140.dll`。
+
+1. 安装最新版 [Microsoft Visual C++ 2015-2022 x64 运行库](https://aka.ms/vs/17/release/vc_redist.x64.exe)；即使以前装过，也要再运行一次并选择「修复」。
+2. 修复后仍崩溃，说明有软件把自带的旧 `msvcp140.dll` 覆盖进了 `C:\Windows\System32`：在「应用和功能」中卸载旧的 `Microsoft Visual C++ 2015 Redistributable (x64) - 14.0.x`，再修复 2015-2022 运行库。
+3. 确认四个运行库文件版本一致且不低于 14.38：
+
+```powershell
+foreach ($n in 'msvcp140.dll','msvcp140_1.dll','vcruntime140.dll','vcruntime140_1.dll') {
+  "{0} {1}" -f $n, [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$env:SystemRoot\System32\$n").FileVersion
+}
+```
+
+4. 复验并继续安装：
+
+```bat
+runtimes\core-cu126\Scripts\python.exe -c "import onnxruntime; print('ORT_OK')"
+setup_env.bat --cu126 --only uvr seedvc ddsp
+```
+
+重装应用、更换安装目录或重装 Python 都不能绕过这个崩溃，因为问题出在系统运行库而不是安装目录。
 
 ### 推理提示缺少 pkg_resources
 

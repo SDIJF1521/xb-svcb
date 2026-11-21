@@ -70,6 +70,13 @@ The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UV
 
 ## Quick Start
 
+### System Requirements
+
+- Windows 10 1809 or newer, or Windows 11, 64-bit.
+- **Microsoft Visual C++ 2015-2022 x64 Redistributable, latest version**: <https://aka.ms/vs/17/release/vc_redist.x64.exe>. Run it and choose "Repair" even if it is already installed. When it is outdated, or an older `msvcp140.dll` shipped by another application has overwritten it, `onnxruntime` crashes while importing (`0xC0000005`) and the installer stops at step 4/12 or at the final shared-runtime check. See [Troubleshooting](#final-install-step-fails-uvr-probes-crash).
+- CUDA126 for NVIDIA RTX 40-series and older, CUDA128 for RTX 50-series, ROCm 10 as the preferred Windows AMD backend (DirectML optional), CPU when no compatible GPU is available.
+- 64-bit CPython 3.12.x: bundled with the installer, only needed separately for source runs, which also require Node.js 20.19+ or 22.12+.
+
 ### Installer
 
 For normal use, download the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`, from the latest GitHub release. It downloads verified offline packages from the ModelScope `v0.1.2` revision. The fallback `XB-SVCB-Online-Setup.exe` is not published on GitHub; contact the developer to obtain it separately.
@@ -225,6 +232,31 @@ npm run build
 ```
 
 See the [documentation index](docs/en/README.md) for architecture, startup, testing, packaging, and contributor references.
+
+## Troubleshooting
+
+### Final install step fails: UVR probes crash
+
+The `uvr_mdx` and `uvr_vr` probes exit with `3221225477` (`0xC0000005`) while `pip check` reports `All installed packages are compatible`. This is not a dependency conflict: the system C++ runtime that `onnxruntime` loads is broken. Windows Event Viewer (Application log, event ID 1000) names `MSVCP140.dll` as the faulting module.
+
+1. Install the latest [Microsoft Visual C++ 2015-2022 x64 Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe); run it and choose "Repair" even if it is already installed.
+2. If it still crashes, another application has overwritten `C:\Windows\System32\msvcp140.dll` with an older copy: uninstall the legacy `Microsoft Visual C++ 2015 Redistributable (x64) - 14.0.x` entry under "Apps & features", then repair the 2015-2022 redistributable.
+3. All four runtime files must report one version of at least 14.38:
+
+```powershell
+foreach ($n in 'msvcp140.dll','msvcp140_1.dll','vcruntime140.dll','vcruntime140_1.dll') {
+  "{0} {1}" -f $n, [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$env:SystemRoot\System32\$n").FileVersion
+}
+```
+
+4. Verify the import, then resume the installer:
+
+```bat
+runtimes\core-cu126\Scripts\python.exe -c "import onnxruntime; print('ORT_OK')"
+setup_env.bat --cu126 --only uvr seedvc ddsp
+```
+
+Reinstalling the application, changing the install directory, or recreating the Python environment cannot bypass this crash, because the fault is in the system runtime rather than in the installation.
 
 ## Roadmap
 

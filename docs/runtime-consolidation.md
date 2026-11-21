@@ -112,6 +112,12 @@ CUDA 安装包构建还必须携带 `assets/runtime/core-cu128/candidate` 和 `c
 & uv pip check --python .\runtimes\svc-cu128\Scripts\python.exe
 ```
 
+### UVR 导入期 0xC0000005
+
+`uvr_mdx` / `uvr_vr` 探针以 `3221225477`（`0xC0000005`）退出、且 `stdout` / `stderr` 为空时，是 `onnxruntime` 的 pybind 扩展在静态初始化阶段崩溃，不是依赖解析失败。系统必须安装最新版 [Microsoft Visual C++ 2015-2022 x64 运行库](https://aka.ms/vs/17/release/vc_redist.x64.exe)；`msvcp140.dll` 过旧、或与 `msvcp140_1.dll` 版本不一致（例如 14.24 与 14.44 混用）都会触发。Windows 事件查看器（应用程序日志，事件 ID 1000）会直接指出错误模块为 `MSVCP140.dll`。
+
+完整排查顺序与验证命令见[安装与修复](getting-started.md#安装最后一步失败uvr-探针崩溃)。重装应用、更换安装目录或重建 Python 环境都无法绕过，因为问题在系统运行库。
+
 自动化测试边界和命令见 [测试说明](testing.md)。配方解析、重复安装、漂移检测、恢复、模块导入、CUDA 小张量和安装器预检都已有回归覆盖；这些检查仍不能替代在目标显卡上的真实模型、真实音频和完整 Setup.exe 验收。
 
 ## 旧安装与清理规则

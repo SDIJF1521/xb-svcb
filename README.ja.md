@@ -70,6 +70,13 @@ So-VITS-SVC、RVC、SeedVC、DDSP-SVCをサポートしています。また、U
 
 ## クイックスタート
 
+### システム要件
+
+- Windows 10 1809 以降または Windows 11（64 ビット）。
+- **Microsoft Visual C++ 2015-2022 x64 再頒布可能パッケージ（最新版）**: <https://aka.ms/vs/17/release/vc_redist.x64.exe>。既に導入済みでも実行し、「修復」を選んでください。古い場合や、他アプリが持つ古い `msvcp140.dll` に上書きされている場合、`onnxruntime` は import 時にクラッシュ（`0xC0000005`）し、インストーラーは 4/12 ステップまたは最後の共有ランタイム検証で停止します。詳細は[トラブルシューティング](#最終ステップで失敗uvr-プローブがクラッシュする)を参照。
+- NVIDIA RTX 40 系以下は CUDA126、RTX 50 系は CUDA128、AMD は ROCm 10 を優先（DirectML も可）、対応 GPU がない場合は CPU。
+- 64 ビット CPython 3.12.x: インストーラーに同梱。ソース実行時のみ別途必要で、Node.js 20.19+ または 22.12+ も要ります。
+
 ### インストーラーを使う
 
 通常の利用では、GitHub Releasesの最新版からModelScope版`XB-SVCB-Online-Setup-ModelScope.exe`をダウンロードしてください。このインストーラーはModelScopeの`v0.1.2`リビジョンから検証済みオフラインパッケージを取得します。予備版`XB-SVCB-Online-Setup.exe`はGitHubで公開しないため、必要な場合は開発者から個別に入手してください。
@@ -225,6 +232,31 @@ npm run build
 ```
 
 設計、起動処理、テスト、パッケージ作成、コントリビューター向け資料は[日本語ドキュメント目次](docs/ja/README.md)を参照してください。
+
+## トラブルシューティング
+
+### 最終ステップで失敗：UVR プローブがクラッシュする
+
+`uvr_mdx` と `uvr_vr` の検査が `3221225477`（`0xC0000005`）で終了し、その前の `pip check` は `All installed packages are compatible` と表示されます。依存関係の衝突ではなく、`onnxruntime` が読み込むシステムの C++ ランタイムが壊れています。Windows のイベント ビューアー（アプリケーション ログ、イベント ID 1000）では、エラー モジュールが `MSVCP140.dll` と表示されます。
+
+1. 最新の [Microsoft Visual C++ 2015-2022 x64 再頒布可能パッケージ](https://aka.ms/vs/17/release/vc_redist.x64.exe) を導入し、既に導入済みでも「修復」を実行してください。
+2. それでもクラッシュする場合、他アプリが古い `msvcp140.dll` を `C:\Windows\System32` に上書きしています。「アプリと機能」で旧 `Microsoft Visual C++ 2015 Redistributable (x64) - 14.0.x` をアンインストールしてから、2015-2022 を修復してください。
+3. 4 つのファイルが同一バージョンかつ 14.38 以上であることを確認します。
+
+```powershell
+foreach ($n in 'msvcp140.dll','msvcp140_1.dll','vcruntime140.dll','vcruntime140_1.dll') {
+  "{0} {1}" -f $n, [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$env:SystemRoot\System32\$n").FileVersion
+}
+```
+
+4. import を確認してからインストーラーを再実行します。
+
+```bat
+runtimes\core-cu126\Scripts\python.exe -c "import onnxruntime; print('ORT_OK')"
+setup_env.bat --cu126 --only uvr seedvc ddsp
+```
+
+アプリの再インストール、インストール先の変更、Python 環境の作り直しでは回避できません。原因はインストール先ではなくシステムのランタイムにあります。
 
 ## ロードマップ
 

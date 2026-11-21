@@ -4,6 +4,13 @@
 
 通常の利用者は、ハードウェア版を自動選択するオンラインインストーラーを使用してください。専用オフラインインストーラーも利用できます。ソースからの起動は、開発者およびエンジンを変更する必要がある利用者向けです。
 
+## 実行時の前提条件
+
+- Windows 10 1809 以降または Windows 11（64 ビット）。
+- **Microsoft Visual C++ 2015-2022 x64 再頒布可能パッケージ（最新版）**: <https://aka.ms/vs/17/release/vc_redist.x64.exe>。既に導入済みでも実行して「修復」を選んでください。古い場合や、他アプリが持つ古い `msvcp140.dll` に上書きされている場合、UVR が読み込む `onnxruntime` は import 時にクラッシュ（`0xC0000005`）し、セットアップは 4/12 ステップまたは最後の共有ランタイム検証で停止します。詳細は[最終ステップで失敗：UVR プローブがクラッシュする](#最終ステップで失敗uvr-プローブがクラッシュする)を参照。
+- ハードウェアに合った GPU ドライバー: NVIDIA RTX 40 系以下は CUDA126、RTX 50 系は CUDA128、AMD は ROCm 10 を優先（DirectML も可）、対応 GPU がない場合は CPU。
+- 64 ビット CPython 3.12.x: インストーラーに同梱。ソース実行時のみ別途必要で、Node.js 20.19+ または 22.12+ も要ります。
+
 ## オンラインインストール
 
 GitHub ReleasesからModelScope版`XB-SVCB-Online-Setup-ModelScope.exe`をダウンロードして実行し、「自動検出 (推奨)」を選択するか、ハードウェア版を手動で指定します。ModelScopeの`v0.1.2`リビジョンから選択した完全なEXE/BINセットだけをダウンロードし、各ファイルをSHA-256で検証してから多言語対応のオフラインセットアップを起動します。ダウンロード中はネットワーク接続を維持し、`www.modelscope.cn`へのアクセスを許可してください。
@@ -161,6 +168,7 @@ Set-Location $root
 ## ソース環境の要件
 
 - Windows。
+- 最新の Microsoft Visual C++ 2015-2022 x64 再頒布可能パッケージ（UVR の `onnxruntime` が依存。詳細は[実行時の前提条件](#実行時の前提条件)）。
 - ソース実行とリリースビルドには 64 ビット CPython 3.12.x が必要です。通常のインストールでは同梱ランタイムを使用します。
 - フロントエンドのビルドにのみ必要な Node.js 20.19+ または 22.12+。
 - PyPI、モデル配布元、上流リポジトリへの接続、または準備済みのオフライン wheelhouse とモデル資産。
@@ -246,6 +254,29 @@ set XB_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple
 set XB_GH_MIRROR=https://ghfast.top
 setup_env.bat
 ```
+
+### 最終ステップで失敗：UVR プローブがクラッシュする
+
+`uvr_mdx` / `uvr_vr` の検査が `3221225477`（`0xC0000005`）で終了し、`pip check` は全て互換と表示されます。原因はシステムの C++ ランタイムです。`onnxruntime` の pybind 拡張は静的リンクで、`C:\Windows\System32\msvcp140.dll` が古い、または `msvcp140_1.dll` と版が揃っていないと初期化時にアクセス違反になります。Windows のイベント ビューアー（アプリケーション ログ、イベント ID 1000）ではエラー モジュールが `MSVCP140.dll` と表示されます。
+
+1. 最新の [Microsoft Visual C++ 2015-2022 x64 再頒布可能パッケージ](https://aka.ms/vs/17/release/vc_redist.x64.exe) を導入し、既に導入済みでも「修復」を実行します。
+2. それでもクラッシュする場合、他アプリが古い `msvcp140.dll` を System32 に上書きしています。「アプリと機能」で旧 `Microsoft Visual C++ 2015 Redistributable (x64) - 14.0.x` をアンインストールしてから 2015-2022 を修復してください。
+3. 4 つのファイルが同一バージョンかつ 14.38 以上であることを確認します。
+
+```powershell
+foreach ($n in 'msvcp140.dll','msvcp140_1.dll','vcruntime140.dll','vcruntime140_1.dll') {
+  "{0} {1}" -f $n, [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$env:SystemRoot\System32\$n").FileVersion
+}
+```
+
+4. import を確認してからセットアップを再実行します。
+
+```bat
+runtimes\core-cu126\Scripts\python.exe -c "import onnxruntime; print('ORT_OK')"
+setup_env.bat --cu126 --only uvr seedvc ddsp
+```
+
+アプリの再インストール、インストール先の変更、Python 環境の作り直しでは回避できません。原因はインストール先ではなくシステムのランタイムにあります。
 
 ### FFmpeg が見つからない
 
