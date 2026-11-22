@@ -45,6 +45,8 @@ class ModelHubEcosystemTests(unittest.TestCase):
     def test_model_detail_combines_manifest_assets_and_update_state(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo_id = "owner/xb-svcb-demo"
+            local_model_file = Path(td) / "local_voice.pth"
+            local_model_file.write_bytes(b"demo")
             service = self.make_service(
                 Path(td),
                 [
@@ -52,6 +54,7 @@ class ModelHubEcosystemTests(unittest.TestCase):
                         "id": "mdl_old",
                         "name": "Demo local",
                         "imported_at": "2026-07-01",
+                        "main_model": {"name": "local_voice.pth", "path": str(local_model_file)},
                         "metadata": {
                             "source_repo_id": repo_id,
                             "source_version": "1.0.0",

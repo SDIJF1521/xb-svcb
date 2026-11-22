@@ -305,6 +305,21 @@ def test_search_uses_page_number_and_returns_total() -> None:
         env.close()
 
 
+def test_search_detects_local_workflow_by_graph_hash() -> None:
+    env = _Env()
+    try:
+        local = env.works.save_workflow("本地改过名的工作流", _graph())
+        result = asyncio.run(env.hub._search("", 1, 10))
+        assert result["ok"] is True
+        item = result["items"][0]
+        # 没有 source.repo_id，但节点图内容一致：应通过哈希识别为已下载。
+        assert item["downloaded"] is True
+        assert item["download_match"] == "graph_hash"
+        assert item["local_workflow_id"] == local["id"]
+    finally:
+        env.close()
+
+
 def test_upload_builds_manifest_and_marks_shared() -> None:
     env = _Env()
     try:

@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -125,8 +126,10 @@ def sanitize_graph(graph: Any) -> dict[str, Any] | None:
     for raw in raw_edges[:WORKFLOW_MANIFEST_MAX_EDGES]:
         if not isinstance(raw, dict):
             continue
-        source = raw.get("from") if isinstance(raw.get("from"), dict) else {}
-        target = raw.get("to") if isinstance(raw.get("to"), dict) else {}
+        source_raw = raw.get("from")
+        target_raw = raw.get("to")
+        source = source_raw if isinstance(source_raw, dict) else {}
+        target = target_raw if isinstance(target_raw, dict) else {}
         source_node = trim_text(source.get("node"), 64)
         target_node = trim_text(target.get("node"), 64)
         if not source_node or not target_node:
@@ -159,6 +162,62 @@ def sanitize_graph(graph: Any) -> dict[str, Any] | None:
     if validate_graph(cleaned):
         return None
     return cleaned
+
+
+def workflow_graph_fingerprint(graph: Any) -> str | None:
+    """工作流的语义指纹（SHA-256），用于识别本地是否已有同一工作流。
+
+    只纳入节点 ``id/type/params`` 与边的起止端口，**不包含**画布坐标、工作流
+    名称、版本、来源仓库等展示字段。因此：
+
+    * 用户拖动节点布局、重命名工作流，仍然能识别为同一内容；
+    * 修改节点参数或连线，指纹会变化，不会误判为已下载。
+
+    Python 侧只做几十 KB 的 JSON 规范化 + ``hashlib``（C 实现），比模型权重
+    哈希轻量得多；调用方仍会按 ``(工作流 id, updated_at)`` 缓存结果。
+    """
+    cleaned = sanitize_graph(graph)
+    if not cleaned or not cleaned.get("nodes"):
+        return None
+    nodes = sorted(
+        (
+            {
+                "id": node.get("id", ""),
+                "type": node.get("type", ""),
+                "params": node.get("params") or {},
+            }
+            for node in cleaned["nodes"]
+        ),
+        key=lambda node: str(node["id"]),
+    )
+    edges = sorted(
+        (
+            {
+                "from": {
+                    "node": (edge.get("from") or {}).get("node", ""),
+                    "port": (edge.get("from") or {}).get("port", ""),
+                },
+                "to": {
+                    "node": (edge.get("to") or {}).get("node", ""),
+                    "port": (edge.get("to") or {}).get("port", ""),
+                },
+            }
+            for edge in cleaned["edges"]
+        ),
+        key=lambda edge: (
+            str(edge["from"]["node"]),
+            str(edge["from"]["port"]),
+            str(edge["to"]["node"]),
+            str(edge["to"]["port"]),
+        ),
+    )
+    payload = json.dumps(
+        {"nodes": nodes, "edges": edges},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def is_workflow_manifest(data: Any) -> bool:
@@ -274,7 +333,8 @@ def pymss_model_names(nodes: Any) -> list[str]:
     for node in nodes or []:
         if not isinstance(node, dict) or node.get("type") not in PYMSS_SEPARATOR_NODE_TYPES:
             continue
-        params = node.get("params") if isinstance(node.get("params"), dict) else {}
+        params_raw = node.get("params")
+        params = params_raw if isinstance(params_raw, dict) else {}
         if str(params.get("engine") or "").strip().lower() != "pymss":
             continue
         name = trim_text(params.get("model"), 160)
@@ -289,7 +349,8 @@ def pymss_node_default_purpose(nodes: Any) -> dict[str, str]:
     for node in nodes or []:
         if not isinstance(node, dict) or node.get("type") not in PYMSS_SEPARATOR_NODE_TYPES:
             continue
-        params = node.get("params") if isinstance(node.get("params"), dict) else {}
+        params_raw = node.get("params")
+        params = params_raw if isinstance(params_raw, dict) else {}
         if str(params.get("engine") or "").strip().lower() != "pymss":
             continue
         name = trim_text(params.get("model"), 160)

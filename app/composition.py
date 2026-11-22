@@ -39,6 +39,7 @@ from infrastructure.engine import EngineRegistry
 from infrastructure.ffmpeg_tool import FfmpegTool
 from infrastructure.high_note_vocoder import HighNoteVocoderProcessor
 from infrastructure.midi_pitch import MidiPitchProcessor
+from infrastructure.model_hub_client import ModelHubClient
 from infrastructure.pymss_tool import PymssTool
 from infrastructure.rvc_engine import RvcEngine
 from infrastructure.seedvc_engine import SeedVcEngine
@@ -102,7 +103,7 @@ def build_api() -> Api:
         works_repo, conversion_service, model_service, settings, files=work_files
     )
     music_service = MusicService(settings, streamer=audio_streamer)
-    hub_service = ModelHubService(settings, model_service)
+    hub_service = ModelHubService(settings, model_service, ModelHubClient())
     workflow_hub_service = WorkflowHubService(
         settings, work_service, pymss, WorkflowHubClient()
     )

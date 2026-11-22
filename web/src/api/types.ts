@@ -907,6 +907,8 @@ export interface HubModelVersion {
 
 export interface HubModelUpdateInfo {
   installed: boolean
+  /** 是否通过本地主模型 SHA-256 与远端文件摘要匹配（来源元数据缺失时使用）。 */
+  installed_by_hash?: boolean
   available: boolean
   model_id?: string
   model_name?: string
@@ -918,6 +920,8 @@ export interface HubModelUpdateInfo {
     installed_version: string
     installed_at: string
     source_uploaded_at?: string
+    /** repo：来源仓库匹配；sha256：主模型内容哈希匹配。 */
+    matched_by?: 'repo' | 'sha256'
   }[]
 }
 
@@ -953,7 +957,9 @@ export interface HubSearchResult {
   items?: HubModelItem[]
   page?: number
   page_size?: number
-  /** 是否还有更多结果可「加载更多」。 */
+  /** 服务端返回的总条数（用于分页组件）。 */
+  total?: number
+  /** 是否还有更多结果（兼容旧调用方；新 UI 以 total 为准）。 */
   has_more?: boolean
 }
 
@@ -1093,6 +1099,8 @@ export interface WorkflowHubItem {
   pymss_models?: WorkflowHubPymssModel[]
   /** 本地「已保存工作流」中是否已有该来源。 */
   downloaded: boolean
+  /** repo：来源仓库匹配；graph_hash：工作流图内容哈希匹配。 */
+  download_match?: 'repo' | 'graph_hash' | ''
   /** 已下载时对应的本地工作流 ID。 */
   local_workflow_id?: string
   /** 列表缩略图用的轻量节点图（不含节点参数）。 */

@@ -1356,8 +1356,40 @@ EDITOR_CACHE_DIR = EDITOR_DIR / "cache"
 EDITOR_PROJECTS_DB = DATA_DIR / "editor_projects.json"
 PLUGINS_DIR = DATA_DIR / "plugins"
 PLUGIN_DATA_DIR = DATA_DIR / "plugin-data"
-# ModelScope 接口限流（客户端侧保守值）
+# ModelScope 接口限流（客户端侧保守值）。保留旧常量供历史代码引用；
+# 读取类请求（搜索 / 清单）使用下面的 READ_QPS 令牌桶，允许小突发以隐藏 RTT。
 MODELSCOPE_QPS = 5
+# 读取类请求的平均 QPS 与突发容量：搜索会并发拉取多个清单，`5 QPS` 会把
+# N 个清单串行成 N * 200ms（旧实现的实际瓶颈）。12 QPS + 10 突发既能明显
+# 提速，又远低于会触发风控的强度；遇到 429 会自动全局退避。
+MODELSCOPE_READ_QPS = 12
+MODELSCOPE_READ_BURST = 10
+# 共享 httpx 连接池上限（搜索 8 路 + 下载 2 路分片共用同一个池）。
+MODELSCOPE_HTTP_MAX_CONNECTIONS = 16
+# 一次搜索最多同时读取多少个仓库清单（受令牌桶约束，不会瞬间打满）。
+MODELSCOPE_MANIFEST_CONCURRENCY = 8
+# 带关键词 / 框架筛选搜索时，需要读取候选清单才能过滤；限制一次最多扫描多少个
+# 候选仓库，避免极端情况下把整个 ModelScope 都拉下来。
+MODELSCOPE_SEARCH_SCAN_LIMIT = 300
+# 清单 / 文件列表缓存的 TTL（秒）：翻页、重复搜索、下载前预取都会命中。
+MODELSCOPE_MANIFEST_TTL = 90.0
+MODELSCOPE_MANIFEST_NEGATIVE_TTL = 30.0
+MODELSCOPE_FILES_TTL = 60.0
+MODELSCOPE_LIST_TTL = 30.0
+MODELSCOPE_SEARCH_TTL = 15.0
+# 令牌校验结果缓存时间（秒）：避免每次搜索都先花 1~3s 调 /api/v1/login。
+MODELSCOPE_TOKEN_TTL = 300.0
+# 只缓存小文件（清单、截图元数据）；试听音频等大文件走流式，不进内存缓存。
+MODELSCOPE_RAW_CACHE_MAX_BYTES = 2 * 1024 * 1024
+# 模型下载：大文件按 Range 分片并行拉取（每个分片复用共享连接池）。
+# 默认 2 路：单连接已跑满带宽时开销最小；海外 / 单连接限速线路可试 4~8。
+# 设为 1 可关闭分片并行，退回单连接流式下载。
+MODELHUB_DOWNLOAD_CONNECTIONS = 2
+MODELHUB_DOWNLOAD_CHUNK_BYTES = 4 * 1024 * 1024
+MODELHUB_DOWNLOAD_PARALLEL_MIN_BYTES = 16 * 1024 * 1024
+# 工作流下载时，多个缺失的 PyMSS 模型并发安装（每个是独立子进程）。
+WORKFLOWHUB_PYMSS_DOWNLOAD_CONCURRENCY = 3
+WORKFLOWHUB_PYMSS_POLL_SECONDS = 0.6
 # settings.json 中保存 ModelScope 访问令牌的键名
 MODELSCOPE_TOKEN_SETTING = "modelscope_token"
 

@@ -86,6 +86,7 @@
 - 音频：`ffmpeg_tool.py`、`audio_engine.py`、`ffmpeg` 之上的渲染能力
 - 分离与推理：`uvr_tool.py`、`pymss_tool.py`、`*_engine.py`、`*_worker.py`
 - 工作流商城：`workflow_hub_client.py`（ModelScope 搜索 / 清单读取 / 子进程上传，实现 `WorkflowHubGateway`）
+- 模型站：`model_hub_client.py`（ModelScope 搜索 / 清单读取 / 断点续传与分片下载，实现 `ModelHubGateway`）
 - 系统集成：`clipboard.py`、`system_audio.py`、`juce_vst3_host.py`、`window_theme.py`、`single_instance.py`
 
 ### 层外模块
@@ -133,6 +134,9 @@
   ModelScope 搜索、清单读取与子进程上传在 `infrastructure/workflow_hub_client.py`
   （实现 `WorkflowHubGateway`），`application/workflow_hub_service.py` 只做用例编排；
   PyMSS 安装状态与下载通过 `PymssGateway` 端口访问；
+- 模型站同样收敛：ModelScope 搜索、清单读取、断点续传与分片下载在
+  `infrastructure/model_hub_client.py`（实现 `ModelHubGateway`），
+  `application/model_hub_service.py` 只做清单校验、导入与 DTO 组装；
 - `audio_editor_service` 按用例拆分：渲染/预览/波形移到 `application/editor_render_service.py`，
   `plugin_service` 的市场解析规则移到 `application/plugin_market.py`；
 - 重新审视后确认无需清理的点：`JobStatus` / `StepStatus` / `ModelType` 枚举、

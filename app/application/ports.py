@@ -35,6 +35,7 @@ __all__ = [
     "HighNoteVocoderPort",
     "ItemRepository",
     "MidiPitchPort",
+    "ModelHubGateway",
     "PymssGateway",
     "PluginHostPort",
     "SeparationGateway",
@@ -274,6 +275,47 @@ class PymssGateway(SeparationGateway, Protocol):
 
 
 @runtime_checkable
+class ModelHubGateway(Protocol):
+    """模型站远端能力（ModelScope 搜索 / 清单读取 / 下载）。
+
+    实现位于 ``infrastructure/model_hub_client.py``。用例层只做清单校验、
+    导入与 DTO 组装，不直接发 HTTP 或处理下载分片。
+    """
+
+    async def verify_token(self, token: str) -> dict[str, Any]: ...
+
+    def prepare(self) -> None: ...
+
+    async def query_models(
+        self, token: str, body: dict[str, Any]
+    ) -> tuple[list[Any], int | None]: ...
+
+    async def fetch_raw(
+        self, token: str, repo_id: str, file_path: str
+    ) -> bytes | None: ...
+
+    async def list_files(self, token: str, repo_id: str) -> dict[str, int]: ...
+
+    async def file_digests(
+        self, token: str, repo_id: str
+    ) -> dict[str, tuple[int, str]]: ...
+
+    async def download_to(
+        self,
+        token: str,
+        repo_id: str,
+        file_path: str,
+        dst: Path,
+        cb: Callable[[int], None] | None = None,
+        expected_size: int = 0,
+    ) -> bool: ...
+
+    def invalidate_cache(self) -> None: ...
+
+    def invalidate_token_cache(self) -> None: ...
+
+
+@runtime_checkable
 class WorkflowHubGateway(Protocol):
     """工作流商城的远端能力（ModelScope 搜索 / 清单读取 / 上传）。
 
@@ -282,6 +324,10 @@ class WorkflowHubGateway(Protocol):
     """
 
     def upload_ready(self) -> bool: ...
+
+    def prepare(self) -> None: ...
+
+    def invalidate_cache(self) -> None: ...
 
     async def verify_token(self, token: str) -> dict[str, Any]: ...
 

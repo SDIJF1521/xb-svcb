@@ -32,6 +32,7 @@ from domain.workflow_manifest import (
     preview_graph,
     sanitize_graph,
     trim_text,
+    workflow_graph_fingerprint,
 )
 from domain.workflow_graph import validate_graph
 
@@ -58,11 +59,33 @@ class WorkflowHubService:
         # 任务：key -> {key, kind, title, status, result, error, created_at}
         self._jobs: dict[str, dict[str, Any]] = {}
         self._progress_lock = threading.Lock()
+        # 本地工作流图指纹缓存：id -> (updated_at, sha256)。工作流图很小，
+        # 但仍避免每次搜索/翻页重复做规范化与 JSON 序列化。
+        self._graph_hash_cache: dict[str, tuple[str, str]] = {}
+        self._remote_graph_hash_cache: dict[tuple[str, str], str] = {}
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
-            target=self._loop.run_forever, daemon=True, name="workflowhub-loop"
+            target=self._run_loop, daemon=True, name="workflowhub-loop"
         )
         self._thread.start()
+
+    def _run_loop(self) -> None:
+        try:
+            self._loop.create_task(self._warm_gateway_async())
+        except Exception:  # noqa: BLE001 - 预热失败不影响主流程
+            pass
+        self._loop.run_forever()
+
+    async def _warm_gateway_async(self) -> None:
+        self._warm_gateway()
+
+    def _warm_gateway(self) -> None:
+        prepare = getattr(self._gateway, "prepare", None)
+        if callable(prepare):
+            try:
+                prepare()
+            except Exception:  # noqa: BLE001 - 预热失败不影响按需创建
+                pass
 
     # ---- 进度 / 后台任务 ----
     def _set_progress(
@@ -196,6 +219,10 @@ class WorkflowHubService:
 
     def set_token(self, token: str) -> bool:
         self._settings.set(config.MODELSCOPE_TOKEN_SETTING, (token or "").strip())
+        try:
+            self._gateway.invalidate_cache()
+        except Exception:  # noqa: BLE001 - 缓存清理失败不应阻断保存令牌
+            pass
         return True
 
     def upload_ready(self) -> bool:
@@ -236,6 +263,51 @@ class WorkflowHubService:
             if repo_id and repo_id not in mapping:
                 mapping[repo_id] = workflow
         return mapping
+
+    def _local_graph_map(self) -> dict[str, dict[str, Any]]:
+        """本地工作流图指纹 -> 工作流（用于来源元数据缺失时的哈希识别）。"""
+        mapping: dict[str, dict[str, Any]] = {}
+        cache = getattr(self, "_graph_hash_cache", None)
+        if cache is None:
+            cache = {}
+            self._graph_hash_cache = cache
+        for workflow in self._works.list_workflows():
+            workflow_id = str(workflow.get("id") or "")
+            updated_at = str(workflow.get("updated_at") or "")
+            cached = cache.get(workflow_id)
+            if cached and cached[0] == updated_at:
+                fingerprint = cached[1]
+            else:
+                fingerprint = workflow_graph_fingerprint(
+                    {
+                        "nodes": workflow.get("nodes") or [],
+                        "edges": workflow.get("edges") or [],
+                    }
+                ) or ""
+                cache[workflow_id] = (updated_at, fingerprint)
+                if len(cache) > 256:
+                    cache.pop(next(iter(cache)), None)
+            if fingerprint and fingerprint not in mapping:
+                mapping[fingerprint] = workflow
+        return mapping
+
+    def _remote_graph_fingerprint(
+        self, repo_id: str, manifest: dict[str, Any], graph: dict[str, Any]
+    ) -> str:
+        """远端清单图指纹缓存：同一仓库 + 版本只规范化一次。"""
+        cache = getattr(self, "_remote_graph_hash_cache", None)
+        if cache is None:
+            cache = {}
+            self._remote_graph_hash_cache = cache
+        key = (repo_id, str(manifest.get("version") or ""))
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        fingerprint = workflow_graph_fingerprint(graph) or ""
+        if len(cache) >= 256:
+            cache.pop(next(iter(cache)), None)
+        cache[key] = fingerprint
+        return fingerprint
 
     def _downloaded_stems(self) -> set[str]:
         try:
@@ -326,11 +398,19 @@ class WorkflowHubService:
         detail: bool,
         source_map: dict[str, dict[str, Any]],
         stems: set[str],
+        graph_map: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         graph = graph_from_manifest(manifest)
         if not graph:
             return None
         source = source_map.get(repo_id)
+        download_match = "repo" if source else ""
+        if not source and graph_map:
+            fingerprint = self._remote_graph_fingerprint(repo_id, manifest, graph)
+            if fingerprint:
+                source = graph_map.get(fingerprint)
+                if source:
+                    download_match = "graph_hash"
         item: dict[str, Any] = {
             "repo_id": repo_id,
             "name": manifest["name"],
@@ -344,6 +424,7 @@ class WorkflowHubService:
             "edge_count": len(graph["edges"]),
             "pymss_models": self._build_pymss_items(manifest, stems),
             "downloaded": bool(source),
+            "download_match": download_match,
             "local_workflow_id": str((source or {}).get("id") or ""),
             "preview_graph": preview_graph(graph),
         }
@@ -394,6 +475,7 @@ class WorkflowHubService:
 
         tokens = [item for item in keyword.lower().split() if item]
         source_map = self._local_source_map()
+        graph_map = self._local_graph_map()
         stems = self._downloaded_stems()
         items: list[dict[str, Any]] = []
         for candidate in result.get("candidates") or []:
@@ -419,6 +501,7 @@ class WorkflowHubService:
                 detail=False,
                 source_map=source_map,
                 stems=stems,
+                graph_map=graph_map,
             )
             if item:
                 items.append(item)
@@ -460,6 +543,7 @@ class WorkflowHubService:
             detail=True,
             source_map=self._local_source_map(),
             stems=self._downloaded_stems(),
+            graph_map=self._local_graph_map(),
         )
         if not item:
             return {"ok": False, "error": "工作流节点图无效，无法预览"}
@@ -474,62 +558,108 @@ class WorkflowHubService:
         start_pct: float,
         end_pct: float,
     ) -> dict[str, Any]:
-        """在下载任务内依次安装缺失的 PyMSS 模型，并汇总成功 / 失败。"""
+        """并发安装缺失的 PyMSS 模型，并汇总成功 / 失败。
+
+        一个工作流可能依赖 3~5 个模型，旧实现逐个启动、逐个轮询，网络等待被
+        完全串行化。这里用有界并发（默认 3）同时下载，进度按模型大小加权汇总。
+        """
         missing = [
             requirement
             for requirement in requirements
             if not self._pymss_downloaded(requirement["name"], stems)
         ]
-        downloaded: list[str] = []
-        failed: list[dict[str, str]] = []
         if not missing:
-            return {"downloaded": downloaded, "failed": failed}
+            return {"downloaded": [], "failed": []}
         total = len(missing)
         span = max(0.0, end_pct - start_pct)
-        for index, requirement in enumerate(missing):
-            name = requirement["name"]
-            if self._pymss_downloaded(name, self._downloaded_stems()):
-                downloaded.append(name)
-                continue
-            purpose = str(requirement.get("purpose") or "")
-            started = self._pymss.start_download_model(name, purpose)
-            if not started.get("ok") or not started.get("key"):
-                failed.append(
-                    {"name": name, "error": str(started.get("error") or "无法启动下载")}
+        weights = [
+            max(1, int(requirement.get("size_bytes") or 0)) for requirement in missing
+        ]
+        total_weight = max(1, sum(weights))
+        fractions = [0.0] * total
+        running: dict[int, str] = {}
+        completed = 0
+        concurrency = max(
+            1, min(total, int(config.WORKFLOWHUB_PYMSS_DOWNLOAD_CONCURRENCY))
+        )
+
+        def report() -> None:
+            weighted = sum(
+                weights[index] * fractions[index] for index in range(total)
+            )
+            pct = start_pct + span * (weighted / total_weight)
+            names = [running[index] for index in sorted(running)]
+            message = f"同步 PyMSS 模型（{completed}/{total}）"
+            if names:
+                message += "：" + "、".join(names[:2])
+            self._set_progress(key, "pymss", pct, message, completed, total)
+
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def sync_one(
+            index: int, requirement: dict[str, Any]
+        ) -> tuple[bool, str, str]:
+            nonlocal completed
+            name = str(requirement["name"])
+            async with semaphore:
+                running[index] = name
+                report()
+                if self._pymss_downloaded(name, self._downloaded_stems()):
+                    fractions[index] = 1.0
+                    completed += 1
+                    running.pop(index, None)
+                    report()
+                    return True, name, ""
+                purpose = str(requirement.get("purpose") or "")
+                started = self._pymss.start_download_model(name, purpose)
+                if not started.get("ok") or not started.get("key"):
+                    fractions[index] = 1.0
+                    completed += 1
+                    running.pop(index, None)
+                    report()
+                    return (
+                        False,
+                        name,
+                        str(started.get("error") or "无法启动下载"),
+                    )
+                job_key = str(started.get("key"))
+                last_message = ""
+                status = "idle"
+                while True:
+                    job = self._pymss.download_progress(job_key)
+                    status = str(job.get("status") or "idle")
+                    last_message = str(job.get("message") or last_message)
+                    pct = _as_float(job.get("pct"), 0.0)
+                    fractions[index] = max(0.0, min(1.0, pct / 100.0))
+                    report()
+                    if status in ("done", "failed", "idle"):
+                        break
+                    await asyncio.sleep(float(config.WORKFLOWHUB_PYMSS_POLL_SECONDS))
+                fractions[index] = 1.0
+                completed += 1
+                running.pop(index, None)
+                report()
+                if status == "done":
+                    return True, name, ""
+                error = str(
+                    self._pymss.download_progress(job_key).get("error")
+                    or last_message
+                    or "下载失败"
                 )
-                continue
-            job_key = str(started.get("key"))
-            last_message = ""
-            while True:
-                job = self._pymss.download_progress(job_key)
-                status = str(job.get("status") or "idle")
-                last_message = str(job.get("message") or last_message)
-                pct = _as_float(job.get("pct"), 0.0)
-                overall = start_pct + span * ((index + pct / 100.0) / total)
-                self._set_progress(
-                    key,
-                    "pymss",
-                    overall,
-                    f"同步 PyMSS 模型 {index + 1}/{total}：{last_message or name}",
-                    index,
-                    total,
-                )
-                if status in ("done", "failed", "idle"):
-                    break
-                await asyncio.sleep(0.8)
-            if status == "done":
-                downloaded.append(name)
-            else:
-                failed.append(
-                    {
-                        "name": name,
-                        "error": str(
-                            self._pymss.download_progress(job_key).get("error")
-                            or last_message
-                            or "下载失败"
-                        ),
-                    }
-                )
+                return False, name, error
+
+        outcomes = await asyncio.gather(
+            *(
+                sync_one(index, requirement)
+                for index, requirement in enumerate(missing)
+            )
+        )
+        downloaded = [name for ok, name, _error in outcomes if ok]
+        failed = [
+            {"name": name, "error": error}
+            for ok, name, error in outcomes
+            if not ok
+        ]
         return {"downloaded": downloaded, "failed": failed}
 
     async def _download(self, repo_id: str) -> dict[str, Any]:
@@ -646,6 +776,8 @@ class WorkflowHubService:
         self._set_progress(key, "prepare", 8, "整理工作流节点图…")
         requirements = self._pymss_requirements_for_manifest(safe_graph["nodes"])
         uploaded_at = datetime.now().isoformat(timespec="seconds")
+        source = workflow.get("source")
+        source_meta = source if isinstance(source, dict) else {}
         try:
             manifest = build_workflow_manifest(
                 name=display,
@@ -656,14 +788,7 @@ class WorkflowHubService:
                 pymss_models=requirements,
                 uploaded_by=username,
                 uploaded_at=uploaded_at,
-                lineage_id=trim_text(
-                    (
-                        workflow.get("source")
-                        if isinstance(workflow.get("source"), dict)
-                        else {}
-                    ).get("lineage_id"),
-                    200,
-                )
+                lineage_id=trim_text(source_meta.get("lineage_id"), 200)
                 or repo_id,
                 app_name=config.APP_NAME,
                 marker=config.MODELSCOPE_WORKFLOW_MARKER,
@@ -706,6 +831,10 @@ class WorkflowHubService:
                 "remote_name": display,
             },
         )
+        try:
+            self._gateway.invalidate_cache()
+        except Exception:  # noqa: BLE001 - 缓存清理失败不应影响上传结果
+            pass
         self._set_progress(key, "done", 100, "完成")
         return result
 

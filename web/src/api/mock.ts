@@ -1872,7 +1872,14 @@ export const mock = {
     })
     const startIdx = (page - 1) * pageSize
     const items = all.slice(startIdx, startIdx + pageSize)
-    return { ok: true, items, page, page_size: pageSize, has_more: startIdx + pageSize < all.length }
+    return {
+      ok: true,
+      items,
+      page,
+      page_size: pageSize,
+      total: all.length,
+      has_more: startIdx + pageSize < all.length,
+    }
   },
   hubDownloadModel(repoId: string): HubDownloadResult {
     const hit = mockHubModels.find((m) => m.repo_id === repoId)

@@ -357,13 +357,25 @@ class Api:
 
     def import_model(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         """导入一组模型，按 framework 分支处理 so-vits / RVC / SeedVC 文件角色。"""
-        return self._models.import_model(payload or {})
+        result = self._models.import_model(payload or {})
+        if result:
+            # 新模型可能通过哈希匹配到模型站条目，清掉安装状态缓存。
+            invalidate = getattr(self._hub, "invalidate_cache", None)
+            if callable(invalidate):
+                invalidate()
+        return result
 
     def set_default_model(self, model_id: str) -> bool:
         return self._models.set_default(model_id)
 
     def delete_model(self, model_id: str) -> bool:
-        return self._models.remove(model_id)
+        removed = self._models.remove(model_id)
+        if removed:
+            # 删除后模型站不能继续显示「查看本地」：让搜索缓存与哈希/来源检测重算。
+            invalidate = getattr(self._hub, "invalidate_cache", None)
+            if callable(invalidate):
+                invalidate()
+        return removed
 
     def inspect_model(self, model_id: str, repair: bool = False) -> dict[str, Any]:
         return self._models.inspect(model_id, bool(repair))

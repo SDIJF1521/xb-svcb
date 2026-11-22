@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from domain.workflow_manifest import (
     pymss_node_default_purpose,
     preview_graph,
     sanitize_graph,
+    workflow_graph_fingerprint,
 )
 
 
@@ -225,3 +227,24 @@ def test_workflow_source_normalization() -> None:
     assert "unknown" not in source
     assert normalize_workflow_source(None) == {}
     assert normalize_workflow_source({"origin": "weird"}) == {}
+
+
+def test_workflow_graph_fingerprint_is_semantic() -> None:
+    first = _graph()
+    second = copy.deepcopy(first)
+    # 拖动布局、改工作流名称、改连线 ID 都不应影响「同一工作流」判断。
+    second["name"] = "本地改过名的工作流"
+    second["nodes"][1]["x"] = 999
+    second["nodes"][1]["y"] = 888
+    for index, edge in enumerate(second["edges"]):
+        edge["id"] = f"local-{index}"
+    assert workflow_graph_fingerprint(first) == workflow_graph_fingerprint(second)
+
+    # 改节点参数 / 连线则必须产生不同指纹。
+    changed = copy.deepcopy(first)
+    changed["nodes"][1]["params"]["model"] = "another.ckpt"
+    assert workflow_graph_fingerprint(changed) != workflow_graph_fingerprint(first)
+
+    # 非法 / 空图没有指纹。
+    assert workflow_graph_fingerprint({"nodes": [], "edges": []}) is None
+    assert workflow_graph_fingerprint(None) is None
