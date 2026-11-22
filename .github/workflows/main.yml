@@ -21,6 +21,10 @@ jobs:
     env:
       # Keep `uv sync` and the explicit interpreter path on the same environment.
       UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/app/.venv
+      # GitHub-hosted runners may not resolve the China mirror configured for
+      # local development; always use the official index in CI.
+      UV_DEFAULT_INDEX: https://pypi.org/simple
+      UV_HTTP_TIMEOUT: "60"
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8
 
