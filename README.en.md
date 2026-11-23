@@ -50,6 +50,16 @@ XB-SVCB is a local-first Windows application for AI song covers and audio produc
 
 The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UVR / PyMSS vocal separation, AI vocal enhancement, high-note protection, an online music library, a model hub, a workflow store, real-time system-audio conversion, and the Audio Editor Lite multitrack editor.
 
+## Mobile Companion App
+
+A separate Android companion, **[XB-SVCB Mobile](https://github.com/SDIJF1521/XB-SVCB-Mobile)** (independent Git repository, GPL-3.0-only).
+
+It covers viewing works and jobs, creating and deleting cover jobs, managing voice models and materials, and downloading results. Audio editing, full timeline editing, custom workflows, and real-time voice conversion remain desktop-only. It connects through this project's FastAPI service, and inference still runs on the desktop.
+
+- Project guide: [XB-SVCB-Mobile](https://github.com/SDIJF1521/XB-SVCB-Mobile)
+- API contract: [docs/API.md](https://github.com/SDIJF1521/XB-SVCB-Mobile/blob/main/docs/API.md)
+- Build: run `pwsh -File build-apk.ps1` in the mobile project to produce `dist/XB-SVCB-Mobile-0.1.2.apk`
+
 ## Features
 
 - Run vocal separation, dereverb, F0 analysis, voice conversion, enhancement, and mixing as one workflow.

@@ -50,6 +50,16 @@ XB-SVCBは、Windowsでローカル動作するAIカバー・音声制作アプ�
 
 So-VITS-SVC、RVC、SeedVC、DDSP-SVCをサポートしています。また、UVR / PyMSSによるボーカル分離、AIボーカル強化、高音保護、オンライン楽曲ライブラリ、モデルハブ、ワークフローストア、システム音声のリアルタイム変換、Audio Editor Liteも利用できます。
 
+## モバイル版
+
+独立したAndroid向けの**[XB-SVCB Mobile](https://github.com/SDIJF1521/XB-SVCB-Mobile)**（独立Gitリポジトリ、GPL-3.0-only）を用意しています。
+
+作品・タスクの確認、カバータスクの作成と削除、声モデルと素材の管理、完成品のダウンロードに使用します。音声エディター、完全なタイムライン、カスタムワークフロー、リアルタイム変声はPC側専用です。本プロジェクトのFastAPIサービス経由で接続し、推論はデスクトップ側で実行されます。
+
+- プロジェクト説明：[XB-SVCB-Mobile](https://github.com/SDIJF1521/XB-SVCB-Mobile)
+- API契約：[docs/API.md](https://github.com/SDIJF1521/XB-SVCB-Mobile/blob/main/docs/API.md)
+- ビルド：モバイルプロジェクトで `pwsh -File build-apk.ps1` を実行し、`dist/XB-SVCB-Mobile-0.1.2.apk` を生成
+
 ## 主な機能
 
 - ボーカル分離、残響除去、F0解析、歌声変換、強化、ミックスを一つのワークフローで実行。

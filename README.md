@@ -55,6 +55,16 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 
 项目目前支持 So-VITS-SVC、RVC、SeedVC 和 DDSP-SVC 四种歌声转换框架，同时提供 UVR / PyMSS 人声分离、AI 歌声增强、高音保护、在线曲库、模型站、工作流商城、实时系统音频变声和 Audio Editor Lite 音频编辑器。
 
+## 移动端伴生应用
+
+配套的独立 Android 手机端 **[XB-SVCB Mobile](https://github.com/SDIJF1521/XB-SVCB-Mobile)**（独立 Git 仓库，GPL-3.0-only）。
+
+手机端用于查看作品与任务、创建和删除翻唱任务、管理声音模型与素材、下载成品；不包含音频编辑器、完整时间轴、自定义工作流与实时变声。它通过本项目的 FastAPI 服务连接，推理仍然在桌面端完成。
+
+- 项目说明：[XB-SVCB-Mobile](https://github.com/SDIJF1521/XB-SVCB-Mobile)
+- 接口契约：[docs/API.md](https://github.com/SDIJF1521/XB-SVCB-Mobile/blob/main/docs/API.md)
+- 构建产物：在移动端项目执行 `pwsh -File build-apk.ps1`，生成 `dist/XB-SVCB-Mobile-0.1.2.apk`
+
 ## 主要功能
 
 - 一键完成「人声分离 → 去混响 → F0 分析 → 歌声转换 → 增强 → 混音」。
