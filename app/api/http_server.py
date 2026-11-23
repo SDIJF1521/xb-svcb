@@ -6,6 +6,7 @@ import copy
 from datetime import datetime, timezone
 import re
 import secrets
+import shutil
 import socket
 import threading
 import time
@@ -69,6 +70,19 @@ API_OVERVIEW_DESCRIPTION = r"""
 | 参数名 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `X-API-Key` | string | 是 | API 接入页显示的密钥；`GET /health` 不需要 |
+
+## 移动端素材与歌词
+
+移动伴生客户端通过以下接口复用电脑端「资源获取」素材与曲库：
+
+- `GET /api/v1/music/downloaded`：列出电脑端已下载素材（只返回文件名、显示名、大小）。
+- `POST /api/v1/music/downloads`：按曲库搜索结果在电脑端下载新素材。
+- `POST /api/v1/music/downloaded/use`：把已下载素材复制成新的 `upload_id`。
+- `GET /api/v1/music/downloaded/{name}/audio`：下载电脑端素材原文件。
+- `DELETE /api/v1/music/downloaded/{name}`：删除电脑端已下载素材。
+- `GET /api/v1/music/sources`、`GET /api/v1/music/search`、`GET /api/v1/music/lyrics`：
+  歌词曲库、候选搜索与时间轴歌词。
+- `GET /api/v1/uploads/{upload_id}/duration`：读取上传音频时长，供多模型分段使用。
 
 ## 完整示例：生成一首 AI 翻唱
 
@@ -1133,6 +1147,63 @@ class ModelRenameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120, description="新的模型显示名称")
 
 
+class HubDownloadRequest(BaseModel):
+    """请求从模型站下载并导入一个声音模型。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    repo_id: str = Field(
+        min_length=1,
+        max_length=255,
+        description="模型站仓库 ID，形如 用户名/模型名，可从模型站搜索结果获取",
+    )
+
+
+class MusicLibraryUseRequest(BaseModel):
+    """选择一首已下载素材作为翻唱源文件。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        min_length=1,
+        max_length=255,
+        description="已下载素材的文件名（从 GET /api/v1/music/downloaded 获取的 id）",
+    )
+
+
+class MusicDownloadRequest(BaseModel):
+    """从在线曲库下载一首新素材到电脑端资源库。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=200, description="搜索关键词")
+    n: int = Field(ge=1, description="搜索结果中的 songs[].n")
+    source: str | None = Field(default=None, description="曲库：wy、qq 或 kuwo")
+    song_id: str | None = Field(default=None, description="可选歌曲 ID；酷我忽略")
+
+
+class MusicDownloadResponse(BaseModel):
+    ok: bool = Field(description="是否已下载成功")
+    name: str = Field(description="下载后的素材显示名")
+    message: str = Field(description="结果说明")
+
+
+class MusicLibraryItem(BaseModel):
+    id: str = Field(description="素材文件名，用于选用、下载和删除")
+    name: str = Field(description="素材显示名")
+    size: str = Field(description="人类可读大小")
+
+
+class MusicLibraryListResponse(BaseModel):
+    items: list[MusicLibraryItem] = Field(description="已下载素材列表")
+    total: int = Field(ge=0, description="素材总数")
+
+
+class UploadDurationResponse(BaseModel):
+    upload_id: str = Field(description="上传文件 ID")
+    duration: float = Field(ge=0, description="时长（秒），无法探测时为 0")
+
+
 class EditorProjectCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1891,6 +1962,10 @@ def create_http_app(
                 "description": "上传源歌曲或参考音频，以及下载任务生成的音频。上传不限制文件大小。",
             },
             {"name": "任务", "description": "创建和管理单模型、多模型及批量 AI 翻唱任务。"},
+            {
+                "name": "音乐",
+                "description": "搜索曲库歌词、列出与下载已下载素材、把素材复制为任务上传件。",
+            },
             {"name": "编辑器", "description": "Audio Editor Lite 工程、音轨、片段和渲染接口。"},
         ],
         docs_url="/docs",
@@ -1947,6 +2022,234 @@ def create_http_app(
     )
     def system_status() -> dict[str, Any]:
         return facade.get_system_status()
+
+    def _music_file_by_name(name: str) -> Path:
+        """按文件名解析已下载素材，并限制在音乐目录内。"""
+        clean = name.strip()
+        if not clean or Path(clean).name != clean:
+            raise HTTPException(status_code=404, detail="素材不存在")
+        try:
+            allowed = config.MUSIC_DIR.resolve()
+        except OSError as exc:
+            raise HTTPException(status_code=409, detail="无法读取素材目录") from exc
+        for item in facade.list_music():
+            candidate = Path(str(item.get("path") or ""))
+            if candidate.name != clean:
+                continue
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if resolved.parent != allowed or not resolved.is_file():
+                break
+            return resolved
+        raise HTTPException(status_code=404, detail="素材不存在")
+
+    @router.get(
+        "/music/sources",
+        tags=["音乐"],
+        summary="列出歌词曲库",
+        description=MUSIC_SOURCE_API_DOC,
+    )
+    def list_music_sources() -> dict[str, Any]:
+        sources = facade.list_music_sources()
+        return {
+            "items": sources,
+            "total": len(sources),
+            "default_id": facade.get_music_source(),
+        }
+
+    @router.get(
+        "/music/search",
+        tags=["音乐"],
+        summary="搜索歌曲歌词候选",
+        description=MUSIC_SEARCH_API_DOC,
+    )
+    def search_music(
+        query: str = Query(description="歌名、歌手或两者组合"),
+        source: str | None = Query(default=None, description="曲库：wy、qq 或 kuwo"),
+        limit: int = Query(default=15, ge=1, le=50, description="返回数量，范围 1~50"),
+    ) -> dict[str, Any]:
+        return facade.search_music(query, 1, limit, source)
+
+    @router.get(
+        "/music/lyrics",
+        tags=["音乐"],
+        summary="获取时间轴歌词",
+        description=MUSIC_LYRICS_API_DOC,
+    )
+    def music_lyrics(
+        query: str = Query(description="产生该候选序号的原始搜索关键词"),
+        n: int = Query(ge=1, description="搜索结果中的 songs[].n"),
+        source: str | None = Query(default=None, description="曲库：wy、qq 或 kuwo"),
+        song_id: str | None = Query(default=None, description="可选歌曲 ID；酷我忽略"),
+    ) -> dict[str, Any]:
+        return facade.get_music_lyrics(query, n, source, song_id)
+
+    @router.post(
+        "/music/downloads",
+        response_model=MusicDownloadResponse,
+        tags=["音乐"],
+        summary="下载在线素材到电脑端",
+        description=_resource_api_doc(
+            "按搜索结果把一首歌曲或伴奏下载到电脑端「资源获取」素材库。",
+            "POST",
+            "/api/v1/music/downloads",
+            [
+                ("query", "string", "是", "-", "产生该候选序号的原始搜索关键词"),
+                ("n", "integer", "是", "-", "搜索结果中的 songs[].n"),
+                ("source", "string|null", "否", "wy", "曲库：wy、qq 或 kuwo"),
+                ("song_id", "string|null", "否", "null", "可选歌曲 ID；酷我忽略"),
+            ],
+            note="下载在电脑端完成后才会返回，可通过 GET /api/v1/music/downloaded 刷新列表。",
+        ),
+    )
+    def download_music(request: MusicDownloadRequest) -> dict[str, Any]:
+        result = facade.download_music(
+            request.query,
+            request.n,
+            request.source,
+            request.song_id,
+        )
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=400,
+                detail=result.get("error") or "下载素材失败",
+            )
+        return {
+            "ok": True,
+            "name": result.get("name") or request.query,
+            "message": "已下载到电脑端素材库",
+        }
+
+    @router.get(
+        "/music/downloaded",
+        response_model=MusicLibraryListResponse,
+        tags=["音乐"],
+        summary="列出已下载素材",
+        description=_resource_api_doc(
+            "列出软件「资源获取」中已下载的歌曲素材，供创建翻唱时直接选用。",
+            "GET",
+            "/api/v1/music/downloaded",
+            note="只返回文件名 id、显示名与大小，不暴露电脑端绝对路径。",
+        ),
+    )
+    def list_downloaded_music() -> dict[str, Any]:
+        items: list[dict[str, Any]] = []
+        for item in facade.list_music():
+            path = Path(str(item.get("path") or ""))
+            if not path.name:
+                continue
+            items.append(
+                {
+                    "id": path.name,
+                    "name": item.get("name") or path.stem,
+                    "size": item.get("size") or "",
+                }
+            )
+        return {"items": items, "total": len(items)}
+
+    @router.post(
+        "/music/downloaded/use",
+        response_model=UploadResponse,
+        status_code=201,
+        tags=["音乐"],
+        summary="把已下载素材复制为任务上传",
+        description=_resource_api_doc(
+            "把一首已下载素材复制到 API 上传目录，返回 upload_id 供创建任务使用。",
+            "POST",
+            "/api/v1/music/downloaded/use",
+            [("name", "string", "是", "-", "已下载素材文件名，来自下载列表的 id")],
+            note="不会移动或删除原素材；复制件与普通上传一样可调用删除上传接口清理。",
+        ),
+        responses={404: {"model": ErrorResponse, "description": "素材不存在"}},
+    )
+    def use_downloaded_music(request: MusicLibraryUseRequest) -> dict[str, Any]:
+        resolved = _music_file_by_name(request.name)
+        suffix = resolved.suffix.lower()
+        if suffix not in SUPPORTED_MEDIA_SUFFIXES:
+            raise HTTPException(status_code=415, detail="不支持的音频或媒体格式")
+        config.API_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+        upload_id = uuid.uuid4().hex
+        destination = config.API_UPLOADS_DIR / f"{upload_id}{suffix}"
+        try:
+            shutil.copyfile(resolved, destination)
+        except OSError as exc:
+            destination.unlink(missing_ok=True)
+            raise HTTPException(status_code=409, detail=f"复制素材失败：{exc}") from exc
+        return {
+            "upload_id": upload_id,
+            "filename": resolved.name,
+            "size": destination.stat().st_size,
+        }
+
+    @router.get(
+        "/music/downloaded/{name:path}/audio",
+        response_class=FileResponse,
+        tags=["音乐"],
+        summary="下载已下载素材",
+        description=_resource_api_doc(
+            "把电脑端已下载的歌曲素材以音频文件返回，供手机保存到本地。",
+            "GET",
+            "/api/v1/music/downloaded/{name}/audio",
+            [("name", "string", "是", "-", "已下载素材文件名")],
+            note="支持流式下载；文件名来自 GET /api/v1/music/downloaded 的 id。",
+        ),
+        responses={404: {"model": ErrorResponse, "description": "素材不存在"}},
+    )
+    def download_downloaded_music(
+        name: str = ApiPath(..., description="已下载素材文件名")
+    ) -> FileResponse:
+        path = _music_file_by_name(name)
+        return FileResponse(path, media_type=_content_type(path), filename=path.name)
+
+    @router.delete(
+        "/music/downloaded/{name:path}",
+        response_model=ActionResponse,
+        tags=["音乐"],
+        summary="删除已下载素材",
+        description=_resource_api_doc(
+            "删除电脑端「资源获取」中的一首已下载歌曲。",
+            "DELETE",
+            "/api/v1/music/downloaded/{name}",
+            [("name", "string", "是", "-", "已下载素材文件名")],
+            note="会删除电脑端文件，无法通过 API 恢复。",
+        ),
+        responses={404: {"model": ErrorResponse, "description": "素材不存在"}},
+    )
+    def delete_downloaded_music(
+        name: str = ApiPath(..., description="已下载素材文件名")
+    ) -> dict[str, Any]:
+        path = _music_file_by_name(name)
+        if not facade.delete_music(str(path)):
+            raise HTTPException(status_code=409, detail="无法删除素材")
+        return {"ok": True, "id": path.name}
+
+    @router.get(
+        "/uploads/{upload_id}/duration",
+        response_model=UploadDurationResponse,
+        tags=["音频"],
+        summary="读取上传音频时长",
+        description=_resource_api_doc(
+            "探测已上传音频的时长，供歌词分段或多模型时间轴使用。",
+            "GET",
+            "/api/v1/uploads/{upload_id}/duration",
+            [("upload_id", "string", "是", "-", "上传文件 ID")],
+            note="返回秒数；无法探测时返回 0。",
+        ),
+        responses={404: {"model": ErrorResponse, "description": "上传文件不存在"}},
+    )
+    def upload_duration(
+        upload_id: str = ApiPath(
+            ...,
+            description="上传文件 ID，由 POST /api/v1/uploads 返回",
+            min_length=32,
+            max_length=32,
+        )
+    ) -> dict[str, Any]:
+        path = _resolve_upload(upload_id)
+        duration = float(facade.get_audio_duration(str(path)) or 0)
+        return {"upload_id": upload_id, "duration": round(duration, 2)}
 
     @router.get(
         "/models",
@@ -2019,6 +2322,86 @@ def create_http_app(
     )
     def get_pymss_download(job_key: str) -> dict[str, Any]:
         return facade.pymss_download_progress(job_key)
+
+    @router.get(
+        "/hub/models",
+        tags=["模型"],
+        summary="搜索模型站声音模型",
+        description=_resource_api_doc(
+            "搜索由本软件上传到 ModelScope 模型站的声音模型。",
+            "GET",
+            "/api/v1/hub/models",
+            [
+                ("query", "string", "否", "空", "搜索关键词；留空表示浏览"),
+                ("page", "integer", "否", "1", "页码，从 1 开始"),
+                ("page_size", "integer", "否", "12", "每页数量，范围 1~50"),
+                ("framework", "string|null", "否", "null", "按框架筛选"),
+            ],
+            note="返回仓库 ID、名称、框架、作者、采样率、标签与本地安装状态。",
+        ),
+    )
+    def search_hub_models(
+        query: str = Query(default="", description="搜索关键词；留空表示浏览"),
+        page: int = Query(default=1, ge=1, description="页码，从 1 开始"),
+        framework: str | None = Query(
+            default=None,
+            description="按框架筛选：so-vits-svc、rvc、seed-vc 或 ddsp-svc",
+        ),
+        page_size: int = Query(default=12, ge=1, le=50, description="每页数量"),
+    ) -> dict[str, Any]:
+        return facade.hub_search_models(query, page, framework, page_size)
+
+    @router.post(
+        "/hub/downloads",
+        status_code=202,
+        tags=["模型"],
+        summary="从模型站下载并导入声音模型",
+        description=_resource_api_doc(
+            "按仓库 ID 启动模型站下载，完成后自动导入本地模型库。",
+            "POST",
+            "/api/v1/hub/downloads",
+            [("repo_id", "string", "是", "-", "模型站仓库 ID，形如 用户名/模型名")],
+            note="立即返回任务 key；下载进度可轮询 GET /api/v1/hub/downloads。",
+        ),
+    )
+    def start_hub_download(request: HubDownloadRequest) -> dict[str, Any]:
+        result = facade.hub_start_download(request.repo_id)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error") or "模型下载启动失败")
+        return result
+
+    @router.get(
+        "/hub/downloads",
+        tags=["模型"],
+        summary="列出模型站下载任务",
+        description=_resource_api_doc(
+            "返回当前会话中由模型站发起的下载任务及其实时进度。",
+            "GET",
+            "/api/v1/hub/downloads",
+            note="任务 key 形如 dl:用户名/模型名。",
+        ),
+    )
+    def list_hub_downloads() -> dict[str, Any]:
+        items = [
+            job
+            for job in facade.hub_list_jobs()
+            if str(job.get("key", "")).startswith("dl:")
+        ]
+        return {"items": items, "total": len(items)}
+
+    @router.get(
+        "/hub/downloads/{job_key:path}",
+        tags=["模型"],
+        summary="查询模型站下载进度",
+        description=_resource_api_doc(
+            "按任务 key 查询模型站下载进度。",
+            "GET",
+            "/api/v1/hub/downloads/{job_key}",
+            [("job_key", "string", "是", "-", "任务 key，形如 dl:用户名/模型名")],
+        ),
+    )
+    def get_hub_download(job_key: str) -> dict[str, Any]:
+        return facade.hub_progress(job_key)
 
     @router.post(
         "/models/default",
