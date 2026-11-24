@@ -183,6 +183,27 @@ def test_installer_packages_and_locks_bundled_python312() -> None:
     assert "sys.version_info[:2] == (3, 12)" in detector
 
 
+def test_installer_packages_and_uses_bundled_git_runtime() -> None:
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    build = (ROOT / "installer" / "build.ps1").read_text(encoding="utf-8")
+    prereqs = (ROOT / "install_prereqs.bat").read_text(encoding="utf-8")
+    setup = (ROOT / "setup_env.bat").read_text(encoding="utf-8")
+
+    assert 'Source: "..\\.tmp\\git-runtime\\*"' in script
+    assert 'DestDir: "{app}\\tools\\git"' in script
+    assert "PathJoin(AppDir, 'tools\\git\\cmd\\git.exe')" in script
+    assert "ExpandConstant('{app}\\tools\\git')" in script
+    assert "BundledGit" in script
+    assert "function Stage-GitRuntime" in build
+    assert "MinGit-2.47.1-64-bit.zip" in build
+    assert "Stage-GitRuntime $Git" in build
+    assert 'Require-File (Join-Path $Root ".tmp\\git-runtime\\cmd\\git.exe")' in build
+    assert 'if not defined XB_GIT_DIR if exist "%~dp0tools\\git\\cmd\\git.exe"' in prereqs
+    assert "if defined XB_GIT_DIR (" in prereqs
+    assert "bundled Git found" in prereqs
+    assert 'if not defined XB_GIT_BIN if exist "%~dp0tools\\git\\cmd\\git.exe"' in setup
+
+
 def test_installer_detects_vbcable_and_provides_manual_official_download() -> None:
     script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
     prereqs = (ROOT / "install_prereqs.bat").read_text(encoding="utf-8")

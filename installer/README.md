@@ -14,7 +14,7 @@
 | `XB-SVCB-Setup-CUDA126` | 两层共享环境 | Torch 2.7.1 + cu126 |
 | `XB-SVCB-Setup-CUDA128` | 两层共享环境 | Torch 2.7.1 + cu128 |
 
-CUDA 是默认发布路径：不传 `-Stacks` 时，`build.ps1` 构建 CUDA128 共享运行时安装包。CPU 和 DirectML 保留隔离布局；ROCm 10 的 SVC/RVC/Vocal 共用 `runtimes/svc-rocm10`，其余组件隔离。五套包都包含同一应用、引擎源码、模型、FFmpeg 和 JUCE Host，但只携带目标硬件栈需要的 wheels。DirectML 包额外携带 PyMSS 与 DDSP legacy 所需的 CPU wheels：PyMSS 2.0.x 需要 Torch 2.7.1，不能与固定 Torch 2.4.1 的 `torch-directml` 混装，因此在独立 `.venv-pymss` 中使用 CPU 推理。DDSP 自动设备同样走 CPU；用户显式选择 DirectML 才尝试 6.3 模型的实验推理，输出可能存在静默数值失真，需要试听确认。
+CUDA 是默认发布路径：不传 `-Stacks` 时，`build.ps1` 构建 CUDA128 共享运行时安装包。CPU 和 DirectML 保留隔离布局；ROCm 10 的 SVC/RVC/Vocal 共用 `runtimes/svc-rocm10`，其余组件隔离。五套包都包含同一应用、引擎源码、模型、内置 Python 3.12、内置 MinGit、FFmpeg 和 JUCE Host，但只携带目标硬件栈需要的 wheels。DirectML 包额外携带 PyMSS 与 DDSP legacy 所需的 CPU wheels：PyMSS 2.0.x 需要 Torch 2.7.1，不能与固定 Torch 2.4.1 的 `torch-directml` 混装，因此在独立 `.venv-pymss` 中使用 CPU 推理。DDSP 自动设备同样走 CPU；用户显式选择 DirectML 才尝试 6.3 模型的实验推理，输出可能存在静默数值失真，需要试听确认。
 
 CUDA 共享布局：
 
@@ -35,7 +35,7 @@ CUDA 共享布局：
 - CUDA 包还必须有 `assets/runtime/core-cu128` 的 candidate/compat 材料；可用
   `-RuntimeAssets C:\path\to\core-cu128` 从单独备份同步。
 
-安装器内置一套干净的 64 位 CPython 3.12.x，安装到 `tools\python312` 并固定写入 `installer_env.cmd`；最终用户不需要另外安装或选择 Python。构建参数 `-Python` 指定的基础解释器既用于生成 wheelhouse，也用于暂存内置运行时；构建器会排除该解释器的 `Lib\site-packages`、`Scripts` 和缓存，避免携带开发机第三方包。`uv` 无需用户预装：wheelhouse 携带启动 wheel，缺失时由安装流程安装。
+安装器内置一套干净的 64 位 CPython 3.12.x，安装到 `tools\python312`，并内置 **MinGit 2.47.1 64-bit** 到 `tools\git`；两者都会固定写入 `installer_env.cmd`，最终用户不需要另外安装或选择 Python / Git。构建参数 `-Python` 指定的基础解释器既用于生成 wheelhouse，也用于暂存内置运行时；构建器会排除该解释器的 `Lib\site-packages`、`Scripts` 和缓存，避免携带开发机第三方包。Git 默认由构建器从 Git for Windows 官方 Release 下载 MinGit 并缓存到 `.tmp\git-runtime`；离线构建可用 `-Git C:\path\to\MinGit` 指定已有的 `cmd\git.exe` 根目录。`uv` 无需用户预装：wheelhouse 携带启动 wheel，缺失时由安装流程安装。
 
 五种发布栈现在都只创建 Python 3.12 环境。CPU 的 SVC/RVC 仍保留独立目录和兼容 Torch 版本，但不再额外要求 Python 3.9。
 
@@ -54,7 +54,7 @@ CUDA 共享布局：
 & .\installer\build.ps1 -ValidateOnly
 ```
 
-构建默认 CUDA128 共享包（自动通过 `py -3.12` 或 `PATH` 检测解释器）：
+构建默认 CUDA128 共享包（自动通过 `py -3.12` 或 `PATH` 检测解释器，并下载/复用内置 MinGit）：
 
 ```powershell
 & .\installer\build.ps1
@@ -67,6 +67,12 @@ CUDA 共享布局：
 & .\installer\build.ps1 -Stacks cpu
 & .\installer\build.ps1 -Stacks rocm10
 & .\installer\build.ps1 -Stacks directml
+```
+
+离线构建可复用已有的 MinGit，避免重新下载：
+
+```powershell
+& .\installer\build.ps1 -Stacks cu128 -Git C:\path\to\MinGit
 ```
 
 ### 受限环境：启动即提权（`-RequireAdmin`）
@@ -379,7 +385,7 @@ XB-SVCB-Setup-CUDA128-2.bin
 
 安装器会：
 
-1. 校验应用、模型、引擎源码、FFmpeg、JUCE Host 和 wheels。
+1. 校验应用、模型、引擎源码、内置 Python / MinGit、FFmpeg、JUCE Host 和 wheels。
 2. 校验并锁定安装包内置的 CPython 3.12.x。
 3. 安装或复用 `uv`，按包内固定硬件栈创建环境。
 4. CUDA126/CUDA128 调用两层共享入口；CPU/ROCm 10/DirectML 调用兼容入口，其中 ROCm 10 的 SVC/RVC/Vocal 使用单独共享层。

@@ -67,6 +67,7 @@ call :CHECK_PYTHON
 if errorlevel 1 exit /b 1
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 28 正在检查 Git
 call :CHECK_GIT
+if errorlevel 1 exit /b 1
 if "%XB_FROM_INSTALLER%"=="1" echo [XB-PROGRESS] 40 正在检查 ffmpeg
 call :CHECK_FFMPEG
 if errorlevel 1 exit /b 1
@@ -94,6 +95,7 @@ endlocal
 exit /b 0
 
 :RESOLVE_PATHS
+if not defined XB_GIT_DIR if exist "%~dp0tools\git\cmd\git.exe" set "XB_GIT_DIR=%~dp0tools\git"
 if defined XB_GIT_DIR (
   if exist "%XB_GIT_DIR%\cmd\git.exe" set "XB_GIT_BIN=%XB_GIT_DIR%\cmd"
   if not defined XB_GIT_BIN if exist "%XB_GIT_DIR%\bin\git.exe" set "XB_GIT_BIN=%XB_GIT_DIR%\bin"
@@ -283,18 +285,20 @@ call :MANUAL_GUIDANCE "Python 3.12" "https://www.python.org/downloads/windows/"
 exit /b 1
 
 :CHECK_GIT
+if defined XB_GIT_BIN if exist "%XB_GIT_BIN%\git.exe" (
+  "%XB_GIT_BIN%\git.exe" --version >nul 2>&1
+  if not errorlevel 1 (
+    echo [ok] bundled Git found: %XB_GIT_BIN%\git.exe
+    exit /b 0
+  )
+)
 where git >nul 2>&1 && (
   echo [ok] Git found in PATH
   exit /b 0
 )
-if defined XB_GIT_BIN if exist "%XB_GIT_BIN%\git.exe" (
-  echo [ok] Git found: %XB_GIT_BIN%\git.exe
-  exit /b 0
-)
-echo [miss] Git not found.
-call :MANUAL_GUIDANCE "Git" "https://git-scm.com/download/win"
-call :RESOLVE_PATHS
-exit /b 0
+echo [fail] Bundled Git is missing and no system Git was found.
+echo        Expected: %~dp0tools\git\cmd\git.exe
+exit /b 1
 
 :CHECK_FFMPEG
 if defined XB_FFMPEG_BIN if exist "!XB_FFMPEG_BIN!\ffmpeg.exe" if exist "!XB_FFMPEG_BIN!\ffprobe.exe" (

@@ -41,6 +41,7 @@ param(
   [ValidateSet('cpu', 'rocm10', 'directml', 'cu126', 'cu128')]
   [string[]]$Stacks,
   [string]$Python,
+  [string]$Git,
   [string]$RuntimeAssets,
   [switch]$BootstrapperOnly,
   [switch]$ValidateOnly,
@@ -56,6 +57,8 @@ Default: cu128
 
 Options:
   -Python <path>        Use a 64-bit CPython 3.12 executable.
+  -Git <dir>            Stage an existing MinGit/PortableGit root (contains cmd\git.exe).
+                        When omitted, MinGit 2.47.1 64-bit is downloaded once into .tmp.
   -RuntimeAssets <dir>  Supply the shared CUDA core runtime assets.
   -SkipWebBuild         Reuse an existing web/dist build.
   -SkipAppBuild         Reuse an up-to-date dist/XB-SVCB app build.
@@ -70,6 +73,7 @@ Use -SkipWheelhouse only after preparing the selected stack's wheels.
 
 Examples:
   .\installer\build.ps1 -Stacks directml -Python C:\path\to\python.exe
+  .\installer\build.ps1 -Stacks directml -Python C:\path\to\python.exe -Git C:\path\to\MinGit
   .\installer\build.ps1 -Stacks directml -SkipWheelhouse -SkipWebBuild
   .\installer\build.ps1 -ValidateOnly -Stacks directml
 '@ | Write-Output
@@ -511,6 +515,77 @@ function Ensure-FfmpegPayload([string]$PayloadDir) {
   }
 }
 
+function Stage-GitRuntime(
+  [string]$SourceDir,
+  [string]$PayloadDir
+) {
+  $payloadGit = Join-Path $PayloadDir 'cmd\git.exe'
+  if (Test-Path -LiteralPath $payloadGit -PathType Leaf) {
+    $cachedVersion = @(& $payloadGit --version 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $cachedVersion.Count -gt 0) {
+      Write-Host ("Reusing bundled Git runtime: {0}" -f $PayloadDir) -ForegroundColor DarkGray
+      return
+    }
+    Remove-Item -LiteralPath $PayloadDir -Recurse -Force
+  }
+
+  $sourceRoot = ''
+  if ($SourceDir) {
+    $sourceRoot = [IO.Path]::GetFullPath($SourceDir)
+  } else {
+    $downloadDir = Join-Path $Root '.tmp\git-payload'
+    $archive = Join-Path $downloadDir 'MinGit-2.47.1-64-bit.zip'
+    $extractDir = Join-Path $downloadDir 'extract'
+    New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
+    if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+      Write-Host 'Downloading the bundled MinGit runtime...' -ForegroundColor Cyan
+      try {
+        Invoke-WebRequest -UseBasicParsing `
+          -Uri 'https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip' `
+          -OutFile $archive
+      } catch {
+        throw "Failed to download MinGit. Download MinGit-2.47.1-64-bit.zip manually and pass -Git <extracted-root> (must contain cmd\git.exe). $($_.Exception.Message)"
+      }
+    }
+    if (Test-Path -LiteralPath $extractDir) {
+      Remove-Item -LiteralPath $extractDir -Recurse -Force
+    }
+    Expand-Archive -LiteralPath $archive -DestinationPath $extractDir -Force
+    $candidate = Get-ChildItem -LiteralPath $extractDir -Filter 'git.exe' -File -Recurse |
+      Where-Object { $_.Directory.Name -ieq 'cmd' } |
+      Select-Object -First 1
+    if (-not $candidate) {
+      throw 'Downloaded MinGit archive does not contain cmd\git.exe.'
+    }
+    $sourceRoot = Split-Path -Parent (Split-Path -Parent $candidate.FullName)
+  }
+
+  $sourceGit = Join-Path $sourceRoot 'cmd\git.exe'
+  if (-not (Test-Path -LiteralPath $sourceGit -PathType Leaf)) {
+    throw "Git runtime root must contain cmd\git.exe: $sourceRoot"
+  }
+
+  if (Test-Path -LiteralPath $PayloadDir) {
+    Remove-Item -LiteralPath $PayloadDir -Recurse -Force
+  }
+  New-Item -ItemType Directory -Force -Path $PayloadDir | Out-Null
+  Write-Host ("Staging bundled Git runtime from {0}..." -f $sourceRoot) -ForegroundColor Cyan
+  & robocopy.exe $sourceRoot $PayloadDir /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP `
+    /XD (Join-Path $sourceRoot '.git') '__pycache__' `
+    /XF 'unins*' '*.pdb'
+  $robocopyExit = $LASTEXITCODE
+  if ($robocopyExit -gt 7) {
+    throw "Failed to stage the bundled Git runtime (robocopy exit code $robocopyExit)."
+  }
+
+  $payloadGit = Join-Path $PayloadDir 'cmd\git.exe'
+  $version = @(& $payloadGit --version 2>&1)
+  if ($LASTEXITCODE -ne 0 -or $version.Count -eq 0 -or $version[0] -notmatch '^git version') {
+    throw "Staged Git runtime is not runnable: $payloadGit"
+  }
+  Write-Host ("Bundled Git: {0}" -f $version[0]) -ForegroundColor Green
+}
+
 function Stage-Python312Runtime(
   [string]$PythonExe,
   [string]$PayloadDir
@@ -902,6 +977,8 @@ Write-Host ("Build Python 3.12: {0}" -f $buildPython) -ForegroundColor Green
 # engine repositories or FFmpeg themselves.
 Ensure-FfmpegPayload (Join-Path $Root "assets\tools\ffmpeg")
 Stage-Python312Runtime $buildPython (Join-Path $Root '.tmp\python312-runtime')
+Stage-GitRuntime $Git (Join-Path $Root '.tmp\git-runtime')
+$env:PATH = "$(Join-Path $Root '.tmp\git-runtime\cmd');$env:PATH"
 Ensure-EngineSource `
   (Join-Path $Root "engines\so-vits-svc") `
   "inference\infer_tool.py" `
@@ -930,6 +1007,7 @@ Require-File (Join-Path $Root "assets\tools\ffmpeg\bin\ffmpeg.exe") "Bundled FFm
 Require-File (Join-Path $Root "assets\tools\ffmpeg\bin\ffprobe.exe") "Bundled ffprobe"
 Require-File (Join-Path $Root ".tmp\python312-runtime\python.exe") "Bundled CPython 3.12"
 Require-File (Join-Path $Root ".tmp\python312-runtime\python312.dll") "Bundled CPython 3.12 DLL"
+Require-File (Join-Path $Root ".tmp\git-runtime\cmd\git.exe") "Bundled Git runtime"
 Require-FileSize `
   (Join-Path $Root "engines\ddsp-svc\pretrain\contentvec\pytorch_model.bin") `
   314572800 `

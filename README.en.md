@@ -85,7 +85,7 @@ It covers viewing works and jobs, creating and deleting cover jobs, managing voi
 - Windows 10 1809 or newer, or Windows 11, 64-bit.
 - **Microsoft Visual C++ 2015-2022 x64 Redistributable, latest version**: <https://aka.ms/vs/17/release/vc_redist.x64.exe>. Run it and choose "Repair" even if it is already installed. When it is outdated, or an older `msvcp140.dll` shipped by another application has overwritten it, `onnxruntime` crashes while importing (`0xC0000005`) and the installer stops at step 4/12 or at the final shared-runtime check. See [Troubleshooting](#final-install-step-fails-uvr-probes-crash).
 - CUDA126 for NVIDIA RTX 40-series and older, CUDA128 for RTX 50-series, ROCm 10 as the preferred Windows AMD backend (DirectML optional), CPU when no compatible GPU is available.
-- 64-bit CPython 3.12.x: bundled with the installer, only needed separately for source runs, which also require Node.js 20.19+ or 22.12+.
+- 64-bit CPython 3.12.x and MinGit: bundled with the installer, so no separate installation is needed. Source builds require Python 3.12.x and Node.js 20.19+ or 22.12+.
 
 ### Installer
 
@@ -93,10 +93,10 @@ For normal use, download the ModelScope edition, `XB-SVCB-Online-Setup-ModelScop
 
 1. Run the online installer and use automatic detection, or manually select CPU, ROCm 10, DirectML, CUDA126, or CUDA128.
 2. Wait for the matching complete package to download and pass SHA-256 verification, then select both the application directory and user-data directory.
-3. Select a 64-bit CPython 3.12.x installation, or let the installer detect one, then keep **Set up the runtime after installation** enabled.
+3. Setup extracts the bundled Python 3.12 and MinGit automatically. Keep **Set up the runtime after installation** enabled; no local Python or Git selection is required.
 4. Start XB-SVCB from the desktop or Start menu.
 
-For a fully offline installation, download the dedicated hardware package's EXE and every BIN file sharing its prefix, and keep them in one directory. The package contains the built frontend, FFmpeg, engine source code, essential base models, and offline Python dependencies for the selected hardware stack. Use CUDA126 for NVIDIA RTX 40-series and older GPUs, CUDA128 for RTX 50-series GPUs, ROCm 10 as the preferred Windows AMD backend, DirectML as an alternative AMD backend, and CPU when no compatible GPU is available. In the DirectML package, PyMSS and DDSP automatic mode run on the CPU; PyMSS does not use DirectML acceleration.
+For a fully offline installation, download the dedicated hardware package's EXE and every BIN file sharing its prefix, and keep them in one directory. The package contains the built frontend, bundled Python 3.12, bundled MinGit, FFmpeg, engine source code, essential base models, and offline Python dependencies for the selected hardware stack. Use CUDA126 for NVIDIA RTX 40-series and older GPUs, CUDA128 for RTX 50-series GPUs, ROCm 10 as the preferred Windows AMD backend, DirectML as an alternative AMD backend, and CPU when no compatible GPU is available. In the DirectML package, PyMSS and DDSP automatic mode run on the CPU; PyMSS does not use DirectML acceleration.
 
 ### Install from source
 

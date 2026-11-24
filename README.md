@@ -90,7 +90,7 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 - Windows 10 1809 及以上或 Windows 11，64 位。
 - **Microsoft Visual C++ 2015-2022 x64 运行库，必须是最新版本**：<https://aka.ms/vs/17/release/vc_redist.x64.exe>。以前装过也要再运行一次并选择「修复」。版本过旧、或被其它软件自带的旧 `msvcp140.dll` 覆盖时，`onnxruntime` 会在导入阶段直接崩溃（`0xC0000005`），安装会停在第 4/12 步或最后的共享运行时校验，详见[常见问题](#安装最后一步失败uvr-探针崩溃)。
 - NVIDIA 40 系及以下用 CUDA126，RTX 50 系用 CUDA128，AMD 优先 ROCm 10、可选 DirectML，没有兼容显卡时用 CPU。
-- 64 位 CPython 3.12.x：安装包已内置，无需另装；源码运行需自行准备，另需 Node.js 20.19+ 或 22.12+。
+- 64 位 CPython 3.12.x 与 MinGit：安装包已内置，无需另装；源码运行需自行准备 Python 3.12.x，另需 Node.js 20.19+ 或 22.12+。
 
 ### 使用安装包
 
@@ -98,10 +98,10 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 
 1. 运行在线安装器，使用自动检测或手动选择 CPU、ROCm 10、DirectML、CUDA126、CUDA128。
 2. 等待对应的完整安装包下载并通过 SHA-256 校验，然后选择应用安装目录和用户数据目录。
-3. 选择或手动指定 64 位 CPython 3.12.x，勾选「安装后立即搭建运行环境」。
+3. 安装包会自动释放内置的 Python 3.12 与 MinGit，勾选「安装后立即搭建运行环境」即可，无需在本机选择 Python / Git。
 4. 通过桌面或开始菜单中的 XB-SVCB 启动应用。
 
-需要离线安装时，按硬件下载专用包的 EXE 和全部同名前缀 BIN 文件，并放在同一目录。安装包内已包含前端、FFmpeg、模型框架源码、关键底模和对应硬件栈的离线 Python 依赖。NVIDIA 40 系及以下选择 CUDA126，RTX 50 系选择 CUDA128；两种 CUDA 包默认创建两层共享运行时。Windows AMD 首选 ROCm 10，也可按需选择 DirectML；无兼容 GPU 时选择 CPU。DirectML 包中的 PyMSS 和 DDSP 自动模式使用 CPU 推理；PyMSS 不会使用 DirectML 加速。
+需要离线安装时，按硬件下载专用包的 EXE 和全部同名前缀 BIN 文件，并放在同一目录。安装包内已包含前端、内置 Python 3.12、内置 MinGit、FFmpeg、模型框架源码、关键底模和对应硬件栈的离线 Python 依赖。NVIDIA 40 系及以下选择 CUDA126，RTX 50 系选择 CUDA128；两种 CUDA 包默认创建两层共享运行时。Windows AMD 首选 ROCm 10，也可按需选择 DirectML；无兼容 GPU 时选择 CPU。DirectML 包中的 PyMSS 和 DDSP 自动模式使用 CPU 推理；PyMSS 不会使用 DirectML 加速。
 
 ### 从源码安装
 
