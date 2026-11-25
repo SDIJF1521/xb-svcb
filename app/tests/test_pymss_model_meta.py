@@ -202,6 +202,10 @@ def test_cover_vocal_entry_accepts_duality_and_karaoke_models() -> None:
     )
 
 
+def test_cover_vocal_entry_accepts_legacy_catalog_row_without_metadata() -> None:
+    assert PymssTool._is_cover_vocal_entry({"name": "model.ckpt"})
+
+
 def test_cover_vocal_entry_rejects_duet_and_pure_instrumental_models() -> None:
     assert not PymssTool._is_cover_vocal_entry(
         {

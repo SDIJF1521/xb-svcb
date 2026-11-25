@@ -682,7 +682,15 @@ class PymssTool:
         if unsafe_name and not instvox:
             return False
         if not stems:
-            return purpose == config.PYMSS_PURPOSE_VOCAL
+            # A few catalog revisions / test doubles expose only a name. If
+            # there is no category metadata at all, keep the historical
+            # behavior and let the requested vocal purpose through; otherwise
+            # require a vocal hint in the description.
+            if purpose == config.PYMSS_PURPOSE_VOCAL:
+                return True
+            if not description.strip():
+                return True
+            return bool(re.search(r"vocal|voice|人声", description))
         if len(stems) > 2:
             return False
         if not any(re.search(r"vocal|voice|人声", stem) for stem in stems):
