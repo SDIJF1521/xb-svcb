@@ -9,6 +9,7 @@ from pathlib import Path
 import config
 from infrastructure import pymss_catalog_meta
 from infrastructure.pymss_catalog_meta import _resolve_weight
+from infrastructure.pymss_tool import PymssTool
 from infrastructure.pymss_worker import (
     normalized_output_label,
     _pick_accompaniment,
@@ -180,3 +181,40 @@ def test_attach_model_stems_exposes_target_tokens_for_missing_models(
     assert rows[0]["stems"] == []
     assert rows[0]["target_stems"] == ["instrumental", "vocals"]
     assert rows[0]["primary_stem"] == "instrumental"
+
+
+def test_cover_vocal_entry_accepts_duality_and_karaoke_models() -> None:
+    assert PymssTool._is_cover_vocal_entry(
+        {
+            "name": "melband_roformer_instvox_duality_v2.ckpt",
+            "purpose": "",
+            "category_label": "人声 / 人声-伴奏双向分离",
+            "target_stems": ["vocals", "instrumental"],
+        }
+    )
+    assert PymssTool._is_cover_vocal_entry(
+        {
+            "name": "mel_band_roformer_karaoke_gabox_v2.ckpt",
+            "purpose": "",
+            "category_label": "卡拉OK/和声",
+            "target_stems": ["backing_vocal"],
+        }
+    )
+
+
+def test_cover_vocal_entry_rejects_duet_and_pure_instrumental_models() -> None:
+    assert not PymssTool._is_cover_vocal_entry(
+        {
+            "name": "model_mel_band_roformer_ep_0_sdr_7.9319_fixed.ckpt",
+            "purpose": "vocal_separation",
+            "category_label": "人声 / 双人/二重唱分离",
+            "target_stems": ["vocals"],
+        }
+    )
+    assert not PymssTool._is_cover_vocal_entry(
+        {
+            "name": "UVR-MDX-NET-Inst_HQ_4",
+            "purpose": "vocal_separation",
+            "target_stems": ["instrumental"],
+        }
+    )

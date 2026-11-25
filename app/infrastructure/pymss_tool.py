@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -628,6 +629,77 @@ class PymssTool:
             del self._download_jobs[str(key)]
             return True
 
+    @staticmethod
+    def _is_cover_vocal_entry(entry: dict[str, Any]) -> bool:
+        """Whether a catalog row can provide vocals for a full-song cover.
+
+        Catalog purpose is not reliable: some useful two-way models
+        (``instvox_duality``) and karaoke/backing-vocal models are not in the
+        legacy vocal_extraction allow-list. Prefer target stems, while still
+        rejecting duet, chorus, speech, multi-stem and pure-instrumental rows.
+        """
+        purpose = str(entry.get("purpose") or "").strip().lower()
+        if purpose in {
+            config.PYMSS_PURPOSE_DEREVERB,
+            config.PYMSS_PURPOSE_HARMONY_LEGACY,
+        }:
+            return False
+        description = " ".join(
+            str(entry.get(key) or "")
+            for key in (
+                "category_label",
+                "primary_category_label",
+                "secondary_category_label",
+                "purpose_label",
+            )
+        ).lower()
+        if re.search(
+            r"双人|二重唱|对唱|合唱|男女声|男声|女声|语音|说话|多轨|单乐器|"
+            r"混响|回声|duet|duo|chorus|male.?female|speech|speaker|multi|"
+            r"instrument|guitar|bass|drum|piano|reverb|echo|dereverb|deecho|denoise",
+            description,
+        ):
+            return False
+
+        raw_stems = entry.get("target_stems") or entry.get("stems") or []
+        if isinstance(raw_stems, str):
+            raw_stems = re.split(r"[/,;|]", raw_stems)
+        stems = [
+            str(stem or "").strip().lower()
+            for stem in raw_stems
+            if str(stem or "").strip()
+        ]
+        name = str(entry.get("name") or "").lower()
+        unsafe_name = re.search(
+            r"(^|[^a-z0-9])(inst|instrumental|multi|speech|speaker|male|female|"
+            r"duet|guitar|bass|drum|piano)([^a-z0-9]|$)",
+            name,
+        )
+        instvox = re.search(
+            r"instvox|inst_vox|instrumental[_-]?vocal|duality",
+            name,
+        )
+        if unsafe_name and not instvox:
+            return False
+        if not stems:
+            return purpose == config.PYMSS_PURPOSE_VOCAL
+        if len(stems) > 2:
+            return False
+        if not any(re.search(r"vocal|voice|人声", stem) for stem in stems):
+            return False
+        forbidden = (
+            "male", "female", "speech", "speaker", "dialog", "duet",
+            "bass", "drum", "guitar", "piano", "other", "multi",
+            "男声", "女声", "语音", "说话", "和声", "卡拉", "吉他",
+            "贝斯", "鼓", "钢琴", "多轨",
+        )
+        if any(word in stem for stem in stems for word in forbidden):
+            return False
+        has_accompaniment = any(
+            re.search(r"instrument|accompani|inst$|伴奏", stem) for stem in stems
+        )
+        return len(stems) == 1 or has_accompaniment
+
     def _resolve_model(
         self,
         model: str,
@@ -640,9 +712,12 @@ class PymssTool:
             model_purpose = config.PYMSS_PURPOSE_DEREVERB
         if model_purpose not in {*config.PYMSS_ALLOWED_MODEL_CATEGORIES, "generic"}:
             raise RuntimeError("不支持的 PyMSS 模型用途")
+        # Vocal separation needs the complete catalog: useful two-way models
+        # may have an empty catalog purpose but valid vocals/instrumental stems.
+        include_all = model_purpose in {"generic", config.PYMSS_PURPOSE_VOCAL}
         catalog = self.list_models(
-            purpose="" if model_purpose == "generic" else model_purpose,
-            include_all=model_purpose == "generic",
+            purpose="" if include_all else model_purpose,
+            include_all=include_all,
         )
         model_aliases: dict[str, str] = {}
         catalog_by_name: dict[str, dict[str, Any]] = {}
@@ -667,7 +742,10 @@ class PymssTool:
                 resolved = matches[0]
         if not resolved:
             raise RuntimeError("该模型不属于受支持的 PyMSS 人声处理类别")
-        return resolved, catalog_by_name.get(resolved.casefold(), {}), model_purpose
+        entry = catalog_by_name.get(resolved.casefold(), {})
+        if model_purpose == config.PYMSS_PURPOSE_VOCAL and not self._is_cover_vocal_entry(entry):
+            raise RuntimeError("该模型不属于受支持的 PyMSS 人声处理类别")
+        return resolved, entry, model_purpose
 
     def open_realtime_session(
         self,

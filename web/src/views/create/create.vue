@@ -1397,6 +1397,7 @@ import { f0MethodsForFramework, normalizeF0Method } from '@/utils/f0'
 import { takePendingAudio } from '@/utils/pendingAudio'
 import { importDroppedAudio } from '@/utils/audioImport'
 import { workflowOutputTitle } from '@/utils/workflowTitle'
+import { isPymssCoverSeparationModel } from '@/utils/pymssPurpose'
 
 defineOptions({ name: 'CreatePage' })
 
@@ -1449,7 +1450,7 @@ const pymssModel = ref(str(prefs.pymssModel, 'bs_roformer_voc_hyperacev2'))
 const pymssModels = ref<PymssModel[]>([])
 // 全量 PyMSS 模型目录（含未下载），供自定义工作流节点选择全部模型。
 const allPymssModels = ref<PymssModel[]>([])
-const downloadedPymssVocalModels = computed(() => pymssModels.value.filter((item) => item.purpose === 'vocal_separation' && item.downloaded))
+const downloadedPymssVocalModels = computed(() => pymssModels.value.filter((item) => isPymssCoverSeparationModel(item) && item.downloaded))
 const downloadedPymssHarmonyModels = computed(() => pymssModels.value.filter((item) => (item.purpose === 'dereverb' || item.purpose === 'harmony_removal') && item.downloaded))
 const harmonyRemovalEnabled = ref(Boolean(prefs.harmonyRemovalEnabled))
 const harmonyModel = ref(str(prefs.harmonyModel, 'UVR-DeEcho-DeReverb.pth'))
@@ -3401,9 +3402,9 @@ onMounted(async () => {
   void loadDownloaded()
   await modelsStore.load()
   try {
-    pymssModels.value = await api.pymssModels()
+    pymssModels.value = await api.pymssModels(undefined, true)
     void refreshAllPymssModels()
-    const vocalModels = pymssModels.value.filter((item) => item.purpose === 'vocal_separation')
+    const vocalModels = pymssModels.value.filter((item) => isPymssCoverSeparationModel(item))
     const harmonyModels = pymssModels.value.filter((item) => item.purpose === 'dereverb' || item.purpose === 'harmony_removal')
     const downloadedVocal = vocalModels.filter((item) => item.downloaded)
     const downloadedHarmony = harmonyModels.filter((item) => item.downloaded)

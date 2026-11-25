@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import type { PymssModel } from '@/api'
 import { translateUiText } from '@/i18n'
-import { pymssPurposeKey } from '@/utils/pymssPurpose'
+import { pymssPurposeKey, isPymssCoverSeparationModel } from '@/utils/pymssPurpose'
 
 // PyMSS 模型选择器：分类快捷筛选 + 关键词搜索 + 下载状态标记，
 // 供自定义工作流的人声分离 / 去混响节点使用（模型数量多，纯下拉很难找）。
@@ -34,7 +34,7 @@ const filter = ref(props.defaultFilter || 'all')
 
 const MATCHERS: Record<string, (model: PymssModel) => boolean> = {
   all: () => true,
-  vocal: (model) => pymssPurposeKey(model) === 'vocal_separation',
+  vocal: (model) => isPymssCoverSeparationModel(model),
   dereverb: (model) => pymssPurposeKey(model) === 'dereverb',
   harmony: (model) => pymssPurposeKey(model) === 'harmony_removal',
   downloaded: (model) => model.downloaded !== false,

@@ -1506,10 +1506,18 @@ class AudioEditorService:
                         "primary": False,
                     },
                 )
+        elif workflow == "audio_editor":
+            # 编辑器归档的作品只有渲染成品，没有翻唱任务的 source/vocal/ai 分轨。
+            # 必须把 output_path 作为成品轨加入，否则后续 remember(output_path)
+            # 会把它标记为已处理，最终得到空工程并返回 None。
+            add_track(_label("编辑成品", locale), "ai", work.get("output_path"))
         else:
             add_track(_label("AI 翻唱干声", locale), "ai", ai_merged or (ai_paths[0] if ai_paths else None))
 
         # 成品音轨已加入后，再标记整轨成品路径，避免「中间片段」重复导入。
+        if not tracks and work.get("output_path"):
+            # 兼容早期/手工归档的作品：没有 source/vocal/ai 字段，只有成品文件。
+            add_track(_label("编辑成品", locale), "ai", work.get("output_path"))
         remember(work.get("output_path"))
 
         mid_clips: list[dict[str, Any]] = []

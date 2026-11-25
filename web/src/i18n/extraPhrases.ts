@@ -968,6 +968,7 @@ Object.assign(enExtraPhrases, {
   'F0 滤波半径': 'F0 filter radius',
   // 编辑器自动生成的音轨名 / 工程名（旧工程按展示翻译，新工程落库时已本地化）
   '原始音频': 'Original audio', '原始人声': 'Original vocal', '翻唱成品': 'Cover mix',
+  '编辑成品': 'Editor mix',
   'AI 翻唱干声': 'AI cover dry vocal', '素材': 'Material', '音轨 1': 'Track 1',
   '空白工程': 'Blank project', '音频工程': 'Audio project',
   '收起日志与流程': 'Collapse log and steps', '展开日志与流程': 'Expand log and steps',
@@ -1602,6 +1603,7 @@ Object.assign(jaExtraPhrases, {
   'F0 滤波半径': 'F0フィルター半径',
   // エディターが自動生成するトラック名 / プロジェクト名
   '原始音频': '元の音声', '原始人声': '元のボーカル', '翻唱成品': 'カバーミックス',
+  '编辑成品': '編集ミックス',
   'AI 翻唱干声': 'AIカバーのドライボーカル', '素材': '素材', '音轨 1': 'トラック 1',
   '空白工程': '空のプロジェクト', '音频工程': '音声プロジェクト',
   '收起日志与流程': 'ログと実行フローを折りたたむ', '展开日志与流程': 'ログと実行フローを展開',

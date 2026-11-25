@@ -304,6 +304,44 @@ class AudioEditorWorkflowTests(unittest.TestCase):
             self.assertNotIn("原始音频", names)
             self.assertTrue(project["title"].endswith(" · Edit"))
 
+    def test_create_from_work_imports_audio_editor_render(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            work_id = "wrk_editor"
+            work_dir = root / "work-files" / work_id
+            work_dir.mkdir(parents=True)
+            output = work_dir / "output.wav"
+            output.write_bytes(b"editor-render")
+            works_repo = ListRepository(root / "works.json")
+            works_repo.add(
+                {
+                    "id": work_id,
+                    "title": "Editor render",
+                    "model": "音频编辑器",
+                    "status": "done",
+                    "mode": "single",
+                    "workflow": "audio_editor",
+                    "duration": "0:12",
+                    "output_path": str(output),
+                }
+            )
+            service = object.__new__(AudioEditorService)
+            service._repo = ListRepository(root / "projects.json")
+            service._works_repo = works_repo
+            service._ffmpeg = _FakeFfmpeg()
+            service._ffmpeg.probe_duration = lambda _path: 12.0
+
+            with patch("application.audio_editor_service.config.WORKS_DIR", root / "work-files"):
+                project = service.create_from_work(work_id)
+
+            self.assertIsNotNone(project)
+            files = [
+                clip["file"]
+                for track in project["tracks"]
+                for clip in track["clips"]
+            ]
+            self.assertIn(str(output), files)
+
     def test_project_bundle_round_trip_includes_media_and_creates_new_project(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

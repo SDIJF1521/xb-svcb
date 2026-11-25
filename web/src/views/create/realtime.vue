@@ -278,6 +278,7 @@ import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
 import { f0MethodsForFramework, normalizeF0Method } from '@/utils/f0'
 import { importDroppedAudio } from '@/utils/audioImport'
+import { isPymssCoverSeparationModel } from '@/utils/pymssPurpose'
 import { storeToRefs } from 'pinia'
 
 defineOptions({ name: 'RealtimeCoverPage' })
@@ -329,7 +330,7 @@ const pymssModels = ref<PymssModel[]>([])
 const pymssModel = ref('')
 const pymssStatus = ref<PymssStatus | null>(null)
 const downloadedPymssModels = computed(() =>
-  pymssModels.value.filter((item) => item.purpose === 'vocal_separation' && item.downloaded),
+  pymssModels.value.filter((item) => isPymssCoverSeparationModel(item) && item.downloaded),
 )
 const bufferSeconds = ref(8)
 const chunkSeconds = ref(1.5)
