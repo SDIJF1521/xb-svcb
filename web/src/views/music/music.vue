@@ -460,6 +460,11 @@ async function removeDownloaded(d: DownloadedMusic) {
   }
   const ok = await api.deleteMusic(d.path)
   if (ok) {
+    // 素材文件已被删除：同步移出播放队列，避免队列里残留无法播放的歌曲。
+    player.removeTracks(
+      (track) =>
+        track.kind === 'local' && (track.path === d.path || track.id === d.path),
+    )
     await refreshDownloaded()
     ElMessage.success('已删除')
   } else {

@@ -1,6 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { api, type WorkDTO } from '@/api'
 import type { PlayerTrack } from '@/player/types'
 import { usePlayerStore } from '@/stores/player'
 
@@ -22,6 +23,10 @@ describe('player queue', () => {
     setActivePinia(createPinia())
   })
 
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('adds tracks without duplicates and can insert the next track', () => {
     const player = usePlayerStore()
     expect(player.addToQueue([track('a'), track('b')])).toBe(2)
@@ -37,6 +42,95 @@ describe('player queue', () => {
     player.removeTrack('work:b')
     expect(player.queue.map((item) => item.id)).toEqual(['a', 'c'])
     expect(player.currentKey).toBe('work:a')
+  })
+
+  it('drops every queue entry of a deleted song', () => {
+    const player = usePlayerStore()
+    player.addToQueue([track('a'), track('b'), track('c')])
+
+    expect(
+      player.removeTracks(
+        (item) => item.kind === 'work' && (item.workId === 'b' || item.id === 'b'),
+      ),
+    ).toBe(1)
+
+    expect(player.queue.map((item) => item.id)).toEqual(['a', 'c'])
+    expect(player.currentKey).toBe('work:a')
+  })
+
+  it('selects a neighbour without playing when the current song is deleted', () => {
+    const player = usePlayerStore()
+    player.addToQueue([track('a'), track('b'), track('c')])
+
+    player.removeTracks((item) => item.id === 'a')
+
+    expect(player.queue.map((item) => item.id)).toEqual(['b', 'c'])
+    expect(player.currentKey).toBe('work:b')
+    expect(player.playing).toBe(false)
+  })
+
+  it('clears the queue when the last song is deleted', () => {
+    const player = usePlayerStore()
+    player.addToQueue([track('a')])
+
+    player.removeTracks((item) => item.id === 'a')
+
+    expect(player.queue).toEqual([])
+    expect(player.currentKey).toBe('')
+  })
+
+  it('matches local downloads by path', () => {
+    const player = usePlayerStore()
+    player.addToQueue([
+      {
+        key: 'local:/music/a.wav',
+        kind: 'local',
+        id: '/music/a.wav',
+        path: '/music/a.wav',
+        title: 'a',
+        subtitle: '已下载',
+        color: '#00f0ff',
+      },
+      track('b'),
+    ])
+
+    player.removeTracks((item) => item.kind === 'local' && item.path === '/music/a.wav')
+
+    expect(player.queue.map((item) => item.id)).toEqual(['b'])
+  })
+
+  it('drops persisted entries that no longer exist in the library', async () => {
+    vi.spyOn(api, 'listWorks').mockResolvedValue([{ id: 'b' } as unknown as WorkDTO])
+    vi.spyOn(api, 'listMusic').mockResolvedValue([])
+    const player = usePlayerStore()
+    player.addToQueue([
+      track('a'),
+      track('b'),
+      {
+        key: 'local:/music/gone.wav',
+        kind: 'local',
+        id: '/music/gone.wav',
+        path: '/music/gone.wav',
+        title: 'gone',
+        subtitle: '已下载',
+        color: '#00f0ff',
+      },
+    ])
+
+    await expect(player.reconcileLibrary()).resolves.toBe(2)
+
+    expect(player.queue.map((item) => item.id)).toEqual(['b'])
+    expect(player.currentKey).toBe('work:b')
+  })
+
+  it('keeps the queue when the library lists cannot be read', async () => {
+    vi.spyOn(api, 'listWorks').mockRejectedValue(new Error('offline'))
+    vi.spyOn(api, 'listMusic').mockRejectedValue(new Error('offline'))
+    const player = usePlayerStore()
+    player.addToQueue([track('a')])
+
+    await expect(player.reconcileLibrary()).resolves.toBe(0)
+    expect(player.queue.map((item) => item.id)).toEqual(['a'])
   })
 
   it('reorders the queue and keeps the current track', () => {

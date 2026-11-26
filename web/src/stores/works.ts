@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api, pickColor, type CreateWorkPayload, type WorkDTO } from '@/api'
+import { usePlayerStore } from '@/stores/player'
 
 export type WorkVM = WorkDTO & { color: string }
 
@@ -93,7 +94,13 @@ export const useWorksStore = defineStore('works', () => {
 
   async function remove(id: string) {
     const ok = await api.deleteWork(id)
-    if (ok) works.value = works.value.filter((w) => w.id !== id)
+    if (ok) {
+      works.value = works.value.filter((w) => w.id !== id)
+      // 作品文件已被删除：同步移出播放队列，避免队列里残留无法播放的歌曲。
+      usePlayerStore().removeTracks(
+        (track) => track.kind === 'work' && (track.workId === id || track.id === id),
+      )
+    }
     return ok
   }
 

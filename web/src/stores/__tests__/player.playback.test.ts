@@ -98,6 +98,25 @@ describe('global player playback', () => {
     expect(player.queue.map((item) => item.id)).toEqual(['b'])
   })
 
+  it('stops playback instead of auto-playing when the playing song is deleted', async () => {
+    const player = usePlayerStore()
+    await player.playQueue([track('a'), track('b')], 0)
+    const element = document.querySelector('audio') as HTMLAudioElement
+    const playCalls = vi.mocked(HTMLMediaElement.prototype.play).mock.calls.length
+    expect(player.playing).toBe(true)
+    expect(element.getAttribute('src')).toContain('/audio/a')
+
+    player.removeTracks((item) => item.kind === 'work' && item.id === 'a')
+
+    expect(player.queue.map((item) => item.id)).toEqual(['b'])
+    expect(player.currentKey).toBe('work:b')
+    expect(player.playing).toBe(false)
+    expect(player.currentTime).toBe(0)
+    expect(element.getAttribute('src')).toBeNull()
+    // 不会自动续播下一首，避免播放已被删除的文件。
+    expect(vi.mocked(HTMLMediaElement.prototype.play).mock.calls.length).toBe(playCalls)
+  })
+
   it('tracks stream metadata and lossless state', async () => {
     const player = usePlayerStore()
     await player.playQueue([track('a')], 0)

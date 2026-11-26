@@ -1038,6 +1038,110 @@ export const usePlayerStore = defineStore('player', () => {
     void playAt(targetIndex, { autoplay: wasPlaying })
   }
 
+  /**
+   * 歌曲文件被删除后，从播放队列（以及正在试听的曲目）里移除它。
+   *
+   * 与「移出队列」不同：删除是不可恢复的，如果被删除的歌曲正在播放，
+   * 这里会立即停止并卸载音频，而不是自动续播下一首，避免去读已经不存在的文件。
+   * 队列里还有其它歌曲时，把选中项落到相邻的一首并保持暂停。
+   */
+  function removeTracks(matches: (track: PlayerTrack) => boolean): number {
+    const removedKeys = new Set(
+      queue.value.filter((track) => matches(track)).map((track) => track.key),
+    )
+    const audition = auditionTrack.value
+    const auditionRemoved = !!audition && matches(audition)
+    if (!removedKeys.size && !auditionRemoved) return 0
+
+    const auditionKey = audition?.key ?? ''
+    const active = activeKey.value
+    // 当前真正出声的可能是队列曲目，也可能是仍在解析中的试听曲目。
+    const activeRemoved = auditionRemoved || (!!active && removedKeys.has(active))
+    const currentRemoved = !!currentKey.value && removedKeys.has(currentKey.value)
+
+    // 先记下被删当前曲目的相邻项，过滤后再用它作为新的选中项。
+    let replacementKey = ''
+    if (currentRemoved) {
+      const index = queue.value.findIndex((track) => track.key === currentKey.value)
+      replacementKey = queue.value[index + 1]?.key ?? queue.value[index - 1]?.key ?? ''
+    }
+
+    if (removedKeys.size) {
+      queue.value = queue.value.filter((track) => !removedKeys.has(track.key))
+    }
+    if (auditionRemoved) auditionTrack.value = null
+
+    if (activeRemoved) {
+      loadToken += 1
+      loadedKey = ''
+      pause()
+      if (audioEl) {
+        try {
+          audioEl.removeAttribute('src')
+          audioEl.load()
+        } catch {
+          /* ignore */
+        }
+      }
+      playing.value = false
+      buffering.value = false
+      resolvingKey.value = ''
+      currentTime.value = 0
+      setMediaPlaybackState('none')
+    }
+
+    if (currentRemoved) {
+      const replacement =
+        queue.value.find((track) => track.key === replacementKey) ?? queue.value[0] ?? null
+      currentKey.value = replacement?.key ?? ''
+      if (activeRemoved) duration.value = replacement?.duration || 0
+    } else if (activeRemoved) {
+      // 被删的是试听曲目：回到队列当前曲目，保持暂停。
+      duration.value = currentTrack.value?.duration || 0
+    }
+
+    if (!queue.value.length && !auditionTrack.value) {
+      clearQueue()
+      return removedKeys.size + (auditionRemoved && !removedKeys.has(auditionKey) ? 1 : 0)
+    }
+
+    refreshShuffle()
+    persistSoon()
+    return removedKeys.size + (auditionRemoved && !removedKeys.has(auditionKey) ? 1 : 0)
+  }
+
+  /**
+   * 清理播放队列中已经不存在于作品库 / 已下载素材的歌曲。
+   *
+   * 队列会持久化到 localStorage；用户可能在应用关闭期间删除作品或下载文件，
+   * 重新打开后这些条目仍然留在队列里。启动时对照一次真实列表即可剔除它们。
+   * 任一列表读取失败时不动对应类型的条目，避免网络 / 后端抖动误删队列。
+   */
+  async function reconcileLibrary(): Promise<number> {
+    if (!queue.value.length) return 0
+    const [worksResult, musicResult] = await Promise.allSettled([
+      api.listWorks(),
+      api.listMusic(),
+    ])
+    const worksKnown = worksResult.status === 'fulfilled'
+    const musicKnown = musicResult.status === 'fulfilled'
+    if (!worksKnown && !musicKnown) return 0
+    const workIds = new Set(worksKnown ? worksResult.value.map((work) => work.id) : [])
+    const localPaths = new Set(
+      musicKnown ? musicResult.value.map((item) => item.path) : [],
+    )
+    return removeTracks((track) => {
+      if (track.kind === 'work') {
+        return worksKnown && !workIds.has(track.id) && !workIds.has(track.workId || '')
+      }
+      if (track.kind === 'local') {
+        return musicKnown && !localPaths.has(track.path || track.id)
+      }
+      // 在线歌曲没有可对照的本地列表，保持原样。
+      return false
+    })
+  }
+
   function moveTrack(from: number, to: number) {
     queue.value = moveItem(queue.value, from, to)
     refreshShuffle()
@@ -1222,6 +1326,8 @@ export const usePlayerStore = defineStore('player', () => {
     // 队列
     addToQueue,
     removeTrack,
+    removeTracks,
+    reconcileLibrary,
     moveTrack,
     jumpTo,
     clearQueue,

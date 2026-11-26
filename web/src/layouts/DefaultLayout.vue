@@ -23,11 +23,17 @@ import FirstUseGuide from '@/components/onboarding/FirstUseGuide.vue'
 import GlobalPlayer from '@/components/player/GlobalPlayer.vue'
 import ThemeBackground from '@/components/theme/ThemeBackground.vue'
 import { useNotificationsStore } from '@/stores/notifications'
+import { usePlayerStore } from '@/stores/player'
 
 defineOptions({ name: 'DefaultLayout' })
 
 const notifications = useNotificationsStore()
-onMounted(() => notifications.start())
+const player = usePlayerStore()
+onMounted(() => {
+  notifications.start()
+  // 恢复的持久化队列里可能残留应用关闭期间被删除的作品 / 下载素材。
+  void player.reconcileLibrary()
+})
 onUnmounted(() => notifications.stop())
 </script>
 
