@@ -60,6 +60,14 @@ class PymssTool:
     def __init__(self) -> None:
         self._download_lock = threading.RLock()
         self._download_jobs: dict[str, dict[str, Any]] = {}
+        # catalog 解析只依赖 PyMSS 安装目录里的 model_catalog.json。缓存解析结果，
+        # 避免翻唱页、工作流页、实时页和编辑器反复启动子进程读取同一份目录。
+        self._catalog_lock = threading.RLock()
+        self._catalog_payloads: dict[bool, list[dict[str, Any]]] = {}
+        # PyMSS 版本号需要启动其解释器；系统状态每 30 秒轮询一次，不能每次都重新导入 torch。
+        self._version_lock = threading.RLock()
+        self._version_cache: str | None = None
+        self._version_loaded = False
 
     @property
     def available(self) -> bool:
@@ -84,21 +92,61 @@ class PymssTool:
     def version(self) -> str | None:
         if not self.available:
             return None
+        with self._version_lock:
+            if self._version_loaded:
+                return self._version_cache
+        value = self._read_package_version()
+        if not value:
+            value = "PyMSS"
+            try:
+                result = subprocess.run(
+                    [str(config.PYMSS_PYTHON), "-c", "import pymss; print(getattr(pymss, '__version__', 'pymss'))"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=30,
+                    env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+                    **config.subprocess_no_window(),
+                )
+                lines = (result.stdout or "").strip().splitlines()
+                if result.returncode == 0 and lines:
+                    value = lines[-1]
+            except (OSError, subprocess.SubprocessError):
+                value = "PyMSS"
+        with self._version_lock:
+            self._version_cache = value
+            self._version_loaded = True
+        return value
+
+    @staticmethod
+    def _read_package_version() -> str | None:
+        """Read the installed PyMSS version from dist-info without importing torch."""
+        python = config.PYMSS_PYTHON
+        if not python:
+            return None
+        root = python.parent.parent
         try:
-            result = subprocess.run(
-                [str(config.PYMSS_PYTHON), "-c", "import pymss; print(getattr(pymss, '__version__', 'pymss'))"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-                env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
-                **config.subprocess_no_window(),
-            )
-            value = (result.stdout or "").strip().splitlines()
-            return value[-1] if result.returncode == 0 and value else "PyMSS"
-        except (OSError, subprocess.SubprocessError):
-            return "PyMSS"
+            candidates = [root / "Lib" / "site-packages"]
+            candidates.extend(root.glob("lib/python*/site-packages"))
+        except OSError:
+            return None
+        for site_packages in candidates:
+            if not site_packages.is_dir():
+                continue
+            try:
+                metadata_files = sorted(site_packages.glob("pymss-*.dist-info/METADATA"))
+            except OSError:
+                continue
+            for metadata in metadata_files:
+                try:
+                    for line in metadata.read_text(encoding="utf-8", errors="replace").splitlines():
+                        if line.lower().startswith("version:"):
+                            version = line.split(":", 1)[1].strip()
+                            return version or None
+                except OSError:
+                    continue
+        return None
 
     @staticmethod
     def _purpose_for_categories(primary: str, secondary: str) -> str:
@@ -151,6 +199,129 @@ class PymssTool:
             return []
         if not self.available:
             return self._fallback_models(purpose)
+        payload = self._catalog_payload(bool(supported_only))
+        if payload is None:
+            return self._fallback_models(purpose)
+        # 一次扫描模型目录即可判断所有条目的下载状态；逐条调用
+        # ``pymss_model_ready`` 会把整个目录重复 rglob 三百多次。
+        downloaded_stems = config.pymss_downloaded_model_stems()
+        filtered: list[dict[str, Any]] = []
+        for item in payload:
+            entry = dict(item)
+            category = str(entry.get("category") or "").strip()
+            primary = str(entry.get("primary_category") or "").strip()
+            secondary = str(entry.get("secondary_category") or "").strip()
+            if (not primary or not secondary) and "/" in category:
+                primary, secondary = (part.strip() for part in category.split("/", 1))
+            item_purpose = self._purpose_for_categories(primary, secondary)
+            if not include_all and (not item_purpose or secondary.casefold() == "vr_backing_vocal"):
+                continue
+            entry["purpose"] = item_purpose
+            entry["purpose_label"] = config.PYMSS_PURPOSE_LABELS.get(item_purpose, "")
+            entry["category_label"] = " / ".join(
+                part for part in (
+                    str(entry.get("primary_category_label") or "").strip(),
+                    str(entry.get("secondary_category_label") or "").strip(),
+                ) if part
+            ) or category
+            name = str(entry.get("name") or "").strip()
+            entry["downloaded"] = bool(name) and Path(name).stem.casefold() in downloaded_stems
+            if not purpose or item_purpose == purpose:
+                filtered.append(entry)
+        return filtered
+
+    def _catalog_payload(self, supported_only: bool) -> list[dict[str, Any]] | None:
+        """Cached catalog rows; only the static catalog is cached, download state is not."""
+        with self._catalog_lock:
+            cached = self._catalog_payloads.get(supported_only)
+        if cached is not None:
+            return cached
+        payload = self._read_catalog_json(supported_only)
+        if payload is None:
+            payload = self._read_catalog_runtime(supported_only)
+        if payload is not None:
+            with self._catalog_lock:
+                self._catalog_payloads[supported_only] = payload
+        return payload
+
+    @staticmethod
+    def _catalog_python_code() -> str:
+        """Lightweight catalog loader: read the JSON shipped with PyMSS directly.
+
+        Importing ``pymss`` pulls in torch, which costs several seconds on every
+        catalog or status refresh.  The catalog itself is a plain JSON file, so
+        reading it in a short-lived interpreter is enough.
+        """
+        return (
+            "import sysconfig,pathlib; "
+            "path=pathlib.Path(sysconfig.get_paths()['purelib'])/'pymss'/'resources'/'model_catalog.json'; "
+            "print(path.read_text(encoding='utf-8'))"
+        )
+
+    def _read_catalog_json(self, supported_only: bool) -> list[dict[str, Any]] | None:
+        try:
+            result = subprocess.run(
+                [str(config.PYMSS_PYTHON), "-c", self._catalog_python_code()],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+                **config.subprocess_no_window(),
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        # The JSON file is pretty-printed, so parse the whole payload instead of
+        # the last line (warnings, if any, appear before the opening brace).
+        text = str(result.stdout or "")
+        start = text.find("{")
+        if start < 0:
+            return None
+        try:
+            data = json.loads(text[start:])
+        except json.JSONDecodeError:
+            return None
+        models = data.get("models") if isinstance(data, dict) else None
+        if not isinstance(models, list):
+            return None
+        rows: list[dict[str, Any]] = []
+        for raw in models:
+            if not isinstance(raw, dict):
+                continue
+            supported = bool(raw.get("supported", True))
+            if supported_only and not supported:
+                continue
+            primary = str(raw.get("primary_category") or "").strip()
+            secondary = str(raw.get("secondary_category") or "").strip()
+            category = str(raw.get("category_path") or "").strip()
+            if not category and primary:
+                category = f"{primary}/{secondary}" if secondary else primary
+            try:
+                size_bytes = int(raw.get("size_bytes") or 0)
+            except (TypeError, ValueError):
+                size_bytes = 0
+            rows.append(
+                {
+                    "name": str(raw.get("name") or ""),
+                    "architecture": str(raw.get("architecture") or ""),
+                    "supported": supported,
+                    "category": category,
+                    "primary_category": primary,
+                    "primary_category_label": str(raw.get("primary_category_cn") or ""),
+                    "secondary_category": secondary,
+                    "secondary_category_label": str(raw.get("secondary_category_cn") or ""),
+                    "purpose": secondary,
+                    "target_stem": str(raw.get("target_stem") or ""),
+                    "size_bytes": size_bytes,
+                }
+            )
+        return rows
+
+    def _read_catalog_runtime(self, supported_only: bool) -> list[dict[str, Any]] | None:
+        """Fallback for PyMSS builds without a readable model_catalog.json."""
         code = (
             "import json,pymss; "
             f"rows=pymss.list_models(supported={bool(supported_only)!r}); "
@@ -173,40 +344,12 @@ class PymssTool:
                 **config.subprocess_no_window(),
             )
             if result.returncode != 0:
-                return self._fallback_models(purpose)
-            # Torch/modelscope may print warnings before the JSON payload.  The
-            # previous full-string json.loads turned a harmless warning into an
-            # empty fallback catalog, making valid models look non-inferable.
+                return None
+            # Torch/modelscope may print warnings before the JSON payload.
             payload = self._last_json_payload(result.stdout)
-            if not isinstance(payload, list):
-                return self._fallback_models(purpose)
-            filtered: list[dict[str, Any]] = []
-            for item in payload:
-                category = str(item.get("category") or "").strip()
-                primary = str(item.get("primary_category") or "").strip()
-                secondary = str(item.get("secondary_category") or "").strip()
-                if (not primary or not secondary) and "/" in category:
-                    primary, secondary = (part.strip() for part in category.split("/", 1))
-                item_purpose = self._purpose_for_categories(
-                    primary,
-                    secondary,
-                )
-                if not include_all and (not item_purpose or secondary.casefold() == "vr_backing_vocal"):
-                    continue
-                item["purpose"] = item_purpose
-                item["purpose_label"] = config.PYMSS_PURPOSE_LABELS.get(item_purpose, "")
-                item["category_label"] = " / ".join(
-                    part for part in (
-                        str(item.get("primary_category_label") or "").strip(),
-                        str(item.get("secondary_category_label") or "").strip(),
-                    ) if part
-                ) or category
-                item["downloaded"] = bool(config.pymss_model_ready(str(item.get("name") or "")))
-                if not purpose or item_purpose == purpose:
-                    filtered.append(item)
-            return filtered
-        except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
-            return self._fallback_models(purpose)
+            return payload if isinstance(payload, list) else None
+        except (OSError, subprocess.SubprocessError):
+            return None
 
     @staticmethod
     def _last_json_payload(output: str | None) -> Any:

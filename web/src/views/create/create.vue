@@ -1274,6 +1274,7 @@
         :pymss-vocal-models="downloadedPymssVocalModels.map((m) => m.name)"
         :pymss-harmony-models="downloadedPymssHarmonyModels.map((m) => m.name)"
         :pymss-all-models="allPymssModels"
+        :pymss-models-loading="pymssCatalogLoading"
         :song-name="song?.name || ''"
         :run-status="currentWork?.mode === 'workflow' ? currentWork.status : ''"
         :run-steps="currentWork?.mode === 'workflow' ? currentWork.steps : []"
@@ -1450,6 +1451,7 @@ const pymssModel = ref(str(prefs.pymssModel, 'bs_roformer_voc_hyperacev2'))
 const pymssModels = ref<PymssModel[]>([])
 // 全量 PyMSS 模型目录（含未下载），供自定义工作流节点选择全部模型。
 const allPymssModels = ref<PymssModel[]>([])
+const pymssCatalogLoading = ref(false)
 const downloadedPymssVocalModels = computed(() => pymssModels.value.filter((item) => isPymssCoverSeparationModel(item) && item.downloaded))
 const downloadedPymssHarmonyModels = computed(() => pymssModels.value.filter((item) => (item.purpose === 'dereverb' || item.purpose === 'harmony_removal') && item.downloaded))
 const harmonyRemovalEnabled = ref(Boolean(prefs.harmonyRemovalEnabled))
@@ -1486,10 +1488,37 @@ async function downloadPymssModel() {
 watch(pymssModel, () => { void refreshPymssStatus() })
 watch(harmonyModel, () => { void refreshPymssStatus() })
 
-/** 全量 PyMSS 模型目录（含未下载），供工作流节点选择全部模型。 */
+/** 全量 PyMSS 模型目录（含未下载），预处理与工作流节点共用同一份数据。 */
+async function loadPymssCatalog() {
+  pymssCatalogLoading.value = true
+  try {
+    const catalog = await api.pymssModels(undefined, true)
+    pymssModels.value = catalog
+    allPymssModels.value = catalog
+    const vocalModels = catalog.filter((item) => isPymssCoverSeparationModel(item))
+    const harmonyModels = catalog.filter((item) => item.purpose === 'dereverb' || item.purpose === 'harmony_removal')
+    const downloadedVocal = vocalModels.filter((item) => item.downloaded)
+    const downloadedHarmony = harmonyModels.filter((item) => item.downloaded)
+    if (!downloadedVocal.some((item) => item.name === pymssModel.value)) {
+      pymssModel.value = downloadedVocal[0]?.name || ''
+    }
+    if (!downloadedHarmony.some((item) => item.name === harmonyModel.value)) {
+      harmonyModel.value = downloadedHarmony[0]?.name || ''
+    }
+    await refreshPymssStatus()
+  } catch {
+    /* PyMSS 可选，目录获取失败时保持原列表。 */
+  } finally {
+    pymssCatalogLoading.value = false
+  }
+}
+
+/** 下载完成后重新读取目录；与首屏加载共用同一个接口，避免重复启动 PyMSS。 */
 async function refreshAllPymssModels() {
   try {
-    allPymssModels.value = await api.pymssModels(undefined, true)
+    const catalog = await api.pymssModels(undefined, true)
+    pymssModels.value = catalog
+    allPymssModels.value = catalog
   } catch {
     /* PyMSS 可选，目录获取失败时保持原列表。 */
   }
@@ -3400,24 +3429,10 @@ watch(trackEl, (el) => {
 
 onMounted(async () => {
   void loadDownloaded()
+  // PyMSS 目录读取与模型库读取互不依赖，并行启动，避免首屏串行等待。
+  const pymssCatalogReady = loadPymssCatalog()
   await modelsStore.load()
-  try {
-    pymssModels.value = await api.pymssModels(undefined, true)
-    void refreshAllPymssModels()
-    const vocalModels = pymssModels.value.filter((item) => isPymssCoverSeparationModel(item))
-    const harmonyModels = pymssModels.value.filter((item) => item.purpose === 'dereverb' || item.purpose === 'harmony_removal')
-    const downloadedVocal = vocalModels.filter((item) => item.downloaded)
-    const downloadedHarmony = harmonyModels.filter((item) => item.downloaded)
-    if (!downloadedVocal.some((item) => item.name === pymssModel.value)) {
-      pymssModel.value = downloadedVocal[0]?.name || ''
-    }
-    if (!downloadedHarmony.some((item) => item.name === harmonyModel.value)) {
-      harmonyModel.value = downloadedHarmony[0]?.name || ''
-    }
-    await refreshPymssStatus()
-  } catch {
-    /* PyMSS is optional; UVR and disabled preprocessing remain available. */
-  }
+  await pymssCatalogReady
   if (systemStore.loaded) {
     normalizeDeviceSelections()
   } else {

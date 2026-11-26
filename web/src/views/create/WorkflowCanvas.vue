@@ -24,6 +24,8 @@ const props = withDefaults(
     pymssVocalModels?: string[]
     pymssHarmonyModels?: string[]
     pymssAllModels?: PymssModel[]
+    /** PyMSS 模型目录是否仍在读取：节点里的选择器据此显示加载状态。 */
+    pymssModelsLoading?: boolean
     songName?: string
     /** 从商城进入时自动载入的已保存工作流 ID。 */
     initialWorkflowId?: string
@@ -37,6 +39,7 @@ const props = withDefaults(
     pymssVocalModels: () => [],
     pymssHarmonyModels: () => [],
     pymssAllModels: () => [],
+    pymssModelsLoading: false,
     songName: '',
     initialWorkflowId: '',
     runStatus: '',
@@ -1997,6 +2000,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                     v-if="node.params.engine === 'pymss'"
                     :model-value="node.params.model"
                     :models="props.pymssAllModels"
+                    :loading="props.pymssModelsLoading"
                     default-filter="vocal"
                     @update:model-value="onSeparateModelChange(node, $event)"
                     @download="emit('download-pymss', $event)"
@@ -2028,6 +2032,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                     <PymssModelPicker
                       v-model="node.params.model"
                       :models="props.pymssAllModels"
+                      :loading="props.pymssModelsLoading"
                       default-filter="dereverb"
                       @update:model-value="onDereverbModelChange(node, $event)"
                       @download="emit('download-pymss', $event)"
@@ -2333,6 +2338,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                   v-if="selectedNode.params.engine === 'pymss'"
                   :model-value="selectedNode.params.model"
                   :models="props.pymssAllModels"
+                  :loading="props.pymssModelsLoading"
                   default-filter="vocal"
                   @update:model-value="onSeparateModelChange(selectedNode, $event)"
                   @download="emit('download-pymss', $event)"
@@ -2419,6 +2425,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                   v-if="selectedNode.params.engine === 'pymss'"
                   v-model="selectedNode.params.model"
                   :models="props.pymssAllModels"
+                  :loading="props.pymssModelsLoading"
                   default-filter="dereverb"
                   @update:model-value="onDereverbModelChange(selectedNode, $event)"
                   @download="emit('download-pymss', $event)"

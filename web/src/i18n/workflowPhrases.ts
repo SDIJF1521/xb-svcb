@@ -171,6 +171,7 @@ export const workflowEnPhrases: Record<string, string> = {
   '没有匹配的模型，换个关键词试试': 'No matching models. Try another keyword.',
   '该分类下暂无模型，可切换到「全部」查看': 'No models in this category. Switch to All to browse.',
   '尚未读取到 PyMSS 模型目录': 'PyMSS model catalog not loaded yet',
+  '正在读取 PyMSS 模型目录…': 'Loading the PyMSS model catalog…',
   '清空': 'Clear',
   '不支持': 'Unsupported',
   // 工作流文件导入 / 导出
@@ -569,6 +570,7 @@ export const workflowJaPhrases: Record<string, string> = {
   '没有匹配的模型，换个关键词试试': '一致するモデルがありません。別のキーワードをお試しください。',
   '该分类下暂无模型，可切换到「全部」查看': 'この分類にはモデルがありません。「すべて」に切り替えてご確認ください。',
   '尚未读取到 PyMSS 模型目录': 'PyMSS モデル一覧を読み込めていません',
+  '正在读取 PyMSS 模型目录…': 'PyMSS モデル一覧を読み込み中…',
   '清空': 'クリア',
   '不支持': '非対応',
   // 工作流文件导入 / 导出
