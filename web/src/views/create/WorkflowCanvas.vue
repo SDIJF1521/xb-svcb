@@ -6,6 +6,7 @@ import { api, type CoverWorkflow, type PymssModel, type WorkflowEdge, type Workf
 import { translateUiText } from '@/i18n'
 import { f0MethodsForFramework } from '@/utils/f0'
 import { preferredPymssModel, pymssPurposeKey } from '@/utils/pymssPurpose'
+import { mergePortOffsets, portOffsetKey as portKey, portOffsetsEqual } from '@/utils/workflowPorts'
 import { trackPreview } from '@/utils/workflowTitle'
 import PymssModelPicker from './PymssModelPicker.vue'
 
@@ -184,7 +185,6 @@ function portDisplayName(port: string, node?: WorkflowNode): string {
 }
 
 const NODE_W = 268
-const portKey = (nodeId: string, side: 'in' | 'out', port: string) => `${nodeId}:${side}:${port}`
 
 // ---- 分离节点输出端口：按模型声明的音轨全量适配 ----
 const SEPARATE_BASE_OUTPUTS = ['vocals', 'instrumental']
@@ -535,16 +535,27 @@ watch(activeNodeId, (id) => {
 })
 
 // ---- 端口位置测量 ----
-async function measurePorts() {
-  await nextTick()
+/**
+ * 读取端口相对节点左上角的偏移。
+ * ``targetIds`` 为空表示全量；指定时只碰这些节点，避免每次内容变高都遍历整张图。
+ */
+function collectPortOffsets(targetIds: Set<string> | null): {
+  next: Record<string, { x: number; y: number }>
+  touched: string[]
+} {
   const world = worldEl.value
-  if (!world) return
   const next: Record<string, { x: number; y: number }> = {}
+  const touched: string[] = []
+  if (!world) return { next, touched }
   const z = zoom.value || 1
   for (const node of nodes.value) {
+    if (targetIds && !targetIds.has(node.id)) continue
     const nodeEl = world.querySelector<HTMLElement>(`[data-node-el="${node.id}"]`)
     if (!nodeEl) continue
     const nr = nodeEl.getBoundingClientRect()
+    // 画布被隐藏（display:none / 弹窗收起）时尺寸为 0，测出来的偏移是垃圾值。
+    if (nr.width < 1 || nr.height < 1) continue
+    touched.push(node.id)
     nodeEl.querySelectorAll<HTMLElement>('[data-port-key]').forEach((portEl) => {
       const key = portEl.dataset.portKey
       if (!key) return
@@ -555,12 +566,71 @@ async function measurePorts() {
       }
     })
   }
-  portOffsets.value = next
+  return { next, touched }
+}
+
+/** 把测量结果写回 ``portOffsets``；内容没变就不触发重渲染。 */
+function applyPortOffsets(targetIds?: Iterable<string>) {
+  const ids = targetIds ? new Set(targetIds) : null
+  if (ids && !ids.size) return
+  const { next, touched } = collectPortOffsets(ids)
+  // 一个节点都没测到（元素还没渲染）时保留旧结果，避免连线瞬间全部回落。
+  if (!touched.length) return
+  // 全量测量且每个节点都测到了：直接替换（顺带清掉已删除节点的旧键）。
+  if (!ids && touched.length >= nodes.value.length) {
+    if (!portOffsetsEqual(next, portOffsets.value)) portOffsets.value = next
+    return
+  }
+  const merged = mergePortOffsets(portOffsets.value, next, touched)
+  if (!portOffsetsEqual(merged, portOffsets.value)) portOffsets.value = merged
+}
+
+async function measurePorts(nodeIds?: Iterable<string>) {
+  await nextTick()
+  applyPortOffsets(nodeIds)
+}
+
+// ---- 节点尺寸变化 → 增量重测端口 ----
+// 「高级参数」折叠展开、切换模型后参数区变高变矮都会改变输出端口的位置；
+// 只监听节点元素自身的尺寸，按动画帧合并后只重测尺寸变化的节点。
+let nodeResizeObserver: ResizeObserver | null = null
+const resizedNodeIds = new Set<string>()
+let portMeasureFrame = 0
+
+function schedulePortMeasure(nodeIds: Iterable<string>) {
+  for (const id of nodeIds) if (id) resizedNodeIds.add(id)
+  if (portMeasureFrame || !resizedNodeIds.size) return
+  portMeasureFrame = requestAnimationFrame(() => {
+    portMeasureFrame = 0
+    const ids = [...resizedNodeIds]
+    resizedNodeIds.clear()
+    if (ids.length) void measurePorts(ids)
+  })
+}
+
+/** 节点增删后重新把节点元素挂到同一个 ResizeObserver 上。 */
+function syncNodeResizeObserver() {
+  const observer = nodeResizeObserver
+  const world = worldEl.value
+  if (!observer || !world) return
+  observer.disconnect()
+  world.querySelectorAll<HTMLElement>('[data-node-el]').forEach((el) => {
+    const id = el.dataset.nodeEl
+    if (id) observer.observe(el)
+  })
 }
 
 watch(
-  () => [nodes.value.length, graph.value.id] as const,
-  () => void measurePorts(),
+  () => [
+    nodes.value.length,
+    graph.value.id,
+    nodes.value.map((node) => node.id).join('|'),
+  ] as const,
+  async () => {
+    await nextTick()
+    syncNodeResizeObserver()
+    void measurePorts()
+  },
 )
 
 // ---- 画布交互 ----
@@ -570,6 +640,19 @@ function clientToWorld(clientX: number, clientY: number) {
     x: (clientX - (rect?.left || 0) - panX.value) / zoom.value,
     y: (clientY - (rect?.top || 0) - panY.value) / zoom.value,
   }
+}
+
+/**
+ * 滚轮缩放期间不逐帧重测端口：端口偏移是「相对节点左上角」的，缩放不改变它。
+ * 手势停下来后再补测一次，既避免一轮滚轮几十次强制布局，也能吃掉浏览器取整误差。
+ */
+let zoomMeasureTimer = 0
+function scheduleZoomMeasure() {
+  if (zoomMeasureTimer) window.clearTimeout(zoomMeasureTimer)
+  zoomMeasureTimer = window.setTimeout(() => {
+    zoomMeasureTimer = 0
+    void measurePorts()
+  }, 140)
 }
 
 function onWheel(e: WheelEvent) {
@@ -583,7 +666,7 @@ function onWheel(e: WheelEvent) {
   zoom.value = Math.max(0.25, Math.min(3, zoom.value * factor))
   panX.value = mx - worldX * zoom.value
   panY.value = my - worldY * zoom.value
-  void measurePorts()
+  scheduleZoomMeasure()
 }
 
 function setZoom(next: number) {
@@ -1645,6 +1728,17 @@ const DEVICE_OPTIONS = [
 ]
 
 onMounted(async () => {
+  // 一个 ResizeObserver 监听所有节点：节点内容变高（展开高级参数等）时只重测变化的节点。
+  if (typeof ResizeObserver !== 'undefined') {
+    nodeResizeObserver = new ResizeObserver((entries) => {
+      const ids: string[] = []
+      for (const entry of entries) {
+        const id = (entry.target as HTMLElement).dataset?.nodeEl
+        if (id) ids.push(id)
+      }
+      if (ids.length) schedulePortMeasure(ids)
+    })
+  }
   window.addEventListener('keydown', onKeydown)
   window.addEventListener('pointerdown', onWindowPointerDown, true)
   await refreshWorkflows()
@@ -1662,8 +1756,18 @@ onMounted(async () => {
   }
   normalizeNodes()
   pushHistory()
+  await nextTick()
+  syncNodeResizeObserver()
+  void measurePorts()
 })
 onUnmounted(() => {
+  nodeResizeObserver?.disconnect()
+  nodeResizeObserver = null
+  if (portMeasureFrame) cancelAnimationFrame(portMeasureFrame)
+  portMeasureFrame = 0
+  resizedNodeIds.clear()
+  if (zoomMeasureTimer) window.clearTimeout(zoomMeasureTimer)
+  zoomMeasureTimer = 0
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('pointerdown', onWindowPointerDown, true)
   window.removeEventListener('pointermove', onPanMove)
