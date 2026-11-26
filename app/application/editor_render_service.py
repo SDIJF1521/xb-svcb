@@ -75,6 +75,31 @@ class EditorRenderService:
         ok = self._audio.render_timeline(project, dst, self._cache_dir(), fmt)
         return dst if ok and dst.exists() else None
 
+    def render_snapshot(
+        self,
+        project: dict[str, Any],
+        destination: Path,
+        output_format: str = "mp3",
+    ) -> Path | None:
+        """把任意工程快照渲染成音频（试听用：不读仓储、不写缓存键）。
+
+        MIDI 子编辑器的整轨试听会先在内存里把片段换成重绘结果，再走同一条时间线
+        渲染链：轨道音量、效果、片段位置都与真实导出保持一致。
+        """
+        if self._audio is None:
+            return None
+        dst = Path(destination)
+        fmt = normalize_format(output_format)
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return None
+        try:
+            ok = self._audio.render_timeline(project, dst, self._cache_dir(), fmt)
+        except (OSError, ValueError, RuntimeError):
+            return None
+        return dst if ok and dst.exists() else None
+
     def render_track(
         self, project_id: str, track_id: str, output_format: str = "wav"
     ) -> Path | None:

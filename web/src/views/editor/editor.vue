@@ -5378,11 +5378,22 @@ async function previewMidiAudio(notes?: MidiNote[]) {
     ElMessage.warning('空白轨道没有音频可试听：把人声/伴奏导入该轨后再试听')
     return
   }
-  const playheadTime = Number(playhead.value) || 0
-  const hit =
-    clips.find((clip) => playheadTime >= Number(clip.start) && playheadTime <= Number(clip.end)) ||
-    clips[0]!
-  void playClip(midiTargetId.value, hit.id)
+  // 整轨范围：按片段重绘后渲染成一条整轨预览，删掉的音符在试听里就是静音。
+  composePreviewLoading.value = true
+  composePreviewUrl.value = ''
+  audioEl.value?.pause()
+  try {
+    const result = await api.previewEditorTrackMidi(currentProject.id, midiTargetId.value, notes || [])
+    if (!result?.ok || !result.audio) {
+      ElMessage.error(translateUiText(result?.error || '试听渲染失败'))
+      return
+    }
+    composePreviewUrl.value = result.audio
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? translateUiText(err.message) : '试听渲染失败')
+  } finally {
+    composePreviewLoading.value = false
+  }
 }
 
 function seekMidiPlayhead(seconds: number) {

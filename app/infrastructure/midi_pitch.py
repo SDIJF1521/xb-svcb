@@ -44,6 +44,7 @@ class MidiPitchProcessor:
         notes: list[dict[str, Any]],
         destination: Path,
         f0_curve: Path | None = None,
+        mute_spans: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         result: dict[str, Any] = {
             "applied": False,
@@ -53,11 +54,13 @@ class MidiPitchProcessor:
             "skipped": [],
             "applied_notes": 0,
             "applied_seconds": 0.0,
+            "muted_seconds": 0.0,
         }
+        mutes = [item for item in (mute_spans or []) if isinstance(item, dict)]
         if not self.available:
             result["reason"] = "MIDI 重绘环境未就绪（缺少 vocal 运行时或 worker）"
             return result
-        if not notes:
+        if not notes and not mutes:
             result["reason"] = "没有 MIDI 音符"
             return result
         if not Path(source).is_file():
@@ -94,6 +97,16 @@ class MidiPitchProcessor:
         ]
         if f0_curve is not None and Path(f0_curve).is_file():
             command.extend(["--f0-npy", str(f0_curve)])
+        if mutes:
+            mutes_path = destination.with_suffix(".mutes.json")
+            try:
+                mutes_path.write_text(
+                    json.dumps(mutes, ensure_ascii=False), encoding="utf-8"
+                )
+            except OSError as exc:
+                result["reason"] = f"静音区间写入失败：{exc}"
+                return result
+            command.extend(["--mute-spans-json", str(mutes_path)])
         try:
             completed = subprocess.run(
                 command,
@@ -130,6 +143,7 @@ class MidiPitchProcessor:
                 "skipped": report.get("skipped") or [],
                 "applied_notes": int(report.get("applied_notes") or 0),
                 "applied_seconds": float(report.get("applied_seconds") or 0.0),
+                "muted_seconds": float(report.get("muted_seconds") or 0.0),
             }
         )
         if report.get("applied") and destination.is_file():

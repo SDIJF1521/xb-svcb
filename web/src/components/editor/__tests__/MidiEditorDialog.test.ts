@@ -1,8 +1,9 @@
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import MidiEditorDialog from '@/components/editor/MidiEditorDialog.vue'
+import { setLocale } from '@/i18n'
 import { DRUM_PIECES } from '@/utils/midi'
 import type { EditorMidiSession } from '@/api/types'
 
@@ -19,6 +20,11 @@ async function flush() {
   await new Promise((resolve) => setTimeout(resolve, 0))
   await nextTick()
 }
+
+beforeEach(() => {
+  // 这些用例按中文文案断言；jsdom 的 navigator.language 是 en-US，会默认翻成英文。
+  setLocale('zh-CN')
+})
 
 afterEach(() => {
   // teleport 出去的节点不归 wrapper 管，失败用例也要清理干净，避免互相串。
@@ -287,6 +293,32 @@ describe('MidiEditorDialog 画布尺寸', () => {
     await flush()
     expect(dialogRoot().querySelector('canvas.midi-keys')).not.toBeNull()
     expect(dialogRoot().textContent).toContain('个音符')
+    wrapper.unmount()
+  })
+})
+
+describe('MidiEditorDialog 演唱音准模式删除', () => {
+  it('删掉全部音符后仍可保存/应用，对应区间会静音', async () => {
+    const wrapper = mountDialog(30)
+    await flush()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true }))
+    await flush()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' }))
+    await flush()
+
+    expect(dialogRoot().textContent).toContain('0 个音符')
+    const save = findByText('.midi-actions button', '保存音符') as HTMLButtonElement
+    const apply = findByText('.midi-actions button', '应用音频') as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    expect(apply.disabled).toBe(false)
+
+    apply.click()
+    await flush()
+    const emitted = wrapper.emitted('apply')
+    expect(emitted).toBeTruthy()
+    expect(emitted![0]![0]).toEqual([])
+
     wrapper.unmount()
   })
 })

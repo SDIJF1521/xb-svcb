@@ -16,7 +16,12 @@ from application import midi_notes
 from application.audio_editor_service import AudioEditorService
 from domain import editor_midi
 from infrastructure import midi_pitch
-from infrastructure.midi_pitch_worker import _ratio_at, note_offsets
+from infrastructure.midi_pitch_worker import (
+    _ratio_at,
+    mute_gain,
+    normalize_mute_spans,
+    note_offsets,
+)
 from infrastructure.storage import ListRepository
 
 CLIP_ID = "clip_midi_1"
@@ -365,6 +370,9 @@ class _FakeStore:
         folder = self._root / "projects" / project_id
         folder.mkdir(parents=True, exist_ok=True)
         return folder
+
+    def audio_data_uri(self, source: Path, *, exact: bool = False) -> str:
+        return f"data:audio/mpeg;base64,{Path(source).name if Path(source).is_file() else ''}"
 
 
 class _FakeAudio:
@@ -752,3 +760,359 @@ def test_apply_track_midi_without_overlap_explains(tmp_path: Path) -> None:
 
     assert result["ok"] is False
     assert "没有音符落在" in result["error"]
+
+
+# ---------------------------------------------------------------- 删除即静音
+
+
+def test_uncovered_spans_reports_deleted_notes() -> None:
+    reference = [{"start": 0.0, "end": 1.0}, {"start": 1.2, "end": 2.0}]
+    kept = [{"start": 0.0, "end": 1.0, "pitch": 60.0}]
+
+    holes = editor_midi.uncovered_spans(reference, kept, duration=2.0)
+
+    assert holes == [(1.2, 2.0)]
+
+
+def test_uncovered_spans_ignores_edge_slivers_and_merges() -> None:
+    reference = [{"start": 0.0, "end": 1.0}, {"start": 1.05, "end": 2.0}]
+    # 向右挪了 20ms：左边缘的碎缝不该被切成气口。
+    kept = [{"start": 0.02, "end": 1.4, "pitch": 60.0}]
+
+    holes = editor_midi.uncovered_spans(reference, kept, duration=2.0)
+
+    assert len(holes) == 1
+    assert holes[0][0] == pytest.approx(1.4)
+    assert holes[0][1] == pytest.approx(2.0)
+
+
+def test_uncovered_spans_mutes_everything_when_all_notes_deleted() -> None:
+    reference = [{"start": 0.2, "end": 0.8}, {"start": 1.0, "end": 1.6}]
+
+    holes = editor_midi.uncovered_spans(reference, [], duration=4.0)
+
+    assert holes == [(0.2, 0.8), (1.0, 1.6)]
+    assert editor_midi.uncovered_spans(reference, [], duration=4.0, min_seconds=5.0) == []
+
+
+def test_normalize_mute_spans_clamps_and_merges() -> None:
+    spans = normalize_mute_spans(
+        [
+            {"start": 0.5, "end": 0.6},
+            {"start": 0.62, "end": 0.9},
+            {"start": -1.0, "end": 9.0},
+            {"start": 2.0, "end": 2.01},  # 太短
+        ],
+        1.0,
+    )
+
+    assert spans == [(0.0, 1.0)]
+
+
+def test_mute_gain_silences_span_with_fades() -> None:
+    gain = mute_gain(1000, [(0.5, 0.6)], 1000)
+
+    assert gain[:488].min() == pytest.approx(1.0)  # 区间之前原样
+    assert gain[500:600].max() == pytest.approx(0.0)  # 区间内静音
+    assert gain[499] < 0.2 and gain[601] < 0.2  # 两端各有一小段淡变
+    assert gain[612] == pytest.approx(1.0)  # 淡入结束后恢复
+
+
+class _FakeRenderService:
+    """整轨试听用：记录快照并写一个假的渲染文件。"""
+
+    def __init__(self, audio: _FakeAudio) -> None:
+        self._audio = audio
+        self.snapshots: list[dict] = []
+
+    def render_snapshot(self, project, destination, output_format: str = "mp3"):
+        self.snapshots.append(project)
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"rendered")
+        return destination
+
+
+def _write_sidecar(service: AudioEditorService, target_id: str, payload: dict) -> None:
+    path = service._midi_path(PROJECT_ID, target_id)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def test_save_clip_midi_seeds_voice_spans_from_previous_notes(tmp_path: Path) -> None:
+    audio = tmp_path / "clip.wav"
+    _write_audio(audio)
+    service = _service(tmp_path, _project(audio))
+    _write_sidecar(
+        service,
+        CLIP_ID,
+        {
+            "audio": str(audio),
+            "audio_mtime": 0.0,
+            "notes": [
+                {"start": 0.0, "end": 1.0, "pitch": 60.0, "detune": 0.0},
+                {"start": 1.2, "end": 2.0, "pitch": 62.0, "detune": 0.0},
+            ],
+        },
+    )
+
+    result = service.save_clip_midi(
+        PROJECT_ID, CLIP_ID, [{"start": 0.0, "end": 1.0, "pitch": 60.0, "detune": 0.0}]
+    )
+
+    assert result["ok"] is True
+    sidecar = json.loads(
+        (service._midi_path(PROJECT_ID, CLIP_ID)).read_text(encoding="utf-8")
+    )
+    assert sidecar["voice_spans"] == [
+        {"start": 0.0, "end": 1.0},
+        {"start": 1.2, "end": 2.0},
+    ]
+    assert len(sidecar["notes"]) == 1
+
+
+def test_apply_clip_midi_mutes_deleted_note_range(tmp_path: Path) -> None:
+    audio = tmp_path / "clip.wav"
+    _write_audio(audio)
+    midi = _FakeMidiPitch({"applied": True, "applied_notes": 1, "muted_seconds": 0.8})
+    service = _service(tmp_path, _project(audio), midi=midi)
+    _write_sidecar(
+        service,
+        CLIP_ID,
+        {
+            **service._audio_signature(audio),
+            "notes": [
+                {"start": 0.0, "end": 0.5, "pitch": 60.0, "detune": 0.0},
+                {"start": 1.2, "end": 2.0, "pitch": 62.0, "detune": 0.0},
+            ],
+            "voice_spans": [
+                {"start": 0.0, "end": 0.5},
+                {"start": 1.2, "end": 2.0},
+            ],
+        },
+    )
+
+    result = service.apply_clip_midi(
+        PROJECT_ID, CLIP_ID, [{"start": 0.0, "end": 0.5, "pitch": 60.0, "detune": 0.0}]
+    )
+
+    assert result["ok"] is True, result
+    call = midi.calls[0]
+    assert call["mute_spans"] == [{"start": 1.2, "end": 2.0}]
+    assert result["report"]["muted_seconds"] == pytest.approx(0.8)
+    assert result["clip"]["metadata"]["midi"]["muted_seconds"] == pytest.approx(0.8)
+
+
+def test_apply_clip_midi_mutes_everything_when_all_notes_deleted(tmp_path: Path) -> None:
+    audio = tmp_path / "clip.wav"
+    _write_audio(audio)
+    midi = _FakeMidiPitch({"applied": True, "muted_seconds": 2.0})
+    service = _service(tmp_path, _project(audio), midi=midi)
+    _write_sidecar(
+        service,
+        CLIP_ID,
+        {
+            **service._audio_signature(audio),
+            "notes": [{"start": 0.25, "end": 1.75, "pitch": 60.0, "detune": 0.0}],
+            "voice_spans": [{"start": 0.25, "end": 1.75}],
+        },
+    )
+
+    result = service.apply_clip_midi(PROJECT_ID, CLIP_ID, [])
+
+    assert result["ok"] is True, result
+    call = midi.calls[0]
+    assert call["notes"] == []
+    assert call["mute_spans"] == [{"start": 0.25, "end": 1.75}]
+
+
+def test_apply_clip_midi_rejects_when_nothing_to_do(tmp_path: Path) -> None:
+    audio = tmp_path / "clip.wav"
+    _write_audio(audio)
+    service = _service(tmp_path, _project(audio))
+
+    result = service.apply_clip_midi(PROJECT_ID, CLIP_ID, [])
+
+    assert result["ok"] is False
+    assert "没有 MIDI 音符" in result["error"]
+
+
+def test_clip_midi_keeps_saved_empty_notes(tmp_path: Path, monkeypatch) -> None:
+    """整段音符删光并保存后，重新打开不能再「分析回来」。"""
+    audio = tmp_path / "clip.wav"
+    _write_audio(audio)
+    service = _service(tmp_path, _project(audio))
+    _write_sidecar(
+        service,
+        CLIP_ID,
+        {
+            **service._audio_signature(audio),
+            "notes": [],
+            "voice_spans": [{"start": 0.1, "end": 1.0}],
+        },
+    )
+
+    def fail_analyse(*_args, **_kwargs):
+        raise AssertionError("空音符的缓存不应触发重新分析")
+
+    monkeypatch.setattr(AudioEditorService, "_analyse_clip_notes", fail_analyse)
+
+    result = service.clip_midi(PROJECT_ID, CLIP_ID)
+
+    assert result["ok"] is True
+    assert result["cached"] is True
+    assert result["notes"] == []
+
+
+def test_preview_clip_midi_accepts_zero_notes_with_reference(tmp_path: Path) -> None:
+    audio = tmp_path / "clip.wav"
+    _write_audio(audio)
+    midi = _FakeMidiPitch({"applied": True, "muted_seconds": 1.0})
+    service = _service(tmp_path, _project(audio), midi=midi)
+    _write_sidecar(
+        service,
+        CLIP_ID,
+        {
+            **service._audio_signature(audio),
+            "notes": [{"start": 0.2, "end": 1.2, "pitch": 60.0, "detune": 0.0}],
+        },
+    )
+
+    result = service.preview_clip_midi(PROJECT_ID, CLIP_ID, [])
+
+    assert result["ok"] is True, result
+    assert result["audio"].startswith("data:")
+    assert midi.calls[0]["mute_spans"] == [{"start": 0.2, "end": 1.2}]
+
+
+def test_apply_track_midi_mutes_deleted_notes_per_clip(tmp_path: Path) -> None:
+    midi = _FakeMidiPitch({"applied": True, "applied_notes": 1})
+    service = _service(tmp_path, _track_project(tmp_path), midi=midi)
+    _write_sidecar(
+        service,
+        TRACK_ID,
+        {
+            "scope": "track",
+            "track_signature": service._track_signature(
+                service._repo.get(PROJECT_ID)["tracks"][0]
+            ),
+            "notes": [
+                {"start": 0.1, "end": 0.6, "pitch": 60.0, "detune": 0.0},
+                {"start": 3.1, "end": 3.6, "pitch": 64.0, "detune": 0.0},
+            ],
+            "voice_spans": [
+                {"start": 0.1, "end": 0.6},
+                {"start": 3.1, "end": 3.6},
+            ],
+        },
+    )
+
+    result = service.apply_track_midi(
+        PROJECT_ID,
+        TRACK_ID,
+        [{"start": 0.1, "end": 0.6, "pitch": 60.0, "detune": 0.0}],
+    )
+
+    assert result["ok"] is True, result
+    # 第一个片段只剩没改的音符（没有静音区间）；第二个片段整段被删 → 静音。
+    assert [call["mute_spans"] for call in midi.calls] == [
+        [],
+        [{"start": 0.1, "end": 0.6}],
+    ]
+    assert midi.calls[1]["notes"] == []
+
+
+def test_preview_track_midi_renders_snapshot_with_muted_clips(tmp_path: Path) -> None:
+    midi = _FakeMidiPitch({"applied": True, "applied_notes": 1})
+    service = _service(tmp_path, _track_project(tmp_path), midi=midi)
+    renderer = _FakeRenderService(service._render._audio)
+    service.__dict__["_render_service"] = renderer
+    _write_sidecar(
+        service,
+        TRACK_ID,
+        {
+            "scope": "track",
+            "track_signature": service._track_signature(
+                service._repo.get(PROJECT_ID)["tracks"][0]
+            ),
+            "notes": [
+                {"start": 0.1, "end": 0.6, "pitch": 60.0, "detune": 0.0},
+                {"start": 3.1, "end": 3.6, "pitch": 64.0, "detune": 0.0},
+            ],
+        },
+    )
+
+    result = service.preview_track_midi(
+        PROJECT_ID,
+        TRACK_ID,
+        [{"start": 0.1, "end": 0.6, "pitch": 60.0, "detune": 0.0}],
+    )
+
+    assert result["ok"] is True, result
+    assert result["audio"].startswith("data:")
+    assert result["rendered_clips"] >= 1
+    assert midi.calls[-1]["mute_spans"] == [{"start": 0.1, "end": 0.6}]
+    snapshot = renderer.snapshots[0]
+    assert len(snapshot["tracks"]) == 1
+    assert Path(snapshot["tracks"][0]["clips"][1]["file"]).name.startswith("clip_b_")
+
+
+def test_preview_track_midi_keeps_original_audio_when_nothing_changes(
+    tmp_path: Path,
+) -> None:
+    """没改过的音符不该让试听变成「没有音符需要修改」：整轨照样要能播。"""
+    midi = _FakeMidiPitch({"applied": False, "reason": "没有音符需要修改"})
+    service = _service(tmp_path, _track_project(tmp_path), midi=midi)
+    renderer = _FakeRenderService(service._render._audio)
+    service.__dict__["_render_service"] = renderer
+    notes = [
+        {"start": 0.1, "end": 0.6, "pitch": 60.0, "detune": 0.0},
+        {"start": 3.1, "end": 3.6, "pitch": 64.0, "detune": 0.0},
+    ]
+    _write_sidecar(
+        service,
+        TRACK_ID,
+        {
+            "scope": "track",
+            "track_signature": service._track_signature(
+                service._repo.get(PROJECT_ID)["tracks"][0]
+            ),
+            "notes": notes,
+        },
+    )
+
+    result = service.preview_track_midi(PROJECT_ID, TRACK_ID, notes)
+
+    assert result["ok"] is True, result
+    assert result["rendered_clips"] == 0
+    snapshot = renderer.snapshots[0]
+    assert Path(snapshot["tracks"][0]["clips"][0]["file"]).name == "one.wav"
+
+
+def test_preview_track_midi_reports_failure_when_every_clip_fails(
+    tmp_path: Path,
+) -> None:
+    midi = _FakeMidiPitch({"applied": False, "reason": "Praat 崩溃"})
+    service = _service(tmp_path, _track_project(tmp_path), midi=midi)
+    renderer = _FakeRenderService(service._render._audio)
+    service.__dict__["_render_service"] = renderer
+    _write_sidecar(
+        service,
+        TRACK_ID,
+        {
+            "scope": "track",
+            "track_signature": service._track_signature(
+                service._repo.get(PROJECT_ID)["tracks"][0]
+            ),
+            "notes": [{"start": 0.1, "end": 0.6, "pitch": 60.0, "detune": 0.0}],
+            "voice_spans": [{"start": 0.1, "end": 0.6}],
+        },
+    )
+
+    result = service.preview_track_midi(
+        PROJECT_ID, TRACK_ID, [{"start": 0.1, "end": 0.6, "pitch": 69.0, "detune": 0.0}]
+    )
+
+    assert result["ok"] is False
+    assert "Praat 崩溃" in result["error"]
+    assert renderer.snapshots == []
+

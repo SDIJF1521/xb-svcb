@@ -291,6 +291,14 @@ Clients may modify and resubmit a fetched project. `audio_url`, `waveform_url`, 
 
 `time_stretch` ranges from `0.25` to `4.0` and defaults to `1.0`. It updates clip duration consistently for waveforms, preview, plugin monitoring, and rendering. Regional re-inference supports `auto_high_pitch_guard: true` by default. With AI vocal enhancement, the server automatically reduces high-frequency coloration.
 
+### MIDI sub-editor
+
+The editor also embeds a piano-roll MIDI sub-editor for **note-level pitch editing**; playback always uses the clip audio itself, never a MIDI sound source. It works on a single clip (`/clips/{clip_id}/midi`, clip-relative time) or a whole track (`/tracks/{track_id}/midi`, absolute time, empty tracks included).
+
+`GET` analyzes the vocal and returns editable notes (`start`/`end`, `pitch`, `detune`); add `?refresh=1` to force re-analysis. `PUT` saves the notes only. `POST .../midi/apply` writes them to audio with per-note formant-preserving Praat PSOLA, generates new clip audio, and pushes one undo step; the track variant splits notes per clip and only replaces clips that actually change. Omit `notes` to use the saved ones; send an explicit empty array to mute every extracted vocal range.
+
+Unedited notes keep their `detune`, so extract → apply does not flatten the singer's natural intonation; only dragged or otherwise edited notes snap to the target pitch. **Deleting a note is not a no-op**: the sung range of a deleted note is muted in preview and after applying (the editor remembers the extracted note spans as the reference vocal region).
+
 ## Endpoint Summary
 
 | Method | Path | Purpose |

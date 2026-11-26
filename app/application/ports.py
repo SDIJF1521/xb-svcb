@@ -236,7 +236,8 @@ class MidiPitchPort(ToolAdapter, Protocol):
     """MIDI 子编辑器的音高重绘：把音符级编辑落到音频上。
 
     实现在隔离环境里用 Praat PSOLA 逐音符移调（保共振峰），只改写被编辑过的
-    音符区间；没有音符需要修改时不产生新音频。
+    音符区间；被删掉的音符通过 ``mute_spans`` 静音。没有音符要改也没有静音区间
+    时不产生新音频。
     """
 
     def apply(self, *args: Any, **kwargs: Any) -> dict[str, Any]: ...

@@ -1332,9 +1332,10 @@ class EditorMergeRequest(BaseModel):
 class EditorMidiNotesRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    notes: list[dict[str, Any]] = Field(
-        default_factory=list,
-        description="音符列表：start/end（片段内秒）、pitch（MIDI 编号）、detune（音分）",
+    # 省略 = 用已保存的音符；显式传空数组 = 把整段演唱静音（删除即静音）。
+    notes: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="音符列表：start/end（片段内秒）、pitch（MIDI 编号）、detune（音分）；省略时使用已保存的音符",
     )
 
 
@@ -3536,7 +3537,7 @@ def create_http_app(
         project_id: str = ApiPath(..., description="编辑工程 ID"),
         clip_id: str = ApiPath(..., description="片段 ID"),
     ) -> dict[str, Any]:
-        result = facade.save_editor_clip_midi(project_id, clip_id, request.notes)
+        result = facade.save_editor_clip_midi(project_id, clip_id, request.notes or [])
         if not result.get("ok"):
             error = str(result.get("error") or "MIDI 保存失败")
             raise HTTPException(status_code=409, detail=error)
@@ -3558,13 +3559,13 @@ def create_http_app(
         tags=["编辑器"],
         summary="应用 MIDI 音符到音频",
         description=_resource_api_doc(
-            "把 MIDI 子编辑器的音符落到音频上：逐音符保共振峰移调后替换片段音频（可撤销）。",
+            "把 MIDI 子编辑器的音符落到音频上：逐音符保共振峰移调后替换片段音频（可撤销）；删掉的音符对应区间静音。",
             "POST",
             "/api/v1/editor/projects/{project_id}/clips/{clip_id}/midi/apply",
             [
                 ("project_id", "string", "是", "-", "编辑工程 ID"),
                 ("clip_id", "string", "是", "-", "片段 ID"),
-                ("notes", "array", "否", "已保存的音符", "不传时使用已保存的 MIDI 音符"),
+                ("notes", "array", "否", "已保存的音符", "不传时使用已保存的 MIDI 音符；传空数组会静音所有已提取的演唱区间"),
             ],
         ),
     )
@@ -3574,7 +3575,7 @@ def create_http_app(
         clip_id: str = ApiPath(..., description="片段 ID"),
     ) -> dict[str, Any]:
         result = facade.apply_editor_clip_midi(
-            project_id, clip_id, request.notes or None, {}
+            project_id, clip_id, request.notes, {}
         )
         if not result.get("ok"):
             error = str(result.get("error") or "应用 MIDI 失败")
@@ -3660,7 +3661,7 @@ def create_http_app(
         project_id: str = ApiPath(..., description="编辑工程 ID"),
         track_id: str = ApiPath(..., description="音轨 ID"),
     ) -> dict[str, Any]:
-        result = facade.save_editor_track_midi(project_id, track_id, request.notes)
+        result = facade.save_editor_track_midi(project_id, track_id, request.notes or [])
         if not result.get("ok"):
             error = str(result.get("error") or "MIDI 保存失败")
             raise HTTPException(status_code=409, detail=error)
@@ -3683,13 +3684,13 @@ def create_http_app(
         tags=["编辑器"],
         summary="应用整轨 MIDI 到音频",
         description=_resource_api_doc(
-            "按片段切分整轨音符并逐个保共振峰移调，替换对应片段音频（可撤销）。",
+            "按片段切分整轨音符并逐个保共振峰移调，替换对应片段音频（可撤销）；删掉的音符对应区间静音。",
             "POST",
             "/api/v1/editor/projects/{project_id}/tracks/{track_id}/midi/apply",
             [
                 ("project_id", "string", "是", "-", "编辑工程 ID"),
                 ("track_id", "string", "是", "-", "音轨 ID"),
-                ("notes", "array", "否", "已保存的音符", "不传时使用已保存的整轨音符"),
+                ("notes", "array", "否", "已保存的音符", "不传时使用已保存的整轨音符；传空数组会静音所有已提取的演唱区间"),
             ],
         ),
     )
@@ -3699,7 +3700,7 @@ def create_http_app(
         track_id: str = ApiPath(..., description="音轨 ID"),
     ) -> dict[str, Any]:
         result = facade.apply_editor_track_midi(
-            project_id, track_id, request.notes or None, {}
+            project_id, track_id, request.notes, {}
         )
         if not result.get("ok"):
             error = str(result.get("error") or "应用 MIDI 失败")

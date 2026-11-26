@@ -1388,6 +1388,15 @@ class Api:
     ) -> dict[str, Any]:
         return self._editor.apply_track_midi(project_id, track_id, notes, options or {})
 
+    def preview_editor_track_midi(
+        self,
+        project_id: str,
+        track_id: str,
+        notes: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """整轨试听：按片段重绘（含删除即静音）后渲染成一条可播放音频。"""
+        return self._editor.preview_track_midi(project_id, track_id, notes)
+
     # ---- MIDI 编曲（多乐器音序器） ----
 
     def get_editor_midi_session(

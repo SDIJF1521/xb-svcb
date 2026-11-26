@@ -978,6 +978,11 @@ export const api = {
       mock.applyEditorTrackMidi(projectId, trackId, notes),
     ),
 
+  previewEditorTrackMidi: (projectId: string, trackId: string, notes?: EditorMidiNote[]) =>
+    invoke<EditorClipMidiApplyResult>('preview_editor_track_midi', [projectId, trackId, notes], () =>
+      mock.previewEditorTrackMidi(projectId, trackId, notes),
+    ),
+
   // ---- MIDI 编曲（多乐器音序器） ----
 
   getEditorMidiSession: (projectId: string, trackId: string) =>

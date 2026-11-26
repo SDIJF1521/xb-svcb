@@ -3315,6 +3315,13 @@ export const mock = {
       clips: touched.map((clip) => ({ ...clip })),
     }
   },
+  previewEditorTrackMidi(
+    _projectId: string,
+    _trackId: string,
+    _notes?: EditorMidiNote[],
+  ): EditorClipMidiApplyResult {
+    return { ok: false, error: '浏览器 mock 没有 MIDI 音高重绘：请用桌面版试听' }
+  },
   getEditorMidiSession(projectId: string, trackId: string): EditorMidiSessionResult {
     const found = findMockMidiTrack(projectId, trackId)
     if (!found) return { ok: false, error: '工程或音轨不存在' }

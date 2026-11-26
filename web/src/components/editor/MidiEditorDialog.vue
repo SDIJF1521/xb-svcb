@@ -533,8 +533,8 @@
             </button>
           </template>
           <template v-else>
-            <button class="ghost" :disabled="!draft.length" @click="resetDraft">{{ t('还原本次编辑') }}</button>
-            <button class="ghost" :disabled="loading || applying || !draft.length" @click="emitSave">
+            <button class="ghost" :disabled="!pitchDraftReady" @click="resetDraft">{{ t('还原本次编辑') }}</button>
+            <button class="ghost" :disabled="loading || applying || !pitchDraftReady" @click="emitSave">
               {{ t('保存音符') }}
             </button>
             <button
@@ -547,7 +547,7 @@
             </button>
             <button
               class="primary"
-              :disabled="loading || applying || !draft.length || !ready || !canApply"
+              :disabled="loading || applying || !pitchDraftReady || !ready || !canApply"
               :title="applyHint"
               @click="emitApply"
             >
@@ -562,7 +562,7 @@
           {{ t('渲染使用内置多乐器合成器：每个声部一件 GM 乐器，可「分乐器各生成一条音轨」（可单独调音量/加效果），也可混成一条片段落回当前轨。导出 .mid 可在其他 DAW 里继续编辑；试听播放的是合成结果。') }}
         </template>
         <template v-else>
-          {{ t('试听播放的是片段音频本身（应用后为编辑结果），不会用 MIDI 音源直接出声；应用会生成新音频并可撤销。未改动的音符保留原始音准，只有被拖动/改过分度的音符才会移动。') }}
+          {{ t('试听播放的是片段音频本身（应用后为编辑结果），不会用 MIDI 音源直接出声；应用会生成新音频并可撤销。未改动的音符保留原始音准，只有被拖动/改过分度的音符才会移动。删掉的音符不会「什么都不发生」：它对应的演唱区间会在试听和应用后静音。') }}
         </template>
       </p>
 
@@ -834,6 +834,11 @@ const hoveredNoteId = ref<string | null>(null)
 
 // 演唱音准模式的草稿与历史
 const draft = ref<MidiNote[]>([])
+/**
+ * 演唱音准模式里删过音符：删掉的音符对应的区间在试听/应用时会静音，
+ * 所以即使一个音符都不剩也要允许保存和应用（整段人声会被静音）。
+ */
+const pitchRemoved = ref(false)
 const pitchClipboard = ref<MidiNote[]>([])
 type PitchSnapshot = { notes: MidiNote[]; curve: Array<{ t: number; midi: number }> }
 const pitchUndo: PitchSnapshot[] = []
@@ -1159,8 +1164,18 @@ const curveRangeLabel = computed(() => {
 const transportDisabled = computed(() => (isCompose.value ? !hasContent.value : !canPreview.value))
 const transportHint = computed(() => {
   if (isCompose.value) return hasContent.value ? t('用内置乐器渲染并播放') : t('还没有音符')
-  return canPreview.value ? t('播放片段音频（不是 MIDI 音源）') : t('空白轨道没有音频可试听')
+  return canPreview.value
+    ? t('按当前音符渲染试听：改过的音符变调，删掉的音符静音')
+    : t('空白轨道没有音频可试听')
 })
+const pitchDraftReady = computed(
+  () =>
+    draft.value.length > 0 ||
+    pitchRemoved.value ||
+    // 之前把音符删光并保存过：打开时一个音符都没有，但演唱区间还在，
+    // 仍然要允许「应用」把这些区间静音。
+    (!props.error && (props.notes?.length ?? 0) === 0),
+)
 const previewTitle = computed(() => {
   if (props.previewLoading) return t('正在渲染试听…')
   return hasContent.value ? t('用内置乐器渲染并播放') : t('还没有音符')
@@ -1190,7 +1205,7 @@ const hintText = computed(() =>
       ? (props.pitchCurve && props.pitchCurve.length >= 2
         ? t('音高曲线：在音符上按住拖动，像画笔一样画线（单击只选中）· Alt 擦除 · Ctrl 吸附半音')
         : t('还没有可用的原始基频（F0），无法自动生成曲线：请先分析片段基频，或手动在音符上拖动绘制'))
-      : t('双击空白新建 · 拖动移动 · 拖边缘改长度 · 框选多选 · 右键菜单 · Del 删除 · 空格试听'),
+      : t('双击空白新建 · 拖动移动 · 拖边缘改长度 · 框选多选 · 右键菜单 · Del 删除并静音 · 空格试听'),
 )
 const canUndo = computed(() =>
   isCompose.value ? composeUndo.length > 0 : pitchUndoVersion.value >= 0 && pitchUndo.length > 0,
@@ -1206,10 +1221,14 @@ const canApply = computed(() => (props.scope === 'track' ? props.clipSpans.lengt
 const applyHint = computed(() => {
   if (!props.ready) return t('MIDI 音高重绘环境未就绪')
   if (!canApply.value) return t('音轨上还没有片段：先切到「MIDI 编曲」写谱并渲染')
-  return props.scope === 'track' ? t('把音符按片段切分后落到音频') : t('把音符应用到音频（保共振峰移调）')
+  return props.scope === 'track'
+    ? t('把音符按片段切分后落到音频（删掉的音符静音）')
+    : t('把音符应用到音频（保共振峰移调，删掉的音符静音）')
 })
 const previewHint = computed(() =>
-  canPreview.value ? t('播放片段音频（不是 MIDI 音源）') : t('空白轨道没有音频可试听'),
+  canPreview.value
+    ? t('按当前音符渲染试听：改过的音符变调，删掉的音符静音')
+    : t('空白轨道没有音频可试听'),
 )
 const analysisText = computed(() => {
   const data = props.analysis || {}
@@ -1249,6 +1268,7 @@ watch(
     pitchUndo.length = 0
     pitchRedo.length = 0
     pitchUndoVersion.value += 1
+    pitchRemoved.value = false
     // 重新分析/重新加载后音符是新的，允许再次自动补曲线。
     clearedCurveIds.clear()
     rebuildGlobalCurve()
@@ -1778,6 +1798,7 @@ function resetDraft() {
   })
   rebuildGlobalCurve()
   selection.value = []
+  pitchRemoved.value = false
   pitchUndoVersion.value += 1
 }
 
@@ -2388,6 +2409,8 @@ function deleteSelected() {
     scheduleDraw()
   } else {
     draft.value = draft.value.filter((note) => !ids.has(note.id))
+    // 删掉的音符不会消失得无声无息：这些区间在试听/应用里会被静音。
+    pitchRemoved.value = true
   }
   selection.value = []
 }

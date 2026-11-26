@@ -22,6 +22,11 @@ MIN_NOTE_SECONDS = 0.03
 DEFAULT_NOTE_SECONDS = 0.25
 # 单片段音符数量上限，防止误粘贴超大 MIDI 撑爆工程。
 MAX_NOTES = 20000
+# 删除即静音：参考跨度里没被当前音符覆盖的部分要静音。
+# 小于该长度的碎缝不处理，避免拖动/吸附时在音符边缘切出气口。
+MUTE_MIN_SECONDS = 0.08
+# 相邻碎缝小于该值时合并成一条静音区间，减少重绘时的淡入淡出次数。
+MUTE_MERGE_SECONDS = 0.04
 
 _NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 
@@ -223,6 +228,111 @@ def clean_notes(
         for note in cleaned
         if note["end"] - note["start"] >= MIN_NOTE_SECONDS
     ]
+
+
+def merge_spans(
+    spans: Any,
+    *,
+    gap: float = 0.0,
+) -> list[tuple[float, float]]:
+    """把若干时间跨度按起点排序并合并重叠（间隔 ≤ ``gap`` 的也合并）。"""
+    ordered: list[tuple[float, float]] = []
+    if isinstance(spans, (list, tuple)):
+        for item in spans:
+            try:
+                start = float(item[0])
+                end = float(item[1])
+            except (TypeError, ValueError, IndexError, KeyError):
+                continue
+            if not math.isfinite(start) or not math.isfinite(end) or end <= start:
+                continue
+            ordered.append((max(0.0, start), end))
+    ordered.sort(key=lambda span: (span[0], span[1]))
+    merged: list[tuple[float, float]] = []
+    for start, end in ordered:
+        if merged and start <= merged[-1][1] + max(0.0, float(gap)):
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def note_spans(
+    notes: Any,
+    duration: float | None = None,
+) -> list[tuple[float, float]]:
+    """音符列表 → 合并后的时间跨度（秒）；用于「参考演唱区间」。
+
+    同时接受音符字典和 ``(start, end)`` 二元组：``uncovered_spans`` 的参考参数
+    往往已经是跨度本身。
+    """
+    if not isinstance(notes, (list, tuple)):
+        return []
+    try:
+        limit = None if duration is None else max(0.0, float(duration))
+    except (TypeError, ValueError):
+        limit = None
+    spans: list[tuple[float, float]] = []
+    for item in notes:
+        if isinstance(item, dict):
+            start_value = item.get("start", 0.0)
+            end_value = item.get("end", 0.0)
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            start_value, end_value = item[0], item[1]
+        else:
+            continue
+        try:
+            start = float(start_value or 0.0)
+            end = float(end_value or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(start) or not math.isfinite(end):
+            continue
+        start = max(0.0, start)
+        end = end if limit is None else min(limit, end)
+        if end - start >= MIN_NOTE_SECONDS:
+            spans.append((start, end))
+    return merge_spans(spans)
+
+
+def uncovered_spans(
+    reference: Any,
+    notes: Any,
+    *,
+    duration: float | None = None,
+    min_seconds: float = MUTE_MIN_SECONDS,
+    merge_gap: float = MUTE_MERGE_SECONDS,
+) -> list[tuple[float, float]]:
+    """参考跨度里没有被当前音符覆盖的部分（= 被删掉、需要静音的人声）。
+
+    ``reference`` 是提取时的音符跨度，``notes`` 是用户现在的音符。删掉一个音符
+    后它不再落在 ``notes`` 里，对应的参考跨度就成了空洞；拖动/缩短音符留下的
+    小于 ``min_seconds`` 的碎缝会被忽略，避免在音符边缘切出气口。
+    """
+    spans = merge_spans(note_spans(reference, duration))
+    if not spans:
+        return []
+    covered = merge_spans(note_spans(notes, duration))
+    holes: list[tuple[float, float]] = []
+    for start, end in spans:
+        cursor = start
+        for cover_start, cover_end in covered:
+            if cover_end <= cursor:
+                continue
+            if cover_start >= end:
+                break
+            if cover_start > cursor:
+                holes.append((cursor, min(end, cover_start)))
+            cursor = max(cursor, min(end, cover_end))
+            if cursor >= end:
+                break
+        if cursor < end:
+            holes.append((cursor, end))
+    threshold = max(0.0, float(min_seconds))
+    return merge_spans(
+        [(start, end) for start, end in holes if end - start >= threshold],
+        gap=max(0.0, float(merge_gap)),
+    )
 
 
 def note_span(note: dict[str, Any]) -> tuple[float, float]:
