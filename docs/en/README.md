@@ -41,7 +41,7 @@ All current Markdown documentation under `docs/` is available in English. Releas
 
 Release history is kept in [`docs/release-notes`](../release-notes/). Starting with v0.1.0, release notes are published in Simplified Chinese, English, and Japanese.
 
-- [v0.1.2](../release-notes/release_notes_v0_1_2.en.md): workflow store with PyMSS sync, layered workflow previews, unified dialogs, downloaded-workflow connection fixes, and DDD boundary cleanup.
+- [v0.1.2](../release-notes/release_notes_v0_1_2.en.md): workflow store with PyMSS sync, layered workflow previews, unified dialogs, downloaded-workflow connection fixes, and DDD boundary cleanup. Follow-up fixes: deleting a MIDI note now mutes it, pitch curves are split per stroke with a Continue option, and workflow edges follow node size changes.
 - [v0.1.1](../release-notes/release_notes_v0_1_1.en.md): MIDI sub-editor and pitch curves, custom workflow, real-time conversion and RVC stack upgrade, installer encoding fix.
 - [v0.1.0](../release-notes/release_notes_v0_1_0.en.md): creation and inference, audio editor, multilingual UI and installer, online setup, and model-repository changes.
 - [v0.0.32](../release-notes/release_notes_v032.md): Python 3.12, ROCm 10, and DirectML inference fixes.

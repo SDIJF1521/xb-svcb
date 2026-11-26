@@ -41,7 +41,7 @@
 
 全バージョンの履歴は[`docs/release-notes`](../release-notes/)にあります。v0.1.0以降のリリースノートは簡体字中国語、英語、日本語で公開します。
 
-- [v0.1.2](../release-notes/release_notes_v0_1_2.ja.md): PyMSS連携付きワークフローストア、階層プレビュー、ダイアログ統一、ダウンロード済みワークフローの接続修正、DDD境界の整理。
+- [v0.1.2](../release-notes/release_notes_v0_1_2.ja.md): PyMSS連携付きワークフローストア、階層プレビュー、ダイアログ統一、ダウンロード済みワークフローの接続修正、DDD境界の整理。追加修正：MIDI音符の削除でミュート、ピッチカーブの一筆単位分割と「続けて描く」、ワークフローの接続線がノードサイズ変更に追従。
 - [v0.1.1](../release-notes/release_notes_v0_1_1.ja.md): MIDIサブエディターとピッチカーブ、カスタムワークフロー、リアルタイム変換とRVCスタックの更新、インストーラーの文字コード修正。
 - [v0.1.0](../release-notes/release_notes_v0_1_0.ja.md): 作成と推論、オーディオエディター、多言語UIとインストーラー、オンラインセットアップ、モデルリポジトリ変更。
 - [v0.0.32](../release-notes/release_notes_v032.md): Python 3.12、ROCm 10、DirectML推論の修正。

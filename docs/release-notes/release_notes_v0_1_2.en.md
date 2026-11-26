@@ -34,6 +34,24 @@ v0.1.2 starts at commit `5afbb7eb522b2bdc244aea9c6daeb8105acb62a5` ("自定义�
 5afbb7eb522b2bdc244aea9c6daeb8105acb62a5^..HEAD
 ```
 
+## 🔧 Post-release fixes & polish (v0.1.2 · 2026-11-21 → 11-27)
+
+Follow-up fixes after the release, focused on MIDI pitch editing and the custom-workflow canvas:
+
+### 🎼 MIDI sub-editor
+
+- **Deleting a note now mutes it**: in Pitch Correction mode, a deleted note's sung range is silenced in preview and after applying instead of leaving the original vocal untouched. The editor records the extracted note spans as the reference vocal region (sidecar `voice_spans`); whatever the current notes do not cover is muted. Deleting every note mutes the whole vocal (breaths and unvoiced consonants are kept).
+- **Empty note lists persist**: after deleting all notes and saving, reopening no longer re-analyzes them back. Save / Apply stay available with zero notes, and `midi/apply` with an explicit empty array mutes the whole extracted vocal range.
+- **Track preview renders MIDI**: track-scope Preview now re-renders each clip into one track-length preview (mutes included), aligned with the piano-roll playhead, so deleted notes are audible there too.
+- **Pitch curves are split per stroke**: hand-drawn curves are segmented per stroke — continuous inside a stroke, not interpolated across strokes, and un-drawn ranges fall back to the source F0. A later stroke no longer draws an imaginary straight line over a range you did not edit.
+- **New “Continue” toggle (off by default)**: a new stroke near an existing segment endpoint joins it and stays continuous; when both ends are near, it joins both, which is useful for filling a gap.
+- **Partial redraw and erase**: a stroke cuts the old segments by its time range (with interpolated boundary points) and keeps both sides without forcing them to connect; erasing splits segments instead of bridging the hole; undo/redo restores segments. Hand-drawn samples are thinned as needed, so long notes are no longer truncated by the 256-point-per-note cap.
+
+### 🧩 Custom workflow canvas
+
+- **No more misplaced edges after expanding Advanced**: port positions now follow node size, so expanding/collapsing sections or switching a model (which changes the parameter area height) keeps edges attached to the bottom output ports.
+- **Performance**: a single `ResizeObserver` watches every node and coalesces updates per animation frame; only resized nodes are re-measured; unchanged offsets do not trigger edge recomputation; wheel zoom no longer forces layout on every tick (port offsets are zoom-invariant) and re-measures once after the gesture.
+
 ## 🛍️ Workflow Store
 
 - Open it from **Library → Workflow Store**; it shares the ModelScope access token with the model store.
