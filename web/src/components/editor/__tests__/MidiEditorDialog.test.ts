@@ -323,6 +323,26 @@ describe('MidiEditorDialog 演唱音准模式删除', () => {
   })
 })
 
+describe('MidiEditorDialog 音高曲线', () => {
+  it('曲线模式提供「续画」开关，默认每笔独立（不强制连续）', async () => {
+    const wrapper = mountDialog(30)
+    await flush()
+
+    // 第一个开关是「音高曲线」，打开后才出现画笔 / 橡皮 / 续画。
+    const curveToggle = findAll('.midi-toggle input')[0] as HTMLInputElement
+    curveToggle.checked = true
+    curveToggle.dispatchEvent(new Event('change'))
+    await flush()
+
+    const continueBox = findAll('.midi-pitch-tool .midi-toggle input')[0] as HTMLInputElement
+    expect(continueBox).toBeTruthy()
+    expect(continueBox.checked).toBe(false)
+    expect(dialogRoot().textContent).toContain('续画')
+
+    wrapper.unmount()
+  })
+})
+
 describe('MidiEditorDialog 编曲模式', () => {
   it('渲染期间显示进度条与百分比', async () => {
     const wrapper = mountCompose({

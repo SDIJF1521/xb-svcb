@@ -199,6 +199,316 @@ export function tidyCurve(
   return clampCurve(simplified, span)
 }
 
+/* --------------------------------------------------------------------------
+ * 整轨音高曲线（多段）
+ *
+ * 手绘曲线按「笔」分段：同一笔内连续，笔与笔之间**默认断开**（不插值），
+ * 没被覆盖的时间回落到原唱 F0。勾选「续画」时，新一笔靠近已有段的端点才接上，
+ * 接上的段仍然是一条连续曲线。这样既能只改一小段，也能接着往下画。
+ * ----------------------------------------------------------------------- */
+
+/** 整轨曲线上的一个采样点：``t`` 是绝对时间（秒），``midi`` 是绝对音高。 */
+export interface CurvePoint {
+  t: number
+  midi: number
+}
+
+/** 一整段手动音高曲线（一笔画出来的连续线）。段与段之间不插值。 */
+export interface CurveSegment {
+  id: string
+  points: CurvePoint[]
+}
+
+/** 判定「时刻是否落在某段曲线上」的容差（秒）：音符边缘落在端点附近时仍算段内。 */
+export const CURVE_EDGE_SECONDS = 0.02
+/** 相邻两段端点时间差小于该值时视为相接（只用于从音符自带曲线重建时）。 */
+export const CURVE_TOUCH_SECONDS = 0.005
+/** 新一笔默认的「续画」判定距离（秒）；组件会按当前缩放换算成像素再传进来。 */
+export const CURVE_CONTINUE_SECONDS = 0.12
+/** 少于两个点的段画不出线，也不会参与插值。 */
+export const CURVE_MIN_SEGMENT_POINTS = 2
+
+let curveSegmentSeq = 0
+
+/** 生成段 id（只用于前端区分，不参与保存）。 */
+export function newCurveSegmentId(prefix = 'curve'): string {
+  curveSegmentSeq += 1
+  return `${prefix}_${curveSegmentSeq}`
+}
+
+function roundCurveValue(value: number): number {
+  return Math.round(value * 1000) / 1000
+}
+
+/** 采样点排序、取整、同一时刻只保留最后一个（避免垂直跳变）。 */
+export function sortCurvePoints(points: Array<CurvePoint | { t: number; midi: number }>): CurvePoint[] {
+  const cleaned: CurvePoint[] = []
+  for (const raw of points || []) {
+    if (!raw) continue
+    const t = roundCurveValue(Number(raw.t))
+    const midi = roundCurveValue(Number(raw.midi))
+    if (!Number.isFinite(t) || !Number.isFinite(midi)) continue
+    cleaned.push({ t, midi })
+  }
+  cleaned.sort((a, b) => a.t - b.t)
+  const deduped: CurvePoint[] = []
+  for (const point of cleaned) {
+    const previous = deduped[deduped.length - 1]
+    if (previous && Math.abs(point.t - previous.t) < 0.0015) deduped[deduped.length - 1] = point
+    else deduped.push(point)
+  }
+  return deduped
+}
+
+/** 所有段的点摊平后按时间排序（画布、纵向范围、撤销快照都用它）。 */
+export function flattenCurveSegments(segments: CurveSegment[]): CurvePoint[] {
+  const points: CurvePoint[] = []
+  for (const segment of segments || []) {
+    for (const point of segment.points || []) points.push(point)
+  }
+  points.sort((a, b) => a.t - b.t)
+  return points
+}
+
+/**
+ * 归一化多段曲线：每段排序去重、丢掉不足两个点的段。
+ * ``mergeTouching`` 会把端点时间相接的相邻段并成一段（从音符自带曲线重建时用，
+ * 保证同一句的曲线看起来是连着的一条线）。
+ */
+export function normalizeCurveSegments(
+  segments: CurveSegment[],
+  options: { mergeTouching?: boolean } = {},
+): CurveSegment[] {
+  const cleaned: CurveSegment[] = []
+  for (const segment of segments || []) {
+    if (!segment) continue
+    const points = sortCurvePoints(segment.points || [])
+    if (points.length < CURVE_MIN_SEGMENT_POINTS) continue
+    cleaned.push({ id: segment.id || newCurveSegmentId(), points })
+  }
+  cleaned.sort((a, b) => a.points[0]!.t - b.points[0]!.t)
+  if (!options.mergeTouching) return cleaned
+  const merged: CurveSegment[] = []
+  for (const segment of cleaned) {
+    const last = merged[merged.length - 1]
+    if (last && segment.points[0]!.t - last.points[last.points.length - 1]!.t <= CURVE_TOUCH_SECONDS) {
+      // 端点相接：并成一条连续线（同一时刻以新点为准）。
+      last.points = sortCurvePoints([...last.points, ...segment.points])
+      continue
+    }
+    merged.push({ id: segment.id, points: segment.points.slice() })
+  }
+  return merged
+}
+
+/**
+ * 某一绝对时刻是否落在某段曲线上：落在段内线性插值，落在端点 ``edge`` 秒以内
+ * 取端点值；不在任何段上返回 ``null``（调用方应回落到原唱 F0）。
+ *
+ * 这是「笔与笔之间可以断开」的关键：跨段不插值，不会把没画过的地方连成直线。
+ */
+export function curveMidiAt(
+  segments: CurveSegment[],
+  time: number,
+  edge = CURVE_EDGE_SECONDS,
+): number | null {
+  const target = Number(time)
+  if (!Number.isFinite(target)) return null
+  const tolerance = Math.max(0, Number(edge) || 0)
+  for (const segment of segments || []) {
+    const points = segment.points || []
+    if (points.length < CURVE_MIN_SEGMENT_POINTS) continue
+    const first = points[0]!
+    const last = points[points.length - 1]!
+    if (target < first.t - tolerance || target > last.t + tolerance) continue
+    if (target <= first.t) return first.midi
+    if (target >= last.t) return last.midi
+    let low = 1
+    let high = points.length - 1
+    while (low < high) {
+      const mid = (low + high) >> 1
+      if (points[mid]!.t < target) low = mid + 1
+      else high = mid
+    }
+    const right = points[low]!
+    const left = points[low - 1]!
+    const span = right.t - left.t
+    if (span <= 1e-6) return right.midi
+    return left.midi + ((right.midi - left.midi) * (target - left.t)) / span
+  }
+  return null
+}
+
+function normalizeRanges(ranges: Array<[number, number]>): Array<[number, number]> {
+  const cleaned: Array<[number, number]> = []
+  for (const range of ranges || []) {
+    if (!range) continue
+    const start = Number(range[0])
+    const end = Number(range[1])
+    if (!Number.isFinite(start) || !Number.isFinite(end)) continue
+    cleaned.push([Math.min(start, end), Math.max(start, end)])
+  }
+  cleaned.sort((a, b) => a[0] - b[0])
+  const merged: Array<[number, number]> = []
+  for (const range of cleaned) {
+    const last = merged[merged.length - 1]
+    if (last && range[0] <= last[1] + 1e-6) last[1] = Math.max(last[1], range[1])
+    else merged.push([range[0], range[1]])
+  }
+  return merged
+}
+
+/** 折线上某时刻的插值点（时间落在首尾之间）；用于在挖掉区间时保留边界点。 */
+function interpolateCurvePoint(points: CurvePoint[], time: number): CurvePoint | null {
+  if (points.length < 2) return null
+  const first = points[0]!
+  const last = points[points.length - 1]!
+  if (time <= first.t || time >= last.t) return null
+  let low = 1
+  let high = points.length - 1
+  while (low < high) {
+    const mid = (low + high) >> 1
+    if (points[mid]!.t < time) low = mid + 1
+    else high = mid
+  }
+  const right = points[low]!
+  const left = points[low - 1]!
+  const span = right.t - left.t
+  if (span <= 1e-9) return { t: time, midi: right.midi }
+  return { t: time, midi: left.midi + ((right.midi - left.midi) * (time - left.t)) / span }
+}
+
+/** 把一条折线按「挖掉的时间区间」切成若干段，并在区间边界插值补点。 */
+function cutCurvePoints(
+  points: CurvePoint[],
+  ranges: Array<[number, number]>,
+): CurvePoint[][] {
+  const first = points[0]!
+  const last = points[points.length - 1]!
+  const inside = (time: number) =>
+    ranges.some(([start, end]) => time > start + 1e-9 && time < end - 1e-9)
+  const events: CurvePoint[] = points.map((point) => ({ ...point }))
+  for (const [start, end] of ranges) {
+    for (const time of [start, end]) {
+      const point = interpolateCurvePoint(points, time)
+      if (point && time > first.t && time < last.t) events.push(point)
+    }
+  }
+  events.sort((a, b) => a.t - b.t)
+  const pieces: CurvePoint[][] = []
+  let current: CurvePoint[] = []
+  for (const point of events) {
+    if (inside(point.t)) {
+      if (current.length) pieces.push(current)
+      current = []
+      continue
+    }
+    const previous = current[current.length - 1]
+    if (previous && Math.abs(previous.t - point.t) < 1e-9) {
+      previous.midi = point.midi
+      continue
+    }
+    if (previous) {
+      // 两个保留点之间跨过了一个被挖掉的区间：断开，不插值。
+      const crossed = ranges.some(
+        ([start, end]) => end > previous.t + 1e-9 && start < point.t - 1e-9,
+      )
+      if (crossed) {
+        pieces.push(current)
+        current = []
+      }
+    }
+    current.push(point)
+  }
+  if (current.length) pieces.push(current)
+  return pieces
+}
+
+/**
+ * 从曲线上挖掉若干时间区间（擦除、或用新一笔覆盖旧曲线时用）。
+ * 被挖掉的区间会把原来的段切开：左右两边各自成段（边界处插值补点），
+ * 不会跨过空洞插值；每段至少保留两个点，稀疏曲线也不会整段消失。
+ */
+export function removeCurveRanges(
+  segments: CurveSegment[],
+  ranges: Array<[number, number]>,
+): CurveSegment[] {
+  const list = normalizeRanges(ranges)
+  if (!list.length) return segments
+  const kept: CurveSegment[] = []
+  for (const segment of segments || []) {
+    if (!segment) continue
+    const points = segment.points || []
+    if (points.length < 2) continue
+    for (const piece of cutCurvePoints(points, list)) {
+      if (piece.length < CURVE_MIN_SEGMENT_POINTS) continue
+      kept.push({ id: `${segment.id}_${kept.length}`, points: piece })
+    }
+  }
+  return kept
+}
+
+export interface AddCurveStrokeOptions {
+  /** 续画：新一笔靠近已有段的端点时接上去，保持连续。 */
+  continueDrawing?: boolean
+  /** 续画判定距离（秒）。 */
+  continueSeconds?: number
+}
+
+/**
+ * 把一笔手绘采样并进多段曲线：
+ * * 先按这一笔覆盖的时间范围挖掉旧点（局部重画，不会和旧曲线叠在一起）；
+ * * 关闭续画：这一笔自成一段（与其它段断开）；
+ * * 开启续画：起点靠近某段的末尾、或终点靠近某段的开头时，把两者接成一条连续线。
+ */
+export function addCurveStroke(
+  segments: CurveSegment[],
+  points: CurvePoint[],
+  options: AddCurveStrokeOptions = {},
+): CurveSegment[] {
+  const stroke = sortCurvePoints(points || [])
+  if (stroke.length < CURVE_MIN_SEGMENT_POINTS) return segments
+  const start = stroke[0]!.t
+  const end = stroke[stroke.length - 1]!.t
+  const base = removeCurveRanges(segments, [[start, end]])
+  const added: CurveSegment = { id: newCurveSegmentId(), points: stroke }
+  if (!options.continueDrawing) return normalizeCurveSegments([...base, added])
+
+  const tolerance = Math.max(1e-3, Number(options.continueSeconds ?? CURVE_CONTINUE_SECONDS))
+  let headIndex = -1
+  let headDistance = Number.POSITIVE_INFINITY
+  let tailIndex = -1
+  let tailDistance = Number.POSITIVE_INFINITY
+  base.forEach((segment, index) => {
+    const first = segment.points[0]!
+    const last = segment.points[segment.points.length - 1]!
+    if (last.t <= start + 1e-6) {
+      const distance = start - last.t
+      if (distance <= tolerance && distance < headDistance) {
+        headDistance = distance
+        headIndex = index
+      }
+    }
+    if (first.t >= end - 1e-6) {
+      const distance = first.t - end
+      if (distance <= tolerance && distance < tailDistance) {
+        tailDistance = distance
+        tailIndex = index
+      }
+    }
+  })
+  if (headIndex < 0 && tailIndex < 0) return normalizeCurveSegments([...base, added])
+  const combined: CurvePoint[] = []
+  if (headIndex >= 0) combined.push(...base[headIndex]!.points)
+  combined.push(...stroke)
+  if (tailIndex >= 0) combined.push(...base[tailIndex]!.points)
+  const consumed = new Set<number>()
+  if (headIndex >= 0) consumed.add(headIndex)
+  if (tailIndex >= 0) consumed.add(tailIndex)
+  const rest = base.filter((_, index) => !consumed.has(index))
+  return normalizeCurveSegments([...rest, { id: newCurveSegmentId(), points: combined }])
+}
+
 
 export function noteName(pitch: number): string {
   const index = Math.round(pitch)

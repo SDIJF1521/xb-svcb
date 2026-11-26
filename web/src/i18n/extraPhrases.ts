@@ -998,6 +998,11 @@ Object.assign(enExtraPhrases, {
     'Smooth the pitch curve of selected notes to remove hand-drawn jitter',
   '音高曲线：在音符上按住拖动，像画笔一样画线（单击只选中）· Alt 擦除 · Ctrl 吸附半音':
     'Pitch curve: press and drag on notes to draw like a pen (click only selects) · Alt erase · Ctrl snap to semitone',
+  '续画': 'Continue',
+  '续画：新的一笔靠近已有曲线的端点时接上去，保持连续；关闭（默认）时每一笔都是独立的一段，可以只改一小块而不和别的段相连':
+    'Continue: a new stroke near an existing curve end joins it and stays continuous. When off (default) every stroke is its own segment, so you can redraw just one part without connecting it to the rest.',
+  '音高曲线：按住拖动像画笔一样画线（单击只选中）· 每一笔独立、可只改一小段 · 勾选「续画」可从端点接着画 · Alt 擦除 · Ctrl 吸附半音':
+    'Pitch curve: drag to draw like a pen (a click only selects) · each stroke is its own segment, so you can redraw just part of it · enable Continue to keep drawing from an endpoint · Alt erases · Ctrl snaps to semitones',
   '批量删除编辑工程？': 'Delete selected editing projects?',
 })
 export const jaExtraPhrases: Record<string, string> = {
@@ -1639,6 +1644,11 @@ Object.assign(jaExtraPhrases, {
     '選択した音符の音高カーブを軽く平滑化し、手描きの揺れを抑えます',
   '音高曲线：在音符上按住拖动，像画笔一样画线（单击只选中）· Alt 擦除 · Ctrl 吸附半音':
     '音高カーブ：音符上を押してドラッグするとペンのように描けます（クリックは選択のみ）· Alt 消去 · Ctrl 半音スナップ',
+  '续画': '続けて描く',
+  '续画：新的一笔靠近已有曲线的端点时接上去，保持连续；关闭（默认）时每一笔都是独立的一段，可以只改一小块而不和别的段相连':
+    '続けて描く：新しい一筆が既存カーブの端点に近いと、そこから繋げて連続にします。オフ（既定）では一筆ごとに独立した区間になり、他の区間と繋がずに一部分だけ描き直せます。',
+  '音高曲线：按住拖动像画笔一样画线（单击只选中）· 每一笔独立、可只改一小段 · 勾选「续画」可从端点接着画 · Alt 擦除 · Ctrl 吸附半音':
+    '音高カーブ：ドラッグでペンのように描きます（クリックは選択のみ）· 一筆ごとに独立し、一部分だけ描き直せます · 「続けて描く」をオンにすると端点から続けて描けます · Altで消去 · Ctrlで半音スナップ',
   '批量删除编辑工程？': '選択した編集プロジェクトを削除しますか？',
 })
 const enDynamicRules: readonly DynamicRule[] = [

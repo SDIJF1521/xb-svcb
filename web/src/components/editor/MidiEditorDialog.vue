@@ -225,6 +225,13 @@
               :title="t('橡皮：拖动擦除音高曲线（右键拖动同效）')"
               @click="pitchTool = 'erase'"
             >⌫</button>
+            <label
+              class="midi-field midi-toggle"
+              :title="t('续画：新的一笔靠近已有曲线的端点时接上去，保持连续；关闭（默认）时每一笔都是独立的一段，可以只改一小块而不和别的段相连')"
+            >
+              <input v-model="curveContinue" type="checkbox" />
+              <span>{{ t('续画') }}</span>
+            </label>
           </span>
           <em v-if="!pitchCurveMode && !hasAnyCurve" class="midi-hint-inline">
             {{ t('勾选后按住拖动，自己画音高线') }}
@@ -610,6 +617,15 @@ import {
   setCurvePoint,
   smoothCurve,
   tidyCurve,
+  type CurvePoint,
+  type CurveSegment,
+  CURVE_EDGE_SECONDS,
+  addCurveStroke,
+  curveMidiAt,
+  flattenCurveSegments,
+  newCurveSegmentId,
+  normalizeCurveSegments,
+  removeCurveRanges,
   DRUM_PITCH_MAX,
   DRUM_PITCH_MIN,
   DRUM_DEFAULT_PITCH,
@@ -840,7 +856,7 @@ const draft = ref<MidiNote[]>([])
  */
 const pitchRemoved = ref(false)
 const pitchClipboard = ref<MidiNote[]>([])
-type PitchSnapshot = { notes: MidiNote[]; curve: Array<{ t: number; midi: number }> }
+type PitchSnapshot = { notes: MidiNote[]; curve: CurveSegment[] }
 const pitchUndo: PitchSnapshot[] = []
 const pitchRedo: PitchSnapshot[] = []
 const pitchUndoVersion = ref(0)
@@ -890,11 +906,25 @@ const drag = ref<{
 const pitchCurveMode = ref(false)
 /** 曲线工具：画笔绘制 / 橡皮擦除（对齐 OpenUtau 的工具切换）。 */
 const pitchTool = ref<'draw' | 'erase'>('draw')
-/** 整轨音高曲线（绝对时间秒 / 绝对音高 MIDI），独立于音符，用户自由绘制。 */
-const globalCurve = ref<Array<{ t: number; midi: number }>>([])
+/**
+ * 整轨音高曲线：按「笔」分段保存（绝对时间秒 / 绝对音高 MIDI）。
+ * 同一笔内连续，笔与笔之间默认断开（不插值），没画过的地方回落到原唱 F0。
+ */
+const curveSegments = ref<CurveSegment[]>([])
+/** 续画：新一笔靠近已有曲线的端点时接上去，保持连续；关闭时每一笔都是独立的一段。 */
+const curveContinue = ref(false)
+/** 续画的判定距离：按像素换算成秒，缩放变化时手感一致。 */
+const curveContinueSeconds = computed(() =>
+  Math.min(0.3, Math.max(0.03, 14 / Math.max(1, pxPerSecond.value))),
+)
+/** 所有段的点摊平（纵向范围、撤销快照、绘制都用它）。 */
+const globalCurve = computed(() => flattenCurveSegments(curveSegments.value))
 /** 本次拖动尚未合并进整轨曲线的采样点：每个动画帧只合并一次，避免逐点全量排序。 */
-const pendingStroke = ref<Array<{ t: number; midi: number }>>([])
+const pendingStroke = ref<CurvePoint[]>([])
 const pendingStrokeErase = ref(false)
+/** 正在画的这一笔：起始时的段快照 + 已累积的笔迹（整笔一起提交，避免被切成很多段）。 */
+let strokeBaseSegments: CurveSegment[] = []
+let strokePoints: CurvePoint[] = []
 /** 原唱 F0 的轻平滑缓存：只在 F0 变化时重算，避免每个动画帧都做窗口平均。 */
 const smoothedPitchCurve = computed<Array<[number, number]>>(() => {
   const raw = props.pitchCurve
@@ -1203,7 +1233,7 @@ const hintText = computed(() =>
     ? t('D 画笔 / V 选择 / E 橡皮 · 双击新建 · 拖音符移动 · 拖边缘改长度 · [ ] 伸缩 · 下方拖力度条 · 空格试听 · Del 删除')
     : pitchCurveMode.value
       ? (props.pitchCurve && props.pitchCurve.length >= 2
-        ? t('音高曲线：在音符上按住拖动，像画笔一样画线（单击只选中）· Alt 擦除 · Ctrl 吸附半音')
+        ? t('音高曲线：按住拖动像画笔一样画线（单击只选中）· 每一笔独立、可只改一小段 · 勾选「续画」可从端点接着画 · Alt 擦除 · Ctrl 吸附半音')
         : t('还没有可用的原始基频（F0），无法自动生成曲线：请先分析片段基频，或手动在音符上拖动绘制'))
       : t('双击空白新建 · 拖动移动 · 拖边缘改长度 · 框选多选 · 右键菜单 · Del 删除并静音 · 空格试听'),
 )
@@ -1269,6 +1299,9 @@ watch(
     pitchRedo.length = 0
     pitchUndoVersion.value += 1
     pitchRemoved.value = false
+    pendingStroke.value = []
+    strokeBaseSegments = []
+    strokePoints = []
     // 重新分析/重新加载后音符是新的，允许再次自动补曲线。
     clearedCurveIds.clear()
     rebuildGlobalCurve()
@@ -1713,10 +1746,10 @@ function pushUndo() {
     dirty.value = true
     return
   }
-  // globalCurve 每次都是整体替换成新数组（从不原地改），快照直接持有旧数组引用即可。
+  // curveSegments 每次都是整体替换成新数组（从不原地改），快照直接持有旧数组引用即可。
   pitchUndo.push({
     notes: snapshotNotes(),
-    curve: globalCurve.value,
+    curve: curveSegments.value,
   })
   if (pitchUndo.length > 60) pitchUndo.shift()
   pitchRedo.length = 0
@@ -1739,10 +1772,10 @@ function undo() {
   if (!previous) return
   pitchRedo.push({
     notes: snapshotNotes(),
-    curve: globalCurve.value,
+    curve: curveSegments.value,
   })
   draft.value = previous.notes
-  globalCurve.value = previous.curve
+  curveSegments.value = previous.curve
   recomputeCurveBounds(globalCurve.value)
   selection.value = selection.value.filter((id) => previous.notes.some((note) => note.id === id))
   pitchUndoVersion.value += 1
@@ -1764,10 +1797,10 @@ function redo() {
   if (!next) return
   pitchUndo.push({
     notes: snapshotNotes(),
-    curve: globalCurve.value,
+    curve: curveSegments.value,
   })
   draft.value = next.notes
-  globalCurve.value = next.curve
+  curveSegments.value = next.curve
   recomputeCurveBounds(globalCurve.value)
   selection.value = selection.value.filter((id) => next.notes.some((note) => note.id === id))
   pitchUndoVersion.value += 1
@@ -1796,6 +1829,9 @@ function resetDraft() {
     }
     return { ...note }
   })
+  pendingStroke.value = []
+  strokeBaseSegments = []
+  strokePoints = []
   rebuildGlobalCurve()
   selection.value = []
   pitchRemoved.value = false
@@ -3458,6 +3494,10 @@ function drawPitchBaselines(
   context.restore()
 }
 
+/**
+ * 把多段手动曲线画成黄色线：**一段一个 path**，段与段之间不连线，
+ * 所以「不是一笔画的」两段看起来就是断开的两个音高区间。
+ */
 function drawGlobalCurve(
   context: CanvasRenderingContext2D,
   offsetX: number,
@@ -3466,39 +3506,36 @@ function drawGlobalCurve(
   const pps = pxPerSecond.value
   const top = pitchRange.value.max
   const row = rowHeight.value
-  const raw = globalCurve.value
-  if (raw.length < 2) return
-  // 显示抽稀：横向缩小时，相距不足 1.2px 的点视觉上不可区分，
-  // 抽掉它们能大幅降低每帧的贝塞尔段数（长曲线/缩小时尤其明显）。
-  const points: Array<{ t: number; midi: number; x: number; y: number }> = []
-  let lastX = Number.NEGATIVE_INFINITY
-  for (let index = 0; index < raw.length; index += 1) {
-    const point = raw[index]!
-    const x = timeToX(point.t, pps) - offsetX
-    if (index !== 0 && index !== raw.length - 1 && Math.abs(x - lastX) < 1.2) continue
-    points.push({
-      t: point.t,
-      midi: point.midi,
-      x,
-      y: pitchToY(point.midi, top, row) + RULER_HEIGHT - offsetY + row / 2,
-    })
-    lastX = x
-  }
-  if (points.length < 2) return
+  const segments = curveSegments.value
+  if (!segments.length) return
   context.save()
   context.lineJoin = 'round'
   context.lineCap = 'round'
-  const trace = () => {
+  for (const segment of segments) {
+    const raw = segment.points
+    if (raw.length < 2) continue
+    // 显示抽稀：横向缩小时，相距不足 1.2px 的点视觉上不可区分，
+    // 抽掉它们能大幅降低每帧的贝塞尔段数（长曲线/缩小时尤其明显）。
+    const points: Array<{ t: number; midi: number; x: number; y: number }> = []
+    let lastX = Number.NEGATIVE_INFINITY
+    for (let index = 0; index < raw.length; index += 1) {
+      const point = raw[index]!
+      const x = timeToX(point.t, pps) - offsetX
+      if (index !== 0 && index !== raw.length - 1 && Math.abs(x - lastX) < 1.2) continue
+      points.push({
+        t: point.t,
+        midi: point.midi,
+        x,
+        y: pitchToY(point.midi, top, row) + RULER_HEIGHT - offsetY + row / 2,
+      })
+      lastX = x
+    }
+    if (points.length < 2) continue
     context.beginPath()
-    let started = false
+    context.moveTo(points[0]!.x, points[0]!.y)
     for (let index = 0; index < points.length - 1; index += 1) {
       const current = points[index]!
       const next = points[index + 1]!
-      if (next.t - current.t > 0.5) continue
-      if (!started) {
-        context.moveTo(current.x, current.y)
-        started = true
-      }
       // Catmull-Rom 转三次贝塞尔：曲线严格穿过鼠标采样点，
       // 不会像折线那样把两点之间画成直线。
       const previous = points[index - 1] ?? current
@@ -3509,19 +3546,13 @@ function drawGlobalCurve(
       const c2y = next.y - (after.y - current.y) / 6
       context.bezierCurveTo(c1x, c1y, c2x, c2y, next.x, next.y)
     }
-    if (!started) {
-      context.moveTo(points[0]!.x, points[0]!.y)
-    }
+    context.strokeStyle = 'rgba(6,12,20,0.75)'
+    context.lineWidth = 4
+    context.stroke()
+    context.strokeStyle = '#ffd166'
+    context.lineWidth = 2
+    context.stroke()
   }
-  context.strokeStyle = 'rgba(6,12,20,0.75)'
-  context.lineWidth = 4
-  trace()
-  context.stroke()
-  context.strokeStyle = '#ffd166'
-  context.lineWidth = 2
-  trace()
-  context.stroke()
-
   context.restore()
 }
 function drawOriginalPitch(
@@ -4009,6 +4040,7 @@ function beginCurveStroke(
 ) {
   // 真正的改写发生在 applyCurvePoint 里；这里只记录一次撤销点。
   pushUndo()
+  resetCurveStroke()
   // 关键：笔迹从「越过阈值的位置」开始，而不是从按下鼠标的位置开始，
   // 否则小笔画会先被一段从落笔点拉过来的直线带偏。
   const absolute = curvePointAt(point)
@@ -4025,52 +4057,43 @@ function curvePointAt(point: CanvasPoint) {
   }
 }
 
-/** 整轨曲线排序/合并相近时间点。 */
-function normalizeGlobalPoints(points: Array<{ t: number; midi: number }>) {
-  const sorted = [...points].sort((a, b) => a.t - b.t)
-  const merged: Array<{ t: number; midi: number }> = []
-  for (const point of sorted) {
-    const last = merged[merged.length - 1]
-    if (last && Math.abs(last.t - point.t) < 0.0015) last.midi = point.midi
-    else merged.push({ t: point.t, midi: point.midi })
-  }
-  return merged
-}
-
-/** 手动曲线在某一绝对时间的音高；该时间没有画过（或超出首尾）时返回 null。 */
-function manualCurveMidiAt(time: number): number | null {
-  const points = globalCurve.value
-  if (points.length < 2) return null
-  const first = points[0]!
-  const last = points[points.length - 1]!
-  if (time < first.t || time > last.t) return null
-  if (time <= first.t) return first.midi
-  if (time >= last.t) return last.midi
-  for (let index = 1; index < points.length; index += 1) {
-    const right = points[index]!
-    if (time <= right.t) {
-      const left = points[index - 1]!
-      const gap = right.t - left.t
-      return gap > 1e-6 ? left.midi + ((right.midi - left.midi) * (time - left.t)) / gap : right.midi
-    }
-  }
-  return last.midi
-}
-
 /**
  * 渲染前把整条音高线落到音符上：
  * 画过曲线的地方用手动曲线，没画过的地方用原唱 F0（原始音高），
  * 连 F0 都没有的音符才退回音符自身音高。
+ *
+ * 多段曲线：每个音符只在**自己被某一段覆盖到**的时间用手动值，段与段之间的
+ * 空白回落 F0 —— 不会因为两笔没连着就被插值成一条直线。
  */
 function notesWithGlobalCurve(notes: MidiNote[]): MidiNote[] {
   const f0 = props.pitchCurve ?? []
+  const segments = curveSegments.value
   return notes.map((note) => {
     const span = Math.max(1e-3, note.end - note.start)
     const anchor = note.pitch + note.detune / 100
     const times: number[] = [note.start]
-    for (const point of globalCurve.value) {
-      if (point.t > note.start + 1e-3 && point.t < note.end - 1e-3) times.push(point.t)
+    const manualTimes: number[] = []
+    const edgeTimes: number[] = []
+    for (const segment of segments) {
+      const points = segment.points
+      if (points.length < 2) continue
+      // 段的采样点（以及段的起止，保证在段边界处切断）落在音符内时都要采样。
+      for (const point of points) {
+        if (point.t > note.start + 1e-3 && point.t < note.end - 1e-3) manualTimes.push(point.t)
+      }
+      const first = points[0]!
+      const last = points[points.length - 1]!
+      if (first.t > note.start + 1e-3 && first.t < note.end - 1e-3) edgeTimes.push(first.t)
+      if (last.t > note.start + 1e-3 && last.t < note.end - 1e-3) edgeTimes.push(last.t)
     }
+    // 手绘采样很密（约 6ms 一个点），长音符会撞上单音符 256 点上限被截断；
+    // 这里先按需抽稀到 ~96 点，再单独补回段边界，保证整条音符都被覆盖。
+    manualTimes.sort((a, b) => a - b)
+    const manualStep = Math.max(1, Math.ceil(manualTimes.length / 96))
+    for (let index = 0; index < manualTimes.length; index += manualStep) {
+      times.push(manualTimes[index]!)
+    }
+    times.push(...edgeTimes)
     const inside = f0.filter(([time]) => time > note.start + 1e-3 && time < note.end - 1e-3)
     // 每个音符最多取 48 个 F0 采样点，控制数据量。
     const stride = Math.max(1, Math.ceil(inside.length / 48))
@@ -4082,7 +4105,7 @@ function notesWithGlobalCurve(notes: MidiNote[]): MidiNote[] {
     for (const time of times) {
       if (time - lastTime < 1e-3) continue
       lastTime = time
-      let midi = manualCurveMidiAt(time)
+      let midi = curveMidiAt(segments, time, CURVE_EDGE_SECONDS)
       if (midi == null) {
         const raw = f0MidiAt(time)
         // F0 可能八度误判：先校正到音符附近的一个八度内。
@@ -4104,99 +4127,84 @@ function notesWithGlobalCurve(notes: MidiNote[]): MidiNote[] {
 function mergeNoteCurvesIntoGlobal(ids: Set<string>) {
   const notes = draft.value.filter((note) => ids.has(note.id))
   if (!notes.length) return
-  const inRange = (time: number) =>
-    notes.some((note) => time >= note.start - 1e-6 && time <= note.end + 1e-6)
-  const kept = globalCurve.value.filter((point) => !inRange(point.t))
-  const added: Array<{ t: number; midi: number }> = []
+  // 这些音符的时间范围内先清空旧曲线，再按每个音符自己的曲线各自成段。
+  const segments = removeCurveRanges(
+    curveSegments.value,
+    notes.map((note) => [note.start, note.end] as [number, number]),
+  )
+  const added: CurveSegment[] = []
   for (const note of notes) {
-    if (!note.curve) continue
-    for (const point of note.curve) {
-      added.push({ t: note.start + point.t, midi: note.pitch + note.detune / 100 + point.v })
-    }
+    if (!note.curve || note.curve.length < 2) continue
+    const anchor = note.pitch + note.detune / 100
+    added.push({
+      id: newCurveSegmentId('note'),
+      points: note.curve.map((point) => ({
+        t: Math.round((note.start + point.t) * 1000) / 1000,
+        midi: Math.round((anchor + point.v) * 1000) / 1000,
+      })),
+    })
   }
-  globalCurve.value = normalizeGlobalPoints([...kept, ...added])
+  // 端点相接的音符曲线并成一条连续线，句内看起来仍然是一整条。
+  curveSegments.value = normalizeCurveSegments([...segments, ...added], { mergeTouching: true })
   recomputeCurveBounds(globalCurve.value)
 }
 
 /** 从音符自带的曲线重建整轨曲线（打开工程/撤销后调用）。 */
 function rebuildGlobalCurve() {
-  const points: Array<{ t: number; midi: number }> = []
+  const segments: CurveSegment[] = []
   for (const note of draft.value) {
-    if (!note.curve) continue
-    for (const point of note.curve) {
-      points.push({ t: note.start + point.t, midi: note.pitch + note.detune / 100 + point.v })
-    }
+    if (!note.curve || note.curve.length < 2) continue
+    const anchor = note.pitch + note.detune / 100
+    segments.push({
+      id: newCurveSegmentId('note'),
+      points: note.curve.map((point) => ({
+        t: Math.round((note.start + point.t) * 1000) / 1000,
+        midi: Math.round((anchor + point.v) * 1000) / 1000,
+      })),
+    })
   }
-  globalCurve.value = normalizeGlobalPoints(points)
+  curveSegments.value = normalizeCurveSegments(segments, { mergeTouching: true })
   recomputeCurveBounds(globalCurve.value)
 }
 
-/** 两个按时间升序的点列归并，重合时间取后者（采样更靠后，更新）。 */
-function mergeSortedPoints(
-  left: Array<{ t: number; midi: number }>,
-  right: Array<{ t: number; midi: number }>,
-) {
-  const out: Array<{ t: number; midi: number }> = []
-  let i = 0
-  let j = 0
-  while (i < left.length && j < right.length) {
-    const a = left[i]!
-    const b = right[j]!
-    if (Math.abs(a.t - b.t) < 0.0015) {
-      out.push(b)
-      i += 1
-      j += 1
-    } else if (a.t < b.t) {
-      out.push(a)
-      i += 1
-    } else {
-      out.push(b)
-      j += 1
-    }
-  }
-  while (i < left.length) out.push(left[i++]!)
-  while (j < right.length) out.push(right[j++]!)
-  return out
+/** 开始新的一笔前重置「这一笔」的缓冲：整笔一起提交，避免被拆成很多段。 */
+function resetCurveStroke() {
+  strokeBaseSegments = curveSegments.value
+  strokePoints = []
 }
 
-/** 每个动画帧最多调用一次：把本次拖动的采样合并进整轨曲线。 */
+/**
+ * 每个动画帧最多调用一次：把本次拖动的采样合并进整轨曲线。
+ *
+ * 画线时不是把「这一帧的采样」当成一笔，而是把整笔累积起来、从落笔时的段快照
+ * 重新合并——否则一笔会被切成几十段，续画/断开都失去意义。
+ */
 function flushCurveStroke() {
   const samples = pendingStroke.value
   if (!samples.length) return
   const erasing = pendingStrokeErase.value
   pendingStroke.value = []
   pendingStrokeErase.value = false
-  const tolerance = erasing ? 0.02 : 0.003
-  const times = samples.map((sample) => sample.t).sort((a, b) => a - b)
-  const covered = (time: number) => {
-    let low = 0
-    let high = times.length - 1
-    while (low <= high) {
-      const mid = (low + high) >> 1
-      const value = times[mid]!
-      if (Math.abs(value - time) <= tolerance) return true
-      if (value < time) low = mid + 1
-      else high = mid - 1
-    }
-    return false
-  }
-  const kept = globalCurve.value.filter((point) => !covered(point.t))
   if (erasing) {
-    globalCurve.value = kept
+    const tolerance = 0.02
+    const ranges: Array<[number, number]> = samples.map((sample) => [
+      sample.t - tolerance,
+      sample.t + tolerance,
+    ])
+    const next = removeCurveRanges(curveSegments.value, ranges)
+    if (!next.length && !curveSegments.value.length) return
+    curveSegments.value = next
     // 擦除后上下界可能缩小，重新算一次（擦除不频繁，可接受）。
-    recomputeCurveBounds(kept)
+    recomputeCurveBounds(globalCurve.value)
     return
   }
-  const rounded = samples
-    .map((sample) => ({
-      t: Math.round(sample.t * 1000) / 1000,
-      midi: Math.round(sample.midi * 1000) / 1000,
-    }))
-    .sort((a, b) => a.t - b.t)
-  // 归并替代全量排序：kept 本身有序，samples 先排好序，整体 O(n+m)。
-  globalCurve.value = mergeSortedPoints(kept, rounded)
+  strokePoints.push(...samples)
+  curveSegments.value = addCurveStroke(strokeBaseSegments, strokePoints, {
+    continueDrawing: curveContinue.value,
+    continueSeconds: curveContinueSeconds.value,
+  })
   // 增量维护纵向范围，避免音域 computed 每帧遍历整条曲线。
-  extendCurveBounds(rounded)
+  extendCurveBounds(samples)
 }
 function onPointerMove(event: PointerEvent) {
   const current = drag.value
@@ -4446,6 +4454,13 @@ function onPointerUp(event: PointerEvent) {
     drag.value = null
     scheduleDraw()
     return
+  }
+  if (current.mode === 'curve') {
+    // 收笔：把最后一帧的采样合并进曲线，并按最终结果重算纵向范围。
+    flushCurveStroke()
+    strokeBaseSegments = []
+    strokePoints = []
+    recomputeCurveBounds(globalCurve.value)
   }
 
   drag.value = null
