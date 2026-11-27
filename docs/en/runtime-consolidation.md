@@ -110,6 +110,12 @@ Audit installed shared environments:
 & uv pip check --python .\runtimes\svc-cu128\Scripts\python.exe
 ```
 
+### 0xC0000005 while importing UVR
+
+When the `uvr_mdx` / `uvr_vr` probes exit with `3221225477` (`0xC0000005`) and both `stdout` and `stderr` are empty, the `onnxruntime` pybind extension crashed during static initialisation; this is not a dependency-resolution failure. The system must have the latest [Microsoft Visual C++ 2015-2022 x64 Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe); an outdated `msvcp140.dll`, or one that does not match `msvcp140_1.dll` (14.24 mixed with 14.44, for example), triggers it. Windows Event Viewer (Application log, event ID 1000) names `MSVCP140.dll` as the faulting module.
+
+See [installation and repair](getting-started.md#final-install-step-fails-uvr-probes-crash) for the full checklist. Reinstalling the application, moving the install directory, or rebuilding the Python environment cannot bypass it, because the fault is in the system runtime.
+
 See [Testing](testing.md) for automation boundaries and commands. Recipe resolution, repeated installation, drift detection, recovery, imports, small CUDA tensors, and installer preflight have regression coverage. They do not replace real models, real audio, and complete Setup.exe acceptance on target GPUs.
 
 ## Legacy Installs and Cleanup

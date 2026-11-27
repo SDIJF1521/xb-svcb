@@ -25,6 +25,7 @@ param(
   [switch]$ReuseBuildOutputs,
   [switch]$KeepExistingInstallers,
   [string]$Python,
+  [string]$Git,
   [string]$RuntimeAssets,
   [switch]$RequireAdmin
 )
@@ -37,6 +38,7 @@ Build order: cpu, rocm10, directml, cu126, cu128.
 
 Options:
   -Python <path>          Use a 64-bit CPython 3.12 executable.
+  -Git <dir>              Stage an existing MinGit/PortableGit root instead of downloading.
   -RuntimeAssets <dir>    Supply the shared CUDA core runtime assets.
   -RebuildWheelhouse      Incrementally complete all five wheel stacks.
   -CleanWheelhouse        Delete cached wheels before rebuilding (slow).
@@ -209,6 +211,7 @@ for ($index = 0; $index -lt $Stacks.Count; $index++) {
     SkipJuceHostBuild = ($index -gt 0) -or (-not $refreshJuceHost)
     RequireAdmin = [bool]$RequireAdmin
   }
+  if ($Git) { $buildArgs.Git = $Git }
   & $BuildScript -Python $BuildPython @buildArgs
 }
 

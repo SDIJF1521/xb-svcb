@@ -70,6 +70,8 @@ rem may be left in the detected Python Scripts directory.
 if exist "%USERPROFILE%\.local\bin\uv.exe" set "PATH=%USERPROFILE%\.local\bin;%PATH%"
 if defined XB_FFMPEG_DIR if exist "%XB_FFMPEG_DIR%\bin\ffmpeg.exe" if exist "%XB_FFMPEG_DIR%\bin\ffprobe.exe" set "XB_FFMPEG_BIN=%XB_FFMPEG_DIR%\bin"
 if defined XB_FFMPEG_DIR if not defined XB_FFMPEG_BIN if exist "%XB_FFMPEG_DIR%\ffmpeg.exe" if exist "%XB_FFMPEG_DIR%\ffprobe.exe" set "XB_FFMPEG_BIN=%XB_FFMPEG_DIR%"
+if defined XB_GIT_DIR if exist "%XB_GIT_DIR%\cmd\git.exe" set "XB_GIT_BIN=%XB_GIT_DIR%\cmd"
+if not defined XB_GIT_BIN if exist "%~dp0tools\git\cmd\git.exe" set "XB_GIT_BIN=%~dp0tools\git\cmd"
 if defined XB_GIT_BIN set "PATH=%XB_GIT_BIN%;%PATH%"
 if defined XB_FFMPEG_BIN set "PATH=%XB_FFMPEG_BIN%;%PATH%"
 if defined XB_CUDA_BIN set "PATH=%XB_CUDA_BIN%;%PATH%"

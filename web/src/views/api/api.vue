@@ -615,7 +615,7 @@ onUnmounted(() => {
 
 <style scoped>
 .api-page {
-  width: min(1280px, calc(100% - 48px));
+  width: min(var(--xb-page-max, 1280px), calc(100% - 48px));
   margin: 0 auto;
   padding: 38px 0 64px;
   color: var(--xb-text);

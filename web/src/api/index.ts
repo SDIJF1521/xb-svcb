@@ -25,6 +25,7 @@ import type {
   MusicSongResult,
   MusicDownloadResult,
   MusicPreviewResult,
+  AudioStreamInfo,
   DownloadedMusic,
   MusicSource,
   LyricsResult,
@@ -44,6 +45,7 @@ import type {
   EditorProject,
   EditorProjectSummary,
   EditorProjectTransferResult,
+  EditorWorkImportResult,
   EditorAudioPasteResult,
   EditorWaveform,
   EditorAudioCopyResult,
@@ -96,6 +98,9 @@ import type {
   WorkflowGraph,
   WorkflowFileExportResult,
   WorkflowFileImportResult,
+  WorkflowHubSearchResult,
+  WorkflowHubDetailResult,
+  WorkflowHubUploadOptions,
 } from './types'
 
 export * from './types'
@@ -424,6 +429,50 @@ export const api = {
       () => mock.importCoverWorkflowFile(),
     ),
 
+  // ---- 工作流商城（ModelScope 魔搭社区）----
+
+  /** 分页搜索工作流商城（可按关键词、只看自己上传筛选）。 */
+  workflowHubSearch: (
+    query = '',
+    page = 1,
+    pageSize = 12,
+    mineOnly = false,
+  ) =>
+    invoke<WorkflowHubSearchResult>(
+      'workflow_hub_search',
+      [query, page, pageSize, mineOnly],
+      () => mock.workflowHubSearch(query, page, pageSize, mineOnly),
+    ),
+
+  /** 读取商城工作流详情（完整节点图 + PyMSS 依赖状态）。 */
+  workflowHubDetail: (repoId: string) =>
+    invoke<WorkflowHubDetailResult>('workflow_hub_detail', [repoId], () =>
+      mock.workflowHubDetail(repoId),
+    ),
+
+  /** 后台下载工作流并同步其 PyMSS 依赖，立即返回任务 key。 */
+  workflowHubStartDownload: (repoId: string) =>
+    invoke<HubStartResult>('workflow_hub_start_download', [repoId], () =>
+      mock.workflowHubStartDownload(repoId),
+    ),
+
+  /** 后台上传本地已保存工作流，立即返回任务 key。 */
+  workflowHubStartUpload: (workflowId: string, options?: WorkflowHubUploadOptions) =>
+    invoke<HubStartResult>(
+      'workflow_hub_start_upload',
+      [workflowId, options],
+      () => mock.workflowHubStartUpload(workflowId, options),
+    ),
+
+  workflowHubProgress: (key: string) =>
+    invoke<HubProgress>('workflow_hub_progress', [key], () => mock.workflowHubProgress(key)),
+
+  workflowHubListJobs: () =>
+    invoke<HubJob[]>('workflow_hub_list_jobs', [], () => mock.workflowHubListJobs()),
+
+  workflowHubClearJob: (key: string) =>
+    invoke<boolean>('workflow_hub_clear_job', [key], () => mock.workflowHubClearJob(key)),
+
   retryWork: (id: string) =>
     invoke<boolean>('retry_work', [id], () => mock.retryWork(id)),
 
@@ -444,6 +493,20 @@ export const api = {
 
   getWorkAudio: (id: string) =>
     invoke<string>('get_work_audio', [id], () => mock.getWorkAudio(id)),
+
+  /** 作品直通播放地址（本地 HTTP + Range，保留无损原始音频）。 */
+  getWorkStream: (id: string, kind: 'output' | 'instrumental' | 'vocals' = 'output') =>
+    invoke<AudioStreamInfo>('get_work_stream', [id, kind], () => mock.getWorkStream(id, kind)),
+
+  /** 已下载歌曲的直通播放地址。 */
+  getMusicStream: (path: string) =>
+    invoke<AudioStreamInfo>('get_music_stream', [path], () => mock.getMusicStream(path)),
+
+  /** 整首在线歌曲的播放地址（后端代理，保留原始音质）。 */
+  streamMusicOnline: (msg: string, n: number, source?: string, songId?: string) =>
+    invoke<AudioStreamInfo>('stream_music_online', [msg, n, source, songId], () =>
+      mock.streamMusicOnline(msg, n, source, songId),
+    ),
 
   getStemAudio: (id: string, kind: 'output' | 'instrumental' | 'vocals') =>
     invoke<string>('get_stem_audio', [id, kind], () => mock.getStemAudio(id, kind)),
@@ -764,6 +827,12 @@ export const api = {
       mock.renderEditorProject(projectId, fmt),
     ),
 
+  /** 把编辑器成品渲染并归档到「我的作品」。 */
+  importEditorProjectToWorks: (projectId: string, fmt = 'wav') =>
+    invoke<EditorWorkImportResult>('import_editor_project_to_works', [projectId, fmt], () =>
+      mock.importEditorProjectToWorks(projectId, fmt),
+    ),
+
   exportEditorProject: (projectId: string, fmt = 'wav') =>
     invoke<string>('export_editor_project', [projectId, fmt], () =>
       mock.exportEditorProject(projectId, fmt),
@@ -907,6 +976,11 @@ export const api = {
   applyEditorTrackMidi: (projectId: string, trackId: string, notes?: EditorMidiNote[]) =>
     invoke<EditorClipMidiApplyResult>('apply_editor_track_midi', [projectId, trackId, notes], () =>
       mock.applyEditorTrackMidi(projectId, trackId, notes),
+    ),
+
+  previewEditorTrackMidi: (projectId: string, trackId: string, notes?: EditorMidiNote[]) =>
+    invoke<EditorClipMidiApplyResult>('preview_editor_track_midi', [projectId, trackId, notes], () =>
+      mock.previewEditorTrackMidi(projectId, trackId, notes),
     ),
 
   // ---- MIDI 编曲（多乐器音序器） ----

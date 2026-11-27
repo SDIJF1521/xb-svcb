@@ -26,6 +26,7 @@ from domain.vocal_enhancement import VocalEnhancementControls
 __all__ = [
     "AudioEnginePort",
     "AudioImportStorePort",
+    "AudioStreamerPort",
     "DataTransferPort",
     "EditorProjectStorePort",
     "WorkFilesPort",
@@ -34,6 +35,7 @@ __all__ = [
     "HighNoteVocoderPort",
     "ItemRepository",
     "MidiPitchPort",
+    "ModelHubGateway",
     "PymssGateway",
     "PluginHostPort",
     "SeparationGateway",
@@ -110,6 +112,8 @@ class FfmpegGateway(ToolAdapter, Protocol):
     """
 
     def probe_duration(self, src: Path) -> float | None: ...
+
+    def probe_audio(self, src: Path) -> dict[str, Any]: ...
 
     def detect_silences(
         self,
@@ -232,7 +236,8 @@ class MidiPitchPort(ToolAdapter, Protocol):
     """MIDI 子编辑器的音高重绘：把音符级编辑落到音频上。
 
     实现在隔离环境里用 Praat PSOLA 逐音符移调（保共振峰），只改写被编辑过的
-    音符区间；没有音符需要修改时不产生新音频。
+    音符区间；被删掉的音符通过 ``mute_spans`` 静音。没有音符要改也没有静音区间
+    时不产生新音频。
     """
 
     def apply(self, *args: Any, **kwargs: Any) -> dict[str, Any]: ...
@@ -251,6 +256,10 @@ class PymssGateway(SeparationGateway, Protocol):
 
     def declared_stems(self, model: str = "") -> list[str]: ...
 
+    def model_ready(self, model: str = "") -> bool: ...
+
+    def downloaded_model_stems(self) -> set[str]: ...
+
     def list_models(self, *args: Any, **kwargs: Any) -> Any: ...
 
     def download_model(self, model: str, out_dir: Path | None = None, purpose: str = "") -> dict[str, Any]: ...
@@ -264,6 +273,90 @@ class PymssGateway(SeparationGateway, Protocol):
     def delete_model(self, model: str) -> bool: ...
 
     def clear_download_job(self, key: str) -> bool: ...
+
+
+@runtime_checkable
+class ModelHubGateway(Protocol):
+    """模型站远端能力（ModelScope 搜索 / 清单读取 / 下载）。
+
+    实现位于 ``infrastructure/model_hub_client.py``。用例层只做清单校验、
+    导入与 DTO 组装，不直接发 HTTP 或处理下载分片。
+    """
+
+    async def verify_token(self, token: str) -> dict[str, Any]: ...
+
+    def prepare(self) -> None: ...
+
+    async def query_models(
+        self, token: str, body: dict[str, Any]
+    ) -> tuple[list[Any], int | None]: ...
+
+    async def fetch_raw(
+        self, token: str, repo_id: str, file_path: str
+    ) -> bytes | None: ...
+
+    async def list_files(self, token: str, repo_id: str) -> dict[str, int]: ...
+
+    async def file_digests(
+        self, token: str, repo_id: str
+    ) -> dict[str, tuple[int, str]]: ...
+
+    async def download_to(
+        self,
+        token: str,
+        repo_id: str,
+        file_path: str,
+        dst: Path,
+        cb: Callable[[int], None] | None = None,
+        expected_size: int = 0,
+    ) -> bool: ...
+
+    def invalidate_cache(self) -> None: ...
+
+    def invalidate_token_cache(self) -> None: ...
+
+
+@runtime_checkable
+class WorkflowHubGateway(Protocol):
+    """工作流商城的远端能力（ModelScope 搜索 / 清单读取 / 上传）。
+
+    实现位于 ``infrastructure/workflow_hub_client.py``；用例层只依赖本协议，
+    不直接发 HTTP、起子进程或写暂存目录。
+    """
+
+    def upload_ready(self) -> bool: ...
+
+    def prepare(self) -> None: ...
+
+    def invalidate_cache(self) -> None: ...
+
+    async def verify_token(self, token: str) -> dict[str, Any]: ...
+
+    async def search(
+        self,
+        *,
+        token: str,
+        query: str,
+        page: int,
+        page_size: int,
+        viewer: str,
+        mine_only: bool,
+    ) -> dict[str, Any]: ...
+
+    async def fetch_manifest(
+        self, repo_id: str, token: str
+    ) -> dict[str, Any] | None: ...
+
+    def upload_manifest(
+        self,
+        *,
+        token: str,
+        repo_id: str,
+        manifest: dict[str, Any],
+        readme: str,
+        display_name: str,
+        on_progress: Callable[[int, int, str], None] | None = None,
+    ) -> dict[str, Any]: ...
 
 
 @runtime_checkable
@@ -408,6 +501,23 @@ class ThemeMediaStorePort(Protocol):
     def data_uri(self, media_path: str) -> str: ...
 
     def delete(self, media_path: str) -> bool: ...
+
+
+@runtime_checkable
+class AudioStreamerPort(Protocol):
+    """把音频文件发布为可由界面播放的地址（本地 HTTP，支持 Range）。
+
+    播放器需要逐段读取音频、拖动进度，因此不能把整首音频编码成 data URI；
+    适配器负责提供一个本机回环地址，并自行处理鉴权与并发。
+    """
+
+    def publish_file(self, path: Path, *, content_type: str = "") -> str: ...
+
+    def publish_remote(
+        self, urls: list[str], headers: dict[str, str], *, content_type: str = ""
+    ) -> str: ...
+
+    def stop(self) -> None: ...
 
 
 @runtime_checkable

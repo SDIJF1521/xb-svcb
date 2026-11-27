@@ -68,6 +68,33 @@ class UvrStatusTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in models], ["DemoModel.CKPT"])
         self.assertEqual(models[0]["purpose"], config.PYMSS_PURPOSE_VOCAL)
 
+    def test_pymss_catalog_reads_json_once_and_reuses_the_cache(self) -> None:
+        tool = PymssTool()
+        payload = json.dumps(
+            {
+                "models": [
+                    {
+                        "name": "DemoModel.ckpt",
+                        "supported": True,
+                        "primary_category": "vocal",
+                        "secondary_category": "vocal_extraction",
+                        "size_bytes": 1024,
+                    }
+                ]
+            },
+            indent=2,
+        )
+        with patch.object(type(tool), "available", new=property(lambda self: True)), patch(
+            "infrastructure.pymss_tool.subprocess.run",
+            return_value=SimpleNamespace(returncode=0, stdout=payload, stderr=""),
+        ) as run:
+            first = tool.list_models(purpose=config.PYMSS_PURPOSE_VOCAL)
+            second = tool.list_models(purpose=config.PYMSS_PURPOSE_VOCAL)
+
+        self.assertEqual([item["name"] for item in first], ["DemoModel.ckpt"])
+        self.assertEqual([item["name"] for item in second], ["DemoModel.ckpt"])
+        self.assertEqual(run.call_count, 1)
+
     def test_pymss_auto_retries_cpu_after_gpu_process_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

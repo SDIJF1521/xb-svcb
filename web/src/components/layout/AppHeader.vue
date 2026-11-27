@@ -110,7 +110,7 @@
           <button
             class="icon-btn"
             :class="{ active: openMenu === 'transfers' }"
-            title="传输任务（模型上传 / 下载）"
+            title="传输任务（模型 / 工作流 / 音乐）"
             @click="toggleMenu('transfers')"
           >
             <el-icon :class="{ spin: transfersActive > 0 }">
@@ -250,7 +250,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
-import { Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Picture, Close, Right, Download, Loading, Scissor, ArrowDown, Connection, Grid, MagicStick } from '@element-plus/icons-vue'
+import { Search, Bell, HomeFilled, Microphone, FolderOpened, Files, Picture, Close, Right, Download, Loading, Scissor, ArrowDown, Connection, Grid, MagicStick, Shop } from '@element-plus/icons-vue'
 import ThemeSwitcher from '@/components/theme/ThemeSwitcher.vue'
 import LocaleSwitcher from '@/components/layout/LocaleSwitcher.vue'
 import { translateUiText, useI18n } from '@/i18n'
@@ -277,6 +277,7 @@ const primaryNavItems = computed(() => [
 const libraryNavItems = computed(() => [
   { label: t('nav.music'), desc: t('nav.musicDesc'), to: '/music', icon: Download },
   { label: t('nav.models'), desc: t('nav.modelsDesc'), to: '/models', icon: FolderOpened },
+  { label: t('nav.workflows'), desc: t('nav.workflowsDesc'), to: '/workflows', icon: Shop },
   { label: t('nav.works'), desc: t('nav.worksDesc'), to: '/works', icon: Files },
   { label: t('nav.api'), desc: t('nav.apiDesc'), to: '/api', icon: Connection },
   { label: t('nav.plugins'), desc: t('nav.pluginsDesc'), to: '/plugins', icon: Grid },
@@ -469,10 +470,10 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--xb-border);
 }
 .header-inner {
-  max-width: 1320px;
+  max-width: var(--xb-page-max, 1320px);
   margin: 0 auto;
   height: 64px;
-  padding: 0 24px;
+  padding: 0 var(--xb-page-gutter, 24px);
   display: flex;
   align-items: center;
   gap: 20px;
@@ -1002,6 +1003,10 @@ onUnmounted(() => {
 }
 .pf-btn.primary:hover { box-shadow: 0 0 16px rgba(var(--xb-primary-rgb), 0.4); color: var(--xb-on-primary); }
 
+@media (min-width: 1700px) {
+  .header-inner { gap: 28px; }
+  .search { width: 300px; }
+}
 @media (max-width: 1180px) {
   .env-status span:last-child { display: none; }
   .env-status { padding: 7px 10px; }

@@ -10,7 +10,7 @@
 
 **🎵 导入歌曲 ｜ 🎚️ 人声分离 ｜ 🌫️ 去混响 ｜ 🗣️ AI 歌声转换 ｜ 🎧 AI 歌声增强 ｜ 🎼 合并伴奏 ｜ 🎤 成品翻唱**
 
-一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **实时系统音频变声** · **AI 歌声增强工程** · **在线曲库** · **模型站** · **音频编辑器**
+一条龙完成整首歌的 AI 翻唱 · 支持 **So-VITS-SVC / RVC 多框架推理** · **多人混合翻唱** · **实时系统音频变声** · **AI 歌声增强工程** · **在线曲库** · **模型站** · **工作流商城** · **音频编辑器**
 
 <br/>
 
@@ -46,14 +46,24 @@
 <div align="center">
   <img src="docs/images/xb-svcb-app.png" width="100%" alt="XB-SVCB AI 翻唱工作台真实运行界面" />
   <br/>
-  <sub>XB-SVCB 0.1.1 · AI 翻唱工作台实际运行界面</sub>
+  <sub>XB-SVCB 0.1.2 · AI 翻唱工作台实际运行界面</sub>
 </div>
 
 ## 项目简介
 
 XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它以 Vue 3 作为界面，以 Python 作为业务核心，并将不同 AI 框架放在独立环境和 Worker 进程中运行。
 
-项目目前支持 So-VITS-SVC、RVC、SeedVC 和 DDSP-SVC 四种歌声转换框架，同时提供 UVR / PyMSS 人声分离、AI 歌声增强、高音保护、在线曲库、模型站、实时系统音频变声和 Audio Editor Lite 音频编辑器。
+项目目前支持 So-VITS-SVC、RVC、SeedVC 和 DDSP-SVC 四种歌声转换框架，同时提供 UVR / PyMSS 人声分离、AI 歌声增强、高音保护、在线曲库、模型站、工作流商城、实时系统音频变声和 Audio Editor Lite 音频编辑器。
+
+## 移动端伴生应用
+
+配套的独立 Android 手机端 **[XB-SVCB Mobile](https://github.com/SDIJF1521/XB-SVCB-Mobile)**（独立 Git 仓库，GPL-3.0-only）。
+
+手机端用于查看作品与任务、创建和删除翻唱任务、管理声音模型与素材、下载成品；不包含音频编辑器、完整时间轴、自定义工作流与实时变声。它通过本项目的 FastAPI 服务连接，推理仍然在桌面端完成。
+
+- 项目说明：[XB-SVCB-Mobile](https://github.com/SDIJF1521/XB-SVCB-Mobile)
+- 接口契约：[docs/API.md](https://github.com/SDIJF1521/XB-SVCB-Mobile/blob/main/docs/API.md)
+- 构建产物：在移动端项目执行 `pwsh -File build-apk.ps1`，生成 `dist/XB-SVCB-Mobile-0.1.2.apk`
 
 ## 主要功能
 
@@ -61,27 +71,37 @@ XB-SVCB 是一个 Windows 本地优先的 AI 翻唱与音频创作工具。它�
 - 统一管理 So-VITS-SVC、RVC、SeedVC、DDSP-SVC 模型，并按模型框架选择推理参数。
 - 按模型音域自动进行高音保护，对掉音或错误音高区域局部降调重试并恢复原调；升回原调后再由 Snake-HiFiGAN / NSF-HiFiGAN 高音声码器重建已确认高音区的超高频带，弥补 PSOLA 在高音上的气声与谐波缺失。
 - 通过歌词或静音检测切分歌曲，在可视化时间轴中分配模型，支持多人混唱和一句多模型合唱。
-- 使用 Audio Editor Lite 进行多轨编辑、剪切、淡化、声道分配、效果处理和 WAV / MP3 / FLAC 导出；内置 MIDI 子编辑器（钢琴卷帘）可对片段做音符级音高编辑，播放与试听始终使用片段音频而非 MIDI 音源。
+- 使用 Audio Editor Lite 进行多轨编辑、剪切、淡化、声道分配、效果处理和 WAV / MP3 / FLAC 导出；内置 MIDI 子编辑器（钢琴卷帘）可对片段做音符级音高编辑，播放与试听始终使用片段音频而非 MIDI 音源；删掉的音符会让对应演唱区间在试听和应用后静音，音高曲线按笔分段、可只改一小段或从端点续画。
+- 编辑器成品可一键保存到「我的作品」，与 AI 翻唱作品共用播放器、下载和二次编辑。
 - 支持 TXT / LRC 歌词导入、角色管理和独唱、对唱、和声等时间轴模板。
 - 通过 WASAPI 回环或 VB-CABLE 对播放器音频进行实时人声转换，伴奏保持原样。
 - 通过 ModelScope 搜索、上传和下载模型，支持后台传输、断点续传和模型清单校验。
+- 通过工作流商城上传、搜索、分页预览和下载 AI 翻唱工作流；下载时自动同步清单中的 PyMSS 模型，并可在 AI 翻唱工作台直接载入。
 - 支持网易云、QQ 音乐、酷我音乐的搜索、试听、下载和歌词获取。
+- 翻唱作品支持队列试听：单击默认只试听单曲，显式「队列播放 / 连续试听」才建立队列；支持顺序 / 列表循环 / 单曲循环 / 随机播放、无损直通与均衡器，作品试听页可查看歌词和 MV。
 - 支持 GPU / CPU 切换：NVIDIA 使用 CUDA，Windows AMD 优先使用 ROCm 10，也可选择独立 DirectML 包；无兼容 GPU 时使用 CPU。
 - 提供可选 FastAPI 服务，供外部程序创建任务、查询进度、管理模型和下载成品。
 - 支持插件中心、自定义插件页面、Python 插件 Worker 和 C++ JUCE VST3 Host。
 
 ## 快速开始
 
+### 系统要求
+
+- Windows 10 1809 及以上或 Windows 11，64 位。
+- **Microsoft Visual C++ 2015-2022 x64 运行库，必须是最新版本**：<https://aka.ms/vs/17/release/vc_redist.x64.exe>。以前装过也要再运行一次并选择「修复」。版本过旧、或被其它软件自带的旧 `msvcp140.dll` 覆盖时，`onnxruntime` 会在导入阶段直接崩溃（`0xC0000005`），安装会停在第 4/12 步或最后的共享运行时校验，详见[常见问题](#安装最后一步失败uvr-探针崩溃)。
+- NVIDIA 40 系及以下用 CUDA126，RTX 50 系用 CUDA128，AMD 优先 ROCm 10、可选 DirectML，没有兼容显卡时用 CPU。
+- 64 位 CPython 3.12.x 与 MinGit：安装包已内置，无需另装；源码运行需自行准备 Python 3.12.x，另需 Node.js 20.19+ 或 22.12+。
+
 ### 使用安装包
 
-普通用户建议直接使用 GitHub Releases 中的魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`。该安装器从 ModelScope 的 `v0.1.1` 版本下载经过校验的离线安装包。备用版 `XB-SVCB-Online-Setup.exe` 不在 GitHub 公开发布，如有需要请联系开发者单独获取。
+普通用户建议直接使用 GitHub Releases 中的魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`。该安装器从 ModelScope 的 `v0.1.2` 版本下载经过校验的离线安装包。备用版 `XB-SVCB-Online-Setup.exe` 不在 GitHub 公开发布，如有需要请联系开发者单独获取。
 
 1. 运行在线安装器，使用自动检测或手动选择 CPU、ROCm 10、DirectML、CUDA126、CUDA128。
 2. 等待对应的完整安装包下载并通过 SHA-256 校验，然后选择应用安装目录和用户数据目录。
-3. 选择或手动指定 64 位 CPython 3.12.x，勾选「安装后立即搭建运行环境」。
+3. 安装包会自动释放内置的 Python 3.12 与 MinGit，勾选「安装后立即搭建运行环境」即可，无需在本机选择 Python / Git。
 4. 通过桌面或开始菜单中的 XB-SVCB 启动应用。
 
-需要离线安装时，按硬件下载专用包的 EXE 和全部同名前缀 BIN 文件，并放在同一目录。安装包内已包含前端、FFmpeg、模型框架源码、关键底模和对应硬件栈的离线 Python 依赖。NVIDIA 40 系及以下选择 CUDA126，RTX 50 系选择 CUDA128；两种 CUDA 包默认创建两层共享运行时。Windows AMD 首选 ROCm 10，也可按需选择 DirectML；无兼容 GPU 时选择 CPU。DirectML 包中的 PyMSS 和 DDSP 自动模式使用 CPU 推理；PyMSS 不会使用 DirectML 加速。
+需要离线安装时，按硬件下载专用包的 EXE 和全部同名前缀 BIN 文件，并放在同一目录。安装包内已包含前端、内置 Python 3.12、内置 MinGit、FFmpeg、模型框架源码、关键底模和对应硬件栈的离线 Python 依赖。NVIDIA 40 系及以下选择 CUDA126，RTX 50 系选择 CUDA128；两种 CUDA 包默认创建两层共享运行时。Windows AMD 首选 ROCm 10，也可按需选择 DirectML；无兼容 GPU 时选择 CPU。DirectML 包中的 PyMSS 和 DDSP 自动模式使用 CPU 推理；PyMSS 不会使用 DirectML 加速。
 
 ### 从源码安装
 
@@ -326,6 +346,29 @@ set XB_GH_MIRROR=https://ghfast.top
 
 v0.0.32 CUDA128 安装若在 <code>torch-2.7.1+cu128</code> 处提示 <code>Missing .dist-info directory</code>，或组件安装成功后最终校验提示缺少 <code>exceptiongroup</code>，请按[源码安装与启动中的 CUDA128 离线安装修复](docs/getting-started.md#v0032-cuda128-离线安装修复)核对 wheel 哈希、刷新 <code>uv</code> 缓存并补齐依赖。不要切换到旧隔离环境，也不需要重新安装 CUDA Toolkit。
 
+### 安装最后一步失败：UVR 探针崩溃
+
+日志里 `uvr_mdx`、`uvr_vr` 两个探针的退出码是 `3221225477`（即 `0xC0000005`），但前面的 `pip check` 显示 `All installed packages are compatible`。这不是依赖冲突，而是 `onnxruntime` 依赖的系统 C++ 运行库有问题——Windows 事件查看器（应用程序日志，事件 ID 1000）里会看到错误模块是 `MSVCP140.dll`。
+
+1. 安装最新版 [Microsoft Visual C++ 2015-2022 x64 运行库](https://aka.ms/vs/17/release/vc_redist.x64.exe)；即使以前装过，也要再运行一次并选择「修复」。
+2. 修复后仍崩溃，说明有软件把自带的旧 `msvcp140.dll` 覆盖进了 `C:\Windows\System32`：在「应用和功能」中卸载旧的 `Microsoft Visual C++ 2015 Redistributable (x64) - 14.0.x`，再修复 2015-2022 运行库。
+3. 确认四个运行库文件版本一致且不低于 14.38：
+
+```powershell
+foreach ($n in 'msvcp140.dll','msvcp140_1.dll','vcruntime140.dll','vcruntime140_1.dll') {
+  "{0} {1}" -f $n, [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$env:SystemRoot\System32\$n").FileVersion
+}
+```
+
+4. 复验并继续安装：
+
+```bat
+runtimes\core-cu126\Scripts\python.exe -c "import onnxruntime; print('ORT_OK')"
+setup_env.bat --cu126 --only uvr seedvc ddsp
+```
+
+重装应用、更换安装目录或重装 Python 都不能绕过这个崩溃，因为问题出在系统运行库而不是安装目录。
+
 ### 推理提示缺少 pkg_resources
 
 SVC 环境可能缺少兼容版本的 setuptools。RTX 50 系 cu128 安装可执行：
@@ -344,9 +387,9 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 
 ## Roadmap
 
-当前版本：**v0.1.1**
+当前版本：**v0.1.2**
 
-完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.1.1 更新说明](docs/release-notes/release_notes_v0_1_1.md)。
+完整版本历史见 [docs/release-notes/](docs/release-notes/)，当前版本说明见 [v0.1.2 更新说明](docs/release-notes/release_notes_v0_1_2.md)。
 
 ## 🤝 贡献者
 
@@ -391,3 +434,13 @@ uv pip install --python <安装目录>\runtimes\svc-cu128\Scripts\python.exe "se
 > - **UVR 模型**：`5_HP-Karaoke-UVR`、`UVR-DeEcho-DeReverb` 等遵循 Ultimate Vocal Remover 项目相应许可。
 >
 > GPL-3.0-only 仅覆盖本仓库自有代码，不改变上述第三方组件、模型和资源的原始授权条款。
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=sdijf1521%2Fxb-svcb&type=date&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&legend=top-left" />
+ </picture>
+</a>

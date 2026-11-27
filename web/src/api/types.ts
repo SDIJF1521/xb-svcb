@@ -236,6 +236,7 @@ export type CreateWorkflow =
   | 'full_manual_editor'
   | 'realtime_cover'
   | 'ai_enhancement'
+  | 'audio_editor'
 
 export type VocalEnhancementLevel = 'basic' | 'advanced'
 
@@ -418,6 +419,18 @@ export interface WorkflowGraph {
   edges: WorkflowEdge[]
 }
 
+/** 工作流来源信息：区分「从商城下载」与「上传到商城」。 */
+export interface WorkflowSource {
+  origin?: 'downloaded' | 'uploaded' | ''
+  repo_id?: string
+  version?: string
+  uploaded_at?: string
+  author?: string
+  lineage_id?: string
+  /** 远端清单里的名称（用于判断用户是否改过本地名称）。 */
+  remote_name?: string
+}
+
 /** 已保存的自定义工作流（后端持久化记录）。 */
 export interface CoverWorkflow {
   id: string
@@ -425,6 +438,8 @@ export interface CoverWorkflow {
   updated_at: string
   nodes: WorkflowNode[]
   edges: WorkflowEdge[]
+  /** 商城来源信息（普通本地工作流没有该字段）。 */
+  source?: WorkflowSource
 }
 
 /** 工作流文件导出结果。 */
@@ -681,6 +696,31 @@ export interface MusicPreviewResult {
   src?: string
 }
 
+/**
+ * 播放器直通音频流信息。
+ *
+ * `url` 指向本机回环音频服务（支持 Range 与跨域），因此可以完整播放、
+ * 拖动进度，并让 Web Audio 读取同一路音频。`lossless` 表示原始文件为
+ * 无损格式；`sample_rate` / `bit_depth` / `channels` 用于界面展示。
+ */
+export interface AudioStreamInfo {
+  ok: boolean
+  error?: string
+  url?: string
+  format?: string
+  codec?: string
+  sample_rate?: number
+  channels?: number
+  bit_depth?: number
+  duration?: number
+  size?: number
+  lossless?: boolean
+  quality?: string
+  /** 后端无法代理而直接返回上游地址时为 true（不保证可跨域处理）。 */
+  direct?: boolean
+}
+
+
 /** 已下载到本地的歌曲。 */
 export interface DownloadedMusic {
   name: string
@@ -867,6 +907,8 @@ export interface HubModelVersion {
 
 export interface HubModelUpdateInfo {
   installed: boolean
+  /** 是否通过本地主模型 SHA-256 与远端文件摘要匹配（来源元数据缺失时使用）。 */
+  installed_by_hash?: boolean
   available: boolean
   model_id?: string
   model_name?: string
@@ -878,6 +920,8 @@ export interface HubModelUpdateInfo {
     installed_version: string
     installed_at: string
     source_uploaded_at?: string
+    /** repo：来源仓库匹配；sha256：主模型内容哈希匹配。 */
+    matched_by?: 'repo' | 'sha256'
   }[]
 }
 
@@ -898,10 +942,6 @@ export interface HubModelItem {
   tags?: string[]
   version?: string
   uploaded_at?: string
-  downloads?: number
-  local_downloads?: number
-  download_count?: number
-  likes?: number
   screenshots?: HubModelAsset[]
   preview_audio?: HubModelAsset | null
   dependency_ok?: boolean
@@ -917,7 +957,9 @@ export interface HubSearchResult {
   items?: HubModelItem[]
   page?: number
   page_size?: number
-  /** 是否还有更多结果可「加载更多」。 */
+  /** 服务端返回的总条数（用于分页组件）。 */
+  total?: number
+  /** 是否还有更多结果（兼容旧调用方；新 UI 以 total 为准）。 */
   has_more?: boolean
 }
 
@@ -1001,11 +1043,116 @@ export interface HubJob {
   title: string
   status: 'running' | 'done' | 'failed'
   error?: string | null
-  result?: { model?: ModelDTO; url?: string; repo_id?: string } | null
+  result?: {
+    model?: ModelDTO
+    url?: string
+    repo_id?: string
+    workflow?: CoverWorkflow
+    warnings?: string[]
+    pymss_failed?: { name: string; error: string }[]
+  } | null
   created_at?: string
   pct: number
   msg: string
   phase: string
+}
+
+// ---- 工作流商城（ModelScope 魔搭社区）----
+
+/** 工作流依赖的一个 PyMSS 模型及其本地安装状态。 */
+export interface WorkflowHubPymssModel {
+  name: string
+  purpose?: string
+  purpose_label?: string
+  architecture?: string
+  category_label?: string
+  target_stem?: string
+  size_bytes?: number
+  downloaded: boolean
+}
+
+/** 工作流缩略图数据：只有节点位置与连线，不含节点参数。 */
+export interface WorkflowPreviewNode {
+  id: string
+  type: string
+  x: number
+  y: number
+}
+
+export interface WorkflowPreviewGraph {
+  nodes: WorkflowPreviewNode[]
+  edges: WorkflowEdge[]
+}
+
+/** 一份可预览 / 可下载的商城工作流。 */
+export interface WorkflowHubItem {
+  repo_id: string
+  name: string
+  description?: string
+  author: string
+  version: string
+  uploaded_at?: string
+  tags?: string[]
+  url: string
+  node_count: number
+  edge_count: number
+  pymss_models?: WorkflowHubPymssModel[]
+  /** 本地「已保存工作流」中是否已有该来源。 */
+  downloaded: boolean
+  /** repo：来源仓库匹配；graph_hash：工作流图内容哈希匹配。 */
+  download_match?: 'repo' | 'graph_hash' | ''
+  /** 已下载时对应的本地工作流 ID。 */
+  local_workflow_id?: string
+  /** 列表缩略图用的轻量节点图（不含节点参数）。 */
+  preview_graph?: WorkflowPreviewGraph | null
+  /** 详情接口返回的完整节点图。 */
+  graph?: WorkflowGraph | null
+}
+
+export interface WorkflowHubSearchResult {
+  ok: boolean
+  error?: string
+  items?: WorkflowHubItem[]
+  page?: number
+  page_size?: number
+  /** 服务端返回的总条数（用于分页组件）。 */
+  total?: number
+  has_more?: boolean
+  /** 当前 ModelScope 登录用户名（用于「我上传的」与上传提示）。 */
+  viewer?: string
+  mine_only?: boolean
+}
+
+export interface WorkflowHubDetailResult {
+  ok: boolean
+  error?: string
+  item?: WorkflowHubItem
+}
+
+/** 上传工作流到商城时可填写的展示信息。 */
+export interface WorkflowHubUploadOptions {
+  name?: string
+  version?: string
+  description?: string
+  tags?: string[]
+}
+
+export interface WorkflowHubUploadResult {
+  ok: boolean
+  error?: string
+  url?: string
+  repo_id?: string
+}
+
+/** 工作流下载结果：工作流已保存，并附带 PyMSS 依赖同步结果。 */
+export interface WorkflowHubDownloadResult {
+  ok: boolean
+  error?: string
+  repo_id?: string
+  workflow?: CoverWorkflow
+  pymss_downloaded?: string[]
+  pymss_failed?: { name: string; error: string }[]
+  warnings?: string[]
 }
 
 // ---- 音频编辑器（Audio Editor Lite）----
@@ -1129,6 +1276,13 @@ export interface EditorProjectTransferResult {
   error?: string
   path?: string
   project?: EditorProject
+}
+
+/** 编辑器成品归档到「我的作品」的结果。 */
+export interface EditorWorkImportResult {
+  ok: boolean
+  error?: string
+  work?: WorkDTO
 }
 
 export interface EditorWaveform {

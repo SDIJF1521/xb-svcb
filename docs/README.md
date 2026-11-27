@@ -16,6 +16,7 @@
 
 - [系统架构](architecture.md)：Python 后端、Vue 前端、Worker、队列、模型和音频工具的职责与连接。
 - [分层架构约束（DDD）](ddd-architecture.md)：分层依赖红线、端口与适配器、组合根和新增功能的放置规则，由 `app/tests/test_architecture.py` 校验。
+- [模型站 / 工作流商城性能](hub-performance.md)：搜索与下载的并发模型、GIL 分析、配置项与实测数据。
 - [启动与推理链路](startup-chain.md)：从 app/main.py 启动到一次普通任务和实时任务完成的过程。
 - [开发与发布](development.md)：代码结构、测试、前端构建、JUCE Host 和安装包构建。
 - [安装器说明](../installer/README.md)：PyInstaller、运行环境、离线 wheelhouse 和 Inno Setup 分卷。
@@ -37,6 +38,7 @@
 
 历史更新说明集中在 [release-notes/](release-notes/)。新增版本建议继续使用 release_notes_vXYZ.md 命名，并在根 README 只链接当前版本。
 
+- [v0.1.2 更新说明](release-notes/release_notes_v0_1_2.md)（[English](release-notes/release_notes_v0_1_2.en.md) / [日本語](release-notes/release_notes_v0_1_2.ja.md)）：工作流商城与 PyMSS 联动、分层工作流预览、全站弹窗统一、下载工作流连线修复与 DDD 分层收束；后续修复：MIDI 删除音符即静音、音高曲线按笔分段与「续画」、工作流画布连线跟随节点尺寸。
 - [v0.1.1 更新说明](release-notes/release_notes_v0_1_1.md)（[English](release-notes/release_notes_v0_1_1.en.md) / [日本語](release-notes/release_notes_v0_1_1.ja.md)）：MIDI 子编辑器与音高曲线、自定义工作流、实时翻唱与 RVC 技术栈升级、安装器编码修复。
 - [v0.1.0 更新说明](release-notes/release_notes_v0_1_0.md)（[English](release-notes/release_notes_v0_1_0.en.md) / [日本語](release-notes/release_notes_v0_1_0.ja.md)）：创建与推理、音频编辑器、三语界面与安装器、在线安装及模型仓库调整。
 - [v0.0.32 更新说明](release-notes/release_notes_v032.md)：Python 3.12、ROCm 10 与 DirectML 推理修复。

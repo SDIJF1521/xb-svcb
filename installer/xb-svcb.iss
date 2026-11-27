@@ -13,9 +13,9 @@
 ;    - 可选“搭建运行环境”：CUDA126/128 创建两层共享环境，ROCm 10 共享 SVC 组，CPU/DirectML 使用隔离环境
 ;    - 创建开始菜单与桌面快捷方式（指向 XB-SVCB.exe）
 ;
-;  用户机前置：安装器只检测缺失的 Python/Git/C++ Build Tools/CUDA Toolkit，
-;  FFmpeg 由安装包分卷内置（检测到系统 ffmpeg 时跳过释放）；uv 会在 Python 可用后
-;  自动安装到用户目录；其他依赖提供跳转官方/可信下载页面的按钮。
+;  用户机前置：安装器只检测缺失的 C++ Build Tools/CUDA Toolkit；Python 3.12、
+;  MinGit 与 FFmpeg 由安装包分卷内置（检测到系统 ffmpeg 时跳过释放）；uv 会在
+;  Python 可用后自动安装到用户目录；其他依赖提供跳转官方/可信下载页面的按钮。
 ;  JUCE VST3 Host 是发布包内置的原生组件，不在用户机现场编译。
 ;  NVIDIA 前置 CUDA 版本固定：50 系使用 CUDA 12.8，50 系以下使用 CUDA 12.6；
 ;  AMD/CPU 不显示 CUDA 前置项。PyTorch/PyMSS wheel 的内部栈名与此显示版本分开管理。
@@ -24,7 +24,7 @@
 
 #define MyAppName "XB-SVCB"
 #define MyAppShort "XB-SVCB"
-#define MyAppVersion "0.1.1"
+#define MyAppVersion "0.1.2"
 #define MyAppPublisher "XB-SVCB"
 #define MyAppExe "XB-SVCB.exe"
 #ifndef XB_PACKAGE_STACK
@@ -282,6 +282,9 @@ ja.FieldPython=Python 3.12.x:
 zhcn.FieldGit=Git：
 en.FieldGit=Git:
 ja.FieldGit=Git:
+zhcn.BundledGit=已内置（tools\git）
+en.BundledGit=Bundled (tools\git)
+ja.BundledGit=同梱（tools\git）
 zhcn.FieldUv=uv：
 en.FieldUv=uv:
 ja.FieldUv=uv:
@@ -495,8 +498,9 @@ Source: "..\setup_shared_env.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\install_prereqs.bat"; DestDir: "{app}"; Flags: ignoreversion
 ; 应用图标（供 .bat 快捷方式引用；exe 已内嵌同一图标）
 Source: "..\web\public\favicon.ico"; DestDir: "{app}"; DestName: "xb-svcb.ico"; Flags: ignoreversion
-; Python 与 FFmpeg 都随分卷离线携带，不依赖用户机器上的全局安装。
+; Python、Git 与 FFmpeg 都随分卷离线携带，不依赖用户机器上的全局安装。
 Source: "..\.tmp\python312-runtime\*"; DestDir: "{app}\tools\python312"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
+Source: "..\.tmp\git-runtime\*"; DestDir: "{app}\tools\git"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
 Source: "..\assets\tools\ffmpeg\*"; DestDir: "{app}\tools\ffmpeg"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
 ; 三个歌声引擎源码随分卷携带。模型由 assets/models 统一提供，排除仓库元数据、缓存、
 ; 示例与重复权重，安装后 install.py 会检测到源码并跳过 Git/ZIP 获取。
@@ -512,9 +516,9 @@ Source: "..\assets\models\*"; DestDir: "{app}\assets\models"; Flags: recursesubd
 Source: "..\.tmp\installer-wheelhouse\*"; DestDir: "{app}\assets\wheels"; Flags: recursesubdirs createallsubdirs ignoreversion nocompression
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\docs\release-notes\release_notes_v0_1_1.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
-Source: "..\docs\release-notes\release_notes_v0_1_1.en.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
-Source: "..\docs\release-notes\release_notes_v0_1_1.ja.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
+Source: "..\docs\release-notes\release_notes_v0_1_2.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
+Source: "..\docs\release-notes\release_notes_v0_1_2.en.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
+Source: "..\docs\release-notes\release_notes_v0_1_2.ja.md"; DestDir: "{app}\docs\release-notes"; Flags: ignoreversion
 Source: "..\docs\api.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 #endif
 
@@ -1246,7 +1250,7 @@ begin
   Result :=
     M('EnvironmentSummaryIntro') + #13#10 +
     '  ' + M('FieldPython') + ' ' + PythonStatus + #13#10 +
-    '  ' + M('FieldGit') + ' ' + StatusText(CmdAvailable('git')) + #13#10 +
+    '  ' + M('FieldGit') + ' ' + M('BundledGit') + #13#10 +
     '  ffmpeg / ffprobe: ' + StatusText(SystemFfmpegAvailable()) + M('BundledFfmpegHint') + #13#10 +
     '  ' + M('FieldUv') + ' ' + StatusText(CmdAvailable('uv')) + M('UvHint') + #13#10;
   if (DetectedStack = 'cu126') or (DetectedStack = 'cu128') then
@@ -1344,11 +1348,10 @@ end;
 procedure RefreshPrereqDownloadStatus;
 var
   IsNvidia, IsAmd, PythonReady: Boolean;
-  DetectedStack, CudaVersion, GitPath, SelectedPython, PythonDir: String;
+  DetectedStack, CudaVersion, SelectedPython, PythonDir: String;
   CudaPath: String;
   UserProfilePath, UvStandalonePath, UvPythonScriptsPath, UvUserScriptsPath: String;
 begin
-  GitPath := ExpandConstant('{localappdata}\Programs\Git\cmd\git.exe');
   UserProfilePath := GetEnv('USERPROFILE');
   if UserProfilePath <> '' then
     UvStandalonePath := PathJoin(UserProfilePath, '.local\bin\uv.exe')
@@ -1361,9 +1364,7 @@ begin
   UvPythonScriptsPath := PathJoin(PythonDir, 'Scripts\uv.exe');
   UvUserScriptsPath := ExpandConstant('{userappdata}\Python\Python312\Scripts\uv.exe');
   PythonStatusLabel.Caption := M('FieldPython') + ' ' + M('BundledPython');
-  GitStatusLabel.Caption := M('FieldGit') + ' ' +
-    StatusText(CommandOrFileAvailable('git', GitPath,
-      ExpandConstant('{autopf}\Git\cmd\git.exe'), ''));
+  GitStatusLabel.Caption := M('FieldGit') + ' ' + M('BundledGit');
   if CommandOrFileAvailable('uv', UvStandalonePath, UvPythonScriptsPath, UvUserScriptsPath) or
      FileExists(UvPythonScriptsPath) then
     UvStatusLabel.Caption := M('UvDetected')
@@ -1418,9 +1419,7 @@ function RequiredPrereqMissing(): Boolean;
 var
   DetectedStack, CudaPath: String;
 begin
-  Result := not CommandOrFileAvailable('git', ExpandConstant('{localappdata}\Programs\Git\cmd\git.exe'),
-      ExpandConstant('{autopf}\Git\cmd\git.exe'), '') or
-    not (CmdAvailable('cl') or
+  Result := not (CmdAvailable('cl') or
       FileExists(ExpandConstant('{pf32}\Microsoft Visual Studio\Installer\vswhere.exe')));
   DetectedStack := InstallerGpuStackName();
   CudaPath := CudaPathPage.Values[0];
@@ -1684,7 +1683,7 @@ begin
   PythonDownloadButton.OnClick := @PythonDownloadClick;
   PythonDownloadButton.Enabled := False;
   CreateDownloadRow(M('FieldGit'), M('OpenGitDownload'), 88, GitStatusLabel, GitDownloadButton);
-  GitDownloadButton.OnClick := @GitDownloadClick;
+  GitDownloadButton.Visible := False;
   CreateDownloadRow(M('FieldUv'), M('AutoInstall'), 120, UvStatusLabel, UvDownloadButton);
   UvDownloadButton.OnClick := @UvDownloadClick;
   UvDownloadButton.Enabled := False;
@@ -1726,7 +1725,6 @@ begin
     False,
     ''
   );
-  PrereqPathPage.Add(M('GitDirectoryLabel'));
   PrereqPathPage.Add(M('FfmpegDirectoryLabel'));
   PrereqPathPage.Add(M('CppDirectoryLabel'));
 
@@ -1853,11 +1851,9 @@ begin
   if CurPageID = PrereqPathPage.ID then
   begin
     if PrereqPathPage.Values[0] = '' then
-      PrereqPathPage.Values[0] := ExpandConstant('{localappdata}\Programs\Git');
+      PrereqPathPage.Values[0] := ExpandConstant('{app}\tools\ffmpeg');
     if PrereqPathPage.Values[1] = '' then
-      PrereqPathPage.Values[1] := ExpandConstant('{app}\tools\ffmpeg');
-    if PrereqPathPage.Values[2] = '' then
-      PrereqPathPage.Values[2] := ExpandConstant('{pf32}\Microsoft Visual Studio\2022\BuildTools');
+      PrereqPathPage.Values[1] := ExpandConstant('{pf32}\Microsoft Visual Studio\2022\BuildTools');
   end;
   if CurPageID = PythonPathPage.ID then
     PythonPathPage.Values[0] := ExpandConstant('{app}\tools\python312\python.exe');
@@ -1964,10 +1960,10 @@ begin
     'set "UV_PYTHON=' + BatchEscape(SelectedPython) + '"' + #13#10 +
     'set "UV_NO_MANAGED_PYTHON=1"' + #13#10 +
     'set "UV_PYTHON_DOWNLOADS=never"' + #13#10 +
-    'set "XB_GIT_DIR=' + BatchEscape(PrereqPathPage.Values[0]) + '"' + #13#10 +
-    'set "XB_FFMPEG_DIR=' + BatchEscape(PrereqPathPage.Values[1]) + '"' + #13#10 +
+    'set "XB_GIT_DIR=' + BatchEscape(ExpandConstant('{app}\tools\git')) + '"' + #13#10 +
+    'set "XB_FFMPEG_DIR=' + BatchEscape(PrereqPathPage.Values[0]) + '"' + #13#10 +
     'set "XB_CUDA_DIR=' + BatchEscape(CudaPathPage.Values[0]) + '"' + #13#10 +
-    'set "XB_VSBT_DIR=' + BatchEscape(PrereqPathPage.Values[2]) + '"' + #13#10 +
+    'set "XB_VSBT_DIR=' + BatchEscape(PrereqPathPage.Values[1]) + '"' + #13#10 +
     'set "XB_HF_MIRROR=https://hf-mirror.com"' + #13#10 +
     'set "HF_ENDPOINT=https://hf-mirror.com"' + #13#10 +
     'set "HUGGINGFACE_HUB_ENDPOINT=https://hf-mirror.com"' + #13#10 +
@@ -2167,6 +2163,8 @@ begin
     Missing := AddMissingRuntimeFile(Missing, 'Python runtime detector', PathJoin(AppDir, 'install\detect_python.bat'));
   if not PythonFileAvailable(PathJoin(AppDir, 'tools\python312\python.exe')) then
     Missing := AddMissingRuntimeFile(Missing, 'Bundled CPython 3.12 runtime', PathJoin(AppDir, 'tools\python312\python.exe'));
+  if not FileExists(PathJoin(AppDir, 'tools\git\cmd\git.exe')) then
+    Missing := AddMissingRuntimeFile(Missing, 'Bundled Git runtime', PathJoin(AppDir, 'tools\git\cmd\git.exe'));
   if not FileExists(PathJoin(AppDir, 'tools\ffmpeg\bin\ffmpeg.exe')) then
     Missing := AddMissingRuntimeFile(Missing, 'Bundled FFmpeg executable', PathJoin(AppDir, 'tools\ffmpeg\bin\ffmpeg.exe'));
   if not FileExists(PathJoin(AppDir, 'tools\ffmpeg\bin\ffprobe.exe')) then

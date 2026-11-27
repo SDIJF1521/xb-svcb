@@ -1,7 +1,5 @@
 <template>
   <div class="page">
-    <audio ref="audioEl" style="display: none" @ended="playingN = null" @pause="onAudioPause" />
-
     <!-- 页面标题 -->
     <div class="page-head">
       <div>
@@ -51,20 +49,31 @@
     <!-- 搜索结果 -->
     <div v-if="results.length" class="block">
       <div class="block-head">
-        <h2>搜索结果</h2>
-        <span class="muted">{{ resultSourceName }} ·「{{ resultKeyword }}」· {{ results.length }} 首</span>
+        <div>
+          <h2>搜索结果</h2>
+          <span class="muted">{{ resultSourceName }} ·「{{ resultKeyword }}」· {{ results.length }} 首</span>
+        </div>
+        <el-button
+          round
+          size="small"
+          class="play-all-btn"
+          :disabled="!results.length"
+          @click="playAllResults"
+        >
+          <el-icon class="el-icon--left"><VideoPlay /></el-icon>连续试听
+        </el-button>
       </div>
       <div class="list glass" data-guide="music-results">
-        <div class="row" v-for="r in results" :key="r.n">
+        <div class="row" v-for="r in results" :key="r.n" :class="{ current: isPreviewCurrent(r) }">
           <span class="row-no">{{ r.n }}</span>
           <button
             class="row-play"
-            :title="playingN === r.n ? '暂停' : '试听'"
-            :disabled="previewLoadingN === r.n"
+            :title="isPreviewPlaying(r) ? '暂停' : '试听'"
+            :disabled="isPreviewLoading(r)"
             @click="togglePreview(r)"
           >
-            <el-icon v-if="previewLoadingN === r.n" class="spin"><Loading /></el-icon>
-            <el-icon v-else-if="playingN === r.n"><VideoPause /></el-icon>
+            <el-icon v-if="isPreviewLoading(r)" class="spin"><Loading /></el-icon>
+            <el-icon v-else-if="isPreviewPlaying(r)"><VideoPause /></el-icon>
             <el-icon v-else><VideoPlay /></el-icon>
           </button>
           <div class="row-main">
@@ -111,11 +120,30 @@
     <!-- 已下载 -->
     <div class="block">
       <div class="block-head">
-        <h2>已下载素材</h2>
-        <span class="muted">{{ downloaded.length }} 首 · 可在翻唱页选用</span>
+        <div>
+          <h2>已下载素材</h2>
+          <span class="muted">{{ downloaded.length }} 首 · 本地直通播放，也可在翻唱页选用</span>
+        </div>
+        <el-button
+          round
+          size="small"
+          class="play-all-btn"
+          :disabled="!downloaded.length"
+          @click="playAllDownloaded"
+        >
+          <el-icon class="el-icon--left"><VideoPlay /></el-icon>连续试听
+        </el-button>
       </div>
       <div v-if="downloaded.length" class="list glass" data-guide="music-downloads">
-        <div class="row" v-for="d in downloaded" :key="d.path">
+        <div class="row" v-for="d in downloaded" :key="d.path" :class="{ current: player.isCurrent(`local:${d.path}`) }">
+          <button
+            class="row-play"
+            :title="player.isPlayingKey(`local:${d.path}`) ? '暂停' : '试听'"
+            @click="toggleDownloaded(d)"
+          >
+            <el-icon v-if="player.isPlayingKey(`local:${d.path}`)"><VideoPause /></el-icon>
+            <el-icon v-else><VideoPlay /></el-icon>
+          </button>
           <div class="row-cover"><el-icon><Headset /></el-icon></div>
           <div class="row-main">
             <div class="row-title" :title="d.name">{{ d.name }}</div>
@@ -192,6 +220,8 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, type MusicSearchItem, type DownloadedMusic, type MusicSource } from '@/api'
+import { usePlayerStore } from '@/stores/player'
+import { localToTrack, onlineToTrack } from '@/player/tracks'
 
 defineOptions({ name: 'MusicPage' })
 
@@ -232,12 +262,7 @@ const downloaded = ref<DownloadedMusic[]>([])
 const downloadingN = ref<number | null>(null)
 const toCreateN = ref<number | null>(null)
 
-/* ----- 试听 ----- */
-const audioEl = ref<HTMLAudioElement | null>(null)
-const playingN = ref<number | null>(null)
-const previewLoadingN = ref<number | null>(null)
-
-/* 已判定「不可播放」的曲目序号（试听失败 / 下载校验失败）→ 禁止下载 */
+/* 已判定「不可播放」的曲目序号（试听 / 下载校验失败）→ 禁止播放与下载 */
 const unplayable = ref<number[]>([])
 function isUnplayable(n: number): boolean {
   return unplayable.value.includes(n)
@@ -261,87 +286,66 @@ function songIdForAudio(item: MusicSearchItem): string | undefined {
   return songIdOf(item)
 }
 
-function audioUrlCandidates(song: { vipmusicurl?: string; musicurl?: string; url?: string }): string[] {
-  const urls: string[] = []
-  for (const value of [song.vipmusicurl, song.musicurl, song.url]) {
-    const url = String(value || '').trim()
-    if (url && !urls.includes(url)) urls.push(url)
-  }
-  return urls
+/* ----- 播放（复用全局播放器，队列包含整页搜索结果） ----- */
+const player = usePlayerStore()
+
+function onlineKey(item: MusicSearchItem): string {
+  return `online:${resultSource.value}:${item.n}:${resultKeyword.value}`
 }
 
-const onAudioPause = () => {
-  if (audioEl.value && audioEl.value.ended) playingN.value = null
+function isPreviewCurrent(item: MusicSearchItem): boolean {
+  return player.isCurrent(onlineKey(item))
+}
+
+function isPreviewPlaying(item: MusicSearchItem): boolean {
+  return player.isPlayingKey(onlineKey(item))
+}
+
+function isPreviewLoading(item: MusicSearchItem): boolean {
+  return player.resolvingKey === onlineKey(item)
 }
 
 async function togglePreview(item: MusicSearchItem) {
-  const el = audioEl.value
-  if (!el) return
-  if (playingN.value === item.n && !el.paused) {
-    el.pause()
-    playingN.value = null
+  if (isUnplayable(item.n)) {
+    ElMessage.warning('该资源不可播放')
     return
   }
-  previewLoadingN.value = item.n
-  try {
-    const res = await api.getMusicSong(
-      resultKeyword.value,
-      item.n,
-      resultSource.value,
-      songIdForAudio(item),
-    )
-    if (!res.ok || !res.song) {
-      if (isUnplayableError(res.error)) markUnplayable(item.n)
-      ElMessage.error(res.error || '获取歌曲信息失败')
-      return
-    }
-    const candidates = audioUrlCandidates(res.song)
-    if (!candidates.length) {
-      markUnplayable(item.n)
-      ElMessage.warning('该歌曲不可播放，无法下载（可能为 VIP / 无版权）')
-      return
-    }
-    if (resultSource.value === 'kuwo') {
-      const preview = await api.previewMusic(
-        resultKeyword.value,
-        item.n,
-        resultSource.value,
-        songIdForAudio(item),
-      )
-      if (!preview.ok || !preview.src) {
-        if (isUnplayableError(preview.error)) markUnplayable(item.n)
-        ElMessage.error(preview.error || '试听失败')
-        return
-      }
-      try {
-        el.src = preview.src
-        el.load()
-        await el.play()
-        playingN.value = item.n
-      } catch {
-        ElMessage.error('试听播放失败')
-      }
-      return
-    }
-    for (const src of candidates) {
-      try {
-        el.src = src
-        el.load()
-        await el.play()
-        playingN.value = item.n
-        return
-      } catch {
-        // 继续测试下一个候选地址。
-      }
-    }
-    markUnplayable(item.n)
-    ElMessage.error('该资源无法播放，无法下载')
-  } catch {
-    markUnplayable(item.n)
-    ElMessage.error('该资源无法播放，无法下载')
-  } finally {
-    previewLoadingN.value = null
+  if (isPreviewCurrent(item)) {
+    void player.togglePlay()
+    return
   }
+  // 单击只试听这一首，不把整页搜索结果建成队列。
+  const ok = await player.playAudition(
+    onlineToTrack(item, { keyword: resultKeyword.value, source: resultSource.value }),
+  )
+  if (!ok && isUnplayableError(player.lastError)) markUnplayable(item.n)
+}
+
+function playAllResults() {
+  const playable = results.value.filter((song) => !isUnplayable(song.n))
+  const first = playable[0]
+  if (!first) {
+    ElMessage.info('没有可播放的歌曲')
+    return
+  }
+  void player.playOnlineQueue(playable, first.n, {
+    keyword: resultKeyword.value,
+    source: resultSource.value,
+  })
+}
+
+function toggleDownloaded(item: DownloadedMusic) {
+  if (player.isCurrent(`local:${item.path}`)) {
+    void player.togglePlay()
+    return
+  }
+  void player.playAudition(localToTrack(item))
+}
+
+function playAllDownloaded() {
+  const first = downloaded.value[0]
+  if (!first) return
+  void player.playLocalQueue(downloaded.value, first.path)
 }
 
 /* ----- 搜索 ----- */
@@ -456,6 +460,11 @@ async function removeDownloaded(d: DownloadedMusic) {
   }
   const ok = await api.deleteMusic(d.path)
   if (ok) {
+    // 素材文件已被删除：同步移出播放队列，避免队列里残留无法播放的歌曲。
+    player.removeTracks(
+      (track) =>
+        track.kind === 'local' && (track.path === d.path || track.id === d.path),
+    )
     await refreshDownloaded()
     ElMessage.success('已删除')
   } else {
@@ -504,9 +513,9 @@ onMounted(async () => {
 
 <style scoped>
 .page {
-  max-width: 1320px;
+  max-width: var(--xb-page-max, 1320px);
   margin: 0 auto;
-  padding: 28px 24px 60px;
+  padding: 28px var(--xb-page-gutter, 24px) 60px;
 }
 .page-head {
   display: flex;
@@ -618,11 +627,30 @@ onMounted(async () => {
 .block { margin-bottom: 30px; }
 .block-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
+  gap: 14px;
   margin-bottom: 14px;
 }
+.block-head > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
 .block-head h2 { font-size: 20px; font-weight: 800; margin: 0; }
+.play-all-btn {
+  flex: 0 0 auto;
+  background: rgba(var(--xb-primary-rgb), 0.08) !important;
+  border: 1px solid rgba(var(--xb-primary-rgb), 0.35) !important;
+  color: var(--xb-primary) !important;
+  font-weight: 600;
+}
+.play-all-btn:hover:not(.is-disabled) {
+  background: rgba(var(--xb-primary-rgb), 0.14) !important;
+  border-color: var(--xb-primary) !important;
+}
+.play-all-btn.is-disabled { opacity: 0.45; }
 .muted { color: var(--xb-muted); font-size: 13px; }
 
 /* 列表 */
@@ -636,6 +664,7 @@ onMounted(async () => {
   transition: background 0.2s;
 }
 .row:hover { background: rgba(var(--xb-primary-rgb), 0.05); }
+.row.current { background: rgba(var(--xb-primary-rgb), 0.09); box-shadow: inset 2px 0 0 var(--xb-primary); }
 .row + .row { border-top: 1px solid rgba(var(--xb-fill-rgb), 0.04); }
 .row-no {
   width: 24px;

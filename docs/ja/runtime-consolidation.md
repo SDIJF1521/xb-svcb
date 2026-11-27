@@ -108,6 +108,12 @@ CUDA128 core配方を導入せず解決:
 & uv pip check --python .\runtimes\svc-cu128\Scripts\python.exe
 ```
 
+### UVR の import 時に 0xC0000005
+
+`uvr_mdx` / `uvr_vr` の検査が `3221225477`（`0xC0000005`）で終了し、`stdout` / `stderr` が空のとき、`onnxruntime` の pybind 拡張が静的初期化で落ちています。依存解決の失敗ではありません。最新の [Microsoft Visual C++ 2015-2022 x64 再頒布可能パッケージ](https://aka.ms/vs/17/release/vc_redist.x64.exe) が必要です。`msvcp140.dll` が古い、または `msvcp140_1.dll` と版が揃っていない（14.24 と 14.44 の混在など）と発生します。Windows のイベント ビューアー（アプリケーション ログ、イベント ID 1000）ではエラー モジュールが `MSVCP140.dll` と表示されます。
+
+確認手順は[インストールと修復](getting-started.md#最終ステップで失敗uvr-プローブがクラッシュする)を参照してください。アプリの再インストール、インストール先の変更、Python 環境の作り直しでは回避できません。原因はシステムのランタイムにあります。
+
 自動テスト範囲は[テスト](testing.md)を参照してください。配方解決、再導入、drift検出、復元、import、小CUDA tensor、事前検証には回帰テストがありますが、対象GPUでの実モデル・実音声・完全なSetup.exe受け入れを置き換えません。
 
 ## 旧環境とクリーンアップ

@@ -7,11 +7,13 @@
         <h1>翻唱作品库</h1>
         <p class="page-sub">管理、试听并导出你生成的所有 AI 翻唱作品</p>
       </div>
-      <router-link to="/create">
-        <el-button size="large" round class="cta-btn">
-          <el-icon class="el-icon--left"><Plus /></el-icon>新建翻唱
-        </el-button>
-      </router-link>
+      <div class="head-actions">
+        <router-link to="/create">
+          <el-button size="large" round class="cta-btn">
+            <el-icon class="el-icon--left"><Plus /></el-icon>新建翻唱
+          </el-button>
+        </router-link>
+      </div>
     </div>
 
     <!-- 工具条 -->
@@ -28,9 +30,19 @@
           <span class="seg-count">{{ countOf(t.key) }}</span>
         </button>
       </div>
-      <div class="search">
-        <el-icon><Search /></el-icon>
-        <input v-model="keyword" type="text" placeholder="搜索作品 / 模型…" />
+      <div class="toolbar-tail">
+        <div class="search">
+          <el-icon><Search /></el-icon>
+          <input v-model="keyword" type="text" placeholder="搜索作品 / 模型…" />
+        </div>
+        <button
+          class="play-all-link"
+          :disabled="!doneFiltered.length"
+          :title="doneFiltered.length ? '按当前筛选顺序建立播放队列' : '暂无可试听作品'"
+          @click="playAll"
+        >
+          <el-icon><VideoPlay /></el-icon>队列播放
+        </button>
       </div>
     </div>
 
@@ -45,10 +57,22 @@
         <span class="col-ops">操作</span>
       </div>
 
-      <div class="work-row" v-for="w in filteredWorks" :key="w.id">
+      <div
+        class="work-row"
+        v-for="w in filteredWorks"
+        :key="w.id"
+        :class="{ 'now-playing': player.isCurrent(`work:${w.id}`) }"
+      >
         <div class="col-title work-title-cell">
-          <button class="work-play" :disabled="w.status !== 'done'" title="打开音乐播放页" @click="openPlayer(w.id)">
-            <el-icon><VideoPlay /></el-icon>
+          <button
+            class="work-play"
+            :class="{ playing: player.isPlayingKey(`work:${w.id}`) }"
+            :disabled="w.status !== 'done'"
+            :title="player.isCurrent(`work:${w.id}`) ? (player.playing ? '暂停试听' : '继续试听') : '试听这首作品'"
+            @click="onPlay(w)"
+          >
+            <el-icon v-if="player.isPlayingKey(`work:${w.id}`)"><VideoPause /></el-icon>
+            <el-icon v-else><VideoPlay /></el-icon>
           </button>
           <div class="work-cover" :style="{ '--wc': w.color }"><el-icon><Headset /></el-icon></div>
           <div class="work-meta">
@@ -74,6 +98,18 @@
         </span>
         <span class="col-time work-dim">{{ w.time }}</span>
         <span class="col-ops">
+          <button
+            class="op"
+            :disabled="w.status !== 'done'"
+            title="打开作品试听页（歌词 / MV）"
+            @click="openPlayer(w)"
+          ><el-icon><Headset /></el-icon></button>
+          <button
+            class="op"
+            :disabled="w.status !== 'done'"
+            title="加入播放队列"
+            @click="enqueue(w)"
+          ><el-icon><List /></el-icon></button>
           <button class="op" title="重命名" @click="onRename(w.id, w.title)"><el-icon><EditPen /></el-icon></button>
           <el-dropdown
             :disabled="w.status !== 'done'"
@@ -99,7 +135,7 @@
           ><el-icon><MagicStick /></el-icon></button>
           <button class="op" v-if="w.status === 'failed'" :title="translateUiText('打开日志')" @click="onOpenLog(w.id)"><el-icon><Document /></el-icon></button>
           <button
-            v-if="w.workflow !== 'realtime_cover'"
+            v-if="w.workflow !== 'realtime_cover' && w.workflow !== 'audio_editor'"
             class="op"
             title="重新生成"
             @click="onRetry(w.id)"
@@ -129,6 +165,8 @@ import {
   Plus,
   Search,
   VideoPlay,
+  VideoPause,
+  List,
   Headset,
   Download,
   Scissor,
@@ -140,14 +178,17 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
+import { workToTrack } from '@/player/tracks'
+import { usePlayerStore } from '@/stores/player'
 import { useWorksStore } from '@/stores/works'
 import { translateUiText } from '@/i18n'
-import type { JobStatus, WorkAudioExportFormat } from '@/api'
+import type { JobStatus, WorkAudioExportFormat, WorkDTO } from '@/api'
 
 defineOptions({ name: 'WorksPage' })
 
 const worksStore = useWorksStore()
 const { works } = storeToRefs(worksStore)
+const player = usePlayerStore()
 const router = useRouter()
 
 const tabs: { key: JobStatus | 'all'; label: string }[] = [
@@ -181,7 +222,38 @@ const filteredWorks = computed(() =>
 const statusText = (s: JobStatus) =>
   ({ done: '已完成', running: '生成中', queue: '排队中', failed: '失败' })[s]
 
-const openPlayer = (id: string) => router.push({ path: '/player', query: { work: id } })
+/** 当前筛选结果里可播放的作品，作为「播放全部」和队列来源。 */
+const doneFiltered = computed(() => filteredWorks.value.filter((w) => w.status === 'done'))
+
+function onPlay(w: WorkDTO) {
+  const key = `work:${w.id}`
+  if (player.isCurrent(key)) {
+    void player.togglePlay()
+    return
+  }
+  // 单击播放只试听这一首，不把整个筛选结果放进队列。
+  void player.playAudition(workToTrack(w))
+}
+
+function openPlayer(w: WorkDTO) {
+  // 打开独立的作品试听页；已在播放的歌保持原状（播放进度与队列都不重置），
+  // 播放页只负责展示当前播放的作品。
+  void router.push({ path: '/player', query: { work: w.id } })
+}
+
+function playAll() {
+  const first = doneFiltered.value[0]
+  if (!first) return
+  // 只有显式点击「队列播放」才构建整个筛选结果队列。
+  void player.playWorks(doneFiltered.value, first.id)
+  void router.push({ path: '/player', query: { work: first.id, queue: '1' } })
+}
+
+function enqueue(w: WorkDTO) {
+  const added = player.addToQueue([workToTrack(w)])
+  if (added > 0) ElMessage.success(`已加入播放队列：${w.title}`)
+  else ElMessage.info('这首歌已经在播放队列里了')
+}
 
 const onDownload = async (id: string, format: WorkAudioExportFormat) => {
   const dest = await api.exportWork(id, format)
@@ -233,9 +305,9 @@ onUnmounted(() => {
 
 <style scoped>
 .page {
-  max-width: 1320px;
+  max-width: var(--xb-page-max, 1320px);
   margin: 0 auto;
-  padding: 28px 24px 60px;
+  padding: 28px var(--xb-page-gutter, 24px) 60px;
 }
 .page-head {
   display: flex;
@@ -252,6 +324,7 @@ onUnmounted(() => {
 }
 .page-head h1 { font-size: 30px; font-weight: 800; margin: 0 0 8px; }
 .page-sub { color: var(--xb-muted); font-size: 15px; margin: 0; }
+.head-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 
 .glass {
   position: relative;
@@ -272,6 +345,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 14px;
   margin-bottom: 18px;
 }
@@ -304,6 +378,22 @@ onUnmounted(() => {
   background: rgba(var(--xb-fill-rgb), 0.08);
   color: inherit;
 }
+.toolbar-tail { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+.play-all-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--xb-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 6px 4px;
+  white-space: nowrap;
+  transition: color 0.2s ease;
+}
+.play-all-link:hover:not(:disabled) { color: var(--xb-primary); }
+.play-all-link:disabled { opacity: 0.35; cursor: default; }
 .search {
   display: flex;
   align-items: center;
@@ -346,6 +436,7 @@ onUnmounted(() => {
   transition: background 0.2s;
 }
 .work-row:hover { background: rgba(var(--xb-primary-rgb), 0.05); }
+.work-row.now-playing { background: rgba(var(--xb-primary-rgb), 0.08); box-shadow: inset 2px 0 0 var(--xb-primary); }
 .work-row + .work-row { border-top: 1px solid rgba(var(--xb-fill-rgb), 0.04); }
 .col-ops { text-align: right; }
 
@@ -364,6 +455,11 @@ onUnmounted(() => {
   transition: all 0.2s;
 }
 .work-play:hover:not(:disabled) { background: var(--xb-primary); color: var(--xb-on-primary); }
+.work-play.playing {
+  background: linear-gradient(135deg, var(--xb-primary), var(--xb-primary-2));
+  color: var(--xb-on-primary);
+  box-shadow: 0 0 18px rgba(var(--xb-primary-rgb), 0.4);
+}
 .work-play:disabled { opacity: 0.35; cursor: not-allowed; }
 .work-cover {
   width: 40px; height: 40px;
@@ -463,7 +559,10 @@ onUnmounted(() => {
 }
 @media (max-width: 560px) {
   .page-head { flex-direction: column; align-items: flex-start; }
+  .head-actions { width: 100%; justify-content: flex-start; }
   .toolbar { flex-direction: column; align-items: stretch; }
+  .toolbar-tail { width: 100%; flex-direction: column; align-items: stretch; gap: 8px; }
   .search { width: 100%; }
+  .play-all-link { align-self: flex-end; }
 }
 </style>

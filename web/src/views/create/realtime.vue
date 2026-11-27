@@ -278,6 +278,7 @@ import { useSystemStore } from '@/stores/system'
 import { useWorksStore } from '@/stores/works'
 import { f0MethodsForFramework, normalizeF0Method } from '@/utils/f0'
 import { importDroppedAudio } from '@/utils/audioImport'
+import { isPymssCoverSeparationModel } from '@/utils/pymssPurpose'
 import { storeToRefs } from 'pinia'
 
 defineOptions({ name: 'RealtimeCoverPage' })
@@ -329,7 +330,7 @@ const pymssModels = ref<PymssModel[]>([])
 const pymssModel = ref('')
 const pymssStatus = ref<PymssStatus | null>(null)
 const downloadedPymssModels = computed(() =>
-  pymssModels.value.filter((item) => item.purpose === 'vocal_separation' && item.downloaded),
+  pymssModels.value.filter((item) => isPymssCoverSeparationModel(item) && item.downloaded),
 )
 const bufferSeconds = ref(8)
 const chunkSeconds = ref(1.5)
@@ -819,7 +820,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.page { --accent: var(--xb-primary, #00d5ff); --text-primary: var(--xb-text, #f4f7fb); --text-muted: var(--xb-muted, #8f9aaa); --border-color: var(--xb-border, #344151); --app-bg: var(--xb-bg, #0c1118); position: relative; z-index: 1; max-width: 1320px; margin: 24px auto 40px; padding: 28px 24px 60px; border: 1px solid var(--xb-border, #344151); border-radius: 14px; background: color-mix(in srgb, var(--xb-bg, #0c1118) 78%, transparent); box-shadow: 0 18px 60px rgba(20, 35, 70, .12); backdrop-filter: blur(18px); }
+.page { --accent: var(--xb-primary, #00d5ff); --text-primary: var(--xb-text, #f4f7fb); --text-muted: var(--xb-muted, #8f9aaa); --border-color: var(--xb-border, #344151); --app-bg: var(--xb-bg, #0c1118); position: relative; z-index: 1; max-width: var(--xb-page-max, 1320px); margin: 24px auto 40px; padding: 28px var(--xb-page-gutter, 24px) 60px; border: 1px solid var(--xb-border, #344151); border-radius: 14px; background: color-mix(in srgb, var(--xb-bg, #0c1118) 78%, transparent); box-shadow: 0 18px 60px rgba(20, 35, 70, .12); backdrop-filter: blur(18px); }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
 .eyebrow { margin: 0 0 6px; color: var(--accent, #00d5ff); font-size: 12px; font-weight: 700; }
 h1 { margin: 0; font-size: 30px; letter-spacing: 0; } .page-sub { margin: 8px 0 0; color: var(--text-muted, #8f9aaa); }
@@ -1012,6 +1013,7 @@ input[type='range'] { width: 100%; accent-color: var(--accent, #00d5ff); } .refe
 .sync-panel span { display: grid; gap: 4px; min-width: 0; }
 .sync-panel b { color: var(--xb-text, var(--text-primary, #f4f7fb)); font-size: 12px; }
 .sync-panel small { color: var(--xb-muted, var(--text-muted, #8f9aaa)); line-height: 1.45; }
+@media (min-width: 1700px) { .layout { grid-template-columns: minmax(0, 1fr) minmax(420px, 520px); } }
 @media (max-width: 940px) { .layout { grid-template-columns: 1fr; } .monitor { position: static; } }
 @media (max-width: 640px) { .page { margin: 10px 8px 24px; padding: 20px 14px 40px; } .page-head { align-items: flex-start; flex-direction: column; } .model-grid, .control-grid, .param-grid, .select-grid, .pitch-guard-grid, .source-library-list, .system-audio-setup { grid-template-columns: 1fr; } .system-audio-note { grid-column: auto; } .setting-title { flex-wrap: wrap; } .manual-param-switch { width: 100%; margin-left: 0; white-space: normal; } }
 </style>

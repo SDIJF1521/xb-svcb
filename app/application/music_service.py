@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 import config
 from domain.formatting import file_size_label
 from .adapters import ensure_data_dirs
-from .ports import SettingsRepository
+from .ports import AudioStreamerPort, SettingsRepository
 
 # settings.json 中保存用户 API Key 的键名
 _API_KEY_SETTING = "music_api_key"
@@ -96,6 +96,21 @@ def _ext_from_url(url: str) -> str | None:
         return None
     ext = "." + m.group(1).lower()
     return ext if ext in config.AUDIO_EXTS else None
+
+
+def _mime_for_format(fmt: str) -> str:
+    """把音频格式名映射成浏览器可识别的 MIME（拿不到时留空由上游决定）。"""
+    value = str(fmt or "").strip().lower().lstrip(".")
+    return {
+        "mp3": "audio/mpeg",
+        "m4a": "audio/mp4",
+        "aac": "audio/aac",
+        "flac": "audio/flac",
+        "wav": "audio/wav",
+        "ogg": "audio/ogg",
+        "opus": "audio/ogg",
+    }.get(value, "")
+
 
 
 def _content_range_total(value: str) -> int:
@@ -245,8 +260,13 @@ def _song_mid(data: dict[str, Any]) -> str:
 class MusicService:
     """封装妖狐音乐 API 的搜索、单曲详情与下载。"""
 
-    def __init__(self, settings: SettingsRepository) -> None:
+    def __init__(
+        self,
+        settings: SettingsRepository,
+        streamer: AudioStreamerPort | None = None,
+    ) -> None:
         self._settings = settings
+        self._streamer = streamer
         self._limiter = _AsyncRateLimiter(config.MUSIC_API_QPS)
         self._downloaded_cache_lock = threading.Lock()
         self._downloaded_cache: tuple[int, list[dict[str, Any]]] | None = None
@@ -389,6 +409,24 @@ class MusicService:
         """获取在线试听地址；酷我经后端代理为 data URI。"""
         return self._submit(
             self._preview(msg, n, self._normalize_source(source), song_id=song_id)
+        )
+
+    def stream_online(
+        self,
+        msg: str,
+        n: int,
+        source: str | None = None,
+        song_id: str | None = None,
+    ) -> dict[str, Any]:
+        """获取整首在线歌曲的播放地址（优先后端代理，保留原始音质）。
+
+        与 45 秒试听不同，这里会挑选可用的最高音质直链并登记到本机音频流
+        服务：前端因此可以完整播放、拖动进度，并让 Web Audio 读取同一路音频。
+        """
+        return self._submit(
+            self._stream_online(
+                msg, int(n or 1), self._normalize_source(source), song_id=song_id
+            )
         )
 
     def get_lyrics(
@@ -881,6 +919,116 @@ class MusicService:
             "size": file_size_label(dest),
         }
 
+    async def _stream_online(
+        self,
+        msg: str,
+        n: int,
+        source: str,
+        song_id: str | None = None,
+    ) -> dict[str, Any]:
+        """解析整首在线歌曲，挑选可用音质并登记本机代理地址。"""
+        detail: dict[str, Any] = {}
+        urls: list[str] = []
+        # 酷我按「无损 → 极高 → SQ → 标准」逐级尝试；其它曲库直接取单曲详情。
+        sizes = _KUWO_DOWNLOAD_SIZES if source == "kuwo" else (None,)
+        for size in sizes:
+            try:
+                detail = await self._get_song(
+                    msg, n, source, song_id=song_id, size=size
+                )
+            except Exception as exc:  # noqa: BLE001 - 网络错误转成可读提示
+                detail = {"ok": False, "error": str(exc)}
+            if not detail.get("ok"):
+                continue
+            urls = self._song_audio_urls(detail.get("song") or {})
+            if urls:
+                break
+        if not urls:
+            return {
+                "ok": False,
+                "error": str(
+                    detail.get("error")
+                    or "无法获取播放地址（可能为 VIP / 无版权歌曲）"
+                ),
+            }
+
+        try:
+            import httpx
+        except ImportError:
+            return {"ok": False, "error": "缺少 httpx 依赖，请重新安装运行环境"}
+
+        timeout = httpx.Timeout(25.0, connect=12.0, read=25.0, write=20.0)
+        chosen = ""
+        content_type = ""
+        last_error = ""
+        client = None
+        try:
+            client = httpx.AsyncClient(timeout=timeout, follow_redirects=True)
+        except Exception:  # noqa: BLE001 - 代理环境解析失败时退化为直连
+            try:
+                client = httpx.AsyncClient(
+                    timeout=timeout, follow_redirects=True, trust_env=False
+                )
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": f"无法初始化播放连接：{exc}"}
+        if client is None:
+            return {"ok": False, "error": "无法初始化播放连接"}
+        async with client:
+            for url in urls:
+                headers = {**self._download_headers(url, source), "Range": "bytes=0-1"}
+                try:
+                    async with client.stream("GET", url, headers=headers) as response:
+                        if response.status_code not in (200, 206):
+                            last_error = f"HTTP {response.status_code}"
+                            continue
+                        ctype = str(response.headers.get("content-type") or "")
+                        if ctype and not ctype.startswith("audio") and "octet-stream" not in ctype:
+                            last_error = f"返回内容不是音频（{ctype}）"
+                            continue
+                        chosen = url
+                        content_type = ctype if ctype.startswith("audio") else ""
+                        break
+                except (httpx.HTTPError, OSError) as exc:
+                    last_error = str(exc) or exc.__class__.__name__
+
+        if not chosen:
+            return {
+                "ok": False,
+                "error": last_error or "该歌曲暂时无法播放（VIP / 版权 / 链接失效）",
+            }
+
+        song = detail.get("song") or {}
+        fmt = str(song.get("format") or "").strip().lower()
+        if not fmt:
+            ext = _ext_from_url(chosen)
+            fmt = ext.lstrip(".") if ext else ""
+        quality = str(song.get("quality") or "")
+        lossless = fmt in {"flac", "wav", "ape", "alac", "aiff"} or "无损" in quality
+        mime = content_type or _mime_for_format(fmt)
+        headers = self._download_headers(chosen, source)
+
+        url = ""
+        direct = True
+        if self._streamer is not None:
+            try:
+                url = self._streamer.publish_remote(
+                    [chosen], headers, content_type=mime
+                )
+            except Exception:  # noqa: BLE001 - 代理失败时退回直链
+                url = ""
+            if url:
+                direct = False
+        if not url:
+            url = chosen
+        return {
+            "ok": True,
+            "url": url,
+            "format": fmt,
+            "quality": quality,
+            "lossless": lossless,
+            "direct": direct,
+        }
+
     async def _preview(
         self,
         msg: str,
@@ -1350,6 +1498,8 @@ class MusicService:
         headers = {
             "User-Agent": _BROWSER_UA,
             "Accept": "audio/*,*/*;q=0.8",
+            # 音频按原始字节透传：避免中间层压缩改变 Content-Length 与 Range 对齐。
+            "Accept-Encoding": "identity",
         }
         if source == "kuwo" or "kuwo" in url.lower():
             headers.update(

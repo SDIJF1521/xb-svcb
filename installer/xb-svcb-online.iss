@@ -2,9 +2,9 @@
 ; complete hardware-specific offline installer set from a public HTTPS directory.
 
 #define MyAppName "XB-SVCB"
-#define MyAppVersion "0.1.1"
+#define MyAppVersion "0.1.2"
 #ifndef XB_ONLINE_BASE_URL
-  #define XB_ONLINE_BASE_URL "https://invalid.example/xb-svcb/0.1.1"
+  #define XB_ONLINE_BASE_URL "https://invalid.example/xb-svcb/0.1.2"
 #endif
 #ifndef XB_ONLINE_MANIFEST_SHA256
   #define XB_ONLINE_MANIFEST_SHA256 "0000000000000000000000000000000000000000000000000000000000000000"

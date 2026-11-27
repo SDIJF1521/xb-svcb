@@ -1506,10 +1506,18 @@ class AudioEditorService:
                         "primary": False,
                     },
                 )
+        elif workflow == "audio_editor":
+            # 编辑器归档的作品只有渲染成品，没有翻唱任务的 source/vocal/ai 分轨。
+            # 必须把 output_path 作为成品轨加入，否则后续 remember(output_path)
+            # 会把它标记为已处理，最终得到空工程并返回 None。
+            add_track(_label("编辑成品", locale), "ai", work.get("output_path"))
         else:
             add_track(_label("AI 翻唱干声", locale), "ai", ai_merged or (ai_paths[0] if ai_paths else None))
 
         # 成品音轨已加入后，再标记整轨成品路径，避免「中间片段」重复导入。
+        if not tracks and work.get("output_path"):
+            # 兼容早期/手工归档的作品：没有 source/vocal/ai 字段，只有成品文件。
+            add_track(_label("编辑成品", locale), "ai", work.get("output_path"))
         remember(work.get("output_path"))
 
         mid_clips: list[dict[str, Any]] = []
@@ -3417,6 +3425,72 @@ class AudioEditorService:
             return None
         return payload if isinstance(payload, dict) else None
 
+    @staticmethod
+    def _reference_spans(
+        payload: dict[str, Any] | None,
+        duration: float,
+    ) -> list[tuple[float, float]]:
+        """参考演唱区间：提取时的音符跨度（被删掉的音符据此静音）。
+
+        新缓存直接记在 ``voice_spans``；旧缓存没有这个字段时退回「上次保存的音符」，
+        这样升级后第一次删除音符也能立刻静音。
+        """
+        data = payload if isinstance(payload, dict) else {}
+        spans = editor_midi.note_spans(data.get("voice_spans"), duration)
+        if spans:
+            return spans
+        return editor_midi.note_spans(data.get("notes"), duration)
+
+    @staticmethod
+    def _mute_spans(
+        reference: list[tuple[float, float]],
+        notes: list[dict[str, Any]],
+        duration: float,
+    ) -> list[dict[str, float]]:
+        """参考跨度里当前音符没覆盖到的部分 → 需要静音的区间（片段内时间）。"""
+        if not reference:
+            return []
+        holes = editor_midi.uncovered_spans(reference, notes, duration=duration)
+        return [
+            {"start": round(start, 3), "end": round(end, 3)} for start, end in holes
+        ]
+
+    @staticmethod
+    def _clip_reference_spans(
+        reference: list[tuple[float, float]],
+        start: float,
+        clip_duration: float,
+    ) -> list[tuple[float, float]]:
+        """整轨（绝对时间）的参考跨度 → 某个片段的片段内时间。"""
+        local: list[tuple[float, float]] = []
+        for span_start, span_end in reference:
+            left = max(0.0, span_start - start)
+            right = min(clip_duration, span_end - start)
+            if right - left >= editor_midi.MIN_NOTE_SECONDS:
+                local.append((left, right))
+        return local
+
+    @staticmethod
+    def _voice_spans_payload(spans: list[tuple[float, float]]) -> list[dict[str, float]]:
+        """参考跨度 → sidecar 里的 ``voice_spans`` 结构。"""
+        return [
+            {"start": round(start, 3), "end": round(end, 3)} for start, end in spans
+        ]
+
+    def _seed_voice_spans(
+        self,
+        payload: dict[str, Any],
+        duration: float,
+        notes: Any = None,
+    ) -> None:
+        """首次写入 ``voice_spans``：用「改动前」的音符跨度当参考演唱区间。"""
+        if editor_midi.note_spans(payload.get("voice_spans"), duration):
+            return
+        source = payload.get("notes") if notes is None else notes
+        spans = editor_midi.note_spans(source, duration)
+        if spans:
+            payload["voice_spans"] = self._voice_spans_payload(spans)
+
     def _clip_model_config(self, clip: dict[str, Any]) -> str:
         """优先用该片段重推理时的主模型配置（决定 F0 采样率与 hop）。"""
         meta = clip.get("metadata") or {}
@@ -3674,7 +3748,8 @@ class AudioEditorService:
             and float(sidecar.get("audio_mtime") or 0.0) == signature["audio_mtime"]
         ):
             notes = editor_midi.clean_notes(sidecar.get("notes"), duration)
-            if notes:
+            # 空音符也要走缓存：用户可能把整段音符都删了，重新分析会把它们捡回来。
+            if notes or isinstance(sidecar.get("notes"), list):
                 return {
                     "ok": True,
                     "clip_id": clip_id,
@@ -3698,6 +3773,10 @@ class AudioEditorService:
             **signature,
             "duration": round(duration, 3),
             "notes": notes,
+            # 参考演唱区间：之后删掉的音符据此静音。
+            "voice_spans": self._voice_spans_payload(
+                editor_midi.note_spans(notes, duration)
+            ),
             "analysis": analysed.get("analysis") or {},
             "extracted_at": self._now(),
         }
@@ -3751,6 +3830,8 @@ class AudioEditorService:
         cleaned = editor_midi.clean_notes(notes, duration)
         sidecar_path = self._midi_path(project_id, clip_id)
         payload = self._read_midi_sidecar(sidecar_path) or {}
+        # 参考演唱区间要在覆盖 notes 之前落盘，否则删掉的音符就无从判断了。
+        self._seed_voice_spans(payload, duration)
         source = Path(str(clip.get("file") or ""))
         payload.update(
             {
@@ -3815,11 +3896,14 @@ class AudioEditorService:
                 "ok": False,
                 "error": f"片段过短：至少 {self._MIN_MIDI_SECONDS:.2f} 秒才能应用 MIDI",
             }
+        sidecar = self._read_midi_sidecar(self._midi_path(project_id, clip_id)) or {}
         if notes is None:
-            sidecar = self._read_midi_sidecar(self._midi_path(project_id, clip_id)) or {}
             notes = sidecar.get("notes")
         cleaned = editor_midi.clean_notes(notes, duration)
-        if not cleaned:
+        mute_spans = self._mute_spans(
+            self._reference_spans(sidecar, duration), cleaned, duration
+        )
+        if not cleaned and not mute_spans:
             return {"ok": False, "error": "没有 MIDI 音符可以应用"}
         if not self._midi_pitch.available:
             return {"ok": False, "error": "MIDI 音高重绘环境未就绪（需要 vocal 运行时）"}
@@ -3830,6 +3914,7 @@ class AudioEditorService:
             cleaned,
             folder,
             sample_rate=self._project_sample_rate(project),
+            mute_spans=mute_spans,
         )
         if updated is None:
             return {"ok": False, **report}
@@ -3880,11 +3965,14 @@ class AudioEditorService:
                 "ok": False,
                 "error": f"片段过短：至少 {self._MIN_MIDI_SECONDS:.2f} 秒才能试听",
             }
+        sidecar = self._read_midi_sidecar(self._midi_path(project_id, clip_id)) or {}
         if notes is None:
-            sidecar = self._read_midi_sidecar(self._midi_path(project_id, clip_id)) or {}
             notes = sidecar.get("notes")
         cleaned = editor_midi.clean_notes(notes, duration)
-        if not cleaned:
+        mute_spans = self._mute_spans(
+            self._reference_spans(sidecar, duration), cleaned, duration
+        )
+        if not cleaned and not mute_spans:
             return {"ok": False, "error": "没有 MIDI 音符可以试听"}
         if not self._midi_pitch.available:
             return {"ok": False, "error": "MIDI 音高重绘环境未就绪（需要 vocal 运行时）"}
@@ -3903,6 +3991,7 @@ class AudioEditorService:
             cleaned,
             preview_root,
             sample_rate=self._project_sample_rate(project),
+            mute_spans=mute_spans,
         )
         if updated is None:
             return {"ok": False, **report}
@@ -3986,6 +4075,9 @@ class AudioEditorService:
         """写入音符缓存：片段范围记音频签名，轨道范围记整轨片段签名。"""
         path = self._midi_path(project_id, target_id)
         payload = self._read_midi_sidecar(path) or {}
+        # 参考演唱区间只在第一次写入时补齐：它描述的是「这段音频本来唱了什么」，
+        # 之后用户删掉的音符要靠它才能静音。
+        self._seed_voice_spans(payload, duration)
         payload.update(
             {
                 "scope": scope,
@@ -4013,8 +4105,13 @@ class AudioEditorService:
         folder: Path,
         *,
         sample_rate: int = 44100,
+        mute_spans: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-        """把片段内时间轴上的音符重绘成新片段音频（不落盘工程）。"""
+        """把片段内时间轴上的音符重绘成新片段音频（不落盘工程）。
+
+        ``mute_spans`` 是「被删掉的音符」留下的区间（片段内时间），重绘时直接静音，
+        这样删除音符在试听/应用里都真的听不到声音。
+        """
         clip_id = str(clip.get("id") or "")
         source = Path(str(clip.get("file") or ""))
         _start, _end, duration = self._clip_span(clip)
@@ -4026,7 +4123,10 @@ class AudioEditorService:
             return None, {"error": "片段裁剪失败，无法应用 MIDI"}
         f0_path = folder / f"{clip_id}_f0.npy"
         f0_curve = f0_path if f0_path.is_file() and f0_path.stat().st_size > 64 else None
-        key = self._rerun_key(span_path, clip, "midi", {"notes": len(notes)})
+        mutes = [dict(item) for item in (mute_spans or []) if isinstance(item, dict)]
+        key = self._rerun_key(
+            span_path, clip, "midi", {"notes": len(notes), "mutes": len(mutes)}
+        )
         out_dir = folder / "applied"
         out_dir.mkdir(parents=True, exist_ok=True)
         output = out_dir / f"{clip_id}_{key}.wav"
@@ -4035,6 +4135,7 @@ class AudioEditorService:
             notes=notes,
             destination=output,
             f0_curve=f0_curve,
+            mute_spans=mutes,
         )
         if not result.get("applied") or not output.is_file():
             return None, {
@@ -4057,12 +4158,14 @@ class AudioEditorService:
             "applied_file": str(output),
             "applied_notes": int(result.get("applied_notes") or 0),
             "applied_seconds": float(result.get("applied_seconds") or 0.0),
+            "muted_seconds": float(result.get("muted_seconds") or 0.0),
             "source_file": str(source),
         }
         updated["metadata"] = meta
         return updated, {
             "applied_notes": int(result.get("applied_notes") or 0),
             "applied_seconds": float(result.get("applied_seconds") or 0.0),
+            "muted_seconds": float(result.get("muted_seconds") or 0.0),
             "skipped": result.get("skipped") or [],
         }
 
@@ -4143,6 +4246,10 @@ class AudioEditorService:
             "track_signature": signature,
             "duration": duration,
             "notes": notes,
+            # 参考演唱区间（工程绝对时间）：之后删掉的音符据此静音。
+            "voice_spans": self._voice_spans_payload(
+                editor_midi.note_spans(notes, duration)
+            ),
             "analysis": {"clips": analyses, "empty_track": not spans},
             "extracted_at": self._now(),
         }
@@ -4189,6 +4296,8 @@ class AudioEditorService:
         cleaned = editor_midi.clean_notes(notes, duration)
         sidecar_path = self._midi_path(project_id, track_id)
         payload = self._read_midi_sidecar(sidecar_path) or {}
+        # 参考演唱区间要在覆盖 notes 之前落盘（旧的整轨缓存同样要补上）。
+        self._seed_voice_spans(payload, duration)
         payload.update(
             {
                 "scope": "track",
@@ -4247,11 +4356,12 @@ class AudioEditorService:
         if track.get("locked"):
             return {"ok": False, "error": "音轨已锁定"}
         duration = self._track_span(project, track)
+        sidecar = self._read_midi_sidecar(self._midi_path(project_id, track_id)) or {}
         if notes is None:
-            sidecar = self._read_midi_sidecar(self._midi_path(project_id, track_id)) or {}
             notes = sidecar.get("notes")
         cleaned = editor_midi.clean_notes(notes, duration)
-        if not cleaned:
+        reference = self._reference_spans(sidecar, duration)
+        if not cleaned and not reference:
             return {"ok": False, "error": "没有 MIDI 音符可以应用"}
         clips = [clip for clip in track.get("clips", []) or [] if not clip.get("locked")]
         if not clips:
@@ -4275,30 +4385,20 @@ class AudioEditorService:
             clip_duration = max(0.0, end - start)
             if clip.get("locked") or clip_duration < self._MIN_MIDI_SECONDS:
                 continue
-            local: list[dict[str, Any]] = []
-            for note in cleaned:
-                note_start = float(note.get("start") or 0.0)
-                note_end = float(note.get("end") or 0.0)
-                if note_end <= start + 1e-6 or note_start >= end - 1e-6:
-                    continue
-                left = max(0.0, note_start - start)
-                right = min(clip_duration, note_end - start)
-                if right - left < editor_midi.MIN_NOTE_SECONDS:
-                    continue
-                local_note = {**note, "start": round(left, 3), "end": round(right, 3)}
-                # 曲线的时间是相对音符起点的；音符被片段边界裁过时要跟着平移。
-                curve = editor_midi.shift_curve(
-                    note.get("curve"), (start + left) - note_start, right - left
-                )
-                if curve:
-                    local_note["curve"] = curve
-                else:
-                    local_note.pop("curve", None)
-                local.append(local_note)
-            if not local:
+            local = self._clip_local_notes(cleaned, start, end, clip_duration)
+            local_mutes = self._mute_spans(
+                self._clip_reference_spans(reference, start, clip_duration),
+                local,
+                clip_duration,
+            )
+            if not local and not local_mutes:
                 continue
             updated, report = self._apply_notes_to_clip(
-                clip, local, folder, sample_rate=sample_rate
+                clip,
+                local,
+                folder,
+                sample_rate=sample_rate,
+                mute_spans=local_mutes,
             )
             if updated is None:
                 reports.append(
@@ -4323,6 +4423,7 @@ class AudioEditorService:
         previous: dict[str, Any] = raw_previous if isinstance(raw_previous, dict) else {}
         applied_notes = sum(int(item.get("applied_notes") or 0) for item in reports)
         applied_seconds = sum(float(item.get("applied_seconds") or 0.0) for item in reports)
+        muted_seconds = sum(float(item.get("muted_seconds") or 0.0) for item in reports)
         meta["midi"] = {
             **previous,
             "scope": "track",
@@ -4330,6 +4431,7 @@ class AudioEditorService:
             "applied_at": self._now(),
             "applied_notes": applied_notes,
             "applied_seconds": round(applied_seconds, 3),
+            "muted_seconds": round(muted_seconds, 3),
         }
         next_track["metadata"] = meta
         next_project["waveform_cache"] = {}
@@ -4350,7 +4452,156 @@ class AudioEditorService:
                 "scope": "track",
                 "applied_notes": applied_notes,
                 "applied_seconds": round(applied_seconds, 3),
+                "muted_seconds": round(muted_seconds, 3),
                 "clips": reports,
+            },
+        }
+
+    @staticmethod
+    def _clip_local_notes(
+        notes: list[dict[str, Any]],
+        start: float,
+        end: float,
+        clip_duration: float,
+    ) -> list[dict[str, Any]]:
+        """整轨音符（绝对时间）→ 某个片段的片段内时间，曲线一起平移。"""
+        local: list[dict[str, Any]] = []
+        for note in notes:
+            note_start = float(note.get("start") or 0.0)
+            note_end = float(note.get("end") or 0.0)
+            if note_end <= start + 1e-6 or note_start >= end - 1e-6:
+                continue
+            left = max(0.0, note_start - start)
+            right = min(clip_duration, note_end - start)
+            if right - left < editor_midi.MIN_NOTE_SECONDS:
+                continue
+            local_note = {**note, "start": round(left, 3), "end": round(right, 3)}
+            # 曲线的时间是相对音符起点的；音符被片段边界裁过时要跟着平移。
+            curve = editor_midi.shift_curve(
+                note.get("curve"), (start + left) - note_start, right - left
+            )
+            if curve:
+                local_note["curve"] = curve
+            else:
+                local_note.pop("curve", None)
+            local.append(local_note)
+        return local
+
+    def preview_track_midi(
+        self,
+        project_id: str,
+        track_id: str,
+        notes: Any = None,
+    ) -> dict[str, Any]:
+        """整轨试听：按片段重绘（含删除即静音）后渲染成一条预览音频。
+
+        整轨模式的时间轴是工程绝对时间，所以先逐片段把音符落到音频上，再把这条轨
+        交给渲染服务混成一条音频；试听播放头因此与钢琴卷帘的整轨时间轴对齐。
+        """
+        project = self._repo.get(project_id)
+        if not project:
+            return {"ok": False, "error": "工程不存在"}
+        track, _index, _clip = self._find_clip_ref_by_track_id(project, track_id)
+        if not track:
+            return {"ok": False, "error": "音轨不存在"}
+        duration = self._track_span(project, track)
+        sidecar = self._read_midi_sidecar(self._midi_path(project_id, track_id)) or {}
+        if notes is None:
+            notes = sidecar.get("notes")
+        cleaned = editor_midi.clean_notes(notes, duration)
+        reference = self._reference_spans(sidecar, duration)
+        clips = [
+            clip
+            for clip in track.get("clips", []) or []
+            if not clip.get("locked")
+            and (float(clip.get("end") or 0.0) - float(clip.get("start") or 0.0))
+            >= self._MIN_MIDI_SECONDS
+        ]
+        if not clips:
+            return {"ok": False, "error": "音轨上没有可用片段：先把音频导入该轨再试听"}
+
+        sample_rate = self._project_sample_rate(project)
+        folder = self._midi_dir(project_id)
+        preview_root = folder / "preview" / new_id("tprev_")
+        preview_root.mkdir(parents=True, exist_ok=True)
+        next_track = copy.deepcopy(track)
+        reports: list[dict[str, Any]] = []
+        rendered = 0
+        failures = 0
+        if self._midi_pitch.available:
+            # 片段自己的 F0 曲线跟着临时目录走，重绘才能用上原始基频。
+            for clip in next_track.get("clips", []) or []:
+                clip_id = str(clip.get("id") or "")
+                source_f0 = folder / f"{clip_id}_f0.npy"
+                if source_f0.is_file():
+                    try:
+                        shutil.copyfile(source_f0, preview_root / f"{clip_id}_f0.npy")
+                    except OSError:
+                        pass
+            for clip in list(next_track.get("clips", []) or []):
+                start = float(clip.get("start") or 0.0)
+                end = float(clip.get("end") or 0.0)
+                clip_duration = max(0.0, end - start)
+                if clip.get("locked") or clip_duration < self._MIN_MIDI_SECONDS:
+                    continue
+                local = self._clip_local_notes(cleaned, start, end, clip_duration)
+                local_mutes = self._mute_spans(
+                    self._clip_reference_spans(reference, start, clip_duration),
+                    local,
+                    clip_duration,
+                )
+                if not local and not local_mutes:
+                    continue
+                updated, report = self._apply_notes_to_clip(
+                    clip,
+                    local,
+                    preview_root,
+                    sample_rate=sample_rate,
+                    mute_spans=local_mutes,
+                )
+                if updated is None:
+                    error = str(report.get("error") or "")
+                    # 「没有音符需要修改」是没改动，不是失败：原音频本来就该照常播放。
+                    if "没有音符需要修改" not in error:
+                        failures += 1
+                        reports.append(
+                            {"clip_id": str(clip.get("id") or ""), "error": error}
+                        )
+                    continue
+                index = next_track["clips"].index(clip)
+                next_track["clips"][index] = updated
+                rendered += 1
+                reports.append({"clip_id": str(updated.get("id") or ""), **(report or {})})
+        if failures and not rendered:
+            errors = [item.get("error") for item in reports if item.get("error")]
+            return {
+                "ok": False,
+                "error": str(errors[0]) if errors else "整轨试听渲染失败",
+                "report": {"clips": reports, "rendered_clips": 0},
+            }
+
+        snapshot = {
+            "id": project_id,
+            "duration": max(duration, 0.05),
+            "sample_rate": sample_rate,
+            "roles": copy.deepcopy(project.get("roles") or []),
+            "tracks": [{**next_track, "mute": False}],
+        }
+        output = preview_root / "track_preview.mp3"
+        rendered_path = self._render.render_snapshot(snapshot, output, "mp3")
+        if rendered_path is None or not Path(rendered_path).is_file():
+            return {"ok": False, "error": "整轨试听渲染失败"}
+        return {
+            "ok": True,
+            "scope": "track",
+            "audio": self._store.audio_data_uri(Path(rendered_path), exact=True),
+            "audio_path": str(rendered_path),
+            "duration": round(duration, 3),
+            "rendered_clips": rendered,
+            "report": {
+                "clips": reports,
+                "rendered_clips": rendered,
+                "midi_ready": bool(self._midi_pitch.available),
             },
         }
 

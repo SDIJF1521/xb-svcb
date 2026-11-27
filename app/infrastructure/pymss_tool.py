@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -59,6 +60,14 @@ class PymssTool:
     def __init__(self) -> None:
         self._download_lock = threading.RLock()
         self._download_jobs: dict[str, dict[str, Any]] = {}
+        # catalog 解析只依赖 PyMSS 安装目录里的 model_catalog.json。缓存解析结果，
+        # 避免翻唱页、工作流页、实时页和编辑器反复启动子进程读取同一份目录。
+        self._catalog_lock = threading.RLock()
+        self._catalog_payloads: dict[bool, list[dict[str, Any]]] = {}
+        # PyMSS 版本号需要启动其解释器；系统状态每 30 秒轮询一次，不能每次都重新导入 torch。
+        self._version_lock = threading.RLock()
+        self._version_cache: str | None = None
+        self._version_loaded = False
 
     @property
     def available(self) -> bool:
@@ -66,6 +75,14 @@ class PymssTool:
 
     def status(self, model: str = "") -> str:
         return config.pymss_status(model)
+
+    def model_ready(self, model: str = "") -> bool:
+        """指定 catalog 模型的权重是否已经下载（端口方法）。"""
+        return config.pymss_model_ready(model)
+
+    def downloaded_model_stems(self) -> set[str]:
+        """一次扫描目录，返回已下载模型的 stem 集合（端口方法）。"""
+        return config.pymss_downloaded_model_stems()
 
     @staticmethod
     def declared_stems(model: str = "") -> list[str]:
@@ -75,21 +92,61 @@ class PymssTool:
     def version(self) -> str | None:
         if not self.available:
             return None
+        with self._version_lock:
+            if self._version_loaded:
+                return self._version_cache
+        value = self._read_package_version()
+        if not value:
+            value = "PyMSS"
+            try:
+                result = subprocess.run(
+                    [str(config.PYMSS_PYTHON), "-c", "import pymss; print(getattr(pymss, '__version__', 'pymss'))"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=30,
+                    env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+                    **config.subprocess_no_window(),
+                )
+                lines = (result.stdout or "").strip().splitlines()
+                if result.returncode == 0 and lines:
+                    value = lines[-1]
+            except (OSError, subprocess.SubprocessError):
+                value = "PyMSS"
+        with self._version_lock:
+            self._version_cache = value
+            self._version_loaded = True
+        return value
+
+    @staticmethod
+    def _read_package_version() -> str | None:
+        """Read the installed PyMSS version from dist-info without importing torch."""
+        python = config.PYMSS_PYTHON
+        if not python:
+            return None
+        root = python.parent.parent
         try:
-            result = subprocess.run(
-                [str(config.PYMSS_PYTHON), "-c", "import pymss; print(getattr(pymss, '__version__', 'pymss'))"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-                env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
-                **config.subprocess_no_window(),
-            )
-            value = (result.stdout or "").strip().splitlines()
-            return value[-1] if result.returncode == 0 and value else "PyMSS"
-        except (OSError, subprocess.SubprocessError):
-            return "PyMSS"
+            candidates = [root / "Lib" / "site-packages"]
+            candidates.extend(root.glob("lib/python*/site-packages"))
+        except OSError:
+            return None
+        for site_packages in candidates:
+            if not site_packages.is_dir():
+                continue
+            try:
+                metadata_files = sorted(site_packages.glob("pymss-*.dist-info/METADATA"))
+            except OSError:
+                continue
+            for metadata in metadata_files:
+                try:
+                    for line in metadata.read_text(encoding="utf-8", errors="replace").splitlines():
+                        if line.lower().startswith("version:"):
+                            version = line.split(":", 1)[1].strip()
+                            return version or None
+                except OSError:
+                    continue
+        return None
 
     @staticmethod
     def _purpose_for_categories(primary: str, secondary: str) -> str:
@@ -142,6 +199,129 @@ class PymssTool:
             return []
         if not self.available:
             return self._fallback_models(purpose)
+        payload = self._catalog_payload(bool(supported_only))
+        if payload is None:
+            return self._fallback_models(purpose)
+        # 一次扫描模型目录即可判断所有条目的下载状态；逐条调用
+        # ``pymss_model_ready`` 会把整个目录重复 rglob 三百多次。
+        downloaded_stems = config.pymss_downloaded_model_stems()
+        filtered: list[dict[str, Any]] = []
+        for item in payload:
+            entry = dict(item)
+            category = str(entry.get("category") or "").strip()
+            primary = str(entry.get("primary_category") or "").strip()
+            secondary = str(entry.get("secondary_category") or "").strip()
+            if (not primary or not secondary) and "/" in category:
+                primary, secondary = (part.strip() for part in category.split("/", 1))
+            item_purpose = self._purpose_for_categories(primary, secondary)
+            if not include_all and (not item_purpose or secondary.casefold() == "vr_backing_vocal"):
+                continue
+            entry["purpose"] = item_purpose
+            entry["purpose_label"] = config.PYMSS_PURPOSE_LABELS.get(item_purpose, "")
+            entry["category_label"] = " / ".join(
+                part for part in (
+                    str(entry.get("primary_category_label") or "").strip(),
+                    str(entry.get("secondary_category_label") or "").strip(),
+                ) if part
+            ) or category
+            name = str(entry.get("name") or "").strip()
+            entry["downloaded"] = bool(name) and Path(name).stem.casefold() in downloaded_stems
+            if not purpose or item_purpose == purpose:
+                filtered.append(entry)
+        return filtered
+
+    def _catalog_payload(self, supported_only: bool) -> list[dict[str, Any]] | None:
+        """Cached catalog rows; only the static catalog is cached, download state is not."""
+        with self._catalog_lock:
+            cached = self._catalog_payloads.get(supported_only)
+        if cached is not None:
+            return cached
+        payload = self._read_catalog_json(supported_only)
+        if payload is None:
+            payload = self._read_catalog_runtime(supported_only)
+        if payload is not None:
+            with self._catalog_lock:
+                self._catalog_payloads[supported_only] = payload
+        return payload
+
+    @staticmethod
+    def _catalog_python_code() -> str:
+        """Lightweight catalog loader: read the JSON shipped with PyMSS directly.
+
+        Importing ``pymss`` pulls in torch, which costs several seconds on every
+        catalog or status refresh.  The catalog itself is a plain JSON file, so
+        reading it in a short-lived interpreter is enough.
+        """
+        return (
+            "import sysconfig,pathlib; "
+            "path=pathlib.Path(sysconfig.get_paths()['purelib'])/'pymss'/'resources'/'model_catalog.json'; "
+            "print(path.read_text(encoding='utf-8'))"
+        )
+
+    def _read_catalog_json(self, supported_only: bool) -> list[dict[str, Any]] | None:
+        try:
+            result = subprocess.run(
+                [str(config.PYMSS_PYTHON), "-c", self._catalog_python_code()],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+                **config.subprocess_no_window(),
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        # The JSON file is pretty-printed, so parse the whole payload instead of
+        # the last line (warnings, if any, appear before the opening brace).
+        text = str(result.stdout or "")
+        start = text.find("{")
+        if start < 0:
+            return None
+        try:
+            data = json.loads(text[start:])
+        except json.JSONDecodeError:
+            return None
+        models = data.get("models") if isinstance(data, dict) else None
+        if not isinstance(models, list):
+            return None
+        rows: list[dict[str, Any]] = []
+        for raw in models:
+            if not isinstance(raw, dict):
+                continue
+            supported = bool(raw.get("supported", True))
+            if supported_only and not supported:
+                continue
+            primary = str(raw.get("primary_category") or "").strip()
+            secondary = str(raw.get("secondary_category") or "").strip()
+            category = str(raw.get("category_path") or "").strip()
+            if not category and primary:
+                category = f"{primary}/{secondary}" if secondary else primary
+            try:
+                size_bytes = int(raw.get("size_bytes") or 0)
+            except (TypeError, ValueError):
+                size_bytes = 0
+            rows.append(
+                {
+                    "name": str(raw.get("name") or ""),
+                    "architecture": str(raw.get("architecture") or ""),
+                    "supported": supported,
+                    "category": category,
+                    "primary_category": primary,
+                    "primary_category_label": str(raw.get("primary_category_cn") or ""),
+                    "secondary_category": secondary,
+                    "secondary_category_label": str(raw.get("secondary_category_cn") or ""),
+                    "purpose": secondary,
+                    "target_stem": str(raw.get("target_stem") or ""),
+                    "size_bytes": size_bytes,
+                }
+            )
+        return rows
+
+    def _read_catalog_runtime(self, supported_only: bool) -> list[dict[str, Any]] | None:
+        """Fallback for PyMSS builds without a readable model_catalog.json."""
         code = (
             "import json,pymss; "
             f"rows=pymss.list_models(supported={bool(supported_only)!r}); "
@@ -164,40 +344,12 @@ class PymssTool:
                 **config.subprocess_no_window(),
             )
             if result.returncode != 0:
-                return self._fallback_models(purpose)
-            # Torch/modelscope may print warnings before the JSON payload.  The
-            # previous full-string json.loads turned a harmless warning into an
-            # empty fallback catalog, making valid models look non-inferable.
+                return None
+            # Torch/modelscope may print warnings before the JSON payload.
             payload = self._last_json_payload(result.stdout)
-            if not isinstance(payload, list):
-                return self._fallback_models(purpose)
-            filtered: list[dict[str, Any]] = []
-            for item in payload:
-                category = str(item.get("category") or "").strip()
-                primary = str(item.get("primary_category") or "").strip()
-                secondary = str(item.get("secondary_category") or "").strip()
-                if (not primary or not secondary) and "/" in category:
-                    primary, secondary = (part.strip() for part in category.split("/", 1))
-                item_purpose = self._purpose_for_categories(
-                    primary,
-                    secondary,
-                )
-                if not include_all and (not item_purpose or secondary.casefold() == "vr_backing_vocal"):
-                    continue
-                item["purpose"] = item_purpose
-                item["purpose_label"] = config.PYMSS_PURPOSE_LABELS.get(item_purpose, "")
-                item["category_label"] = " / ".join(
-                    part for part in (
-                        str(item.get("primary_category_label") or "").strip(),
-                        str(item.get("secondary_category_label") or "").strip(),
-                    ) if part
-                ) or category
-                item["downloaded"] = bool(config.pymss_model_ready(str(item.get("name") or "")))
-                if not purpose or item_purpose == purpose:
-                    filtered.append(item)
-            return filtered
-        except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
-            return self._fallback_models(purpose)
+            return payload if isinstance(payload, list) else None
+        except (OSError, subprocess.SubprocessError):
+            return None
 
     @staticmethod
     def _last_json_payload(output: str | None) -> Any:
@@ -620,6 +772,85 @@ class PymssTool:
             del self._download_jobs[str(key)]
             return True
 
+    @staticmethod
+    def _is_cover_vocal_entry(entry: dict[str, Any]) -> bool:
+        """Whether a catalog row can provide vocals for a full-song cover.
+
+        Catalog purpose is not reliable: some useful two-way models
+        (``instvox_duality``) and karaoke/backing-vocal models are not in the
+        legacy vocal_extraction allow-list. Prefer target stems, while still
+        rejecting duet, chorus, speech, multi-stem and pure-instrumental rows.
+        """
+        purpose = str(entry.get("purpose") or "").strip().lower()
+        if purpose in {
+            config.PYMSS_PURPOSE_DEREVERB,
+            config.PYMSS_PURPOSE_HARMONY_LEGACY,
+        }:
+            return False
+        description = " ".join(
+            str(entry.get(key) or "")
+            for key in (
+                "category_label",
+                "primary_category_label",
+                "secondary_category_label",
+                "purpose_label",
+            )
+        ).lower()
+        if re.search(
+            r"双人|二重唱|对唱|合唱|男女声|男声|女声|语音|说话|多轨|单乐器|"
+            r"混响|回声|duet|duo|chorus|male.?female|speech|speaker|multi|"
+            r"instrument|guitar|bass|drum|piano|reverb|echo|dereverb|deecho|denoise",
+            description,
+        ):
+            return False
+
+        raw_stems = entry.get("target_stems") or entry.get("stems") or []
+        if isinstance(raw_stems, str):
+            raw_stems = re.split(r"[/,;|]", raw_stems)
+        stems = [
+            str(stem or "").strip().lower()
+            for stem in raw_stems
+            if str(stem or "").strip()
+        ]
+        name = str(entry.get("name") or "").lower()
+        unsafe_name = re.search(
+            r"(^|[^a-z0-9])(inst|instrumental|multi|speech|speaker|male|female|"
+            r"duet|guitar|bass|drum|piano)([^a-z0-9]|$)",
+            name,
+        )
+        instvox = re.search(
+            r"instvox|inst_vox|instrumental[_-]?vocal|duality",
+            name,
+        )
+        if unsafe_name and not instvox:
+            return False
+        if not stems:
+            # A few catalog revisions / test doubles expose only a name. If
+            # there is no category metadata at all, keep the historical
+            # behavior and let the requested vocal purpose through; otherwise
+            # require a vocal hint in the description.
+            if purpose == config.PYMSS_PURPOSE_VOCAL:
+                return True
+            if not description.strip():
+                return True
+            return bool(re.search(r"vocal|voice|人声", description))
+        if len(stems) > 2:
+            return False
+        if not any(re.search(r"vocal|voice|人声", stem) for stem in stems):
+            return False
+        forbidden = (
+            "male", "female", "speech", "speaker", "dialog", "duet",
+            "bass", "drum", "guitar", "piano", "other", "multi",
+            "男声", "女声", "语音", "说话", "和声", "卡拉", "吉他",
+            "贝斯", "鼓", "钢琴", "多轨",
+        )
+        if any(word in stem for stem in stems for word in forbidden):
+            return False
+        has_accompaniment = any(
+            re.search(r"instrument|accompani|inst$|伴奏", stem) for stem in stems
+        )
+        return len(stems) == 1 or has_accompaniment
+
     def _resolve_model(
         self,
         model: str,
@@ -632,9 +863,12 @@ class PymssTool:
             model_purpose = config.PYMSS_PURPOSE_DEREVERB
         if model_purpose not in {*config.PYMSS_ALLOWED_MODEL_CATEGORIES, "generic"}:
             raise RuntimeError("不支持的 PyMSS 模型用途")
+        # Vocal separation needs the complete catalog: useful two-way models
+        # may have an empty catalog purpose but valid vocals/instrumental stems.
+        include_all = model_purpose in {"generic", config.PYMSS_PURPOSE_VOCAL}
         catalog = self.list_models(
-            purpose="" if model_purpose == "generic" else model_purpose,
-            include_all=model_purpose == "generic",
+            purpose="" if include_all else model_purpose,
+            include_all=include_all,
         )
         model_aliases: dict[str, str] = {}
         catalog_by_name: dict[str, dict[str, Any]] = {}
@@ -659,7 +893,10 @@ class PymssTool:
                 resolved = matches[0]
         if not resolved:
             raise RuntimeError("该模型不属于受支持的 PyMSS 人声处理类别")
-        return resolved, catalog_by_name.get(resolved.casefold(), {}), model_purpose
+        entry = catalog_by_name.get(resolved.casefold(), {})
+        if model_purpose == config.PYMSS_PURPOSE_VOCAL and not self._is_cover_vocal_entry(entry):
+            raise RuntimeError("该模型不属于受支持的 PyMSS 人声处理类别")
+        return resolved, entry, model_purpose
 
     def open_realtime_session(
         self,

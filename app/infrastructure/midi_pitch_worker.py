@@ -10,6 +10,9 @@ MIDI 子编辑器里的音符最终要落到音频上，而不是用 MIDI 音源
 
 未修改的音符（差值小于阈值）不做任何处理，所以「提取 → 应用」不会把歌手的自然
 音准洗成电音；只有真正被拖动的音符才会被压到目标音高。
+
+被删掉的音符另有 ``mute_spans``：这些区间不做移调，直接把重绘结果衰减到 0（两端
+各带一小段淡变），所以「删掉一段音符」在音频里能真的听出来，而不是原唱照旧。
 """
 
 from __future__ import annotations
@@ -30,6 +33,10 @@ _PRAAT_FLOOR_HZ = 55.0
 _PRAAT_CEILING_HZ = 2000.0
 _F0_FRAME = 1024
 _F0_HOP = 256
+# 静音区间的边缘淡变：太长会把前后音符吃掉，太短会「咔哒」。
+_MUTE_FADE_SECONDS = 0.012
+# 比这更短的静音区间直接忽略（拖动/吸附留下的碎缝）。
+_MIN_MUTE_SECONDS = 0.05
 
 
 def _tier_points(tier, praat_call):  # noqa: ANN001, ANN202
@@ -256,6 +263,60 @@ def _ratio_at(seconds, spans, ramp: float, tier_hz=None):  # noqa: ANN001, ANN20
     return ratios
 
 
+def normalize_mute_spans(value, duration: float) -> list[tuple[float, float]]:
+    """归一化静音区间：裁剪到片段内、排序、合并重叠，丢掉过短的碎缝。"""
+    spans: list[tuple[float, float]] = []
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            if isinstance(item, dict):
+                start_value, end_value = item.get("start"), item.get("end")
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                start_value, end_value = item[0], item[1]
+            else:
+                continue
+            try:
+                start = max(0.0, float(start_value))
+                end = min(float(duration), float(end_value))
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(start) or not math.isfinite(end):
+                continue
+            if end - start >= _MIN_MUTE_SECONDS:
+                spans.append((start, end))
+    spans.sort(key=lambda span: (span[0], span[1]))
+    merged: list[tuple[float, float]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1] + 0.01:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def mute_gain(length: int, spans: list[tuple[float, float]], rate: int):  # noqa: ANN201
+    """静音区间的增益曲线：区间内 0，两端各用 ``_MUTE_FADE_SECONDS`` 淡出/淡入。"""
+    import numpy as np
+
+    gain = np.ones(max(0, int(length)), dtype=np.float64)
+    if not spans or gain.size == 0:
+        return gain
+    fade = max(1, int(round(float(rate) * _MUTE_FADE_SECONDS)))
+    for start, end in spans:
+        left = max(0, min(gain.size, int(round(float(start) * rate))))
+        right = max(left, min(gain.size, int(round(float(end) * rate))))
+        if right <= left:
+            continue
+        head = max(0, left - fade)
+        if left > head:
+            ramp = np.linspace(1.0, 0.0, left - head, endpoint=False)
+            gain[head:left] = np.minimum(gain[head:left], ramp)
+        gain[left:right] = 0.0
+        tail = min(gain.size, right + fade)
+        if tail > right:
+            ramp = np.linspace(0.0, 1.0, tail - right, endpoint=True)
+            gain[right:tail] = np.minimum(gain[right:tail], ramp)
+    return gain
+
 
 def _restore_channels(original, tuned):  # noqa: ANN001, ANN202
     """把 Praat 的单声道重合成恢复到源声道布局，保留侧声道内容。"""
@@ -322,11 +383,12 @@ def apply_notes(
     notes: list[dict],
     *,
     f0_curve: Path | None = None,
+    mute_spans: list[dict] | list[tuple[float, float]] | None = None,
     min_offset_cents: float = _DEFAULT_MIN_OFFSET_CENTS,
     max_semitones: float = _DEFAULT_MAX_SEMITONES,
     ramp_seconds: float = _RAMP_SECONDS,
 ) -> dict:
-    """执行音频重绘；没有任何音符需要修改时复制原文件并返回 applied=False。"""
+    """执行音频重绘；没有音符要改也没有静音区间时复制原文件并返回 applied=False。"""
     try:
         import numpy as np
         import parselmouth
@@ -342,20 +404,22 @@ def apply_notes(
     if original.ndim == 1:
         original = original[np.newaxis, :]
     mono = np.mean(original, axis=0)
-    frames = max(1, int(round(duration / (_F0_HOP / float(rate)))))
-    times = np.linspace(0.0, duration, frames)
-
-    if f0_curve is not None and Path(f0_curve).is_file():
-        curve = np.asarray(np.load(str(f0_curve), allow_pickle=False), dtype=np.float64).reshape(-1)
-        if curve.size >= 8:
-            times = np.linspace(0.0, duration, curve.size)
-            f0 = curve
+    mutes = normalize_mute_spans(mute_spans, duration)
+    times = np.zeros(0, dtype=np.float64)
+    f0 = np.zeros(0, dtype=np.float64)
+    # 只删音符（notes 为空）时不用探基频，直接按静音区间处理原音频，省一次全片 FFT。
+    if notes:
+        if f0_curve is not None and Path(f0_curve).is_file():
+            curve = np.asarray(np.load(str(f0_curve), allow_pickle=False), dtype=np.float64).reshape(-1)
+            if curve.size >= 8:
+                times = np.linspace(0.0, duration, curve.size)
+                f0 = curve
+            else:
+                f0, _clarity = _estimate_f0(mono, rate)
+                times = np.linspace(0.0, duration, max(1, f0.size))
         else:
             f0, _clarity = _estimate_f0(mono, rate)
             times = np.linspace(0.0, duration, max(1, f0.size))
-    else:
-        f0, _clarity = _estimate_f0(mono, rate)
-        times = np.linspace(0.0, duration, max(1, f0.size))
 
     computed = note_offsets(
         notes,
@@ -390,10 +454,12 @@ def apply_notes(
         )
 
     report: dict = {
-        "applied": bool(spans),
+        "applied": bool(spans or mutes),
         "note_count": len(notes or []),
         "applied_notes": len(spans),
         "applied_seconds": round(sum(end - start for start, end, *_ in spans), 3),
+        "muted_seconds": round(sum(end - start for start, end in mutes), 3),
+        "mutes": [{"start": round(start, 3), "end": round(end, 3)} for start, end in mutes],
         "notes": applied,
         "skipped": [
             {
@@ -405,50 +471,56 @@ def apply_notes(
         ],
         "f0_source": "sidecar" if f0_curve is not None and Path(f0_curve).is_file() else "probe",
     }
-    if not spans:
+    if not spans and not mutes:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(Path(source).read_bytes())
         report["reason"] = "没有音符需要修改"
         return report
 
-    manipulation = call(
-        sound,
-        "To Manipulation",
-        0.01,
-        _PRAAT_FLOOR_HZ,
-        _PRAAT_CEILING_HZ,
-    )
-    source_tier = call(manipulation, "Extract pitch tier")
-    tier_times, tier_values = _tier_points(source_tier, call)
-    if tier_times.size < 2:
-        raise RuntimeError("Praat 没有取到可用的音高曲线")
-    ratios = _ratio_at(tier_times, spans, float(ramp_seconds), tier_values)
-    modified_tier = call(
-        "Create PitchTier",
-        "xb-midi-pitch",
-        float(sound.xmin),
-        float(sound.xmax),
-    )
-    for time_value, frequency, ratio in zip(tier_times, tier_values, ratios):
-        if not math.isfinite(float(frequency)) or frequency <= 0.0:
-            continue
-        call(
-            modified_tier,
-            "Add point",
-            float(time_value),
-            float(frequency) * float(ratio),
+    if spans:
+        manipulation = call(
+            sound,
+            "To Manipulation",
+            0.01,
+            _PRAAT_FLOOR_HZ,
+            _PRAAT_CEILING_HZ,
         )
-    call([modified_tier, manipulation], "Replace pitch tier")
-    tuned_sound = call(manipulation, "Get resynthesis (overlap-add)")
-    tuned = np.asarray(tuned_sound.values, dtype=np.float64)
-    expected = original.shape[-1]
-    if tuned.shape[-1] > expected:
-        tuned = tuned[..., :expected]
-    elif tuned.shape[-1] < expected:
-        tuned = np.pad(tuned, ((0, 0), (0, expected - tuned.shape[-1])))
+        source_tier = call(manipulation, "Extract pitch tier")
+        tier_times, tier_values = _tier_points(source_tier, call)
+        if tier_times.size < 2:
+            raise RuntimeError("Praat 没有取到可用的音高曲线")
+        ratios = _ratio_at(tier_times, spans, float(ramp_seconds), tier_values)
+        modified_tier = call(
+            "Create PitchTier",
+            "xb-midi-pitch",
+            float(sound.xmin),
+            float(sound.xmax),
+        )
+        for time_value, frequency, ratio in zip(tier_times, tier_values, ratios):
+            if not math.isfinite(float(frequency)) or frequency <= 0.0:
+                continue
+            call(
+                modified_tier,
+                "Add point",
+                float(time_value),
+                float(frequency) * float(ratio),
+            )
+        call([modified_tier, manipulation], "Replace pitch tier")
+        tuned_sound = call(manipulation, "Get resynthesis (overlap-add)")
+        tuned = np.asarray(tuned_sound.values, dtype=np.float64)
+        expected = original.shape[-1]
+        if tuned.shape[-1] > expected:
+            tuned = tuned[..., :expected]
+        elif tuned.shape[-1] < expected:
+            tuned = np.pad(tuned, ((0, 0), (0, expected - tuned.shape[-1])))
 
-    tuned = _restore_channels(original, tuned)
-    blended = _blend_spans(original, tuned, [(start, end) for start, end, *_ in spans], rate)
+        tuned = _restore_channels(original, tuned)
+        blended = _blend_spans(original, tuned, [(start, end) for start, end, *_ in spans], rate)
+    else:
+        # 只删音符、没有移调：直接用原音频，再按静音区间衰减，省掉一次 Praat 重合成。
+        blended = original.copy()
+    if mutes:
+        blended = blended * mute_gain(blended.shape[-1], mutes, rate)
     peak = float(np.max(np.abs(blended))) if blended.size else 0.0
     if peak > 0.99:
         blended *= 0.99 / peak
@@ -470,12 +542,32 @@ def _load_notes(path: Path) -> list[dict]:
     return [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
 
 
+def _load_spans(path: Path) -> list[dict]:
+    """静音区间文件：``[{"start": 1.0, "end": 1.5}, ...]``（也接受二元数组）。"""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return []
+    if isinstance(payload, dict):
+        payload = payload.get("spans") or []
+    if not isinstance(payload, list):
+        return []
+    spans: list[dict] = []
+    for item in payload:
+        if isinstance(item, dict):
+            spans.append(item)
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            spans.append({"start": item[0], "end": item[1]})
+    return spans
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="把 MIDI 音符应用到音频（Praat PSOLA）")
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--notes-json", required=True)
     parser.add_argument("--f0-npy", default="")
+    parser.add_argument("--mute-spans-json", default="")
     parser.add_argument("--report-json", default="")
     parser.add_argument("--min-offset-cents", type=float, default=_DEFAULT_MIN_OFFSET_CENTS)
     parser.add_argument("--max-semitones", type=float, default=_DEFAULT_MAX_SEMITONES)
@@ -489,11 +581,13 @@ def main() -> int:
         if not source.is_file():
             raise RuntimeError(f"输入不存在：{source}")
         notes = _load_notes(Path(args.notes_json))
+        mutes = _load_spans(Path(args.mute_spans_json)) if args.mute_spans_json else []
         report = apply_notes(
             source,
             output,
             notes,
             f0_curve=Path(args.f0_npy) if args.f0_npy else None,
+            mute_spans=mutes,
             min_offset_cents=float(args.min_offset_cents),
             max_semitones=float(args.max_semitones),
         )
@@ -519,6 +613,7 @@ def main() -> int:
         f"{'ok' if report.get('applied') else 'skip'}\t"
         f"{report.get('applied_notes', 0)}/{report.get('note_count', 0)}\t"
         f"{report.get('applied_seconds', 0.0)}s\t"
+        f"mute {report.get('muted_seconds', 0.0)}s\t"
         f"{report.get('reason') or ''}",
         flush=True,
     )

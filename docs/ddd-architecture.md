@@ -48,6 +48,7 @@
 - `audio_editor_rules.py`：工程/效果/包络归一化、时长与拉伸度量、片段与轨道查找、波形重算判定；
 - `lyrics.py`：LRC 与普通 TXT 歌词解析、按比例自动配时、由静音区间推导演唱范围；
 - `workflow_graph.py`：自定义工作流的节点图模型、图校验与拓扑排序；
+- `workflow_manifest.py`：工作流商城清单格式、节点图安全收敛、PyMSS 依赖解析与来源信息；
 - `work_request.py`：任务创建请求的业务规则（模式、工作流、模型、分句、参考音频）；
 - `vocal_enhancement.py`：歌声增强等级、强度归一化与设置解析规则；
 - `identity.py`：实体 ID 生成；
@@ -58,7 +59,7 @@
 每个服务 = 一个用例集合，负责「取数据 → 调领域规则/端口 → 落库 → 返回 DTO」：
 
 - 作品与推理：`work_service`、`conversion_service`、`realtime_cover_service`；
-- 模型：`model_service`、`model_hub_service`；
+- 模型：`model_service`、`model_hub_service`、`workflow_hub_service`（工作流商城编排）；
 - 编辑器与媒体：`audio_editor_service`（工程/轨道/片段与插件会话）、
   `editor_render_service`（渲染、预览、波形）、`media_service`（试听/导出/时长）、
   `audio_import_service`（拖拽与分块上传）、`theme_media_service`（背景媒体）；
@@ -84,6 +85,8 @@
   渲染/波形缓存、工程包 zip）、`data_transfer.py`（数据目录迁移搬运）
 - 音频：`ffmpeg_tool.py`、`audio_engine.py`、`ffmpeg` 之上的渲染能力
 - 分离与推理：`uvr_tool.py`、`pymss_tool.py`、`*_engine.py`、`*_worker.py`
+- 工作流商城：`workflow_hub_client.py`（ModelScope 搜索 / 清单读取 / 子进程上传，实现 `WorkflowHubGateway`）
+- 模型站：`model_hub_client.py`（ModelScope 搜索 / 清单读取 / 断点续传与分片下载，实现 `ModelHubGateway`）
 - 系统集成：`clipboard.py`、`system_audio.py`、`juce_vst3_host.py`、`window_theme.py`、`single_instance.py`
 
 ### 层外模块
@@ -127,6 +130,13 @@
 - 用例层不再直接做文件 I/O：作品工作目录/日志走 `WorkFilesPort`（`infrastructure/work_files.py`），
   编辑器工程目录、渲染/波形缓存、音频 data URI、工程包 zip 走 `EditorProjectStorePort`
   （`infrastructure/editor_project_store.py`），两者由组合根显式注入；
+- 工作流商城按分层拆分：清单格式 / 图收敛 / PyMSS 依赖解析在 `domain/workflow_manifest.py`，
+  ModelScope 搜索、清单读取与子进程上传在 `infrastructure/workflow_hub_client.py`
+  （实现 `WorkflowHubGateway`），`application/workflow_hub_service.py` 只做用例编排；
+  PyMSS 安装状态与下载通过 `PymssGateway` 端口访问；
+- 模型站同样收敛：ModelScope 搜索、清单读取、断点续传与分片下载在
+  `infrastructure/model_hub_client.py`（实现 `ModelHubGateway`），
+  `application/model_hub_service.py` 只做清单校验、导入与 DTO 组装；
 - `audio_editor_service` 按用例拆分：渲染/预览/波形移到 `application/editor_render_service.py`，
   `plugin_service` 的市场解析规则移到 `application/plugin_market.py`；
 - 重新审视后确认无需清理的点：`JobStatus` / `StepStatus` / `ModelType` 枚举、

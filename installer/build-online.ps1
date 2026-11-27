@@ -49,9 +49,9 @@ Options:
 Examples:
   .\installer\build-online.ps1 -ValidateOnly
   .\installer\build-online.ps1 -ManifestOnly
-  .\installer\build-online.ps1 -ReuseManifest -BaseUrl https://downloads.example.com/xb-svcb/0.1.1
-  .\installer\build-online.ps1 -BaseUrl https://downloads.example.com/xb-svcb/0.1.1
-  .\installer\build-online.ps1 -Source modelscope -ModelScopeRepo lkpp233/xb-svcb
+  .\installer\build-online.ps1 -ReuseManifest -BaseUrl https://downloads.example.com/xb-svcb/0.1.2
+  .\installer\build-online.ps1 -BaseUrl https://downloads.example.com/xb-svcb/0.1.2
+  .\installer\build-online.ps1 -Source modelscope -ModelScopeRepo lkpp233/xb-svcb-bate
 '@ | Write-Output
   return
 }
@@ -193,7 +193,7 @@ if ($ValidateOnly) {
   New-Item -ItemType Directory -Force -Path $validateDir | Out-Null
   try {
     & $iscc `
-      '/DXB_ONLINE_BASE_URL=https://invalid.example/xb-svcb/0.1.1' `
+      '/DXB_ONLINE_BASE_URL=https://invalid.example/xb-svcb/0.1.2' `
       '/DXB_ONLINE_MANIFEST_SHA256=0000000000000000000000000000000000000000000000000000000000000000' `
       "/O$validateDir" `
       '/FXB-SVCB-Online-Validation' `
@@ -204,7 +204,7 @@ if ($ValidateOnly) {
     & $iscc `
       '/DXB_ONLINE_MODELSCOPE=1' `
       '/DXB_ONLINE_MODELSCOPE_REPO=owner/repository' `
-      '/DXB_ONLINE_MODELSCOPE_REVISION=v0.1.1' `
+      '/DXB_ONLINE_MODELSCOPE_REVISION=v0.1.2' `
       '/DXB_ONLINE_MODELSCOPE_PATH=' `
       '/DXB_ONLINE_OUTPUT_FILENAME=XB-SVCB-Online-ModelScope-Validation' `
       '/DXB_ONLINE_MANIFEST_SHA256=0000000000000000000000000000000000000000000000000000000000000000' `

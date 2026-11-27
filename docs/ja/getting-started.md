@@ -4,11 +4,18 @@
 
 通常の利用者は、ハードウェア版を自動選択するオンラインインストーラーを使用してください。専用オフラインインストーラーも利用できます。ソースからの起動は、開発者およびエンジンを変更する必要がある利用者向けです。
 
+## 実行時の前提条件
+
+- Windows 10 1809 以降または Windows 11（64 ビット）。
+- **Microsoft Visual C++ 2015-2022 x64 再頒布可能パッケージ（最新版）**: <https://aka.ms/vs/17/release/vc_redist.x64.exe>。既に導入済みでも実行して「修復」を選んでください。古い場合や、他アプリが持つ古い `msvcp140.dll` に上書きされている場合、UVR が読み込む `onnxruntime` は import 時にクラッシュ（`0xC0000005`）し、セットアップは 4/12 ステップまたは最後の共有ランタイム検証で停止します。詳細は[最終ステップで失敗：UVR プローブがクラッシュする](#最終ステップで失敗uvr-プローブがクラッシュする)を参照。
+- ハードウェアに合った GPU ドライバー: NVIDIA RTX 40 系以下は CUDA126、RTX 50 系は CUDA128、AMD は ROCm 10 を優先（DirectML も可）、対応 GPU がない場合は CPU。
+- 64 ビット CPython 3.12.x: インストーラーに同梱。ソース実行時のみ別途必要で、Node.js 20.19+ または 22.12+ も要ります。
+
 ## オンラインインストール
 
-GitHub ReleasesからModelScope版`XB-SVCB-Online-Setup-ModelScope.exe`をダウンロードして実行し、「自動検出 (推奨)」を選択するか、ハードウェア版を手動で指定します。ModelScopeの`v0.1.1`リビジョンから選択した完全なEXE/BINセットだけをダウンロードし、各ファイルをSHA-256で検証してから多言語対応のオフラインセットアップを起動します。ダウンロード中はネットワーク接続を維持し、`www.modelscope.cn`へのアクセスを許可してください。
+GitHub ReleasesからModelScope版`XB-SVCB-Online-Setup-ModelScope.exe`をダウンロードして実行し、「自動検出 (推奨)」を選択するか、ハードウェア版を手動で指定します。ModelScopeの`v0.1.2`リビジョンから選択した完全なEXE/BINセットだけをダウンロードし、各ファイルをSHA-256で検証してから多言語対応のオフラインセットアップを起動します。ダウンロード中はネットワーク接続を維持し、`www.modelscope.cn`へのアクセスを許可してください。
 
-GitHubでは予備版`XB-SVCB-Online-Setup.exe`を公開しません。必要な場合は開発者から個別に入手してください。オンラインインストーラーはリポジトリやOSSの認証情報をコンピューターに保存しません。検証済みのEXE/BINは、オンラインインストーラーと同じ場所の`XB-SVCB-Downloads\0.1.1\<ハードウェア版>\`に保存され、そこから起動されます。このフォルダーはオンラインインストーラー終了時に削除されません。オンラインインストーラーを置くフォルダーには書き込み権限が必要です。ダウンロードの中断や検証エラーが発生した場合は再実行してください。保存されたEXEと同じ接頭辞を持つすべてのBINは、完全なオフラインパッケージとしても使用できます。
+GitHubでは予備版`XB-SVCB-Online-Setup.exe`を公開しません。必要な場合は開発者から個別に入手してください。オンラインインストーラーはリポジトリやOSSの認証情報をコンピューターに保存しません。検証済みのEXE/BINは、オンラインインストーラーと同じ場所の`XB-SVCB-Downloads\0.1.2\<ハードウェア版>\`に保存され、そこから起動されます。このフォルダーはオンラインインストーラー終了時に削除されません。オンラインインストーラーを置くフォルダーには書き込み権限が必要です。ダウンロードの中断や検証エラーが発生した場合は再実行してください。保存されたEXEと同じ接頭辞を持つすべてのBINは、完全なオフラインパッケージとしても使用できます。
 
 ## インストーラーを選ぶ
 
@@ -161,6 +168,7 @@ Set-Location $root
 ## ソース環境の要件
 
 - Windows。
+- 最新の Microsoft Visual C++ 2015-2022 x64 再頒布可能パッケージ（UVR の `onnxruntime` が依存。詳細は[実行時の前提条件](#実行時の前提条件)）。
 - ソース実行とリリースビルドには 64 ビット CPython 3.12.x が必要です。通常のインストールでは同梱ランタイムを使用します。
 - フロントエンドのビルドにのみ必要な Node.js 20.19+ または 22.12+。
 - PyPI、モデル配布元、上流リポジトリへの接続、または準備済みのオフライン wheelhouse とモデル資産。
@@ -247,9 +255,44 @@ set XB_GH_MIRROR=https://ghfast.top
 setup_env.bat
 ```
 
+### 最終ステップで失敗：UVR プローブがクラッシュする
+
+`uvr_mdx` / `uvr_vr` の検査が `3221225477`（`0xC0000005`）で終了し、`pip check` は全て互換と表示されます。原因はシステムの C++ ランタイムです。`onnxruntime` の pybind 拡張は静的リンクで、`C:\Windows\System32\msvcp140.dll` が古い、または `msvcp140_1.dll` と版が揃っていないと初期化時にアクセス違反になります。Windows のイベント ビューアー（アプリケーション ログ、イベント ID 1000）ではエラー モジュールが `MSVCP140.dll` と表示されます。
+
+1. 最新の [Microsoft Visual C++ 2015-2022 x64 再頒布可能パッケージ](https://aka.ms/vs/17/release/vc_redist.x64.exe) を導入し、既に導入済みでも「修復」を実行します。
+2. それでもクラッシュする場合、他アプリが古い `msvcp140.dll` を System32 に上書きしています。「アプリと機能」で旧 `Microsoft Visual C++ 2015 Redistributable (x64) - 14.0.x` をアンインストールしてから 2015-2022 を修復してください。
+3. 4 つのファイルが同一バージョンかつ 14.38 以上であることを確認します。
+
+```powershell
+foreach ($n in 'msvcp140.dll','msvcp140_1.dll','vcruntime140.dll','vcruntime140_1.dll') {
+  "{0} {1}" -f $n, [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$env:SystemRoot\System32\$n").FileVersion
+}
+```
+
+4. import を確認してからセットアップを再実行します。
+
+```bat
+runtimes\core-cu126\Scripts\python.exe -c "import onnxruntime; print('ORT_OK')"
+setup_env.bat --cu126 --only uvr seedvc ddsp
+```
+
+アプリの再インストール、インストール先の変更、Python 環境の作り直しでは回避できません。原因はインストール先ではなくシステムのランタイムにあります。
+
 ### FFmpeg が見つからない
 
 インストーラーパッケージには FFmpeg が含まれます。ソースから実行する場合は、システムの `PATH` に `ffmpeg` を追加するか、完全な Windows ビルドを `assets/tools/ffmpeg` に配置してください。
+
+### 非 ASCII パスで Failed to resolve Python.Runtime.Loader.Initialize が出る
+
+Windows の非 ASCII 文字を含むパスにおける pythonnet / clr-loader の既知の互換問題です（pythonnet #2141、clr-loader #59）。.NET Framework が `Python.Runtime.dll` をネットワーク上の場所と誤判定することがあります。
+
+起動時に pythonnet ランタイムと pywebview の WebView2 アセンブリを次の場所へミラーし、ASCII のみのパスから読み込みます。
+
+```text
+%LOCALAPPDATA%\XB-SVCB\clr-mirror
+```
+
+これによりプロジェクトはローカライズされたディレクトリのまま使用できます。起動できない場合は、このディレクトリへの書き込み権限を確認するか、プロジェクトを ASCII のみのパスへ移動してください。
 
 ### フロントエンドを変更しても古いページが表示される
 

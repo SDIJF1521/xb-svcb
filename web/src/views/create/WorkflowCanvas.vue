@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, ArrowUp, Close, Delete, Download, FolderOpened, FullScreen, Grid, MagicStick, Plus, RefreshLeft, RefreshRight, Setting, Upload } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowUp, Close, Delete, Download, FolderOpened, FullScreen, Grid, MagicStick, Plus, RefreshLeft, RefreshRight, Setting, Shop, Upload } from '@element-plus/icons-vue'
 import { api, type CoverWorkflow, type PymssModel, type WorkflowEdge, type WorkflowGraph, type WorkflowNode, type WorkflowNodeType } from '@/api'
 import { translateUiText } from '@/i18n'
 import { f0MethodsForFramework } from '@/utils/f0'
 import { preferredPymssModel, pymssPurposeKey } from '@/utils/pymssPurpose'
+import { mergePortOffsets, portOffsetKey as portKey, portOffsetsEqual } from '@/utils/workflowPorts'
 import { trackPreview } from '@/utils/workflowTitle'
 import PymssModelPicker from './PymssModelPicker.vue'
 
@@ -24,7 +25,11 @@ const props = withDefaults(
     pymssVocalModels?: string[]
     pymssHarmonyModels?: string[]
     pymssAllModels?: PymssModel[]
+    /** PyMSS 模型目录是否仍在读取：节点里的选择器据此显示加载状态。 */
+    pymssModelsLoading?: boolean
     songName?: string
+    /** 从商城进入时自动载入的已保存工作流 ID。 */
+    initialWorkflowId?: string
     runStatus?: string
     runProgress?: number
     runSteps?: { key: string; status: string }[]
@@ -35,7 +40,9 @@ const props = withDefaults(
     pymssVocalModels: () => [],
     pymssHarmonyModels: () => [],
     pymssAllModels: () => [],
+    pymssModelsLoading: false,
     songName: '',
+    initialWorkflowId: '',
     runStatus: '',
     runProgress: 0,
     runSteps: () => [],
@@ -46,6 +53,7 @@ const emit = defineEmits<{
   (e: 'pick-song'): void
   (e: 'run'): void
   (e: 'download-pymss', name: string): void
+  (e: 'open-market'): void
 }>()
 
 const graph = defineModel<WorkflowGraph>({ required: true })
@@ -177,7 +185,6 @@ function portDisplayName(port: string, node?: WorkflowNode): string {
 }
 
 const NODE_W = 268
-const portKey = (nodeId: string, side: 'in' | 'out', port: string) => `${nodeId}:${side}:${port}`
 
 // ---- 分离节点输出端口：按模型声明的音轨全量适配 ----
 const SEPARATE_BASE_OUTPUTS = ['vocals', 'instrumental']
@@ -304,6 +311,17 @@ function separateStemsUnknown(node: WorkflowNode): boolean {
   return declaredStems(node).length === 0
 }
 
+/**
+ * 仅当能确定 PyMSS 模型实际输出音轨时才清理旧连线。
+ * 工作流商城的自动载入会先渲染画布、后拿到模型目录；此时模型音轨未知，
+ * 如果仍按「只有 audio」推断去裁剪，会把 male / female / stem:xxx 等
+ * 有效连线全部删掉，看起来就像下载后的连线错乱。
+ */
+function canPruneSeparateEdges(node: WorkflowNode): boolean {
+  if (String(node.params?.engine || 'uvr').toLowerCase() !== 'pymss') return true
+  return !separateStemsUnknown(node)
+}
+
 // ---- 默认参数 ----
 function defaultParams(type: WorkflowNodeType): Record<string, any> {
   switch (type) {
@@ -407,7 +425,13 @@ const worldStyle = computed(() => ({
 /** 端口中心相对节点左上角的偏移（世界坐标，由 DOM 实测）。 */
 function portPos(node: WorkflowNode, side: 'in' | 'out', port: string) {
   const off = portOffsets.value[portKey(node.id, side, port)]
-  return { x: node.x + (off?.x ?? 0), y: node.y + (off?.y ?? 0) }
+  if (off) return { x: node.x + off.x, y: node.y + off.y }
+  // 模型目录尚未返回 / 端口刚变化时可能还没测量：回落到节点左右边缘中点，
+  // 避免连线从节点左上角飞出去，看起来像“连错节点”。
+  return {
+    x: node.x + (side === 'out' ? NODE_W : 0),
+    y: node.y + nodeHeightOf(node) / 2,
+  }
 }
 
 function edgePath(e: WorkflowEdge): string {
@@ -511,16 +535,27 @@ watch(activeNodeId, (id) => {
 })
 
 // ---- 端口位置测量 ----
-async function measurePorts() {
-  await nextTick()
+/**
+ * 读取端口相对节点左上角的偏移。
+ * ``targetIds`` 为空表示全量；指定时只碰这些节点，避免每次内容变高都遍历整张图。
+ */
+function collectPortOffsets(targetIds: Set<string> | null): {
+  next: Record<string, { x: number; y: number }>
+  touched: string[]
+} {
   const world = worldEl.value
-  if (!world) return
   const next: Record<string, { x: number; y: number }> = {}
+  const touched: string[] = []
+  if (!world) return { next, touched }
   const z = zoom.value || 1
   for (const node of nodes.value) {
+    if (targetIds && !targetIds.has(node.id)) continue
     const nodeEl = world.querySelector<HTMLElement>(`[data-node-el="${node.id}"]`)
     if (!nodeEl) continue
     const nr = nodeEl.getBoundingClientRect()
+    // 画布被隐藏（display:none / 弹窗收起）时尺寸为 0，测出来的偏移是垃圾值。
+    if (nr.width < 1 || nr.height < 1) continue
+    touched.push(node.id)
     nodeEl.querySelectorAll<HTMLElement>('[data-port-key]').forEach((portEl) => {
       const key = portEl.dataset.portKey
       if (!key) return
@@ -531,12 +566,71 @@ async function measurePorts() {
       }
     })
   }
-  portOffsets.value = next
+  return { next, touched }
+}
+
+/** 把测量结果写回 ``portOffsets``；内容没变就不触发重渲染。 */
+function applyPortOffsets(targetIds?: Iterable<string>) {
+  const ids = targetIds ? new Set(targetIds) : null
+  if (ids && !ids.size) return
+  const { next, touched } = collectPortOffsets(ids)
+  // 一个节点都没测到（元素还没渲染）时保留旧结果，避免连线瞬间全部回落。
+  if (!touched.length) return
+  // 全量测量且每个节点都测到了：直接替换（顺带清掉已删除节点的旧键）。
+  if (!ids && touched.length >= nodes.value.length) {
+    if (!portOffsetsEqual(next, portOffsets.value)) portOffsets.value = next
+    return
+  }
+  const merged = mergePortOffsets(portOffsets.value, next, touched)
+  if (!portOffsetsEqual(merged, portOffsets.value)) portOffsets.value = merged
+}
+
+async function measurePorts(nodeIds?: Iterable<string>) {
+  await nextTick()
+  applyPortOffsets(nodeIds)
+}
+
+// ---- 节点尺寸变化 → 增量重测端口 ----
+// 「高级参数」折叠展开、切换模型后参数区变高变矮都会改变输出端口的位置；
+// 只监听节点元素自身的尺寸，按动画帧合并后只重测尺寸变化的节点。
+let nodeResizeObserver: ResizeObserver | null = null
+const resizedNodeIds = new Set<string>()
+let portMeasureFrame = 0
+
+function schedulePortMeasure(nodeIds: Iterable<string>) {
+  for (const id of nodeIds) if (id) resizedNodeIds.add(id)
+  if (portMeasureFrame || !resizedNodeIds.size) return
+  portMeasureFrame = requestAnimationFrame(() => {
+    portMeasureFrame = 0
+    const ids = [...resizedNodeIds]
+    resizedNodeIds.clear()
+    if (ids.length) void measurePorts(ids)
+  })
+}
+
+/** 节点增删后重新把节点元素挂到同一个 ResizeObserver 上。 */
+function syncNodeResizeObserver() {
+  const observer = nodeResizeObserver
+  const world = worldEl.value
+  if (!observer || !world) return
+  observer.disconnect()
+  world.querySelectorAll<HTMLElement>('[data-node-el]').forEach((el) => {
+    const id = el.dataset.nodeEl
+    if (id) observer.observe(el)
+  })
 }
 
 watch(
-  () => [nodes.value.length, graph.value.id] as const,
-  () => void measurePorts(),
+  () => [
+    nodes.value.length,
+    graph.value.id,
+    nodes.value.map((node) => node.id).join('|'),
+  ] as const,
+  async () => {
+    await nextTick()
+    syncNodeResizeObserver()
+    void measurePorts()
+  },
 )
 
 // ---- 画布交互 ----
@@ -546,6 +640,19 @@ function clientToWorld(clientX: number, clientY: number) {
     x: (clientX - (rect?.left || 0) - panX.value) / zoom.value,
     y: (clientY - (rect?.top || 0) - panY.value) / zoom.value,
   }
+}
+
+/**
+ * 滚轮缩放期间不逐帧重测端口：端口偏移是「相对节点左上角」的，缩放不改变它。
+ * 手势停下来后再补测一次，既避免一轮滚轮几十次强制布局，也能吃掉浏览器取整误差。
+ */
+let zoomMeasureTimer = 0
+function scheduleZoomMeasure() {
+  if (zoomMeasureTimer) window.clearTimeout(zoomMeasureTimer)
+  zoomMeasureTimer = window.setTimeout(() => {
+    zoomMeasureTimer = 0
+    void measurePorts()
+  }, 140)
 }
 
 function onWheel(e: WheelEvent) {
@@ -559,7 +666,7 @@ function onWheel(e: WheelEvent) {
   zoom.value = Math.max(0.25, Math.min(3, zoom.value * factor))
   panX.value = mx - worldX * zoom.value
   panY.value = my - worldY * zoom.value
-  void measurePorts()
+  scheduleZoomMeasure()
 }
 
 function setZoom(next: number) {
@@ -639,7 +746,7 @@ function layoutRanks(): Map<string, number> {
  * 一键整理：按连线依赖分层、从左到右排列，同层纵向居中铺开，
  * 并用重心法做多轮扫描以减少连线交叉，最后自动缩放铺满画布。
  */
-async function tidyLayout() {
+async function tidyLayout(notify = true) {
   if (!nodes.value.length) return
   await nextTick()
   const heights = new Map<string, number>()
@@ -740,7 +847,7 @@ async function tidyLayout() {
   void measurePorts()
   await nextTick()
   await fitView()
-  ElMessage.success('已自动整理画布节点')
+  if (notify) ElMessage.success('已自动整理画布节点')
 }
 
 const panning = ref<{ startX: number; startY: number; ox: number; oy: number } | null>(null)
@@ -1413,7 +1520,7 @@ async function saveWorkflow() {
   }
 }
 
-async function loadWorkflow(id: string) {
+async function loadWorkflow(id: string, options: { autoTidy?: boolean } = {}) {
   const wf = savedWorkflows.value.find((w) => w.id === id)
   if (!wf) return
   graph.value = { id: wf.id, name: wf.name, updated_at: wf.updated_at, nodes: wf.nodes, edges: wf.edges }
@@ -1421,6 +1528,8 @@ async function loadWorkflow(id: string) {
   selectedNodeId.value = null
   selectedEdgeId.value = null
   await fitView()
+  // 商城工作流沿用作者的画布坐标可能很散，首次载入自动整理一次，减少交叉连线。
+  if (options.autoTidy) await tidyLayout(false)
 }
 
 // ---- 工作流文件导入 / 导出 ----
@@ -1521,8 +1630,11 @@ function normalizeNodes() {
     if (node.type === 'separate' || node.type === 'dereverb') syncPymssNodeType(node, false)
   }
   // 旧工作流可能连了当前模型并不输出的音轨，载入时静默清理。
+  // 模型目录尚未返回时先保留连线，等 watch(pymssAllModels) 拿到音轨后再判断。
   for (const node of graph.value.nodes) {
-    if (node.type === 'separate') pruneStalePortEdges(node, true)
+    if (node.type === 'separate' && canPruneSeparateEdges(node)) {
+      pruneStalePortEdges(node, true)
+    }
   }
 }
 
@@ -1534,8 +1646,12 @@ watch(
   () => {
     for (const node of nodes.value) {
       if (node.type === 'separate' || node.type === 'dereverb') syncPymssNodeType(node, false)
-      if (node.type === 'separate') pruneStalePortEdges(node, true)
+      if (node.type === 'separate' && canPruneSeparateEdges(node)) {
+        pruneStalePortEdges(node, true)
+      }
     }
+    // 模型音轨补全后端口数量可能变化，重新测量端口位置，避免连线落在节点角落。
+    void measurePorts()
   },
   { deep: true },
 )
@@ -1611,16 +1727,47 @@ const DEVICE_OPTIONS = [
   { label: 'CPU', value: 'cpu' },
 ]
 
-onMounted(() => {
+onMounted(async () => {
+  // 一个 ResizeObserver 监听所有节点：节点内容变高（展开高级参数等）时只重测变化的节点。
+  if (typeof ResizeObserver !== 'undefined') {
+    nodeResizeObserver = new ResizeObserver((entries) => {
+      const ids: string[] = []
+      for (const entry of entries) {
+        const id = (entry.target as HTMLElement).dataset?.nodeEl
+        if (id) ids.push(id)
+      }
+      if (ids.length) schedulePortMeasure(ids)
+    })
+  }
   window.addEventListener('keydown', onKeydown)
   window.addEventListener('pointerdown', onWindowPointerDown, true)
-  if (!graph.value.nodes?.length) newWorkflow()
-  else void fitView()
+  await refreshWorkflows()
+  const wantedId = String(props.initialWorkflowId || '').trim()
+  const wanted = wantedId
+    ? savedWorkflows.value.find((workflow) => workflow.id === wantedId)
+    : undefined
+  if (wanted) {
+    await loadWorkflow(wanted.id, { autoTidy: wanted.source?.origin === 'downloaded' })
+    ElMessage.success(`已载入工作流「${wanted.name}」`)
+  } else if (!graph.value.nodes?.length) {
+    newWorkflow()
+  } else {
+    void fitView()
+  }
   normalizeNodes()
-  void refreshWorkflows()
   pushHistory()
+  await nextTick()
+  syncNodeResizeObserver()
+  void measurePorts()
 })
 onUnmounted(() => {
+  nodeResizeObserver?.disconnect()
+  nodeResizeObserver = null
+  if (portMeasureFrame) cancelAnimationFrame(portMeasureFrame)
+  portMeasureFrame = 0
+  resizedNodeIds.clear()
+  if (zoomMeasureTimer) window.clearTimeout(zoomMeasureTimer)
+  zoomMeasureTimer = 0
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('pointerdown', onWindowPointerDown, true)
   window.removeEventListener('pointermove', onPanMove)
@@ -1787,6 +1934,9 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
         <div v-if="savedPanelOpen" class="wf-saved-panel" @pointerdown.stop>
           <div class="wf-saved-head">
             <span>已保存工作流</span>
+            <button class="wf-saved-shop" title="打开工作流商城" @click="emit('open-market')">
+              <el-icon><Shop /></el-icon>商城
+            </button>
             <button class="wf-saved-close" title="关闭" @click="savedPanelOpen = false">
               <el-icon><Close /></el-icon>
             </button>
@@ -1799,7 +1949,12 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
             :class="{ active: w.id === graph.id }"
           >
             <button class="wf-saved-pick" :title="`载入「${w.name}」`" @click="pickSavedWorkflow(w.id)">
-              <span class="wf-saved-name">{{ w.name }}</span>
+              <span class="wf-saved-name">
+                {{ w.name }}
+                <span v-if="w.source?.repo_id" class="wf-saved-src">
+                  {{ w.source.origin === 'uploaded' ? '已分享' : '商城' }}
+                </span>
+              </span>
               <span v-if="w.updated_at" class="wf-saved-meta">{{ w.updated_at }}</span>
             </button>
             <button class="wf-saved-del" title="删除该工作流" @click.stop="deleteSavedWorkflow(w)">
@@ -1820,7 +1975,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
         class="ghost-btn"
         :disabled="!nodes.length"
         title="按连线依赖自动排列节点，减少交叉"
-        @click="tidyLayout"
+        @click="tidyLayout()"
       >
         <el-icon class="el-icon--left"><Grid /></el-icon>一键整理
       </el-button>
@@ -1949,6 +2104,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                     v-if="node.params.engine === 'pymss'"
                     :model-value="node.params.model"
                     :models="props.pymssAllModels"
+                    :loading="props.pymssModelsLoading"
                     default-filter="vocal"
                     @update:model-value="onSeparateModelChange(node, $event)"
                     @download="emit('download-pymss', $event)"
@@ -1980,6 +2136,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                     <PymssModelPicker
                       v-model="node.params.model"
                       :models="props.pymssAllModels"
+                      :loading="props.pymssModelsLoading"
                       default-filter="dereverb"
                       @update:model-value="onDereverbModelChange(node, $event)"
                       @download="emit('download-pymss', $event)"
@@ -2285,6 +2442,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                   v-if="selectedNode.params.engine === 'pymss'"
                   :model-value="selectedNode.params.model"
                   :models="props.pymssAllModels"
+                  :loading="props.pymssModelsLoading"
                   default-filter="vocal"
                   @update:model-value="onSeparateModelChange(selectedNode, $event)"
                   @download="emit('download-pymss', $event)"
@@ -2371,6 +2529,7 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
                   v-if="selectedNode.params.engine === 'pymss'"
                   v-model="selectedNode.params.model"
                   :models="props.pymssAllModels"
+                  :loading="props.pymssModelsLoading"
                   default-filter="dereverb"
                   @update:model-value="onDereverbModelChange(selectedNode, $event)"
                   @download="emit('download-pymss', $event)"
@@ -2617,6 +2776,33 @@ const ENHANCE_CONTROLS: { key: string; label: string }[] = [
   background: transparent;
   color: var(--xb-muted);
   cursor: pointer;
+}
+.wf-saved-shop {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  margin-right: 4px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--xb-primary) 35%, transparent);
+  background: color-mix(in srgb, var(--xb-primary) 10%, transparent);
+  color: var(--xb-primary);
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.wf-saved-shop:hover { background: color-mix(in srgb, var(--xb-primary) 20%, transparent); }
+.wf-saved-src {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--xb-primary) 16%, transparent);
+  color: var(--xb-primary);
+  font-size: 9.5px;
+  font-weight: 700;
+  vertical-align: middle;
 }
 .wf-saved-close:hover { background: rgba(127, 127, 127, 0.16); color: var(--xb-text); }
 .wf-saved-empty { padding: 12px 8px; font-size: 12px; color: var(--xb-muted); text-align: center; }

@@ -33,6 +33,7 @@ from application import (
     SystemService,
     ThemeMediaService,
     WorkService,
+    WorkflowHubService,
 )
 from application.ports import (
     ItemRepository,
@@ -59,6 +60,7 @@ class Api:
         works: WorkService,
         music: MusicService,
         hub: ModelHubService,
+        workflow_hub: WorkflowHubService,
         editor: AudioEditorService,
         models_repo: ItemRepository,
         works_repo: ItemRepository,
@@ -79,6 +81,7 @@ class Api:
         self._works = works
         self._music = music
         self._hub = hub
+        self._workflow_hub = workflow_hub
         self._editor = editor
         self._models_repo = models_repo
         self._works_repo = works_repo
@@ -155,6 +158,8 @@ class Api:
         """释放桌面进程内的后台服务。"""
         self._realtime_cover.shutdown()
         self._http_api.shutdown()
+        # 播放器直通服务随桌面进程退出而关闭，避免遗留监听端口。
+        self._media.shutdown()
         # 清理所有应用生成的临时音频、UVR 中间文件和编辑器缓存；保留
         # data/temp 目录本身，便于下次启动直接复用。
         self._cleanup_temp()
@@ -352,13 +357,25 @@ class Api:
 
     def import_model(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         """导入一组模型，按 framework 分支处理 so-vits / RVC / SeedVC 文件角色。"""
-        return self._models.import_model(payload or {})
+        result = self._models.import_model(payload or {})
+        if result:
+            # 新模型可能通过哈希匹配到模型站条目，清掉安装状态缓存。
+            invalidate = getattr(self._hub, "invalidate_cache", None)
+            if callable(invalidate):
+                invalidate()
+        return result
 
     def set_default_model(self, model_id: str) -> bool:
         return self._models.set_default(model_id)
 
     def delete_model(self, model_id: str) -> bool:
-        return self._models.remove(model_id)
+        removed = self._models.remove(model_id)
+        if removed:
+            # 删除后模型站不能继续显示「查看本地」：让搜索缓存与哈希/来源检测重算。
+            invalidate = getattr(self._hub, "invalidate_cache", None)
+            if callable(invalidate):
+                invalidate()
+        return removed
 
     def inspect_model(self, model_id: str, repair: bool = False) -> dict[str, Any]:
         return self._models.inspect(model_id, bool(repair))
@@ -500,6 +517,8 @@ class Api:
             )
         # 音乐曲库下载同样纳入传输中心，避免下载大文件时界面没有反馈。
         jobs.extend(self._music.download_jobs())
+        # 工作流商城的上传 / 下载（含 PyMSS 依赖同步）也统一展示。
+        jobs.extend(self._workflow_hub.list_jobs())
         return jobs
 
     def hub_clear_job(self, key: str) -> bool:
@@ -508,7 +527,50 @@ class Api:
             return self._pymss.clear_download_job(key)
         if str(key or "").startswith("music:"):
             return self._music.clear_download_job(key)
+        if str(key or "").startswith(("wfdl:", "wful:")):
+            return self._workflow_hub.clear_job(key)
         return self._hub.clear_job(key or "")
+
+    # ---- 工作流商城（ModelScope 魔搭社区）----
+    def workflow_hub_search(
+        self,
+        query: str = "",
+        page: int = 1,
+        page_size: int = 12,
+        mine_only: bool = False,
+    ) -> dict[str, Any]:
+        """分页搜索工作流商城中由本软件上传的工作流。"""
+        return self._workflow_hub.search(
+            query or "", int(page or 1), int(page_size or 12), bool(mine_only)
+        )
+
+    def workflow_hub_detail(self, repo_id: str) -> dict[str, Any]:
+        """读取工作流详情：完整节点图、依赖的 PyMSS 模型与本地安装状态。"""
+        return self._workflow_hub.detail(repo_id)
+
+    def workflow_hub_start_download(self, repo_id: str) -> dict[str, Any]:
+        """后台下载工作流并同步 PyMSS 模型，立即返回任务 key。"""
+        return self._workflow_hub.start_download(repo_id)
+
+    def workflow_hub_start_upload(
+        self,
+        workflow_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """后台上传本地已保存工作流到商城，立即返回任务 key。"""
+        return self._workflow_hub.start_upload(workflow_id, metadata or {})
+
+    def workflow_hub_progress(self, key: str) -> dict[str, Any]:
+        """轮询工作流上传 / 下载进度。key 形如 'wfdl:<repo>' 或 'wful:<id>'。"""
+        return self._workflow_hub.get_progress(key or "")
+
+    def workflow_hub_list_jobs(self) -> list[dict[str, Any]]:
+        """列出工作流商城后台任务（含实时进度）。"""
+        return self._workflow_hub.list_jobs()
+
+    def workflow_hub_clear_job(self, key: str) -> bool:
+        """清理一条工作流商城任务记录。"""
+        return self._workflow_hub.clear_job(key or "")
 
     # ---- 作品 / 翻唱 ----
     def pick_audio_file(self) -> str | None:
@@ -800,6 +862,24 @@ class Api:
         """
         return self._media.data_uri(work_id, kind)
 
+    def get_work_stream(self, work_id: str, kind: str = "output") -> dict[str, Any]:
+        """返回作品的直通播放地址与技术参数（本地 HTTP + Range，无损直出）。"""
+        return self._media.stream_work(work_id, kind)
+
+    def get_music_stream(self, path: str) -> dict[str, Any]:
+        """返回已下载歌曲的直通播放地址与技术参数。"""
+        return self._media.stream_music(path)
+
+    def stream_music_online(
+        self,
+        msg: str,
+        n: int,
+        source: str | None = None,
+        song_id: str | None = None,
+    ) -> dict[str, Any]:
+        """返回整首在线歌曲的播放地址（本机代理，保留原始音质）。"""
+        return self._music.stream_online(msg, n, source, song_id)
+
     def export_work(self, work_id: str, fmt: str = "wav") -> str:
         """按指定格式导出翻唱成品，返回用户选择的保存路径。"""
         src = self._media.stem_path(work_id, "output")
@@ -1085,6 +1165,30 @@ class Api:
         path = self._editor.render(project_id, fmt)
         return str(path) if path else ""
 
+    def import_editor_project_to_works(
+        self, project_id: str, fmt: str = "wav"
+    ) -> dict[str, Any]:
+        """把编辑器渲染好的成品归档进「我的作品」，可直接播放、再编辑或导出。"""
+        project = self._editor.get(project_id)
+        if not project:
+            return {"ok": False, "error": "编辑工程不存在"}
+        output_format = str(fmt or "wav").strip().lower().lstrip(".")
+        if output_format not in {"wav", "mp3", "flac"}:
+            output_format = "wav"
+        path = self._editor.render(project_id, output_format)
+        if path is None:
+            return {"ok": False, "error": "渲染编辑工程失败，请确认工程中有音频片段"}
+        work = self._works.import_rendered_audio(
+            path,
+            title=str(project.get("title") or ""),
+            model_label="音频编辑器",
+            workflow="audio_editor",
+            duration=self._media.duration(str(path)),
+        )
+        if work is None:
+            return {"ok": False, "error": "保存到作品库失败，请检查数据目录权限"}
+        return {"ok": True, "work": work}
+
     def export_editor_project(self, project_id: str, fmt: str = "wav") -> str:
         src = self._editor.render(project_id, fmt)
         if src is None:
@@ -1283,6 +1387,15 @@ class Api:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._editor.apply_track_midi(project_id, track_id, notes, options or {})
+
+    def preview_editor_track_midi(
+        self,
+        project_id: str,
+        track_id: str,
+        notes: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """整轨试听：按片段重绘（含删除即静音）后渲染成一条可播放音频。"""
+        return self._editor.preview_track_midi(project_id, track_id, notes)
 
     # ---- MIDI 编曲（多乐器音序器） ----
 

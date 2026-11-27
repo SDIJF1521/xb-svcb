@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Search } from '@element-plus/icons-vue'
+import { Loading, Search } from '@element-plus/icons-vue'
 import type { PymssModel } from '@/api'
 import { translateUiText } from '@/i18n'
-import { pymssPurposeKey } from '@/utils/pymssPurpose'
+import { pymssPurposeKey, isPymssCoverSeparationModel } from '@/utils/pymssPurpose'
 
 // PyMSS 模型选择器：分类快捷筛选 + 关键词搜索 + 下载状态标记，
 // 供自定义工作流的人声分离 / 去混响节点使用（模型数量多，纯下拉很难找）。
@@ -14,12 +14,15 @@ const props = withDefaults(
     /** 打开面板时默认选中的筛选项：all / vocal / dereverb / harmony / downloaded */
     defaultFilter?: string
     placeholder?: string
+    /** 模型目录仍在读取时显示加载状态，而不是误报「尚未读取到」。 */
+    loading?: boolean
   }>(),
   {
     modelValue: '',
     models: () => [],
     defaultFilter: 'all',
     placeholder: '选择模型',
+    loading: false,
   },
 )
 
@@ -34,7 +37,7 @@ const filter = ref(props.defaultFilter || 'all')
 
 const MATCHERS: Record<string, (model: PymssModel) => boolean> = {
   all: () => true,
-  vocal: (model) => pymssPurposeKey(model) === 'vocal_separation',
+  vocal: (model) => isPymssCoverSeparationModel(model),
   dereverb: (model) => pymssPurposeKey(model) === 'dereverb',
   harmony: (model) => pymssPurposeKey(model) === 'harmony_removal',
   downloaded: (model) => model.downloaded !== false,
@@ -186,7 +189,11 @@ watch(open, (value) => {
             下载
           </button>
         </div>
-        <div v-if="!filtered.length" class="pmp-empty">
+        <div v-if="loading && !models.length" class="pmp-empty pmp-loading">
+          <el-icon class="pmp-spin"><Loading /></el-icon>
+          <span>{{ translateUiText('正在读取 PyMSS 模型目录…') }}</span>
+        </div>
+        <div v-else-if="!filtered.length" class="pmp-empty">
           {{
             !models.length
               ? '尚未读取到 PyMSS 模型目录'
@@ -434,6 +441,21 @@ watch(open, (value) => {
   text-align: center;
   font-size: 11.5px;
   color: var(--xb-muted);
+}
+.pmp-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.pmp-spin {
+  font-size: 13px;
+  animation: pmp-spin 0.9s linear infinite;
+}
+@keyframes pmp-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .pmp-foot {
   display: flex;

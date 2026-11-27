@@ -1274,13 +1274,16 @@
         :pymss-vocal-models="downloadedPymssVocalModels.map((m) => m.name)"
         :pymss-harmony-models="downloadedPymssHarmonyModels.map((m) => m.name)"
         :pymss-all-models="allPymssModels"
+        :pymss-models-loading="pymssCatalogLoading"
         :song-name="song?.name || ''"
         :run-status="currentWork?.mode === 'workflow' ? currentWork.status : ''"
         :run-steps="currentWork?.mode === 'workflow' ? currentWork.steps : []"
         :run-progress="currentWork?.mode === 'workflow' ? currentWork.progress : 0"
+        :initial-workflow-id="initialWorkflowId"
         @pick-song="onPickSong"
         @run="generate"
         @download-pymss="onWorkflowDownloadPymss"
+        @open-market="openWorkflowMarket"
       />
 
       <section class="card glass wf-runlog">
@@ -1395,6 +1398,7 @@ import { f0MethodsForFramework, normalizeF0Method } from '@/utils/f0'
 import { takePendingAudio } from '@/utils/pendingAudio'
 import { importDroppedAudio } from '@/utils/audioImport'
 import { workflowOutputTitle } from '@/utils/workflowTitle'
+import { isPymssCoverSeparationModel } from '@/utils/pymssPurpose'
 
 defineOptions({ name: 'CreatePage' })
 
@@ -1402,7 +1406,16 @@ const modelsStore = useModelsStore()
 const systemStore = useSystemStore()
 const worksStore = useWorksStore()
 const router = useRouter()
+const route = useRoute()
 const { models, defaultId } = storeToRefs(modelsStore)
+
+/** 从工作流商城「前往 AI 翻唱工作台」进入时，自动载入对应工作流。 */
+const initialWorkflowId = computed(() => {
+  const raw = route.query.workflow
+  const value = Array.isArray(raw) ? raw[0] : raw
+  return typeof value === 'string' ? value.trim() : ''
+})
+const openInWorkflowMode = route.query.mode === 'workflow' || !!initialWorkflowId.value
 
 interface Song {
   name: string
@@ -1438,7 +1451,8 @@ const pymssModel = ref(str(prefs.pymssModel, 'bs_roformer_voc_hyperacev2'))
 const pymssModels = ref<PymssModel[]>([])
 // 全量 PyMSS 模型目录（含未下载），供自定义工作流节点选择全部模型。
 const allPymssModels = ref<PymssModel[]>([])
-const downloadedPymssVocalModels = computed(() => pymssModels.value.filter((item) => item.purpose === 'vocal_separation' && item.downloaded))
+const pymssCatalogLoading = ref(false)
+const downloadedPymssVocalModels = computed(() => pymssModels.value.filter((item) => isPymssCoverSeparationModel(item) && item.downloaded))
 const downloadedPymssHarmonyModels = computed(() => pymssModels.value.filter((item) => (item.purpose === 'dereverb' || item.purpose === 'harmony_removal') && item.downloaded))
 const harmonyRemovalEnabled = ref(Boolean(prefs.harmonyRemovalEnabled))
 const harmonyModel = ref(str(prefs.harmonyModel, 'UVR-DeEcho-DeReverb.pth'))
@@ -1474,13 +1488,45 @@ async function downloadPymssModel() {
 watch(pymssModel, () => { void refreshPymssStatus() })
 watch(harmonyModel, () => { void refreshPymssStatus() })
 
-/** 全量 PyMSS 模型目录（含未下载），供工作流节点选择全部模型。 */
+/** 全量 PyMSS 模型目录（含未下载），预处理与工作流节点共用同一份数据。 */
+async function loadPymssCatalog() {
+  pymssCatalogLoading.value = true
+  try {
+    const catalog = await api.pymssModels(undefined, true)
+    pymssModels.value = catalog
+    allPymssModels.value = catalog
+    const vocalModels = catalog.filter((item) => isPymssCoverSeparationModel(item))
+    const harmonyModels = catalog.filter((item) => item.purpose === 'dereverb' || item.purpose === 'harmony_removal')
+    const downloadedVocal = vocalModels.filter((item) => item.downloaded)
+    const downloadedHarmony = harmonyModels.filter((item) => item.downloaded)
+    if (!downloadedVocal.some((item) => item.name === pymssModel.value)) {
+      pymssModel.value = downloadedVocal[0]?.name || ''
+    }
+    if (!downloadedHarmony.some((item) => item.name === harmonyModel.value)) {
+      harmonyModel.value = downloadedHarmony[0]?.name || ''
+    }
+    await refreshPymssStatus()
+  } catch {
+    /* PyMSS 可选，目录获取失败时保持原列表。 */
+  } finally {
+    pymssCatalogLoading.value = false
+  }
+}
+
+/** 下载完成后重新读取目录；与首屏加载共用同一个接口，避免重复启动 PyMSS。 */
 async function refreshAllPymssModels() {
   try {
-    allPymssModels.value = await api.pymssModels(undefined, true)
+    const catalog = await api.pymssModels(undefined, true)
+    pymssModels.value = catalog
+    allPymssModels.value = catalog
   } catch {
     /* PyMSS 可选，目录获取失败时保持原列表。 */
   }
+}
+
+/** 打开工作流商城（画布「已保存工作流」面板入口）。 */
+function openWorkflowMarket() {
+  void router.push('/workflows')
 }
 
 /** 工作流节点内直接下载任意 PyMSS 模型。 */
@@ -1702,7 +1748,9 @@ function paramsForFramework(framework: string, values: ParamValues): InferencePa
   return params
 }
 const mode = ref<'single' | 'multi' | 'workflow'>(
-  prefs.mode === 'multi' ? 'multi' : prefs.mode === 'workflow' ? 'workflow' : 'single',
+  openInWorkflowMode
+    ? 'workflow'
+    : prefs.mode === 'multi' ? 'multi' : prefs.mode === 'workflow' ? 'workflow' : 'single',
 )
 
 // 自定义工作流：画布节点图。初始为空，由 WorkflowCanvas 挂载时生成默认模板。
@@ -3139,7 +3187,6 @@ async function pickMultiReference(id: string) {
 }
 
 // 已下载素材（来自「资源获取」页）
-const route = useRoute()
 const downloaded = ref<DownloadedMusic[]>([])
 
 function pickDownloaded(d: DownloadedMusic) {
@@ -3382,24 +3429,10 @@ watch(trackEl, (el) => {
 
 onMounted(async () => {
   void loadDownloaded()
+  // PyMSS 目录读取与模型库读取互不依赖，并行启动，避免首屏串行等待。
+  const pymssCatalogReady = loadPymssCatalog()
   await modelsStore.load()
-  try {
-    pymssModels.value = await api.pymssModels()
-    void refreshAllPymssModels()
-    const vocalModels = pymssModels.value.filter((item) => item.purpose === 'vocal_separation')
-    const harmonyModels = pymssModels.value.filter((item) => item.purpose === 'dereverb' || item.purpose === 'harmony_removal')
-    const downloadedVocal = vocalModels.filter((item) => item.downloaded)
-    const downloadedHarmony = harmonyModels.filter((item) => item.downloaded)
-    if (!downloadedVocal.some((item) => item.name === pymssModel.value)) {
-      pymssModel.value = downloadedVocal[0]?.name || ''
-    }
-    if (!downloadedHarmony.some((item) => item.name === harmonyModel.value)) {
-      harmonyModel.value = downloadedHarmony[0]?.name || ''
-    }
-    await refreshPymssStatus()
-  } catch {
-    /* PyMSS is optional; UVR and disabled preprocessing remain available. */
-  }
+  await pymssCatalogReady
   if (systemStore.loaded) {
     normalizeDeviceSelections()
   } else {
@@ -3481,9 +3514,9 @@ onUnmounted(() => {
 
 <style scoped>
 .page {
-  max-width: 1320px;
+  max-width: var(--xb-page-max, 1320px);
   margin: 0 auto;
-  padding: 28px 24px 60px;
+  padding: 28px var(--xb-page-gutter, 24px) 60px;
 }
 .page-head { margin-bottom: 24px; }
 .eyebrow {
@@ -3738,13 +3771,13 @@ onUnmounted(() => {
 .model-check { color: var(--xb-primary); font-size: 18px; }
 
 /* 模式切换 */
-.mode-card { display: flex; gap: 10px; padding: 12px; }
+.mode-card { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(16px, 1vw, 24px); padding: 16px; margin-bottom: 24px; }
 .mode-item {
   flex: 1;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
+  gap: 12px;
+  padding: 14px 16px;
   border-radius: 10px;
   border: 1px solid var(--xb-border);
   background: rgba(var(--xb-fill-rgb), 0.02);
@@ -5174,6 +5207,8 @@ input[type='range'] {
 }
 :global(html[data-locale='ja-JP'] .quick-btn) { font-size: 11.5px; }
 
+@media (min-width: 1700px) { .layout { grid-template-columns: minmax(0, 1fr) minmax(520px, 700px); } }
+@media (max-width: 760px) { .mode-card { grid-template-columns: 1fr; gap: 10px; padding: 12px; } }
 @media (max-width: 980px) {
   .layout { grid-template-columns: 1fr; }
   .preview { position: static; }

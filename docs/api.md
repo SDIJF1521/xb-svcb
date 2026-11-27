@@ -2,7 +2,7 @@
 
 # XB-SVCB FastAPI 接入文档
 
-适用版本：XB-SVCB 0.1.1
+适用版本：XB-SVCB 0.1.2
 
 ## 启动与安全
 
@@ -47,8 +47,62 @@ Content-Type: application/json
 {"name": "新的模型显示名称"}
 ```
 
-## PyMSS 音源分离与人声处理
+## 已下载素材与时间轴歌词
 
+移动端创建多模型翻唱时，可以直接选用电脑端「资源获取」里已下载的歌曲，并通过
+曲库接口获取时间轴歌词来初始化分段：
+
+```http
+GET /api/v1/music/downloaded
+POST /api/v1/music/downloads
+Content-Type: application/json
+
+{"query": "起风了 周深", "n": 1, "source": "wy"}
+
+POST /api/v1/music/downloaded/use
+Content-Type: application/json
+
+{"name": "起风了 - 周深.mp3"}
+
+GET /api/v1/music/downloaded/起风了 - 周深.mp3/audio
+DELETE /api/v1/music/downloaded/起风了 - 周深.mp3
+
+GET /api/v1/music/sources
+GET /api/v1/music/search?query=起风了 周深&source=wy&limit=15
+GET /api/v1/music/lyrics?query=起风了 周深&n=1&source=wy
+GET /api/v1/uploads/{upload_id}/duration
+```
+
+`music/downloaded` 只返回文件名、显示名与大小，不暴露电脑端绝对路径；
+`music/downloads` 按搜索结果把新素材下载到电脑端资源库；`music/downloaded/use`
+会把选中的素材复制到 API 上传目录并返回 `upload_id`，之后按普通上传件创建任务；
+`music/downloaded/{name}/audio` 以音频文件返回素材，供手机保存；`DELETE` 会删除电脑端
+原文件。`uploads/{upload_id}/duration` 返回探测到的秒数，用于多模型分段与歌词时间轴
+对齐；无法探测时返回 `0`。
+
+## 模型站声音模型
+
+模型站接口用于搜索、下载并自动导入由本软件上传到 ModelScope 的声音模型，
+供移动端和外部程序管理本地模型库：
+
+```http
+GET /api/v1/hub/models?query=&page=1&page_size=12&framework=rvc
+POST /api/v1/hub/downloads
+Content-Type: application/json
+
+{"repo_id": "用户名/模型名"}
+
+GET /api/v1/hub/downloads
+GET /api/v1/hub/downloads/dl:用户名/模型名
+```
+
+搜索结果是分页对象，包含 `repo_id`、名称、框架、作者、采样率、标签与
+`update.installed` 安装状态。下载接口会立即返回 `{ok, key}`，模型进入电脑端
+后台传输中心；轮询任务列表可读取 `status`、`pct` 与 `msg`，完成后模型自动
+出现在 `GET /api/v1/models` 中。下载失败时返回 `failed` 与 `error`，可重新提交
+同一 `repo_id` 继续下载。
+
+## PyMSS 音源分离与人声处理
 模型站可列出 PyMSS catalog 中的全部受支持模型，并返回一级、二级分类和中文分类名。
 `purpose` 仍用于筛选翻唱前处理兼容的 `vocal_separation`（人声分离）与
 `dereverb`（去混响/人声净化）模型：
@@ -351,9 +405,13 @@ print("成品已保存：", OUTPUT_AUDIO.resolve())
 
 1. `GET /api/v1/editor/projects/{project_id}/clips/{clip_id}/midi` 或 `GET .../tracks/{track_id}/midi` 分析并返回可编辑音符：`start`/`end` 为时间（片段范围是片段内秒数，轨道范围是绝对秒数），`pitch` 为 MIDI 编号，`detune` 为原始音准（音分）。加 `?refresh=1` 强制重新分析；轨道接口额外返回 `clip_spans` 用于显示片段分段。
 2. `PUT` 同一路径保存音符（只改音符数据）。空白轨道的音符会作为草稿保存。
-3. `POST .../midi/apply` 把音符落到音频：逐音符保共振峰 PSOLA 移调，只改写被编辑过的音符区间，生成新片段音频并推入撤销历史；轨道范围会按片段切分后逐个应用，只替换真正有改动的片段。`notes` 省略时使用已保存的音符；没有音符需要修改或空白轨道没有片段时返回 409 与原因。
+3. `POST .../midi/apply` 把音符落到音频：逐音符保共振峰 PSOLA 移调，只改写被编辑过的音符区间，生成新片段音频并推入撤销历史；轨道范围会按片段切分后逐个应用，只替换真正有改动的片段。`notes` 省略时使用已保存的音符；显式传空数组（`[]`）表示把已提取的整段演唱静音。没有音符需要修改或空白轨道没有片段时返回 409 与原因。
 
-未编辑的音符保留 `detune`，应用时偏移为 0，因此“提取 → 应用”不会把歌手的自然音准洗成电音；只有被拖动/改动的音符才会压到目标音高。编辑器支持多选（框选 / Shift 点选）、量化、半音移调、复制粘贴，以及 Ctrl+Z / Ctrl+Shift+Z / Ctrl+A / Ctrl+C / Ctrl+V / Ctrl+Q / Delete / 方向键等快捷键。
+「试听」按当前音符重绘：片段范围播放该片段的编辑结果；整轨范围会按片段逐个重绘后渲染成一条整轨预览，播放头与钢琴卷帘的整轨时间轴对齐，删除的音符在试听里同样静音。
+
+未编辑的音符保留 `detune`，应用时偏移为 0，因此“提取 → 应用”不会把歌手的自然音准洗成电音；只有被拖动/改动的音符才会压到目标音高。**删除音符不是空操作**：被删掉的音符对应的演唱区间会在试听和应用后静音——编辑器会把提取时的音符跨度记成“参考演唱区间”（sidecar 里的 `voice_spans`），当前音符没有覆盖到的部分就是要静音的区间。整段音符删光后应用，会把这段人声静音（换气、辅音等非浊音部分保留）。编辑器支持多选（框选 / Shift 点选）、量化、半音移调、复制粘贴，以及 Ctrl+Z / Ctrl+Shift+Z / Ctrl+A / Ctrl+C / Ctrl+V / Ctrl+Q / Delete / 方向键等快捷键。
+
+音高曲线（滑音 / 颤音）按“笔”分段保存：同一笔内连续，笔与笔之间默认**不插值**，没有画过的区间回落到原唱 F0 —— 因此可以只修改一小段，不会把两笔之间没画过的地方强行连成一条直线。打开工具栏的「续画」后，新一笔靠近已有曲线的端点（约 14px，按缩放换算成时间）时会接上去并保持连续；两端都靠近时同时接上，正好用来补画中间断开的部分。擦除同样只把段切开、不会跨过空洞插值，撤销 / 重做按段快照恢复。
 
 ## 接口清单
 
@@ -368,8 +426,21 @@ print("成品已保存：", OUTPUT_AUDIO.resolve())
 | `POST`           | `/api/v1/models/{model_id}/favorite`                                                   | 切换收藏状态                                         |
 | `POST`           | `/api/v1/models/{model_id}/inspect`                                                    | 检查模型，可选自动修复                               |
 | `DELETE`         | `/api/v1/models/{model_id}`                                                            | 删除模型及托管文件                                   |
+| `GET`            | `/api/v1/hub/models`                                                                   | 搜索模型站声音模型                                   |
+| `POST`           | `/api/v1/hub/downloads`                                                                | 下载并导入模型站模型                                 |
+| `GET`            | `/api/v1/hub/downloads`                                                                | 列出模型站下载任务                                   |
+| `GET`            | `/api/v1/hub/downloads/{key}`                                                          | 查询模型站下载进度                                   |
 | `POST`           | `/api/v1/uploads`                                                                      | 流式上传源音频或参考音频，不限制文件大小             |
 | `DELETE`         | `/api/v1/uploads/{upload_id}`                                                          | 删除不再使用的上传文件                               |
+| `GET`            | `/api/v1/uploads/{upload_id}/duration`                                                 | 探测上传音频时长（秒）                               |
+| `GET`            | `/api/v1/music/downloaded`                                                             | 列出已下载歌曲素材                                   |
+| `POST`           | `/api/v1/music/downloads`                                                              | 在线搜索后下载新素材到电脑端                         |
+| `POST`           | `/api/v1/music/downloaded/use`                                                         | 把已下载素材复制为任务上传                           |
+| `GET`            | `/api/v1/music/downloaded/{name}/audio`                                                | 下载已下载素材音频                                   |
+| `DELETE`         | `/api/v1/music/downloaded/{name}`                                                      | 删除电脑端已下载素材                                 |
+| `GET`            | `/api/v1/music/sources`                                                                | 列出歌词曲库                                         |
+| `GET`            | `/api/v1/music/search`                                                                 | 搜索歌词候选歌曲                                     |
+| `GET`            | `/api/v1/music/lyrics`                                                                 | 获取时间轴歌词                                       |
 | `GET`            | `/api/v1/jobs`                                                                         | 最近任务列表，`limit` 最大 200                     |
 | `GET`            | `/api/v1/jobs/queue`                                                                   | 当前推理队列                                         |
 | `GET`            | `/api/v1/jobs/history`                                                                 | 推理历史                                             |

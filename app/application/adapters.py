@@ -26,6 +26,7 @@ from .ports import (
     FfmpegGateway,
     HighNoteVocoderPort,
     MidiPitchPort,
+    ModelHubGateway,
     PymssGateway,
     PluginHostPort,
     SeparationGateway,
@@ -54,6 +55,13 @@ def pymss_tool() -> PymssGateway:
     from infrastructure.pymss_tool import PymssTool
 
     return PymssTool()
+
+
+def model_hub_gateway() -> ModelHubGateway:
+    """模型站默认网关（组合根未注入时使用；生产路径由 composition 注入）。"""
+    from infrastructure.model_hub_client import ModelHubClient
+
+    return ModelHubClient()
 
 
 def audio_engine(ffmpeg: FfmpegGateway | None = None) -> AudioEnginePort:

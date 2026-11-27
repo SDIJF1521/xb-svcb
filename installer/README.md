@@ -14,7 +14,7 @@
 | `XB-SVCB-Setup-CUDA126` | 两层共享环境 | Torch 2.7.1 + cu126 |
 | `XB-SVCB-Setup-CUDA128` | 两层共享环境 | Torch 2.7.1 + cu128 |
 
-CUDA 是默认发布路径：不传 `-Stacks` 时，`build.ps1` 构建 CUDA128 共享运行时安装包。CPU 和 DirectML 保留隔离布局；ROCm 10 的 SVC/RVC/Vocal 共用 `runtimes/svc-rocm10`，其余组件隔离。五套包都包含同一应用、引擎源码、模型、FFmpeg 和 JUCE Host，但只携带目标硬件栈需要的 wheels。DirectML 包额外携带 PyMSS 与 DDSP legacy 所需的 CPU wheels：PyMSS 2.0.x 需要 Torch 2.7.1，不能与固定 Torch 2.4.1 的 `torch-directml` 混装，因此在独立 `.venv-pymss` 中使用 CPU 推理。DDSP 自动设备同样走 CPU；用户显式选择 DirectML 才尝试 6.3 模型的实验推理，输出可能存在静默数值失真，需要试听确认。
+CUDA 是默认发布路径：不传 `-Stacks` 时，`build.ps1` 构建 CUDA128 共享运行时安装包。CPU 和 DirectML 保留隔离布局；ROCm 10 的 SVC/RVC/Vocal 共用 `runtimes/svc-rocm10`，其余组件隔离。五套包都包含同一应用、引擎源码、模型、内置 Python 3.12、内置 MinGit、FFmpeg 和 JUCE Host，但只携带目标硬件栈需要的 wheels。DirectML 包额外携带 PyMSS 与 DDSP legacy 所需的 CPU wheels：PyMSS 2.0.x 需要 Torch 2.7.1，不能与固定 Torch 2.4.1 的 `torch-directml` 混装，因此在独立 `.venv-pymss` 中使用 CPU 推理。DDSP 自动设备同样走 CPU；用户显式选择 DirectML 才尝试 6.3 模型的实验推理，输出可能存在静默数值失真，需要试听确认。
 
 CUDA 共享布局：
 
@@ -35,7 +35,7 @@ CUDA 共享布局：
 - CUDA 包还必须有 `assets/runtime/core-cu128` 的 candidate/compat 材料；可用
   `-RuntimeAssets C:\path\to\core-cu128` 从单独备份同步。
 
-安装器内置一套干净的 64 位 CPython 3.12.x，安装到 `tools\python312` 并固定写入 `installer_env.cmd`；最终用户不需要另外安装或选择 Python。构建参数 `-Python` 指定的基础解释器既用于生成 wheelhouse，也用于暂存内置运行时；构建器会排除该解释器的 `Lib\site-packages`、`Scripts` 和缓存，避免携带开发机第三方包。`uv` 无需用户预装：wheelhouse 携带启动 wheel，缺失时由安装流程安装。
+安装器内置一套干净的 64 位 CPython 3.12.x，安装到 `tools\python312`，并内置 **MinGit 2.47.1 64-bit** 到 `tools\git`；两者都会固定写入 `installer_env.cmd`，最终用户不需要另外安装或选择 Python / Git。构建参数 `-Python` 指定的基础解释器既用于生成 wheelhouse，也用于暂存内置运行时；构建器会排除该解释器的 `Lib\site-packages`、`Scripts` 和缓存，避免携带开发机第三方包。Git 默认由构建器从 Git for Windows 官方 Release 下载 MinGit 并缓存到 `.tmp\git-runtime`；离线构建可用 `-Git C:\path\to\MinGit` 指定已有的 `cmd\git.exe` 根目录。`uv` 无需用户预装：wheelhouse 携带启动 wheel，缺失时由安装流程安装。
 
 五种发布栈现在都只创建 Python 3.12 环境。CPU 的 SVC/RVC 仍保留独立目录和兼容 Torch 版本，但不再额外要求 Python 3.9。
 
@@ -54,7 +54,7 @@ CUDA 共享布局：
 & .\installer\build.ps1 -ValidateOnly
 ```
 
-构建默认 CUDA128 共享包（自动通过 `py -3.12` 或 `PATH` 检测解释器）：
+构建默认 CUDA128 共享包（自动通过 `py -3.12` 或 `PATH` 检测解释器，并下载/复用内置 MinGit）：
 
 ```powershell
 & .\installer\build.ps1
@@ -67,6 +67,12 @@ CUDA 共享布局：
 & .\installer\build.ps1 -Stacks cpu
 & .\installer\build.ps1 -Stacks rocm10
 & .\installer\build.ps1 -Stacks directml
+```
+
+离线构建可复用已有的 MinGit，避免重新下载：
+
+```powershell
+& .\installer\build.ps1 -Stacks cu128 -Git C:\path\to\MinGit
 ```
 
 ### 受限环境：启动即提权（`-RequireAdmin`）
@@ -82,7 +88,7 @@ CUDA 共享布局：
 ```powershell
 & .\installer\build.ps1 -Stacks cu126 -RequireAdmin
 & .\installer\build-all-packages.ps1 -ReuseBuildOutputs -RequireAdmin
-& .\installer\build-online-modelscope.ps1 -Repo lkpp233/xb-svcb -Revision v0.1.1 -RequireAdmin
+& .\installer\build-online-modelscope.ps1 -Repo lkpp233/xb-svcb-bate -Revision v0.1.2 -RequireAdmin
 ```
 
 提权版本的安装目录仍是 `{localappdata}\Programs\XB-SVCB`（同一账户提权时路径不变），
@@ -193,11 +199,11 @@ CPU、ROCm 已完成而其余三栈尚未准备时，直接补齐剩余栈，避
 
 ## 在线安装器与发布源
 
-v0.1.1 提供两种引导式在线安装器。GitHub Releases 只公开发布魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`；备用下载源版本 `XB-SVCB-Online-Setup.exe` 不上传 GitHub，如有需要请联系开发者单独获取。两种版本都会自动检测或让用户手动选择硬件栈，先读取并校验发布清单，再显示完整安装包大小、缓存复用情况和下载位置。只有缺失或 SHA-256 不匹配的 EXE/BIN 分卷会下载；全部文件校验通过后，在线安装器会以当前语言启动完整离线安装向导。在线安装器支持简体中文、English 和日本語。
+v0.1.2 提供两种引导式在线安装器。GitHub Releases 只公开发布魔搭社区版 `XB-SVCB-Online-Setup-ModelScope.exe`；备用下载源版本 `XB-SVCB-Online-Setup.exe` 不上传 GitHub，如有需要请联系开发者单独获取。两种版本都会自动检测或让用户手动选择硬件栈，先读取并校验发布清单，再显示完整安装包大小、缓存复用情况和下载位置。只有缺失或 SHA-256 不匹配的 EXE/BIN 分卷会下载；全部文件校验通过后，在线安装器会以当前语言启动完整离线安装向导。在线安装器支持简体中文、English 和日本語。
 
 ### 魔搭社区 ModelScope 版本
 
-`XB-SVCB-Online-Setup-ModelScope.exe` 与备用 OSS 版共用同一份带 SHA-256 的发布清单和五套离线包，但从公开的 ModelScope 模型仓库下载。两个引导程序可同时构建，互不覆盖。当前默认发布源是 [`lkpp233/xb-svcb` 的 `v0.1.1` 版本文件页](https://www.modelscope.cn/models/lkpp233/xb-svcb/files?version=v0.1.1)，安装器读取该版本的仓库根目录。把 `online-manifest.ini` 和全部 `XB-SVCB-Setup-*` EXE/BIN 原名上传到该版本根目录，然后运行：
+`XB-SVCB-Online-Setup-ModelScope.exe` 与备用 OSS 版共用同一份带 SHA-256 的发布清单和五套离线包，但从公开的 ModelScope 模型仓库下载。两个引导程序可同时构建，互不覆盖。当前默认发布源是 [`lkpp233/xb-svcb-bate` 的 `v0.1.2` 版本文件页](https://www.modelscope.cn/models/lkpp233/xb-svcb-bate/files?version=v0.1.2)，安装器读取该版本的仓库根目录。把 `online-manifest.ini` 和全部 `XB-SVCB-Setup-*` EXE/BIN 原名上传到该版本根目录，然后运行：
 
 ```powershell
 & .\installer\build-online-modelscope.ps1 `
@@ -209,11 +215,32 @@ v0.1.1 提供两种引导式在线安装器。GitHub Releases 只公开发布魔
 ```powershell
 & .\installer\build-online-modelscope.ps1 `
   -Repo "你的用户名/xb-svcb-releases" `
-  -Revision v0.1.1 `
-  -RepositoryPath "xb-svcb/0.1.1"
+  -Revision v0.1.2 `
+  -RepositoryPath "xb-svcb/0.1.2"
 ```
 
 仓库必须允许匿名下载。构建脚本使用 ModelScope 官方文件接口 `/api/v1/models/<仓库>/repo?Revision=...&FilePath=...`，不会把访问令牌写进安装器。上传后应先验证清单、一个 EXE 和最大的 BIN 都能在未登录状态下下载，并确认 BIN 请求支持断点续传；仓库配额、单文件大小或下行流量不满足时，不能只上传部分分卷。替换任何发布文件后，仍需重新生成清单并重新构建、分发引导程序。
+
+### 一条命令发布到魔搭社区
+
+`installer\publish-modelscope.ps1` 把「重新生成清单 → 编译魔搭版在线安装器 → 上传清单与五套 EXE/BIN →
+创建版本标签」串成一条命令，顺序保证分卷没传完时该版本不可达：
+
+```powershell
+& .\installer\publish-modelscope.ps1 -Python C:\python3.12.9\python.exe
+```
+
+| 开关 | 作用 |
+| --- | --- |
+| `-Repo` | 目标仓库，默认 `lkpp233/xb-svcb-bate` |
+| `-Revision` | 要创建的版本标签，默认 `v<应用版本>` |
+| `-ReuseManifest` | 复用 `dist\online-manifest.ini`（只校验，不重新计算哈希） |
+| `-SkipBuild` / `-SkipUpload` / `-SkipTag` | 只做其中几步，便于分步排查 |
+| `-MsCli` / `-Token` | 指定 `ms.exe`；标签接口的令牌默认取 `MODELSCOPE_API_TOKEN` 或 `~\.modelscope\credentials\git_token` |
+
+上传走 `ms upload`（`pip install modelscope` 后可用），先写 `master`，最后用
+`POST /api/v1/models/<仓库>/repo/tag` 创建版本标签；清单和在线安装器一起上传，安装器里固定的是本次清单的
+SHA-256。完成后按上一节的检查项做一次匿名下载验证。
 
 ### 当前 OSS 桶配置
 
@@ -225,30 +252,30 @@ Region:  oss-cn-hongkong
 Endpoint: https://oss-cn-hongkong.aliyuncs.com
 ```
 
-你已经在 Bucket 内创建了 `xb-svcb/0.1.1/` 对象前缀，因此在线安装器的基础地址为：
+你已经在 Bucket 内创建了 `xb-svcb/0.1.2/` 对象前缀，因此在线安装器的基础地址为：
 
 ```text
-https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1.1
+https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1.2
 ```
 
-注意：截图显示该 Bucket 当前是“私有”。当前在线安装器使用的是不带凭据的 HTTPS 下载，并且会拒绝把 AccessKey、Secret 或带查询参数的长期签名 URL 编译进去，所以私有桶的直接 URL 会返回 `403`，不能直接用于在线安装。推荐保留 Bucket 默认私有，仅通过 OSS Bucket Policy 对 `xb-svcb/0.1.1/*` 授予匿名 `oss:GetObject`；不要授予匿名列目录、上传或删除权限。若控制台无法配置按前缀授权，则使用公开 HTTPS CDN/下载域名作为 `-BaseUrl`，不要把密钥写入安装器。
+注意：截图显示该 Bucket 当前是“私有”。当前在线安装器使用的是不带凭据的 HTTPS 下载，并且会拒绝把 AccessKey、Secret 或带查询参数的长期签名 URL 编译进去，所以私有桶的直接 URL 会返回 `403`，不能直接用于在线安装。推荐保留 Bucket 默认私有，仅通过 OSS Bucket Policy 对 `xb-svcb/0.1.2/*` 授予匿名 `oss:GetObject`；不要授予匿名列目录、上传或删除权限。若控制台无法配置按前缀授权，则使用公开 HTTPS CDN/下载域名作为 `-BaseUrl`，不要把密钥写入安装器。
 
 构建在线安装器时可以直接使用这个地址：
 
 ```powershell
-$env:XB_OSS_BASE_URL = "https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1.1"
+$env:XB_OSS_BASE_URL = "https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1.2"
 & .\installer\build-online.ps1 `
   -Python C:\python3.12.9\python.exe
 ```
 
-构建完成后，把 `dist\online-manifest.ini` 和五套离线安装器的 EXE/BIN 文件原名上传到 `xb-svcb/0.1.1/` 前缀。先上传全部 EXE/BIN，最后上传 `online-manifest.ini`。本地生成的 `dist\XB-SVCB-Online-Setup.exe` 是备用引导程序，不上传 GitHub Releases，也不要求放在 OSS；需要时由开发者单独提供。如果上传到内部下载位置，必须与离线安装分卷分开，避免用户误把它当作某个硬件栈的离线安装器。
+构建完成后，把 `dist\online-manifest.ini` 和五套离线安装器的 EXE/BIN 文件原名上传到 `xb-svcb/0.1.2/` 前缀。先上传全部 EXE/BIN，最后上传 `online-manifest.ini`。本地生成的 `dist\XB-SVCB-Online-Setup.exe` 是备用引导程序，不上传 GitHub Releases，也不要求放在 OSS；需要时由开发者单独提供。如果上传到内部下载位置，必须与离线安装分卷分开，避免用户误把它当作某个硬件栈的离线安装器。
 
 如果 OSS 上的五套离线包和 `online-manifest.ini` 没有变化，只修改了在线安装器代码，本地可以删除大分卷后复用现有清单。此时使用 `-ReuseManifest`，脚本会严格校验现有清单但不会要求本地保留五套 EXE/BIN：
 
 ```powershell
 .\installer\build-online.ps1 `
   -ReuseManifest `
-  -BaseUrl "https://xb-svcb.oss-accelerate.aliyuncs.com/xb-svcb/0.1.1" `
+  -BaseUrl "https://xb-svcb.oss-accelerate.aliyuncs.com/xb-svcb/0.1.2" `
   -Python C:\python3.12.9\python.exe
 ```
 
@@ -257,15 +284,15 @@ $env:XB_OSS_BASE_URL = "https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1
 在线安装器只把几 KB 的 `online-manifest.ini` 临时放入系统临时目录。大体积的 EXE/BIN 分卷优先由 Windows 自带 `curl.exe` 直接下载到在线安装器所在目录下；如果系统没有 curl，则自动回退到 Windows PowerShell 的 `Invoke-WebRequest`。两种方式都不会把大文件写入 C 盘临时目录：
 
 ```text
-<在线安装器所在目录>\XB-SVCB-Downloads\0.1.1\<stack>\
+<在线安装器所在目录>\XB-SVCB-Downloads\0.1.2\<stack>\
 ```
 
-例如在线安装器在 `D:\Downloads` 中并选择 CUDA126，下载中的文件和最终文件都位于 `D:\Downloads\XB-SVCB-Downloads\0.1.1\cu126\`。未完成文件使用 `.part` 后缀；curl 路径支持续传，PowerShell 回退路径会从头重新下载。SHA-256 校验通过后文件在同一目录原地改名。该目录保存用户选择的硬件栈 EXE 和全部 `.bin` 分卷，在线安装器从这里启动离线安装器。它不会在在线安装器退出时自动删除，因此也可作为完整离线包保留。在线安装器所在目录必须可写；若从只读目录、受保护目录或压缩包内运行，需要先把在线安装器移动到普通可写文件夹。
+例如在线安装器在 `D:\Downloads` 中并选择 CUDA126，下载中的文件和最终文件都位于 `D:\Downloads\XB-SVCB-Downloads\0.1.2\cu126\`。未完成文件使用 `.part` 后缀；curl 路径支持续传，PowerShell 回退路径会从头重新下载。SHA-256 校验通过后文件在同一目录原地改名。该目录保存用户选择的硬件栈 EXE 和全部 `.bin` 分卷，在线安装器从这里启动离线安装器。它不会在在线安装器退出时自动删除，因此也可作为完整离线包保留。在线安装器所在目录必须可写；若从只读目录、受保护目录或压缩包内运行，需要先把在线安装器移动到普通可写文件夹。
 
 上传后先验证匿名读取（在 OSS 权限配置完成后执行）：
 
 ```powershell
-$base = "https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1.1"
+$base = "https://xb-svcb.oss-cn-hongkong.aliyuncs.com/xb-svcb/0.1.2"
 Invoke-WebRequest -UseBasicParsing -Method Head "$base/online-manifest.ini"
 Invoke-WebRequest -UseBasicParsing -Method Head "$base/XB-SVCB-Setup-CPU.exe"
 ```
@@ -278,13 +305,13 @@ Invoke-WebRequest -UseBasicParsing -Method Head "$base/XB-SVCB-Setup-CPU.exe"
 & .\installer\build-all-packages.ps1 `
   -Python C:\python3.12.9\python.exe -RebuildWheelhouse
 & .\installer\build-online.ps1 `
-  -BaseUrl "https://你的公开下载域名/xb-svcb/0.1.1"
+  -BaseUrl "https://你的公开下载域名/xb-svcb/0.1.2"
 ```
 
 也可以通过环境变量提供公开目录 URL：
 
 ```powershell
-$env:XB_OSS_BASE_URL = "https://你的公开下载域名/xb-svcb/0.1.1"
+$env:XB_OSS_BASE_URL = "https://你的公开下载域名/xb-svcb/0.1.2"
 & .\installer\build-online.ps1
 ```
 
@@ -306,7 +333,7 @@ XB-SVCB-Setup-CUDA128-*.bin
 
 备用 OSS 版只在需要时由开发者单独分发本地生成的 `dist\XB-SVCB-Online-Setup.exe`，不上传 GitHub Releases；它本身不必放在同一个 OSS 目录。OSS 发布要求：
 
-- 推荐 Bucket 保持私有，只通过 Bucket Policy 给 `xb-svcb/0.1.1/*` 前缀开放匿名只读；不要开放匿名写入、删除或列目录权限。
+- 推荐 Bucket 保持私有，只通过 Bucket Policy 给 `xb-svcb/0.1.2/*` 前缀开放匿名只读；不要开放匿名写入、删除或列目录权限。
 - 绑定公开 HTTPS 域名或使用 OSS 公网 HTTPS Endpoint，不要使用内网 Endpoint，也不要把 AccessKey、Secret 或临时签名 URL 编译进安装器。
 - 文件名和目录层级必须保持不变；开启 Range 请求，EXE/BIN 使用 `application/octet-stream`，INI 使用 `text/plain; charset=utf-8`，不要启用自动压缩或内容改写。
 - 若开启防盗链，必须允许空 Referer，否则 Inno Setup 下载请求会返回 403。安装器直连不需要配置 CORS；只有网页 JavaScript 跨域读取文件时才需要 CORS。
@@ -371,7 +398,7 @@ XB-SVCB-Setup-CUDA128-2.bin
 
 安装器支持简体中文、English 和日本語。启动时会按 Windows UI 语言预选，并始终显示语言选择框。Inno Setup 的简中、日语基础消息固定在 `installer/languages/`，构建不依赖开发机是否安装可选语言包；自定义页面、依赖检测、进度、校验弹窗、完成页和开始菜单名称统一由 `xb-svcb.iss` 的 `[CustomMessages]` 提供。
 
-从 v0.1.0 开始，离线包同时携带简体中文、英文和日文发布说明。后续版本构建前也必须准备对应的三份文件；当前版本为 `release_notes_v0_1_1.md`、`release_notes_v0_1_1.en.md`、`release_notes_v0_1_1.ja.md`，`build.ps1` 会在打包前校验这三份文件存在。
+从 v0.1.0 开始，离线包同时携带简体中文、英文和日文发布说明。后续版本构建前也必须准备对应的三份文件；当前版本为 `release_notes_v0_1_2.md`、`release_notes_v0_1_2.en.md`、`release_notes_v0_1_2.ja.md`，`build.ps1` 会在打包前校验这三份文件存在。
 
 新增安装器文案时必须同时提供 `zhcn`、`en`、`ja` 三个同名键，并从 Pascal Script 通过 `M` / `M1` 到 `M4` 调用。`app/tests/test_installer_runtime.py` 会检查三套键完全一致、引用键均存在，且 `[Code]` 中没有重新引入面向用户的中文硬编码。
 
@@ -379,7 +406,7 @@ XB-SVCB-Setup-CUDA128-2.bin
 
 安装器会：
 
-1. 校验应用、模型、引擎源码、FFmpeg、JUCE Host 和 wheels。
+1. 校验应用、模型、引擎源码、内置 Python / MinGit、FFmpeg、JUCE Host 和 wheels。
 2. 校验并锁定安装包内置的 CPython 3.12.x。
 3. 安装或复用 `uv`，按包内固定硬件栈创建环境。
 4. CUDA126/CUDA128 调用两层共享入口；CPU/ROCm 10/DirectML 调用兼容入口，其中 ROCm 10 的 SVC/RVC/Vocal 使用单独共享层。

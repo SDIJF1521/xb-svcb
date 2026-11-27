@@ -36,6 +36,11 @@ const router = createRouter({
           component: () => import('@/views/models/models.vue'),
         },
         {
+          path: 'workflows',
+          name: 'WorkflowMarket',
+          component: () => import('@/views/workflows/market.vue'),
+        },
+        {
           path: 'music',
           name: 'Music',
           component: () => import('@/views/music/music.vue'),

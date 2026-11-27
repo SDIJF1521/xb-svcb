@@ -122,6 +122,16 @@
           <el-icon class="el-icon--left" :class="{ spin: playbackBuffering }"><component :is="playbackBuffering ? Loading : playing ? VideoPause : VideoPlay" /></el-icon>
           {{ playing ? (playbackBuffering ? '缓冲中' : '暂停') : '播放' }}
         </el-button>
+        <el-button
+          :disabled="!project"
+          :loading="savingToWorks"
+          round
+          class="ghost-btn"
+          title="把当前成品渲染并保存到我的作品"
+          @click="saveToWorks"
+        >
+          <el-icon class="el-icon--left"><Files /></el-icon>保存到作品
+        </el-button>
         <el-dropdown :disabled="!project" trigger="click" @command="(cmd: string | number | object) => handleExportCommand(String(cmd))">
           <el-button :disabled="!project" round class="ghost-btn">
             <el-icon class="el-icon--left"><Download /></el-icon>{{ exportLabel }}
@@ -1266,6 +1276,7 @@ import {
   Delete,
   Download,
   EditPen,
+  Files,
   FolderAdd,
   Loading,
   Lock,
@@ -1283,7 +1294,7 @@ import {
   VideoPause,
   VideoPlay,
 } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import EditorImportTrackDialog from '@/components/editor/EditorImportTrackDialog.vue'
 import EditorPluginDialog from '@/components/editor/EditorPluginDialog.vue'
 import EditorRoleManager from '@/components/editor/EditorRoleManager.vue'
@@ -1850,6 +1861,7 @@ const activeTemplateId = computed(() => {
 const exportLabel = computed(() =>
   project.value?.metadata?.export_mode === 'vocal' ? '导出人声' : '导出',
 )
+const savingToWorks = ref(false)
 /** 选中音轨有片段时才允许导出单轨。 */
 const canExportTrack = computed(() => Boolean(selectedTrack.value?.clips?.length))
 const selectedClipDuration = computed(() => {
@@ -4733,6 +4745,37 @@ async function exportTrackAudio(track: EditorTrack | null | undefined, fmt = 'wa
   }
 }
 
+/**
+ * 把当前工程渲染成 WAV 并归档到「我的作品」。
+ *
+ * 归档后作品会走统一的播放器、下载、二次编辑和删除路径；编辑器本身保持打开，
+ * 用户可以继续调整后再保存一次。
+ */
+async function saveToWorks() {
+  if (!project.value || savingToWorks.value) return
+  savingToWorks.value = true
+  try {
+    await saveProject()
+    const result = await api.importEditorProjectToWorks(project.value.id, 'wav')
+    if (!result.ok || !result.work) {
+      throw new Error(result.error || '保存到我的作品失败')
+    }
+    ElNotification({
+      title: '已保存到我的作品',
+      message: `${result.work.title} · 点击打开作品库`,
+      type: 'success',
+      duration: 6000,
+      onClick: () => {
+        void router.push('/works')
+      },
+    })
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? translateUiText(err.message) : '保存到我的作品失败')
+  } finally {
+    savingToWorks.value = false
+  }
+}
+
 async function exitEditor() {
   stopPlayback()
   await closePluginNativeEditor()
@@ -5335,11 +5378,22 @@ async function previewMidiAudio(notes?: MidiNote[]) {
     ElMessage.warning('空白轨道没有音频可试听：把人声/伴奏导入该轨后再试听')
     return
   }
-  const playheadTime = Number(playhead.value) || 0
-  const hit =
-    clips.find((clip) => playheadTime >= Number(clip.start) && playheadTime <= Number(clip.end)) ||
-    clips[0]!
-  void playClip(midiTargetId.value, hit.id)
+  // 整轨范围：按片段重绘后渲染成一条整轨预览，删掉的音符在试听里就是静音。
+  composePreviewLoading.value = true
+  composePreviewUrl.value = ''
+  audioEl.value?.pause()
+  try {
+    const result = await api.previewEditorTrackMidi(currentProject.id, midiTargetId.value, notes || [])
+    if (!result?.ok || !result.audio) {
+      ElMessage.error(translateUiText(result?.error || '试听渲染失败'))
+      return
+    }
+    composePreviewUrl.value = result.audio
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? translateUiText(err.message) : '试听渲染失败')
+  } finally {
+    composePreviewLoading.value = false
+  }
 }
 
 function seekMidiPlayhead(seconds: number) {

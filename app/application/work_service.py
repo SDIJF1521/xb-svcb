@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import threading
 import time
 from datetime import datetime
@@ -23,6 +24,7 @@ from domain.work_request import (
     require_seedvc_reference,
 )
 from domain.workflow_graph import NODE_LABELS, topological_order, validate_graph
+from domain.workflow_manifest import normalize_workflow_source
 
 from .adapters import ensure_data_dirs, work_files
 from .conversion_service import (
@@ -155,6 +157,61 @@ class WorkService:
                     record[key] = str(candidate)
             self._repo.add(record)
             return self._view(record)
+
+    def import_rendered_audio(
+        self,
+        source: Path | str,
+        *,
+        title: str = "",
+        model_label: str = "音频编辑器",
+        workflow: str = "audio_editor",
+        duration: float = 0.0,
+    ) -> dict[str, Any] | None:
+        """把编辑器渲染好的成品复制进作品库，登记为一条已完成作品。
+
+        与 AI 任务不同，这里没有推理队列：渲染文件已经存在，只需要归档到
+        ``WORKS_DIR/<id>``，之后就能走统一的播放器、编辑器、导出和删除路径。
+        """
+        try:
+            src = Path(source).expanduser().resolve()
+        except (OSError, ValueError):
+            return None
+        if not src.is_file() or src.suffix.lower() not in config.AUDIO_EXTS:
+            return None
+
+        work_id = new_id("wrk_")
+        work_dir = self._files.work_dir(work_id)
+        destination = work_dir / f"output{src.suffix.lower()}"
+        try:
+            work_dir.mkdir(parents=True, exist_ok=False)
+            shutil.copyfile(src, destination)
+        except OSError:
+            self._files.remove_tree(work_dir)
+            return None
+
+        record = {
+            "id": work_id,
+            "title": str(title or "").strip() or "音频编辑器成品",
+            "model": str(model_label or "").strip() or "音频编辑器",
+            "model_id": "",
+            "status": JobStatus.DONE.value,
+            "progress": 100,
+            "duration": self._format_duration(duration) if duration > 0 else "—",
+            "format": destination.suffix.lstrip(".").upper() or "WAV",
+            "size": file_size_label(destination),
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "source_path": None,
+            "output_path": str(destination),
+            "error": None,
+            "params": {},
+            "steps": [{"key": "editor", "label": "音频编辑器", "status": JobStatus.DONE.value}],
+            "workflow": str(workflow or "audio_editor"),
+            "mode": "single",
+            "segments": [],
+            "log_path": None,
+        }
+        self._repo.add(record)
+        return self._view(record)
 
     @staticmethod
     def _duration_seconds(value: Any) -> float:
@@ -382,6 +439,13 @@ class WorkService:
             "nodes": (graph or {}).get("nodes") or [],
             "edges": (graph or {}).get("edges") or [],
         }
+        # 覆盖保存时保留商城来源信息，避免编辑后“已下载 / 已分享”标记凭空消失。
+        existing = next(
+            (w for w in workflows if str(w.get("id") or "") == workflow["id"]),
+            None,
+        )
+        if existing and isinstance(existing.get("source"), dict) and existing["source"]:
+            workflow["source"] = dict(existing["source"])
         workflows = [w for w in workflows if w.get("id") != workflow["id"]]
         workflows.insert(0, workflow)
         self._settings.set("cover_workflows", workflows[:50])
@@ -403,6 +467,120 @@ class WorkService:
         next_workflows = [w for w in workflows if w.get("id") != workflow_id]
         self._settings.set("cover_workflows", next_workflows)
         return len(next_workflows) != len(workflows)
+
+    # ---- 工作流商城：来源信息与下载入库 ----
+
+    def get_workflow(self, workflow_id: str) -> dict[str, Any] | None:
+        target = str(workflow_id or "").strip()
+        if not target:
+            return None
+        for workflow in self.list_workflows():
+            if str(workflow.get("id") or "") == target:
+                return dict(workflow)
+        return None
+
+    def find_workflow_by_source(self, repo_id: str) -> dict[str, Any] | None:
+        """按 ModelScope 仓库 ID 找到已经下载过的工作流。"""
+        target = str(repo_id or "").strip().strip("/")
+        if not target:
+            return None
+        for workflow in self.list_workflows():
+            source = workflow.get("source")
+            if not isinstance(source, dict):
+                continue
+            if str(source.get("repo_id") or "").strip().strip("/") == target:
+                return dict(workflow)
+        return None
+
+    @staticmethod
+    def _normalize_workflow_source(source: Any) -> dict[str, Any]:
+        """规整工作流来源信息（规则在领域层，用例层保留薄封装）。"""
+        return normalize_workflow_source(source)
+
+    def save_imported_workflow(
+        self,
+        name: str,
+        graph: dict[str, Any],
+        source: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """把商城下载的工作流写入「已保存工作流」，并保留来源信息。
+
+        同一来源仓库重复下载时原地更新节点图（保留本地 id 与用户后续改动过的名称），
+        避免每次下载都多出一条同名工作流。
+        """
+        error = validate_graph(graph or {})
+        if error:
+            raise ValueError(error)
+        workflows = self.list_workflows()
+        clean_source = self._normalize_workflow_source(source)
+        repo_id = str(clean_source.get("repo_id") or "")
+        existing = next(
+            (
+                w
+                for w in workflows
+                if repo_id
+                and isinstance(w.get("source"), dict)
+                and str(w["source"].get("repo_id") or "").strip().strip("/") == repo_id
+            ),
+            None,
+        )
+        display_name = (name or "未命名工作流").strip() or "未命名工作流"
+        if existing:
+            previous_remote = str(
+                (existing.get("source") or {}).get("remote_name") or ""
+            ).strip()
+            # 用户下载后改过名字就尊重本地名称；没改过则跟随作者的新名称。
+            if previous_remote and str(existing.get("name") or "") != previous_remote:
+                display_name = str(existing.get("name") or display_name)
+            others = [w for w in workflows if str(w.get("id") or "") != str(existing.get("id") or "")]
+            display_name = self._unique_workflow_name(display_name, others)
+            workflow = {
+                **existing,
+                "name": display_name,
+                "updated_at": datetime.now().isoformat(timespec="seconds"),
+                "nodes": (graph or {}).get("nodes") or [],
+                "edges": (graph or {}).get("edges") or [],
+            }
+            if clean_source:
+                workflow["source"] = clean_source
+        else:
+            display_name = self._unique_workflow_name(display_name, workflows)
+            workflow = {
+                "id": new_id("wf_"),
+                "name": display_name,
+                "updated_at": datetime.now().isoformat(timespec="seconds"),
+                "nodes": (graph or {}).get("nodes") or [],
+                "edges": (graph or {}).get("edges") or [],
+            }
+            if clean_source:
+                workflow["source"] = clean_source
+        workflows = [w for w in workflows if w.get("id") != workflow["id"]]
+        workflows.insert(0, workflow)
+        self._settings.set("cover_workflows", workflows[:50])
+        return workflow
+
+    def mark_workflow_shared(
+        self,
+        workflow_id: str,
+        source: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """上传成功后给本地工作流记录来源仓库，供列表展示「已分享」。"""
+        target = str(workflow_id or "").strip()
+        clean_source = self._normalize_workflow_source(source)
+        if not target or not clean_source:
+            return None
+        workflows = self.list_workflows()
+        updated: dict[str, Any] | None = None
+        for index, workflow in enumerate(workflows):
+            if str(workflow.get("id") or "") != target:
+                continue
+            updated = {**workflow, "source": clean_source}
+            workflows[index] = updated
+            break
+        if updated is None:
+            return None
+        self._settings.set("cover_workflows", workflows[:50])
+        return dict(updated)
 
     @staticmethod
     def workflow_file_payload(graph: dict[str, Any]) -> dict[str, Any]:

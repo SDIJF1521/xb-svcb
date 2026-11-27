@@ -21,6 +21,7 @@ import type {
   MusicSongResult,
   MusicDownloadResult,
   MusicPreviewResult,
+  AudioStreamInfo,
   DownloadedMusic,
   MusicSource,
   LyricsResult,
@@ -66,6 +67,7 @@ import type {
   EditorProject,
   EditorProjectSummary,
   EditorProjectTransferResult,
+  EditorWorkImportResult,
   EditorTrack,
   RealtimeCoverPayload,
   RealtimeCoverStatus,
@@ -98,11 +100,52 @@ import type {
   WorkflowGraph,
   WorkflowFileExportResult,
   WorkflowFileImportResult,
+  WorkflowHubItem,
+  WorkflowHubSearchResult,
+  WorkflowHubDetailResult,
+  WorkflowHubUploadOptions,
 } from './types'
 
 const now = () => new Date().toISOString()
 const rid = (p: string) => p + Math.random().toString(36).slice(2, 12)
 const fileName = (p: string) => p.split(/[/\\]/).pop() || p
+
+/**
+ * 浏览器开发环境没有真实作品音频：现场生成一段 8 秒静音 WAV（4 kHz / 8 bit），
+ * 让播放器状态机、队列与切歌逻辑可以在 npm run dev 里完整走一遍。
+ */
+function mockSilentWav(seconds = 8): string {
+  const rate = 4000
+  const samples = Math.max(1, Math.floor(rate * seconds))
+  const buffer = new ArrayBuffer(44 + samples)
+  const view = new DataView(buffer)
+  const writeText = (offset: number, value: string) => {
+    for (let i = 0; i < value.length; i += 1) view.setUint8(offset + i, value.charCodeAt(i))
+  }
+  writeText(0, 'RIFF')
+  view.setUint32(4, 36 + samples, true)
+  writeText(8, 'WAVE')
+  writeText(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, rate, true)
+  view.setUint32(28, rate, true)
+  view.setUint16(32, 1, true)
+  view.setUint16(34, 8, true)
+  writeText(36, 'data')
+  view.setUint32(40, samples, true)
+  new Uint8Array(buffer, 44).fill(128)
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  }
+  return `data:audio/wav;base64,${btoa(binary)}`
+}
+
+const MOCK_SILENT_AUDIO = mockSilentWav()
+
 const editorFormat = (fmt = 'wav') => {
   const value = fmt.trim().toLowerCase().replace(/^\./, '')
   return ['wav', 'mp3', 'flac'].includes(value) ? value : 'wav'
@@ -328,10 +371,6 @@ const mockHubModels: HubModelItem[] = [
     tags: ['中文', '女声', '扩散'],
     version: '1.3.0',
     uploaded_at: '2026-07-20T12:00:00',
-    download_count: 238,
-    downloads: 236,
-    local_downloads: 2,
-    likes: 41,
     screenshots: [{ path: 'screenshot_1_demo.png', name: 'screenshot_1_demo.png', kind: 'image', mime: 'image/png' }],
     preview_audio: { path: 'preview_demo.mp3', name: 'preview_demo.mp3', kind: 'audio', mime: 'audio/mpeg' },
     dependency_ok: true,
@@ -353,10 +392,6 @@ const mockHubModels: HubModelItem[] = [
     tags: ['RVC', '女声', 'index'],
     version: '2.1.0',
     uploaded_at: '2026-07-24T16:20:00',
-    download_count: 412,
-    downloads: 412,
-    local_downloads: 0,
-    likes: 62,
     screenshots: [],
     preview_audio: { path: 'preview_reze.mp3', name: 'preview_reze.mp3', kind: 'audio', mime: 'audio/mpeg' },
     dependency_ok: true,
@@ -378,10 +413,6 @@ const mockHubModels: HubModelItem[] = [
     tags: ['SeedVC', 'zero-shot'],
     version: '1.0.0',
     uploaded_at: '2026-07-18T08:00:00',
-    download_count: 96,
-    downloads: 96,
-    local_downloads: 0,
-    likes: 15,
     screenshots: [],
     preview_audio: null,
     dependency_ok: false,
@@ -391,6 +422,175 @@ const mockHubModels: HubModelItem[] = [
   },
 ]
 const mockPymssDownloaded = new Set<string>(['bs_roformer_voc_hyperacev2.ckpt'])
+
+// ---- 工作流商城（ModelScope）模拟数据 ----
+function mockWorkflowGraph(
+  engine: 'uvr' | 'pymss',
+  pymssModel: string,
+  withDereverb: boolean,
+): WorkflowGraph {
+  const nodes: WorkflowGraph['nodes'] = [
+    { id: 'n1', type: 'input', x: 40, y: 190, params: {} },
+    { id: 'n2', type: 'separate', x: 250, y: 140, params: { engine, model: pymssModel, device: 'auto' } },
+  ]
+  if (withDereverb) {
+    nodes.push({ id: 'n3', type: 'dereverb', x: 450, y: 320, params: { engine: 'pymss', model: 'UVR-DeEcho-DeReverb.pth' } })
+  }
+  nodes.push(
+    { id: 'n4', type: 'convert', x: 650, y: 60, params: { model_id: '', device: 'auto', auto_high_pitch_guard: true } },
+    { id: 'n5', type: 'enhance', x: 650, y: 320, params: { level: 'basic' } },
+    { id: 'n6', type: 'mix', x: 920, y: 190, params: { enhanced: true } },
+    { id: 'n7', type: 'output', x: 1160, y: 190, params: { file_template: '%filename%_%stem%_%model%' } },
+  )
+  const edges: WorkflowGraph['edges'] = withDereverb
+    ? [
+        { id: 'e1', from: { node: 'n1', port: 'audio' }, to: { node: 'n2', port: 'audio' } },
+        { id: 'e2', from: { node: 'n2', port: 'vocals' }, to: { node: 'n3', port: 'audio' } },
+        { id: 'e3', from: { node: 'n3', port: 'audio' }, to: { node: 'n4', port: 'audio' } },
+        { id: 'e4', from: { node: 'n4', port: 'audio' }, to: { node: 'n5', port: 'audio' } },
+        { id: 'e5', from: { node: 'n2', port: 'instrumental' }, to: { node: 'n6', port: 'instrumental' } },
+        { id: 'e6', from: { node: 'n5', port: 'audio' }, to: { node: 'n6', port: 'vocals' } },
+        { id: 'e7', from: { node: 'n6', port: 'audio' }, to: { node: 'n7', port: 'audio' } },
+      ]
+    : [
+        { id: 'e1', from: { node: 'n1', port: 'audio' }, to: { node: 'n2', port: 'audio' } },
+        { id: 'e2', from: { node: 'n2', port: 'vocals' }, to: { node: 'n4', port: 'audio' } },
+        { id: 'e3', from: { node: 'n4', port: 'audio' }, to: { node: 'n5', port: 'audio' } },
+        { id: 'e4', from: { node: 'n2', port: 'instrumental' }, to: { node: 'n6', port: 'instrumental' } },
+        { id: 'e5', from: { node: 'n5', port: 'audio' }, to: { node: 'n6', port: 'vocals' } },
+        { id: 'e6', from: { node: 'n6', port: 'audio' }, to: { node: 'n7', port: 'audio' } },
+      ]
+  return { id: '', name: '', updated_at: '', nodes, edges }
+}
+
+const mockWorkflowSeeds = [
+  {
+    name: '女声流行标准翻唱',
+    description: 'PyMSS 人声分离 + 去混响，适合大多数流行女声；转换节点请选择你自己的声音模型。',
+    tags: ['女声', '流行', 'PyMSS'],
+    author: 'demo-user',
+    engine: 'pymss' as const,
+    pymss: [
+      { name: 'bs_roformer_voc_hyperacev2.ckpt', purpose: 'vocal_separation', purpose_label: '人声分离' },
+      { name: 'UVR-DeEcho-DeReverb.pth', purpose: 'dereverb', purpose_label: '去混响 / 人声净化' },
+    ],
+    dereverb: true,
+  },
+  {
+    name: '男声摇滚高音保护',
+    description: '针对男声高音做了保护轮次预设，伴奏保留原始动态，适合摇滚与现场曲目。',
+    tags: ['男声', '摇滚', '高音保护'],
+    author: 'community-a',
+    engine: 'pymss' as const,
+    pymss: [{ name: 'bs_roformer_voc_hyperacev2.ckpt', purpose: 'vocal_separation', purpose_label: '人声分离' }],
+    dereverb: false,
+  },
+  {
+    name: '二次元电子柔化',
+    description: '轻量 AI 增强 + 混音，保留高频空气感，适合电子与二次元曲风。',
+    tags: ['二次元', '电子', 'AI 增强'],
+    author: 'demo-user',
+    engine: 'uvr' as const,
+    pymss: [],
+    dereverb: false,
+  },
+  {
+    name: '说唱人声净化',
+    description: '先做去混响再转换，减少齿音与房间反射，说唱与念白都能用。',
+    tags: ['说唱', '去混响', '净化'],
+    author: 'community-b',
+    engine: 'pymss' as const,
+    pymss: [
+      { name: 'UVR-DeEcho-DeReverb.pth', purpose: 'dereverb', purpose_label: '去混响 / 人声净化' },
+      { name: 'bs_roformer_voc_hyperacev2.ckpt', purpose: 'vocal_separation', purpose_label: '人声分离' },
+    ],
+    dereverb: true,
+  },
+  {
+    name: '老歌修复工作流',
+    description: '人声修复 + 响度归一化，处理低码率老录音的噪声与音量不齐。',
+    tags: ['修复', '老歌', '响度'],
+    author: 'demo-user',
+    engine: 'uvr' as const,
+    pymss: [],
+    dereverb: false,
+  },
+  {
+    name: '日语女声柔化',
+    description: '偏柔和的增强参数，适合日语流行与抒情歌，转换后自动进入混音。',
+    tags: ['日语', '女声', '抒情'],
+    author: 'community-a',
+    engine: 'pymss' as const,
+    pymss: [{ name: 'bs_roformer_voc_hyperacev2.ckpt', purpose: 'vocal_separation', purpose_label: '人声分离' }],
+    dereverb: true,
+  },
+]
+
+let mockWorkflowHubItems: WorkflowHubItem[] = Array.from({ length: 15 }, (_, index) => {
+  const seed = mockWorkflowSeeds[index % mockWorkflowSeeds.length]!
+  const round = Math.floor(index / mockWorkflowSeeds.length) + 1
+  const name = round === 1 ? seed.name : `${seed.name} · ${round}`
+  const graph = mockWorkflowGraph(seed.engine, seed.pymss[0]?.name || 'bs_roformer_voc_hyperacev2.ckpt', seed.dereverb)
+  return {
+    repo_id: `demo-user/xb-cover-workflow-demo-${index + 1}-a${index}b`,
+    name,
+    description: seed.description,
+    author: seed.author,
+    version: `1.${round}.0`,
+    uploaded_at: new Date(Date.UTC(2026, 6, 28 - index)).toISOString(),
+    tags: seed.tags,
+    url: '#',
+    node_count: graph.nodes.length,
+    edge_count: graph.edges.length,
+    pymss_models: seed.pymss.map((item) => ({
+      ...item,
+      downloaded: mockPymssDownloaded.has(item.name),
+    })),
+    downloaded: false,
+    preview_graph: {
+      nodes: graph.nodes.map((node) => ({ id: node.id, type: node.type, x: node.x, y: node.y })),
+      edges: graph.edges,
+    },
+    graph,
+  }
+})
+
+/** 工作流商城下载完成后：写入「已保存工作流」并标记 PyMSS 依赖已安装。 */
+function mockCompleteWorkflowDownload(key: string): CoverWorkflow | undefined {
+  const repoId = key.startsWith('wfdl:') ? key.slice(5) : ''
+  const item = mockWorkflowHubItems.find((row) => row.repo_id === repoId)
+  if (!item) return undefined
+  for (const model of item.pymss_models || []) {
+    if (!model.downloaded) {
+      model.downloaded = true
+      mockPymssDownloaded.add(model.name)
+    }
+  }
+  item.downloaded = true
+  const existing = mockCoverWorkflows.find((w) => w.source?.repo_id === repoId)
+  if (existing) {
+    item.local_workflow_id = existing.id
+    return existing
+  }
+  const workflow: CoverWorkflow = {
+    id: rid('wf_'),
+    name: item.name,
+    updated_at: now(),
+    nodes: item.graph?.nodes || [],
+    edges: item.graph?.edges || [],
+    source: {
+      origin: 'downloaded',
+      repo_id: item.repo_id,
+      version: item.version,
+      uploaded_at: item.uploaded_at || '',
+      author: item.author,
+    },
+  }
+  mockCoverWorkflows = [workflow, ...mockCoverWorkflows].slice(0, 50)
+  item.local_workflow_id = workflow.id
+  return workflow
+}
+
 let mockMigrationTimer: ReturnType<typeof setInterval> | null = null
 let mockDataDir = 'D:/XB-SVCB-Data'
 let mockMigrationStatus: DataMigrationProgress = {
@@ -1335,12 +1535,14 @@ export const mock = {
       while (names.has(`${displayName} (${index})`)) index += 1
       displayName = `${displayName} (${index})`
     }
+    const existing = mockCoverWorkflows.find((w) => w.id === existingId)
     const workflow: CoverWorkflow = {
       id: existingId || rid('wf_'),
       name: displayName,
       updated_at: now(),
       nodes: graph.nodes,
       edges: graph.edges,
+      ...(existing?.source ? { source: existing.source } : {}),
     }
     mockCoverWorkflows = [
       workflow,
@@ -1416,6 +1618,50 @@ export const mock = {
   getStemAudio(id: string, kind: string): string {
     console.info('[mock] getStemAudio', id, kind)
     return ''
+  },
+  getWorkStream(id: string, kind: string): AudioStreamInfo {
+    console.info('[mock] getWorkStream', id, kind)
+    // 浏览器开发环境没有真实作品音频：返回一小段静音 WAV，让播放器状态机可调试。
+    return {
+      ok: true,
+      url: MOCK_SILENT_AUDIO,
+      format: 'wav',
+      sample_rate: 44100,
+      channels: 2,
+      bit_depth: 16,
+      duration: 1,
+      lossless: true,
+    }
+  },
+  getMusicStream(path: string): AudioStreamInfo {
+    console.info('[mock] getMusicStream', path)
+    return {
+      ok: true,
+      url: MOCK_SILENT_AUDIO,
+      format: 'wav',
+      sample_rate: 44100,
+      channels: 2,
+      bit_depth: 16,
+      duration: 1,
+      lossless: true,
+    }
+  },
+  streamMusicOnline(msg: string, n: number, _source?: string, _songId?: string): AudioStreamInfo {
+    void msg
+    void n
+    void _source
+    void _songId
+    return {
+      ok: true,
+      url: MOCK_SILENT_AUDIO,
+      format: 'wav',
+      quality: '模拟音质',
+      sample_rate: 44100,
+      channels: 2,
+      bit_depth: 16,
+      duration: 1,
+      lossless: false,
+    }
   },
   exportWork(id: string, fmt: WorkAudioExportFormat = 'wav'): string {
     console.info('[mock] exportWork', id, fmt)
@@ -1626,7 +1872,14 @@ export const mock = {
     })
     const startIdx = (page - 1) * pageSize
     const items = all.slice(startIdx, startIdx + pageSize)
-    return { ok: true, items, page, page_size: pageSize, has_more: startIdx + pageSize < all.length }
+    return {
+      ok: true,
+      items,
+      page,
+      page_size: pageSize,
+      total: all.length,
+      has_more: startIdx + pageSize < all.length,
+    }
   },
   hubDownloadModel(repoId: string): HubDownloadResult {
     const hit = mockHubModels.find((m) => m.repo_id === repoId)
@@ -1653,8 +1906,6 @@ export const mock = {
       },
     }
     mockModels.unshift(m)
-    hit.local_downloads = (hit.local_downloads || 0) + 1
-    hit.download_count = (hit.downloads || 0) + (hit.local_downloads || 0)
     return { ok: true, model: m }
   },
   hubUploadModel(modelId: string, name?: string, framework?: string, options?: HubUploadOptions): HubUploadResult {
@@ -1679,10 +1930,6 @@ export const mock = {
       tags: options?.tags || [],
       version,
       uploaded_at: uploadedAt,
-      download_count: 0,
-      downloads: 0,
-      local_downloads: 0,
-      likes: 0,
       screenshots: (options?.screenshots || []).map((path) => ({
         path,
         name: fileName(path),
@@ -1741,7 +1988,7 @@ export const mock = {
       mime: asset.mime,
       data: isImage
         ? 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="100%" height="100%" fill="%23202a3a"/><text x="50%" y="50%" fill="%23ffffff" text-anchor="middle" font-size="28">XB-SVCB Preview</text></svg>'
-        : 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=',
+        : MOCK_SILENT_AUDIO,
     }
   },
 
@@ -1831,6 +2078,13 @@ export const mock = {
             mockPymssDownloaded.add(job.title.replace(/^PyMSS · /, ''))
             continue
           }
+          if (key.startsWith('wfdl:')) {
+            const workflow = mockCompleteWorkflowDownload(key)
+            job.result = { repo_id: key.slice(5), workflow }
+            continue
+          }
+          const repoId = key.startsWith('dl:') ? key.slice(3) : ''
+          const hit = mockHubModels.find((item) => item.repo_id === repoId)
           const m: ModelDTO = {
             id: rid('mdl_'),
             name: job.title.split('/').pop() || job.title,
@@ -1842,6 +2096,15 @@ export const mock = {
             main_config: { name: 'config.json', path: '' },
             diffusion_model: null,
             diffusion_config: null,
+            framework: hit?.framework || 'so-vits-svc',
+            metadata: {
+              schema: 'xb-svcb.model.v1',
+              framework: hit?.framework || 'so-vits-svc',
+              valid: true,
+              source_repo_id: repoId,
+              source_version: hit?.version || '1.0.0',
+              source_uploaded_at: hit?.uploaded_at || '',
+            },
           }
           mockModels.unshift(m)
           job.result = { model: m }
@@ -1853,6 +2116,157 @@ export const mock = {
     )
   },
   hubClearJob(key: string): boolean {
+    delete mockJobs[key]
+    delete mockProgress[key]
+    return true
+  },
+
+  // ---- 工作流商城（浏览器开发环境模拟）----
+  workflowHubSearch(
+    query = '',
+    page = 1,
+    pageSize = 12,
+    mineOnly = false,
+  ): WorkflowHubSearchResult {
+    const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    let rows = mockWorkflowHubItems.filter((row) => {
+      const hay = `${row.name} ${row.description || ''} ${(row.tags || []).join(' ')}`.toLowerCase()
+      return tokens.every((token) => hay.includes(token))
+    })
+    if (mineOnly) rows = rows.filter((row) => row.author === 'demo-user')
+    rows = rows.map((row) => {
+      const local = mockCoverWorkflows.find((w) => w.source?.repo_id === row.repo_id)
+      return { ...row, downloaded: !!local, local_workflow_id: local?.id || '' }
+    })
+    const total = rows.length
+    const start = Math.max(0, (page - 1) * pageSize)
+    return {
+      ok: true,
+      items: rows.slice(start, start + pageSize),
+      page,
+      page_size: pageSize,
+      total,
+      has_more: start + pageSize < total,
+      viewer: mockHubToken ? 'demo-user' : '',
+      mine_only: mineOnly,
+    }
+  },
+  workflowHubDetail(repoId: string): WorkflowHubDetailResult {
+    const row = mockWorkflowHubItems.find((item) => item.repo_id === repoId)
+    if (!row) return { ok: false, error: '未找到该工作流' }
+    const local = mockCoverWorkflows.find((w) => w.source?.repo_id === repoId)
+    return {
+      ok: true,
+      item: {
+        ...row,
+        downloaded: !!local,
+        local_workflow_id: local?.id || '',
+        pymss_models: (row.pymss_models || []).map((model) => ({
+          ...model,
+          downloaded: mockPymssDownloaded.has(model.name),
+        })),
+      },
+    }
+  },
+  workflowHubStartDownload(repoId: string): HubStartResult {
+    const row = mockWorkflowHubItems.find((item) => item.repo_id === repoId)
+    if (!row) return { ok: false, error: '未找到该工作流' }
+    const key = `wfdl:${repoId}`
+    if (mockJobs[key]?.status === 'running') return { ok: true, key, already: true }
+    mockProgress[key] = 0
+    mockJobs[key] = {
+      key,
+      kind: 'download',
+      title: `工作流 · ${row.name}`,
+      status: 'running',
+      pct: 0,
+      msg: '排队中…',
+      phase: 'start',
+      created_at: now(),
+    }
+    return { ok: true, key }
+  },
+  workflowHubStartUpload(
+    workflowId: string,
+    options?: WorkflowHubUploadOptions,
+  ): HubStartResult {
+    if (!mockHubToken) return { ok: false, error: '未填写 ModelScope 访问令牌' }
+    const workflow = mockCoverWorkflows.find((item) => item.id === workflowId)
+    if (!workflow) return { ok: false, error: '本地工作流不存在，请先保存工作流' }
+    const name = (options?.name || workflow.name || '工作流').trim() || '工作流'
+    const pymssNames = Array.from(
+      new Set(
+        workflow.nodes
+          .filter((node) => (node.type === 'separate' || node.type === 'dereverb')
+            && String(node.params?.engine || '').toLowerCase() === 'pymss')
+          .map((node) => String(node.params?.model || '').trim())
+          .filter(Boolean),
+      ),
+    )
+    const repoId = `demo-user/xb-cover-workflow-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30)}-${Math.random().toString(36).slice(2, 8)}`
+    mockWorkflowHubItems.unshift({
+      repo_id: repoId,
+      name,
+      description: options?.description || '',
+      author: 'demo-user',
+      version: options?.version || '1.0.0',
+      uploaded_at: now(),
+      tags: options?.tags || [],
+      url: '#',
+      node_count: workflow.nodes.length,
+      edge_count: workflow.edges.length,
+      pymss_models: pymssNames.map((model) => ({
+        name: model,
+        purpose: model.toLowerCase().includes('dereverb') ? 'dereverb' : 'vocal_separation',
+        purpose_label: model.toLowerCase().includes('dereverb') ? '去混响 / 人声净化' : '人声分离',
+        downloaded: mockPymssDownloaded.has(model),
+      })),
+      downloaded: true,
+      local_workflow_id: workflow.id,
+      preview_graph: {
+        nodes: workflow.nodes.map((node) => ({ id: node.id, type: node.type, x: node.x, y: node.y })),
+        edges: workflow.edges,
+      },
+      graph: { id: '', name, updated_at: '', nodes: workflow.nodes, edges: workflow.edges },
+    })
+    workflow.source = {
+      origin: 'uploaded',
+      repo_id: repoId,
+      version: options?.version || '1.0.0',
+      uploaded_at: now(),
+      author: 'demo-user',
+    }
+    const key = `wful:${workflowId}`
+    mockProgress[key] = 0
+    mockJobs[key] = {
+      key,
+      kind: 'upload',
+      title: `工作流 · ${name}`,
+      status: 'running',
+      pct: 0,
+      msg: '排队中…',
+      phase: 'start',
+      created_at: now(),
+    }
+    return { ok: true, key }
+  },
+  workflowHubProgress(key: string): HubProgress {
+    const cur = Math.min(100, (mockProgress[key] ?? 0) + 20)
+    mockProgress[key] = cur
+    return {
+      phase: cur >= 100 ? 'done' : 'upload',
+      pct: cur,
+      msg: cur >= 100 ? '完成' : `处理中 ${cur}%`,
+      done: cur,
+      total: 100,
+    }
+  },
+  workflowHubListJobs(): HubJob[] {
+    return Object.values(mockJobs)
+      .filter((job) => job.key.startsWith('wfdl:') || job.key.startsWith('wful:'))
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+  },
+  workflowHubClearJob(key: string): boolean {
     delete mockJobs[key]
     delete mockProgress[key]
     return true
@@ -2316,6 +2730,29 @@ export const mock = {
   },
   renderEditorProject(projectId: string, fmt = 'wav'): string {
     return `C:/exports/${projectId}.${editorFormat(fmt)}`
+  },
+  importEditorProjectToWorks(projectId: string, fmt = 'wav'): EditorWorkImportResult {
+    const project = this.getEditorProject(projectId)
+    if (!project) return { ok: false, error: '编辑工程不存在' }
+    const work: WorkDTO = {
+      id: rid('wrk_'),
+      title: project.title || '音频编辑器成品',
+      model: '音频编辑器',
+      model_id: '',
+      status: 'done',
+      progress: 100,
+      duration: '00:00',
+      format: editorFormat(fmt).toUpperCase(),
+      size: '—',
+      created_at: now(),
+      time: '刚刚',
+      steps: [{ key: 'editor', label: '音频编辑器', status: 'done' }],
+      workflow: 'audio_editor',
+      mode: 'single',
+      output: MOCK_SILENT_AUDIO,
+    }
+    mockWorks.unshift(work)
+    return { ok: true, work }
   },
   exportEditorProject(projectId: string, fmt = 'wav'): string {
     return `C:/exports/${projectId}.${editorFormat(fmt)}`
@@ -2877,6 +3314,13 @@ export const mock = {
       project: cloneProject(found.project),
       clips: touched.map((clip) => ({ ...clip })),
     }
+  },
+  previewEditorTrackMidi(
+    _projectId: string,
+    _trackId: string,
+    _notes?: EditorMidiNote[],
+  ): EditorClipMidiApplyResult {
+    return { ok: false, error: '浏览器 mock 没有 MIDI 音高重绘：请用桌面版试听' }
   },
   getEditorMidiSession(projectId: string, trackId: string): EditorMidiSessionResult {
     const found = findMockMidiTrack(projectId, trackId)

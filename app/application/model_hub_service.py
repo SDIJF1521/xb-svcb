@@ -9,7 +9,8 @@
   的条目，避免被无关模型污染（软校验：他人理论上可伪造标记）。
 - 下载：读清单 → 拉取各文件到暂存目录 → 复用 ModelService.import_model 导入本地模型库。
 
-搜索 / 下载 / 校验令牌均走纯 httpx；仅模型上传使用 .venv-hub。
+搜索 / 下载 / 校验令牌均经 ``ModelHubGateway`` 端口（实现见
+``infrastructure/model_hub_client.py``）；仅模型上传使用 .venv-hub。
 所有对外方法返回带 ``ok`` 字段的字典，便于前端统一处理。
 """
 
@@ -17,12 +18,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
 import threading
+import time
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
@@ -30,7 +33,7 @@ from typing import Any
 
 import config
 from .adapters import ensure_data_dirs
-from .ports import SettingsRepository
+from .ports import ModelHubGateway, SettingsRepository
 
 MODELHUB_ASSET_MIMES = {
     ".jpg": "image/jpeg",
@@ -47,22 +50,72 @@ MODELHUB_ASSET_MIMES = {
 }
 MODELHUB_PREVIEW_AUDIO_MAX_BYTES = 1024 * 1024 * 1024
 
+# 搜索时补充的框架别名：用户常在模型名后加「模型」或写 sovits / ddsp。
+_MODELHUB_FRAMEWORK_ALIASES: dict[str, tuple[str, ...]] = {
+    "so-vits-svc": ("so-vits", "sovits", "svc"),
+    "rvc": ("rvc",),
+    "seed-vc": ("seed-vc", "seedvc"),
+    "ddsp-svc": ("ddsp", "ddsp-svc", "浅扩散"),
+    "other": (),
+}
+# 「ddsp模型」「rvc 模型」里的通用后缀不参与匹配，否则会把结果滤空。
+_MODELHUB_SEARCH_STOPWORDS = {
+    "模型",
+    "声音",
+    "声音模型",
+    "翻唱",
+    "音色",
+    "语音",
+    "的",
+}
+
+
+def _search_tokens(query: str) -> list[str]:
+    """把搜索词拆成小写 tokens，并去掉「模型」这类通用后缀。
+
+    ``ddsp模型`` -> ``["ddsp"]``；``纳西妲 模型`` -> ``["纳西妲"]``；
+    ``芙芙`` 保持 ``["芙芙"]``。这样既支持框架词，也支持中文名 + 「模型」后缀。
+    """
+    tokens: list[str] = []
+    for part in (query or "").lower().split():
+        pieces = re.findall(r"[a-z0-9][a-z0-9._+-]*|[\u4e00-\u9fff]+", part)
+        for piece in pieces:
+            token = piece
+            for suffix in ("声音模型", "模型", "音色", "翻唱", "语音"):
+                if token.endswith(suffix) and len(token) > len(suffix):
+                    token = token[: -len(suffix)]
+                    break
+            if not token or token in _MODELHUB_SEARCH_STOPWORDS:
+                continue
+            if token not in tokens:
+                tokens.append(token)
+    return tokens
+
 
 class _AsyncRateLimiter:
-    """异步最小间隔限流器：保证每秒不超过 ``rate_per_sec`` 次请求。"""
+    """兼容旧引用的空壳（真正的限流在 infrastructure/http_async.py）。"""
 
     def __init__(self, rate_per_sec: float) -> None:
-        self._min_interval = 1.0 / max(rate_per_sec, 1)
-        self._lock = asyncio.Lock()
-        self._last = 0.0
+        self._rate = rate_per_sec
 
     async def wait(self) -> None:
-        async with self._lock:
-            loop = asyncio.get_event_loop()
-            delay = self._last + self._min_interval - loop.time()
-            if delay > 0:
-                await asyncio.sleep(delay)
-            self._last = loop.time()
+        return None
+
+
+async def _gather_bounded(items: list[Any], worker: Any, limit: int) -> list[Any]:
+    """有界并发执行，失败项返回 None（保持与 items 的顺序对应）。"""
+    if not items:
+        return []
+    semaphore = asyncio.Semaphore(max(1, int(limit)))
+
+    async def run(item: Any) -> Any:
+        async with semaphore:
+            try:
+                return await worker(item)
+            except Exception:  # noqa: BLE001 - 单个仓库失败不应拖垮搜索
+                return None
+
+    return await asyncio.gather(*(run(item) for item in items))
 
 
 def _slugify(name: str) -> str:
@@ -77,24 +130,6 @@ def _first(d: dict[str, Any], *keys: str) -> Any:
         if k in d and d[k] not in (None, ""):
             return d[k]
     return None
-
-
-def _as_int(value: Any, default: int = 0) -> int:
-    try:
-        if isinstance(value, str):
-            value = value.replace(",", "").strip()
-        return int(float(value))
-    except (TypeError, ValueError):
-        return default
-
-
-def _as_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if isinstance(value, str):
-            value = value.replace(",", "").strip()
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _trim_text(value: Any, max_len: int) -> str:
@@ -210,10 +245,20 @@ def _is_remote_newer(
 class ModelHubService:
     """ModelScope 模型站：上传 / 搜索 / 下载本软件生态内的翻唱模型。"""
 
-    def __init__(self, settings: SettingsRepository, models: Any) -> None:
+    def __init__(
+        self,
+        settings: SettingsRepository,
+        models: Any,
+        gateway: ModelHubGateway | None = None,
+    ) -> None:
         self._settings = settings
         self._models = models  # ModelService：下载后复用其 import_model
-        self._limiter = _AsyncRateLimiter(config.MODELSCOPE_QPS)
+        self._gateway = gateway
+        # 搜索缓存：清单 / 令牌校验 / 搜索结果都带短 TTL。所有搜索协程都在
+        # 本服务的专用 loop 上执行，字典访问不需要跨线程锁。
+        self._manifest_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+        self._search_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+        self._viewer_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         # 进度表：key -> {phase, pct, msg, done, total}；供前端轮询展示进度条。
         # 下载 key 形如 "dl:<repo_id>"，上传 key 形如 "ul:<model_id>"。
         self._progress: dict[str, dict[str, Any]] = {}
@@ -223,9 +268,269 @@ class ModelHubService:
         self._progress_lock = threading.Lock()
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
-            target=self._loop.run_forever, daemon=True, name="modelhub-loop"
+            target=self._run_loop, daemon=True, name="modelhub-loop"
         )
         self._thread.start()
+
+    def _run_loop(self) -> None:
+        # 在 loop 启动前排入预热协程；协程真正执行时 running loop 已就绪。
+        try:
+            self._loop.create_task(self._warm_gateway_async())
+        except Exception:  # noqa: BLE001 - 预热失败不影响主流程
+            pass
+        self._loop.run_forever()
+
+    async def _warm_gateway_async(self) -> None:
+        self._warm_gateway()
+
+    def _warm_gateway(self) -> None:
+        gateway = getattr(self, "_gateway", None)
+        prepare = getattr(gateway, "prepare", None)
+        if callable(prepare):
+            try:
+                prepare()
+            except Exception:  # noqa: BLE001 - 预热失败不影响按需创建
+                pass
+
+    def _gw(self) -> ModelHubGateway:
+        """取注入的网关；单独构造服务（脚本 / 单测）时走默认适配器接缝。"""
+        gateway = getattr(self, "_gateway", None)
+        if gateway is None:
+            from .adapters import model_hub_gateway
+
+            gateway = model_hub_gateway()
+            self._gateway = gateway
+        return gateway
+
+    def _ensure_caches(self) -> None:
+        """兼容脚本 / 单测用 object.__new__ 构造、未走 __init__ 的场景。"""
+        if not hasattr(self, "_manifest_cache"):
+            self._manifest_cache = {}
+        if not hasattr(self, "_search_cache"):
+            self._search_cache = {}
+        if not hasattr(self, "_viewer_cache"):
+            self._viewer_cache = {}
+        if not hasattr(self, "_local_hash_cache"):
+            self._local_hash_cache = {}
+            self._load_local_hash_cache()
+
+    @staticmethod
+    def _local_hash_cache_path() -> Path:
+        return config.MODELHUB_DIR / "local-model-hashes.json"
+
+    def _load_local_hash_cache(self) -> None:
+        try:
+            raw = json.loads(self._local_hash_cache_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if isinstance(raw, dict):
+            self._local_hash_cache = {
+                str(key): str(value)
+                for key, value in raw.items()
+                if isinstance(value, str) and value
+            }
+
+    def _save_local_hash_cache(self) -> None:
+        path = self._local_hash_cache_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_text(
+                json.dumps(self._local_hash_cache, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            temporary.replace(path)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _hash_local_file_sync(path: Path) -> str | None:
+        digest = hashlib.sha256()
+        try:
+            with path.open("rb") as handle:
+                while True:
+                    chunk = handle.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+        except OSError:
+            return None
+        return digest.hexdigest()
+
+    async def _local_file_sha256(self, path: str) -> str | None:
+        """本地文件 SHA-256（按路径+大小+mtime 缓存，线程内计算）。"""
+        self._ensure_caches()
+        target = Path(path)
+        try:
+            stat = target.stat()
+        except OSError:
+            return None
+        cache_key = (
+            f"{target.resolve()}|{int(stat.st_size)}|{int(stat.st_mtime_ns)}"
+        )
+        cached = self._local_hash_cache.get(cache_key)
+        if isinstance(cached, str):
+            return cached
+        value = await asyncio.to_thread(self._hash_local_file_sync, target)
+        if value:
+            if len(self._local_hash_cache) >= 512:
+                self._local_hash_cache.pop(next(iter(self._local_hash_cache)), None)
+            self._local_hash_cache[cache_key] = value
+            self._save_local_hash_cache()
+        return value
+
+    async def _file_digests(self, repo_id: str) -> dict[str, tuple[int, str]]:
+        try:
+            return await self._gw().file_digests(self.get_token(), repo_id)
+        except Exception:  # noqa: BLE001 - 摘要不可用时退回元数据匹配
+            return {}
+
+    @staticmethod
+    def _remote_main_digest(
+        manifest: dict[str, Any], digests: dict[str, tuple[int, str]]
+    ) -> tuple[int, str] | None:
+        files = manifest.get("files")
+        if not isinstance(files, dict):
+            return None
+        main_name = str(files.get("main_model") or "").strip().replace("\\", "/")
+        if not main_name or not digests:
+            return None
+        main_name = main_name.lstrip("./")
+        record = digests.get(main_name) or digests.get(Path(main_name).name)
+        if not record:
+            return None
+        size, sha256 = record
+        try:
+            size_value = int(size)
+        except (TypeError, ValueError):
+            size_value = 0
+        sha256 = str(sha256 or "").lower()
+        if size_value <= 0 or not sha256:
+            return None
+        return size_value, sha256
+
+    @staticmethod
+    def _local_main_path(model: dict[str, Any]) -> Path | None:
+        main = model.get("main_model")
+        if not isinstance(main, dict):
+            return None
+        raw = str(main.get("path") or "").strip()
+        if not raw:
+            return None
+        path = Path(raw)
+        return path if path.is_file() else None
+
+    @staticmethod
+    def _model_framework(model: dict[str, Any]) -> str:
+        framework = str(model.get("framework") or "").strip()
+        if framework:
+            return config.modelhub_normalize_framework(framework)
+        return config.modelhub_guess_framework(str(model.get("type") or ""))
+
+    async def _hash_match_local_model(
+        self,
+        repo_id: str,
+        manifest: dict[str, Any],
+        local_models: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """用主模型文件 SHA-256 匹配本地模型（不依赖 source_repo_id）。"""
+        if not local_models:
+            return None
+        remote_framework = config.modelhub_normalize_framework(
+            manifest.get("framework")
+        )
+        digests = await self._file_digests(repo_id)
+        remote = self._remote_main_digest(manifest, digests)
+        if not remote:
+            return None
+        remote_size, remote_sha = remote
+        for model in local_models:
+            meta = model.get("metadata") or {}
+            source_repo = (
+                str(meta.get("source_repo_id") or "").strip().strip("/")
+            )
+            # 已经绑定来源仓库的本地模型走 source_repo_id 快速路径；不要让它
+            # 通过相同权重去“顶替”另一个仓库（例如两个仓库共用同一份 pth），
+            # 否则删除其中一个模型后，另一个仍会让它显示「查看本地」。
+            if source_repo:
+                continue
+            if self._model_framework(model) != remote_framework:
+                continue
+            path = self._local_main_path(model)
+            if path is None:
+                continue
+            try:
+                if path.stat().st_size != remote_size:
+                    continue
+            except OSError:
+                continue
+            local_sha = await self._local_file_sha256(str(path))
+            if local_sha and local_sha.lower() == remote_sha:
+                return model
+        return None
+
+    async def _resolve_hash_matches(
+        self,
+        candidates: list[tuple[str, dict[str, Any], dict[str, Any]]],
+        local_models: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        if not candidates or not local_models:
+            return {}
+        source_repo_ids = {
+            str((model.get("metadata") or {}).get("source_repo_id") or "")
+            .strip()
+            .strip("/")
+            for model in local_models
+            if self._local_main_path(model) is not None
+        }
+        needs_hash = [
+            (repo_id, manifest)
+            for repo_id, manifest, _entry in candidates
+            if repo_id not in source_repo_ids
+        ]
+        if not needs_hash:
+            return {}
+
+        async def match_one(item: tuple[str, dict[str, Any]]) -> tuple[str, dict[str, Any] | None]:
+            repo_id, manifest = item
+            return repo_id, await self._hash_match_local_model(
+                repo_id, manifest, local_models
+            )
+
+        results = await _gather_bounded(needs_hash, match_one, 4)
+        matches: dict[str, dict[str, Any]] = {}
+        for item in results:
+            if not item:
+                continue
+            repo_id, model = item
+            if model:
+                matches[repo_id] = model
+        return matches
+
+    def _cache_get(
+        self, cache: dict[Any, Any], key: Any, default: Any = None
+    ) -> Any:
+        item = cache.get(key)
+        if item is None:
+            return default
+        expires, value = item
+        if expires <= time.monotonic():
+            cache.pop(key, None)
+            return default
+        return value
+
+    def _cache_set(
+        self,
+        cache: dict[Any, Any],
+        key: Any,
+        value: Any,
+        ttl: float,
+        *,
+        max_entries: int = 512,
+    ) -> None:
+        if len(cache) >= max_entries and key not in cache:
+            cache.pop(next(iter(cache)), None)
+        cache[key] = (time.monotonic() + max(0.1, ttl), value)
 
     # ---- 进度 ----
     def _set_progress(
@@ -368,7 +673,25 @@ class ModelHubService:
 
     def set_token(self, token: str) -> bool:
         self._settings.set(config.MODELSCOPE_TOKEN_SETTING, (token or "").strip())
+        self._viewer_cache.clear()
+        self._search_cache.clear()
+        getattr(self, "_manifest_cache", {}).clear()
+        try:
+            self._gw().invalidate_token_cache()
+        except Exception:  # noqa: BLE001 - 缓存清理失败不应阻断保存令牌
+            pass
         return True
+
+    def invalidate_cache(self) -> None:
+        """本地模型库变化（删除 / 导入）后让下一次搜索重新计算安装状态。"""
+        self._ensure_caches()
+        self._manifest_cache.clear()
+        self._search_cache.clear()
+        self._viewer_cache.clear()
+        try:
+            self._gw().invalidate_cache()
+        except Exception:  # noqa: BLE001
+            pass
 
     def upload_ready(self) -> bool:
         """上传组件（.venv-hub + modelscope）是否就绪。"""
@@ -497,27 +820,6 @@ class ModelHubService:
             out.append({**spec, "ok": ok, "message": message})
         return out
 
-    def _metric_summary(
-        self,
-        manifest: dict[str, Any] | None = None,
-        entry: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        manifest = manifest or {}
-        entry = entry or {}
-        metrics = manifest.get("metrics")
-        if not isinstance(metrics, dict):
-            metrics = {}
-        downloads = max(
-            _as_int(_first(entry, "DownloadCount", "Downloads", "DownloadsCount", "download_count")),
-            _as_int(metrics.get("downloads")),
-        )
-        return {
-            "downloads": downloads,
-            "local_downloads": 0,
-            "download_count": downloads,
-            "likes": max(_as_int(_first(entry, "LikeCount", "Likes", "like_count")), _as_int(metrics.get("likes"))),
-        }
-
     def _assets_from_manifest(self, manifest: dict[str, Any]) -> dict[str, Any]:
         raw = manifest.get("assets")
         if not isinstance(raw, dict):
@@ -553,13 +855,25 @@ class ModelHubService:
             else None,
         }
 
-    def _installed_info(self, repo_id: str, manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _installed_info(
+        self,
+        repo_id: str,
+        manifest: dict[str, Any] | None = None,
+        local_models: list[dict[str, Any]] | None = None,
+        hash_match: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         latest_version = str((manifest or {}).get("version") or "1.0.0")
         latest_time = str((manifest or {}).get("uploaded_at") or "")
         matches: list[dict[str, Any]] = []
-        for model in self._models.list():
+        # 搜索结果有多条时由调用方传入一次快照，避免每条都重新扫描本地模型库
+        # （ModelService.list 会读取配置 / 声线信息，重复调用很浪费）。
+        source = local_models if local_models is not None else self._models.list()
+        for model in source:
             meta = model.get("metadata") or {}
             if meta.get("source_repo_id") != repo_id:
+                continue
+            if self._local_main_path(model) is None:
+                # 元数据说有来源，但本地文件已经不在了：不能算已安装。
                 continue
             installed_version = str(meta.get("source_version") or "")
             installed_time = str(meta.get("source_uploaded_at") or "")
@@ -570,11 +884,27 @@ class ModelHubService:
                     "installed_version": installed_version,
                     "installed_at": model.get("imported_at", ""),
                     "source_uploaded_at": installed_time,
+                    "matched_by": "repo",
                 }
             )
+        matched_by_hash = False
+        if not matches and hash_match:
+            meta = hash_match.get("metadata") or {}
+            matches.append(
+                {
+                    "model_id": hash_match.get("id", ""),
+                    "model_name": hash_match.get("name", ""),
+                    "installed_version": str(meta.get("source_version") or ""),
+                    "installed_at": hash_match.get("imported_at", ""),
+                    "source_uploaded_at": str(meta.get("source_uploaded_at") or ""),
+                    "matched_by": "sha256",
+                }
+            )
+            matched_by_hash = True
         current = matches[0] if matches else {}
         return {
             "installed": bool(matches),
+            "installed_by_hash": matched_by_hash,
             "installed_models": matches,
             "model_id": current.get("model_id", ""),
             "model_name": current.get("model_name", ""),
@@ -582,6 +912,7 @@ class ModelHubService:
             "latest_version": latest_version,
             "available": bool(
                 matches
+                and not matched_by_hash
                 and _is_remote_newer(
                     latest_version,
                     current.get("installed_version"),
@@ -595,15 +926,15 @@ class ModelHubService:
         self,
         repo_id: str,
         manifest: dict[str, Any],
-        entry: dict[str, Any] | None = None,
         *,
         detail: bool = False,
+        local_models: list[dict[str, Any]] | None = None,
+        hash_match: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         fw = config.modelhub_normalize_framework(manifest.get("framework"))
         raw_files = manifest.get("files")
         files = raw_files if isinstance(raw_files, dict) else {}
         assets = self._assets_from_manifest(manifest)
-        metric_summary = self._metric_summary(manifest, entry)
         deps = self._dependency_status(fw, files)
         required_deps_ok = all(d.get("ok") for d in deps if d.get("required"))
         version = str(manifest.get("version") or "1.0.0")
@@ -636,21 +967,15 @@ class ModelHubService:
                     "current": True,
                 }
             ],
-            "update": self._installed_info(repo_id, manifest),
-            **metric_summary,
+            "update": self._installed_info(repo_id, manifest, local_models, hash_match),
         }
         item["score"] = round(
-            min(10, _as_int(item.get("download_count")) / 10)
-            + (8 if item.get("preview_audio") else 0)
+            (8 if item.get("preview_audio") else 0)
             + min(8, len(item.get("screenshots") or []) * 2)
             + (6 if item.get("dependency_ok") else 0),
             2,
         )
         return item
-
-    def _record_download(self, repo_id: str, manifest: dict[str, Any]) -> None:
-        # 下载量以 ModelScope 仓库返回值为准，不在本地伪造社区数据。
-        return None
 
     def model_detail(self, repo_id: str) -> dict[str, Any]:
         return self._submit(self._model_detail(repo_id))
@@ -701,41 +1026,39 @@ class ModelHubService:
     ) -> dict[str, Any]:
         return self._submit(self._upload(model_id, name, framework, metadata or {}))
 
-    # ---- HTTP 基础 ----
-    def _headers(self, token: str | None) -> dict[str, str]:
-        h = {"User-Agent": "XB-SVCB", "Content-Type": "application/json"}
-        if token:
-            h["Authorization"] = f"Bearer {token}"
-            h["Cookie"] = f"m_session_id={token}"  # 兼容部分接口的会话校验
-        return h
-
+    # ---- 网关封装（网络 / 限流 / 缓存都在 infrastructure）----
     async def _verify_token(self, token: str | None) -> dict[str, Any]:
-        try:
-            import httpx
-        except ImportError:
-            return {"ok": False, "error": "缺少 httpx 依赖，请重新安装运行环境"}
-        token = (token if token is not None else self.get_token()).strip()
-        if not token:
+        self._ensure_caches()
+        value = (token if token is not None else self.get_token()).strip()
+        if not value:
             return {"ok": False, "error": "未填写 ModelScope 访问令牌"}
-        url = f"{config.MODELSCOPE_ENDPOINT}/api/v1/login"
-        await self._limiter.wait()
+        cached = self._cache_get(self._viewer_cache, value)
+        if isinstance(cached, dict):
+            return dict(cached)
         try:
-            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-                resp = await client.post(url, json={"AccessToken": token})
-                data = resp.json()
-        except Exception as exc:  # noqa: BLE001
+            result = await self._gw().verify_token(value)
+        except Exception as exc:  # noqa: BLE001 - 与旧实现一致：校验失败返回错误字典
             return {"ok": False, "error": f"校验失败：{exc}"}
-        d = data.get("Data") if isinstance(data, dict) else None
-        if not isinstance(d, dict):
-            msg = (data or {}).get("Message") if isinstance(data, dict) else None
-            return {"ok": False, "error": msg or "令牌无效或网络异常"}
-        username = _first(d, "Username", "Name", "username", "name") or ""
-        email = _first(d, "Email", "email") or ""
-        if not username:
-            return {"ok": False, "error": "未能从令牌解析到用户名"}
-        return {"ok": True, "username": str(username), "email": str(email)}
+        if isinstance(result, dict):
+            self._cache_set(
+                self._viewer_cache,
+                value,
+                result,
+                config.MODELSCOPE_TOKEN_TTL if result.get("ok") else 15.0,
+                max_entries=8,
+            )
+        return result
 
-    # ---- 搜索 ----
+    async def _query_models_page(
+        self, body: dict[str, Any]
+    ) -> tuple[list[Any], int | None]:
+        """同 ``_query_models``，但保留服务端总数提示（分页组件需要）。"""
+        try:
+            raw, total = await self._gw().query_models(self.get_token(), body)
+        except Exception:  # noqa: BLE001 - 搜索失败退化为空结果
+            return [], None
+        return (raw if isinstance(raw, list) else []), total
+
     async def _query_models(self, body: dict[str, Any]) -> list[Any]:
         """调用 ModelScope 模型列表/搜索接口（PUT /api/v1/models/），返回原始条目列表。
 
@@ -747,26 +1070,50 @@ class ModelHubService:
             接口会改回「全站热门第一页」，这正是"只搜得到自己上传的"根因。
         失败时返回空列表，不抛出异常。
         """
-        try:
-            import httpx
-        except ImportError:
-            return []
-        token = self.get_token()
-        url = f"{config.MODELSCOPE_ENDPOINT}/api/v1/models/"
-        await self._limiter.wait()
-        try:
-            async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
-                resp = await client.put(url, json=body, headers=self._headers(token))
-                data = resp.json()
-        except Exception:  # noqa: BLE001
-            return []
-        d = data.get("Data") if isinstance(data, dict) else None
-        raw = []
-        if isinstance(d, dict):
-            raw = _first(d, "Models", "models", "Model", "List", "Data") or []
-        elif isinstance(d, list):
-            raw = d
-        return raw if isinstance(raw, list) else []
+        raw, _total = await self._query_models_page(body)
+        return raw
+
+    async def _query_models_all(
+        self,
+        body: dict[str, Any],
+        *,
+        page_size: int = 100,
+        max_pages: int = 10,
+    ) -> list[Any]:
+        """按 100 条/页拉全某个查询的所有条目（用于稳定的客户端分页）。
+
+        模型站只收录本软件上传的模型，总量很小；分页要保证「每页条数绝不超」
+        且跨页不重不漏，就不能每页只拉一部分再合并多个来源。这里一次拉全候选
+        列表（有上限保护），再按页取清单，页面边界才稳定。
+        """
+        first_body = dict(body)
+        first_body["PageNumber"] = 1
+        first_body["PageSize"] = page_size
+        entries, total = await self._query_models_page(first_body)
+        collected = list(entries)
+        if not collected:
+            return collected
+        if total is not None:
+            effective = len(entries) if len(entries) < page_size else page_size
+            effective = max(1, effective)
+            page_count = min(max_pages, max(1, (int(total) + effective - 1) // effective))
+        else:
+            page_count = max_pages if len(entries) >= page_size else 1
+        if page_count <= 1:
+            return collected
+
+        async def fetch_page(page_number: int) -> list[Any]:
+            page_body = dict(body)
+            page_body["PageNumber"] = page_number
+            page_body["PageSize"] = page_size
+            page_entries, _page_total = await self._query_models_page(page_body)
+            return page_entries
+
+        rest = await _gather_bounded(list(range(2, page_count + 1)), fetch_page, 4)
+        for page_entries in rest:
+            if page_entries:
+                collected.extend(page_entries)
+        return collected
 
     async def _search(
         self,
@@ -775,59 +1122,63 @@ class ModelHubService:
         framework: str | None = None,
         page_size: int = 12,
     ) -> dict[str, Any]:
-        try:
-            import httpx  # noqa: F401
-        except ImportError:
-            return {"ok": False, "error": "缺少 httpx 依赖，请重新安装运行环境"}
+        self._ensure_caches()
         page = max(1, page)
         page_size = max(1, min(50, int(page_size or 12)))
         q = (query or "").strip()
-
-        # 汇集多来源候选条目，保证既能看到自己上传的，也能发现他人分享的：
-        raw_entries: list[Any] = []
-        viewer = ""
-        me: dict[str, Any] = {}
-        if self.get_token():
-            me = await self._verify_token(None)
-            if me.get("ok") and me.get("username"):
-                viewer = _trim_text(me.get("username"), 40)
-        # 来源 1：当前用户自己的命名空间（仅第 1 页合并，避免翻页时重复堆叠）
-        if page == 1 and viewer:
-            raw_entries += await self._query_models(
-                {"Path": viewer, "PageNumber": 1, "PageSize": 100}
-            )
-        # 来源 2：全站按「仓库名前缀」搜索（发现所有人公开分享的本软件模型）。
-        # 经实测：PUT /api/v1/models 真正生效的搜索字段是「Name」（帕斯卡），分页用
-        # PageNumber/PageSize。早期用的 "Search"（及小写 search/page_size）会被服务端
-        # 静默忽略 → 接口改回「全站热门第一页」，经前缀过滤后全被丢弃，于是看起来「只
-        # 搜得到自己上传的」（自己那路靠 Path 命名空间过滤才幸存）。每个上传仓库英文名
-        # 都是 xb-svcb-<slug>-<id>，按 Name=xb-svcb 即可命中所有人；真伪仍由后续的
-        # 「前缀过滤 + 清单 magic 校验」把关，避免污染。
-        marker_raw = await self._query_models(
-            {"Name": config.MODELHUB_REPO_PREFIX, "PageNumber": page, "PageSize": page_size}
-        )
-        raw_entries += marker_raw
-        # 来源 3：若用户输入了关键词，再按关键词全站搜一次（英文名/slug 命中补召回；
-        # 中文名等仍由下方 tokens 客户端过滤兜底）
-        keyword_raw: list[Any] = []
-        if q:
-            keyword_raw = await self._query_models(
-                {"Name": q, "PageNumber": page, "PageSize": page_size}
-            )
-            raw_entries += keyword_raw
-        # 是否还有下一页：以分页来源的原始条数是否「满页」作启发式判断
-        has_more = len(marker_raw) >= page_size or (
-            bool(q) and len(keyword_raw) >= page_size
-        )
-
-        prefix = config.MODELHUB_REPO_PREFIX
         fw_filter = (framework or "").strip().lower()
         if fw_filter not in config.MODELHUB_FRAMEWORKS:
             fw_filter = ""
-        # 模糊匹配：拆分为多个关键词，全部命中（名称/仓库/作者拼接文本）才算匹配
-        tokens = [t for t in q.lower().split() if t]
+        token = self.get_token()
 
-        candidates: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+        cache_key = (q, page, page_size, fw_filter, token)
+        cached = self._cache_get(self._search_cache, cache_key)
+        if isinstance(cached, dict):
+            return dict(cached)
+
+        # 分页不能在「每页只拉一部分」的基础上合并多个来源，否则第 1 页会
+        # 同时出现 marker + 关键词 + 自己命名空间的多批条目，条数超过 page_size。
+        # 这里先拉全候选列表（模型站总量很小，且有列表缓存），再按页切：
+        # 页大小严格 <= page_size，跨页不重不漏。
+        prefix = config.MODELHUB_REPO_PREFIX
+        sources: dict[str, Any] = {
+            "marker": self._query_models_all(
+                {"Name": prefix}, page_size=100, max_pages=10
+            )
+        }
+        if q:
+            # 关键词结果只作为「优先展示」来源（一页 100 条足够），最终仍按
+            # 仓库前缀 + 清单校验过滤，不会把无关模型混进分页。
+            sources["keyword"] = self._query_models_page(
+                {"Name": q, "PageNumber": 1, "PageSize": 100}
+            )
+        if token:
+            sources["verify"] = self._verify_token(None)
+
+        keys = list(sources)
+        values = await asyncio.gather(*(sources[key] for key in keys))
+        results = dict(zip(keys, values))
+        marker_raw = results.get("marker") or []
+        keyword_raw, _keyword_total = results.get("keyword") or ([], None)
+        me = results.get("verify") or {}
+        viewer = ""
+        if isinstance(me, dict) and me.get("ok") and me.get("username"):
+            viewer = _trim_text(me.get("username"), 40)
+
+        # 自己的命名空间也纳入同一份候选列表（每页都取同一份，保证页码稳定）；
+        # 它依赖令牌校验结果，因此放在并发批次之后。
+        own_raw: list[Any] = []
+        if viewer:
+            own_raw = await self._query_models_all(
+                {"Path": viewer}, page_size=100, max_pages=2
+            )
+
+        # 顺序：自己命名空间 -> 关键词命中 -> 全站标记搜索。去重后作为稳定列表。
+        raw_entries: list[Any] = own_raw + keyword_raw + marker_raw
+        # 模糊匹配：拆分为多个关键词（兼容「ddsp模型」这种框架词 + 通用后缀）
+        tokens = _search_tokens(q)
+
+        pending: list[tuple[str, dict[str, Any]]] = []
         seen: set[str] = set()
         for entry in raw_entries:
             if not isinstance(entry, dict):
@@ -839,34 +1190,100 @@ class ModelHubService:
             name_part = repo_id.split("/", 1)[-1]
             if not name_part.startswith(prefix):
                 continue  # 不带本软件前缀，跳过
-            # 校验清单，确认确为本软件上传（防污染）
-            manifest = await self._fetch_manifest(repo_id)
-            if not manifest:
-                continue
+            pending.append((repo_id, entry))
+
+        start = (page - 1) * page_size
+        filter_active = bool(tokens or fw_filter)
+
+        def manifest_matches(repo_id: str, manifest: dict[str, Any]) -> bool:
+            name_part = repo_id.split("/", 1)[-1]
             display = manifest.get("name") or name_part
-            haystack = f"{display} {repo_id}".lower()
-            if tokens and not all(t in haystack for t in tokens):
-                continue  # 模糊关键词未全部命中
             fw = config.modelhub_normalize_framework(manifest.get("framework"))
+            # 搜索桶要包含框架名：用户搜「ddsp」时应能命中 framework=ddsp-svc
+            # 的模型，即使它的显示名是「芙芙」、仓库名也不含 ddsp。
+            haystack = " ".join(
+                [
+                    str(display),
+                    repo_id,
+                    fw,
+                    str(config.MODELHUB_FRAMEWORKS.get(fw, "")),
+                    " ".join(_MODELHUB_FRAMEWORK_ALIASES.get(fw, ())),
+                    str(manifest.get("type") or ""),
+                    " ".join(_normalize_tags(manifest.get("tags"))),
+                ]
+            ).lower()
+            if tokens and not all(token in haystack for token in tokens):
+                return False
             if fw_filter and fw != fw_filter:
-                continue
-            candidates.append((repo_id, manifest, entry))
+                return False
+            return True
+
+        if filter_active:
+            # 有关键词 / 框架筛选时必须扫描全部候选清单，否则匹配项在后面的
+            # 仓库时会「搜不到」（旧实现只过滤当前页）。清单有 90s 缓存，
+            # 扫描上限见 MODELSCOPE_SEARCH_SCAN_LIMIT。
+            scan_limit = max(page_size, int(config.MODELSCOPE_SEARCH_SCAN_LIMIT))
+            scan_pending = pending[:scan_limit]
+            manifests = await _gather_bounded(
+                [repo_id for repo_id, _entry in scan_pending],
+                self._fetch_manifest,
+                config.MODELSCOPE_MANIFEST_CONCURRENCY,
+            )
+            filtered: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+            for (repo_id, entry), manifest in zip(scan_pending, manifests):
+                if not manifest or not manifest_matches(repo_id, manifest):
+                    continue
+                filtered.append((repo_id, manifest, entry))
+            total = len(filtered)
+            page_candidates = filtered[start:start + page_size]
+        else:
+            # 无筛选时按页读取清单，翻页更快；每页条数仍严格 <= page_size。
+            total = len(pending)
+            page_pending = pending[start:start + page_size]
+            manifests = await _gather_bounded(
+                [repo_id for repo_id, _entry in page_pending],
+                self._fetch_manifest,
+                config.MODELSCOPE_MANIFEST_CONCURRENCY,
+            )
+            page_candidates = [
+                (repo_id, manifest, entry)
+                for (repo_id, entry), manifest in zip(page_pending, manifests)
+                if manifest
+            ]
+        has_more = page * page_size < total
+
+        local_models = self._models.list() if page_candidates else []
+        hash_matches = (
+            await self._resolve_hash_matches(page_candidates, local_models)
+            if local_models
+            else {}
+        )
         items = [
             self._build_item(
                 repo_id,
                 manifest,
-                entry,
                 detail=False,
+                local_models=local_models,
+                hash_match=hash_matches.get(repo_id),
             )
-            for repo_id, manifest, entry in candidates
+            for repo_id, manifest, _entry in page_candidates
         ]
-        return {
+        payload = {
             "ok": True,
             "items": items,
             "page": page,
             "page_size": page_size,
+            "total": total,
             "has_more": has_more,
         }
+        self._cache_set(
+            self._search_cache,
+            cache_key,
+            payload,
+            config.MODELSCOPE_SEARCH_TTL,
+            max_entries=64,
+        )
+        return payload
 
     async def _model_detail(self, repo_id: str) -> dict[str, Any]:
         repo_id = (repo_id or "").strip().strip("/")
@@ -875,12 +1292,18 @@ class ModelHubService:
         manifest = await self._fetch_manifest(repo_id)
         if not manifest:
             return {"ok": False, "error": "该模型不是本软件上传或清单校验失败"}
+        local_models = self._models.list()
+        hash_matches = await self._resolve_hash_matches(
+            [(repo_id, manifest, {})], local_models
+        )
         return {
             "ok": True,
             "item": self._build_item(
                 repo_id,
                 manifest,
                 detail=True,
+                local_models=local_models,
+                hash_match=hash_matches.get(repo_id),
             ),
         }
 
@@ -932,6 +1355,7 @@ class ModelHubService:
 
     async def _check_updates(self) -> dict[str, Any]:
         items: list[dict[str, Any]] = []
+        rows: list[tuple[dict[str, Any], str]] = []
         seen: set[str] = set()
         for model in self._models.list():
             meta = model.get("metadata") or {}
@@ -939,9 +1363,17 @@ class ModelHubService:
             if "/" not in repo_id or repo_id in seen:
                 continue
             seen.add(repo_id)
-            manifest = await self._fetch_manifest(repo_id)
+            rows.append((model, repo_id))
+        # 本地模型可能很多：并发读取清单，避免「检查更新」按钮串行等 N 个 RTT。
+        manifests = await _gather_bounded(
+            [repo_id for _model, repo_id in rows],
+            self._fetch_manifest,
+            config.MODELSCOPE_MANIFEST_CONCURRENCY,
+        )
+        for (model, repo_id), manifest in zip(rows, manifests):
             if not manifest:
                 continue
+            meta = model.get("metadata") or {}
             installed_version = str(meta.get("source_version") or "")
             latest_version = str(manifest.get("version") or "1.0.0")
             installed_time = str(meta.get("source_uploaded_at") or "")
@@ -985,63 +1417,18 @@ class ModelHubService:
         return None
 
     async def _get_raw(self, repo_id: str, file_path: str) -> "bytes | None":
-        """读取仓库中某个文件的原始内容（GET .../repo?FilePath=...）。"""
+        """读取仓库中某个文件的原始内容（带连接复用与小文件 TTL 缓存）。"""
         try:
-            import httpx
-        except ImportError:
-            return None
-        token = self.get_token()
-        url = f"{config.MODELSCOPE_ENDPOINT}/api/v1/models/{repo_id}/repo"
-        params = {"FilePath": file_path, "Revision": "master"}
-        await self._limiter.wait()
-        try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                resp = await client.get(url, params=params, headers=self._headers(token))
-                if resp.status_code != 200:
-                    return None
-                return resp.content
-        except Exception:  # noqa: BLE001
+            return await self._gw().fetch_raw(self.get_token(), repo_id, file_path)
+        except Exception:  # noqa: BLE001 - 单个文件读取失败按 None 处理
             return None
 
     async def _list_files(self, repo_id: str) -> dict[str, int]:
         """获取仓库文件列表及大小（完整路径及唯一文件名 -> 字节数）。"""
         try:
-            import httpx
-        except ImportError:
-            return {}
-        token = self.get_token()
-        url = f"{config.MODELSCOPE_ENDPOINT}/api/v1/models/{repo_id}/repo/files"
-        params = {"Recursive": "true", "Revision": "master"}
-        await self._limiter.wait()
-        try:
-            async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
-                resp = await client.get(url, params=params, headers=self._headers(token))
-                data = resp.json()
+            return await self._gw().list_files(self.get_token(), repo_id)
         except Exception:  # noqa: BLE001
             return {}
-        d = data.get("Data") if isinstance(data, dict) else None
-        raw = []
-        if isinstance(d, dict):
-            raw = _first(d, "Files", "files", "Tree") or []
-        elif isinstance(d, list):
-            raw = d
-        sizes: dict[str, int] = {}
-        if isinstance(raw, list):
-            for f in raw:
-                if not isinstance(f, dict):
-                    continue
-                path = _first(f, "Path", "Name", "name", "path")
-                size = _first(f, "Size", "size") or 0
-                if path:
-                    full_path = str(path).replace("\\", "/").lstrip("./")
-                    name = full_path.split("/")[-1]
-                    try:
-                        value = int(size)
-                    except (TypeError, ValueError):
-                        value = 0
-                    sizes[full_path] = value
-                    sizes.setdefault(name, value)
-        return sizes
 
     async def _download_to(
         self,
@@ -1051,71 +1438,40 @@ class ModelHubService:
         cb: Any,
         expected_size: int = 0,
     ) -> bool:
-        """流式下载并断点续传；失败时保留 ``.part`` 供下次继续。"""
+        """下载单文件；大文件由网关做分片并行 + 断点续传。"""
         try:
-            import httpx
-        except ImportError:
+            return await self._gw().download_to(
+                self.get_token(), repo_id, file_path, dst, cb, expected_size
+            )
+        except Exception:  # noqa: BLE001 - 失败保留 .part 供下次续传
             return False
-        token = self.get_token()
-        url = f"{config.MODELSCOPE_ENDPOINT}/api/v1/models/{repo_id}/repo"
-        params = {"FilePath": file_path, "Revision": "master"}
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        partial = dst.with_name(dst.name + ".part")
-
-        if dst.is_file():
-            size = dst.stat().st_size
-            if expected_size > 0 and size == expected_size:
-                return True
-            if not partial.exists() or partial.stat().st_size < size:
-                partial.unlink(missing_ok=True)
-                dst.replace(partial)
-            else:
-                dst.unlink(missing_ok=True)
-        if partial.is_file() and expected_size > 0 and partial.stat().st_size > expected_size:
-            partial.unlink(missing_ok=True)
-
-        timeout = httpx.Timeout(connect=20, read=120, write=30, pool=30)
-        for attempt in range(3):
-            start = partial.stat().st_size if partial.is_file() else 0
-            headers = self._headers(token)
-            if start > 0:
-                headers["Range"] = f"bytes={start}-"
-            await self._limiter.wait()
-            try:
-                async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                    async with client.stream(
-                        "GET", url, params=params, headers=headers
-                    ) as resp:
-                        if resp.status_code == 416 and start > 0:
-                            content_range = str(resp.headers.get("Content-Range") or "")
-                            match = re.search(r"/(\d+)\s*$", content_range)
-                            remote_size = int(match.group(1)) if match else expected_size
-                            if remote_size > 0 and start == remote_size:
-                                partial.replace(dst)
-                                return True
-                        if resp.status_code not in (200, 206):
-                            raise RuntimeError(f"HTTP {resp.status_code}")
-                        append = resp.status_code == 206 and start > 0
-                        mode = "ab" if append else "wb"
-                        with partial.open(mode) as output:
-                            async for chunk in resp.aiter_bytes(256 * 1024):
-                                output.write(chunk)
-                                if cb:
-                                    cb(len(chunk))
-                actual = partial.stat().st_size if partial.is_file() else 0
-                if expected_size > 0 and actual != expected_size:
-                    raise RuntimeError(
-                        f"文件大小不完整：{actual}/{expected_size} bytes"
-                    )
-                partial.replace(dst)
-                return True
-            except Exception:  # noqa: BLE001 - retry while preserving partial file
-                if attempt < 2:
-                    await asyncio.sleep(1 + attempt * 2)
-        return False
 
     async def _fetch_manifest(self, repo_id: str) -> dict[str, Any] | None:
+        repo_id = (repo_id or "").strip().strip("/")
+        if not repo_id:
+            return None
+        cache = getattr(self, "_manifest_cache", None)
+        if cache is None:
+            cache = {}
+            self._manifest_cache = cache
+        now = time.monotonic()
+        cached = cache.get(repo_id)
+        if cached is not None and cached[0] > now:
+            return cached[1]
         raw = await self._get_raw(repo_id, config.MODELHUB_MANIFEST)
+        manifest = self._parse_manifest(raw)
+        ttl = (
+            config.MODELSCOPE_MANIFEST_TTL
+            if manifest
+            else config.MODELSCOPE_MANIFEST_NEGATIVE_TTL
+        )
+        if len(cache) >= 512 and repo_id not in cache:
+            cache.pop(next(iter(cache)), None)
+        cache[repo_id] = (now + ttl, manifest)
+        return manifest
+
+    @staticmethod
+    def _parse_manifest(raw: bytes | None) -> dict[str, Any] | None:
         if not raw:
             return None
         try:
@@ -1234,7 +1590,8 @@ class ModelHubService:
         if not imported:
             self._set_progress(key, "error", 0, "导入失败")
             return {"ok": False, "error": "导入到本地模型库失败"}
-        self._record_download(repo_id, manifest)
+        # 本地安装状态变了：让下一次搜索重新计算「已安装 / 可更新」。
+        getattr(self, "_search_cache", {}).clear()
         shutil.rmtree(stage, ignore_errors=True)  # 导入成功后才清理断点文件
         self._set_progress(key, "done", 100, "完成")
         return {"ok": True, "model": imported}
@@ -1410,6 +1767,13 @@ class ModelHubService:
         )
         shutil.rmtree(stage, ignore_errors=True)
         if result.get("ok"):
+            # 刚上传/更新的仓库立刻可被搜索到：清掉清单与搜索结果缓存。
+            getattr(self, "_manifest_cache", {}).clear()
+            getattr(self, "_search_cache", {}).clear()
+            try:
+                self._gw().invalidate_cache()
+            except Exception:  # noqa: BLE001
+                pass
             self._set_progress(key, "done", 100, "完成")
         else:
             self._set_progress(key, "error", 0, result.get("error", "上传失败"))

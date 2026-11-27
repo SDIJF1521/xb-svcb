@@ -10,7 +10,7 @@
 
 **楽曲読込 · ボーカル分離 · 残響除去 · 歌声変換 · ボーカル強化 · ミックス · 書き出し**
 
-AIカバー制作の全工程を一つのワークフローで実行できます。**So-VITS-SVC / RVC推論**、**複数歌手によるカバー**、**システム音声のリアルタイム変換**、**AIボーカル強化プロジェクト**、**オンライン楽曲ライブラリ**、**モデルハブ**、**オーディオエディター**に対応しています。
+AIカバー制作の全工程を一つのワークフローで実行できます。**So-VITS-SVC / RVC推論**、**複数歌手によるカバー**、**システム音声のリアルタイム変換**、**AIボーカル強化プロジェクト**、**オンライン楽曲ライブラリ**、**モデルハブ**、**ワークフローストア**、**オーディオエディター**に対応しています。
 
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release&color=ff6b9d)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
@@ -41,14 +41,24 @@ AIカバー制作の全工程を一つのワークフローで実行できます
 <div align="center">
   <img src="docs/images/xb-svcb-app-ja.png" width="100%" alt="XB-SVCB AIカバー制作画面の日本語表示" />
   <br/>
-  <sub>XB-SVCB 0.1.1 · 日本語で表示した実際のAIカバー制作画面</sub>
+  <sub>XB-SVCB 0.1.2 · 日本語で表示した実際のAIカバー制作画面</sub>
 </div>
 
 ## 概要
 
 XB-SVCBは、Windowsでローカル動作するAIカバー・音声制作アプリケーションです。UIにはVue 3、アプリケーションコアにはPythonを使用し、各AIフレームワークは独立した環境とWorkerプロセスで動作します。
 
-So-VITS-SVC、RVC、SeedVC、DDSP-SVCをサポートしています。また、UVR / PyMSSによるボーカル分離、AIボーカル強化、高音保護、オンライン楽曲ライブラリ、モデルハブ、システム音声のリアルタイム変換、Audio Editor Liteも利用できます。
+So-VITS-SVC、RVC、SeedVC、DDSP-SVCをサポートしています。また、UVR / PyMSSによるボーカル分離、AIボーカル強化、高音保護、オンライン楽曲ライブラリ、モデルハブ、ワークフローストア、システム音声のリアルタイム変換、Audio Editor Liteも利用できます。
+
+## モバイル版
+
+独立したAndroid向けの**[XB-SVCB Mobile](https://github.com/SDIJF1521/XB-SVCB-Mobile)**（独立Gitリポジトリ、GPL-3.0-only）を用意しています。
+
+作品・タスクの確認、カバータスクの作成と削除、声モデルと素材の管理、完成品のダウンロードに使用します。音声エディター、完全なタイムライン、カスタムワークフロー、リアルタイム変声はPC側専用です。本プロジェクトのFastAPIサービス経由で接続し、推論はデスクトップ側で実行されます。
+
+- プロジェクト説明：[XB-SVCB-Mobile](https://github.com/SDIJF1521/XB-SVCB-Mobile)
+- API契約：[docs/API.md](https://github.com/SDIJF1521/XB-SVCB-Mobile/blob/main/docs/API.md)
+- ビルド：モバイルプロジェクトで `pwsh -File build-apk.ps1` を実行し、`dist/XB-SVCB-Mobile-0.1.2.apk` を生成
 
 ## 主な機能
 
@@ -56,27 +66,37 @@ So-VITS-SVC、RVC、SeedVC、DDSP-SVCをサポートしています。また、U
 - So-VITS-SVC、RVC、SeedVC、DDSP-SVCモデルを統合管理し、フレームワーク別の推論パラメーターを設定。
 - モデルの音域を外れた箇所を自動検出し、部分的なピッチ調整と再推論によって高音を保護。原音程へ戻した後、確定した高音区間の超高域はSnake-HiFiGAN / NSF-HiFiGAN高音ボコーダーで再合成し、PSOLA由来の息混じり感と倍音欠落を補います。
 - 歌詞または無音検出で楽曲を分割し、タイムライン上でモデルを割り当てて複数歌手や合唱のカバーを制作。
-- Audio Editor Liteでマルチトラック編集、カット、フェード、チャンネル設定、エフェクト処理、WAV / MP3 / FLAC書き出し。内蔵のMIDIサブエディター（ピアノロール）でクリップの音程を音符単位で編集でき、試聴は常にMIDI音源ではなくクリップ音声を再生します。
+- Audio Editor Liteでマルチトラック編集、カット、フェード、チャンネル設定、エフェクト処理、WAV / MP3 / FLAC書き出し。内蔵のMIDIサブエディター（ピアノロール）でクリップの音程を音符単位で編集でき、試聴は常にMIDI音源ではなくクリップ音声を再生します。音符を削除すると、その歌唱区間は試聴と適用後にミュートされ、ピッチカーブは一筆ごとに分割されるため、一部分だけの描き直しや端点からの続け描きができます。
+- 音声編集の完成品をワンクリックで「マイ作品」へ保存でき、AIカバー作品と同じプレーヤー、ダウンロード、再編集の流れで扱えます。
 - TXT / LRC歌詞の読み込み、役割管理、ソロ・デュエット・ハーモニー用テンプレート。
 - WASAPIループバックまたはVB-CABLEを利用し、伴奏を保ったままプレイヤー音声をリアルタイム変換。
 - ModelScopeでのモデル検索、アップロード、ダウンロード、バックグラウンド転送、再開、マニフェスト検証。
+- ワークフローストアでAIカバーワークフローをアップロード、検索、ページ分割表示、プレビュー、ダウンロード。ダウンロード時はマニフェストに記載されたPyMSSモデルを同期し、AIカバーワークベンチで直接読み込めます。
 - NetEase Cloud Music、QQ Music、Kuwo Musicの楽曲・歌詞を検索、試聴、ダウンロード。
+- カバー作品のキュー試聴に対応：曲をクリックした場合はその1曲だけを試聴し、キュー再生／連続試聴を選んだ場合のみキューを作成します。順番再生、リストループ、1曲リピート、シャッフル、ロスレス直通、イコライザーに対応し、試聴ページでは歌詞とMVも表示できます。
 - NVIDIA CUDA、Windows AMD ROCm 10、DirectML、CPUを選択可能。
 - 外部プログラム向けに、タスク作成、進捗確認、モデル管理、成果物ダウンロードを行うFastAPIサービスを提供。
 - カスタムページ、Python Plugin Worker、C++ JUCE VST3 Hostによる拡張。
 
 ## クイックスタート
 
+### システム要件
+
+- Windows 10 1809 以降または Windows 11（64 ビット）。
+- **Microsoft Visual C++ 2015-2022 x64 再頒布可能パッケージ（最新版）**: <https://aka.ms/vs/17/release/vc_redist.x64.exe>。既に導入済みでも実行し、「修復」を選んでください。古い場合や、他アプリが持つ古い `msvcp140.dll` に上書きされている場合、`onnxruntime` は import 時にクラッシュ（`0xC0000005`）し、インストーラーは 4/12 ステップまたは最後の共有ランタイム検証で停止します。詳細は[トラブルシューティング](#最終ステップで失敗uvr-プローブがクラッシュする)を参照。
+- NVIDIA RTX 40 系以下は CUDA126、RTX 50 系は CUDA128、AMD は ROCm 10 を優先（DirectML も可）、対応 GPU がない場合は CPU。
+- 64 ビット CPython 3.12.x と MinGit: インストーラーに同梱。ソース実行時のみ Python 3.12.x を別途用意し、Node.js 20.19+ または 22.12+ も必要です。
+
 ### インストーラーを使う
 
-通常の利用では、GitHub Releasesの最新版からModelScope版`XB-SVCB-Online-Setup-ModelScope.exe`をダウンロードしてください。このインストーラーはModelScopeの`v0.1.1`リビジョンから検証済みオフラインパッケージを取得します。予備版`XB-SVCB-Online-Setup.exe`はGitHubで公開しないため、必要な場合は開発者から個別に入手してください。
+通常の利用では、GitHub Releasesの最新版からModelScope版`XB-SVCB-Online-Setup-ModelScope.exe`をダウンロードしてください。このインストーラーはModelScopeの`v0.1.2`リビジョンから検証済みオフラインパッケージを取得します。予備版`XB-SVCB-Online-Setup.exe`はGitHubで公開しないため、必要な場合は開発者から個別に入手してください。
 
 1. オンラインインストーラーを実行し、自動検出を使用するか、CPU、ROCm 10、DirectML、CUDA126、CUDA128を手動で選択します。
 2. 対応する完全パッケージのダウンロードとSHA-256検証が完了したら、アプリケーションのインストール先とユーザーデータの保存先を選択します。
-3. 64ビットCPython 3.12.xを選択するか自動検出を使い、「インストール後に実行環境を構築」を有効にします。
+3. インストーラーが同梱の Python 3.12 と MinGit を自動展開します。「インストール後に実行環境を構築」を有効にすれば、ローカルの Python / Git を選択する必要はありません。
 4. デスクトップまたはスタートメニューからXB-SVCBを起動します。
 
-完全なオフラインインストールでは、ハードウェア別パッケージのEXEと同じ接頭辞を持つすべてのBINファイルをダウンロードし、同じディレクトリに置いてください。パッケージには、ビルド済みフロントエンド、FFmpeg、各エンジンのソース、主要な基本モデル、選択したハードウェア向けのオフラインPython依存関係が含まれます。NVIDIA RTX 40シリーズ以前はCUDA126、RTX 50シリーズはCUDA128、Windows AMDではROCm 10を優先し、必要に応じてDirectMLを選択してください。対応GPUがない場合はCPUを使用します。DirectMLパッケージではPyMSSとDDSPの自動モードがCPU推論を使用し、PyMSSはDirectMLで高速化しません。
+完全なオフラインインストールでは、ハードウェア別パッケージのEXEと同じ接頭辞を持つすべてのBINファイルをダウンロードし、同じディレクトリに置いてください。パッケージには、ビルド済みフロントエンド、同梱 Python 3.12、同梱 MinGit、FFmpeg、各エンジンのソース、主要な基本モデル、選択したハードウェア向けのオフラインPython依存関係が含まれます。NVIDIA RTX 40シリーズ以前はCUDA126、RTX 50シリーズはCUDA128、Windows AMDではROCm 10を優先し、必要に応じてDirectMLを選択してください。対応GPUがない場合はCPUを使用します。DirectMLパッケージではPyMSSとDDSPの自動モードがCPU推論を使用し、PyMSSはDirectMLで高速化しません。
 
 ### ソースからインストール
 
@@ -223,13 +243,38 @@ npm run build
 
 設計、起動処理、テスト、パッケージ作成、コントリビューター向け資料は[日本語ドキュメント目次](docs/ja/README.md)を参照してください。
 
+## トラブルシューティング
+
+### 最終ステップで失敗：UVR プローブがクラッシュする
+
+`uvr_mdx` と `uvr_vr` の検査が `3221225477`（`0xC0000005`）で終了し、その前の `pip check` は `All installed packages are compatible` と表示されます。依存関係の衝突ではなく、`onnxruntime` が読み込むシステムの C++ ランタイムが壊れています。Windows のイベント ビューアー（アプリケーション ログ、イベント ID 1000）では、エラー モジュールが `MSVCP140.dll` と表示されます。
+
+1. 最新の [Microsoft Visual C++ 2015-2022 x64 再頒布可能パッケージ](https://aka.ms/vs/17/release/vc_redist.x64.exe) を導入し、既に導入済みでも「修復」を実行してください。
+2. それでもクラッシュする場合、他アプリが古い `msvcp140.dll` を `C:\Windows\System32` に上書きしています。「アプリと機能」で旧 `Microsoft Visual C++ 2015 Redistributable (x64) - 14.0.x` をアンインストールしてから、2015-2022 を修復してください。
+3. 4 つのファイルが同一バージョンかつ 14.38 以上であることを確認します。
+
+```powershell
+foreach ($n in 'msvcp140.dll','msvcp140_1.dll','vcruntime140.dll','vcruntime140_1.dll') {
+  "{0} {1}" -f $n, [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$env:SystemRoot\System32\$n").FileVersion
+}
+```
+
+4. import を確認してからインストーラーを再実行します。
+
+```bat
+runtimes\core-cu126\Scripts\python.exe -c "import onnxruntime; print('ORT_OK')"
+setup_env.bat --cu126 --only uvr seedvc ddsp
+```
+
+アプリの再インストール、インストール先の変更、Python 環境の作り直しでは回避できません。原因はインストール先ではなくシステムのランタイムにあります。
+
 ## ロードマップ
 
-現在のバージョン: **v0.1.1**
+現在のバージョン: **v0.1.2**
 
 複数フレームワークでの推論、タイムライン式の複数歌手カバー、Audio Editor Lite、ModelScopeモデルハブ、FastAPI連携、CUDA / ROCm 10 / DirectML / CPU対応、プラグインランタイムは実装済みです。今後は歌詞の自動認識とタイムライン生成、モデルメタデータの標準化、プロジェクトの入出力と自動保存、対応フレームワークの追加、動画・歌詞動画の書き出し、Intel GPU / CPU / マルチGPUの最適化に取り組みます。
 
-全バージョンの履歴は[リリースノート](docs/release-notes/)を参照してください。現行版は[v0.1.1リリースノート](docs/release-notes/release_notes_v0_1_1.ja.md)で確認できます。
+全バージョンの履歴は[リリースノート](docs/release-notes/)を参照してください。現行版は[v0.1.2リリースノート](docs/release-notes/release_notes_v0_1_2.ja.md)で確認できます。
 
 ## コントリビューター
 
@@ -249,3 +294,13 @@ XB-SVCB の開発と保守に参加してくださったすべての皆様に感
 本プロジェクトが独自に作成したソースコードは、**[GNU General Public License v3.0 only](LICENSE)**で提供されます。Copyright © 2026 SDIJF1521。
 
 同梱するサードパーティ製コンポーネント、モデル、リソースには、それぞれ元のライセンスが適用されます。特にso-vits-svc 4.1はAGPL-3.0、DDSP-SVC 6.3はMIT License、同梱のRVC推論スタックもMIT Licenseです。基本モデルとUVRモデルにも各上流プロジェクトの条件が適用され、GPL-3.0-onlyがそれらを置き換えることはありません。
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=sdijf1521%2Fxb-svcb&type=date&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&legend=top-left" />
+ </picture>
+</a>

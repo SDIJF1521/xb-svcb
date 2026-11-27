@@ -19,6 +19,21 @@ from typing import Any, Optional
 import config
 
 
+def _as_int(value: Any) -> int:
+    """把 ffprobe 的字符串/None 数字宽松转成 int（失败返回 0）。"""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _as_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 class FfmpegTool:
     # 人声/伴奏的基础平衡。人声是窄带且压缩过的信号，等增益相加时听感会明显盖过
     # 全频段伴奏，因此默认让人声略低于伴奏；实际值由成品混音按响度测量决定。
@@ -90,6 +105,71 @@ class FfmpegTool:
             except (OSError, subprocess.SubprocessError, ValueError):
                 pass
         return self._wave_duration(src)
+
+    def probe_audio(self, src: Path) -> dict[str, Any]:
+        """读取音频流的技术参数，供高保真播放器显示格式与采样信息。
+
+        返回字段保持宽松：``format``（容器后缀）、``codec``、``sample_rate``、
+        ``channels``、``bit_depth``、``duration``。拿不到 ffprobe 时用
+        ``wave`` 头解析 WAV；其它格式只返回后缀与时长。
+        """
+        info: dict[str, Any] = {
+            "format": src.suffix.lower().lstrip("."),
+            "codec": "",
+            "sample_rate": 0,
+            "channels": 0,
+            "bit_depth": 0,
+            "duration": 0.0,
+        }
+        if self.ffprobe:
+            try:
+                out = subprocess.run(
+                    [
+                        self.ffprobe,
+                        "-v",
+                        "error",
+                        "-select_streams",
+                        "a:0",
+                        "-show_entries",
+                        "stream=codec_name,sample_rate,channels,bits_per_sample,bits_per_raw_sample:format=duration,bit_rate",
+                        "-of",
+                        "json",
+                        str(src),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=15,
+                    **config.subprocess_no_window(),
+                )
+                payload = json.loads(out.stdout or "{}")
+                streams = payload.get("streams") if isinstance(payload, dict) else None
+                stream = streams[0] if isinstance(streams, list) and streams else {}
+                if isinstance(stream, dict):
+                    info["codec"] = str(stream.get("codec_name") or "")
+                    info["sample_rate"] = _as_int(stream.get("sample_rate"))
+                    info["channels"] = _as_int(stream.get("channels"))
+                    info["bit_depth"] = _as_int(
+                        stream.get("bits_per_raw_sample") or stream.get("bits_per_sample")
+                    )
+                fmt = payload.get("format") if isinstance(payload, dict) else None
+                if isinstance(fmt, dict):
+                    info["duration"] = _as_float(fmt.get("duration"))
+                    info["bit_rate"] = _as_int(fmt.get("bit_rate"))
+            except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+                pass
+        if info["format"] == "wav" and (not info["sample_rate"] or not info["channels"]):
+            try:
+                with wave.open(str(src), "rb") as wf:
+                    info["sample_rate"] = int(info["sample_rate"] or wf.getframerate())
+                    info["channels"] = int(info["channels"] or wf.getnchannels())
+                    info["bit_depth"] = int(info["bit_depth"] or wf.getsampwidth() * 8)
+            except (wave.Error, OSError, EOFError):
+                pass
+        if not info["duration"]:
+            info["duration"] = float(self.probe_duration(src) or 0.0)
+        return info
 
     @staticmethod
     def _wave_duration(src: Path) -> Optional[float]:

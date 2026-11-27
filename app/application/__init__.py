@@ -14,6 +14,7 @@ from .realtime_cover_service import RealtimeCoverService
 from .system_service import SystemService
 from .theme_media_service import ThemeMediaService
 from .work_service import WorkService
+from .workflow_hub_service import WorkflowHubService
 
 __all__ = [
     "AudioEditorService",
@@ -30,4 +31,5 @@ __all__ = [
     "SystemService",
     "ThemeMediaService",
     "WorkService",
+    "WorkflowHubService",
 ]

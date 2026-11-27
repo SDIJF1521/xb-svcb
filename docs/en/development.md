@@ -51,11 +51,11 @@ The output should be `engines/juce-vst3-host/xb-juce-vst3-host.exe`. See the ins
 
 Build scripts support `-Help` or `--help` without running preflight checks or packaging.
 
-The v0.1.1 history starts at commit `12f6db36754f5e86c9997449752367804e2da76a`, and that commit is included in v0.1.1. Generate the release commit list with:
+The v0.1.2 history starts at commit `5afbb7eb522b2bdc244aea9c6daeb8105acb62a5` ("自定义工作流节点优先级添加", 2026-11-20), and that commit is included in v0.1.2. Generate the release commit list with:
 
-    git log --reverse 12f6db36754f5e86c9997449752367804e2da76a^..HEAD
+    git log --reverse 5afbb7eb522b2bdc244aea9c6daeb8105acb62a5^..HEAD
 
-Use the same inclusive range for audits. Do not use `12f6db36754f5e86c9997449752367804e2da76a..HEAD`, which omits the starting commit.
+Use the same inclusive range for audits. Do not use `5afbb7eb522b2bdc244aea9c6daeb8105acb62a5..HEAD`, which omits the starting commit.
 
 Lightweight validation:
 

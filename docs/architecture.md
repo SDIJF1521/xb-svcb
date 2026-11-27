@@ -61,22 +61,22 @@ XB-SVCB 是一个本地优先的桌面应用。前端负责交互和状态展示
 
 ### app/application/
 
-用例和业务编排层，包含模型管理、作品管理、音乐资源、音频编辑（`audio_editor_service` 负责工程/片段/插件会话，`editor_render_service` 负责渲染与波形）、媒体试听导出、拖拽音频导入、主题媒体、数据目录维护、实时翻唱、插件（`plugin_service` 与 `plugin_market`）和转换任务等服务。
+用例和业务编排层，包含模型管理、工作流商城（`workflow_hub_service` 负责分页搜索、预览、上传、下载与 PyMSS 依赖同步）、作品管理、音乐资源、音频编辑（`audio_editor_service` 负责工程/片段/插件会话，`editor_render_service` 负责渲染与波形）、媒体试听导出、拖拽音频导入、主题媒体、数据目录维护、实时翻唱、插件（`plugin_service` 与 `plugin_market`）和转换任务等服务。
 
 普通推理任务在 conversion_service.py 中进入串行队列；成品混音按测量到的 LUFS 平衡人声与伴奏。
 本层只依赖 `application/ports.py` 声明的端口，不 import 基础设施。
 
 ### app/domain/
 
-保存编辑工程、任务、模型等领域对象和枚举，尽量不依赖 pywebview、FastAPI 或具体 AI 框架。
+保存编辑工程、任务、模型等领域对象和枚举，以及工作流商城清单规则（`workflow_manifest.py`：清单校验、节点图收敛、PyMSS 依赖与来源信息），尽量不依赖 pywebview、FastAPI 或具体 AI 框架。
 
 ### app/infrastructure/
 
-负责文件存储、路径、FFmpeg、系统音频、UVR、F0、模型引擎适配和 Worker 进程。svc_engine.py、rvc_engine.py、seedvc_engine.py、ddsp_engine.py 是框架适配入口；RVC 适配器加载 `engines/rvc` 内置的官方推理栈，不再依赖第三方 `rvc-python`。
+负责文件存储、路径、FFmpeg、系统音频、UVR、F0、模型引擎适配和 Worker 进程。svc_engine.py、rvc_engine.py、seedvc_engine.py、ddsp_engine.py 是框架适配入口；RVC 适配器加载 `engines/rvc` 内置的官方推理栈，不再依赖第三方 `rvc-python`。工作流商城的 ModelScope 搜索、清单读取与子进程上传位于 `workflow_hub_client.py`，实现 `WorkflowHubGateway` 端口。
 
 ### web/
 
-Vue 3 + Vite 前端。views/ 组织页面，stores/ 管理跨页面状态，src/api/ 对接 pywebview Bridge 和 HTTP 类型。
+Vue 3 + Vite 前端。views/ 组织页面（含 `views/workflows/market.vue` 工作流商城），stores/ 管理跨页面状态，components/workflow 提供只读工作流预览，src/api/ 对接 pywebview Bridge 和 HTTP 类型。
 
 ## 运行边界
 

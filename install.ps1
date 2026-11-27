@@ -1,4 +1,4 @@
-﻿<#
+<#
   XB-SVCB 一键安装器（Windows 入口）
 
   用法：
@@ -9,7 +9,8 @@
       ./install.ps1 --rocm10   # 强制 AMD ROCm 10
       ./install.ps1 --only seedvc # 只跑某一步（app/web/uvr/svc/rvc/seedvc/hub/models）
 
-  前置要求（脚本会检测并提示）：Git、Node.js LTS（含 npm）、64 位 CPython 3.12.x、ffmpeg。
+  前置要求（脚本会检测并提示）：Node.js LTS（含 npm）、64 位 CPython 3.12.x、ffmpeg。
+  正式安装包已内置 Python 3.12 与 MinGit；源码安装时 Git 缺失会自动改用 ZIP。
 #>
 
 $ErrorActionPreference = "Stop"
@@ -49,9 +50,17 @@ foreach ($t in @("ffmpeg", "npm")) {
   if (Test-Cmd $t) { Write-Host ("{0,-7}: 已安装" -f $t) -ForegroundColor Green }
   else { Write-Host ("{0,-7}: 未检测到（对应步骤可能失败）" -f $t) -ForegroundColor Yellow }
 }
-# Git 可选：缺失时安装器会自动改用下载 ZIP 获取 so-vits-svc
-if (Test-Cmd "git") { Write-Host "git    : 已安装" -ForegroundColor Green }
-else { Write-Host "git    : 未检测到（可选，将自动改用下载 ZIP）" -ForegroundColor Yellow }
+# Git：正式安装包内置 tools\git；源码环境优先使用内置，其次系统 Git。
+$bundledGit = Join-Path $PSScriptRoot 'tools\git'
+if (Test-Path (Join-Path $bundledGit 'cmd\git.exe')) {
+  $env:XB_GIT_DIR = $bundledGit
+  $env:PATH = "$(Join-Path $bundledGit 'cmd');$env:PATH"
+  Write-Host "git    : 已内置（tools\git）" -ForegroundColor Green
+} elseif (Test-Cmd "git") {
+  Write-Host "git    : 已安装" -ForegroundColor Green
+} else {
+  Write-Host "git    : 未检测到（可选，将自动改用下载 ZIP）" -ForegroundColor Yellow
+}
 
 Write-Host "`n==== 开始安装（首次运行会下载较多依赖与模型，请耐心等待）====" -ForegroundColor Cyan
 

@@ -509,9 +509,9 @@ export const enExtraPhrases: Record<string, string> = {
   '当前环境未报告可用推理设备': 'No inference device was reported for the current environment',
   '模型站基于': 'Model Hub is based on', '魔搭社区 ModelScope': 'ModelScope Community',
   '尚未配置模型上传令牌': 'No model upload token configured', '浏览和下载无需本地令牌；分享到自己的 ModelScope 仓库时再配置访问令牌。': 'Browsing and downloading do not require a local token. Configure one only to share to your ModelScope repository.',
-  '架构': 'Architecture', '全部架构': 'All architectures', '排序': 'Sort', '综合排序': 'Relevance', '下载排行': 'Most downloads', '最近更新': 'Recently updated',
+  '架构': 'Architecture', '全部架构': 'All architectures', '排序': 'Sort', '综合排序': 'Relevance', '最近更新': 'Recently updated',
   '搜索模型站中的翻唱模型（留空浏览全部）…': 'Search cover models on the hub (leave empty to browse all)…', '仅展示由本软件上传、且通过清单校验的模型，避免无关模型干扰。下载后会自动导入「本地模型」。': 'Only models uploaded by this app and passing manifest validation are shown. Downloads are imported into Local Models.',
-  '依赖缺失': 'Missing dependency', '依赖 OK': 'Dependencies OK', '作者': 'Author', '图': 'images', '下载中断，可继续下载': 'Download interrupted. You can resume.', '在 ModelScope 查看': 'View on ModelScope', '查看本地': 'View local', '继续下载': 'Resume download', '下载导入': 'Download and import', '加载更多': 'Load more', '换个关键词，或把你的模型「分享到模型站」让社区也能用': 'Try another keyword, or share your model to the hub for the community.', '点击「搜索」浏览模型站中的社区翻唱模型。': 'Click Search to browse community cover models on the hub.',
+  '依赖缺失': 'Missing dependency', '依赖 OK': 'Dependencies OK', '作者': 'Author', '已下载曲库': 'Downloaded Library', '已选择曲库原曲': 'Selected library track', '图': 'images', '下载中断，可继续下载': 'Download interrupted. You can resume.', '在 ModelScope 查看': 'View on ModelScope', '查看本地': 'View local', '继续下载': 'Resume download', '下载导入': 'Download and import', '加载更多': 'Load more', '换个关键词，或把你的模型「分享到模型站」让社区也能用': 'Try another keyword, or share your model to the hub for the community.', '点击「搜索」浏览模型站中的社区翻唱模型。': 'Click Search to browse community cover models on the hub.',
   'PyMSS 音乐源分离模型站': 'PyMSS Source Separation Model Hub', '完整 PyMSS Studio 模型目录，可按一级分类、二级分类和架构筛选；人声前处理兼容模型可在翻唱页直接选择。': 'Complete PyMSS Studio model catalog. Filter by primary category, secondary category, and architecture; compatible vocal preprocessing models can be selected in the Cover page.', '一级分类': 'Primary category', '二级分类': 'Secondary category', '模型架构': 'Model architecture', '下载状态': 'Download status', '全部一级分类': 'All primary categories', '全部二级分类': 'All secondary categories', '请先选择一级分类': 'Select a primary category first', '全部模型': 'All models', '全部能力': 'All capabilities', '搜索': 'Search', '搜索模型名称、分类或目标音轨': 'Search model name, category, or target stem', '当前筛选条件下没有 PyMSS 模型。': 'No PyMSS models match the current filters.', '去混响 / 人声净化': 'Dereverb / Vocal Cleanup', '目标音轨': 'Target stem', '搜索模型名称，例如 dereverb_mel_band_roformer_anvuew': 'Search model name, e.g. dereverb_mel_band_roformer_anvuew', '重新下载': 'Download again', '未读取到该用途的 PyMSS 模型，请先安装 PyMSS 环境。': 'No PyMSS models were found for this purpose. Install the PyMSS environment first.',
   '人声': 'Vocals', '传统 VR 模型': 'Legacy VR models', '传统非 VR 模型': 'Legacy non-VR models', '伴奏/无人声提取': 'Instrumental extraction', '单乐器/单音轨': 'Single instrument / stem', '卡拉OK/和声': 'Karaoke / backing vocals', '声像/空间分离': 'Spatial separation', '实验/通用分离': 'Experimental / general separation', '混响/回声处理': 'Reverb / echo control', '特殊目标/差异提取': 'Special target / difference extraction', '音乐多轨/分轨': 'Multi-stem music separation', '音频清理/修复': 'Audio cleanup / restoration', '人声-伴奏双向分离': 'Vocal / instrumental dual separation', '人声提取': 'Vocal extraction', '双人/二重唱分离': 'Duet separation', '合唱/人群歌声分离': 'Choir / crowd vocal separation', '气声/呼吸声分离': 'Breath / aspiration separation', '男女声/合唱分离': 'Gender / choir vocal separation', '语音/说话人声分离': 'Speech vocal separation', 'VR HP2 系列': 'VR HP2 series', 'VR MGM 系列': 'VR MGM series', 'VR SP 系列': 'VR SP series', 'VR 人声提取': 'VR vocal extraction', 'VR 伴唱/和声': 'VR backing vocal / harmony', 'VR 伴奏/无人声提取': 'VR instrumental extraction', 'VR 去回声': 'VR dereverb / echo removal', 'VR 去回声+去混响': 'VR echo and reverb removal', 'VR 去混响': 'VR dereverb', 'VR 和声/伴唱': 'VR harmony / backing vocal', 'VR 谐波/噪声分离': 'VR harmonic / noise separation', 'VR 降噪': 'VR denoise', 'VR 风声/管乐伴奏': 'VR wind / instrumental separation', 'Demucs/HTDemucs 系列': 'Demucs / HTDemucs series', '吉他': 'Guitar', '弦乐': 'Strings', '贝斯': 'Bass', '鼓/打击乐': 'Drums / percussion', '中央/宽声像提取': 'Center / wide stereo extraction', '单声道/立体声分离': 'Mono / stereo separation', '通用源分离': 'General source separation', '去混响': 'Dereverb', '去混响+去回声': 'Dereverb + echo removal', '相似/差异分离': 'Similarity / difference separation', 'DNR 对话/音乐/音效分轨': 'DNR dialogue / music / effects separation', 'MVSep 53 轨分离': 'MVSep 53-stem separation', '六轨分离': 'Six-stem separation', '四轨分离': 'Four-stem separation', '鼓组细分': 'Drum stem separation', '人群/观众声移除': 'Crowd / audience removal', '降噪/串音抑制': 'Denoise / bleed suppression', '音频/人声修复': 'Audio / vocal restoration',
   '请登录后在「个人中心 → 访问令牌」获取令牌填入下方。令牌仅保存在本地，用于上传到你自己的命名空间。': 'Sign in, get a token from Profile → Access Token, and enter it below. It is stored locally and used only for uploads to your namespace.',
@@ -623,17 +623,21 @@ Object.assign(enExtraPhrases, {
   '渲染中…': 'Rendering…', '渲染到本轨': 'Render to track', '导出 .mid': 'Export .mid', '渲染为分乐器音轨': 'Render as separate tracks',
   '保存音符': 'Save notes', '试听音频': 'Preview audio', '应用音频中…': 'Applying audio…', '应用到轨道片段': 'Apply to track clips', '应用音频': 'Apply audio',
   '渲染使用内置多乐器合成器：每个声部一件 GM 乐器，可「分乐器各生成一条音轨」（可单独调音量/加效果），也可混成一条片段落回当前轨。导出 .mid 可在其他 DAW 里继续编辑；试听播放的是合成结果。': 'Rendering uses the built-in multi-instrument synthesizer: one GM instrument per part. Render each part to its own track (for independent volume/effects) or mix into one clip on this track. Export .mid to continue editing in other DAWs; preview plays the synthesized result.',
-  '试听播放的是片段音频本身（应用后为编辑结果），不会用 MIDI 音源直接出声；应用会生成新音频并可撤销。未改动的音符保留原始音准，只有被拖动/改过分度的音符才会移动。': 'Preview plays the clip audio itself (the edited result after applying), not a MIDI synth directly. Applying generates new audio and can be undone. Unmodified notes keep their original pitch; only dragged/edited notes move.',
+  '试听播放的是片段音频本身（应用后为编辑结果），不会用 MIDI 音源直接出声；应用会生成新音频并可撤销。未改动的音符保留原始音准，只有被拖动/改过分度的音符才会移动。删掉的音符不会「什么都不发生」：它对应的演唱区间会在试听和应用后静音。': 'Preview plays the clip audio itself (the edited result after applying), not a MIDI synth directly. Applying generates new audio and can be undone. Unmodified notes keep their original pitch; only dragged/edited notes move. Deleting a note is not a no-op: its sung range is muted in preview and after applying.',
   '正在分析片段基频…': 'Analyzing clip pitch…', '正在处理…': 'Processing…', '正在读取 MIDI 编曲…': 'Loading MIDI composition…',
   '正在按乐器渲染音频…': 'Rendering per-instrument audio…', '正在渲染混合音频…': 'Rendering mixed audio…', '正在渲染试听…': 'Rendering preview…',
   '正在保存编曲…': 'Saving composition…', '用内置乐器渲染并播放': 'Render and play with built-in instruments', '还没有音符': 'No notes yet',
   '播放片段音频（不是 MIDI 音源）': 'Play clip audio (not a MIDI synth)', '空白轨道没有音频可试听': 'Empty track has no audio to preview',
+  '按当前音符渲染试听：改过的音符变调，删掉的音符静音': 'Render a preview from the current notes: edited notes change pitch, deleted notes are muted',
   '渲染试听…': 'Rendering preview…', '⏸ 暂停': '⏸ Pause', '▶ 试听': '▶ Preview',
   'D 画笔 / V 选择 / E 橡皮 · 双击新建 · 拖边缘改长度 · 下方拖力度条 · 空格试听 · Del 删除': 'D Draw / V Select / E Erase · double-click to add · drag edges to resize · drag velocity below · Space to preview · Del to delete',
+  '双击空白新建 · 拖动移动 · 拖边缘改长度 · 框选多选 · 右键菜单 · Del 删除并静音 · 空格试听': 'Double-click to add · drag to move · drag edges to resize · marquee multi-select · right-click menu · Del to delete and mute · Space to preview',
   '双击空白新建 · 拖动移动 · 拖边缘改长度 · 框选多选 · 右键菜单 · Del 删除 · 空格试听': 'Double-click to add · drag to move · drag edges to resize · marquee multi-select · right-click menu · Del to delete · Space to preview',
   'MIDI 音高重绘环境未就绪': 'MIDI pitch redraw environment is not ready',
   '音轨上还没有片段：先切到「MIDI 编曲」写谱并渲染': 'No clips on the track: switch to MIDI Composer, write notes and render first',
   '把音符按片段切分后落到音频': 'Split notes by clip and apply to audio', '把音符应用到音频（保共振峰移调）': 'Apply notes to audio (formant-preserving pitch shift)',
+  '把音符按片段切分后落到音频（删掉的音符静音）': 'Split notes by clip and apply to audio (deleted notes are muted)',
+  '把音符应用到音频（保共振峰移调，删掉的音符静音）': 'Apply notes to audio (formant-preserving pitch shift; deleted notes are muted)',
   '中位基频': 'Median F0', '浊音': 'Voiced', '空白轨道': 'Empty track', '旋律': 'Melody', '架子鼓': 'Drum Kit', 'MIDI 文件里没有音符': 'No notes in the MIDI file',
   // 主音频编辑器里的 MIDI 相关入口
   'MIDI 音高编辑（片段）': 'MIDI Pitch Editor (Clip)', 'MIDI 音高编辑（整轨）': 'MIDI Pitch Editor (Track)',
@@ -968,6 +972,7 @@ Object.assign(enExtraPhrases, {
   'F0 滤波半径': 'F0 filter radius',
   // 编辑器自动生成的音轨名 / 工程名（旧工程按展示翻译，新工程落库时已本地化）
   '原始音频': 'Original audio', '原始人声': 'Original vocal', '翻唱成品': 'Cover mix',
+  '编辑成品': 'Editor mix',
   'AI 翻唱干声': 'AI cover dry vocal', '素材': 'Material', '音轨 1': 'Track 1',
   '空白工程': 'Blank project', '音频工程': 'Audio project',
   '收起日志与流程': 'Collapse log and steps', '展开日志与流程': 'Expand log and steps',
@@ -993,6 +998,11 @@ Object.assign(enExtraPhrases, {
     'Smooth the pitch curve of selected notes to remove hand-drawn jitter',
   '音高曲线：在音符上按住拖动，像画笔一样画线（单击只选中）· Alt 擦除 · Ctrl 吸附半音':
     'Pitch curve: press and drag on notes to draw like a pen (click only selects) · Alt erase · Ctrl snap to semitone',
+  '续画': 'Continue',
+  '续画：新的一笔靠近已有曲线的端点时接上去，保持连续；关闭（默认）时每一笔都是独立的一段，可以只改一小块而不和别的段相连':
+    'Continue: a new stroke near an existing curve end joins it and stays continuous. When off (default) every stroke is its own segment, so you can redraw just one part without connecting it to the rest.',
+  '音高曲线：按住拖动像画笔一样画线（单击只选中）· 每一笔独立、可只改一小段 · 勾选「续画」可从端点接着画 · Alt 擦除 · Ctrl 吸附半音':
+    'Pitch curve: drag to draw like a pen (a click only selects) · each stroke is its own segment, so you can redraw just part of it · enable Continue to keep drawing from an endpoint · Alt erases · Ctrl snaps to semitones',
   '批量删除编辑工程？': 'Delete selected editing projects?',
 })
 export const jaExtraPhrases: Record<string, string> = {
@@ -1115,7 +1125,7 @@ export const jaExtraPhrases: Record<string, string> = {
   '当前环境未报告可用推理设备': '現在の環境で利用可能な推論デバイスが報告されていません',
   '模型站基于': 'モデルハブの基盤：', '魔搭社区 ModelScope': 'ModelScopeコミュニティ',
   '尚未配置模型上传令牌': 'モデルアップロードトークン未設定', '浏览和下载无需本地令牌；分享到自己的 ModelScope 仓库时再配置访问令牌。': '閲覧とダウンロードにローカルトークンは不要です。ModelScopeリポジトリへ共有するときだけ設定してください。',
-  '架构': 'アーキテクチャ', '全部架构': 'すべての方式', '排序': '並び順', '综合排序': '関連度', '下载排行': 'ダウンロード数', '最近更新': '最近更新', '搜索模型站中的翻唱模型（留空浏览全部）…': 'モデルハブのカバーモデルを検索（空欄で全件表示）…', '依赖缺失': '依存関係不足', '依赖 OK': '依存関係OK', '作者': '作者', '图': '画像', '下载中断，可继续下载': 'ダウンロードが中断されました。再開できます', '在 ModelScope 查看': 'ModelScopeで表示', '查看本地': 'ローカルを表示', '继续下载': 'ダウンロードを再開', '下载导入': 'ダウンロードしてインポート', '加载更多': 'さらに読み込む', '换个关键词，或把你的模型「分享到模型站」让社区也能用': '別のキーワードを試すか、モデルをハブへ共有してコミュニティで利用できます。', '点击「搜索」浏览模型站中的社区翻唱模型。': '「検索」をクリックしてコミュニティのカバーモデルを表示します。',
+  '架构': 'アーキテクチャ', '全部架构': 'すべての方式', '排序': '並び順', '综合排序': '関連度', '最近更新': '最近更新', '搜索模型站中的翻唱模型（留空浏览全部）…': 'モデルハブのカバーモデルを検索（空欄で全件表示）…', '依赖缺失': '依存関係不足', '依赖 OK': '依存関係OK', '作者': '作者', '已下载曲库': 'ダウンロード済みライブラリ', '已选择曲库原曲': 'ライブラリの原曲を選択しました', '图': '画像', '下载中断，可继续下载': 'ダウンロードが中断されました。再開できます', '在 ModelScope 查看': 'ModelScopeで表示', '查看本地': 'ローカルを表示', '继续下载': 'ダウンロードを再開', '下载导入': 'ダウンロードしてインポート', '加载更多': 'さらに読み込む', '换个关键词，或把你的模型「分享到模型站」让社区也能用': '別のキーワードを試すか、モデルをハブへ共有してコミュニティで利用できます。', '点击「搜索」浏览模型站中的社区翻唱模型。': '「検索」をクリックしてコミュニティのカバーモデルを表示します。',
   'PyMSS 音乐源分离模型站': 'PyMSS音源分離モデルハブ', '完整 PyMSS Studio 模型目录，可按一级分类、二级分类和架构筛选；人声前处理兼容模型可在翻唱页直接选择。': 'PyMSS Studioの全モデルカタログです。大分類・小分類・アーキテクチャで絞り込み、対応するボーカル前処理モデルをカバー画面から選択できます。', '一级分类': '大分類', '二级分类': '小分類', '模型架构': 'モデルアーキテクチャ', '下载状态': 'ダウンロード状態', '全部一级分类': 'すべての大分類', '全部二级分类': 'すべての小分類', '请先选择一级分类': '先に大分類を選択', '全部模型': 'すべてのモデル', '全部能力': 'すべての機能', '搜索': '検索', '搜索模型名称、分类或目标音轨': 'モデル名・分類・対象ステムを検索', '当前筛选条件下没有 PyMSS 模型。': '現在の条件に一致するPyMSSモデルはありません。', '去混响 / 人声净化': '残響除去 / ボーカル浄化', '目标音轨': '対象ステム', '搜索模型名称，例如 dereverb_mel_band_roformer_anvuew': 'モデル名を検索（例：dereverb_mel_band_roformer_anvuew）', '重新下载': '再ダウンロード', '未读取到该用途的 PyMSS 模型，请先安装 PyMSS 环境。': 'この用途のPyMSSモデルが見つかりません。先にPyMSS環境をインストールしてください。',
   '人声': 'ボーカル', '传统 VR 模型': '従来型VRモデル', '传统非 VR 模型': '従来型非VRモデル', '伴奏/无人声提取': '伴奏 / ボーカルなし抽出', '单乐器/单音轨': '単一楽器 / 単一ステム', '卡拉OK/和声': 'カラオケ / バッキングボーカル', '声像/空间分离': '定位 / 空間分離', '实验/通用分离': '実験 / 汎用分離', '混响/回声处理': '残響 / エコー処理', '特殊目标/差异提取': '特殊ターゲット / 差分抽出', '音乐多轨/分轨': '音楽マルチステム分離', '音频清理/修复': '音声クリーンアップ / 修復', '人声-伴奏双向分离': 'ボーカル / 伴奏の双方向分離', '人声提取': 'ボーカル抽出', '双人/二重唱分离': 'デュエット分離', '合唱/人群歌声分离': '合唱 / 群衆ボーカル分離', '气声/呼吸声分离': '息づかい / ブレス分離', '男女声/合唱分离': '男女声 / 合唱分離', '语音/说话人声分离': '音声 / 話し声分離', 'VR HP2 系列': 'VR HP2シリーズ', 'VR MGM 系列': 'VR MGMシリーズ', 'VR SP 系列': 'VR SPシリーズ', 'VR 人声提取': 'VRボーカル抽出', 'VR 伴唱/和声': 'VRバッキング / ハーモニー', 'VR 伴奏/无人声提取': 'VR伴奏抽出', 'VR 去回声': 'VRエコー除去', 'VR 去回声+去混响': 'VRエコー + 残響除去', 'VR 去混响': 'VR残響除去', 'VR 和声/伴唱': 'VRハーモニー / バッキング', 'VR 谐波/噪声分离': 'VR倍音 / ノイズ分離', 'VR 降噪': 'VRノイズ除去', 'VR 风声/管乐伴奏': 'VR風音 / 楽器伴奏分離', 'Demucs/HTDemucs 系列': 'Demucs / HTDemucsシリーズ', '吉他': 'ギター', '弦乐': '弦楽器', '贝斯': 'ベース', '鼓/打击乐': 'ドラム / パーカッション', '中央/宽声像提取': 'センター / ワイドステレオ抽出', '单声道/立体声分离': 'モノラル / ステレオ分離', '通用源分离': '汎用音源分離', '去混响': '残響除去', '去混响+去回声': '残響除去 + エコー除去', '相似/差异分离': '類似 / 差分分離', 'DNR 对话/音乐/音效分轨': 'DNR 会話 / 音楽 / 効果音分離', 'MVSep 53 轨分离': 'MVSep 53ステム分離', '六轨分离': '6ステム分離', '四轨分离': '4ステム分離', '鼓组细分': 'ドラムステム分離', '人群/观众声移除': '群衆 / 観客音声除去', '降噪/串音抑制': 'ノイズ除去 / 漏れ抑制', '音频/人声修复': '音声 / ボーカル修復',
   '请登录后在「个人中心 → 访问令牌」获取令牌填入下方。令牌仅保存在本地，用于上传到你自己的命名空间。': 'ログイン後、プロフィール → アクセストークンから取得して入力してください。トークンはローカルにのみ保存されます。',
@@ -1255,17 +1265,21 @@ Object.assign(jaExtraPhrases, {
   '渲染中…': 'レンダリング中…', '渲染到本轨': 'このトラックにレンダリング', '导出 .mid': '.midを書き出し', '渲染为分乐器音轨': '楽器ごとに音声トラックを作成',
   '保存音符': '音符を保存', '试听音频': '音声を試聴', '应用音频中…': '音声を適用中…', '应用到轨道片段': 'トラックのクリップに適用', '应用音频': '音声を適用',
   '渲染使用内置多乐器合成器：每个声部一件 GM 乐器，可「分乐器各生成一条音轨」（可单独调音量/加效果），也可混成一条片段落回当前轨。导出 .mid 可在其他 DAW 里继续编辑；试听播放的是合成结果。': 'レンダリングは内蔵のマルチ音源シンセを使用します：パートごとに1つのGM楽器で、「楽器ごとに音声トラックを作成」すれば個別に音量/エフェクトを調整でき、現在のトラックに1つのクリップとしてミックスもできます。.midを書き出せば他のDAWで編集を続けられます。試聴は合成結果を再生します。',
-  '试听播放的是片段音频本身（应用后为编辑结果），不会用 MIDI 音源直接出声；应用会生成新音频并可撤销。未改动的音符保留原始音准，只有被拖动/改过分度的音符才会移动。': '試聴はクリップ音声そのもの（適用後は編集結果）を再生し、MIDI音源で直接鳴らしません。適用すると新しい音声が生成され、取り消しも可能です。変更していない音符は元のピッチのまま、ドラッグやピッチ編集した音符だけが移動します。',
+  '试听播放的是片段音频本身（应用后为编辑结果），不会用 MIDI 音源直接出声；应用会生成新音频并可撤销。未改动的音符保留原始音准，只有被拖动/改过分度的音符才会移动。删掉的音符不会「什么都不发生」：它对应的演唱区间会在试听和应用后静音。': '試聴はクリップ音声そのもの（適用後は編集結果）を再生し、MIDI音源で直接鳴らしません。適用すると新しい音声が生成され、取り消しも可能です。変更していない音符は元のピッチのまま、ドラッグやピッチ編集した音符だけが移動します。音符を削除しても何も起きない、ということはありません：その歌唱区間は試聴と適用後にミュートされます。',
   '正在分析片段基频…': 'クリップの基本周波数を解析中…', '正在处理…': '処理中…', '正在读取 MIDI 编曲…': 'MIDI作曲を読み込み中…',
   '正在按乐器渲染音频…': '楽器ごとに音声をレンダリング中…', '正在渲染混合音频…': 'ミックス音声をレンダリング中…', '正在渲染试听…': '試聴をレンダリング中…',
   '正在保存编曲…': '作曲を保存中…', '用内置乐器渲染并播放': '内蔵楽器でレンダリングして再生', '还没有音符': 'まだ音符がありません',
   '播放片段音频（不是 MIDI 音源）': 'クリップ音声を再生（MIDI音源ではありません）', '空白轨道没有音频可试听': '空トラックには試聴できる音声がありません',
+  '按当前音符渲染试听：改过的音符变调，删掉的音符静音': '現在の音符で試聴をレンダリング：編集した音符は移調し、削除した音符はミュートされます',
   '渲染试听…': '試聴をレンダリング中…', '⏸ 暂停': '⏸ 一時停止', '▶ 试听': '▶ 試聴',
   'D 画笔 / V 选择 / E 橡皮 · 双击新建 · 拖边缘改长度 · 下方拖力度条 · 空格试听 · Del 删除': 'D ペン / V 選択 / E 消しゴム · ダブルクリックで作成 · 端で長さ変更 · 下でベロシティ調整 · スペースで試聴 · Delで削除',
+  '双击空白新建 · 拖动移动 · 拖边缘改长度 · 框选多选 · 右键菜单 · Del 删除并静音 · 空格试听': 'ダブルクリックで作成 · ドラッグで移動 · 端で長さ変更 · 範囲選択 · 右クリックメニュー · Delで削除してミュート · スペースで試聴',
   '双击空白新建 · 拖动移动 · 拖边缘改长度 · 框选多选 · 右键菜单 · Del 删除 · 空格试听': 'ダブルクリックで作成 · ドラッグで移動 · 端で長さ変更 · 範囲選択 · 右クリックメニュー · Delで削除 · スペースで試聴',
   'MIDI 音高重绘环境未就绪': 'MIDIピッチ再描画環境が準備されていません',
   '音轨上还没有片段：先切到「MIDI 编曲」写谱并渲染': 'トラックにクリップがありません：「MIDI作曲」に切り替えて楽譜を作成し、レンダリングしてください',
   '把音符按片段切分后落到音频': '音符をクリップごとに分割して音声に適用', '把音符应用到音频（保共振峰移调）': '音符を音声に適用（フォルマント保持で移調）',
+  '把音符按片段切分后落到音频（删掉的音符静音）': '音符をクリップごとに分割して音声に適用（削除した音符はミュート）',
+  '把音符应用到音频（保共振峰移调，删掉的音符静音）': '音符を音声に適用（フォルマント保持で移調、削除した音符はミュート）',
   '中位基频': '中央基本周波数', '浊音': '有声音', '空白轨道': '空トラック', '旋律': 'メロディ', '架子鼓': 'ドラムキット', 'MIDI 文件里没有音符': 'MIDIファイルに音符がありません',
   // メイン音声エディター内の MIDI 関連エントリー
   'MIDI 音高编辑（片段）': 'MIDIピッチ編集（クリップ）', 'MIDI 音高编辑（整轨）': 'MIDIピッチ編集（トラック）',
@@ -1602,6 +1616,7 @@ Object.assign(jaExtraPhrases, {
   'F0 滤波半径': 'F0フィルター半径',
   // エディターが自動生成するトラック名 / プロジェクト名
   '原始音频': '元の音声', '原始人声': '元のボーカル', '翻唱成品': 'カバーミックス',
+  '编辑成品': '編集ミックス',
   'AI 翻唱干声': 'AIカバーのドライボーカル', '素材': '素材', '音轨 1': 'トラック 1',
   '空白工程': '空のプロジェクト', '音频工程': '音声プロジェクト',
   '收起日志与流程': 'ログと実行フローを折りたたむ', '展开日志与流程': 'ログと実行フローを展開',
@@ -1629,6 +1644,11 @@ Object.assign(jaExtraPhrases, {
     '選択した音符の音高カーブを軽く平滑化し、手描きの揺れを抑えます',
   '音高曲线：在音符上按住拖动，像画笔一样画线（单击只选中）· Alt 擦除 · Ctrl 吸附半音':
     '音高カーブ：音符上を押してドラッグするとペンのように描けます（クリックは選択のみ）· Alt 消去 · Ctrl 半音スナップ',
+  '续画': '続けて描く',
+  '续画：新的一笔靠近已有曲线的端点时接上去，保持连续；关闭（默认）时每一笔都是独立的一段，可以只改一小块而不和别的段相连':
+    '続けて描く：新しい一筆が既存カーブの端点に近いと、そこから繋げて連続にします。オフ（既定）では一筆ごとに独立した区間になり、他の区間と繋がずに一部分だけ描き直せます。',
+  '音高曲线：按住拖动像画笔一样画线（单击只选中）· 每一笔独立、可只改一小段 · 勾选「续画」可从端点接着画 · Alt 擦除 · Ctrl 吸附半音':
+    '音高カーブ：ドラッグでペンのように描きます（クリックは選択のみ）· 一筆ごとに独立し、一部分だけ描き直せます · 「続けて描く」をオンにすると端点から続けて描けます · Altで消去 · Ctrlで半音スナップ',
   '批量删除编辑工程？': '選択した編集プロジェクトを削除しますか？',
 })
 const enDynamicRules: readonly DynamicRule[] = [
@@ -1917,7 +1937,6 @@ const jaDynamicRules: readonly DynamicRule[] = [
   [/^已下载原始歌曲：(.+)$/u, '原曲をダウンロードしました：$1'],
   [/^已导入 (\d+) 个声部，记得点「保存编曲」$/u, '$1 個のパートをインポートしました。「作曲を保存」を押してください'],
   [/^已导入 (\d+) 句歌词$/u, '歌詞を $1 行インポートしました'],
-  [/^已导入 (\d+) 个音频资源$/u, '音声素材を $1 個インポートしました'],
   [/^已把 (\d+) 个音符应用到片段音频，可用撤销恢复$/u, '$1 個のノートをクリップの音声に適用しました。元に戻せます'],
   [/^已把 (\d+) 个音符应用到轨道音频，可用撤销恢复$/u, '$1 個のノートをトラックの音声に適用しました。元に戻せます'],
   [/^片段已替换，已应用 (.+) 美声$/u, 'クリップを $1 のボーカル強化で置き換えました'],

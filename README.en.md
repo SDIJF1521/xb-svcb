@@ -10,7 +10,7 @@
 
 **Import · Vocal separation · Dereverb · Voice conversion · Vocal enhancement · Mixing · Export**
 
-Create a complete AI song cover in one workflow. Supports **So-VITS-SVC and RVC inference**, **multi-singer covers**, **real-time system-audio conversion**, **AI vocal enhancement projects**, an **online music library**, a **model hub**, and an **audio editor**.
+Create a complete AI song cover in one workflow. Supports **So-VITS-SVC and RVC inference**, **multi-singer covers**, **real-time system-audio conversion**, **AI vocal enhancement projects**, an **online music library**, a **model hub**, a **workflow store**, and an **audio editor**.
 
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/SDIJF1521/xb-svcb?include_prereleases&label=release&color=ff6b9d)](https://github.com/SDIJF1521/xb-svcb/releases/latest)
@@ -41,14 +41,24 @@ Create a complete AI song cover in one workflow. Supports **So-VITS-SVC and RVC 
 <div align="center">
   <img src="docs/images/xb-svcb-app-en.png" width="100%" alt="XB-SVCB AI cover workspace running in English" />
   <br/>
-  <sub>XB-SVCB 0.1.1 · Actual AI cover workspace in English</sub>
+  <sub>XB-SVCB 0.1.2 · Actual AI cover workspace in English</sub>
 </div>
 
 ## Overview
 
 XB-SVCB is a local-first Windows application for AI song covers and audio production. Its interface is built with Vue 3, its application core is written in Python, and each AI framework runs in an isolated environment and worker process.
 
-The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UVR / PyMSS vocal separation, AI vocal enhancement, high-note protection, an online music library, a model hub, real-time system-audio conversion, and the Audio Editor Lite multitrack editor.
+The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UVR / PyMSS vocal separation, AI vocal enhancement, high-note protection, an online music library, a model hub, a workflow store, real-time system-audio conversion, and the Audio Editor Lite multitrack editor.
+
+## Mobile Companion App
+
+A separate Android companion, **[XB-SVCB Mobile](https://github.com/SDIJF1521/XB-SVCB-Mobile)** (independent Git repository, GPL-3.0-only).
+
+It covers viewing works and jobs, creating and deleting cover jobs, managing voice models and materials, and downloading results. Audio editing, full timeline editing, custom workflows, and real-time voice conversion remain desktop-only. It connects through this project's FastAPI service, and inference still runs on the desktop.
+
+- Project guide: [XB-SVCB-Mobile](https://github.com/SDIJF1521/XB-SVCB-Mobile)
+- API contract: [docs/API.md](https://github.com/SDIJF1521/XB-SVCB-Mobile/blob/main/docs/API.md)
+- Build: run `pwsh -File build-apk.ps1` in the mobile project to produce `dist/XB-SVCB-Mobile-0.1.2.apk`
 
 ## Features
 
@@ -56,27 +66,37 @@ The project supports So-VITS-SVC, RVC, SeedVC, and DDSP-SVC. It also provides UV
 - Manage So-VITS-SVC, RVC, SeedVC, and DDSP-SVC models through one interface with framework-specific parameters.
 - Protect notes outside a model's range by retrying affected regions at a lower pitch and restoring the original pitch afterward; the confirmed high-note regions then get their upper band rebuilt by a Snake-HiFiGAN / NSF-HiFiGAN high-note vocoder, which replaces the PSOLA air and missing harmonics.
 - Split songs from lyrics or silence detection, assign models on a visual timeline, and create multi-singer or ensemble covers.
-- Edit tracks, cut and fade clips, route channels, apply effects, and export WAV / MP3 / FLAC with Audio Editor Lite; its built-in MIDI sub-editor (piano roll) edits clip pitch note by note, and preview always plays the clip audio instead of a MIDI synth.
+- Edit tracks, cut and fade clips, route channels, apply effects, and export WAV / MP3 / FLAC with Audio Editor Lite; its built-in MIDI sub-editor (piano roll) edits clip pitch note by note, and preview always plays the clip audio instead of a MIDI synth. Deleting a note mutes its sung range in preview and after applying, and pitch curves are split per stroke so you can redraw just one part or continue from an endpoint.
+- Save an Audio Editor Lite render directly to My Works, where it shares the same player, download, and re-editing paths as AI covers.
 - Import TXT / LRC lyrics and use role-based solo, duet, and harmony timeline templates.
 - Convert player audio in real time through WASAPI loopback or VB-CABLE while preserving the accompaniment.
 - Search, upload, and download models through ModelScope with background transfers, resume support, and manifest verification.
+- Upload, search, paginate, preview, and download AI cover workflows through the Workflow Store. Downloads sync the PyMSS models declared in each manifest and can be opened directly in the AI Cover studio.
 - Search, preview, and download songs and lyrics from NetEase Cloud Music, QQ Music, and Kuwo Music.
+- Covers support queued audition: clicking a track plays only that track, while queue playback / continuous audition must be chosen explicitly. Queues support in-order, repeat-all, repeat-one, and shuffle play, with lossless direct output and an equalizer; the audition page shows lyrics and MV.
 - Select NVIDIA CUDA, Windows AMD ROCm 10, DirectML, or CPU execution.
 - Enable an optional FastAPI service for task creation, progress tracking, model management, and result downloads.
 - Extend the application with custom pages, Python plugin workers, and a C++ JUCE VST3 host.
 
 ## Quick Start
 
+### System Requirements
+
+- Windows 10 1809 or newer, or Windows 11, 64-bit.
+- **Microsoft Visual C++ 2015-2022 x64 Redistributable, latest version**: <https://aka.ms/vs/17/release/vc_redist.x64.exe>. Run it and choose "Repair" even if it is already installed. When it is outdated, or an older `msvcp140.dll` shipped by another application has overwritten it, `onnxruntime` crashes while importing (`0xC0000005`) and the installer stops at step 4/12 or at the final shared-runtime check. See [Troubleshooting](#final-install-step-fails-uvr-probes-crash).
+- CUDA126 for NVIDIA RTX 40-series and older, CUDA128 for RTX 50-series, ROCm 10 as the preferred Windows AMD backend (DirectML optional), CPU when no compatible GPU is available.
+- 64-bit CPython 3.12.x and MinGit: bundled with the installer, so no separate installation is needed. Source builds require Python 3.12.x and Node.js 20.19+ or 22.12+.
+
 ### Installer
 
-For normal use, download the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`, from the latest GitHub release. It downloads verified offline packages from the ModelScope `v0.1.1` revision. The fallback `XB-SVCB-Online-Setup.exe` is not published on GitHub; contact the developer to obtain it separately.
+For normal use, download the ModelScope edition, `XB-SVCB-Online-Setup-ModelScope.exe`, from the latest GitHub release. It downloads verified offline packages from the ModelScope `v0.1.2` revision. The fallback `XB-SVCB-Online-Setup.exe` is not published on GitHub; contact the developer to obtain it separately.
 
 1. Run the online installer and use automatic detection, or manually select CPU, ROCm 10, DirectML, CUDA126, or CUDA128.
 2. Wait for the matching complete package to download and pass SHA-256 verification, then select both the application directory and user-data directory.
-3. Select a 64-bit CPython 3.12.x installation, or let the installer detect one, then keep **Set up the runtime after installation** enabled.
+3. Setup extracts the bundled Python 3.12 and MinGit automatically. Keep **Set up the runtime after installation** enabled; no local Python or Git selection is required.
 4. Start XB-SVCB from the desktop or Start menu.
 
-For a fully offline installation, download the dedicated hardware package's EXE and every BIN file sharing its prefix, and keep them in one directory. The package contains the built frontend, FFmpeg, engine source code, essential base models, and offline Python dependencies for the selected hardware stack. Use CUDA126 for NVIDIA RTX 40-series and older GPUs, CUDA128 for RTX 50-series GPUs, ROCm 10 as the preferred Windows AMD backend, DirectML as an alternative AMD backend, and CPU when no compatible GPU is available. In the DirectML package, PyMSS and DDSP automatic mode run on the CPU; PyMSS does not use DirectML acceleration.
+For a fully offline installation, download the dedicated hardware package's EXE and every BIN file sharing its prefix, and keep them in one directory. The package contains the built frontend, bundled Python 3.12, bundled MinGit, FFmpeg, engine source code, essential base models, and offline Python dependencies for the selected hardware stack. Use CUDA126 for NVIDIA RTX 40-series and older GPUs, CUDA128 for RTX 50-series GPUs, ROCm 10 as the preferred Windows AMD backend, DirectML as an alternative AMD backend, and CPU when no compatible GPU is available. In the DirectML package, PyMSS and DDSP automatic mode run on the CPU; PyMSS does not use DirectML acceleration.
 
 ### Install from source
 
@@ -223,13 +243,38 @@ npm run build
 
 See the [documentation index](docs/en/README.md) for architecture, startup, testing, packaging, and contributor references.
 
+## Troubleshooting
+
+### Final install step fails: UVR probes crash
+
+The `uvr_mdx` and `uvr_vr` probes exit with `3221225477` (`0xC0000005`) while `pip check` reports `All installed packages are compatible`. This is not a dependency conflict: the system C++ runtime that `onnxruntime` loads is broken. Windows Event Viewer (Application log, event ID 1000) names `MSVCP140.dll` as the faulting module.
+
+1. Install the latest [Microsoft Visual C++ 2015-2022 x64 Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe); run it and choose "Repair" even if it is already installed.
+2. If it still crashes, another application has overwritten `C:\Windows\System32\msvcp140.dll` with an older copy: uninstall the legacy `Microsoft Visual C++ 2015 Redistributable (x64) - 14.0.x` entry under "Apps & features", then repair the 2015-2022 redistributable.
+3. All four runtime files must report one version of at least 14.38:
+
+```powershell
+foreach ($n in 'msvcp140.dll','msvcp140_1.dll','vcruntime140.dll','vcruntime140_1.dll') {
+  "{0} {1}" -f $n, [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$env:SystemRoot\System32\$n").FileVersion
+}
+```
+
+4. Verify the import, then resume the installer:
+
+```bat
+runtimes\core-cu126\Scripts\python.exe -c "import onnxruntime; print('ORT_OK')"
+setup_env.bat --cu126 --only uvr seedvc ddsp
+```
+
+Reinstalling the application, changing the install directory, or recreating the Python environment cannot bypass this crash, because the fault is in the system runtime rather than in the installation.
+
 ## Roadmap
 
-Current version: **v0.1.1**
+Current version: **v0.1.2**
 
 The core multi-framework inference workflow, timeline-based multi-singer covers, Audio Editor Lite, ModelScope model hub, FastAPI integration, CUDA / ROCm 10 / DirectML / CPU paths, and plugin runtime are available. Current priorities include automatic lyric recognition, improved automatic timelines, standardized model metadata, project import/export and autosave, more conversion frameworks, video and lyric-video export, and improved Intel GPU / CPU / multi-GPU scheduling.
 
-See the [release-notes directory](docs/release-notes/) for the full version history. The current release is available as [v0.1.1 release notes](docs/release-notes/release_notes_v0_1_1.en.md).
+See the [release-notes directory](docs/release-notes/) for the full version history. The current release is available as [v0.1.2 release notes](docs/release-notes/release_notes_v0_1_2.en.md).
 
 ## Contributors
 
@@ -249,3 +294,13 @@ Contributors: **SDIJF1521 (YGXB) · emptyelse · GFMAA · SugarCatCat**. Click a
 The project's own source code is licensed under **[GNU General Public License v3.0 only](LICENSE)**. Copyright © 2026 SDIJF1521.
 
 Bundled third-party components, models, and resources retain their original licenses. In particular, so-vits-svc 4.1 is AGPL-3.0, DDSP-SVC 6.3 is MIT-licensed, the bundled RVC inference stack is MIT-licensed, and base models and UVR models use their respective upstream terms. GPL-3.0-only does not replace those third-party terms.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=sdijf1521%2Fxb-svcb&type=date&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=sdijf1521/xb-svcb&type=date&legend=top-left" />
+ </picture>
+</a>

@@ -328,8 +328,17 @@
         <div class="rank-field">
           <el-select v-model="hubSort" class="rank-select" :placeholder="translateUiText('排序')">
             <el-option :label="translateUiText('综合排序')" value="score" />
-            <el-option :label="translateUiText('下载排行')" value="downloads" />
             <el-option :label="translateUiText('最近更新')" value="recent" />
+          </el-select>
+        </div>
+        <div class="rank-field">
+          <el-select v-model="hubPageSize" class="rank-select" @change="onHubPageSizeChange">
+            <el-option
+              v-for="size in HUB_PAGE_SIZES"
+              :key="size"
+              :label="`${translateUiText('每页')} ${size}`"
+              :value="size"
+            />
           </el-select>
         </div>
         <div class="search">
@@ -369,7 +378,6 @@
             </div>
             <div class="row-sub">
               {{ it.sample_rate || '44.1kHz' }} · {{ translateUiText('作者') }} {{ it.author }}
-              · {{ countText(it.download_count) }} {{ translateUiText('下载') }}
             </div>
             <div v-if="(it.tags || []).length || it.preview_audio || (it.screenshots || []).length" class="row-tags">
               <span v-for="tag in (it.tags || []).slice(0, 4)" :key="tag" class="mini-tag">{{ tag }}</span>
@@ -411,25 +419,36 @@
               :loading="dlJob(it.repo_id)?.status === 'running'"
               @click="downloadHub(it)"
             >
-              <el-icon v-if="dlJob(it.repo_id)?.status === 'done'" class="el-icon--left"><CircleCheck /></el-icon>
+              <el-icon v-if="dlJob(it.repo_id)?.status !== 'running' && isHubInstalled(it)" class="el-icon--left"><CircleCheck /></el-icon>
               <el-icon v-else-if="dlJob(it.repo_id)?.status !== 'running'" class="el-icon--left"><Download /></el-icon>
-              {{ translateUiText(dlJob(it.repo_id)?.status === 'done' ? '查看本地' : dlJob(it.repo_id)?.status === 'failed' ? '继续下载' : '下载导入') }}
+              {{ translateUiText(dlJob(it.repo_id)?.status === 'running' ? '下载导入' : isHubInstalled(it) ? '查看本地' : dlJob(it.repo_id)?.status === 'failed' ? '继续下载' : '下载导入') }}
             </el-button>
           </div>
-        </div>
-        <div v-if="hubHasMore" class="load-more">
-          <el-button round class="ghost-btn" :loading="hubLoadingMore" @click="loadMoreHub">
-            {{ translateUiText('加载更多') }}
-          </el-button>
         </div>
       </div>
       <div v-else-if="hubSearched && !hubSearching" class="empty glass">
         <el-icon class="empty-icon"><Connection /></el-icon>
         <p class="empty-title">{{ translateUiText('没有找到相关模型') }}</p>
-        <p class="empty-sub">{{ translateUiText('换个关键词，或把你的模型「分享到模型站」让社区也能用') }}</p>
+        <p class="empty-sub">
+          {{ translateUiText(hubTotal > 0 ? '当前页没有匹配项，可翻页或换个关键词' : '换个关键词，或把你的模型「分享到模型站」让社区也能用') }}
+        </p>
       </div>
       <div v-else-if="!hubSearched" class="empty glass small">
         <span>{{ translateUiText('点击「搜索」浏览模型站中的社区翻唱模型。') }}</span>
+      </div>
+      <div v-if="hubSearched && hubTotal > 0" class="pager glass">
+        <span class="pager-total">
+          {{ translateUiText('共') }} <b>{{ hubTotal }}</b> {{ translateUiText('个模型') }}
+        </span>
+        <el-pagination
+          background
+          :total="hubTotal"
+          :page-size="hubPageSize"
+          :current-page="hubPage"
+          :pager-count="7"
+          layout="prev, pager, next, jumper"
+          @current-change="onHubPageChange"
+        />
       </div>
     </template>
 
@@ -474,10 +493,16 @@
           <span>{{ translateUiText('搜索') }}</span>
           <el-input v-model="pymssQuery" clearable :placeholder="translateUiText('搜索模型名称、分类或目标音轨')" />
         </label>
+        <label class="pymss-filter-control compact">
+          <span>{{ translateUiText('每页') }}</span>
+          <el-select v-model="pymssPageSize" @change="onPymssPageSizeChange">
+            <el-option v-for="size in PYMSS_PAGE_SIZES" :key="size" :label="`${size}`" :value="size" />
+          </el-select>
+        </label>
         <span class="pymss-filter-count">{{ filteredPymssItems.length }} / {{ pymssItems.length }}</span>
       </div>
       <div class="list glass">
-        <div v-for="item in filteredPymssItems" :key="item.name" class="row">
+        <div v-for="item in pagedPymssItems" :key="item.name" class="row">
           <div class="row-cover hub"><el-icon><Operation /></el-icon></div>
           <div class="row-main">
             <div class="row-title">{{ item.name }} <span class="fw-tag">{{ item.architecture || 'PyMSS' }}</span></div>
@@ -508,6 +533,20 @@
           </div>
         </div>
         <div v-if="!filteredPymssItems.length && !pymssLoading" class="empty small"><span>{{ translateUiText('当前筛选条件下没有 PyMSS 模型。') }}</span></div>
+      </div>
+      <div v-if="pymssTotal > 0" class="pager glass">
+        <span class="pager-total">
+          {{ translateUiText('共') }} <b>{{ pymssTotal }}</b> {{ translateUiText('个模型') }}
+        </span>
+        <el-pagination
+          background
+          :total="pymssTotal"
+          :page-size="pymssPageSize"
+          :current-page="pymssPage"
+          :pager-count="7"
+          layout="prev, pager, next, jumper"
+          @current-change="onPymssPageChange"
+        />
       </div>
     </template>
 
@@ -619,8 +658,6 @@
             </div>
             <p v-if="hubDetail.description" class="detail-desc">{{ hubDetail.description }}</p>
             <div class="detail-stats">
-              <span>{{ countText(hubDetail.download_count) }} 下载</span>
-              <span v-if="hubDetail.likes">{{ countText(hubDetail.likes) }} 喜欢</span>
               <span>{{ hubDetail.uploaded_at || '未知时间' }}</span>
             </div>
             <div v-if="(hubDetail.tags || []).length" class="row-tags">
@@ -697,7 +734,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   Setting, FolderOpened, Connection, Document, Plus, Microphone, Star, Delete,
@@ -733,6 +770,25 @@ function frameworkLabel(id: string): string {
   return frameworks.value.find((f) => f.id === id)?.name || id || 'So-VITS-SVC'
 }
 
+/** 搜索词拆分：兼容「ddsp模型」「RVC 模型」这类「框架 + 通用后缀」写法。 */
+const SEARCH_STOPWORDS = new Set(['模型', '声音', '声音模型', '翻唱', '音色', '语音', '的'])
+function searchTokens(raw: string): string[] {
+  const tokens: string[] = []
+  const pieces = (raw || '').toLowerCase().match(/[a-z0-9][a-z0-9._+-]*|[\u4e00-\u9fff]+/g) || []
+  for (const piece of pieces) {
+    let token = piece
+    for (const suffix of ['声音模型', '模型', '音色', '翻唱', '语音']) {
+      if (token.endsWith(suffix) && token.length > suffix.length) {
+        token = token.slice(0, -suffix.length)
+        break
+      }
+    }
+    if (!token || SEARCH_STOPWORDS.has(token) || tokens.includes(token)) continue
+    tokens.push(token)
+  }
+  return tokens
+}
+
 const defaultModelName = computed(() =>
   modelsStore.models.find((m) => m.id === modelsStore.defaultId)?.name || '',
 )
@@ -745,13 +801,14 @@ const localFrameworkOptions = computed(() =>
   ),
 )
 const filteredLocalModels = computed(() => {
-  const q = localQuery.value.trim().toLowerCase()
+  const tokens = searchTokens(localQuery.value)
   return [...modelsStore.models].sort((a, b) => Number(b.favorite) - Number(a.favorite)).filter((m) => {
     if (localFramework.value && (m.framework || 'so-vits-svc') !== localFramework.value) return false
-    if (!q) return true
+    if (!tokens.length) return true
     const hay = [
       m.name,
       m.type,
+      m.framework,
       frameworkLabel(m.framework),
       m.mainModel,
       m.mainConfig,
@@ -759,7 +816,7 @@ const filteredLocalModels = computed(() => {
       m.diffusionConfig,
       m.indexFile,
     ].join(' ').toLowerCase()
-    return hay.includes(q)
+    return tokens.every((token) => hay.includes(token))
   })
 })
 
@@ -861,6 +918,7 @@ async function doImport() {
       const detected = String(created.metadata?.rvc_version || '')
       ElMessage.success('已导入：' + created.name + (isRvc && detected ? `（自动识别 ${detected}）` : ''))
       resetImport()
+      await refreshHubAfterLocalChange()
     } else {
       ElMessage.error('导入失败，请检查所选文件')
     }
@@ -924,8 +982,76 @@ async function removeModel(m: ModelVM) {
   } catch {
     return
   }
-  if (await modelsStore.remove(m.id)) ElMessage.success('已删除')
-  else ElMessage.error('删除失败')
+  const repoId = String(m.metadata?.source_repo_id || '')
+  if (await modelsStore.remove(m.id)) {
+    // 删除后同步清掉模型站的「已下载」任务与详情安装态，避免历史任务把已删除模型显示成仍存在。
+    if (repoId) {
+      try {
+        await transfers.clear(`dl:${repoId}`)
+      } catch {
+        /* 任务清理失败不影响删除结果；安装态仍按本地模型库刷新。 */
+      }
+      syncHubInstallState(repoId)
+    }
+    clearHubInstalledModel(m.id)
+    await refreshHubAfterLocalChange()
+    ElMessage.success('已删除')
+  } else {
+    ElMessage.error('删除失败')
+  }
+}
+
+/** 本地模型被删除 / 新增后，重新让后端做来源 + 哈希检测，刷新模型站列表与详情。 */
+async function refreshHubAfterLocalChange() {
+  if (hubSearched.value) {
+    await loadHubPage(hubPage.value)
+  }
+  const current = hubDetail.value
+  if (detailVisible.value && current?.repo_id) {
+    try {
+      const res = await api.hubModelDetail(current.repo_id)
+      if (res.ok && res.item) {
+        hubDetail.value = res.item
+        mergeHubItem(res.item)
+      }
+    } catch {
+      /* 详情刷新失败不影响列表 */
+    }
+  }
+}
+
+/** 根据当前本地模型库刷新模型站条目的安装状态（删除 / 下载后都可调用）。 */
+function syncHubInstallState(repoId: string) {
+  const installed = modelsStore.models.some(
+    (model) => String(model.metadata?.source_repo_id || '') === repoId,
+  )
+  const row = hubItems.value.find((item) => item.repo_id === repoId)
+  if (row?.update) {
+    row.update.installed = installed
+    row.update.installed_models = installed ? row.update.installed_models : []
+    if (!installed) row.update.available = false
+  }
+  const detail = hubDetail.value
+  if (detail?.repo_id === repoId && detail.update) {
+    detail.update.installed = installed
+    detail.update.installed_models = installed ? detail.update.installed_models : []
+    if (!installed) detail.update.available = false
+  }
+}
+
+/** 删除某个本地模型后，立即清掉所有引用它的模型站安装态（不等重新搜索）。 */
+function clearHubInstalledModel(modelId: string) {
+  const clear = (row: HubModelItem) => {
+    if (row.update?.model_id !== modelId) return
+    row.update.installed = false
+    row.update.installed_by_hash = false
+    row.update.installed_models = []
+    row.update.model_id = ''
+    row.update.model_name = ''
+    row.update.available = false
+  }
+  for (const row of hubItems.value) clear(row)
+  if (hubDetail.value) clear(hubDetail.value)
 }
 
 /* ---------- 模型站令牌 ---------- */
@@ -980,16 +1106,16 @@ async function saveToken() {
 }
 
 /* ---------- 模型站搜索 / 下载 ---------- */
-const HUB_PAGE_SIZE = 12
+const HUB_PAGE_SIZES = [12, 24, 48]
 const hubQuery = ref('')
 const hubFramework = ref('')
 const hubSearching = ref(false)
 const hubSearched = ref(false)
 const hubItems = ref<HubModelItem[]>([])
 const hubPage = ref(1)
-const hubHasMore = ref(false)
-const hubLoadingMore = ref(false)
-const hubSort = ref<'score' | 'downloads' | 'recent'>('score')
+const hubPageSize = ref(12)
+const hubTotal = ref(0)
+const hubSort = ref<'score' | 'recent'>('score')
 const modelUpdates = ref<HubModelUpdateItem[]>([])
 const firstUpdate = computed(() => modelUpdates.value[0] || null)
 const upgradingId = ref('')
@@ -1006,6 +1132,9 @@ const pymssSecondaryCategory = ref('')
 const pymssArchitecture = ref('')
 const pymssDownloadState = ref<'all' | 'downloaded' | 'available'>('all')
 const pymssQuery = ref('')
+const PYMSS_PAGE_SIZES = [12, 24, 48]
+const pymssPage = ref(1)
+const pymssPageSize = ref(12)
 
 function pymssCategoryLabel(item: PymssModel) {
   const byId = translatePymssCategory(item.primary_category, item.secondary_category)
@@ -1076,24 +1205,72 @@ function onPymssPrimaryCategoryChange() {
 }
 
 const filteredPymssItems = computed(() => {
-  const query = pymssQuery.value.trim().toLowerCase()
+  const tokens = searchTokens(pymssQuery.value)
   return pymssItems.value.filter((item) => {
     if (pymssPrimaryCategory.value && item.primary_category !== pymssPrimaryCategory.value) return false
     if (pymssSecondaryCategory.value && pymssSecondaryKey(item) !== pymssSecondaryCategory.value) return false
     if (pymssArchitecture.value && String(item.architecture || 'unknown').toLowerCase() !== pymssArchitecture.value) return false
     if (pymssDownloadState.value === 'downloaded' && !item.downloaded) return false
     if (pymssDownloadState.value === 'available' && item.downloaded) return false
-    if (!query) return true
-    return [
+    if (!tokens.length) return true
+    const hay = [
       item.name,
       item.architecture,
       item.category,
       item.category_label,
+      item.primary_category,
       item.primary_category_label,
+      item.secondary_category,
       item.secondary_category_label,
+      item.purpose,
+      item.purpose_label,
       item.target_stem,
-    ].some((value) => String(value || '').toLowerCase().includes(query))
+      (item.target_stems || []).join(' '),
+      (item.stems || []).join(' '),
+    ].join(' ').toLowerCase()
+    return tokens.every((token) => hay.includes(token))
   })
+})
+
+const pymssTotal = computed(() => filteredPymssItems.value.length)
+const pagedPymssItems = computed(() => {
+  const start = (pymssPage.value - 1) * pymssPageSize.value
+  return filteredPymssItems.value.slice(start, start + pymssPageSize.value)
+})
+
+function onPymssPageChange(next: number) {
+  pymssPage.value = Math.max(1, next)
+}
+
+function onPymssPageSizeChange() {
+  pymssPage.value = 1
+}
+
+// 任一筛选条件变化都回到第 1 页，避免停留在已不存在的页码。
+watch(
+  [
+    pymssPrimaryCategory,
+    pymssSecondaryCategory,
+    pymssArchitecture,
+    pymssDownloadState,
+    pymssQuery,
+    pymssPageSize,
+  ],
+  () => {
+    pymssPage.value = 1
+  },
+)
+
+watch(pymssTotal, (total) => {
+  const maxPage = Math.max(1, Math.ceil(total / pymssPageSize.value))
+  if (pymssPage.value > maxPage) pymssPage.value = maxPage
+})
+
+// 从本地页切回模型站时重新检测一次，避免本地删除/导入后沿用旧的「查看本地」状态。
+watch(tab, (value) => {
+  if (value === 'hub' && hubSearched.value) {
+    void loadHubPage(hubPage.value)
+  }
 })
 
 async function loadPymssModels() {
@@ -1187,7 +1364,6 @@ const sortedHubItems = computed(() => {
   const rows = [...hubItems.value]
   const sort = hubSort.value
   rows.sort((a, b) => {
-    if (sort === 'downloads') return (b.download_count || 0) - (a.download_count || 0)
     if (sort === 'recent') return String(b.uploaded_at || '').localeCompare(String(a.uploaded_at || ''))
     return (b.score || 0) - (a.score || 0)
   })
@@ -1201,11 +1377,12 @@ function dlJob(repoId: string) {
   return transfers.jobByKey(`dl:${repoId}`)
 }
 
-function countText(value?: number): string {
-  const n = Number(value || 0)
-  if (n >= 10000) return `${(n / 10000).toFixed(1)}万`
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
-  return String(n)
+/** 模型站条目的「已安装」以后端来源元数据 + SHA-256 检测为准。 */
+function isHubInstalled(it: HubModelItem): boolean {
+  if (it.update) return Boolean(it.update.installed)
+  return modelsStore.models.some(
+    (model) => String(model.metadata?.source_repo_id || '') === it.repo_id,
+  )
 }
 
 async function refreshUpdates() {
@@ -1303,54 +1480,48 @@ function onFrameworkChange() {
   void doHubSearch()
 }
 
-async function doHubSearch() {
+async function loadHubPage(targetPage = 1) {
+  const target = Math.max(1, targetPage)
+  hubPage.value = target
   hubSearching.value = true
-  hubPage.value = 1
   try {
     const res = await api.hubSearchModels(
       hubQuery.value.trim(),
-      1,
+      target,
       hubFramework.value || undefined,
-      HUB_PAGE_SIZE,
+      hubPageSize.value,
     )
     hubSearched.value = true
     if (!res.ok) {
       hubItems.value = []
-      hubHasMore.value = false
+      hubTotal.value = 0
       ElMessage.error(res.error || '搜索失败')
       return
     }
-    hubItems.value = res.items || []
-    hubHasMore.value = !!res.has_more
+    const pageNo = Number(res.page || target)
+    const size = Number(res.page_size || hubPageSize.value)
+    const items = res.items || []
+    hubItems.value = items
+    hubPage.value = pageNo
+    // 旧后端没有 total 时按当前页回退，保证分页组件仍可用。
+    hubTotal.value = Number(
+      res.total ?? (pageNo - 1) * size + items.length + (res.has_more ? size : 0),
+    )
   } finally {
     hubSearching.value = false
   }
 }
 
-async function loadMoreHub() {
-  if (hubLoadingMore.value || !hubHasMore.value) return
-  hubLoadingMore.value = true
-  try {
-    const next = hubPage.value + 1
-    const res = await api.hubSearchModels(
-      hubQuery.value.trim(),
-      next,
-      hubFramework.value || undefined,
-      HUB_PAGE_SIZE,
-    )
-    if (!res.ok) {
-      ElMessage.error(res.error || '加载失败')
-      return
-    }
-    // 按 repo_id 去重后追加
-    const seen = new Set(hubItems.value.map((m) => m.repo_id))
-    const more = (res.items || []).filter((m) => !seen.has(m.repo_id))
-    hubItems.value = [...hubItems.value, ...more]
-    hubPage.value = next
-    hubHasMore.value = !!res.has_more
-  } finally {
-    hubLoadingMore.value = false
-  }
+function doHubSearch() {
+  void loadHubPage(1)
+}
+
+function onHubPageChange(next: number) {
+  void loadHubPage(next)
+}
+
+function onHubPageSizeChange() {
+  void loadHubPage(1)
 }
 
 async function downloadHub(it: HubModelItem) {
@@ -1359,10 +1530,15 @@ async function downloadHub(it: HubModelItem) {
     ElMessage.info('该模型正在后台下载，请在顶栏「传输」查看进度')
     return
   }
-  if (job?.status === 'done') {
+  if (isHubInstalled(it)) {
     await modelsStore.load()
+    const local =
+      modelsStore.models.find((model) => model.id === it.update?.model_id) ||
+      modelsStore.models.find(
+        (model) => String(model.metadata?.source_repo_id || '') === it.repo_id,
+      )
     tab.value = 'local'
-    localQuery.value = job.result?.model?.name || ''
+    localQuery.value = local?.name || it.update?.model_name || it.name
     return
   }
   const key = await transfers.startDownload(it.repo_id)
@@ -1462,14 +1638,14 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.page { max-width: 1320px; margin: 0 auto; padding: 28px 24px 60px; }
+.page { max-width: var(--xb-page-max, 1320px); margin: 0 auto; padding: 28px var(--xb-page-gutter, 24px) 60px; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
 .eyebrow { color: var(--xb-primary); font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 14px; margin: 0 0 8px; }
 .page-head h1 { font-size: 30px; font-weight: 800; margin: 0 0 8px; }
 .page-sub { color: var(--xb-muted); font-size: 15px; margin: 0; }
 .pymss-filter-bar {
   display: grid;
-  grid-template-columns: minmax(180px, 1.05fr) minmax(180px, 1.05fr) minmax(150px, .8fr) minmax(140px, .72fr) minmax(230px, 1.35fr) auto;
+  grid-template-columns: minmax(180px, 1.05fr) minmax(180px, 1.05fr) minmax(150px, .8fr) minmax(140px, .72fr) minmax(230px, 1.35fr) minmax(90px, auto) auto;
   align-items: end;
   gap: 10px;
   margin: 18px 0 10px;
@@ -1489,7 +1665,7 @@ onUnmounted(() => {
 .pymss-filter-count { align-self: center; color: var(--xb-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; padding-top: 18px; }
 .purpose-label { color: var(--xb-primary); font-weight: 700; }
 @media (max-width: 1100px) { .pymss-filter-bar { grid-template-columns: repeat(3, minmax(0, 1fr)); } .pymss-filter-control.search { grid-column: span 2; } }
-@media (max-width: 760px) { .pymss-filter-bar { grid-template-columns: 1fr 1fr; } .pymss-filter-control.search { grid-column: 1 / -1; } .pymss-filter-count { padding-top: 0; } }
+@media (max-width: 760px) { .pymss-filter-bar { grid-template-columns: 1fr 1fr; } .pymss-filter-control.search { grid-column: 1 / -1; } .pymss-filter-count { padding-top: 0; } .pager { flex-wrap: wrap; } .toolbar { flex-wrap: wrap; } .toolbar .search { flex-basis: 100%; } }
 @media (max-width: 520px) { .pymss-filter-bar { grid-template-columns: 1fr; } .pymss-filter-control.search { grid-column: auto; } }
 
 .glass { position: relative; background: var(--xb-panel); border: 1px solid var(--xb-border); backdrop-filter: blur(16px); }
@@ -1512,7 +1688,7 @@ onUnmounted(() => {
 /* 多框架概览 */
 .framework-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
 }
 .fw-card {
@@ -1633,7 +1809,17 @@ onUnmounted(() => {
 
 /* 列表 */
 .list { border-radius: 6px; padding: 6px; }
-.load-more { display: flex; justify-content: center; padding: 12px 6px 6px; }
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin-top: 12px;
+}
+.pager-total { color: var(--xb-muted); font-size: 13px; }
+.pager-total b { color: var(--xb-text); font-size: 14px; margin: 0 2px; }
 .row { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 6px; transition: background 0.2s; }
 .row:hover { background: rgba(var(--xb-primary-rgb), 0.05); }
 .row + .row { border-top: 1px solid rgba(var(--xb-fill-rgb), 0.04); }

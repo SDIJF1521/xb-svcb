@@ -3,7 +3,7 @@
 param(
   [Alias('h')]
   [switch]$Help,
-  [string]$Repo = 'lkpp233/xb-svcb',
+  [string]$Repo = 'lkpp233/xb-svcb-bate',
   [string]$Revision,
   [string]$RepositoryPath,
   [switch]$RootFiles,
@@ -20,7 +20,7 @@ Usage: .\installer\build-online-modelscope.ps1 [options]
 
 Options:
   -Repo <owner/name>       Public ModelScope model repository. Defaults to
-                           lkpp233/xb-svcb.
+                           lkpp233/xb-svcb-bate.
   -Revision <revision>     Repository revision. Defaults to v<app-version>.
   -RepositoryPath <path>   Optional release subdirectory. The default is the
                            repository root shown on the versioned files page.
@@ -32,7 +32,7 @@ Options:
   -Help, -h, --help        Show this help and exit.
 
 Source files:
-  https://www.modelscope.cn/models/lkpp233/xb-svcb/files?version=v0.1.1
+  https://www.modelscope.cn/models/lkpp233/xb-svcb-bate/files?version=v0.1.2
 
 Example:
   .\installer\build-online-modelscope.ps1

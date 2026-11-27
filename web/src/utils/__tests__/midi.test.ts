@@ -71,8 +71,14 @@ import {
   barBeatLabel,
   barSeconds,
   yToPitch,
+  addCurveStroke,
+  curveMidiAt,
+  flattenCurveSegments,
+  normalizeCurveSegments,
+  removeCurveRanges,
+  CURVE_SEMITONE_LIMIT,
 } from '@/utils/midi'
-import type { MidiComposeNote, MidiPart } from '@/utils/midi'
+import type { CurveSegment, MidiComposeNote, MidiPart } from '@/utils/midi'
 
 describe('midi utils', () => {
   it('maps pitch to note names and black keys', () => {
@@ -491,7 +497,8 @@ describe('pitch curve', () => {
     expect(curve).toBeDefined()
     expect(curve![0]!.t).toBe(0)
     expect(curve![curve!.length - 1]!.t).toBe(2)
-    expect(curve![curve!.length - 1]!.v).toBe(12)
+    // 幅度上限跟随后端 domain.editor_midi.CURVE_SEMITONE_LIMIT（±36 半音）。
+    expect(curve![curve!.length - 1]!.v).toBe(CURVE_SEMITONE_LIMIT)
 
     expect(clampCurve([{ t: 0, v: 1 }], 2)).toBeUndefined()
   })
@@ -614,6 +621,149 @@ describe('pitch curve', () => {
     expect(second.curve![0]!.t).toBeCloseTo(0)
     // 切点处两段的值一致（连续性在切点被干净断开）
     expect(first.curve![first.curve!.length - 1]!.v).toBeCloseTo(second.curve![0]!.v)
+  })
+})
+
+describe('pitch curve segments', () => {
+  const segment = (id: string, points: Array<[number, number]>): CurveSegment => ({
+    id,
+    points: points.map(([t, midi]) => ({ t, midi })),
+  })
+
+  it('段内线性插值，段与段之间不插值（返回 null）', () => {
+    const segments = [segment('a', [[0, 60], [1, 62]]), segment('b', [[3, 65], [4, 64]])]
+
+    expect(curveMidiAt(segments, 0.5)).toBeCloseTo(61)
+    expect(curveMidiAt(segments, 1)).toBeCloseTo(62)
+    // 两段之间的空白不连线：交给原唱 F0
+    expect(curveMidiAt(segments, 2)).toBeNull()
+    expect(curveMidiAt(segments, 3.5)).toBeCloseTo(64.5)
+  })
+
+  it('端点附近的采样仍算段内（容差内取端点值）', () => {
+    const segments = [segment('a', [[1, 60], [2, 64]])]
+    expect(curveMidiAt(segments, 0.99)).toBeCloseTo(60)
+    expect(curveMidiAt(segments, 2.01)).toBeCloseTo(64)
+    expect(curveMidiAt(segments, 0.5)).toBeNull()
+  })
+
+  it('一笔默认自成一段，不与远处的旧段相连', () => {
+    const base = [segment('old', [[0, 60], [1, 60]])]
+    const next = addCurveStroke(base, [
+      { t: 3, midi: 67 },
+      { t: 3.5, midi: 66 },
+      { t: 4, midi: 65 },
+    ])
+    expect(next).toHaveLength(2)
+    expect(curveMidiAt(next, 2)).toBeNull()
+    // 旧段仍在
+    expect(curveMidiAt(next, 0.5)).toBeCloseTo(60)
+  })
+
+  it('续画：靠近端点时接成一条连续线', () => {
+    const base = [segment('old', [[0, 60], [1, 60]])]
+    const next = addCurveStroke(
+      base,
+      [
+        { t: 1.05, midi: 62 },
+        { t: 1.5, midi: 64 },
+      ],
+      { continueDrawing: true, continueSeconds: 0.12 },
+    )
+    expect(next).toHaveLength(1)
+    // 端点之间也被连起来（旧段末尾 → 新笔起点），保持连续
+    expect(curveMidiAt(next, 1.02)).not.toBeNull()
+    expect(curveMidiAt(next, 1.5)).toBeCloseTo(64)
+  })
+
+  it('续画：离端点太远时仍然另起一段', () => {
+    const base = [segment('old', [[0, 60], [1, 60]])]
+    const next = addCurveStroke(
+      base,
+      [
+        { t: 2, midi: 62 },
+        { t: 2.4, midi: 64 },
+      ],
+      { continueDrawing: true, continueSeconds: 0.12 },
+    )
+    expect(next).toHaveLength(2)
+    expect(curveMidiAt(next, 1.5)).toBeNull()
+  })
+
+  it('续画：可以同时接到前面的尾端和后面的头端（补画中段）', () => {
+    const base = [
+      segment('a', [[0, 60], [1, 60]]),
+      segment('b', [[3, 67], [4, 67]]),
+    ]
+    const next = addCurveStroke(
+      base,
+      [
+        { t: 1.1, midi: 62 },
+        { t: 2.0, midi: 64 },
+        { t: 2.95, midi: 66 },
+      ],
+      { continueDrawing: true, continueSeconds: 0.12 },
+    )
+    expect(next).toHaveLength(1)
+    expect(curveMidiAt(next, 0.5)).toBeCloseTo(60)
+    expect(curveMidiAt(next, 2.0)).toBeCloseTo(64)
+    expect(curveMidiAt(next, 3.5)).toBeCloseTo(67)
+  })
+
+  it('局部重画会把旧段切开（不强制和两边连续）', () => {
+    const base = [segment('old', [[0, 60], [1, 60], [2, 60], [3, 60]])]
+    const next = addCurveStroke(base, [
+      { t: 1.2, midi: 66 },
+      { t: 1.8, midi: 66 },
+    ])
+    expect(next).toHaveLength(3)
+    expect(curveMidiAt(next, 0.5)).toBeCloseTo(60)
+    expect(curveMidiAt(next, 1.5)).toBeCloseTo(66)
+    expect(curveMidiAt(next, 2.5)).toBeCloseTo(60)
+  })
+
+  it('稀疏段（只有两个点）被局部重画时两侧仍然保留', () => {
+    const base = [segment('slide', [[0, 60], [2, 64]])]
+    const next = addCurveStroke(base, [
+      { t: 0.9, midi: 70 },
+      { t: 1.1, midi: 70 },
+    ])
+    expect(next).toHaveLength(3)
+    expect(curveMidiAt(next, 0.5)).toBeCloseTo(61)
+    expect(curveMidiAt(next, 0.95)).toBeCloseTo(70)
+    expect(curveMidiAt(next, 1.5)).toBeCloseTo(63)
+  })
+
+  it('擦除区间会把段切开，不会跨过空洞插值', () => {
+    const dense = Array.from({ length: 9 }, (_, index) => [index * 0.25, 60] as [number, number])
+    const base = [segment('old', dense)]
+    const next = removeCurveRanges(base, [[0.95, 1.05]])
+    expect(next).toHaveLength(2)
+    expect(curveMidiAt(next, 1.0)).toBeNull()
+    expect(curveMidiAt(next, 0.5)).toBeCloseTo(60)
+    expect(curveMidiAt(next, 1.5)).toBeCloseTo(60)
+  })
+
+  it('从音符曲线重建时，端点相接的段会并成一条（句内连续）', () => {
+    const merged = normalizeCurveSegments(
+      [
+        segment('a', [[0, 60], [1, 60]]),
+        segment('b', [[1, 60], [2, 62]]),
+        segment('c', [[4, 64], [5, 64]]),
+      ],
+      { mergeTouching: true },
+    )
+    expect(merged).toHaveLength(2)
+    expect(merged[0]!.points).toHaveLength(3)
+    expect(curveMidiAt(merged, 1.5)).toBeCloseTo(61)
+  })
+
+  it('flattenCurveSegments 按时间摊平', () => {
+    const flat = flattenCurveSegments([
+      segment('b', [[2, 62], [3, 63]]),
+      segment('a', [[0, 60], [1, 61]]),
+    ])
+    expect(flat.map((point) => point.t)).toEqual([0, 1, 2, 3])
   })
 })
 

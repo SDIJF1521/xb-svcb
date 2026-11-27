@@ -61,19 +61,19 @@ The composition root: creates the infrastructure adapters and repositories, inje
 
 ### `app/application/`
 
-Use-case and orchestration layer. It contains services for models, works, music sources, audio editing, real-time conversion, plugins, and conversion tasks. Normal inference tasks enter the serial queue in `conversion_service.py`.
+Use-case and orchestration layer. It contains services for models, the workflow store (`workflow_hub_service` handles paginated search, preview, upload, download and PyMSS dependency sync), works, music sources, audio editing, real-time conversion, plugins, and conversion tasks. Normal inference tasks enter the serial queue in `conversion_service.py`.
 
 ### `app/domain/`
 
-Contains domain objects and enums for editor projects, tasks, and models, with minimal dependency on pywebview, FastAPI, or concrete AI frameworks.
+Contains domain objects and enums for editor projects, tasks, and models, plus workflow-store manifest rules (`workflow_manifest.py`), with minimal dependency on pywebview, FastAPI, or concrete AI frameworks.
 
 ### `app/infrastructure/`
 
-Implements file storage, paths, FFmpeg, system audio, UVR, F0, engine adapters, and workers. `svc_engine.py`, `rvc_engine.py`, `seedvc_engine.py`, and `ddsp_engine.py` are the framework adapter entry points. The RVC adapter loads the vendored official inference stack in `engines/rvc` instead of the third-party `rvc-python` package.
+Implements file storage, paths, FFmpeg, system audio, UVR, F0, engine adapters, and workers. `svc_engine.py`, `rvc_engine.py`, `seedvc_engine.py`, and `ddsp_engine.py` are the framework adapter entry points. The RVC adapter loads the vendored official inference stack in `engines/rvc` instead of the third-party `rvc-python` package. ModelScope search, manifest reading and subprocess uploads for the workflow store live in `workflow_hub_client.py`, which implements the `WorkflowHubGateway` port.
 
 ### `web/`
 
-Vue 3 + Vite frontend. `views/` organizes pages, `stores/` manages cross-page state, and `src/api/` defines pywebview bridge and HTTP types.
+Vue 3 + Vite frontend. `views/` organizes pages (including `views/workflows/market.vue` for the workflow store), `stores/` manages cross-page state, `components/workflow` provides read-only workflow previews, and `src/api/` defines pywebview bridge and HTTP types.
 
 ## Runtime Boundaries
 
