@@ -20,6 +20,7 @@ OFFLINE_SCRIPT = ROOT / "installer" / "xb-svcb.iss"
 APP_EXE_VERSION = ROOT / "installer" / "xb-svcb-version.txt"
 ONLINE_BUILD = ROOT / "installer" / "build-online.ps1"
 MODELSCOPE_BUILD = ROOT / "installer" / "build-online-modelscope.ps1"
+MODELSCOPE_PUBLISH = ROOT / "installer" / "publish-modelscope.ps1"
 
 
 def _read_version(path: Path, pattern: str) -> str:
@@ -247,16 +248,28 @@ def test_online_installer_supports_a_separate_modelscope_edition() -> None:
     assert "Result := Result + '{#XB_ONLINE_MODELSCOPE_PATH}/';" in script
     assert "OutputBaseFilename={#XB_ONLINE_OUTPUT_FILENAME}" in script
     assert "XB-SVCB 在线安装器（魔搭社区版）" in script
-    assert "[string]$Repo = 'lkpp233/xb-svcb'" in wrapper
+    assert "[string]$Repo = 'lkpp233/xb-svcb-bate'" in wrapper
     assert "[string]$Revision," in wrapper
     assert "if ($Revision) { $forward.ModelScopeRevision = $Revision }" in wrapper
     source_files_url = (
-        "https://www.modelscope.cn/models/lkpp233/xb-svcb/files"
+        "https://www.modelscope.cn/models/lkpp233/xb-svcb-bate/files"
         f"?version=v{RELEASE_VERSION}"
     )
     assert source_files_url in wrapper
     assert "ModelScopeRoot = $true" in wrapper
     assert 'else { "v$appVersion" }' in build
+
+
+def test_modelscope_publish_script_uploads_before_tagging() -> None:
+    script = MODELSCOPE_PUBLISH.read_text(encoding="utf-8")
+
+    assert "[string]$Repo = 'lkpp233/xb-svcb-bate'" in script
+    assert "build_online_manifest.py" in script
+    assert "build-online.ps1" in script
+    assert "--revision master" in script
+    assert "/repo/tag" in script
+    assert script.index("upload $Repo $stage") < script.index("/repo/tag")
+    assert "$Revision = \"v$appVersion\"" in script
 
 
 def test_release_installers_use_the_web_favicon_as_the_canonical_icon() -> None:

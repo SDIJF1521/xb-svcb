@@ -88,7 +88,7 @@ CUDA 共享布局：
 ```powershell
 & .\installer\build.ps1 -Stacks cu126 -RequireAdmin
 & .\installer\build-all-packages.ps1 -ReuseBuildOutputs -RequireAdmin
-& .\installer\build-online-modelscope.ps1 -Repo lkpp233/xb-svcb -Revision v0.1.2 -RequireAdmin
+& .\installer\build-online-modelscope.ps1 -Repo lkpp233/xb-svcb-bate -Revision v0.1.2 -RequireAdmin
 ```
 
 提权版本的安装目录仍是 `{localappdata}\Programs\XB-SVCB`（同一账户提权时路径不变），
@@ -203,7 +203,7 @@ v0.1.2 提供两种引导式在线安装器。GitHub Releases 只公开发布魔
 
 ### 魔搭社区 ModelScope 版本
 
-`XB-SVCB-Online-Setup-ModelScope.exe` 与备用 OSS 版共用同一份带 SHA-256 的发布清单和五套离线包，但从公开的 ModelScope 模型仓库下载。两个引导程序可同时构建，互不覆盖。当前默认发布源是 [`lkpp233/xb-svcb` 的 `v0.1.2` 版本文件页](https://www.modelscope.cn/models/lkpp233/xb-svcb/files?version=v0.1.2)，安装器读取该版本的仓库根目录。把 `online-manifest.ini` 和全部 `XB-SVCB-Setup-*` EXE/BIN 原名上传到该版本根目录，然后运行：
+`XB-SVCB-Online-Setup-ModelScope.exe` 与备用 OSS 版共用同一份带 SHA-256 的发布清单和五套离线包，但从公开的 ModelScope 模型仓库下载。两个引导程序可同时构建，互不覆盖。当前默认发布源是 [`lkpp233/xb-svcb-bate` 的 `v0.1.2` 版本文件页](https://www.modelscope.cn/models/lkpp233/xb-svcb-bate/files?version=v0.1.2)，安装器读取该版本的仓库根目录。把 `online-manifest.ini` 和全部 `XB-SVCB-Setup-*` EXE/BIN 原名上传到该版本根目录，然后运行：
 
 ```powershell
 & .\installer\build-online-modelscope.ps1 `
@@ -220,6 +220,27 @@ v0.1.2 提供两种引导式在线安装器。GitHub Releases 只公开发布魔
 ```
 
 仓库必须允许匿名下载。构建脚本使用 ModelScope 官方文件接口 `/api/v1/models/<仓库>/repo?Revision=...&FilePath=...`，不会把访问令牌写进安装器。上传后应先验证清单、一个 EXE 和最大的 BIN 都能在未登录状态下下载，并确认 BIN 请求支持断点续传；仓库配额、单文件大小或下行流量不满足时，不能只上传部分分卷。替换任何发布文件后，仍需重新生成清单并重新构建、分发引导程序。
+
+### 一条命令发布到魔搭社区
+
+`installer\publish-modelscope.ps1` 把「重新生成清单 → 编译魔搭版在线安装器 → 上传清单与五套 EXE/BIN →
+创建版本标签」串成一条命令，顺序保证分卷没传完时该版本不可达：
+
+```powershell
+& .\installer\publish-modelscope.ps1 -Python C:\python3.12.9\python.exe
+```
+
+| 开关 | 作用 |
+| --- | --- |
+| `-Repo` | 目标仓库，默认 `lkpp233/xb-svcb-bate` |
+| `-Revision` | 要创建的版本标签，默认 `v<应用版本>` |
+| `-ReuseManifest` | 复用 `dist\online-manifest.ini`（只校验，不重新计算哈希） |
+| `-SkipBuild` / `-SkipUpload` / `-SkipTag` | 只做其中几步，便于分步排查 |
+| `-MsCli` / `-Token` | 指定 `ms.exe`；标签接口的令牌默认取 `MODELSCOPE_API_TOKEN` 或 `~\.modelscope\credentials\git_token` |
+
+上传走 `ms upload`（`pip install modelscope` 后可用），先写 `master`，最后用
+`POST /api/v1/models/<仓库>/repo/tag` 创建版本标签；清单和在线安装器一起上传，安装器里固定的是本次清单的
+SHA-256。完成后按上一节的检查项做一次匿名下载验证。
 
 ### 当前 OSS 桶配置
 

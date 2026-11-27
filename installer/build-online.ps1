@@ -51,7 +51,7 @@ Examples:
   .\installer\build-online.ps1 -ManifestOnly
   .\installer\build-online.ps1 -ReuseManifest -BaseUrl https://downloads.example.com/xb-svcb/0.1.2
   .\installer\build-online.ps1 -BaseUrl https://downloads.example.com/xb-svcb/0.1.2
-  .\installer\build-online.ps1 -Source modelscope -ModelScopeRepo lkpp233/xb-svcb
+  .\installer\build-online.ps1 -Source modelscope -ModelScopeRepo lkpp233/xb-svcb-bate
 '@ | Write-Output
   return
 }
