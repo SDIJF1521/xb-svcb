@@ -1,5 +1,5 @@
 <template>
-  <div class="editor-page">
+  <div class="editor-page" @keydown.enter="onEditorEnter">
     <audio
       ref="audioPrimaryEl"
       hidden
@@ -376,7 +376,7 @@
             <button title="与时间线中的下一片段合并" :disabled="!canMergeNextClip || mergingAudio" @click="mergeSelectedClipWithNext">
               <el-icon><Connection /></el-icon>
             </button>
-            <button title="删除片段" class="danger" :disabled="!selectedClipEditable" @click="deleteSelectedClip">
+            <button :title="translateUiText('删除片段（Delete / Backspace）')" class="danger" :disabled="!selectedClipEditable" @click="deleteSelectedClip">
               <el-icon><Delete /></el-icon>
             </button>
           </div>
@@ -1305,6 +1305,7 @@ import { translateLogText, translatePymssCategory, translatePymssTargetStem, tra
 import { useModelsStore } from '@/stores/models'
 import { useSystemStore } from '@/stores/system'
 import { f0MethodsForFramework, normalizeF0Method } from '@/utils/f0'
+import { isDeleteShortcut, isTextEditingTarget } from '@/utils/keyboard'
 import type { MidiNote } from '@/utils/midi'
 import type {
   EditorClip,
@@ -1998,7 +1999,7 @@ const contextMenuItems = computed<ContextMenuItem[]>(() => {
       { id: 'merge', label: mergingAudio.value ? '正在合并' : '与下一片段合并', icon: Connection, disabled: !canMergeNextClip.value || mergingAudio.value, run: mergeSelectedClipWithNext },
       { id: 'mute-clip', label: clip?.mute ? '取消片段静音' : '静音片段', icon: Mute, separatorBefore: true, disabled: !clip || !!clip.locked || !!track?.locked, run: toggleClipMute },
       { id: 'lock-clip', label: clip?.locked ? '解除片段锁定' : '锁定片段', icon: Lock, disabled: !clip || !!track?.locked, run: toggleClipLock },
-      { id: 'delete-clip', label: '删除片段', icon: Delete, shortcut: 'Delete', danger: true, separatorBefore: true, disabled: !selectedClipEditable.value, run: deleteSelectedClip },
+      { id: 'delete-clip', label: '删除片段', icon: Delete, shortcut: 'Delete / Backspace', danger: true, separatorBefore: true, disabled: !selectedClipEditable.value, run: deleteSelectedClip },
     ]
   }
   if (state.kind === 'track') {
@@ -3209,11 +3210,25 @@ function toggleClipLock() {
   saveProject()
 }
 function deleteSelectedClip() {
-  if (!project.value || !selected.value) return
+  if (!project.value) return
   const track = selectedTrack.value
-  if (!track || !selectedClipEditable.value) return
+  const clip = selectedClip.value
+  if (!selected.value || !clip || !track) {
+    // 快捷键没有可删对象时给一句提示，避免「按了 Delete 却毫无反应」。
+    // grouping 让长按 Delete 时提示合并计数，而不是弹出一串相同消息。
+    ElMessage.info({ message: translateUiText('选中片段后按 Delete 或 Backspace 删除'), grouping: true })
+    return
+  }
+  if (!selectedClipEditable.value) {
+    ElMessage.info({
+      message: translateUiText(clip.locked ? '片段已锁定，不能删除' : '音轨已锁定，不能删除片段'),
+      grouping: true,
+    })
+    return
+  }
   pushHistory()
-  track.clips = track.clips.filter((c) => c.id !== selected.value?.clipId)
+  const clipId = clip.id
+  track.clips = track.clips.filter((c) => c.id !== clipId)
   selected.value = null
   saveProject()
 }
@@ -5737,12 +5752,8 @@ function fadeStyle(seconds: number | undefined, clip: EditorClip) {
   const width = Math.min(clipWidth / 2, Math.max(0, Number(seconds || 0) * zoom.value))
   return { width: `${width}px` }
 }
-function isTypingTarget(target: EventTarget | null) {
-  const el = target instanceof HTMLElement ? target : null
-  return !!el?.closest('input, textarea, select, [contenteditable="true"]')
-}
 function onKey(e: KeyboardEvent) {
-  if (!project.value || isTypingTarget(e.target)) return
+  if (!project.value || isTextEditingTarget(e.target)) return
   // MIDI 子编辑器打开时，全局快捷键（尤其是空格）交给它自己处理，避免主编辑器也同时播放。
   if (midiDialogOpen.value) return
   const key = e.key.toLowerCase()
@@ -5763,7 +5774,9 @@ function onKey(e: KeyboardEvent) {
   } else if (!command && e.code === 'Space') {
     e.preventDefault()
     void playMix()
-  } else if (!command && key === 'delete') {
+  } else if (!e.isComposing && isDeleteShortcut(e)) {
+    // Delete 与 Backspace 都删除选中片段：两个键都不会误伤文本输入框
+    // （文本框内的删除在上面 isTextEditingTarget 已经提前返回）。
     e.preventDefault()
     deleteSelectedClip()
   } else if (command && key === 'z' && e.shiftKey) {
@@ -5786,6 +5799,17 @@ function onKey(e: KeyboardEvent) {
     e.preventDefault()
     void pasteAudioToSelectedTrack()
   }
+}
+
+/**
+ * 数值输入框里按 Enter 视为「提交」：主动失焦，把键盘还给时间轴。
+ * 否则改完片段起止/偏移后焦点还在 input 里，紧接着按 Delete 只会删数字，
+ * 表现得就像删除片段的快捷键失效。
+ */
+function onEditorEnter(event: KeyboardEvent) {
+  const target = event.target
+  if (!(target instanceof HTMLInputElement) || target.type !== 'number') return
+  target.blur()
 }
 
 watch(
